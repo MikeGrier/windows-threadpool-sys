@@ -4,7 +4,7 @@
     "include-component-in-tag": false,
     "packages": {
         ".": {
-            "package-name": "your-crate-name",
+            "package-name": "windows-threadpool-sys",
             "extra-files": [
                 "Cargo.toml"
             ]

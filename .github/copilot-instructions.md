@@ -4,17 +4,23 @@ Use LF line endings.
 
 ## Repository purpose
 
-This repository is a **template** for a Rust crate that will be published to
-crates.io. Keep the automation working while replacing the placeholder crate
-with project-specific code.
+This repository contains `windows-threadpool-sys`, a Rust crate providing
+memory-safe access to the Windows operating system's thread pool APIs. Raw API
+declarations come from `windows-sys`; this crate owns the higher-level resource,
+callback, cancellation, and lifetime model.
 
 ## Working rules
 
 - Prefer small, reviewable changes.
-- Do not leave placeholder names like `your-crate-name`, `OWNER`, or
-  `REPOSITORY` behind when specializing the template for a real project.
+- Keep `unsafe` code inside narrow FFI boundaries and document the invariants
+  that make each boundary sound.
+- Do not expose a safe API until callback execution, cancellation, and native
+  object destruction have a defined ownership model.
+- Use `windows-sys` bindings instead of declaring Windows APIs locally.
+- Gate Windows-specific implementation with `cfg(windows)` while keeping
+  non-Windows workspace checks operational.
 - Keep documentation, release automation, and publish automation aligned with
-  the actual crate metadata.
+  the crate metadata.
 - If you add or remove workspace members, update any workflow or release config
   that assumes a single publishable crate.
 

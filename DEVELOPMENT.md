@@ -1,6 +1,11 @@
 # Development
 
-This repository is a generic template for publishing a Rust crate to crates.io.
+Development guidance for `windows-threadpool-sys`.
+
+The implementation targets Windows and should use `windows-sys` for raw API
+declarations. Keep `unsafe` code at narrow FFI boundaries, document its safety
+invariants, and represent callback and native-object ownership explicitly in
+safe Rust types.
 
 ## Commands
 
@@ -13,13 +18,18 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-## Release setup
+Windows-specific behavior must be exercised on Windows. Keep platform-specific
+implementation details behind `cfg(windows)` so the non-Windows CI jobs can
+continue checking the platform-independent crate surface.
 
-Before publishing from a repository created from this template:
+## Release process
 
-1. Replace the placeholder crate name and metadata in the Cargo manifests and
-   workflow files.
-2. Create the `RELEASE_PLEASE_TOKEN` repository secret so release tags trigger
-   downstream workflows.
-3. Create the `CARGO_REGISTRY_TOKEN` repository secret with crates.io publish
-   permission.
+`release-please` owns version changes, tags, and changelog updates. A `v<version>`
+tag triggers the crates.io publish workflow after verifying that the tag matches
+the workspace package version.
+
+Publishing requires these repository secrets:
+
+- `RELEASE_PLEASE_TOKEN` for release pull requests, tags, and follow-up workflow
+  runs.
+- `CARGO_REGISTRY_TOKEN` with crates.io publish permission.

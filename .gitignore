@@ -13,3 +13,4 @@ target
 
 # Scratch / diagnostic output (git-ignored per repo instructions)
 .scratch/
+.vs

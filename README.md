@@ -1,29 +1,28 @@
-# crate-template
+# windows-threadpool-sys
 
-A template repository for building and publishing a Rust crate on crates.io.
+Memory-safe Rust access to the Windows thread pool APIs.
 
-## What this template includes
+The Windows thread pool lets applications dispatch work and wait on operating
+system objects without permanently dedicating application threads to those
+waits. This is particularly useful for Windows services and components that
+need to become inexpensive when idle.
 
-- A Cargo workspace with one placeholder library crate at `crates/your-crate-name`
-- GitHub Actions CI for formatting, clippy, tests, MSRV checks, and CodeQL
-- `release-please` automation for changelog, tags, and release PRs
-- A publish workflow that pushes the crate to crates.io from `v*` tags
-- Copilot instructions and lightweight planning/design placeholders
+`windows-threadpool-sys` will build on the raw API declarations from
+[`windows-sys`](https://crates.io/crates/windows-sys) and provide a Rust
+programming model with explicit callback, cancellation, and resource lifetime
+rules.
 
-## Specialize this template
+## Status
 
-Before your first real release, replace the placeholder values below:
+The crate is in its initial development stage and does not yet expose its
+thread pool API. The intended scope and motivation are recorded in
+[`DESIGN-NOTES.md`](DESIGN-NOTES.md), and current implementation work is tracked
+in [`CHECKLIST.md`](CHECKLIST.md).
 
-1. Rename the crate directory `crates/your-crate-name` if desired.
-2. Update `your-crate-name` in:
-   - `Cargo.toml`
-   - `crates/your-crate-name/Cargo.toml`
-   - `release-please-config.json`
-3. Replace the example metadata URLs, author, and documentation settings in `Cargo.toml`.
-4. Replace the placeholder library code with your actual crate implementation.
-5. Set the repository secrets required for releases:
-   - `RELEASE_PLEASE_TOKEN`
-   - `CARGO_REGISTRY_TOKEN`
+## Platform support
+
+The public API targets Windows. The workspace is also checked on non-Windows
+hosts so that package metadata and platform-gated code remain healthy.
 
 ## Build
 
@@ -31,6 +30,7 @@ Requires Rust `1.97` or newer.
 
 ```sh
 cargo fmt --all --check
+cargo build --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```

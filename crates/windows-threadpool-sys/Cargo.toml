@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Mike Grier
 
 [package]
-name = "your-crate-name"
+name = "windows-threadpool-sys"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -11,9 +11,9 @@ repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
 readme = "README.md"
-description = "Placeholder crate shipped with the crate-template repository."
-keywords = ["template", "crate"]
-categories = ["development-tools"]
+description = "Memory-safe access to the Windows thread pool APIs."
+keywords = ["windows", "threadpool", "asynchronous", "ffi"]
+categories = ["api-bindings", "os::windows-apis"]
 
 [lib]
 path = "src/lib.rs"

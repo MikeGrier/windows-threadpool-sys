@@ -1,18 +1,18 @@
 # Copyright (c) 2026 Mike Grier
 
 [workspace]
-members = ["crates/your-crate-name"]
+members = ["crates/windows-threadpool-sys"]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0" # x-release-please-version
-authors = ["Your Name <you@example.com>"]
+authors = ["Mike Grier"]
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
-repository = "https://github.com/OWNER/REPOSITORY"
-homepage = "https://github.com/OWNER/REPOSITORY"
-documentation = "https://docs.rs/your-crate-name"
+repository = "https://github.com/MikeGrier/windows-threadpool-sys"
+homepage = "https://github.com/MikeGrier/windows-threadpool-sys"
+documentation = "https://docs.rs/windows-threadpool-sys"
 
 [profile.release]
 strip = "symbols"
