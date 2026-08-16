@@ -11,3 +11,9 @@
 //! still under investigation.
 
 #![warn(missing_docs)]
+
+#[cfg(windows)]
+mod endpoint;
+
+#[cfg(windows)]
+pub use endpoint::UnassociatedEndpoint;
