@@ -16,7 +16,7 @@ use windows_sys::Win32::System::IO::{
     CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED, PostQueuedCompletionStatus,
 };
 
-use crate::UnassociatedEndpoint;
+use crate::{Operation, OperationState, UnassociatedEndpoint};
 
 /// An owned I/O completion port.
 #[derive(Debug)]
@@ -165,6 +165,64 @@ impl<'port> AssociatedEndpoint<'port> {
     pub fn port(&self) -> &'port CompletionPort {
         self.port
     }
+
+    /// Submit an owned operation on this endpoint.
+    ///
+    /// `issue` performs the single native overlapped call using the endpoint's
+    /// handle and the operation's stable `OVERLAPPED` pointer. It returns `Ok`
+    /// when a completion will arrive (native success or `ERROR_IO_PENDING`) and
+    /// `Err` for an immediate failure that yields no completion.
+    ///
+    /// On the completion path the operation's storage is transferred to the
+    /// kernel and recovered later with [`Completion::claim`]. On the failure
+    /// path the operation is returned intact so its storage can be reused.
+    ///
+    /// # Safety
+    ///
+    /// `issue` must start exactly one overlapped operation using the provided
+    /// `OVERLAPPED` pointer and no other storage, and must classify the outcome
+    /// correctly: `Ok` only when a completion packet will be delivered to this
+    /// endpoint's port, `Err` only when none will.
+    pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
+    where
+        P: Send,
+        F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<()>,
+    {
+        let mut boxed = Box::new(operation);
+        boxed.set_state(OperationState::Submitted);
+        let overlapped = boxed.overlapped_ptr();
+        match issue(self.handle(), overlapped) {
+            Ok(()) => {
+                boxed.set_state(OperationState::Pending);
+                // Ownership moves to the kernel until the completion is claimed.
+                let _ = Box::into_raw(boxed);
+                Submitted::Pending
+            }
+            Err(error) => {
+                boxed.set_state(OperationState::Idle);
+                Submitted::Failed {
+                    operation: *boxed,
+                    error,
+                }
+            }
+        }
+    }
+}
+
+/// The outcome of [`AssociatedEndpoint::submit`].
+#[derive(Debug)]
+pub enum Submitted<P> {
+    /// A completion will arrive; the storage was transferred to the kernel and
+    /// is recovered later with [`Completion::claim`].
+    Pending,
+    /// Submission failed immediately with no completion; the operation is
+    /// returned so its storage can be reused or dropped.
+    Failed {
+        /// The operation whose submission failed.
+        operation: Operation<P>,
+        /// The immediate failure reported by the native call.
+        error: io::Error,
+    },
 }
 
 /// A completion packet dequeued from a [`CompletionPort`].
@@ -203,17 +261,57 @@ impl Completion {
     pub fn error(&self) -> Option<&io::Error> {
         self.error.as_ref()
     }
+
+    /// Recover the owned operation whose completion this is.
+    ///
+    /// # Safety
+    ///
+    /// This completion must have been produced by submitting an `Operation<P>`
+    /// of this exact type through [`AssociatedEndpoint::submit`], and it must be
+    /// claimed exactly once.
+    pub unsafe fn claim<P>(&self) -> Operation<P> {
+        let ptr = self.overlapped.cast::<Operation<P>>();
+        // SAFETY: by this function's contract, `ptr` is the box leaked by a
+        // matching submit and is reclaimed exactly once here.
+        let mut operation = unsafe { *Box::from_raw(ptr) };
+        operation.set_state(OperationState::Completed);
+        operation
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CompletionPort;
-    use crate::UnassociatedEndpoint;
+    use super::{AssociatedEndpoint, CompletionPort, Submitted};
+    use crate::{Operation, OperationState, UnassociatedEndpoint};
     use std::fs::OpenOptions;
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::OwnedHandle;
+    use std::path::PathBuf;
 
     const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
+
+    fn associate_temp_file<'port>(
+        port: &'port CompletionPort,
+        tag: &str,
+    ) -> (AssociatedEndpoint<'port>, PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "windows-overlapped-io-sys-{tag}-{}.tmp",
+            std::process::id()
+        ));
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .custom_flags(FILE_FLAG_OVERLAPPED)
+            .open(&path)
+            .expect("create overlapped temp file");
+        let owned = OwnedHandle::from(file);
+        // SAFETY: the file was just created with FILE_FLAG_OVERLAPPED, is not
+        // associated with any port, has no duplicates, and moves in exclusively.
+        let endpoint = unsafe { UnassociatedEndpoint::assume_overlapped(owned) };
+        let associated = port.associate(endpoint, 0).expect("associate");
+        (associated, path)
+    }
 
     #[test]
     fn posts_and_dequeues_a_user_packet() {
@@ -258,6 +356,60 @@ mod tests {
         assert_eq!(associated.key(), 0x55);
 
         drop(associated);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn submit_pending_then_claim_recovers_the_operation() {
+        let port = CompletionPort::new(0).expect("create port");
+        let (endpoint, path) = associate_temp_file(&port, "submit-pending");
+
+        let operation = Operation::new(vec![1_u8, 2, 3]);
+        // SAFETY: the closure issues exactly one operation using the given
+        // OVERLAPPED pointer; here it simulates a device that queues a
+        // completion for that pointer, so a packet will arrive.
+        let submitted = unsafe {
+            endpoint.submit(operation, |_handle, overlapped| {
+                port.post(7, 3, overlapped)?;
+                Ok(())
+            })
+        };
+        assert!(matches!(submitted, Submitted::Pending));
+
+        let completion = port.get(1_000).expect("get").expect("a packet");
+        // SAFETY: this completion is from the Operation<Vec<u8>> submitted above
+        // and is claimed exactly once.
+        let operation = unsafe { completion.claim::<Vec<u8>>() };
+        assert_eq!(operation.state(), OperationState::Completed);
+        assert_eq!(operation.payload(), &vec![1_u8, 2, 3]);
+
+        drop(endpoint);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn submit_immediate_failure_returns_the_operation() {
+        let port = CompletionPort::new(0).expect("create port");
+        let (endpoint, path) = associate_temp_file(&port, "submit-fail");
+
+        let operation = Operation::new(vec![9_u8]);
+        // SAFETY: the closure issues no operation and reports an immediate
+        // failure, so no completion will arrive.
+        let submitted = unsafe {
+            endpoint.submit(operation, |_handle, _overlapped| {
+                Err(std::io::Error::from_raw_os_error(5))
+            })
+        };
+        match submitted {
+            Submitted::Failed { operation, error } => {
+                assert_eq!(operation.payload(), &vec![9_u8]);
+                assert_eq!(operation.state(), OperationState::Idle);
+                assert_eq!(error.raw_os_error(), Some(5));
+            }
+            Submitted::Pending => panic!("expected immediate failure"),
+        }
+
+        drop(endpoint);
         let _ = std::fs::remove_file(&path);
     }
 }

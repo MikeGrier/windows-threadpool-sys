@@ -33,7 +33,10 @@ pub enum OperationState {
 /// crate never interprets it. The `OVERLAPPED` lives in an [`UnsafeCell`] because
 /// the kernel writes to it through [`Operation::overlapped_ptr`] while the owner
 /// holds only a shared reference.
+// `repr(C)` with `overlapped` first keeps the operation pointer identical to its
+// `OVERLAPPED` pointer, so a completion can recover the operation from it.
 #[derive(Debug)]
+#[repr(C)]
 pub struct Operation<P> {
     overlapped: UnsafeCell<OVERLAPPED>,
     state: OperationState,
@@ -66,6 +69,10 @@ impl<P> Operation<P> {
     #[must_use]
     pub fn state(&self) -> OperationState {
         self.state
+    }
+
+    pub(crate) fn set_state(&mut self, state: OperationState) {
+        self.state = state;
     }
 
     /// Borrow the payload.
