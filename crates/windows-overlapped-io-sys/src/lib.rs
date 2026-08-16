@@ -16,10 +16,16 @@
 mod endpoint;
 
 #[cfg(windows)]
+mod iocp;
+
+#[cfg(windows)]
 mod operation;
 
 #[cfg(windows)]
 pub use endpoint::UnassociatedEndpoint;
+
+#[cfg(windows)]
+pub use iocp::{AssociatedEndpoint, Completion, CompletionPort};
 
 #[cfg(windows)]
 pub use operation::{Operation, OperationState};
