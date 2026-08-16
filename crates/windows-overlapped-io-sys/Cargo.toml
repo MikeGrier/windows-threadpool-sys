@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Mike Grier
 
 [package]
-name = "windows-threadpool-sys"
+name = "windows-overlapped-io-sys"
 version = "0.1.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
@@ -9,10 +9,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation = "https://docs.rs/windows-threadpool-sys"
+documentation = "https://docs.rs/windows-overlapped-io-sys"
 readme = "README.md"
-description = "Memory-safe access to the Windows thread pool APIs."
-keywords = ["windows", "threadpool", "asynchronous", "ffi"]
+description = "Owned overlapped I/O endpoints and pinned operations for Windows IOCP and thread-pool completion."
+keywords = ["windows", "overlapped", "iocp", "async", "ffi"]
 categories = ["api-bindings", "os::windows-apis"]
 
 [lib]
@@ -22,5 +22,5 @@ path = "src/lib.rs"
 windows-sys = {
 	version = "0.61.2",
 	default-features = false,
-	features = ["Win32_System_IO", "Win32_System_Threading"],
+	features = ["Win32_Foundation", "Win32_System_IO"],
 }

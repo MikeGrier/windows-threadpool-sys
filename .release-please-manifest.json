@@ -1,3 +1,4 @@
 {
-    ".": "0.1.0"
+    "crates/windows-overlapped-io-sys": "0.1.0",
+    "crates/windows-threadpool-sys": "0.1.0"
 }

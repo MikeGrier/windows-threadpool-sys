@@ -1,10 +1,19 @@
 {
     "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
     "release-type": "simple",
-    "include-component-in-tag": false,
+    "include-component-in-tag": true,
+    "separate-pull-requests": true,
     "packages": {
-        ".": {
+        "crates/windows-overlapped-io-sys": {
+            "package-name": "windows-overlapped-io-sys",
+            "component": "windows-overlapped-io-sys",
+            "extra-files": [
+                "Cargo.toml"
+            ]
+        },
+        "crates/windows-threadpool-sys": {
             "package-name": "windows-threadpool-sys",
+            "component": "windows-threadpool-sys",
             "extra-files": [
                 "Cargo.toml"
             ]

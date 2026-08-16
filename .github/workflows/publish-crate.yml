@@ -4,7 +4,8 @@ name: publish-crate
 on:
   push:
     tags:
-      - 'v*'
+      - 'windows-overlapped-io-sys-v*'
+      - 'windows-threadpool-sys-v*'
 
 permissions:
   contents: read
@@ -21,21 +22,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Verify tag matches crate version
         run: |
+          tag="${GITHUB_REF_NAME}"
+          crate="${tag%-v*}"
+          version="${tag##*-v}"
           metadata="$(cargo metadata --no-deps --format-version 1)"
-          member_count="$(printf '%s' "$metadata" | jq '.workspace_members | length')"
-          if [ "$member_count" -ne 1 ]; then
-            echo "::error::publish-crate.yml expects exactly one workspace member; found ${member_count}" >&2
+          actual="$(printf '%s' "$metadata" | jq -r --arg n "$crate" '.packages[] | select(.name == $n) | .version')"
+          if [ -z "$actual" ] || [ "$actual" = "null" ]; then
+            echo "::error::tag ${tag} references unknown crate ${crate}" >&2
             exit 1
           fi
-          pkg_id="$(printf '%s' "$metadata" | jq -r '.workspace_members[0]')"
-          crate_name="$(printf '%s' "$metadata" | jq -r --arg pkg_id "$pkg_id" '.packages[] | select(.id == $pkg_id) | .name')"
-          version="$(printf '%s' "$metadata" | jq -r --arg pkg_id "$pkg_id" '.packages[] | select(.id == $pkg_id) | .version')"
-          expected="v${version}"
-          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} does not match crate version ${expected}" >&2
+          if [ "$actual" != "$version" ]; then
+            echo "::error::tag ${tag} version ${version} does not match crate version ${actual}" >&2
             exit 1
           fi
-          echo "CRATE_NAME=${crate_name}" >> "$GITHUB_ENV"
+          echo "CRATE_NAME=${crate}" >> "$GITHUB_ENV"
       - name: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
