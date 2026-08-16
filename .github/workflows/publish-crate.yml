@@ -1,0 +1,42 @@
+# Copyright (c) 2026 Mike Grier
+name: publish-crate
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  publish:
+    name: cargo publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify tag matches crate version
+        run: |
+          metadata="$(cargo metadata --no-deps --format-version 1)"
+          member_count="$(printf '%s' "$metadata" | jq '.workspace_members | length')"
+          if [ "$member_count" -ne 1 ]; then
+            echo "::error::publish-crate.yml expects exactly one workspace member; found ${member_count}" >&2
+            exit 1
+          fi
+          pkg_id="$(printf '%s' "$metadata" | jq -r '.workspace_members[0]')"
+          crate_name="$(printf '%s' "$metadata" | jq -r --arg pkg_id "$pkg_id" '.packages[] | select(.id == $pkg_id) | .name')"
+          version="$(printf '%s' "$metadata" | jq -r --arg pkg_id "$pkg_id" '.packages[] | select(.id == $pkg_id) | .version')"
+          expected="v${version}"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match crate version ${expected}" >&2
+            exit 1
+          fi
+          echo "CRATE_NAME=${crate_name}" >> "$GITHUB_ENV"
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p "$CRATE_NAME" --locked

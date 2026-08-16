@@ -1,0 +1,19 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "your-crate-name"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme = "README.md"
+description = "Placeholder crate shipped with the crate-template repository."
+keywords = ["template", "crate"]
+categories = ["development-tools"]
+
+[lib]
+path = "src/lib.rs"
