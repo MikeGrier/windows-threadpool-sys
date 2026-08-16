@@ -16,4 +16,10 @@
 mod endpoint;
 
 #[cfg(windows)]
+mod operation;
+
+#[cfg(windows)]
 pub use endpoint::UnassociatedEndpoint;
+
+#[cfg(windows)]
+pub use operation::{Operation, OperationState};
