@@ -24,3 +24,132 @@ This crate does not attempt to solve this problem, but it does provide a useful 
 wants to avoid contributing to it. The Windows threadpool types are inherently memory unsafe and leave many
 choices up to the developer. The `windows-sys` crate published by Microsoft helps with the basics of the FFI
 to the APIs, but does little to help turn the alphabet and phrasebook into a useful programming model.
+
+## Windows SDK model and constraints
+
+This crate targets the object-based thread pool API (introduced in Windows Vista) rather than the legacy
+`QueueUserWorkItem`, timer queue, or registered-wait APIs. The modern API has separate pool, cleanup group,
+work, timer, wait, and I/O objects. A callback environment selects the pool, cleanup group, callback priority,
+long-running behavior, and related callback settings when a callback-generating object is created.
+
+The SDK contracts impose several requirements that the safe API must represent:
+
+- Closing cleanup group members blocks until executing callbacks finish and either waits for or cancels
+	callbacks that have not started. It also releases the member objects, which must not be used or closed
+	individually afterward. Creating new group members must be synchronized with group cleanup.
+- Canceling queued callbacks does not stop callbacks that have started. For thread pool I/O, it also does not
+	cancel the underlying I/O request or make its `OVERLAPPED` storage safe to free.
+- A waitable handle must remain valid while its wait is pending. A wait must be explicitly rearmed for each
+	activation, and passing a mutex handle is unsupported.
+- Disarming a timer or wait prevents new callbacks from being queued but does not retract callbacks already
+	queued. Relative times exclude sleep and hibernation; absolute times include them.
+- `StartThreadpoolIo` must precede every overlapped operation. A failed operation, or an immediate success on
+	a handle using `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`, must be balanced with `CancelThreadpoolIo`.
+- Callback code runs on shared, process-managed threads. It must restore thread-local state before returning,
+	must not terminate the thread, and must not unwind across the FFI boundary.
+- Teardown must prevent new submissions, disarm callback sources, account for outstanding I/O, wait for
+	executing callbacks, and only then release callback context and dependent native resources.
+
+The minimum supported Windows version is the current publicly-supported Windows baseline that the project's
+GitHub CI validates: Windows Server 2025 (the `windows-latest` hosted runner) and, equivalently, Windows 11 on
+the client. The crate does not pursue down-level support below that baseline. Every capability this crate uses
+-- the object-based thread pool, callback priorities, `SetThreadpoolTimerEx`, `SetThreadpoolWaitEx`,
+`CancelIoEx`, and `GetQueuedCompletionStatusEx` -- is available there, so their historical Vista / 7 / 8
+introduction points do not require version gating in the public API. The toolchain baseline is Rust 1.97 (the
+MSRV) on edition 2024.
+
+## Downstream directory notification evaluation scenario
+
+A separate future directory notification facility is an evaluation scenario for deciding how fully this crate
+should build out its lower layers; it is not part of this crate's API or implementation plan. That facility is
+expected to add and remove watched paths dynamically, watch subtrees recursively, use
+`ReadDirectoryChangesExW` where available, fall back to `FindFirstChangeNotification` when necessary, retain
+multiple notification buffers, and deliver submissions and completions through SQ/CQ-style rings.
+
+The capabilities exert different kinds of design pressure:
+
+- Dynamic addition and removal tests whether individual I/O and wait registrations have independent ownership,
+	rundown, and failure isolation. It does not imply that this crate should own a path registry.
+- Recursive watching is primarily directory-domain policy. It does not by itself require another thread pool
+	abstraction, although multiple recursive roots reinforce the need for independently removable registrations.
+- The `ReadDirectoryChangesExW` path tests stable `OVERLAPPED` and payload ownership, exact operation identity,
+	balanced `StartThreadpoolIo` accounting, prompt rearming, and cancellation races. These concerns argue for
+	reusable thread pool I/O operation machinery, but do not decide whether that machinery can be both fully
+	generic and entirely safe.
+- The `FindFirstChangeNotification` fallback tests composition with `TP_WAIT`, including safe disarm, rearm,
+	callback drain, and notification-handle close ordering. Its specialized open, rearm, and close operations
+	remain concerns of the directory notification facility rather than general file I/O in this crate.
+- SQ/CQ delivery tests whether callbacks can feed a caller-selected bounded ring without allocation, copying,
+	blocking a process thread pool worker, invoking arbitrary application code, or imposing this crate's choice of
+	channel or executor. Ring layout, capacity, overflow policy, and buffer recycling remain downstream decisions.
+
+Taken together, the scenario is evidence for building registration-level `TP_IO` and `TP_WAIT` ownership,
+operation identity, callback dispatch, and object-local rundown more fully than a single private directory
+adapter would require. It is not evidence for a general safe file I/O layer covering file creation, reads,
+writes, paths, parsing, or filesystem policy.
+
+The directory scenario establishes that an owned overlapped-I/O foundation must exist before this crate exposes
+thread pool I/O. That foundation now lives in the sibling crate `windows-overlapped-io-sys`, which is versioned
+and published independently. Its requirements -- typed endpoint ownership, provenance-controlled association,
+pinned per-request `OVERLAPPED` storage, completion identity, the uniform result model, cancellation, and
+rundown across raw IOCP and event backends -- are specified in
+`crates/windows-overlapped-io-sys/DESIGN-NOTES.md` and are deliberately rounded out to cover the full range of
+Windows overlapped operations, not just directory notification. Operation payloads stay opaque there:
+directory-notification names may be arbitrary 16-bit units that a higher layer validates without the foundation
+decoding or copying them.
+
+This crate consumes that foundation to implement thread pool I/O. `TP_IO` reuses the shared endpoint and
+operation storage but is a distinct completion backend: it owns an opaque system-managed IOCP association and
+additionally requires every `StartThreadpoolIo` to be balanced by a callback or `CancelThreadpoolIo`. The
+sibling crate defines the backend seam; this crate implements that seam and its accounting, and never exposes
+the thread pool's internal completion port. The dependency is one-directional: `windows-overlapped-io-sys` must
+not depend on `windows-threadpool-sys` or reference any `TP_*` type.
+
+Generic overlapped submission remains the hardest public boundary for the pair. A safe API cannot accept an
+arbitrary raw handle, `OVERLAPPED` pointer, payload, and caller-reported submission result while proving that
+exactly one operation was issued and that a completion will or will not arrive. A constrained owned-operation
+prototype must demonstrate balanced immediate failure, immediate success, pending completion, cancellation, and
+destruction without trusting caller-maintained state before any public thread pool I/O API is committed.
+
+## `windows-sys` binding boundary
+
+The initial dependency is `windows-sys` 0.61.2 with default features disabled and
+`Win32_System_Threading` plus `Win32_System_IO` enabled. They transitively enable `Win32_System`, `Win32`, and
+`Win32_Foundation`. The threading feature is sufficient for the core pool, cleanup group, work, timer, wait,
+and thread pool I/O exports. The `Win32_System_IO` feature covers the `OVERLAPPED` interplay at the thread pool
+I/O seam; the reusable overlapped-I/O foundation itself now lives in the sibling crate
+`windows-overlapped-io-sys`, which owns its own `windows-sys` feature layout.
+
+The bindings expose the kernel32 functions, opaque `PTP_*` values, `unsafe extern "system"` callback types,
+`TP_CALLBACK_ENVIRON_V3`, callback priorities, and `TP_POOL_STACK_INFORMATION`. They remain raw bindings:
+the `PTP_*` values are represented as `isize`, callback contexts are untyped pointers, and the thread pool I/O
+callback exposes its `OVERLAPPED` argument as `*mut c_void`.
+
+The reusable overlapped machinery -- `OVERLAPPED`, `OVERLAPPED_ENTRY`, the cancellation and result functions,
+and the raw IOCP create, post, and dequeue functions, all under `Win32_System_IO` -- is specified and owned by
+`windows-overlapped-io-sys`; see `crates/windows-overlapped-io-sys/DESIGN-NOTES.md` for its feature layout.
+`SetFileCompletionNotificationModes` is under `Win32_Storage_FileSystem` and remains an operation- or
+endpoint-specific dependency there rather than part of this crate's core feature set.
+
+The SDK's callback-environment functions are header-only inline helpers and are therefore not emitted by
+`windows-sys`. This includes `InitializeThreadpoolEnvironment`, `DestroyThreadpoolEnvironment`,
+`SetThreadpoolCallbackPool`, `SetThreadpoolCallbackCleanupGroup`, `SetThreadpoolCallbackPriority`, and
+`SetThreadpoolCallbackRunsLong`, as well as `SetThreadpoolCallbackLibrary`. The crate will need narrow
+equivalents over `TP_CALLBACK_ENVIRON_V3`.
+`TP_CALLBACK_ENVIRON_V3::default()` is not a substitute for SDK initialization: the SDK sets version 3,
+normal callback priority, and the structure size in addition to clearing the remaining fields. The current SDK
+destroy helper is a no-op, but the wrapper should still model that lifecycle boundary.
+
+`LeaveCriticalSectionWhenCallbackReturns` additionally requires the `Win32_System_Kernel` feature because its
+`CRITICAL_SECTION` parameter is feature-gated. That feature is intentionally deferred until the safe API has a
+use for this specialized callback-return operation.
+
+Primary references:
+
+- [Thread Pools](https://learn.microsoft.com/windows/win32/procthread/thread-pools)
+- [Thread Pool API](https://learn.microsoft.com/windows/win32/procthread/thread-pool-api)
+- [Using the Thread Pool Functions](https://learn.microsoft.com/windows/win32/procthread/using-the-thread-pool-functions)
+- [`threadpoolapiset.h` API index](https://learn.microsoft.com/windows/win32/api/threadpoolapiset/)
+- [`ReadDirectoryChangesExW`](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-readdirectorychangesexw)
+- [`CancelIoEx`](https://learn.microsoft.com/windows/win32/api/ioapiset/nf-ioapiset-cancelioex)
+- [`windows-sys::Win32::System::Threading`](https://docs.rs/windows-sys/0.61.2/windows_sys/Win32/System/Threading/)
