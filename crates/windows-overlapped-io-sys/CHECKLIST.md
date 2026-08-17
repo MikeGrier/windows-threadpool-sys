@@ -9,7 +9,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	`WSASend` with a per-call `WSACreateEvent` completion event and blocking via `WSAGetOverlappedResult`, with no
 	`unsafe` for the caller. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Integration test (`socket`): a loopback TCP round-trip through `BlockingSocket`, with no `unsafe` in the
+- [x] Integration test (`socket`): a loopback TCP round-trip through `BlockingSocket`, with no `unsafe` in the
 	test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 ## M∞ — Horizon (ungated)

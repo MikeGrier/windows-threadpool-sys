@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::windows::io::OwnedSocket;
 
-use windows_overlapped_io_sys::{AssociatedSocket, CompletionPort};
+use windows_overlapped_io_sys::{AssociatedSocket, BlockingSocket, CompletionPort};
 
 const PAYLOAD: usize = 8192;
 
@@ -75,4 +75,47 @@ fn socket_adapter_round_trips_over_loopback_tcp() {
     assert_eq!(port.outstanding(), 0);
 
     drop(endpoint);
+}
+
+fn blocking_send_all(socket: &BlockingSocket, data: &[u8]) {
+    let mut sent = 0;
+    while sent < data.len() {
+        let n = socket.send(&data[sent..]).expect("blocking send");
+        assert!(n > 0, "send made no progress");
+        sent += n;
+    }
+}
+
+fn blocking_recv_exact(socket: &BlockingSocket, total: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(total);
+    while out.len() < total {
+        let (buffer, n) = socket.recv(total - out.len()).expect("blocking recv");
+        assert!(n > 0, "peer closed before sending all bytes");
+        out.extend_from_slice(&buffer);
+    }
+    out
+}
+
+#[test]
+fn blocking_socket_round_trips_over_loopback_tcp() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    let client = TcpStream::connect(addr).expect("connect");
+    let (mut server, _peer) = listener.accept().expect("accept");
+
+    let socket = BlockingSocket::new(OwnedSocket::from(client));
+
+    let outbound: Vec<u8> = (0..PAYLOAD).map(|i| (i % 251) as u8).collect();
+    let inbound: Vec<u8> = (0..PAYLOAD).map(|i| (i % 241) as u8).collect();
+
+    // Our side sends; the peer reads it back and verifies.
+    blocking_send_all(&socket, &outbound);
+    let mut peer_got = vec![0_u8; PAYLOAD];
+    server.read_exact(&mut peer_got).expect("peer read");
+    assert_eq!(peer_got, outbound);
+
+    // The peer sends (fits the receive buffer), then our side receives it.
+    server.write_all(&inbound).expect("peer write");
+    let got = blocking_recv_exact(&socket, PAYLOAD);
+    assert_eq!(got, inbound);
 }
