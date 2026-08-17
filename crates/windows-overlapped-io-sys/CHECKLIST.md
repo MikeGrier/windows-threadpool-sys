@@ -1,17 +1,11 @@
 # Checklist: windows-overlapped-io-sys
 
-Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Design decisions are in
-[DESIGN-NOTES.md](DESIGN-NOTES.md).
+All planned milestones are complete; there are no pending work items. Completed milestones are archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md), and design decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-## M11 — Safe `DeviceIoControl` adapters (`device` feature)
+The overlapped-I/O foundation now covers owned endpoints and provenance, pinned operation storage, the raw IOCP
+and blocking backends, cancellation and rundown, the submission seam, and safe per-family adapters for every
+operation family the design enumerated: file read/write and scatter/gather (`fs`), sockets on both the IOCP and
+blocking backends (`socket`), and `DeviceIoControl` (`device`).
 
-- [x] Implement fully-safe synchronous `BlockingEndpoint::ioctl(code, input, output_len)` behind the `device`
-	feature, issuing an overlapped `DeviceIoControl` and returning `io::Result<(Vec<u8>, usize)>` with no `unsafe`
-	for the caller. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
-
-- [x] Implement safe-submission `AssociatedEndpoint::ioctl(code, input, output_len)` behind `device` returning a
-	typed `DeviceIoControlIo` token whose `claim(&Completion)` recovers the output buffer and byte count. See
-	[DESIGN-NOTES.md](DESIGN-NOTES.md).
-
-- [x] Integration test (`device`): an `FSCTL` query on a real file through both the blocking and IOCP `ioctl`
-	adapters, with no `unsafe` in the test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+This file reopens when new work (a new operation family, a new backend, or hardening) is planned.
