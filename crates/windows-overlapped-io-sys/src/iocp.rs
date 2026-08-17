@@ -15,7 +15,6 @@ use std::fmt;
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::panic::Location;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
@@ -24,6 +23,7 @@ use windows_sys::Win32::System::IO::{
     PostQueuedCompletionStatus,
 };
 
+use crate::identity::{OperationId, OperationRegistry};
 use crate::{Operation, OperationState, UnassociatedEndpoint};
 
 /// Waits without timeout in `GetQueuedCompletionStatus`; used while draining.
@@ -39,18 +39,20 @@ struct Track {
 
 /// State shared between a port, its completions, and the drain path.
 ///
-/// `outstanding` is a lock-free count that always governs rundown. `tracked` is
-/// consulted only when source tracking is enabled, so the mutex is never taken
-/// on the submission hot path by default.
+/// `live` is the registry of submitted-but-unreclaimed operations. It governs
+/// rundown (its length is the outstanding count) and answers whether an
+/// [`OperationId`] still names a live operation, which is what keeps a retained
+/// identity from cancelling an operation that merely recycled its address.
+/// `tracked` is consulted only when source tracking is enabled.
 struct PortState {
-    outstanding: AtomicUsize,
+    live: OperationRegistry,
     tracked: Mutex<HashMap<usize, Track>>,
 }
 
 impl PortState {
     fn new() -> Self {
         Self {
-            outstanding: AtomicUsize::new(0),
+            live: OperationRegistry::new(),
             tracked: Mutex::new(HashMap::new()),
         }
     }
@@ -171,6 +173,9 @@ impl CompletionPort {
                 bytes_transferred,
                 overlapped,
                 error: None,
+                // Recover the generation while the operation is still
+                // registered, so the completion can name it exactly.
+                generation: self.state.live.generation_of(overlapped),
                 state: Arc::clone(&self.state),
                 claimed: Cell::new(false),
             }));
@@ -189,6 +194,7 @@ impl CompletionPort {
             bytes_transferred,
             overlapped,
             error: Some(error),
+            generation: self.state.live.generation_of(overlapped),
             state: Arc::clone(&self.state),
             claimed: Cell::new(false),
         }))
@@ -202,7 +208,7 @@ impl CompletionPort {
     /// been claimed, reclaimed, or drained.
     #[must_use]
     pub fn outstanding(&self) -> usize {
-        self.state.outstanding.load(Ordering::SeqCst)
+        self.state.live.len()
     }
 
     /// Block until every outstanding operation has completed and been reclaimed.
@@ -246,10 +252,13 @@ impl CompletionPort {
         // it is reclaimed. `into_overlapped` arms the type-erased reclaim thunk.
         let overlapped = operation.into_overlapped();
         let identity = overlapped as usize;
+        // Stamp this submission with a fresh generation, so the identity names
+        // this operation and not whatever later operation may reuse the address.
+        let id = OperationId::mint(overlapped);
 
-        // Count before issuing so a completion cannot race ahead of the count.
+        // Register before issuing so a completion cannot race ahead of the count.
         let state = &self.state;
-        state.outstanding.fetch_add(1, Ordering::SeqCst);
+        state.live.insert(id);
         let tracking = crate::source_tracking_enabled();
         if tracking {
             lock(&state.tracked).insert(
@@ -263,11 +272,11 @@ impl CompletionPort {
         }
 
         match issue(overlapped) {
-            Ok(Issued::Pending) => Submitted::Pending(OperationId(overlapped)),
+            Ok(Issued::Pending) => Submitted::Pending(id),
             Ok(Issued::Completed { bytes_transferred }) => {
                 // Synchronous completion with no packet to arrive (the
                 // skip-on-success case): balance the count and reclaim inline.
-                state.outstanding.fetch_sub(1, Ordering::SeqCst);
+                state.live.remove(overlapped);
                 if tracking {
                     lock(&state.tracked).remove(&identity);
                 }
@@ -282,7 +291,7 @@ impl CompletionPort {
                 }
             }
             Err(error) => {
-                state.outstanding.fetch_sub(1, Ordering::SeqCst);
+                state.live.remove(overlapped);
                 if tracking {
                     lock(&state.tracked).remove(&identity);
                 }
@@ -418,8 +427,26 @@ impl<'port> AssociatedEndpoint<'port> {
     /// Cancellation is only a request: the operation still completes, typically
     /// with `ERROR_OPERATION_ABORTED`, and that completion remains the point at
     /// which its storage is reclaimed with [`Completion::claim`].
+    ///
+    /// The identity is checked against this port's live operations first. An
+    /// identity whose operation has already completed is rejected with
+    /// [`io::ErrorKind::NotFound`] and no native call is made, even if another
+    /// operation has since been given the same storage address -- so retaining
+    /// an identity too long can never cancel an unrelated operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::NotFound`] if `id` no longer names a live
+    /// operation, or the error from `CancelIoEx` if the native request fails.
     pub fn cancel(&self, id: OperationId) -> io::Result<()> {
-        // SAFETY: cancelling by a valid handle and an OVERLAPPED identity.
+        if !self.port.state.live.is_live(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the operation named by this identity is no longer outstanding",
+            ));
+        }
+        // SAFETY: cancelling by a valid handle and an OVERLAPPED identity that
+        // the registry just confirmed still names a live operation.
         let ok = unsafe { CancelIoEx(self.raw_handle(), id.as_ptr()) };
         if ok == 0 {
             return Err(io::Error::last_os_error());
@@ -439,43 +466,6 @@ impl<'port> AssociatedEndpoint<'port> {
 
     fn raw_handle(&self) -> HANDLE {
         self.handle.as_raw_handle()
-    }
-}
-
-/// An identity for an in-flight operation: the address of its `OVERLAPPED`.
-///
-/// It is used to cancel a specific operation and to match its later completion.
-/// The pointer must not be dereferenced or freed; the kernel owns the storage
-/// until the completion is claimed.
-///
-/// An identity is unique only among operations that are outstanding *at the same
-/// time*. It is the address of the operation's storage, so once an operation
-/// completes and its storage is reclaimed, the allocator may hand the same
-/// address to a later operation. Use an identity to cancel or match a live
-/// operation; to correlate an operation across its whole lifetime, put a key in
-/// its payload instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OperationId(*mut OVERLAPPED);
-
-impl OperationId {
-    /// Build an identity from the `OVERLAPPED` returned by
-    /// [`Operation::into_overlapped`].
-    ///
-    /// Part of the shared submission seam: a completion backend implemented in
-    /// another crate -- the `TP_IO` backend in `windows-threadpool-sys` -- must
-    /// name the operations it has submitted using the same identity type the
-    /// backends here use. The value is only an address, and [`OperationId::as_ptr`]
-    /// already hands it back out, so wrapping one grants no additional access to
-    /// the operation's storage.
-    #[must_use]
-    pub fn from_ptr(overlapped: *mut OVERLAPPED) -> Self {
-        Self(overlapped)
-    }
-
-    /// The `OVERLAPPED` pointer this identity refers to.
-    #[must_use]
-    pub fn as_ptr(self) -> *mut OVERLAPPED {
-        self.0
     }
 }
 
@@ -533,6 +523,9 @@ pub struct Completion {
     bytes_transferred: u32,
     overlapped: *mut OVERLAPPED,
     error: Option<io::Error>,
+    /// The generation of the operation this packet completes, recovered from the
+    /// registry at dequeue time. `None` for a user packet, which has no operation.
+    generation: Option<u64>,
     state: Arc<PortState>,
     claimed: Cell<bool>,
 }
@@ -543,6 +536,7 @@ impl fmt::Debug for Completion {
             .field("key", &self.key)
             .field("bytes_transferred", &self.bytes_transferred)
             .field("overlapped", &self.overlapped)
+            .field("generation", &self.generation)
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
@@ -557,7 +551,7 @@ impl Drop for Completion {
         }
         // An operation completion observed but never claimed: reclaim it so the
         // port's rundown can finish.
-        self.state.outstanding.fetch_sub(1, Ordering::SeqCst);
+        self.state.live.remove(self.overlapped);
         if crate::source_tracking_enabled() {
             lock(&self.state.tracked).remove(&(self.overlapped as usize));
         }
@@ -589,6 +583,20 @@ impl Completion {
         self.overlapped
     }
 
+    /// The identity of the operation this packet completes.
+    ///
+    /// It matches the [`OperationId`] that [`AssociatedEndpoint::submit`]
+    /// returned for the operation, so a caller holding submission-time
+    /// identities can match a completion against them directly. Returns `None`
+    /// for a user packet from [`CompletionPort::post`], which completes no
+    /// operation.
+    #[must_use]
+    pub fn id(&self) -> Option<OperationId> {
+        // The registry recorded this generation for this address at submission,
+        // so pairing them reproduces the identity that submit returned.
+        Some(OperationId::from_parts(self.overlapped, self.generation?))
+    }
+
     /// The failure of the completed operation, if it did not succeed.
     #[must_use]
     pub fn error(&self) -> Option<&io::Error> {
@@ -605,7 +613,7 @@ impl Completion {
     pub unsafe fn claim<P>(&self) -> Operation<P> {
         // Mark claimed so this completion's own drop will not also reclaim it.
         self.claimed.set(true);
-        self.state.outstanding.fetch_sub(1, Ordering::SeqCst);
+        self.state.live.remove(self.overlapped);
         if crate::source_tracking_enabled() {
             lock(&self.state.tracked).remove(&(self.overlapped as usize));
         }

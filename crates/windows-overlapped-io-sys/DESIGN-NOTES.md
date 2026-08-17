@@ -189,13 +189,17 @@ may only manage this on a best-effort basis (behind an optional logging feature 
 standard error), and full context may not always be recoverable; the diagnostic is advisory, not a correctness
 mechanism.
 
-The raw IOCP backend keeps rundown correctness lock-free: an atomic outstanding count governs draining, and
-each operation's `repr(C)` header carries a type-erased reclaim thunk that frees it from the `OVERLAPPED` pointer
-alone. Source tracking is a separate, opt-in diagnostic layer: when enabled it records each operation's
+Rundown correctness rests on the live-operation registry: its length is the outstanding count that governs
+draining, and each operation's `repr(C)` header carries a type-erased reclaim thunk that frees it from the
+`OVERLAPPED` pointer alone. The registry was originally a lock-free `AtomicUsize`; it became a mutex-guarded map
+when identities gained generations, because liveness has to be checked per identity and not merely counted (see
+[the identity decision](#decision--identities-are-generation-stamped-and-validated-not-bare-addresses)).
+
+Source tracking is a separate, opt-in diagnostic layer: when enabled it records each operation's
 `#[track_caller]` submit `Location` in a per-port map, so the drop-time message can name the sources. It is a
 one-time in-process setting (`set_source_tracking`) that defaults from the `WINDOWS_OVERLAPPED_IO_SYS_TRACK`
-environment variable and is off by default, because when on it takes a mutex on the submission hot path. With
-tracking off, the drop message reports only the count and how to enable sources. The optional
+environment variable and is off by default. Its cost is now a second map insertion rather than the only lock on
+the path. With tracking off, the drop message reports only the count and how to enable sources. The optional
 `operation-backtrace` cargo feature additionally captures a full backtrace per submission -- itself gated at run
 time by `RUST_BACKTRACE` -- giving both build-time and run-time control over how much context is retained.
 
@@ -284,14 +288,46 @@ submission, `CancelThreadpoolIo` to balance an immediate failure, and reclamatio
 the operation family is known, or `reclaim_overlapped` during object rundown). This crate never links the
 thread-pool functions or references `TP_*`.
 
-An operation identity is unique only across operations outstanding *at the same time*. Because the identity is
-the address of the operation's storage, reclaiming an operation returns that address to the allocator, which
-may then hand it to a later operation -- so identities are recycled, not monotonic. This is a property of the
-storage model rather than of any one backend, and it was surfaced by the thread-pool crate's behavioral matrix,
-where fast cached reads completed and were reclaimed while later operations were still being submitted.
-Identities remain correct for their documented purposes (cancelling and matching a live operation); correlating
-an operation across its entire lifetime is the payload's job, since the payload travels inside the storage and
-is unique for as long as the operation exists.
+### Decision — identities are generation-stamped and validated, not bare addresses
+
+An operation's storage address alone is not a durable name for it. Reclaiming an operation returns that address
+to the allocator, which may hand it to a later operation, so an address retained past its operation's completion
+can name a different, live operation. This was originally treated as a documentation matter -- "an identity is
+unique only among simultaneously outstanding operations" -- but that was the wrong call, because it left a
+**safe** function able to do something silently wrong: `cancel` acts purely on the address, so a stale identity
+could cancel an unrelated operation. It was reproduced directly, recycling an address within 64 cancel-and-
+resubmit cycles.
+
+The severity comes from the triggering pattern being the *primary* use of cancellation -- a timeout firing while
+a completion is in flight. A caller cannot atomically know whether the operation is still outstanding; that is
+precisely what it needs the API to establish.
+
+`OperationId` therefore carries a process-wide monotonic generation taken at submission, and each backend keeps
+an `OperationRegistry` of live identities. Cancellation consults the registry and rejects an identity that is
+not live under its own generation, with `ErrorKind::NotFound` and **without** calling `CancelIoEx` -- a recycled
+address is never handed to the kernel on the caller's behalf. Retaining an identity indefinitely is now
+harmless.
+
+Consequences accepted:
+
+- **The IOCP backend's lock-free submission path is gone.** `PortState` previously kept `outstanding` as an
+	`AtomicUsize` specifically so the mutex was untouched on the hot path by default. The registry must be
+	consulted on every submission and completion, so that property is deliberately reversed: correctness of a
+	safe API outranks an uncontended-atomic-versus-mutex difference on the submission path. The registry replaces
+	the counter rather than joining it (`outstanding` is now `live.len()`), so there is one lock rather than a
+	lock plus an atomic, and the count and the liveness set cannot disagree.
+- **The generation sequence is process-wide, not per-backend.** Per-object counters would let two objects mint
+	the same (address, generation) pair, so an identity from one object could alias an operation in another. A
+	single `AtomicU64` costs one relaxed increment and makes every identity unique for the life of the process;
+	at one submission per nanosecond it still takes centuries to wrap.
+- **`OperationId` is `Send + Sync`.** The raw pointer would otherwise make it neither, which would put
+	cancelling from a different thread -- the entire point of holding an identity -- out of reach. The identity
+	is inert data that no backend dereferences, so this is sound.
+
+Alternatives rejected: storing the generation inside the operation header and validating by reading it, which
+would require dereferencing storage that may already be freed; and exposing an `is_outstanding(id)` predicate,
+which invites a time-of-check/time-of-use race when `cancel`'s return value already answers the same question
+atomically.
 
 `OperationId`, `Issued`, and `Submitted` are part of that seam rather than IOCP-private types: an operation
 identity, a submission classification, and a submission outcome mean the same thing to any backend. Building

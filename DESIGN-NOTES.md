@@ -86,6 +86,11 @@ below are the common surface both must satisfy.
 - The matching completion -- delivered even for a cancelled operation, typically as `ERROR_OPERATION_ABORTED`
 	-- remains the sole trigger that reclaims the operation's storage. Targeted and whole-endpoint cancellation
 	both leave that completion path intact.
+- Targeted cancellation names an operation by an `OperationId`, which pairs the storage address with a
+	process-wide generation taken at submission. Both crates validate the identity against their live-operation
+	registry before issuing a native cancel, so an identity retained past its operation's completion is rejected
+	rather than applied to whatever operation has since been given that address. Cancelling therefore races
+	safely against completion in both crates: a late cancel fails, it never hits an unrelated operation.
 
 ### Callback lifetime and teardown
 
@@ -202,9 +207,12 @@ three paths: the I/O callback (pending), or `CancelThreadpoolIo` inline in `subm
 for a synchronous completion on a handle in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode. The unsafe contract on
 `submit` exists to make the caller's `Issued` classification the single point where this can go wrong.
 
-The count is a `Mutex<usize>` plus a `Condvar` rather than the raw IOCP backend's `AtomicUsize`. That backend
-can dequeue on the owner's thread, so it drains by pumping `get()` in a loop; here the completions are delivered
-on pool threads the owner does not drive, so rundown must block on a condition variable instead of spinning.
+The accounting is the shared `OperationRegistry` from `windows-overlapped-io-sys`: its length is the number of
+unbalanced starts, and its condition variable is what rundown blocks on. Using the shared type rather than a
+private counter means the two backends cannot drift apart on what "outstanding" means, and it gives `TP_IO` the
+identity validation described under [Cancellation](#cancellation) for free. Rundown must block on a condition
+variable rather than pump a dequeue loop as the IOCP backend does, because these completions arrive on pool
+threads the owner does not drive.
 
 ### Callback ordering is what makes rundown mean something
 
@@ -232,9 +240,15 @@ potential permanent hang into a bounded wait.
 
 `OperationId` had no public constructor, so only backends inside `windows-overlapped-io-sys` could name their
 in-flight operations. Implementing the second backend outside that crate revealed the gap, and it was fixed at
-the source with `OperationId::from_ptr` rather than by defining a competing identity type here -- a duplicate
-would have split the shared vocabulary the two crates are supposed to hold in common. The constructor is safe:
-the value is only an address, and `OperationId::as_ptr` already hands it back out.
+the source rather than by defining a competing identity type here -- a duplicate would have split the shared
+vocabulary the two crates are supposed to hold in common.
+
+Building the second backend then exposed a deeper problem in the same seam: an identity was only an address, so
+one retained past its operation's completion could name a later operation that had been given the same storage.
+`OperationId::mint` / `from_parts` and the shared `OperationRegistry` replaced the original address-only
+constructor; see
+[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) for that
+decision, which this crate consumes rather than duplicates.
 
 Primary references:
 

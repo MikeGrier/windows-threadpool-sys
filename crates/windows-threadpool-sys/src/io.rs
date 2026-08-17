@@ -27,11 +27,11 @@ use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use windows_overlapped_io_sys::{
-    Issued, Operation, OperationId, OperationState, Submitted, UnassociatedEndpoint,
-    reclaim_overlapped,
+    Issued, Operation, OperationId, OperationRegistry, OperationState, Submitted,
+    UnassociatedEndpoint, reclaim_overlapped,
 };
 use windows_sys::Win32::Foundation::{FALSE, HANDLE, NO_ERROR};
 use windows_sys::Win32::System::IO::{CancelIoEx, OVERLAPPED};
@@ -42,83 +42,27 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::callback_env::CallbackEnviron;
 
-/// Lock a mutex, recovering the guard even if a previous holder panicked.
-///
-/// A poisoned lock here only means some callback panicked; the outstanding count
-/// it protects is still a plain integer that the guards keep exact, so refusing
-/// to run down would be strictly worse than continuing.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
-}
-
-/// The outstanding-operation accounting shared by a [`ThreadpoolIo`] and the
-/// callbacks the pool runs for it.
-///
-/// The count is exactly the number of `StartThreadpoolIo` calls that have not
-/// yet been balanced, so it is also the number of operations whose storage is
-/// still owned by the kernel or the pool. Rundown blocks on the condition
-/// variable rather than spinning, because the completions that release it are
-/// delivered on pool threads the owner does not drive.
-struct IoState {
-    outstanding: Mutex<usize>,
-    drained: Condvar,
-}
-
-impl IoState {
-    fn new() -> Self {
-        Self {
-            outstanding: Mutex::new(0),
-            drained: Condvar::new(),
-        }
-    }
-
-    /// Record one `StartThreadpoolIo`, before it is issued.
-    fn start_one(&self) {
-        *lock(&self.outstanding) += 1;
-    }
-
-    /// Balance one `StartThreadpoolIo`, waking rundown when the last one clears.
-    fn finish_one(&self) {
-        let mut count = lock(&self.outstanding);
-        *count -= 1;
-        if *count == 0 {
-            self.drained.notify_all();
-        }
-    }
-
-    fn outstanding(&self) -> usize {
-        *lock(&self.outstanding)
-    }
-
-    /// Block until every start has been balanced.
-    fn wait_for_drain(&self) {
-        let mut count = lock(&self.outstanding);
-        while *count > 0 {
-            count = self
-                .drained
-                .wait(count)
-                .unwrap_or_else(|poison| poison.into_inner());
-        }
-    }
-}
-
 /// Heap-allocated callback state kept alive for the lifetime of the `TP_IO`
 /// object, and freed only after [`ThreadpoolIo::drop`] has drained every
 /// operation and waited for every executing callback.
 struct IoContext {
-    state: Arc<IoState>,
+    live: Arc<OperationRegistry>,
     callback: Box<dyn Fn(&IoCompletion) + Send + Sync + 'static>,
 }
 
 /// Balances one `StartThreadpoolIo` when the callback frame ends, including
 /// while unwinding, so a panicking callback cannot corrupt the accounting.
+///
+/// Removing the operation from the registry is what balances the start: the
+/// registry's length is the number of unbalanced starts.
 struct StartBalance<'state> {
-    state: &'state IoState,
+    live: &'state OperationRegistry,
+    overlapped: *mut OVERLAPPED,
 }
 
 impl Drop for StartBalance<'_> {
     fn drop(&mut self) {
-        self.state.finish_one();
+        self.live.remove(self.overlapped);
     }
 }
 
@@ -139,15 +83,24 @@ unsafe extern "system" fn io_trampoline(
     // SAFETY: context is a valid *mut IoContext for the full callback duration (see Drop).
     let ctx = unsafe { &*(context as *const IoContext) };
 
+    let overlapped = overlapped.cast::<OVERLAPPED>();
+
     // A panic must never unwind across the FFI boundary into the pool's frame.
     // Inside the guarded frame, locals drop in reverse declaration order, so the
     // operation's storage is reclaimed first and the start is balanced second --
     // on the normal path and while unwinding alike. Balancing last is what makes
     // "outstanding reached zero" mean "no storage is still pool-owned".
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        let _balance = StartBalance { state: &ctx.state };
+        let _balance = StartBalance {
+            live: &ctx.live,
+            overlapped,
+        };
         let completion = IoCompletion {
-            overlapped: overlapped.cast::<OVERLAPPED>(),
+            overlapped,
+            // Read the generation while the operation is still registered, so
+            // the callback can name it exactly; the balance above deregisters it
+            // only after the callback has returned.
+            generation: ctx.live.generation_of(overlapped),
             io_result,
             bytes_transferred,
             claimed: Cell::new(false),
@@ -174,13 +127,13 @@ pub struct ThreadpoolIo {
     handle: OwnedHandle,
     // Kept alive as a raw pointer until Drop has drained and waited.
     context: *mut IoContext,
-    state: Arc<IoState>,
+    live: Arc<OperationRegistry>,
 }
 
 // SAFETY: PTP_IO is a cross-thread pool object and OwnedHandle is Send + Sync.
 // `context` points to an IoContext whose callback is Fn + Send + Sync and whose
-// state is an Arc<IoState>; it is only read (never reassigned) until Drop frees
-// it after all callbacks have finished.
+// registry is an Arc<OperationRegistry>; it is only read (never reassigned)
+// until Drop frees it after all callbacks have finished.
 unsafe impl Send for ThreadpoolIo {}
 unsafe impl Sync for ThreadpoolIo {}
 
@@ -210,9 +163,9 @@ impl ThreadpoolIo {
         F: Fn(&IoCompletion) + Send + Sync + 'static,
     {
         let handle = endpoint.into_handle();
-        let state = Arc::new(IoState::new());
+        let live = Arc::new(OperationRegistry::new());
         let context = Box::into_raw(Box::new(IoContext {
-            state: Arc::clone(&state),
+            live: Arc::clone(&live),
             callback: Box::new(callback),
         }));
 
@@ -241,7 +194,7 @@ impl ThreadpoolIo {
             tp_io,
             handle,
             context,
-            state,
+            live,
         })
     }
 
@@ -256,7 +209,7 @@ impl ThreadpoolIo {
     /// calls.
     #[must_use]
     pub fn outstanding(&self) -> usize {
-        self.state.outstanding()
+        self.live.len()
     }
 
     /// Submit an owned operation on this endpoint.
@@ -297,20 +250,24 @@ impl ThreadpoolIo {
         // Transfer the operation's storage out; the kernel owns it until it is
         // reclaimed. `into_overlapped` arms the type-erased reclaim thunk.
         let overlapped = operation.into_overlapped();
+        // Stamp this submission with a fresh generation, so the identity names
+        // this operation and not whatever later operation may reuse the address.
+        let id = OperationId::mint(overlapped);
 
-        // Count before starting so a callback can never race ahead of the count.
-        self.state.start_one();
+        // Register before starting so a callback can never race ahead of the
+        // accounting; the registry's length is the unbalanced-start count.
+        self.live.insert(id);
         // SAFETY: tp_io is valid for the lifetime of self. This start is balanced
         // exactly once on every path below.
         unsafe { StartThreadpoolIo(self.tp_io) };
 
         match issue(self.handle(), overlapped) {
-            Ok(Issued::Pending) => Submitted::Pending(OperationId::from_ptr(overlapped)),
+            Ok(Issued::Pending) => Submitted::Pending(id),
             Ok(Issued::Completed { bytes_transferred }) => {
                 // SAFETY: no callback will arrive, so the start must be balanced
                 // here or the pool would wait for a completion that never comes.
                 unsafe { CancelThreadpoolIo(self.tp_io) };
-                self.state.finish_one();
+                self.live.remove(overlapped);
                 // SAFETY: the operation completed synchronously and no callback
                 // will arrive, so the kernel is done with the storage; reclaim
                 // the box we just leaked, exactly once.
@@ -325,7 +282,7 @@ impl ThreadpoolIo {
                 // SAFETY: the submission failed and no callback will arrive, so
                 // the start must be balanced here.
                 unsafe { CancelThreadpoolIo(self.tp_io) };
-                self.state.finish_one();
+                self.live.remove(overlapped);
                 // SAFETY: no callback will arrive, so reclaim the operation we
                 // just leaked, exactly once.
                 let mut operation = unsafe { Operation::<P>::from_overlapped(overlapped) };
@@ -341,12 +298,26 @@ impl ThreadpoolIo {
     /// with `ERROR_OPERATION_ABORTED`, and that completion callback remains the
     /// point at which its storage is reclaimed.
     ///
+    /// The identity is checked against this object's live operations first. An
+    /// identity whose operation has already completed is rejected with
+    /// [`io::ErrorKind::NotFound`] and no native call is made, even if another
+    /// operation has since been given the same storage address. Cancelling
+    /// therefore races safely against completion: the worst outcome of a late
+    /// cancel is this error, never the cancellation of an unrelated operation.
+    ///
     /// # Errors
     ///
-    /// Returns the error from `CancelIoEx`, which reports `ERROR_NOT_FOUND` when
-    /// the operation already completed -- a benign race, not a failure to cancel.
+    /// Returns [`io::ErrorKind::NotFound`] if `id` no longer names a live
+    /// operation, or the error from `CancelIoEx` if the native request fails.
     pub fn cancel(&self, id: OperationId) -> io::Result<()> {
-        // SAFETY: cancelling by a valid handle and an OVERLAPPED identity.
+        if !self.live.is_live(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the operation named by this identity is no longer outstanding",
+            ));
+        }
+        // SAFETY: cancelling by a valid handle and an OVERLAPPED identity that
+        // the registry just confirmed still names a live operation.
         let ok = unsafe { CancelIoEx(self.raw_handle(), id.as_ptr()) };
         if ok == 0 {
             return Err(io::Error::last_os_error());
@@ -376,7 +347,7 @@ impl ThreadpoolIo {
     /// or this waits indefinitely. Each completion callback reclaims its own
     /// operation, so rundown is just waiting for the count to reach zero.
     pub fn run_down(&self) {
-        self.state.wait_for_drain();
+        self.live.wait_until_empty();
     }
 
     /// Block until no I/O callback for this object is executing.
@@ -420,7 +391,7 @@ impl Drop for ThreadpoolIo {
                  this blocks."
             );
             let _ = self.cancel_all();
-            self.state.wait_for_drain();
+            self.live.wait_until_empty();
         }
 
         // The count reaches zero inside the last callback, just before it
@@ -451,6 +422,10 @@ impl Drop for ThreadpoolIo {
 /// payload types.
 pub struct IoCompletion {
     overlapped: *mut OVERLAPPED,
+    /// The generation of the completing operation, read from the registry while
+    /// it was still registered. `None` only if the entry was already gone, which
+    /// a correctly-operating backend does not produce.
+    generation: Option<u64>,
     io_result: u32,
     bytes_transferred: usize,
     claimed: Cell<bool>,
@@ -460,6 +435,7 @@ impl fmt::Debug for IoCompletion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IoCompletion")
             .field("overlapped", &self.overlapped)
+            .field("generation", &self.generation)
             .field("io_result", &self.io_result)
             .field("bytes_transferred", &self.bytes_transferred)
             .finish_non_exhaustive()
@@ -492,9 +468,15 @@ impl IoCompletion {
 
     /// The identity of the completed operation, as returned by
     /// [`ThreadpoolIo::submit`].
+    ///
+    /// It compares equal to the [`OperationId`] that submission returned, so a
+    /// caller holding submission-time identities can match a completion against
+    /// them directly.
     #[must_use]
-    pub fn id(&self) -> OperationId {
-        OperationId::from_ptr(self.overlapped)
+    pub fn id(&self) -> Option<OperationId> {
+        // The registry recorded this generation for this address at submission,
+        // so pairing them reproduces the identity that submit returned.
+        Some(OperationId::from_parts(self.overlapped, self.generation?))
     }
 
     /// The `OVERLAPPED` pointer identifying the completed operation.
