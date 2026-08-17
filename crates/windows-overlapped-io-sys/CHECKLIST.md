@@ -13,5 +13,5 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	typed `DeviceIoControlIo` token whose `claim(&Completion)` recovers the output buffer and byte count. See
 	[DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Integration test (`device`): an `FSCTL` query on a real file through both the blocking and IOCP `ioctl`
+- [x] Integration test (`device`): an `FSCTL` query on a real file through both the blocking and IOCP `ioctl`
 	adapters, with no `unsafe` in the test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
