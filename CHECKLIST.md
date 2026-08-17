@@ -1,39 +1,26 @@
-# Checklist
+# Checklist: workspace
 
-## Workspace and release
+Workspace-level and cross-crate work only. Per-crate work is tracked in
+[crates/windows-overlapped-io-sys/CHECKLIST.md](crates/windows-overlapped-io-sys/CHECKLIST.md) and
+[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md).
+
+## M1 — Workspace and release
 
 - [x] Specialize the crate name, metadata, documentation, and release config.
+
 - [x] Split the workspace into `windows-overlapped-io-sys` and `windows-threadpool-sys` with independent,
 	component-tagged publishing.
+
 - [ ] Reserve the `windows-overlapped-io-sys` name on crates.io.
+
 - [ ] Confirm CI and crates.io publishing secrets are configured for both crates.
 
-## Shared
+## M2 — Shared invariants
 
 - [x] Select the initial `windows-sys` feature set and document the FFI boundary.
+
 - [x] Choose the minimum supported Windows version for the pair (Windows Server 2025 / Windows 11, per CI).
-- [ ] Specify ownership, cancellation, and callback lifetime invariants.
 
-## windows-overlapped-io-sys
-
-- [x] Specify the rounded-out overlapped-I/O requirements and the crate boundary.
-- [x] Specify the voluntary-rundown-versus-`Drop` contract.
-- [x] Implement endpoint ownership and the unsafe provenance seam.
-- [x] Implement pinned operation storage and `OVERLAPPED` completion identity.
-- [x] Implement the raw IOCP backend: port, association, submission, and cancellation.
-- [x] Implement outstanding-operation accounting, generic reclamation, and blocking rundown for the voluntary
-	method and `Drop`, with a non-panicking `Drop` diagnostic that names each outstanding operation's submit site
-	(the `operation-backtrace` feature adds full backtraces).
-- [ ] Design safe endpoint creators / sealed association to remove reliance on the unsafe seam.
-- [x] Implement and test the blocking `GetOverlappedResult` backend for un-ported endpoints.
-- [x] Define the submission seam (`into_overlapped` / `from_overlapped` / `reclaim_overlapped`) consumed by the
-	thread-pool `TP_IO` implementation, and dogfood it in the raw IOCP backend.
-- [ ] Add the gated `windows-sys` feature layout for file, socket, and device operations.
-
-## windows-threadpool-sys
-
-- [ ] Implement and test SDK-equivalent callback environment helpers.
-- [ ] Implement the `TP_IO` backend and `StartThreadpoolIo` accounting over the shared seam.
-- [ ] Implement safe work, timer, wait, and I/O abstractions.
-- [ ] Test callback completion, cancellation, and destruction on Windows.
-- [ ] Add API examples and generated documentation.
+- [ ] Specify the ownership, cancellation, and callback lifetime invariants shared by both crates. See the
+	workspace [DESIGN-NOTES.md](DESIGN-NOTES.md) and
+	[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md).
