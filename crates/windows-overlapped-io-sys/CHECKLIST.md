@@ -9,7 +9,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	feature, issuing an overlapped `DeviceIoControl` and returning `io::Result<(Vec<u8>, usize)>` with no `unsafe`
 	for the caller. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Implement safe-submission `AssociatedEndpoint::ioctl(code, input, output_len)` behind `device` returning a
+- [x] Implement safe-submission `AssociatedEndpoint::ioctl(code, input, output_len)` behind `device` returning a
 	typed `DeviceIoControlIo` token whose `claim(&Completion)` recovers the output buffer and byte count. See
 	[DESIGN-NOTES.md](DESIGN-NOTES.md).
 

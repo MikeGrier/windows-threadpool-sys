@@ -43,6 +43,9 @@ pub use blocking::BlockingEndpoint;
 #[cfg(windows)]
 pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_enabled};
 
+#[cfg(all(windows, feature = "device"))]
+pub use device::DeviceIoControlIo;
+
 #[cfg(windows)]
 pub use endpoint::UnassociatedEndpoint;
 
