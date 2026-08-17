@@ -206,6 +206,10 @@ impl CompletionPort {
 
     /// The registry of operations submitted through this port and not yet
     /// reclaimed, for backends that must validate an identity before cancelling.
+    ///
+    /// Only the socket backend reaches for this; the file backend cancels
+    /// through `AssociatedEndpoint`, which already holds the port.
+    #[cfg(feature = "socket")]
     pub(crate) fn live_operations(&self) -> &OperationRegistry {
         &self.state.live
     }

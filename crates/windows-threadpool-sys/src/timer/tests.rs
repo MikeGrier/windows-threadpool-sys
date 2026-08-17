@@ -241,6 +241,71 @@ fn a_self_rearming_callback_never_overlaps() {
     );
 }
 
+/// Re-arming at the *start* of a slow callback must still not overlap, because
+/// the request is applied only after the callback returns. Arming immediately
+/// would let the next firing begin while this one is still running.
+#[test]
+fn rearming_early_in_a_slow_callback_still_does_not_overlap() {
+    let concurrent = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let fires = Fires::new();
+
+    let in_flight = Arc::clone(&concurrent);
+    let high_water = Arc::clone(&peak);
+    let recorder = Arc::clone(&fires);
+
+    let timer = ThreadpoolTimer::new(
+        move |firing| {
+            // Requested first, with a delay far shorter than this callback runs.
+            firing.rearm_after(Duration::from_millis(1));
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            high_water.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(15));
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            recorder.record();
+        },
+        None,
+    )
+    .expect("create timer");
+
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(4);
+    timer.disarm();
+    timer.wait();
+
+    assert_eq!(
+        peak.load(Ordering::SeqCst),
+        1,
+        "re-arming early must not let the next firing start before this one ends"
+    );
+}
+
+/// The last request in a firing wins, rather than each one arming separately.
+#[test]
+fn the_last_rearm_request_in_a_firing_wins() {
+    let fires = Fires::new();
+    let recorder = Arc::clone(&fires);
+    let timer = ThreadpoolTimer::new(
+        move |firing| {
+            let seen = recorder.count();
+            recorder.record();
+            if seen + 1 < 3 {
+                // Only the second request should take effect.
+                firing.rearm_after(Duration::from_secs(3_600));
+                firing.rearm_after(Duration::from_millis(1));
+            }
+        },
+        None,
+    )
+    .expect("create timer");
+
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(3);
+    timer.disarm();
+    timer.wait();
+    assert_eq!(fires.count(), 3);
+}
+
 #[test]
 fn a_callback_that_does_not_rearm_stops() {
     let (timer, fires) = counting_timer();

@@ -47,7 +47,7 @@ leaving other routes to the same hazard open.
 	trampoline in the crate. A panicking work callback unwinds into a non-unwind FFI boundary and aborts the
 	process, while the crate documentation promises panics are contained.
 
-- [ ] **PR-5** — Defer token-requested timer re-arming until the callback has returned.
+- [x] **PR-5** — Defer token-requested timer re-arming until the callback has returned.
 
 	**Gap:** `TimerFiring::rearm_after` arms immediately, so its delay runs from the moment of the call rather
 	than from the end of the firing. A callback that re-arms early and then runs longer than the delay can be

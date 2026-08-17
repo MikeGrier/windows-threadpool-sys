@@ -5,9 +5,9 @@
 //! Two types share this machinery, and they differ in the one property that
 //! matters when writing the callback:
 //!
-//! - [`ThreadpoolTimer`] fires **exactly once per arming**. A firing cannot overlap
-//!   another firing of the same timer, because there is no next one until the
-//!   caller arms it again.
+//! - [`ThreadpoolTimer`] fires **exactly once per arming**, and re-arming from
+//!   inside its own callback is applied only after that callback returns, so
+//!   repetition driven that way never overlaps itself.
 //! - [`ThreadpoolPeriodicTimer`] repeats on a fixed period, and the pool may queue the
 //!   next callback **while the previous one is still running**. Its callback
 //!   must tolerate overlapping with itself.
@@ -35,6 +35,7 @@ mod periodic;
 
 pub use periodic::{PeriodicTick, ThreadpoolPeriodicTimer};
 
+use std::cell::Cell;
 use std::io;
 use std::ptr;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -131,6 +132,18 @@ pub(crate) struct TimerContext {
     callback: Box<dyn Fn(&TimerFiring<'_>) + Send + Sync + 'static>,
 }
 
+/// A re-arming a callback asked for, applied once the callback has returned.
+///
+/// Applying it immediately would start the delay from the moment of the call
+/// rather than from the end of the firing, which is both what the API documents
+/// and what keeps firings from overlapping: a callback that re-armed early and
+/// then ran longer than its delay could be entered again concurrently.
+#[derive(Clone, Copy)]
+enum PendingRearm {
+    After(Duration),
+    At(SystemTime),
+}
+
 /// One firing of a [`ThreadpoolTimer`], handed to its callback.
 ///
 /// The timer is not armed while the callback runs, so re-arming from here is
@@ -138,6 +151,11 @@ pub(crate) struct TimerContext {
 /// callback -- repetition that can never overlap itself.
 pub struct TimerFiring<'ctx> {
     ctx: &'ctx TimerContext,
+    /// What the callback asked for, applied by the trampoline after it returns.
+    ///
+    /// A `Cell` rather than a lock because the firing is borrowed only by the
+    /// one callback invocation that owns it.
+    pending: Cell<Option<PendingRearm>>,
 }
 
 impl std::fmt::Debug for TimerFiring<'_> {
@@ -149,23 +167,39 @@ impl std::fmt::Debug for TimerFiring<'_> {
 impl TimerFiring<'_> {
     /// Arm the timer again to fire once, `delay` from now.
     ///
-    /// Because "now" is inside the callback, successive delays are measured from
-    /// the end of each firing rather than from a fixed schedule. That is the
-    /// non-overlapping alternative to [`ThreadpoolPeriodicTimer`].
+    /// The arming is applied after this callback returns, so `delay` is measured
+    /// from the **end** of this firing regardless of where in the callback it is
+    /// requested. That is what keeps successive firings strictly sequential: a
+    /// callback that re-armed at its start and then ran longer than `delay`
+    /// would otherwise be entered again while still running.
+    ///
+    /// Calling this more than once in a firing keeps the last request.
     pub fn rearm_after(&self, delay: Duration) {
-        let timer = self.ctx.timer.load(Ordering::Acquire);
-        debug_assert_ne!(timer, 0, "the timer must be published before callbacks");
-        // SAFETY: `timer` is this object's live PTP_TIMER, published before any
-        // callback could run.
-        unsafe { arm_raw(timer, relative_filetime(delay), 0, 0) };
+        self.pending.set(Some(PendingRearm::After(delay)));
     }
 
     /// Arm the timer again to fire once at the wall-clock instant `when`.
+    ///
+    /// Like [`TimerFiring::rearm_after`], this is applied after the callback
+    /// returns. An instant that has already passed by then fires immediately.
     pub fn rearm_at(&self, when: SystemTime) {
+        self.pending.set(Some(PendingRearm::At(when)));
+    }
+
+    /// Apply whatever the callback asked for, once it has returned.
+    fn apply_pending(&self) {
+        let Some(pending) = self.pending.get() else {
+            return;
+        };
         let timer = self.ctx.timer.load(Ordering::Acquire);
         debug_assert_ne!(timer, 0, "the timer must be published before callbacks");
-        // SAFETY: as above.
-        unsafe { arm_raw(timer, absolute_filetime(when), 0, 0) };
+        let due = match pending {
+            PendingRearm::After(delay) => relative_filetime(delay),
+            PendingRearm::At(when) => absolute_filetime(when),
+        };
+        // SAFETY: `timer` is this object's live PTP_TIMER, published before any
+        // callback could run.
+        unsafe { arm_raw(timer, due, 0, 0) };
     }
 }
 
@@ -181,24 +215,47 @@ unsafe extern "system" fn timer_trampoline(
 ) {
     // SAFETY: context is a valid *mut TimerContext for the full callback duration.
     let ctx = unsafe { &*(context as *const TimerContext) };
-    let firing = TimerFiring { ctx };
+    let firing = TimerFiring {
+        ctx,
+        pending: Cell::new(None),
+    };
     // A panic must never unwind across the FFI boundary into the pool's frame.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         (ctx.callback)(&firing);
     }));
+    // Applied only now that the callback has returned, so a requested delay runs
+    // from the end of this firing and the next one cannot overlap it. A callback
+    // that panicked after requesting a re-arm still gets it, matching the
+    // accounting behaviour of the crate's other trampolines.
+    firing.apply_pending();
 }
 
 /// An owned one-shot thread-pool timer.
 ///
-/// Each arming produces exactly one firing, so a firing can never overlap
-/// another firing of the same timer. Arm it with [`ThreadpoolTimer::set_after`] or
-/// [`ThreadpoolTimer::set_at`], and stop it with [`ThreadpoolTimer::disarm`]. Arming again replaces
-/// the previous setting rather than adding to it.
+/// Each arming produces exactly one firing. Arm it with
+/// [`ThreadpoolTimer::set_after`] or [`ThreadpoolTimer::set_at`], and stop it
+/// with [`ThreadpoolTimer::disarm`]. Arming again replaces the previous setting
+/// rather than adding to it.
 ///
 /// For repetition, either re-arm from inside the callback with
 /// [`TimerFiring::rearm_after`] -- which keeps firings strictly sequential -- or
-/// use [`ThreadpoolPeriodicTimer`] when a fixed cadence matters more than avoiding
-/// overlap.
+/// use [`ThreadpoolPeriodicTimer`] when a fixed cadence matters more than
+/// avoiding overlap.
+///
+/// # When firings can overlap
+///
+/// Re-arming through [`TimerFiring`] never overlaps: the request is applied
+/// after the callback returns, so the next firing cannot begin until this one
+/// has finished. That is the intended way to repeat.
+///
+/// Arming from *outside* the callback is a different matter. Calling
+/// [`ThreadpoolTimer::set_after`] while a callback is running can queue the next
+/// firing before the current one returns, and the two then run concurrently on
+/// different pool threads. The callback is `Fn + Sync`, so this is permitted
+/// rather than unsound -- but it means a callback that assumes it is the only
+/// one running must not be driven that way. Re-arm from the callback, or use
+/// [`ThreadpoolTimer::disarm`] and [`ThreadpoolTimer::wait`] before re-arming
+/// externally.
 ///
 /// [`Drop`] disarms before draining callbacks, so the captured closure stays
 /// valid for the full lifetime of every callback execution.
