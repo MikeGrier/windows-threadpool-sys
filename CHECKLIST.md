@@ -37,7 +37,7 @@ live identities, so cancellation can reject an identity that no longer names the
 	commits. Records the decision in both crates' DESIGN-NOTES, including the reversal of the IOCP backend's
 	previously documented lock-free-submission property and the alternatives rejected.
 
-- [ ] **AB-2** — Test in `windows-overlapped-io-sys` that a retained identity cannot cancel a recycled
+- [x] **AB-2** — Test in `windows-overlapped-io-sys` that a retained identity cannot cancel a recycled
 	operation on the IOCP backend, including a direct reproduction of address recycling.
 
 - [ ] **AB-3** — Test in `windows-threadpool-sys` that a retained identity cannot cancel a recycled operation
