@@ -299,10 +299,13 @@ impl SocketIo {
     /// `result` is the byte count or the operation's error. Returns `Err(self)`
     /// when `completion` belongs to a different operation.
     pub fn claim(self, completion: &Completion) -> Result<(Vec<u8>, io::Result<usize>), Self> {
-        if completion.overlapped_ptr() != self.id.as_ptr() {
+        if completion.id() != Some(self.id) {
             return Err(self);
         }
-        // SAFETY: the identity match proves this completion is the
+        // SAFETY: the full identity -- address *and* generation -- matches, which
+        // an address alone would not: a recycled address can belong to a later
+        // operation of a different payload type. The match therefore proves this
+        // completion is the
         // Operation<SocketPayload> this token submitted; claim it exactly once.
         let operation = unsafe { completion.claim::<SocketPayload>() };
         let buffer = operation.into_payload().buffer;

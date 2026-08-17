@@ -23,7 +23,7 @@ leaving other routes to the same hazard open.
 	**Target:** a registry operation that checks liveness and performs the native cancellation while still
 	holding the guard, used by the IOCP, socket, and `TP_IO` cancellation paths alike.
 
-- [ ] **PR-2** — Compare full operation identities in the typed claim tokens.
+- [x] **PR-2** — Compare full operation identities in the typed claim tokens.
 
 	**Gap:** `FileIo`, `ScatterGatherIo`, `SocketIo`, and `DeviceIoControlIo` match a completion by comparing
 	`completion.overlapped_ptr()` against a stored address only. A token that outlives an unclaimed completion

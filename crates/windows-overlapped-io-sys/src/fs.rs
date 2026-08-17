@@ -231,10 +231,13 @@ impl FileIo {
     /// operation's error. Returns `Err(self)` when `completion` belongs to a
     /// different operation, so the caller can try the token against another one.
     pub fn claim(self, completion: &Completion) -> Result<(Vec<u8>, io::Result<usize>), Self> {
-        if completion.overlapped_ptr() != self.id.as_ptr() {
+        if completion.id() != Some(self.id) {
             return Err(self);
         }
-        // SAFETY: the identity match proves this completion is the
+        // SAFETY: the full identity -- address *and* generation -- matches, which
+        // an address alone would not: a recycled address can belong to a later
+        // operation of a different payload type. The match therefore proves this
+        // completion is the
         // Operation<Vec<u8>> this token submitted; claim it exactly once.
         let operation = unsafe { completion.claim::<Vec<u8>>() };
         let buffer = operation.into_payload();
@@ -557,10 +560,13 @@ impl ScatterGatherIo {
     /// operation's error. Returns `Err(self)` when `completion` belongs to a
     /// different operation.
     pub fn claim(self, completion: &Completion) -> Result<(PageBuffers, io::Result<usize>), Self> {
-        if completion.overlapped_ptr() != self.id.as_ptr() {
+        if completion.id() != Some(self.id) {
             return Err(self);
         }
-        // SAFETY: the identity match proves this completion is the
+        // SAFETY: the full identity -- address *and* generation -- matches, which
+        // an address alone would not: a recycled address can belong to a later
+        // operation of a different payload type. The match therefore proves this
+        // completion is the
         // Operation<ScatterPayload> this token submitted; claim it exactly once.
         let operation = unsafe { completion.claim::<ScatterPayload>() };
         let buffers = operation.into_payload().buffers;
