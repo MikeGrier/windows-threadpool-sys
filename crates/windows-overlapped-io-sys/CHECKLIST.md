@@ -13,7 +13,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	`AssociatedSocket` with `recv` / `send` (`WSARecv` / `WSASend`) returning a typed `SocketIo` token whose
 	`claim(&Completion)` recovers the buffer and byte count. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Integration test (`socket`): a loopback TCP send-and-receive round-trip through the IOCP socket adapter,
+- [x] Integration test (`socket`): a loopback TCP send-and-receive round-trip through the IOCP socket adapter,
 	with no `unsafe` in the test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 ## M∞ — Horizon (ungated)
