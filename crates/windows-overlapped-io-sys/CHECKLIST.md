@@ -3,16 +3,6 @@
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Design decisions are in
 [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-## M5 — Safe endpoint provenance and feature layout
-
-- [x] Design and implement safe endpoint creators / sealed association to remove reliance on the unsafe
-	`assume_overlapped` seam. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
-
-- [x] Add the gated `windows-sys` feature layout for file, socket, and device operation families, keeping the
-	published crate's default feature set minimal. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
-
-- [x] Integration test: a safe-created endpoint runs a real operation on both the IOCP and blocking backends.
-
 ## M6 — Behavioral-matrix hardening
 
 - [ ] Exercise the raw IOCP backend across the behavioral-matrix cases not yet covered: immediate success under

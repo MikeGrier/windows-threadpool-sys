@@ -27,3 +27,15 @@ Append-only record of completed checklist groups. Design decisions are in
 - [x] Implement and test the blocking `GetOverlappedResult` backend for un-ported endpoints.
 - [x] Define the submission seam (`into_overlapped` / `from_overlapped` / `reclaim_overlapped`) consumed by the
 	thread-pool `TP_IO` implementation, and dogfood it in the raw IOCP backend.
+
+## Moved 2026-08-16 — Safe endpoint provenance and feature layout (M5)
+
+### M5 — Safe endpoint provenance and feature layout
+
+- [x] Design and implement safe endpoint creators / sealed association to remove reliance on the unsafe
+	`assume_overlapped` seam. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+- [x] Add the gated `windows-sys` feature layout for file, socket, and device operation families, keeping the
+	published crate's default feature set minimal. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+- [x] Integration test: a safe-created endpoint runs a real operation on both the IOCP and blocking backends.
