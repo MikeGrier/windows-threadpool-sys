@@ -78,6 +78,27 @@ unwinding at the FFI boundary, because unwinding into the pool's frame is
 undefined — but the panic is contained rather than reported, so a callback that
 cares should catch its own errors.
 
+## Safety highlights
+
+Each type carries the invariant its SDK object needs, rather than leaving it to
+the caller to remember:
+
+- **Waits own their handle.** A waitable handle must stay valid while a wait is
+  pending, so `ThreadpoolWait` takes an `OwnedHandle` and hands it back only as
+  a borrow. The handle cannot be closed underneath a pending wait.
+- **Callbacks get a token for the operations only they can perform.**
+  `TimerFiring::rearm_after` re-arms a one-shot from inside its own firing,
+  `PeriodicTick::stop` lets a periodic timer end itself, and
+  `WaitActivation::rearm` re-arms a wait — which the SDK requires per activation.
+- **Cleanup-group members are protected at compile time.** Members borrow the
+  group and `close_members` takes `&mut self`, so using a member after the group
+  released it is a borrow-check error rather than a documented rule.
+- **Panics cannot unwind into the pool.** Every callback trampoline catches
+  unwinding at the FFI boundary, and the accounting stays exact when it does.
+- **Teardown is ordered.** Every object disarms or cancels before draining
+  callbacks, then releases its callback context last, so a callback can never
+  outlive the state it captured.
+
 ## Relationship to `windows-overlapped-io-sys`
 
 Thread-pool I/O is one of three completion backends for the overlapped model

@@ -31,3 +31,21 @@ drop-time outstanding-operation diagnostic.
 
 Fully generic, fully safe overlapped submission remains intentionally unsolved;
 the per-family adapters are the sanctioned safe path.
+
+## Operation identity
+
+Submitting returns an `OperationId` that names *that* operation for the life of
+the process, not merely while its storage address stays put. This matters
+because cancellation is a safe operation racing a completion it cannot observe:
+
+- An operation's storage address is reused once the operation is reclaimed, so
+  an address alone would let an identity retained a moment too long refer to a
+  different, live operation.
+- Each identity therefore carries a process-wide generation taken at submission,
+  and each backend keeps a registry of live identities.
+- `cancel` validates the identity first and rejects a stale one with
+  `ErrorKind::NotFound` **without** calling `CancelIoEx`, so a recycled address
+  is never handed to the kernel on the caller's behalf.
+
+The result is that holding an identity too long is harmless, and a late cancel
+fails rather than silently cancelling an unrelated operation.
