@@ -58,6 +58,48 @@ the client. The crate does not pursue down-level support below that baseline. Ev
 introduction points do not require version gating in the public API. The toolchain baseline is Rust 1.97 (the
 MSRV) on edition 2024.
 
+## Shared invariants (both crates)
+
+Both crates uphold one contract for ownership, cancellation, and callback lifetime, so a resource created in one
+and driven through the other never has ambiguous rules. The per-crate mechanics live in
+[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) (overlapped
+storage, IOCP and blocking backends) and in the sections of this document (thread-pool objects); the invariants
+below are the common surface both must satisfy.
+
+### Ownership
+
+- Every native resource -- handle, socket, operation storage, and thread-pool object -- has exactly one typed
+	owner whose destructor is the documented native destructor. Reuse `std::os::windows::io::OwnedHandle` /
+	`OwnedSocket` where that destructor is `CloseHandle` / `closesocket`; add a typed owner only for a specialized
+	destructor. There is no untyped universal handle owner.
+- An operation's pinned storage is transferred out of Rust's control on submission -- to the kernel, or to the
+	thread pool -- and is reclaimed only after that operation's completion has been observed. Its stable
+	`OVERLAPPED` address is its identity; the storage is never moved, reused, freed, or aliased while the
+	operation is outstanding.
+- Associating an endpoint with a completion backend is a one-time, consuming transition; an associated endpoint
+	exposes neither cloning nor an unrestricted raw-handle escape hatch.
+
+### Cancellation
+
+- Cancellation is a request, not a completion. `CancelIoEx` (overlapped I/O) and `CancelThreadpoolIo`
+	(thread-pool accounting) neither stop an operation that has started nor make its storage safe to free.
+- The matching completion -- delivered even for a cancelled operation, typically as `ERROR_OPERATION_ABORTED`
+	-- remains the sole trigger that reclaims the operation's storage. Targeted and whole-endpoint cancellation
+	both leave that completion path intact.
+
+### Callback lifetime and teardown
+
+- Callbacks run on shared, process-managed threads. A callback must not unwind across the FFI boundary, must not
+	terminate its thread, must restore any thread-local or thread state it changed before returning, and must not
+	block on downstream consumer progress.
+- Teardown, in both crates, follows one order: prevent new submissions, disarm or cancel outstanding work,
+	account for and drain outstanding completions, wait for executing callbacks to finish, and only then release
+	the callback context and the dependent native resources.
+- Voluntary rundown blocks with these semantics, and `Drop` blocks the same way to stay memory-safe: it never
+	frees storage the kernel or pool may still touch, and it never panics. See
+	[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) for the
+	overlapped-side realization.
+
 ## Downstream directory notification evaluation scenario
 
 A separate future directory notification facility is an evaluation scenario for deciding how fully this crate
