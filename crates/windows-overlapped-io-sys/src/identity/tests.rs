@@ -212,6 +212,126 @@ fn removing_one_identity_leaves_the_others_live() {
     assert_eq!(registry.len(), 1);
 }
 
+// --- guarded cancellation ---
+
+#[test]
+fn cancel_if_live_runs_the_cancel_for_a_live_identity() {
+    let registry = OperationRegistry::new();
+    let id = OperationId::mint(address(0x50_000));
+    registry.insert(id);
+
+    let ran = std::cell::Cell::new(false);
+    registry
+        .cancel_if_live(id, || {
+            ran.set(true);
+            Ok(())
+        })
+        .expect("a live identity must be cancellable");
+    assert!(ran.get(), "the native cancellation must have run");
+}
+
+#[test]
+fn cancel_if_live_skips_the_cancel_for_a_stale_identity() {
+    let registry = OperationRegistry::new();
+    let slot = address(0x51_000);
+
+    let first = OperationId::mint(slot);
+    registry.insert(first);
+    registry.remove(slot);
+
+    // The address is reissued to a new operation, as the allocator may do.
+    let second = OperationId::mint(slot);
+    registry.insert(second);
+
+    let ran = std::cell::Cell::new(false);
+    let error = registry
+        .cancel_if_live(first, || {
+            ran.set(true);
+            Ok(())
+        })
+        .expect_err("a stale identity must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        !ran.get(),
+        "the native cancellation must not run for a stale identity"
+    );
+}
+
+#[test]
+fn cancel_if_live_propagates_the_cancel_error() {
+    let registry = OperationRegistry::new();
+    let id = OperationId::mint(address(0x52_000));
+    registry.insert(id);
+
+    let error = registry
+        .cancel_if_live(id, || Err(std::io::Error::from_raw_os_error(5)))
+        .expect_err("the cancellation error must propagate");
+    assert_eq!(error.raw_os_error(), Some(5));
+}
+
+/// The registry guard must still be held while the native cancellation runs.
+/// Otherwise the address could be reclaimed and reissued between the check and
+/// the call, which is the race `cancel_if_live` exists to close.
+#[test]
+fn cancel_if_live_holds_the_guard_across_the_native_call() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    let registry = Arc::new(OperationRegistry::new());
+    let id = OperationId::mint(address(0x53_000));
+    registry.insert(id);
+
+    let blocked = Arc::new(AtomicBool::new(false));
+    let contender_finished = Arc::new(AtomicBool::new(false));
+
+    let other = Arc::clone(&registry);
+    let saw_block = Arc::clone(&blocked);
+    let finished = Arc::clone(&contender_finished);
+
+    // The contender must be spawned *after* the guard is taken, or it would
+    // finish before the cancellation ever starts and prove nothing. It is joined
+    // after `cancel_if_live` returns, because joining inside would deadlock: the
+    // contender cannot finish until the guard is released.
+    let contender_slot: std::cell::RefCell<Option<std::thread::JoinHandle<()>>> =
+        std::cell::RefCell::new(None);
+
+    registry
+        .cancel_if_live(id, || {
+            let contender = std::thread::spawn(move || {
+                saw_block.store(true, Ordering::SeqCst);
+                // Blocks here until the cancellation releases the guard.
+                let _ = other.len();
+                finished.store(true, Ordering::SeqCst);
+            });
+            // Wait until the contender is about to take the lock, then hold the
+            // guard long enough that it would certainly have finished if it
+            // could get in.
+            while !blocked.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(
+                !contender_finished.load(Ordering::SeqCst),
+                "another thread reached the registry while the cancellation was in flight, \
+                 so the guard was not held across the native call"
+            );
+            *contender_slot.borrow_mut() = Some(contender);
+            Ok(())
+        })
+        .expect("a live identity must be cancellable");
+
+    let contender = contender_slot
+        .borrow_mut()
+        .take()
+        .expect("the contender was spawned");
+    contender.join().expect("join the contender");
+    assert!(
+        contender_finished.load(Ordering::SeqCst),
+        "the contender must proceed once the guard is released"
+    );
+}
+
 // --- rundown ---
 
 #[test]

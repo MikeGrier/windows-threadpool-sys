@@ -13,7 +13,7 @@ being accepted. Several are undefined-behaviour paths reachable from safe code, 
 guarantees this very branch introduced -- the identity work fixed one instance of an aliasing hazard while
 leaving other routes to the same hazard open.
 
-- [ ] **PR-1** — Make cancellation validate and act under one lock, and route every backend through it.
+- [x] **PR-1** — Make cancellation validate and act under one lock, and route every backend through it.
 
 	**Gap:** `cancel` calls `OperationRegistry::is_live`, which releases the mutex before the caller invokes
 	`CancelIoEx`. A completion can reclaim the operation in that window and a concurrent submission can reuse

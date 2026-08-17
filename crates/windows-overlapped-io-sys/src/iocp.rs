@@ -204,6 +204,12 @@ impl CompletionPort {
         self.handle.as_raw_handle()
     }
 
+    /// The registry of operations submitted through this port and not yet
+    /// reclaimed, for backends that must validate an identity before cancelling.
+    pub(crate) fn live_operations(&self) -> &OperationRegistry {
+        &self.state.live
+    }
+
     /// The number of operations submitted through this port that have not yet
     /// been claimed, reclaimed, or drained.
     #[must_use]
@@ -447,19 +453,18 @@ impl<'port> AssociatedEndpoint<'port> {
     /// Returns [`io::ErrorKind::NotFound`] if `id` no longer names a live
     /// operation, or the error from `CancelIoEx` if the native request fails.
     pub fn cancel(&self, id: OperationId) -> io::Result<()> {
-        if !self.port.state.live.is_live(id) {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "the operation named by this identity is no longer outstanding",
-            ));
-        }
-        // SAFETY: cancelling by a valid handle and an OVERLAPPED identity that
-        // the registry just confirmed still names a live operation.
-        let ok = unsafe { CancelIoEx(self.raw_handle(), id.as_ptr()) };
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        // The liveness check and the native call happen under one registry
+        // guard; splitting them would let the address be recycled in between.
+        self.port.state.live.cancel_if_live(id, || {
+            // SAFETY: cancelling by a valid handle and an OVERLAPPED identity
+            // the registry has confirmed still names a live operation, and which
+            // cannot be reclaimed and reissued while the guard is held.
+            let ok = unsafe { CancelIoEx(self.raw_handle(), id.as_ptr()) };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        })
     }
 
     /// Request cancellation of every outstanding operation on this endpoint.

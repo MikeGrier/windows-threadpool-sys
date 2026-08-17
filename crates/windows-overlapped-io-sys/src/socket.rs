@@ -165,16 +165,29 @@ impl<'port> AssociatedSocket<'port> {
 
     /// Request cancellation of a single outstanding operation on this socket.
     ///
+    /// The identity is validated against the port's live operations, and the
+    /// native cancellation happens under the same guard, so an identity retained
+    /// past its operation's completion cannot reach a later operation that was
+    /// given the same storage address.
+    ///
     /// # Errors
     ///
-    /// Returns any error from `CancelIoEx`.
+    /// Returns [`io::ErrorKind::NotFound`] if `id` no longer names a live
+    /// operation, or any error from `CancelIoEx`.
     pub fn cancel(&self, id: OperationId) -> io::Result<()> {
-        // SAFETY: cancelling by a valid socket handle and an OVERLAPPED identity.
-        let ok = unsafe { CancelIoEx(self.raw_socket() as HANDLE, id.as_ptr()) };
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        // Socket cancellation goes through the same registry as file
+        // cancellation; routing around it would leave the identity guarantee
+        // holding for one endpoint kind and not the other.
+        self.port.live_operations().cancel_if_live(id, || {
+            // SAFETY: cancelling by a valid socket handle and an OVERLAPPED
+            // identity the registry has confirmed still names a live operation,
+            // and which cannot be reissued while the guard is held.
+            let ok = unsafe { CancelIoEx(self.raw_socket() as HANDLE, id.as_ptr()) };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        })
     }
 
     /// Request cancellation of every outstanding operation on this socket.

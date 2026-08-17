@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 
@@ -222,9 +223,50 @@ impl OperationRegistry {
     ///
     /// A retained identity whose operation has completed returns `false` even if
     /// its address has since been reissued to another operation.
+    ///
+    /// This is a snapshot, so it must not be used to guard a native cancellation:
+    /// the answer can be stale by the time the caller acts on it. Use
+    /// [`OperationRegistry::cancel_if_live`] for that.
     #[must_use]
     pub fn is_live(&self, id: OperationId) -> bool {
         lock(&self.live).get(&(id.as_ptr() as usize)) == Some(&id.generation())
+    }
+
+    /// Run `cancel` only if `id` still names a live operation, holding the
+    /// registry guard across both the check and the call.
+    ///
+    /// Checking liveness and then cancelling as two steps is a race, not merely
+    /// an imprecision: between the two, the operation can complete and be
+    /// reclaimed, and a concurrent submission can be handed the same storage
+    /// address. The native cancel would then reach an unrelated live operation --
+    /// exactly what the generation is meant to prevent. Holding the guard closes
+    /// that window, because a submission cannot register a reused address until
+    /// it is released.
+    ///
+    /// `cancel` should perform only the native cancellation. It must not call
+    /// back into this registry, which would deadlock on the same non-reentrant
+    /// lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::NotFound`] without invoking `cancel` if `id` no
+    /// longer names a live operation, or whatever `cancel` returns.
+    pub fn cancel_if_live<F>(&self, id: OperationId, cancel: F) -> io::Result<()>
+    where
+        F: FnOnce() -> io::Result<()>,
+    {
+        let live = lock(&self.live);
+        if live.get(&(id.as_ptr() as usize)) != Some(&id.generation()) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the operation named by this identity is no longer outstanding",
+            ));
+        }
+        // The guard is deliberately still held: releasing it here would reopen
+        // the window this function exists to close.
+        let result = cancel();
+        drop(live);
+        result
     }
 
     /// The generation currently recorded for an address, if it is live.
