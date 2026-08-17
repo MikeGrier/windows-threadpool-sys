@@ -83,3 +83,18 @@ Append-only record of completed checklist groups. Design decisions are in
 
 - [x] Integration test (`fs`): a page-aligned gather-write-then-scatter-read round-trip on both the blocking and
 	IOCP backends, with no `unsafe` in the test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+## Moved 2026-08-16 — Safe socket operation adapters (M9)
+
+### M9 — Safe socket operation adapters (`socket` feature)
+
+- [x] Refactor the IOCP submission core into a shared `CompletionPort::submit_with` helper so both handle and
+	socket endpoints reuse the outstanding-operation accounting; `AssociatedEndpoint::submit` delegates to it with
+	no behavior change. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+- [x] Implement the IOCP socket backend behind the `socket` feature: `CompletionPort::associate_socket` and an
+	`AssociatedSocket` with `recv` / `send` (`WSARecv` / `WSASend`) returning a typed `SocketIo` token whose
+	`claim(&Completion)` recovers the buffer and byte count. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+- [x] Integration test (`socket`): a loopback TCP send-and-receive round-trip through the IOCP socket adapter,
+	with no `unsafe` in the test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
