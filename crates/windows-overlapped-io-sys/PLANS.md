@@ -2,6 +2,6 @@
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | Behavioral-matrix hardening and operation-family adapters (M5 safe endpoint provenance and gated feature layout complete). | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [CHECKLIST.md](CHECKLIST.md) | in progress | Horizon operation-family safe adapters (M5 safe provenance and gated features, M6 behavioral-matrix hardening and shared-port drain semantics complete). | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
 
 Completed work is archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
