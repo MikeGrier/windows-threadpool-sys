@@ -5,7 +5,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M9 — Safe socket operation adapters (`socket` feature)
 
-- [ ] Refactor the IOCP submission core into a shared `CompletionPort::submit_with` helper so both handle and
+- [x] Refactor the IOCP submission core into a shared `CompletionPort::submit_with` helper so both handle and
 	socket endpoints reuse the outstanding-operation accounting; `AssociatedEndpoint::submit` delegates to it with
 	no behavior change. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 

@@ -219,6 +219,82 @@ impl CompletionPort {
         Ok(())
     }
 
+    /// Submit an owned operation on this port, running the shared outstanding-
+    /// operation accounting around a caller-supplied native call.
+    ///
+    /// This is the accounting core shared by every endpoint kind: `issue`
+    /// receives only the stable `OVERLAPPED` pointer and performs the single
+    /// native overlapped call (the endpoint supplies its own handle or socket by
+    /// capture). The counting, source tracking, and reclamation on the
+    /// synchronous and failure paths are identical regardless of endpoint kind.
+    ///
+    /// # Safety
+    ///
+    /// `issue` must start exactly one overlapped operation using the provided
+    /// `OVERLAPPED` pointer and no other storage, and must classify the outcome
+    /// correctly: [`Issued::Pending`] only when a completion packet will be
+    /// delivered to this port, [`Issued::Completed`] only when the operation is
+    /// already complete and no packet will arrive, and `Err` only when the
+    /// submission failed and no completion will arrive.
+    #[track_caller]
+    pub(crate) unsafe fn submit_with<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
+    where
+        P: Send,
+        F: FnOnce(*mut OVERLAPPED) -> io::Result<Issued>,
+    {
+        // Transfer the operation's storage out; the caller (kernel) owns it until
+        // it is reclaimed. `into_overlapped` arms the type-erased reclaim thunk.
+        let overlapped = operation.into_overlapped();
+        let identity = overlapped as usize;
+
+        // Count before issuing so a completion cannot race ahead of the count.
+        let state = &self.state;
+        state.outstanding.fetch_add(1, Ordering::SeqCst);
+        let tracking = crate::source_tracking_enabled();
+        if tracking {
+            lock(&state.tracked).insert(
+                identity,
+                Track {
+                    location: Location::caller(),
+                    #[cfg(feature = "operation-backtrace")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                },
+            );
+        }
+
+        match issue(overlapped) {
+            Ok(Issued::Pending) => Submitted::Pending(OperationId(overlapped)),
+            Ok(Issued::Completed { bytes_transferred }) => {
+                // Synchronous completion with no packet to arrive (the
+                // skip-on-success case): balance the count and reclaim inline.
+                state.outstanding.fetch_sub(1, Ordering::SeqCst);
+                if tracking {
+                    lock(&state.tracked).remove(&identity);
+                }
+                // SAFETY: the operation completed synchronously and no packet
+                // will arrive, so the kernel is done with the storage; reclaim
+                // the box we just leaked, exactly once.
+                let mut operation = unsafe { Operation::<P>::from_overlapped(overlapped) };
+                operation.set_state(OperationState::Completed);
+                Submitted::Completed {
+                    operation,
+                    bytes_transferred,
+                }
+            }
+            Err(error) => {
+                state.outstanding.fetch_sub(1, Ordering::SeqCst);
+                if tracking {
+                    lock(&state.tracked).remove(&identity);
+                }
+                // SAFETY: no completion will arrive, so reclaim the operation we
+                // just leaked, exactly once.
+                let mut operation = unsafe { Operation::<P>::from_overlapped(overlapped) };
+                operation.set_state(OperationState::Idle);
+                Submitted::Failed { operation, error }
+            }
+        }
+    }
+
     fn report_outstanding_at_drop(&self, count: usize) {
         let tracked = lock(&self.state.tracked);
         let mut message = format!(
@@ -328,56 +404,12 @@ impl<'port> AssociatedEndpoint<'port> {
         P: Send,
         F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<Issued>,
     {
-        // Transfer the operation's storage out; the caller (kernel) owns it until
-        // it is reclaimed. `into_overlapped` arms the type-erased reclaim thunk.
-        let overlapped = operation.into_overlapped();
-        let identity = overlapped as usize;
-
-        // Count before issuing so a completion cannot race ahead of the count.
-        let state = &self.port.state;
-        state.outstanding.fetch_add(1, Ordering::SeqCst);
-        let tracking = crate::source_tracking_enabled();
-        if tracking {
-            lock(&state.tracked).insert(
-                identity,
-                Track {
-                    location: Location::caller(),
-                    #[cfg(feature = "operation-backtrace")]
-                    backtrace: std::backtrace::Backtrace::capture(),
-                },
-            );
-        }
-
-        match issue(self.handle(), overlapped) {
-            Ok(Issued::Pending) => Submitted::Pending(OperationId(overlapped)),
-            Ok(Issued::Completed { bytes_transferred }) => {
-                // Synchronous completion with no packet to arrive (the
-                // skip-on-success case): balance the count and reclaim inline.
-                state.outstanding.fetch_sub(1, Ordering::SeqCst);
-                if tracking {
-                    lock(&state.tracked).remove(&identity);
-                }
-                // SAFETY: the operation completed synchronously and no packet
-                // will arrive, so the kernel is done with the storage; reclaim
-                // the box we just leaked, exactly once.
-                let mut operation = unsafe { Operation::<P>::from_overlapped(overlapped) };
-                operation.set_state(OperationState::Completed);
-                Submitted::Completed {
-                    operation,
-                    bytes_transferred,
-                }
-            }
-            Err(error) => {
-                state.outstanding.fetch_sub(1, Ordering::SeqCst);
-                if tracking {
-                    lock(&state.tracked).remove(&identity);
-                }
-                // SAFETY: no completion will arrive, so reclaim the operation we
-                // just leaked, exactly once.
-                let mut operation = unsafe { Operation::<P>::from_overlapped(overlapped) };
-                operation.set_state(OperationState::Idle);
-                Submitted::Failed { operation, error }
-            }
+        let handle = self.handle();
+        // SAFETY: `issue`'s safety contract (restated on this method) is exactly
+        // what the shared core requires; the endpoint only supplies its handle.
+        unsafe {
+            self.port
+                .submit_with(operation, move |overlapped| issue(handle, overlapped))
         }
     }
 
