@@ -31,6 +31,9 @@ mod iocp;
 #[cfg(windows)]
 mod operation;
 
+#[cfg(all(windows, feature = "socket"))]
+mod socket;
+
 #[cfg(windows)]
 pub use blocking::BlockingEndpoint;
 
@@ -48,3 +51,6 @@ pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, Issued, Operation
 
 #[cfg(windows)]
 pub use operation::{Operation, OperationState, reclaim_overlapped};
+
+#[cfg(all(windows, feature = "socket"))]
+pub use socket::{AssociatedSocket, SocketIo};

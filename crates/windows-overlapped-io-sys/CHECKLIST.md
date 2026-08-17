@@ -9,7 +9,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	socket endpoints reuse the outstanding-operation accounting; `AssociatedEndpoint::submit` delegates to it with
 	no behavior change. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Implement the IOCP socket backend behind the `socket` feature: `CompletionPort::associate_socket` and an
+- [x] Implement the IOCP socket backend behind the `socket` feature: `CompletionPort::associate_socket` and an
 	`AssociatedSocket` with `recv` / `send` (`WSARecv` / `WSASend`) returning a typed `SocketIo` token whose
 	`claim(&Completion)` recovers the buffer and byte count. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 

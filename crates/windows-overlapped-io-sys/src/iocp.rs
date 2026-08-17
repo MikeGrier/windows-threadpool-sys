@@ -194,7 +194,7 @@ impl CompletionPort {
         }))
     }
 
-    fn raw(&self) -> HANDLE {
+    pub(crate) fn raw(&self) -> HANDLE {
         self.handle.as_raw_handle()
     }
 
