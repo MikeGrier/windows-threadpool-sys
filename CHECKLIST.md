@@ -26,7 +26,8 @@
 	(the `operation-backtrace` feature adds full backtraces).
 - [ ] Design safe endpoint creators / sealed association to remove reliance on the unsafe seam.
 - [x] Implement and test the blocking `GetOverlappedResult` backend for un-ported endpoints.
-- [ ] Define the backend seam consumed by the thread-pool `TP_IO` implementation.
+- [x] Define the submission seam (`into_overlapped` / `from_overlapped` / `reclaim_overlapped`) consumed by the
+	thread-pool `TP_IO` implementation, and dogfood it in the raw IOCP backend.
 - [ ] Add the gated `windows-sys` feature layout for file, socket, and device operations.
 
 ## windows-threadpool-sys

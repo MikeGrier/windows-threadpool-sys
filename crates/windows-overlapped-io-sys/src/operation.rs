@@ -79,6 +79,19 @@ pub(crate) unsafe fn reclaim_from_overlapped(overlapped: *mut OVERLAPPED) {
     }
 }
 
+/// Reclaim and drop an operation from its `OVERLAPPED` identity without knowing
+/// its payload type, using the thunk armed by [`Operation::into_overlapped`].
+///
+/// This lets a backend free operations of mixed payload types during rundown.
+///
+/// # Safety
+///
+/// `overlapped` must have been returned by [`Operation::into_overlapped`] and
+/// must be reclaimed exactly once.
+pub unsafe fn reclaim_overlapped(overlapped: *mut OVERLAPPED) {
+    unsafe { reclaim_from_overlapped(overlapped) };
+}
+
 impl<P> Operation<P> {
     /// Create idle storage with a zeroed `OVERLAPPED` and the given payload.
     #[must_use]
@@ -108,13 +121,45 @@ impl<P> Operation<P> {
         self.state
     }
 
-    pub(crate) fn set_state(&mut self, state: OperationState) {
+    /// Set the lifecycle state marker.
+    pub fn set_state(&mut self, state: OperationState) {
         self.state = state;
     }
 
     /// Arm the reclaim thunk so rundown can free this operation generically.
     pub(crate) fn arm(&mut self) {
         self.reclaim = Some(reclaim_operation::<P>);
+    }
+
+    /// Consume the operation for submission, transferring ownership out and
+    /// returning its stable `OVERLAPPED` identity.
+    ///
+    /// The returned pointer identifies the operation and must be handed to
+    /// exactly one native overlapped call. Recover the operation afterward with
+    /// [`Operation::from_overlapped`] when the payload type is known (as in a
+    /// completion), or with [`reclaim_overlapped`] when it is not (as during
+    /// rundown). This is the submission seam shared by the completion-port and
+    /// thread-pool backends.
+    #[must_use]
+    pub fn into_overlapped(mut self) -> *mut OVERLAPPED {
+        self.arm();
+        self.state = OperationState::Pending;
+        let boxed = Box::new(self);
+        let overlapped = boxed.overlapped_ptr();
+        // Ownership transfers to the caller until the operation is reclaimed.
+        let _ = Box::into_raw(boxed);
+        overlapped
+    }
+
+    /// Recover an operation previously submitted with [`Operation::into_overlapped`].
+    ///
+    /// # Safety
+    ///
+    /// `overlapped` must have been returned by [`Operation::into_overlapped`] on
+    /// an `Operation<P>` of this exact type, and must be reclaimed exactly once.
+    #[must_use]
+    pub unsafe fn from_overlapped(overlapped: *mut OVERLAPPED) -> Self {
+        unsafe { *Box::from_raw(overlapped.cast::<Operation<P>>()) }
     }
 
     /// Borrow the payload.
@@ -194,5 +239,35 @@ mod tests {
             assert_eq!(overlapped.Anonymous.Anonymous.Offset, 0x2345_6789);
             assert_eq!(overlapped.Anonymous.Anonymous.OffsetHigh, 0x1);
         }
+    }
+
+    #[test]
+    fn into_and_from_overlapped_round_trip() {
+        let operation = Operation::new(vec![1_u8, 2, 3]);
+        let overlapped = operation.into_overlapped();
+        assert!(!overlapped.is_null());
+
+        // SAFETY: reclaim the exact operation just leaked, exactly once.
+        let recovered = unsafe { Operation::<Vec<u8>>::from_overlapped(overlapped) };
+        assert_eq!(recovered.state(), OperationState::Pending);
+        assert_eq!(recovered.payload(), &vec![1_u8, 2, 3]);
+    }
+
+    #[test]
+    fn reclaim_overlapped_drops_the_payload() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static DROPS: AtomicUsize = AtomicUsize::new(0);
+        struct Marker;
+        impl Drop for Marker {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let overlapped = Operation::new(Marker).into_overlapped();
+        // SAFETY: reclaim the leaked operation once, type-erased via its thunk.
+        unsafe { super::reclaim_overlapped(overlapped) };
+        assert_eq!(DROPS.load(Ordering::SeqCst), 1);
     }
 }

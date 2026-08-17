@@ -223,12 +223,30 @@ Behavioral matrix every backend must be exercised against:
 	support (`SetFileCompletionNotificationModes`) still varies by device and is treated as a runtime capability,
 	not a compile-time guarantee. The Rust baseline is 1.97 (the MSRV) on edition 2024.
 
+## Submission seam
+
+Both backends -- the raw IOCP backend here and the `TP_IO` backend in `windows-threadpool-sys` -- perform the
+same ownership transfer, so it is exposed as a small set of primitives rather than duplicated. An operation is
+handed to the kernel with `Operation::into_overlapped`, which arms a type-erased reclaim thunk in the header,
+leaks the boxed storage, and returns the stable `OVERLAPPED` identity to pass to exactly one native call. The
+operation is recovered with `Operation::from_overlapped` when the payload type is known (an immediate failure or
+a typed completion) or with the free `reclaim_overlapped` when it is not (rundown, where a backend frees
+operations of mixed payload types). Endpoints reach a backend by consuming an `UnassociatedEndpoint`:
+`CompletionPort::associate` for IOCP, `BlockingEndpoint::new` for the blocking backend, and, in the thread-pool
+crate, `CreateThreadpoolIo` over the handle taken with `UnassociatedEndpoint::into_handle`.
+
+The raw IOCP backend is implemented on top of these primitives, which validates that the seam is sufficient for
+a real backend. `TP_IO` reuses them unchanged and adds only its own concerns: `StartThreadpoolIo` before each
+submission, `CancelThreadpoolIo` to balance an immediate failure, and reclamation from its callback (typed when
+the operation family is known, or `reclaim_overlapped` during object rundown). This crate never links the
+thread-pool functions or references `TP_*`.
+
 ## Crate boundary summary
 
 `windows-overlapped-io-sys` exports the endpoint owners, provenance and sealed types, pinned operation storage
-with identity and state, the result model, the cancellation primitives, the raw IOCP and event backends, and
-the backend trait a thread-pool implementation consumes. `windows-threadpool-sys` depends on this crate to
-implement the `TP_IO` backend and its `StartThreadpoolIo` accounting alongside its callback environment, work,
+with identity and state, the submission seam (`into_overlapped` / `from_overlapped` / `reclaim_overlapped`), the
+cancellation primitives, and the raw IOCP and blocking backends. `windows-threadpool-sys` depends on this crate
+to implement the `TP_IO` backend and its `StartThreadpoolIo` accounting alongside its callback environment, work,
 timer, and wait objects. The dependency is one-directional.
 
 ## Open boundary

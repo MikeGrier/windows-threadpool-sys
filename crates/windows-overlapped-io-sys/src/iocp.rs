@@ -320,10 +320,9 @@ impl<'port> AssociatedEndpoint<'port> {
         P: Send,
         F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<()>,
     {
-        let mut boxed = Box::new(operation);
-        boxed.set_state(OperationState::Submitted);
-        boxed.arm();
-        let overlapped = boxed.overlapped_ptr();
+        // Transfer the operation's storage out; the caller (kernel) owns it until
+        // it is reclaimed. `into_overlapped` arms the type-erased reclaim thunk.
+        let overlapped = operation.into_overlapped();
         let identity = overlapped as usize;
 
         // Count before issuing so a completion cannot race ahead of the count.
@@ -342,23 +341,17 @@ impl<'port> AssociatedEndpoint<'port> {
         }
 
         match issue(self.handle(), overlapped) {
-            Ok(()) => {
-                boxed.set_state(OperationState::Pending);
-                // Ownership moves to the kernel until the completion is
-                // claimed, reclaimed, or drained.
-                let _ = Box::into_raw(boxed);
-                Submitted::Pending(OperationId(overlapped))
-            }
+            Ok(()) => Submitted::Pending(OperationId(overlapped)),
             Err(error) => {
                 state.outstanding.fetch_sub(1, Ordering::SeqCst);
                 if tracking {
                     lock(&state.tracked).remove(&identity);
                 }
-                boxed.set_state(OperationState::Idle);
-                Submitted::Failed {
-                    operation: *boxed,
-                    error,
-                }
+                // SAFETY: no completion will arrive, so reclaim the operation we
+                // just leaked, exactly once.
+                let mut operation = unsafe { Operation::<P>::from_overlapped(overlapped) };
+                operation.set_state(OperationState::Idle);
+                Submitted::Failed { operation, error }
             }
         }
     }
@@ -507,10 +500,9 @@ impl Completion {
         if crate::source_tracking_enabled() {
             lock(&self.state.tracked).remove(&(self.overlapped as usize));
         }
-        let ptr = self.overlapped.cast::<Operation<P>>();
-        // SAFETY: by this function's contract, `ptr` is the box leaked by a
-        // matching submit and is reclaimed exactly once here.
-        let mut operation = unsafe { *Box::from_raw(ptr) };
+        // SAFETY: by this function's contract, the identity is a matching leaked
+        // Operation<P>, reclaimed exactly once here.
+        let mut operation = unsafe { Operation::<P>::from_overlapped(self.overlapped) };
         operation.set_state(OperationState::Completed);
         operation
     }

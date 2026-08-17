@@ -40,4 +40,4 @@ pub use endpoint::UnassociatedEndpoint;
 pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, OperationId, Submitted};
 
 #[cfg(windows)]
-pub use operation::{Operation, OperationState};
+pub use operation::{Operation, OperationState, reclaim_overlapped};
