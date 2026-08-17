@@ -2,18 +2,8 @@
 
 Workspace-level and cross-crate work only. Per-crate work is tracked in
 [crates/windows-overlapped-io-sys/CHECKLIST.md](crates/windows-overlapped-io-sys/CHECKLIST.md) and
-[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md).
-
-## M1 — Workspace and release
-
-- [x] Specialize the crate name, metadata, documentation, and release config.
-
-- [x] Split the workspace into `windows-overlapped-io-sys` and `windows-threadpool-sys` with independent,
-	component-tagged publishing.
-
-- [ ] Reserve the `windows-overlapped-io-sys` name on crates.io.
-
-- [ ] Confirm CI and crates.io publishing secrets are configured for both crates.
+[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md). Completed groups are
+archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
 ## M2 — Shared invariants
 
