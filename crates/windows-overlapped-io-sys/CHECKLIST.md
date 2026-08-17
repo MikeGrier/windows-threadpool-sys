@@ -13,7 +13,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	`ScatterGatherIo` token whose `claim(&Completion)` recovers the `PageBuffers` and byte count. See
 	[DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Integration test (`fs`): a page-aligned gather-write-then-scatter-read round-trip on both the blocking and
+- [x] Integration test (`fs`): a page-aligned gather-write-then-scatter-read round-trip on both the blocking and
 	IOCP backends, with no `unsafe` in the test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 ## M∞ — Horizon (ungated)
