@@ -5,7 +5,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M10 — Safe blocking socket backend (`socket` feature)
 
-- [ ] Implement fully-safe `BlockingSocket::recv` / `send` behind the `socket` feature, issuing `WSARecv` /
+- [x] Implement fully-safe `BlockingSocket::recv` / `send` behind the `socket` feature, issuing `WSARecv` /
 	`WSASend` with a per-call `WSACreateEvent` completion event and blocking via `WSAGetOverlappedResult`, with no
 	`unsafe` for the caller. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 

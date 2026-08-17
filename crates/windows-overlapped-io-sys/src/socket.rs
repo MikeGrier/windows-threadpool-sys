@@ -15,8 +15,11 @@ use std::io;
 use std::os::windows::io::{AsRawSocket, AsSocket, BorrowedSocket, OwnedSocket};
 
 use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::Networking::WinSock::{SOCKET, WSA_IO_PENDING, WSABUF, WSARecv, WSASend};
-use windows_sys::Win32::System::IO::{CancelIoEx, CreateIoCompletionPort};
+use windows_sys::Win32::Networking::WinSock::{
+    SOCKET, WSA_INVALID_EVENT, WSA_IO_PENDING, WSABUF, WSACloseEvent, WSACreateEvent, WSAEVENT,
+    WSAGetOverlappedResult, WSARecv, WSASend,
+};
+use windows_sys::Win32::System::IO::{CancelIoEx, CreateIoCompletionPort, OVERLAPPED};
 
 use crate::operation::payload_ptr_from_overlapped;
 use crate::{Completion, CompletionPort, Issued, Operation, OperationId, Submitted};
@@ -297,6 +300,154 @@ impl SocketIo {
             None => Ok(completion.bytes_transferred() as usize),
         };
         Ok((buffer, result))
+    }
+}
+
+/// A connected overlapped socket that completes operations synchronously, one at
+/// a time, via a Winsock completion event.
+///
+/// This is the socket counterpart of the handle blocking backend. It cannot use
+/// `GetOverlappedResult` on the socket handle, so each call creates a
+/// `WSACreateEvent`, issues the operation with that event in `OVERLAPPED.hEvent`,
+/// and blocks on `WSAGetOverlappedResult`.
+#[derive(Debug)]
+pub struct BlockingSocket {
+    socket: OwnedSocket,
+}
+
+impl BlockingSocket {
+    /// Take ownership of a connected overlapped socket for synchronous
+    /// completion.
+    #[must_use]
+    pub fn new(socket: OwnedSocket) -> Self {
+        Self { socket }
+    }
+
+    /// Borrow the underlying socket.
+    #[must_use]
+    pub fn socket(&self) -> BorrowedSocket<'_> {
+        self.socket.as_socket()
+    }
+
+    fn raw_socket(&self) -> SOCKET {
+        self.socket.as_raw_socket() as usize
+    }
+
+    /// Receive up to `len` bytes, blocking until the receive completes.
+    ///
+    /// Returns the buffer truncated to the bytes received and that count.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from issuing or completing the receive.
+    pub fn recv(&self, len: usize) -> io::Result<(Vec<u8>, usize)> {
+        let mut buffer = vec![0_u8; len];
+        let wsabuf = WSABUF {
+            len: clamp_u32(len),
+            buf: buffer.as_mut_ptr(),
+        };
+        // SAFETY: issues exactly one WSARecv into `buffer` via `wsabuf`, both of
+        // which stay valid for the whole blocking call.
+        let received = unsafe {
+            self.run(|socket, overlapped| {
+                let mut flags = 0_u32;
+                WSARecv(
+                    socket,
+                    &wsabuf,
+                    1,
+                    std::ptr::null_mut(),
+                    &mut flags,
+                    overlapped,
+                    None,
+                )
+            })
+        }?;
+        buffer.truncate(received);
+        Ok((buffer, received))
+    }
+
+    /// Send `data`, blocking until the send completes, and return the bytes sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from issuing or completing the send.
+    pub fn send(&self, data: &[u8]) -> io::Result<usize> {
+        let wsabuf = WSABUF {
+            len: clamp_u32(data.len()),
+            buf: data.as_ptr().cast_mut(),
+        };
+        // SAFETY: issues exactly one WSASend from `data` via `wsabuf`, both of
+        // which stay valid for the whole blocking call; WSASend does not write
+        // through the buffer pointer.
+        unsafe {
+            self.run(|socket, overlapped| {
+                WSASend(
+                    socket,
+                    &wsabuf,
+                    1,
+                    std::ptr::null_mut(),
+                    0,
+                    overlapped,
+                    None,
+                )
+            })
+        }
+    }
+
+    /// Issue one overlapped socket operation with a completion event and block on
+    /// `WSAGetOverlappedResult` until it finishes, returning the bytes transferred.
+    ///
+    /// # Safety
+    ///
+    /// `issue` must start exactly one overlapped operation using the provided
+    /// socket and `OVERLAPPED`, with any buffers valid for the whole call.
+    unsafe fn run<F>(&self, issue: F) -> io::Result<usize>
+    where
+        F: FnOnce(SOCKET, *mut OVERLAPPED) -> i32,
+    {
+        let socket = self.raw_socket();
+        // SAFETY: creates a manual-reset Winsock event; the null handle
+        // `WSA_INVALID_EVENT` signals failure.
+        let event: WSAEVENT = unsafe { WSACreateEvent() };
+        if event == WSA_INVALID_EVENT {
+            return Err(io::Error::last_os_error());
+        }
+
+        // SAFETY: `OVERLAPPED` is plain data; a zeroed value with the event in
+        // `hEvent` is the documented way to wait for a single operation.
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.hEvent = event as HANDLE;
+
+        let ret = issue(socket, &mut overlapped);
+        if ret != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(WSA_IO_PENDING) {
+                // SAFETY: `event` was created above and is closed exactly once.
+                unsafe { WSACloseEvent(event) };
+                return Err(error);
+            }
+        }
+
+        let mut transferred = 0_u32;
+        let mut flags = 0_u32;
+        // SAFETY: waits on `overlapped`'s event for this one operation to finish.
+        let ok = unsafe {
+            WSAGetOverlappedResult(
+                socket,
+                &overlapped,
+                &mut transferred,
+                i32::from(true),
+                &mut flags,
+            )
+        };
+        let result = if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(transferred as usize)
+        };
+        // SAFETY: `event` was created above and is closed exactly once here.
+        unsafe { WSACloseEvent(event) };
+        result
     }
 }
 

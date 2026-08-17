@@ -53,4 +53,4 @@ pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, Issued, Operation
 pub use operation::{Operation, OperationState, reclaim_overlapped};
 
 #[cfg(all(windows, feature = "socket"))]
-pub use socket::{AssociatedSocket, SocketIo};
+pub use socket::{AssociatedSocket, BlockingSocket, SocketIo};

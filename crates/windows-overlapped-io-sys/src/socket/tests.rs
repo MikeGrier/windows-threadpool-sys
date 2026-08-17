@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-use crate::CompletionPort;
+use crate::{BlockingSocket, CompletionPort};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::windows::io::OwnedSocket;
@@ -43,4 +43,26 @@ fn iocp_socket_recv_and_send_round_trip() {
     assert_eq!(port.outstanding(), 0);
 
     drop(endpoint);
+}
+
+#[test]
+fn blocking_socket_recv_and_send_round_trip() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    let client = TcpStream::connect(addr).expect("connect");
+    let (mut server, _peer) = listener.accept().expect("accept");
+
+    let blocking = BlockingSocket::new(OwnedSocket::from(client));
+
+    // The peer sends first, so the blocking receive has data and cannot deadlock.
+    server.write_all(b"ping").expect("peer write");
+    let (buffer, received) = blocking.recv(64).expect("recv");
+    assert_eq!(received, 4);
+    assert_eq!(buffer, b"ping");
+
+    let sent = blocking.send(b"pong").expect("send");
+    assert_eq!(sent, 4);
+    let mut got = [0_u8; 4];
+    server.read_exact(&mut got).expect("peer read");
+    assert_eq!(&got, b"pong");
 }
