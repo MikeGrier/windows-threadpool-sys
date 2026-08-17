@@ -33,12 +33,12 @@ Execution showed that item was mis-sized and partly already satisfied, so it is 
 	with a documented contract rather than gaining a safe wrapper here, because a sound cleanup group requires
 	changing how *every* callback object is closed (see M4-6) and that cannot land in this item.
 
-- [ ] **M4-2** — Implement a safe `ThreadpoolTimer` over `CreateThreadpoolTimer`, `SetThreadpoolTimer`,
+- [x] **M4-2** — Implement a safe `ThreadpoolTimer` over `CreateThreadpoolTimer`, `SetThreadpoolTimer`,
 	`IsThreadpoolTimerSet`, `WaitForThreadpoolTimerCallbacks`, and `CloseThreadpoolTimer`, covering one-shot
 	relative, periodic, and absolute due times, plus disarming. `Drop` must disarm before draining callbacks so
 	a periodic timer cannot requeue during teardown.
 
-- [ ] **M4-3** — Test the timer: one-shot firing, periodic repetition, absolute due time, disarming before and
+- [x] **M4-3** — Test the timer: one-shot firing, periodic repetition, absolute due time, disarming before and
 	after firing, `is_set` transitions, cancellation of queued callbacks, and destruction while a callback is
 	executing.
 
