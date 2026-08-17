@@ -205,6 +205,29 @@ from the `OVERLAPPED` pointer alone. That mechanism is what lets both voluntary 
 heterogeneous operations on one endpoint, and it advances the generic-submission boundary the rest of the crate
 is prototyping.
 
+### Multi-endpoint and multi-threaded drain
+
+One `CompletionPort` may serve many endpoints, and its completion stream may be drained by several threads at
+once. The decisions that make that safe:
+
+- The port -- not the endpoint -- owns the completion stream and is the single drain authority. Outstanding
+	operations are counted once per port (a shared atomic), not per endpoint, so `run_down` drains *every*
+	endpoint's outstanding operations in one pass; there is deliberately no per-endpoint rundown. An endpoint's
+	own teardown only cancels its in-flight operations -- closing its handle issues an implicit
+	`CancelIoEx(handle, null)` -- and defers reclamation to the port's drain. The lifetime binding (each
+	`AssociatedEndpoint` borrows its port) enforces the order: all endpoints drop first, cancelling their
+	operations, and the port's `run_down` or blocking `Drop` then observes and frees every resulting completion.
+- Completions are attributed on two independent axes. The completion *key* identifies which endpoint a packet
+	came from (each association fixes its key); the `OVERLAPPED` address identifies which operation, and `claim`
+	recovers its typed storage. Neither axis depends on which thread dequeued the packet, so a shared port with a
+	distinct key per endpoint keeps endpoints' completions distinguishable even when drained concurrently.
+- Any number of threads may call `get` on the same `&CompletionPort` concurrently; the kernel hands each queued
+	packet to exactly one caller, and the shared atomic count plus per-completion reclamation stay correct under
+	that concurrency (`CompletionPort` is `Sync`). The one restriction is that a `Completion` is neither `Send`
+	nor `Sync` -- it borrows the port's shared state and carries a raw `OVERLAPPED` -- so each thread must claim
+	or drop the completions it dequeues on that same thread rather than handing them to another. Multi-threaded
+	draining is therefore "many workers each dequeue-and-process", never "one thread dequeues and forwards".
+
 Behavioral matrix every backend must be exercised against:
 
 - immediate submission failure with no packet to arrive;

@@ -9,7 +9,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`, completion identity under many simultaneous operations, and
 	results/payloads retained after native endpoint shutdown. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Decide and document multi-endpoint / multi-threaded drain semantics for a shared `CompletionPort` — who
+- [x] Decide and document multi-endpoint / multi-threaded drain semantics for a shared `CompletionPort` — who
 	drains, and how completions for distinct endpoints are attributed during rundown. See
 	[DESIGN-NOTES.md](DESIGN-NOTES.md).
 
