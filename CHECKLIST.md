@@ -25,7 +25,7 @@
 	method and `Drop`, with a non-panicking `Drop` diagnostic that names each outstanding operation's submit site
 	(the `operation-backtrace` feature adds full backtraces).
 - [ ] Design safe endpoint creators / sealed association to remove reliance on the unsafe seam.
-- [ ] Implement and test the event / `GetOverlappedResult` backend.
+- [x] Implement and test the blocking `GetOverlappedResult` backend for un-ported endpoints.
 - [ ] Define the backend seam consumed by the thread-pool `TP_IO` implementation.
 - [ ] Add the gated `windows-sys` feature layout for file, socket, and device operations.
 
