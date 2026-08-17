@@ -284,6 +284,15 @@ submission, `CancelThreadpoolIo` to balance an immediate failure, and reclamatio
 the operation family is known, or `reclaim_overlapped` during object rundown). This crate never links the
 thread-pool functions or references `TP_*`.
 
+An operation identity is unique only across operations outstanding *at the same time*. Because the identity is
+the address of the operation's storage, reclaiming an operation returns that address to the allocator, which
+may then hand it to a later operation -- so identities are recycled, not monotonic. This is a property of the
+storage model rather than of any one backend, and it was surfaced by the thread-pool crate's behavioral matrix,
+where fast cached reads completed and were reclaimed while later operations were still being submitted.
+Identities remain correct for their documented purposes (cancelling and matching a live operation); correlating
+an operation across its entire lifetime is the payload's job, since the payload travels inside the storage and
+is unique for as long as the operation exists.
+
 `OperationId`, `Issued`, and `Submitted` are part of that seam rather than IOCP-private types: an operation
 identity, a submission classification, and a submission outcome mean the same thing to any backend. Building
 `TP_IO` outside this crate showed that only `OperationId` was not actually reachable -- it had no public

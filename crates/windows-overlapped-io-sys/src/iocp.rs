@@ -447,6 +447,13 @@ impl<'port> AssociatedEndpoint<'port> {
 /// It is used to cancel a specific operation and to match its later completion.
 /// The pointer must not be dereferenced or freed; the kernel owns the storage
 /// until the completion is claimed.
+///
+/// An identity is unique only among operations that are outstanding *at the same
+/// time*. It is the address of the operation's storage, so once an operation
+/// completes and its storage is reclaimed, the allocator may hand the same
+/// address to a later operation. Use an identity to cancel or match a live
+/// operation; to correlate an operation across its whole lifetime, put a key in
+/// its payload instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OperationId(*mut OVERLAPPED);
 
