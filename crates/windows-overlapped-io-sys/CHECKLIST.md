@@ -13,7 +13,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	drains, and how completions for distinct endpoints are attributed during rundown. See
 	[DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Integration test: multi-threaded dequeue and rundown on a port shared by several endpoints.
+- [x] Integration test: multi-threaded dequeue and rundown on a port shared by several endpoints.
 
 ## M∞ — Horizon (ungated)
 
