@@ -18,4 +18,5 @@ pub mod callback_env;
 pub mod io;
 pub mod pool;
 pub mod timer;
+pub mod wait;
 pub mod work;

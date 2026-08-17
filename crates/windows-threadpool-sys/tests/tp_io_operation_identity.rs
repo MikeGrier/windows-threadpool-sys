@@ -249,12 +249,19 @@ fn recycled_addresses_still_produce_distinct_identities() {
     }
 
     assert_eq!(identities.len(), CYCLES, "every identity must be unique");
-    assert!(
-        addresses.len() < CYCLES,
-        "expected the allocator to recycle at least one address across {CYCLES} cycles; \
-         saw {} distinct addresses (the test is not exercising recycling)",
-        addresses.len()
-    );
+
+    // Whether the allocator actually reuses an address in any given run depends
+    // on it and on whatever else the process is doing, so reuse is reported
+    // rather than required -- asserting it here made this test flaky. The reuse
+    // case is covered deterministically by
+    // `a_stale_generation_at_a_live_address_is_rejected` below, which builds the
+    // exact identity a reused address would produce.
+    if addresses.len() == CYCLES {
+        eprintln!(
+            "note: no storage address was reused across {CYCLES} cycles in this run, so this \
+             test exercised only identity uniqueness"
+        );
+    }
 
     // Every completion must have reported the identity its submission returned.
     for (reported, _) in recorder.records() {
@@ -358,18 +365,129 @@ fn a_retained_identity_cannot_cancel_the_operation_that_recycled_its_address() {
         }
     }
 
-    let (dead, live) = collided.expect(
-        "expected an address to be recycled within the cycle budget; if this fails the test \
-         is no longer exercising the hazard it was written for",
-    );
-    assert_eq!(
-        dead.as_ptr(),
-        live.as_ptr(),
-        "the collision must be a genuine address reuse"
-    );
-
+    // Natural address reuse is opportunistic, so its absence is reported rather
+    // than failed -- requiring it here made this test flaky. The hazard itself is
+    // covered on every run by `a_stale_generation_at_a_live_address_is_rejected`.
+    match collided {
+        Some((dead, live)) => assert_eq!(
+            dead.as_ptr(),
+            live.as_ptr(),
+            "the collision must be a genuine address reuse"
+        ),
+        None => eprintln!(
+            "note: no storage address was reused across {CYCLES} cycles in this run, so this \
+             test observed no natural collision"
+        ),
+    }
     drop(tp);
     let _ = std::fs::remove_file(&path);
+}
+
+/// The recycled-address hazard, synthesized deterministically.
+///
+/// An identity carrying an *older* generation at an address that is currently
+/// live is exactly the value a retained identity would have after the allocator
+/// reissued its storage. Building it directly with `OperationId::from_parts`
+/// removes the dependence on the allocator actually reusing an address, so this
+/// covers the hazard on every run rather than opportunistically.
+#[test]
+fn a_stale_generation_at_a_live_address_is_rejected() {
+    let (endpoint, _client) = pending_pipe("synthetic-aba");
+    let recorder = Recorder::new();
+    let seen = Arc::clone(&recorder);
+
+    let tp = ThreadpoolIo::new(
+        endpoint,
+        move |completion: &IoCompletion| {
+            // SAFETY: only Operation<usize> is submitted below, claimed once.
+            let _operation = unsafe { completion.claim::<usize>() };
+            seen.push((completion.id(), completion.io_result()));
+        },
+        None,
+    )
+    .expect("create TP_IO");
+
+    let mut landed = 0_u8;
+    let slot: *mut u8 = &mut landed;
+
+    let operation = Operation::new(11_usize);
+    // SAFETY: one 1-byte overlapped ReadFile on a pipe carrying no data, so it
+    // stays pending; `landed` outlives it because it is drained below.
+    let submitted = unsafe { tp.submit(operation, |h, ov| issue_read(h, ov, slot)) };
+    let live = match submitted {
+        Submitted::Pending(id) => id,
+        other => panic!("expected pending, got {other:?}"),
+    };
+    assert_eq!(tp.outstanding(), 1);
+
+    // The identity a previous operation at this same storage would have had.
+    let stale = OperationId::from_parts(live.as_ptr(), live.generation() - 1);
+    assert_eq!(
+        stale.as_ptr(),
+        live.as_ptr(),
+        "same address by construction"
+    );
+    assert_ne!(stale, live, "different generation by construction");
+
+    let rejected = tp
+        .cancel(stale)
+        .expect_err("a stale generation must not cancel the live operation");
+    assert_rejected_without_a_native_call(&rejected);
+
+    // The live operation must be untouched, and still cancellable by its own
+    // identity -- the rejection must not have disturbed it.
+    assert_eq!(tp.outstanding(), 1, "the live operation must survive");
+    assert_eq!(recorder.len(), 0, "nothing may have completed yet");
+
+    tp.cancel(live).expect("the live identity must still work");
+    let records = recorder.wait_for(1);
+    assert_eq!(records[0].0, Some(live));
+    assert_eq!(records[0].1, ERROR_OPERATION_ABORTED);
+
+    tp.run_down();
+    assert_eq!(tp.outstanding(), 0);
+}
+
+/// A *newer* generation than the live one is also rejected, so the check is an
+/// equality test rather than an ordering test.
+#[test]
+fn a_future_generation_at_a_live_address_is_rejected() {
+    let (endpoint, _client) = pending_pipe("future-generation");
+    let recorder = Recorder::new();
+    let seen = Arc::clone(&recorder);
+
+    let tp = ThreadpoolIo::new(
+        endpoint,
+        move |completion: &IoCompletion| {
+            // SAFETY: only Operation<usize> is submitted below, claimed once.
+            let _operation = unsafe { completion.claim::<usize>() };
+            seen.push((completion.id(), completion.io_result()));
+        },
+        None,
+    )
+    .expect("create TP_IO");
+
+    let mut landed = 0_u8;
+    let slot: *mut u8 = &mut landed;
+
+    let operation = Operation::new(12_usize);
+    // SAFETY: one 1-byte overlapped ReadFile on a pipe carrying no data.
+    let submitted = unsafe { tp.submit(operation, |h, ov| issue_read(h, ov, slot)) };
+    let live = match submitted {
+        Submitted::Pending(id) => id,
+        other => panic!("expected pending, got {other:?}"),
+    };
+
+    let ahead = OperationId::from_parts(live.as_ptr(), live.generation() + 1);
+    let rejected = tp
+        .cancel(ahead)
+        .expect_err("a generation that was never issued must be rejected");
+    assert_rejected_without_a_native_call(&rejected);
+    assert_eq!(tp.outstanding(), 1);
+
+    tp.cancel_all().expect("cancel the live operation");
+    recorder.wait_for(1);
+    tp.run_down();
 }
 
 /// An identity whose operation has completed is rejected even when nothing has

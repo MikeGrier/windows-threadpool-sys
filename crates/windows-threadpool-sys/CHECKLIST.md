@@ -42,12 +42,12 @@ Execution showed that item was mis-sized and partly already satisfied, so it is 
 	after firing, `is_set` transitions, cancellation of queued callbacks, and destruction while a callback is
 	executing.
 
-- [ ] **M4-4** — Implement a safe `ThreadpoolWait` over `CreateThreadpoolWait`, `SetThreadpoolWait`,
+- [x] **M4-4** — Implement a safe `ThreadpoolWait` over `CreateThreadpoolWait`, `SetThreadpoolWait`,
 	`WaitForThreadpoolWaitCallbacks`, and `CloseThreadpoolWait`. The object owns its waitable handle, so the
 	handle cannot be closed while a wait is pending, and the callback receives a token that can rearm the wait
 	for the next activation, since the SDK requires explicit rearming per activation.
 
-- [ ] **M4-5** — Test the wait: signalled activation, timeout activation, explicit rearming across several
+- [x] **M4-5** — Test the wait: signalled activation, timeout activation, explicit rearming across several
 	activations, disarming, and destruction with a wait armed.
 
 - [ ] **M4-6** — Design and implement safe cleanup-group membership across every callback object.
