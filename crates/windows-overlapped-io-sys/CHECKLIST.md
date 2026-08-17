@@ -13,7 +13,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	`pub(crate)` payload-pointer-from-`OVERLAPPED` primitive to `operation.rs` (its only consumer), so the two
 	land together. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Integration test (`fs`): a safe file write-then-read round-trip on both the blocking and IOCP backends,
+- [x] Integration test (`fs`): a safe file write-then-read round-trip on both the blocking and IOCP backends,
 	with no `unsafe` in the test's I/O path.
 
 ## M∞ — Horizon (ungated)
