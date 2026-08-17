@@ -63,3 +63,45 @@ cycles.
 	that callback, so a concurrent submission could be handed the address while the completed operation was still
 	registered. Fixed by deregistering on callback entry; `run_down` then also waits for callbacks so it keeps
 	its "my callbacks have run" contract. Verified the regression test fails 10/10 with the fix reverted.
+
+## Moved 2026-08-17 — PR #3 review findings
+
+Six review threads, all verified against the code before being accepted. Four were undefined-behaviour paths
+reachable from safe code, and two of those undermined guarantees this same branch introduced -- the identity
+work fixed one instance of an aliasing hazard while leaving other routes to it open.
+
+- [x] **PR-1** — Make cancellation validate and act under one lock, and route every backend through it.
+	*(completed 2026-08-17 18:00:00 -04:00)*
+
+	`cancel` checked liveness with `is_live` and then called `CancelIoEx` after the mutex was released; a
+	completion could reclaim the operation and a concurrent submission reuse its address in that window.
+	`OperationRegistry::cancel_if_live` now holds the guard across both steps. `AssociatedSocket::cancel` never
+	consulted the registry at all, so socket identities bypassed the guarantee entirely.
+
+- [x] **PR-2** — Compare full operation identities in the typed claim tokens.
+	*(completed 2026-08-17 18:03:00 -04:00)*
+
+	`FileIo`, `ScatterGatherIo`, `SocketIo`, and `DeviceIoControlIo` matched a completion by address only, so a
+	token outliving an unclaimed completion could match a later completion that reused the address and claim it
+	with the wrong payload type -- type confusion reachable without `unsafe` on the caller's side. The `SAFETY`
+	comments asserted the address match proved the payload type, which it did not.
+
+- [x] **PR-3** — Make `CallbackEnviron` actually retain the pool borrow it appears to take.
+	*(completed 2026-08-17 18:06:00 -04:00)*
+
+	`set_pool` took `&ThreadpoolPool` but stored only the raw value, with no lifetime on the environment, so
+	safe code could drop the pool and then create an object from the still-live environment. The environment now
+	carries the pool's lifetime, pinned by a `compile_fail` doc test.
+
+- [x] **PR-4** — Contain panics in the work trampoline.
+	*(completed 2026-08-17 18:06:00 -04:00)*
+
+	The `TP_WORK` trampoline invoked the callback without `catch_unwind`, unlike every other trampoline, so a
+	panicking work callback aborted the process instead of being contained as documented.
+
+- [x] **PR-5** — Defer token-requested timer re-arming until the callback has returned.
+	*(completed 2026-08-17 18:10:00 -04:00)*
+
+	`TimerFiring::rearm_after` armed immediately, so a callback that re-armed early and then ran longer than its
+	delay could be entered again concurrently. The request is now applied after the callback returns. Arming
+	from outside during a callback can still overlap, so the type documents the guarantee it actually provides.
