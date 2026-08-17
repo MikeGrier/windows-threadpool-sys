@@ -24,7 +24,7 @@ struct PeriodicContext {
     callback: Box<dyn Fn(&PeriodicTick<'_>) + Send + Sync + 'static>,
 }
 
-/// One tick of a [`PeriodicTimer`], handed to its callback.
+/// One tick of a [`ThreadpoolPeriodicTimer`], handed to its callback.
 ///
 /// A tick may be running concurrently with other ticks of the same timer, so
 /// anything this callback touches must tolerate that.
@@ -60,7 +60,7 @@ impl PeriodicTick<'_> {
 /// Trampoline from the raw `PTP_TIMER_CALLBACK` ABI into the boxed closure.
 ///
 /// SAFETY: `context` must point to a live [`PeriodicContext`] for the entire
-/// duration of every callback invocation, which [`PeriodicTimer`]'s `Drop`
+/// duration of every callback invocation, which [`ThreadpoolPeriodicTimer`]'s `Drop`
 /// ordering guarantees.
 unsafe extern "system" fn periodic_trampoline(
     _instance: PTP_CALLBACK_INSTANCE,
@@ -91,13 +91,13 @@ unsafe extern "system" fn periodic_trampoline(
 /// follows from the cadence being fixed: the schedule cannot wait for the
 /// callback without ceasing to be a schedule.
 ///
-/// So a `PeriodicTimer` callback must be safe to run concurrently with itself.
-/// If that is awkward, the alternative is a one-shot [`Timer`](crate::timer::Timer) re-armed from
+/// So a `ThreadpoolPeriodicTimer` callback must be safe to run concurrently with itself.
+/// If that is awkward, the alternative is a one-shot [`ThreadpoolTimer`](crate::timer::ThreadpoolTimer) re-armed from
 /// inside its own callback with [`crate::timer::TimerFiring::rearm_after`]:
 /// there is never more than one firing outstanding, and the gap is measured from
 /// the end of each firing rather than from a fixed schedule.
 ///
-/// |  | [`PeriodicTimer`] | [`Timer`](crate::timer::Timer) + `rearm_after` |
+/// |  | [`ThreadpoolPeriodicTimer`] | [`ThreadpoolTimer`](crate::timer::ThreadpoolTimer) + `rearm_after` |
 /// |---|---|---|
 /// | Cadence | fixed, independent of callback duration | drifts by the callback duration |
 /// | Concurrent runs of the callback | possible | never |
@@ -106,7 +106,7 @@ unsafe extern "system" fn periodic_trampoline(
 /// # Teardown
 ///
 /// [`Drop`] stops the timer before draining callbacks, so it cannot requeue
-/// during teardown. [`PeriodicTimer::stop_and_drain`] does the same thing under
+/// during teardown. [`ThreadpoolPeriodicTimer::stop_and_drain`] does the same thing under
 /// the caller's control, and is the ordering to copy if doing it by hand:
 /// stop first, drain second.
 ///
@@ -116,13 +116,13 @@ unsafe extern "system" fn periodic_trampoline(
 /// use std::sync::Arc;
 /// use std::sync::atomic::{AtomicUsize, Ordering};
 /// use std::time::Duration;
-/// use windows_threadpool_sys::timer::PeriodicTimer;
+/// use windows_threadpool_sys::timer::ThreadpoolPeriodicTimer;
 ///
 /// let ticks = Arc::new(AtomicUsize::new(0));
 /// let counter = Arc::clone(&ticks);
 ///
 /// // The period belongs to the timer, not to a call.
-/// let timer = PeriodicTimer::new(Duration::from_millis(1), move |_tick| {
+/// let timer = ThreadpoolPeriodicTimer::new(Duration::from_millis(1), move |_tick| {
 ///     counter.fetch_add(1, Ordering::SeqCst);
 /// }, None)?;
 ///
@@ -143,12 +143,12 @@ unsafe extern "system" fn periodic_trampoline(
 /// use std::sync::Arc;
 /// use std::sync::atomic::{AtomicUsize, Ordering};
 /// use std::time::Duration;
-/// use windows_threadpool_sys::timer::PeriodicTimer;
+/// use windows_threadpool_sys::timer::ThreadpoolPeriodicTimer;
 ///
 /// let ticks = Arc::new(AtomicUsize::new(0));
 /// let counter = Arc::clone(&ticks);
 ///
-/// let timer = PeriodicTimer::new(Duration::from_millis(1), move |tick| {
+/// let timer = ThreadpoolPeriodicTimer::new(Duration::from_millis(1), move |tick| {
 ///     if counter.fetch_add(1, Ordering::SeqCst) >= 2 {
 ///         tick.stop();
 ///     }
@@ -162,7 +162,7 @@ unsafe extern "system" fn periodic_trampoline(
 /// assert!(ticks.load(Ordering::SeqCst) >= 3);
 /// # Ok::<(), std::io::Error>(())
 /// ```
-pub struct PeriodicTimer {
+pub struct ThreadpoolPeriodicTimer {
     timer: PTP_TIMER,
     period: Duration,
     // Kept alive as a raw pointer until Drop has stopped and drained.
@@ -172,14 +172,14 @@ pub struct PeriodicTimer {
 // SAFETY: PTP_TIMER is a cross-thread pool object, and the context holds a
 // callback that is Fn + Send + Sync; the pointer is only read until Drop frees
 // it after all callbacks have finished.
-unsafe impl Send for PeriodicTimer {}
-unsafe impl Sync for PeriodicTimer {}
+unsafe impl Send for ThreadpoolPeriodicTimer {}
+unsafe impl Sync for ThreadpoolPeriodicTimer {}
 
-impl PeriodicTimer {
+impl ThreadpoolPeriodicTimer {
     /// Create a stopped timer that invokes `callback` every `period`.
     ///
     /// A zero period is rejected, because it would describe a timer that never
-    /// repeats -- use [`Timer`](crate::timer::Timer) for that rather than a `PeriodicTimer` that
+    /// repeats -- use [`ThreadpoolTimer`](crate::timer::ThreadpoolTimer) for that rather than a `ThreadpoolPeriodicTimer` that
     /// silently behaves like one.
     ///
     /// Pass `Some(env)` to select a private pool or callback priority; `None`
@@ -206,7 +206,7 @@ impl PeriodicTimer {
         if period.is_zero() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "a PeriodicTimer needs a non-zero period; use Timer for a one-shot",
+                "a ThreadpoolPeriodicTimer needs a non-zero period; use ThreadpoolTimer for a one-shot",
             ));
         }
 
@@ -258,7 +258,7 @@ impl PeriodicTimer {
 
     /// Start ticking, with the first tick `first_delay` from now.
     ///
-    /// Subsequent ticks follow every [`PeriodicTimer::period`]. A zero
+    /// Subsequent ticks follow every [`ThreadpoolPeriodicTimer::period`]. A zero
     /// `first_delay` makes the first tick due immediately.
     pub fn start_after(&self, first_delay: Duration) {
         // SAFETY: timer is valid for the lifetime of self.
@@ -309,7 +309,7 @@ impl PeriodicTimer {
     ///
     /// Future ticks stop being queued, but a tick already queued still runs and
     /// ticks already executing are unaffected. Use
-    /// [`PeriodicTimer::stop_and_drain`] to also wait for those.
+    /// [`ThreadpoolPeriodicTimer::stop_and_drain`] to also wait for those.
     pub fn stop(&self) {
         // SAFETY: timer is valid for the lifetime of self.
         unsafe { disarm_raw(self.timer) };
@@ -318,7 +318,7 @@ impl PeriodicTimer {
     /// Whether the timer is currently started.
     ///
     /// Ticking does not clear the schedule, so this stays `true` until something
-    /// stops the timer -- [`PeriodicTimer::stop`], [`PeriodicTick::stop`], or
+    /// stops the timer -- [`ThreadpoolPeriodicTimer::stop`], [`PeriodicTick::stop`], or
     /// teardown.
     #[must_use]
     pub fn is_running(&self) -> bool {
@@ -329,7 +329,7 @@ impl PeriodicTimer {
     /// Block until all queued and executing ticks have completed.
     ///
     /// Stop the timer first, or this waits for a schedule that keeps producing
-    /// new ticks. [`PeriodicTimer::stop_and_drain`] does both in the right order.
+    /// new ticks. [`ThreadpoolPeriodicTimer::stop_and_drain`] does both in the right order.
     pub fn wait(&self) {
         // SAFETY: timer is valid for the lifetime of self.
         unsafe { WaitForThreadpoolTimerCallbacks(self.timer, FALSE) };
@@ -348,7 +348,7 @@ impl PeriodicTimer {
     }
 }
 
-impl Drop for PeriodicTimer {
+impl Drop for ThreadpoolPeriodicTimer {
     fn drop(&mut self) {
         // Stop before draining, or the timer would queue a fresh tick while the
         // drain is in progress and never settle.
@@ -363,9 +363,9 @@ impl Drop for PeriodicTimer {
     }
 }
 
-impl std::fmt::Debug for PeriodicTimer {
+impl std::fmt::Debug for ThreadpoolPeriodicTimer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PeriodicTimer")
+        f.debug_struct("ThreadpoolPeriodicTimer")
             .field("period", &self.period)
             .field("is_running", &self.is_running())
             .finish_non_exhaustive()

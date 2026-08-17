@@ -17,16 +17,16 @@ it captured.
 | Type | Wraps | Runs the callback when |
 |---|---|---|
 | `work::ThreadpoolWork` | `TP_WORK` | you submit it |
-| `timer::Timer` | `TP_TIMER` | a due time arrives, once per arming |
-| `timer::PeriodicTimer` | `TP_TIMER` | every period, until stopped |
+| `timer::ThreadpoolTimer` | `TP_TIMER` | a due time arrives, once per arming |
+| `timer::ThreadpoolPeriodicTimer` | `TP_TIMER` | every period, until stopped |
 | `wait::ThreadpoolWait` | `TP_WAIT` | a handle signals or a wait times out |
 | `io::ThreadpoolIo` | `TP_IO` | an overlapped operation completes |
 
 One-shot and periodic timers are separate types on purpose. The platform models
 both with one object and a `period` argument, which hides the property that
-matters most when writing the callback: a `PeriodicTimer` may queue its next
+matters most when writing the callback: a `ThreadpoolPeriodicTimer` may queue its next
 tick while the previous one is still running, so its callback must tolerate
-overlapping with itself. A `Timer` never overlaps, and re-arming it from inside
+overlapping with itself. A `ThreadpoolTimer` never overlaps, and re-arming it from inside
 its own callback gives repetition whose gap is measured from the end of each
 firing.
 

@@ -5,10 +5,10 @@
 //! Two types share this machinery, and they differ in the one property that
 //! matters when writing the callback:
 //!
-//! - [`Timer`] fires **exactly once per arming**. A firing cannot overlap
+//! - [`ThreadpoolTimer`] fires **exactly once per arming**. A firing cannot overlap
 //!   another firing of the same timer, because there is no next one until the
 //!   caller arms it again.
-//! - [`PeriodicTimer`] repeats on a fixed period, and the pool may queue the
+//! - [`ThreadpoolPeriodicTimer`] repeats on a fixed period, and the pool may queue the
 //!   next callback **while the previous one is still running**. Its callback
 //!   must tolerate overlapping with itself.
 //!
@@ -19,21 +19,21 @@
 //! # Choosing between them
 //!
 //! Want a fixed cadence, and the callback is short or safe to overlap? Use
-//! [`PeriodicTimer`]. Want the next delay measured from when the previous
-//! callback *finished*, with no overlap possible? Use a [`Timer`] and re-arm it
+//! [`ThreadpoolPeriodicTimer`]. Want the next delay measured from when the previous
+//! callback *finished*, with no overlap possible? Use a [`ThreadpoolTimer`] and re-arm it
 //! from inside its own callback with [`TimerFiring::rearm_after`].
 //!
 //! # Due times
 //!
-//! Relative due times ([`Timer::set_after`]) count only time the system is
+//! Relative due times ([`ThreadpoolTimer::set_after`]) count only time the system is
 //! awake, so sleep and hibernation do not consume the delay. Absolute due times
-//! ([`Timer::set_at`]) name a wall-clock instant, which sleep and hibernation
+//! ([`ThreadpoolTimer::set_at`]) name a wall-clock instant, which sleep and hibernation
 //! *do* pass through: a timer set for an instant that elapsed while the machine
 //! slept fires promptly on resume.
 
 mod periodic;
 
-pub use periodic::{PeriodicTick, PeriodicTimer};
+pub use periodic::{PeriodicTick, ThreadpoolPeriodicTimer};
 
 use std::io;
 use std::ptr;
@@ -131,7 +131,7 @@ pub(crate) struct TimerContext {
     callback: Box<dyn Fn(&TimerFiring<'_>) + Send + Sync + 'static>,
 }
 
-/// One firing of a [`Timer`], handed to its callback.
+/// One firing of a [`ThreadpoolTimer`], handed to its callback.
 ///
 /// The timer is not armed while the callback runs, so re-arming from here is
 /// what produces repetition whose delay is measured from the *end* of this
@@ -151,7 +151,7 @@ impl TimerFiring<'_> {
     ///
     /// Because "now" is inside the callback, successive delays are measured from
     /// the end of each firing rather than from a fixed schedule. That is the
-    /// non-overlapping alternative to [`PeriodicTimer`].
+    /// non-overlapping alternative to [`ThreadpoolPeriodicTimer`].
     pub fn rearm_after(&self, delay: Duration) {
         let timer = self.ctx.timer.load(Ordering::Acquire);
         debug_assert_ne!(timer, 0, "the timer must be published before callbacks");
@@ -172,7 +172,7 @@ impl TimerFiring<'_> {
 /// Trampoline from the raw `PTP_TIMER_CALLBACK` ABI into the boxed closure.
 ///
 /// SAFETY: `context` must point to a live [`TimerContext`] for the entire
-/// duration of every callback invocation, which [`Timer`]'s `Drop` ordering
+/// duration of every callback invocation, which [`ThreadpoolTimer`]'s `Drop` ordering
 /// guarantees.
 unsafe extern "system" fn timer_trampoline(
     _instance: PTP_CALLBACK_INSTANCE,
@@ -191,13 +191,13 @@ unsafe extern "system" fn timer_trampoline(
 /// An owned one-shot thread-pool timer.
 ///
 /// Each arming produces exactly one firing, so a firing can never overlap
-/// another firing of the same timer. Arm it with [`Timer::set_after`] or
-/// [`Timer::set_at`], and stop it with [`Timer::disarm`]. Arming again replaces
+/// another firing of the same timer. Arm it with [`ThreadpoolTimer::set_after`] or
+/// [`ThreadpoolTimer::set_at`], and stop it with [`ThreadpoolTimer::disarm`]. Arming again replaces
 /// the previous setting rather than adding to it.
 ///
 /// For repetition, either re-arm from inside the callback with
 /// [`TimerFiring::rearm_after`] -- which keeps firings strictly sequential -- or
-/// use [`PeriodicTimer`] when a fixed cadence matters more than avoiding
+/// use [`ThreadpoolPeriodicTimer`] when a fixed cadence matters more than avoiding
 /// overlap.
 ///
 /// [`Drop`] disarms before draining callbacks, so the captured closure stays
@@ -210,12 +210,12 @@ unsafe extern "system" fn timer_trampoline(
 /// ```
 /// use std::sync::mpsc;
 /// use std::time::Duration;
-/// use windows_threadpool_sys::timer::Timer;
+/// use windows_threadpool_sys::timer::ThreadpoolTimer;
 ///
 /// let (tx, rx) = mpsc::channel();
 /// let sender = std::sync::Mutex::new(tx);
 ///
-/// let timer = Timer::new(move |_firing| {
+/// let timer = ThreadpoolTimer::new(move |_firing| {
 ///     let _ = sender.lock().expect("send").send(());
 /// }, None)?;
 ///
@@ -232,12 +232,12 @@ unsafe extern "system" fn timer_trampoline(
 /// use std::sync::Arc;
 /// use std::sync::atomic::{AtomicUsize, Ordering};
 /// use std::time::Duration;
-/// use windows_threadpool_sys::timer::Timer;
+/// use windows_threadpool_sys::timer::ThreadpoolTimer;
 ///
 /// let ticks = Arc::new(AtomicUsize::new(0));
 /// let counter = Arc::clone(&ticks);
 ///
-/// let timer = Timer::new(move |firing| {
+/// let timer = ThreadpoolTimer::new(move |firing| {
 ///     // Stop after three firings by simply not re-arming.
 ///     if counter.fetch_add(1, Ordering::SeqCst) < 2 {
 ///         firing.rearm_after(Duration::from_millis(1));
@@ -253,7 +253,7 @@ unsafe extern "system" fn timer_trampoline(
 /// assert_eq!(ticks.load(Ordering::SeqCst), 3);
 /// # Ok::<(), std::io::Error>(())
 /// ```
-pub struct Timer {
+pub struct ThreadpoolTimer {
     timer: PTP_TIMER,
     // Kept alive as a raw pointer until Drop has disarmed and drained.
     context: *mut TimerContext,
@@ -262,10 +262,10 @@ pub struct Timer {
 // SAFETY: PTP_TIMER is a cross-thread pool object, and the context holds a
 // callback that is Fn + Send + Sync; the pointer is only read until Drop frees
 // it after all callbacks have finished.
-unsafe impl Send for Timer {}
-unsafe impl Sync for Timer {}
+unsafe impl Send for ThreadpoolTimer {}
+unsafe impl Sync for ThreadpoolTimer {}
 
-impl Timer {
+impl ThreadpoolTimer {
     /// Create an idle timer that invokes `callback` each time it expires.
     ///
     /// Pass `Some(env)` to select a private pool or callback priority; `None`
@@ -343,7 +343,7 @@ impl Timer {
     /// Stop the timer.
     ///
     /// New callbacks stop being queued, but a callback already queued still
-    /// runs; use [`Timer::cancel_pending`] to drop those as well. Disarming an
+    /// runs; use [`ThreadpoolTimer::cancel_pending`] to drop those as well. Disarming an
     /// idle timer is a no-op.
     pub fn disarm(&self) {
         // SAFETY: timer is valid for the lifetime of self.
@@ -355,7 +355,7 @@ impl Timer {
     /// This reports whether the timer has been armed and not since disarmed. It
     /// is **not** a prediction that the timer will fire again: expiring does not
     /// clear the due time, so a fired timer still reports `true`. Only
-    /// [`Timer::disarm`] makes it `false`.
+    /// [`ThreadpoolTimer::disarm`] makes it `false`.
     #[must_use]
     pub fn is_set(&self) -> bool {
         // SAFETY: timer is valid for the lifetime of self.
@@ -380,7 +380,7 @@ impl Timer {
     }
 }
 
-impl Drop for Timer {
+impl Drop for ThreadpoolTimer {
     fn drop(&mut self) {
         // Disarm before draining: a callback that re-arms would otherwise queue a
         // fresh firing while the drain is in progress and never settle.
@@ -396,9 +396,9 @@ impl Drop for Timer {
     }
 }
 
-impl std::fmt::Debug for Timer {
+impl std::fmt::Debug for ThreadpoolTimer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Timer")
+        f.debug_struct("ThreadpoolTimer")
             .field("is_set", &self.is_set())
             .finish_non_exhaustive()
     }

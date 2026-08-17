@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::callback_env::CallbackEnviron;
 use crate::pool::ThreadpoolPool;
-use crate::timer::Timer;
+use crate::timer::ThreadpoolTimer;
 
 /// Upper bound for waiting on a callback the timer really should deliver.
 const FIRE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -56,10 +56,10 @@ impl Fires {
     }
 }
 
-fn counting_timer() -> (Timer, Arc<Fires>) {
+fn counting_timer() -> (ThreadpoolTimer, Arc<Fires>) {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer = Timer::new(move |_firing| recorder.record(), None).expect("create timer");
+    let timer = ThreadpoolTimer::new(move |_firing| recorder.record(), None).expect("create timer");
     (timer, fires)
 }
 
@@ -67,24 +67,24 @@ fn counting_timer() -> (Timer, Arc<Fires>) {
 
 #[test]
 fn new_timer_succeeds() {
-    assert!(Timer::new(|_| {}, None).is_ok());
+    assert!(ThreadpoolTimer::new(|_| {}, None).is_ok());
 }
 
 #[test]
 fn new_timer_with_env_succeeds() {
     let mut env = CallbackEnviron::new();
-    assert!(Timer::new(|_| {}, Some(&mut env)).is_ok());
+    assert!(ThreadpoolTimer::new(|_| {}, Some(&mut env)).is_ok());
 }
 
 #[test]
 fn new_timer_is_idle() {
-    let timer = Timer::new(|_| {}, None).expect("create timer");
+    let timer = ThreadpoolTimer::new(|_| {}, None).expect("create timer");
     assert!(!timer.is_set(), "a fresh timer must not be armed");
 }
 
 #[test]
 fn drop_without_arming_is_clean() {
-    let _timer = Timer::new(|_| {}, None).expect("create timer");
+    let _timer = ThreadpoolTimer::new(|_| {}, None).expect("create timer");
 }
 
 // --- one-shot firing ---
@@ -184,7 +184,7 @@ fn a_callback_can_rearm_itself() {
 
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer = Timer::new(
+    let timer = ThreadpoolTimer::new(
         move |firing| {
             let seen = recorder.count();
             recorder.record();
@@ -215,7 +215,7 @@ fn a_self_rearming_callback_never_overlaps() {
     let high_water = Arc::clone(&peak);
     let recorder = Arc::clone(&fires);
 
-    let timer = Timer::new(
+    let timer = ThreadpoolTimer::new(
         move |firing| {
             let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             high_water.fetch_max(now, Ordering::SeqCst);
@@ -258,7 +258,7 @@ fn rearm_at_accepts_an_absolute_instant() {
     let rearmed = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&rearmed);
 
-    let timer = Timer::new(
+    let timer = ThreadpoolTimer::new(
         move |firing| {
             recorder.record();
             if counter.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -352,7 +352,7 @@ fn drop_waits_for_an_executing_callback() {
     let entered = Arc::clone(&started);
 
     {
-        let timer = Timer::new(
+        let timer = ThreadpoolTimer::new(
             move |_firing| {
                 entered.record();
                 std::thread::sleep(Duration::from_millis(30));
@@ -382,7 +382,7 @@ fn drop_of_a_self_rearming_timer_terminates() {
     {
         let fires = Fires::new();
         let recorder = Arc::clone(&fires);
-        let timer = Timer::new(
+        let timer = ThreadpoolTimer::new(
             move |firing| {
                 recorder.record();
                 firing.rearm_after(Duration::from_millis(1));
@@ -418,7 +418,7 @@ fn the_callback_may_own_heap_state() {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
 
-    let timer = Timer::new(
+    let timer = ThreadpoolTimer::new(
         move |_firing| {
             total.fetch_add(data.iter().sum::<u64>() as usize, Ordering::SeqCst);
             recorder.record();
@@ -442,7 +442,7 @@ fn a_timer_runs_on_a_private_pool() {
 
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer = Timer::new(move |_firing| recorder.record(), Some(&mut env)).expect("create timer");
+    let timer = ThreadpoolTimer::new(move |_firing| recorder.record(), Some(&mut env)).expect("create timer");
 
     timer.set_after(Duration::from_millis(1));
     fires.wait_for(1);
@@ -457,7 +457,7 @@ fn a_timer_runs_on_a_private_pool() {
 fn a_panicking_callback_is_contained() {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer = Timer::new(
+    let timer = ThreadpoolTimer::new(
         move |_firing| {
             recorder.record();
             panic!("timer callback panics on purpose");
@@ -476,8 +476,8 @@ fn a_panicking_callback_is_contained() {
 fn a_timer_is_send_and_sync() {
     fn assert_send<T: Send>() {}
     fn assert_sync<T: Sync>() {}
-    assert_send::<Timer>();
-    assert_sync::<Timer>();
+    assert_send::<ThreadpoolTimer>();
+    assert_sync::<ThreadpoolTimer>();
 }
 
 /// Arming from another thread must work, since the type advertises `Sync`.

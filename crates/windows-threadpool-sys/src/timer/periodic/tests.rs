@@ -11,14 +11,14 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::callback_env::CallbackEnviron;
 use crate::pool::ThreadpoolPool;
-use crate::timer::PeriodicTimer;
+use crate::timer::ThreadpoolPeriodicTimer;
 use crate::timer::tests::Fires;
 
-fn counting_timer(period: Duration) -> (PeriodicTimer, Arc<Fires>) {
+fn counting_timer(period: Duration) -> (ThreadpoolPeriodicTimer, Arc<Fires>) {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
     let timer =
-        PeriodicTimer::new(period, move |_tick| recorder.record(), None).expect("create timer");
+        ThreadpoolPeriodicTimer::new(period, move |_tick| recorder.record(), None).expect("create timer");
     (timer, fires)
 }
 
@@ -26,40 +26,40 @@ fn counting_timer(period: Duration) -> (PeriodicTimer, Arc<Fires>) {
 
 #[test]
 fn new_periodic_timer_succeeds() {
-    assert!(PeriodicTimer::new(Duration::from_millis(1), |_| {}, None).is_ok());
+    assert!(ThreadpoolPeriodicTimer::new(Duration::from_millis(1), |_| {}, None).is_ok());
 }
 
 #[test]
 fn new_with_env_succeeds() {
     let mut env = CallbackEnviron::new();
-    assert!(PeriodicTimer::new(Duration::from_millis(1), |_| {}, Some(&mut env)).is_ok());
+    assert!(ThreadpoolPeriodicTimer::new(Duration::from_millis(1), |_| {}, Some(&mut env)).is_ok());
 }
 
 /// A zero period would describe a timer that never repeats, which is what
-/// `Timer` is for. Accepting it would recreate exactly the ambiguity that
+/// `ThreadpoolTimer` is for. Accepting it would recreate exactly the ambiguity that
 /// splitting the types removed.
 #[test]
 fn a_zero_period_is_rejected() {
-    let error = PeriodicTimer::new(Duration::ZERO, |_| {}, None)
+    let error = ThreadpoolPeriodicTimer::new(Duration::ZERO, |_| {}, None)
         .expect_err("a zero period must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }
 
 #[test]
 fn new_timer_is_stopped() {
-    let timer = PeriodicTimer::new(Duration::from_millis(1), |_| {}, None).expect("create timer");
+    let timer = ThreadpoolPeriodicTimer::new(Duration::from_millis(1), |_| {}, None).expect("create timer");
     assert!(!timer.is_running(), "a fresh timer must not be running");
 }
 
 #[test]
 fn the_period_is_reported() {
-    let timer = PeriodicTimer::new(Duration::from_millis(25), |_| {}, None).expect("create timer");
+    let timer = ThreadpoolPeriodicTimer::new(Duration::from_millis(25), |_| {}, None).expect("create timer");
     assert_eq!(timer.period(), Duration::from_millis(25));
 }
 
 #[test]
 fn drop_without_starting_is_clean() {
-    let _timer = PeriodicTimer::new(Duration::from_millis(1), |_| {}, None).expect("create timer");
+    let _timer = ThreadpoolPeriodicTimer::new(Duration::from_millis(1), |_| {}, None).expect("create timer");
 }
 
 // --- repetition ---
@@ -148,7 +148,7 @@ fn a_slow_callback_may_overlap_itself() {
     let recorder = Arc::clone(&fires);
 
     // Ticks are scheduled far faster than the callback can complete.
-    let timer = PeriodicTimer::new(
+    let timer = ThreadpoolPeriodicTimer::new(
         Duration::from_millis(2),
         move |_tick| {
             let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
@@ -225,7 +225,7 @@ fn a_tick_can_stop_the_timer() {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
 
-    let timer = PeriodicTimer::new(
+    let timer = ThreadpoolPeriodicTimer::new(
         Duration::from_millis(2),
         move |tick| {
             recorder.record();
@@ -283,7 +283,7 @@ fn drop_waits_for_an_executing_tick() {
     let entered = Arc::clone(&started);
 
     {
-        let timer = PeriodicTimer::new(
+        let timer = ThreadpoolPeriodicTimer::new(
             Duration::from_secs(3_600),
             move |_tick| {
                 entered.record();
@@ -325,7 +325,7 @@ fn the_callback_may_own_heap_state() {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
 
-    let timer = PeriodicTimer::new(
+    let timer = ThreadpoolPeriodicTimer::new(
         Duration::from_millis(2),
         move |tick| {
             total.fetch_add(data.iter().sum::<u64>() as usize, Ordering::SeqCst);
@@ -351,7 +351,7 @@ fn a_timer_runs_on_a_private_pool() {
 
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer = PeriodicTimer::new(
+    let timer = ThreadpoolPeriodicTimer::new(
         Duration::from_millis(2),
         move |_tick| recorder.record(),
         Some(&mut env),
@@ -371,7 +371,7 @@ fn a_timer_runs_on_a_private_pool() {
 fn a_panicking_tick_is_contained_and_the_timer_continues() {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer = PeriodicTimer::new(
+    let timer = ThreadpoolPeriodicTimer::new(
         Duration::from_millis(2),
         move |_tick| {
             recorder.record();
@@ -391,8 +391,8 @@ fn a_panicking_tick_is_contained_and_the_timer_continues() {
 fn a_periodic_timer_is_send_and_sync() {
     fn assert_send<T: Send>() {}
     fn assert_sync<T: Sync>() {}
-    assert_send::<PeriodicTimer>();
-    assert_sync::<PeriodicTimer>();
+    assert_send::<ThreadpoolPeriodicTimer>();
+    assert_sync::<ThreadpoolPeriodicTimer>();
 }
 
 #[test]

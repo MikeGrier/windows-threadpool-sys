@@ -66,8 +66,10 @@ Execution showed that item was mis-sized and partly already satisfied, so it is 
 	`PeriodicTick::stop` (how a periodic timer ends itself). Each type's documentation must state its own
 	concurrency contract and point at the other as the alternative.
 
-	Note the naming: these are `Timer` and `PeriodicTimer`, not `ThreadpoolTimer`, which leaves them
-	inconsistent with `ThreadpoolWork`, `ThreadpoolWait`, `ThreadpoolIo`, and `ThreadpoolPool`.
+	The types are named `ThreadpoolTimer` and `ThreadpoolPeriodicTimer`, matching `ThreadpoolWork`,
+	`ThreadpoolWait`, `ThreadpoolIo`, and `ThreadpoolPool`. The callback tokens (`TimerFiring`,
+	`PeriodicTick`) carry no prefix, matching `WaitActivation`: they are callback parameters rather than
+	owned thread-pool objects.
 
 - [ ] **M4-6** — Design and implement safe cleanup-group membership across every callback object.
 
