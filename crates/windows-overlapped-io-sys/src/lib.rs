@@ -40,6 +40,9 @@ pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_
 #[cfg(windows)]
 pub use endpoint::UnassociatedEndpoint;
 
+#[cfg(all(windows, feature = "fs"))]
+pub use fs::FileIo;
+
 #[cfg(windows)]
 pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, Issued, OperationId, Submitted};
 

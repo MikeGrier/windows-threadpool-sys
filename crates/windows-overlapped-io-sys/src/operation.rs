@@ -80,6 +80,24 @@ pub(crate) unsafe fn reclaim_from_overlapped(overlapped: *mut OVERLAPPED) {
     }
 }
 
+/// Recover a pointer to the payload of an operation from its `OVERLAPPED`
+/// identity.
+///
+/// The payload offset depends on `P`, so the caller must supply the exact `P`
+/// the operation was created with. It is used by a family adapter to reach the
+/// buffer it owns inside the pinned operation while issuing the native call.
+///
+/// # Safety
+///
+/// `overlapped` must be the identity pointer of a live `Operation<P>` of this
+/// exact type, and the returned pointer must be used only while that operation's
+/// storage stays put and nothing else accesses the payload concurrently.
+#[cfg(feature = "fs")]
+pub(crate) unsafe fn payload_ptr_from_overlapped<P>(overlapped: *mut OVERLAPPED) -> *mut P {
+    let offset = core::mem::offset_of!(Operation<P>, payload);
+    unsafe { overlapped.cast::<u8>().add(offset).cast::<P>() }
+}
+
 /// Reclaim and drop an operation from its `OVERLAPPED` identity without knowing
 /// its payload type, using the thunk armed by [`Operation::into_overlapped`].
 ///
