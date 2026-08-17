@@ -148,37 +148,43 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	`StartThreadpoolIo` with a callback or a `CancelThreadpoolIo`, whereas the raw IOCP and event backends have no
 	such counter. The core exposes the hooks these require without encoding thread-pool accounting itself.
 
-### Voluntary rundown versus `Drop`
+### Voluntary rundown and `Drop`
 
-Rundown has two distinct paths with different obligations, and the difference is deliberate.
+Rundown has two entry points that share the same blocking semantics; the difference is only who initiates it.
 
-- Voluntary rundown is an explicit method that **blocks** with the full semantics: it prevents new submissions,
-	cancels every outstanding operation, drains and observes all of their completions, frees the associated
-	storage, and returns only once the kernel is guaranteed to be done with every operation's storage. Blocking
-	belongs here and only here, because only an explicit call may take unbounded time.
-- `Drop` must be **memory-safe** and must **never block for correctness**. Those two requirements can only be
-	met together by refusing to free storage the kernel might still own: leaking that storage is memory-safe,
-	whereas freeing it while a completion is still pending is a use-after-free. `Drop` therefore closes the native
-	handle and port -- which is sound, because leaked storage stays valid for any late kernel writes -- and
-	abandons any operation storage that voluntary rundown did not already reclaim. It does not wait for
-	outstanding completions.
+- Voluntary rundown is an explicit method that **blocks**: it prevents new submissions, cancels every
+	outstanding operation, drains and observes all of their completions, frees the associated storage, and
+	returns only once the kernel is guaranteed to be done with every operation's storage. It is the preferred
+	path because the caller chooses when the wait happens.
+- `Drop` is the safety net, and it **must also block** to stay memory-safe. `Drop` reclaims the operation
+	storage, so before freeing it must guarantee the kernel has finished writing to every outstanding
+	`OVERLAPPED`; that guarantee can only be obtained by cancelling the outstanding operations and waiting for
+	their completions. A non-blocking `Drop` that freed the storage could permit a post-`Drop` kernel write into
+	freed memory -- exactly the use-after-free the crate must prevent. `Drop` therefore performs the same
+	cancel-drain-free rundown synchronously before closing the native handle and port.
 
-This rests on the invariant that already governs the crate: per-operation storage is freed only after that
-operation's completion has been observed. Voluntary rundown observes every completion before returning; `Drop`
-observes none and leaks. Both uphold the invariant, so no path can produce a post-`Drop` kernel write into freed
-memory.
+This rests on the invariant that governs the crate: per-operation storage is freed only after that operation's
+completion has been observed. Both paths satisfy it by observing every completion before freeing; the only
+difference is that voluntary rundown lets the caller control the timing, while `Drop` blocks whenever the caller
+did not run down first.
 
-`Drop` must not **panic**: a leak is not a memory-safety violation, and unwinding from `Drop` is harmful. When
-`Drop` runs with operations still outstanding it should instead emit a best-effort diagnostic carrying enough
-context to make the leak diagnosable -- at least the count of abandoned operations. A zero-dependency `-sys`
-crate may only be able to do this on a best-effort basis (for example behind an optional logging feature or as a
-last-resort write to standard error), and full context may not always be recoverable; the diagnostic is
-advisory, not a correctness mechanism.
+The blocking drain belongs to whichever object owns the completion stream -- the completion port for the raw
+IOCP backend. An associated endpoint's own teardown cancels its outstanding operations (closing its handle does
+this) and defers reclamation to that drain, so the port's rundown is what finally frees the storage.
 
-Draining generically is the implementation crux: because the port delivers untyped completions, freeing an
-abandoned operation's storage without its `P` requires either type-erased reclamation recorded in the operation
-header or a caller-typed drain that supplies `P`. This choice is bound to the same generic-submission boundary
-that the rest of the crate is prototyping and must be resolved as part of it.
+`Drop` must not **panic**: unwinding out of `Drop` is harmful, and blocking-then-freeing is the correct
+behavior, not an error. Because a blocking `Drop` signals that the caller omitted an explicit rundown, `Drop`
+should emit a best-effort diagnostic when it runs with operations still outstanding, carrying enough context to
+locate the missing rundown -- at least the count of operations it had to drain. A zero-dependency `-sys` crate
+may only manage this on a best-effort basis (behind an optional logging feature or as a last-resort write to
+standard error), and full context may not always be recoverable; the diagnostic is advisory, not a correctness
+mechanism.
+
+Because `Drop` must free outstanding storage without knowing each operation's `P`, generic drain is mandatory
+rather than optional: the operation header must record a type-erased reclamation function that frees the storage
+from the `OVERLAPPED` pointer alone. That mechanism is what lets both voluntary rundown and `Drop` reclaim
+heterogeneous operations on one endpoint, and it advances the generic-submission boundary the rest of the crate
+is prototyping.
 
 Behavioral matrix every backend must be exercised against:
 
