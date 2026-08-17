@@ -98,26 +98,22 @@ fn default_matches_new() {
 }
 
 // --- set_pool ---
+//
+// `set_pool` now takes an owned `ThreadpoolPool`, so it cannot be handed an
+// invented value. Its behaviour is covered in the pool module's own tests, next
+// to the type that makes it sound.
 
 #[test]
-fn set_pool_stores_value() {
+fn clear_pool_leaves_the_default_pool() {
     let mut env = CallbackEnviron::new();
-    env.set_pool(42);
-    assert_eq!(inner(&env).Pool, 42);
-}
-
-#[test]
-fn set_pool_zero_resets() {
-    let mut env = CallbackEnviron::new();
-    env.set_pool(42);
-    env.set_pool(0);
+    env.clear_pool();
     assert_eq!(inner(&env).Pool, 0);
 }
 
 #[test]
-fn set_pool_does_not_alter_priority_or_size() {
+fn clear_pool_does_not_alter_priority_or_size() {
     let mut env = CallbackEnviron::new();
-    env.set_pool(123);
+    env.clear_pool();
     assert_eq!(inner(&env).CallbackPriority, TP_CALLBACK_PRIORITY_NORMAL);
     assert_eq!(
         inner(&env).Size,
@@ -126,11 +122,17 @@ fn set_pool_does_not_alter_priority_or_size() {
 }
 
 // --- set_cleanup_group ---
+//
+// The values below are never handed to the thread pool; these tests only check
+// that the setter records what it was given. `set_cleanup_group` is `unsafe`
+// precisely because a real call would have the pool dereference them.
 
 #[test]
 fn set_cleanup_group_none_callback() {
     let mut env = CallbackEnviron::new();
-    env.set_cleanup_group(99, None);
+    // SAFETY: the environment is never used to create an object, so the group
+    // value is only stored and read back, never dereferenced by the pool.
+    unsafe { env.set_cleanup_group(99, None) };
     assert_eq!(inner(&env).CleanupGroup, 99);
     assert!(inner(&env).CleanupGroupCancelCallback.is_none());
 }
@@ -144,7 +146,8 @@ fn set_cleanup_group_with_callback() {
     }
 
     let mut env = CallbackEnviron::new();
-    env.set_cleanup_group(7, Some(cancel_cb));
+    // SAFETY: as above, the environment never reaches an object creation call.
+    unsafe { env.set_cleanup_group(7, Some(cancel_cb)) };
     assert_eq!(inner(&env).CleanupGroup, 7);
     assert!(inner(&env).CleanupGroupCancelCallback.is_some());
 }
@@ -152,11 +155,13 @@ fn set_cleanup_group_with_callback() {
 #[test]
 fn set_cleanup_group_zero_clears() {
     let mut env = CallbackEnviron::new();
-    env.set_cleanup_group(55, None);
-    env.set_cleanup_group(0, None);
+    // SAFETY: as above, the environment never reaches an object creation call.
+    unsafe {
+        env.set_cleanup_group(55, None);
+        env.set_cleanup_group(0, None);
+    }
     assert_eq!(inner(&env).CleanupGroup, 0);
 }
-
 // --- set_priority ---
 
 #[test]

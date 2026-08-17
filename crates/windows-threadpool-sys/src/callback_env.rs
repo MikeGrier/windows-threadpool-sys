@@ -9,9 +9,11 @@
 use core::mem;
 
 use windows_sys::Win32::System::Threading::{
-    PTP_CLEANUP_GROUP, PTP_CLEANUP_GROUP_CANCEL_CALLBACK, PTP_POOL, TP_CALLBACK_ENVIRON_V3,
+    PTP_CLEANUP_GROUP, PTP_CLEANUP_GROUP_CANCEL_CALLBACK, TP_CALLBACK_ENVIRON_V3,
     TP_CALLBACK_ENVIRON_V3_0, TP_CALLBACK_PRIORITY, TP_CALLBACK_PRIORITY_NORMAL,
 };
+
+use crate::pool::ThreadpoolPool;
 
 /// Equivalent to `InitializeThreadpoolEnvironment` / `DestroyThreadpoolEnvironment`.
 ///
@@ -48,14 +50,38 @@ impl CallbackEnviron {
 
     /// Equivalent to `SetThreadpoolCallbackPool`.
     ///
-    /// `pool` must remain valid for the lifetime of all thread-pool objects
-    /// created with this environment. Pass `0` to use the default pool.
-    pub fn set_pool(&mut self, pool: PTP_POOL) {
-        self.0.Pool = pool;
+    /// Callbacks created with this environment run on `pool` instead of the
+    /// process-default pool. The environment borrows the pool, and objects
+    /// created from the environment copy its contents, so the pool must also
+    /// outlive those objects -- see [`ThreadpoolPool`] for the ordering rule.
+    ///
+    /// Use [`CallbackEnviron::clear_pool`] to go back to the default pool.
+    pub fn set_pool(&mut self, pool: &ThreadpoolPool) {
+        self.0.Pool = pool.as_raw();
+    }
+
+    /// Restore the process-default pool, dropping any [`ThreadpoolPool`] this
+    /// environment named.
+    pub fn clear_pool(&mut self) {
+        self.0.Pool = 0;
     }
 
     /// Equivalent to `SetThreadpoolCallbackCleanupGroup`.
-    pub fn set_cleanup_group(
+    ///
+    /// # Safety
+    ///
+    /// This takes a raw `PTP_CLEANUP_GROUP` because the crate has no owned
+    /// cleanup group yet, so the caller must guarantee that:
+    ///
+    /// - `group` is a live cleanup group from `CreateThreadpoolCleanupGroup`,
+    ///   or `0` to clear the setting;
+    /// - it outlives every object created with this environment; and
+    /// - once `CloseThreadpoolCleanupGroupMembers` releases those objects, they
+    ///   are neither used nor closed again. This crate's callback objects close
+    ///   themselves on drop, so a group-owned object of any of those types would
+    ///   be closed twice -- do not place them in a cleanup group until the crate
+    ///   models group membership.
+    pub unsafe fn set_cleanup_group(
         &mut self,
         group: PTP_CLEANUP_GROUP,
         cancel_callback: PTP_CLEANUP_GROUP_CANCEL_CALLBACK,

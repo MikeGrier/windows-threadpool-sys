@@ -20,7 +20,7 @@ Execution showed that item was mis-sized and partly already satisfied, so it is 
 - Building on the callback environment surfaced a soundness defect that must be fixed before any further
 	object type consumes it, which is now the first item.
 
-- [ ] **M4-1** — Close the `CallbackEnviron` soundness hole: add an owned `ThreadpoolPool` and change
+- [x] **M4-1** — Close the `CallbackEnviron` soundness hole: add an owned `ThreadpoolPool` and change
 	`set_pool` to accept it, and make `set_cleanup_group` `unsafe` pending a full cleanup-group design.
 
 	**Gap:** `set_pool` and `set_cleanup_group` are **safe** functions that accept a raw `PTP_POOL` /

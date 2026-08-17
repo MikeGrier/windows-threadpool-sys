@@ -16,4 +16,5 @@
 
 pub mod callback_env;
 pub mod io;
+pub mod pool;
 pub mod work;
