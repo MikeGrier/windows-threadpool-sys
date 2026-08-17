@@ -451,6 +451,20 @@ impl<'port> AssociatedEndpoint<'port> {
 pub struct OperationId(*mut OVERLAPPED);
 
 impl OperationId {
+    /// Build an identity from the `OVERLAPPED` returned by
+    /// [`Operation::into_overlapped`].
+    ///
+    /// Part of the shared submission seam: a completion backend implemented in
+    /// another crate -- the `TP_IO` backend in `windows-threadpool-sys` -- must
+    /// name the operations it has submitted using the same identity type the
+    /// backends here use. The value is only an address, and [`OperationId::as_ptr`]
+    /// already hands it back out, so wrapping one grants no additional access to
+    /// the operation's storage.
+    #[must_use]
+    pub fn from_ptr(overlapped: *mut OVERLAPPED) -> Self {
+        Self(overlapped)
+    }
+
     /// The `OVERLAPPED` pointer this identity refers to.
     #[must_use]
     pub fn as_ptr(self) -> *mut OVERLAPPED {

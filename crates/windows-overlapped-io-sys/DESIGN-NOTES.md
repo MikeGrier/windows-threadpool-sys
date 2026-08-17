@@ -284,6 +284,15 @@ submission, `CancelThreadpoolIo` to balance an immediate failure, and reclamatio
 the operation family is known, or `reclaim_overlapped` during object rundown). This crate never links the
 thread-pool functions or references `TP_*`.
 
+`OperationId`, `Issued`, and `Submitted` are part of that seam rather than IOCP-private types: an operation
+identity, a submission classification, and a submission outcome mean the same thing to any backend. Building
+`TP_IO` outside this crate showed that only `OperationId` was not actually reachable -- it had no public
+constructor, so a backend in another crate could read an identity but never produce one. `OperationId::from_ptr`
+closes that gap. It is safe because the value is only an address that `OperationId::as_ptr` already exposes, and
+the type is documented as never to be dereferenced or freed. The alternative -- letting the thread-pool crate
+define its own identity type -- was rejected: it would fork the shared vocabulary the two crates exist to hold
+in common, and downstream code composing the backends would have to translate between two identical types.
+
 ## Crate boundary summary
 
 `windows-overlapped-io-sys` exports the endpoint owners, provenance and sealed types, pinned operation storage

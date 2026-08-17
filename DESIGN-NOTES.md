@@ -186,6 +186,56 @@ destroy helper is a no-op, but the wrapper should still model that lifecycle bou
 `CRITICAL_SECTION` parameter is feature-gated. That feature is intentionally deferred until the safe API has a
 use for this specialized callback-return operation.
 
+## `TP_IO` backend realization
+
+`ThreadpoolIo` is the third completion backend for the shared overlapped model, alongside the raw IOCP and
+blocking backends owned by `windows-overlapped-io-sys`. It reuses that crate's endpoint ownership and pinned
+operation storage unchanged and adds only the two concerns the thread pool imposes.
+
+### Balanced accounting is the type's central invariant
+
+One counter -- the number of `StartThreadpoolIo` calls not yet balanced -- serves as both the pool's accounting
+and the crate's rundown state, because they are the same quantity: an unbalanced start is exactly an operation
+whose storage the kernel or pool still owns. `submit` increments before issuing `StartThreadpoolIo`, so a
+completion delivered on a pool thread can never race ahead of the count. It is then balanced on exactly one of
+three paths: the I/O callback (pending), or `CancelThreadpoolIo` inline in `submit` for an immediate failure or
+for a synchronous completion on a handle in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode. The unsafe contract on
+`submit` exists to make the caller's `Issued` classification the single point where this can go wrong.
+
+The count is a `Mutex<usize>` plus a `Condvar` rather than the raw IOCP backend's `AtomicUsize`. That backend
+can dequeue on the owner's thread, so it drains by pumping `get()` in a loop; here the completions are delivered
+on pool threads the owner does not drive, so rundown must block on a condition variable instead of spinning.
+
+### Callback ordering is what makes rundown mean something
+
+Inside the callback, the completion is dropped (reclaiming the operation's storage) *before* the start is
+balanced, because the two are declared in that reverse order in the guarded frame. This ordering is the reason
+"outstanding reached zero" can be read as "no storage is still pool-owned". The balance is performed by a guard
+whose `Drop` runs even while unwinding, so a panicking callback cannot leave the accounting permanently short;
+the panic itself is caught at the FFI boundary, since unwinding into the pool's frame is undefined.
+
+The count reaches zero *inside* the last callback, just before it returns, so a callback frame can still be live
+when rundown returns. `Drop` therefore also calls `WaitForThreadpoolIoCallbacks` before freeing the callback
+context. There is deliberately no cancelling variant of `wait`: cancelling a pending I/O callback neither
+cancels the underlying operation nor makes its `OVERLAPPED` safe to free, so the only sound way to stop
+outstanding I/O is `cancel_all` followed by `run_down`.
+
+### `Drop` cancels rather than only blocking
+
+The raw IOCP `CompletionPort::drop` blocks on a drain that the caller must already have made terminating. A
+`ThreadpoolIo` owns its endpoint handle, so it can do better: `Drop` reports the skipped rundown once, then
+issues `cancel_all` itself, which guarantees every outstanding operation delivers its callback and therefore
+that the block terminates. Cancelling a handle that is about to be closed anyway costs nothing and converts a
+potential permanent hang into a bounded wait.
+
+### Seam change this required
+
+`OperationId` had no public constructor, so only backends inside `windows-overlapped-io-sys` could name their
+in-flight operations. Implementing the second backend outside that crate revealed the gap, and it was fixed at
+the source with `OperationId::from_ptr` rather than by defining a competing identity type here -- a duplicate
+would have split the shared vocabulary the two crates are supposed to hold in common. The constructor is safe:
+the value is only an address, and `OperationId::as_ptr` already hands it back out.
+
 Primary references:
 
 - [Thread Pools](https://learn.microsoft.com/windows/win32/procthread/thread-pools)

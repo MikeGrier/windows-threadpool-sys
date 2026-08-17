@@ -29,7 +29,7 @@ Design decisions for this crate are in the workspace-root
 - [x] **M3-1** — Wire the `windows-threadpool-sys` → `windows-overlapped-io-sys` dependency (path plus
 	version), and update the publish workflow so the overlapped crate releases before this one.
 
-- [ ] **M3-2** — Implement the `TP_IO` backend over the shared seam with balanced `StartThreadpoolIo` /
+- [x] **M3-2** — Implement the `TP_IO` backend over the shared seam with balanced `StartThreadpoolIo` /
 	`CancelThreadpoolIo` accounting and callback-driven reclamation.
 
 - [ ] **M3-3** — Test `TP_IO` across the behavioral matrix: immediate failure, immediate success, pending

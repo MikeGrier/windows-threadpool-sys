@@ -6,9 +6,14 @@
 //! those facilities while making callback and resource lifetimes explicit in
 //! Rust.
 //!
-//! The crate is currently in its initial development stage.
+//! The crate is currently in its initial development stage. It provides
+//! [`callback_env`] (SDK-equivalent `TP_CALLBACK_ENVIRON_V3` helpers),
+//! [`work`] (owned `TP_WORK` objects), and [`io`] (the `TP_IO` completion
+//! backend built on the overlapped submission seam owned by
+//! `windows-overlapped-io-sys`).
 
 #![warn(missing_docs)]
 
 pub mod callback_env;
+pub mod io;
 pub mod work;
