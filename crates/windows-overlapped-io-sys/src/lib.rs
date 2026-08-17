@@ -41,7 +41,7 @@ pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_
 pub use endpoint::UnassociatedEndpoint;
 
 #[cfg(all(windows, feature = "fs"))]
-pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PAGE_SIZE, PageBuffers};
+pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PAGE_SIZE, PageBuffers, ScatterGatherIo};
 
 #[cfg(windows)]
 pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, Issued, OperationId, Submitted};

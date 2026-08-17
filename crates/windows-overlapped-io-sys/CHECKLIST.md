@@ -9,7 +9,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 	`write_gather` behind the `fs` feature, owning the buffers and the `FILE_SEGMENT_ELEMENT` array. `PageBuffers`
 	lands with this, its first consumer. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Implement safe-submission `AssociatedEndpoint::read_scatter` / `write_gather` behind `fs` returning a typed
+- [x] Implement safe-submission `AssociatedEndpoint::read_scatter` / `write_gather` behind `fs` returning a typed
 	`ScatterGatherIo` token whose `claim(&Completion)` recovers the `PageBuffers` and byte count. See
 	[DESIGN-NOTES.md](DESIGN-NOTES.md).
 

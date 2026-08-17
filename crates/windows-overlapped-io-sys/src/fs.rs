@@ -437,5 +437,142 @@ impl BlockingEndpoint {
     }
 }
 
+/// The pinned payload for an in-flight scatter/gather operation: the buffers and
+/// the `FILE_SEGMENT_ELEMENT` array that points into them.
+struct ScatterPayload {
+    buffers: PageBuffers,
+    segments: Vec<FILE_SEGMENT_ELEMENT>,
+}
+
+// SAFETY: the raw pointers in `segments` point into `buffers`, which this payload
+// owns; moving the payload moves the whole self-referential unit together, and it
+// exposes no aliasing access, so it is `Send` like the `PageBuffers` it wraps.
+unsafe impl Send for ScatterPayload {}
+
+impl AssociatedEndpoint<'_> {
+    /// Submit an overlapped scatter-read of `pages` pages starting at `offset`
+    /// into a fresh page-aligned buffer, returning a [`ScatterGatherIo`] token.
+    ///
+    /// The endpoint must be opened with [`FILE_FLAG_NO_BUFFERING`] and must not be
+    /// in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns any immediate failure from issuing the scatter-read.
+    #[track_caller]
+    pub fn read_scatter(&self, pages: usize, offset: u64) -> io::Result<ScatterGatherIo> {
+        let buffers = PageBuffers::new(pages);
+        let total = clamp_u32(buffers.len());
+        let segments = buffers.segment_array();
+        let mut operation = Operation::new(ScatterPayload { buffers, segments });
+        operation.set_offset(offset);
+        // SAFETY: issues exactly one ReadFileScatter into the payload's buffers
+        // via its segment array, both reached through the pinned OVERLAPPED; they
+        // live until the completion is claimed.
+        let submitted = unsafe {
+            self.submit(operation, |handle, overlapped| {
+                let payload = payload_ptr_from_overlapped::<ScatterPayload>(overlapped);
+                let ok = ReadFileScatter(
+                    handle.as_raw_handle(),
+                    (*payload).segments.as_ptr(),
+                    total,
+                    std::ptr::null(),
+                    overlapped,
+                );
+                classify_issued(ok)
+            })
+        };
+        finish_scatter(submitted)
+    }
+
+    /// Submit an overlapped gather-write of `buffers` starting at `offset`,
+    /// returning a [`ScatterGatherIo`] token.
+    ///
+    /// The endpoint must be opened with [`FILE_FLAG_NO_BUFFERING`] and must not be
+    /// in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns any immediate failure from issuing the gather-write.
+    #[track_caller]
+    pub fn write_gather(&self, buffers: PageBuffers, offset: u64) -> io::Result<ScatterGatherIo> {
+        let total = clamp_u32(buffers.len());
+        let segments = buffers.segment_array();
+        let mut operation = Operation::new(ScatterPayload { buffers, segments });
+        operation.set_offset(offset);
+        // SAFETY: issues exactly one WriteFileGather from the payload's buffers
+        // via its segment array, both reached through the pinned OVERLAPPED; they
+        // live until the completion is claimed.
+        let submitted = unsafe {
+            self.submit(operation, |handle, overlapped| {
+                let payload = payload_ptr_from_overlapped::<ScatterPayload>(overlapped);
+                let ok = WriteFileGather(
+                    handle.as_raw_handle(),
+                    (*payload).segments.as_ptr(),
+                    total,
+                    std::ptr::null(),
+                    overlapped,
+                );
+                classify_issued(ok)
+            })
+        };
+        finish_scatter(submitted)
+    }
+}
+
+/// Turn a scatter/gather submission outcome into a token or an immediate error.
+fn finish_scatter(submitted: Submitted<ScatterPayload>) -> io::Result<ScatterGatherIo> {
+    match submitted {
+        Submitted::Pending(id) => Ok(ScatterGatherIo { id }),
+        Submitted::Completed { .. } => Err(io::Error::other(
+            "scatter/gather adapter observed a synchronous completion; the endpoint must not be in \
+             FILE_SKIP_COMPLETION_PORT_ON_SUCCESS mode",
+        )),
+        Submitted::Failed { error, .. } => Err(error),
+    }
+}
+
+/// A pending scatter/gather operation submitted through
+/// [`AssociatedEndpoint::read_scatter`] or [`AssociatedEndpoint::write_gather`].
+///
+/// The token carries the operation's identity and its payload type, so
+/// [`ScatterGatherIo::claim`] recovers the [`PageBuffers`] and byte count safely
+/// once the matching completion is dequeued.
+#[derive(Debug)]
+pub struct ScatterGatherIo {
+    id: OperationId,
+}
+
+impl ScatterGatherIo {
+    /// The identity of the in-flight operation, for cancellation or matching.
+    #[must_use]
+    pub fn id(&self) -> OperationId {
+        self.id
+    }
+
+    /// Claim this operation's result from `completion`.
+    ///
+    /// On a match returns `Ok((buffers, result))`: `buffers` is the payload (the
+    /// pages read, or the data written) and `result` is the byte count or the
+    /// operation's error. Returns `Err(self)` when `completion` belongs to a
+    /// different operation.
+    pub fn claim(self, completion: &Completion) -> Result<(PageBuffers, io::Result<usize>), Self> {
+        if completion.overlapped_ptr() != self.id.as_ptr() {
+            return Err(self);
+        }
+        // SAFETY: the identity match proves this completion is the
+        // Operation<ScatterPayload> this token submitted; claim it exactly once.
+        let operation = unsafe { completion.claim::<ScatterPayload>() };
+        let buffers = operation.into_payload().buffers;
+        let result = match completion.error() {
+            Some(error) => Err(io::Error::from_raw_os_error(
+                error.raw_os_error().unwrap_or_default(),
+            )),
+            None => Ok(completion.bytes_transferred() as usize),
+        };
+        Ok((buffers, result))
+    }
+}
+
 #[cfg(test)]
 mod tests;
