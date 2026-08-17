@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use std::ptr;
 
 use windows_overlapped_io_sys::{
-    BlockingEndpoint, CompletionPort, Operation, OperationState, Submitted, UnassociatedEndpoint,
+    BlockingEndpoint, CompletionPort, Issued, Operation, OperationState, Submitted,
+    UnassociatedEndpoint,
 };
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
@@ -98,12 +99,14 @@ fn safe_created_endpoint_reads_on_the_iocp_backend() {
                 ptr::null_mut(),
                 overlapped,
             );
+            // Skip-on-success mode is not set on this handle, so even a
+            // synchronous success queues a packet: report Pending either way.
             if ok != 0 {
-                return Ok(());
+                return Ok(Issued::Pending);
             }
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
-                Ok(())
+                Ok(Issued::Pending)
             } else {
                 Err(error)
             }
@@ -111,6 +114,9 @@ fn safe_created_endpoint_reads_on_the_iocp_backend() {
     };
     let id = match submitted {
         Submitted::Pending(id) => id,
+        Submitted::Completed { .. } => {
+            panic!("unexpected synchronous completion without skip mode")
+        }
         Submitted::Failed { error, .. } => panic!("submit failed: {error}"),
     };
 

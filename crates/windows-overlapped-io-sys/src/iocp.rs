@@ -301,25 +301,32 @@ impl<'port> AssociatedEndpoint<'port> {
     /// Submit an owned operation on this endpoint.
     ///
     /// `issue` performs the single native overlapped call using the endpoint's
-    /// handle and the operation's stable `OVERLAPPED` pointer. It returns `Ok`
-    /// when a completion will arrive (native success or `ERROR_IO_PENDING`) and
-    /// `Err` for an immediate failure that yields no completion.
+    /// handle and the operation's stable `OVERLAPPED` pointer. It classifies the
+    /// outcome as an [`Issued`]: [`Issued::Pending`] when a completion packet
+    /// will be delivered, or [`Issued::Completed`] when the call finished
+    /// synchronously and no packet will arrive -- the state a handle in
+    /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode reports on synchronous
+    /// success. It returns `Err` for an immediate failure that yields no
+    /// completion.
     ///
-    /// On the completion path the operation's storage is transferred to the
-    /// kernel and recovered later with [`Completion::claim`]. On the failure
-    /// path the operation is returned intact so its storage can be reused.
+    /// On the pending path the operation's storage is transferred to the kernel
+    /// and recovered later with [`Completion::claim`]. On the synchronous and
+    /// failure paths the operation is returned intact through [`Submitted`] so
+    /// its storage can be reused or inspected.
     ///
     /// # Safety
     ///
     /// `issue` must start exactly one overlapped operation using the provided
     /// `OVERLAPPED` pointer and no other storage, and must classify the outcome
-    /// correctly: `Ok` only when a completion packet will be delivered to this
-    /// endpoint's port, `Err` only when none will.
+    /// correctly: [`Issued::Pending`] only when a completion packet will be
+    /// delivered to this endpoint's port, [`Issued::Completed`] only when the
+    /// operation is already complete and no packet will arrive, and `Err` only
+    /// when the submission failed and no completion will arrive.
     #[track_caller]
     pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
         P: Send,
-        F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<()>,
+        F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<Issued>,
     {
         // Transfer the operation's storage out; the caller (kernel) owns it until
         // it is reclaimed. `into_overlapped` arms the type-erased reclaim thunk.
@@ -342,7 +349,24 @@ impl<'port> AssociatedEndpoint<'port> {
         }
 
         match issue(self.handle(), overlapped) {
-            Ok(()) => Submitted::Pending(OperationId(overlapped)),
+            Ok(Issued::Pending) => Submitted::Pending(OperationId(overlapped)),
+            Ok(Issued::Completed { bytes_transferred }) => {
+                // Synchronous completion with no packet to arrive (the
+                // skip-on-success case): balance the count and reclaim inline.
+                state.outstanding.fetch_sub(1, Ordering::SeqCst);
+                if tracking {
+                    lock(&state.tracked).remove(&identity);
+                }
+                // SAFETY: the operation completed synchronously and no packet
+                // will arrive, so the kernel is done with the storage; reclaim
+                // the box we just leaked, exactly once.
+                let mut operation = unsafe { Operation::<P>::from_overlapped(overlapped) };
+                operation.set_state(OperationState::Completed);
+                Submitted::Completed {
+                    operation,
+                    bytes_transferred,
+                }
+            }
             Err(error) => {
                 state.outstanding.fetch_sub(1, Ordering::SeqCst);
                 if tracking {
@@ -402,6 +426,28 @@ impl OperationId {
     }
 }
 
+/// How the native call in [`AssociatedEndpoint::submit`] accepted an operation.
+///
+/// `issue` returns this to tell the backend whether a completion packet will be
+/// delivered, so the port's outstanding-operation accounting stays correct.
+#[derive(Debug, Clone, Copy)]
+pub enum Issued {
+    /// A completion packet will be delivered to the port; the operation's
+    /// storage stays with the kernel until [`Completion::claim`] recovers it.
+    /// This covers both native success that queues a packet and
+    /// `ERROR_IO_PENDING`.
+    Pending,
+    /// The operation finished synchronously and no completion packet will
+    /// arrive -- the outcome a handle in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`
+    /// mode reports on synchronous success. `bytes_transferred` is the count the
+    /// native call reported; the operation's storage is reclaimed inline and
+    /// returned through [`Submitted::Completed`].
+    Completed {
+        /// The number of bytes the synchronous call transferred.
+        bytes_transferred: u32,
+    },
+}
+
 /// The outcome of [`AssociatedEndpoint::submit`].
 #[derive(Debug)]
 pub enum Submitted<P> {
@@ -409,6 +455,15 @@ pub enum Submitted<P> {
     /// is recovered later with [`Completion::claim`]. The [`OperationId`]
     /// identifies the in-flight operation for cancellation and matching.
     Pending(OperationId),
+    /// The operation completed synchronously with no completion packet (the
+    /// skip-on-success case); the operation is returned already reclaimed, with
+    /// the bytes the native call transferred.
+    Completed {
+        /// The operation whose synchronous completion was observed inline.
+        operation: Operation<P>,
+        /// The number of bytes the synchronous call transferred.
+        bytes_transferred: u32,
+    },
     /// Submission failed immediately with no completion; the operation is
     /// returned so its storage can be reused or dropped.
     Failed {

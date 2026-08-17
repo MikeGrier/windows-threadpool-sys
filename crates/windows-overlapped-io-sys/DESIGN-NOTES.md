@@ -134,6 +134,15 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	event backend. `Internal` and `InternalHigh` are read only through these sanctioned paths.
 - A completed operation's result and payload survive native endpoint shutdown. Tearing down the port or handle
 	must not invalidate a result the owner has not yet consumed.
+- Synchronous completion is distinguished from a pending submission at the submit seam, because only the caller's
+	native call knows which occurred. The raw IOCP backend's `submit` closure classifies the outcome as an
+	`Issued`: `Pending` when a completion packet will be delivered (native success that queues a packet, or
+	`ERROR_IO_PENDING`), or `Completed { bytes_transferred }` when the call finished synchronously with no packet
+	to arrive -- the state a handle in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode reports on synchronous success.
+	A `Completed` outcome is reclaimed inline and returned through `Submitted::Completed`; only a `Pending` outcome
+	leaves an operation counted as outstanding. Misclassifying a synchronous success as `Pending` would leave the
+	outstanding count permanently high and hang rundown, so the distinction is part of the seam's safety contract,
+	not an optimization.
 
 ## Cancellation and rundown
 

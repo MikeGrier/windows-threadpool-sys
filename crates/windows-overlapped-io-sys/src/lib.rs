@@ -38,7 +38,7 @@ pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_
 pub use endpoint::UnassociatedEndpoint;
 
 #[cfg(windows)]
-pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, OperationId, Submitted};
+pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, Issued, OperationId, Submitted};
 
 #[cfg(windows)]
 pub use operation::{Operation, OperationState, reclaim_overlapped};

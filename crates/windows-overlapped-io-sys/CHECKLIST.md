@@ -5,7 +5,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M6 — Behavioral-matrix hardening
 
-- [ ] Exercise the raw IOCP backend across the behavioral-matrix cases not yet covered: immediate success under
+- [x] Exercise the raw IOCP backend across the behavioral-matrix cases not yet covered: immediate success under
 	`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`, completion identity under many simultaneous operations, and
 	results/payloads retained after native endpoint shutdown. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 

@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-use super::{AssociatedEndpoint, CompletionPort, Submitted};
+use super::{AssociatedEndpoint, CompletionPort, Issued, Submitted};
 use crate::{Operation, OperationState, UnassociatedEndpoint};
 use std::fs::OpenOptions;
 use std::os::windows::fs::OpenOptionsExt;
@@ -88,7 +88,7 @@ fn submit_pending_then_claim_recovers_the_operation() {
     let submitted = unsafe {
         endpoint.submit(operation, |_handle, overlapped| {
             port.post_raw(7, 3, overlapped)?;
-            Ok(())
+            Ok(Issued::Pending)
         })
     };
     assert!(matches!(submitted, Submitted::Pending(_)));
@@ -129,6 +129,7 @@ fn submit_immediate_failure_returns_the_operation() {
             assert_eq!(operation.state(), OperationState::Idle);
             assert_eq!(error.raw_os_error(), Some(5));
         }
+        Submitted::Completed { .. } => panic!("expected immediate failure"),
         Submitted::Pending(_) => panic!("expected immediate failure"),
     }
     assert_eq!(port.outstanding(), 0);
@@ -148,7 +149,7 @@ fn unclaimed_completion_reclaims_on_drop() {
     let submitted = unsafe {
         endpoint.submit(operation, |_handle, overlapped| {
             port.post_raw(0, 1, overlapped)?;
-            Ok(())
+            Ok(Issued::Pending)
         })
     };
     assert!(matches!(submitted, Submitted::Pending(_)));
@@ -157,6 +158,40 @@ fn unclaimed_completion_reclaims_on_drop() {
     // Drop the completion without claiming it; its storage is reclaimed.
     let completion = port.get(1_000).expect("get").expect("a packet");
     drop(completion);
+    assert_eq!(port.outstanding(), 0);
+
+    drop(endpoint);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn synchronous_completion_reclaims_inline_without_a_packet() {
+    let port = CompletionPort::new(0).expect("create port");
+    let (endpoint, path) = associate_temp_file(&port, "sync-complete");
+
+    let operation = Operation::new(vec![5_u8, 6, 7]);
+    // SAFETY: the closure starts no real operation and reports a synchronous
+    // completion, so no packet will arrive for this OVERLAPPED and reclaiming
+    // its storage inline is sound.
+    let submitted = unsafe {
+        endpoint.submit(operation, |_handle, _overlapped| {
+            Ok(Issued::Completed {
+                bytes_transferred: 3,
+            })
+        })
+    };
+    match submitted {
+        Submitted::Completed {
+            operation,
+            bytes_transferred,
+        } => {
+            assert_eq!(bytes_transferred, 3);
+            assert_eq!(operation.state(), OperationState::Completed);
+            assert_eq!(operation.payload(), &vec![5_u8, 6, 7]);
+        }
+        _ => panic!("expected synchronous completion"),
+    }
+    // No packet is outstanding, so the port needs no drain before teardown.
     assert_eq!(port.outstanding(), 0);
 
     drop(endpoint);

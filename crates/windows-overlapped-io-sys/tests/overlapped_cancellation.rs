@@ -12,7 +12,7 @@ use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
 use windows_overlapped_io_sys::{
-    CompletionPort, Operation, OperationState, Submitted, UnassociatedEndpoint,
+    CompletionPort, Issued, Operation, OperationState, Submitted, UnassociatedEndpoint,
 };
 use windows_sys::Win32::Foundation::{
     ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, INVALID_HANDLE_VALUE,
@@ -65,11 +65,11 @@ fn connect_named_pipe_is_cancellable_and_completes_as_aborted() {
         endpoint.submit(Operation::new(()), |handle, overlapped| {
             let ok = ConnectNamedPipe(handle.as_raw_handle(), overlapped);
             if ok != 0 {
-                return Ok(());
+                return Ok(Issued::Pending);
             }
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
-                Ok(())
+                Ok(Issued::Pending)
             } else {
                 Err(error)
             }
@@ -139,11 +139,11 @@ fn run_down_drains_a_cancelled_operation() {
         endpoint.submit(Operation::new(()), |handle, overlapped| {
             let ok = ConnectNamedPipe(handle.as_raw_handle(), overlapped);
             if ok != 0 {
-                return Ok(());
+                return Ok(Issued::Pending);
             }
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
-                Ok(())
+                Ok(Issued::Pending)
             } else {
                 Err(error)
             }
