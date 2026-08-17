@@ -98,3 +98,14 @@ Append-only record of completed checklist groups. Design decisions are in
 
 - [x] Integration test (`socket`): a loopback TCP send-and-receive round-trip through the IOCP socket adapter,
 	with no `unsafe` in the test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+## Moved 2026-08-16 — Safe blocking socket backend (M10)
+
+### M10 — Safe blocking socket backend (`socket` feature)
+
+- [x] Implement fully-safe `BlockingSocket::recv` / `send` behind the `socket` feature, issuing `WSARecv` /
+	`WSASend` with a per-call `WSACreateEvent` completion event and blocking via `WSAGetOverlappedResult`, with no
+	`unsafe` for the caller. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+- [x] Integration test (`socket`): a loopback TCP round-trip through `BlockingSocket`, with no `unsafe` in the
+	test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
