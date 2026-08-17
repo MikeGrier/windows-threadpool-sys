@@ -214,19 +214,37 @@ identity validation described under [Cancellation](#cancellation) for free. Rund
 variable rather than pump a dequeue loop as the IOCP backend does, because these completions arrive on pool
 threads the owner does not drive.
 
-### Callback ordering is what makes rundown mean something
+### Callback ordering: deregister on entry, and what that costs `run_down`
 
-Inside the callback, the completion is dropped (reclaiming the operation's storage) *before* the start is
-balanced, because the two are declared in that reverse order in the guarded frame. This ordering is the reason
-"outstanding reached zero" can be read as "no storage is still pool-owned". The balance is performed by a guard
-whose `Drop` runs even while unwinding, so a panicking callback cannot leave the accounting permanently short;
-the panic itself is caught at the FFI boundary, since unwinding into the pool's frame is undefined.
+The governing invariant is that **an address is never registered while it is available for reuse**. Violating it
+is a real race, not a theoretical one: the registry's duplicate-address assertion caught it during
+multi-threaded testing, where one thread's completion freed storage that another thread's submission was
+immediately handed while the freed operation's entry was still present.
 
-The count reaches zero *inside* the last callback, just before it returns, so a callback frame can still be live
-when rundown returns. `Drop` therefore also calls `WaitForThreadpoolIoCallbacks` before freeing the callback
-context. There is deliberately no cancelling variant of `wait`: cancelling a pending I/O callback neither
-cancels the underlying operation nor makes its `OVERLAPPED` safe to free, so the only sound way to stop
-outstanding I/O is `cancel_all` followed by `run_down`.
+Satisfying it requires deregistering the operation **before any user code runs**, at the top of the callback.
+Deregistering afterwards is not sufficient no matter how the guards are ordered, because `IoCompletion::claim`
+hands the storage to the callback, which may drop it -- freeing the address -- part-way through its own body.
+The kernel is finished with the operation by the time its callback is entered, so there is nothing to lose by
+deregistering there, and it makes `cancel` correctly reject an operation whose completion is already being
+delivered. Doing it unconditionally before `catch_unwind` also keeps the accounting exact when a callback
+panics, which is why no drop guard is needed for it.
+
+The cost is that an empty registry no longer implies the callbacks have finished, so `run_down` waits for two
+things: first that no operation is outstanding, then -- via `WaitForThreadpoolIoCallbacks` -- that no callback
+is still executing. Without the second wait, `cancel_all(); run_down(); read results` is a race, which is
+exactly how the weaker version was caught. Keeping both inside `run_down` means callers get the contract they
+would assume ("when this returns, my callbacks have run") rather than the one that happens to fall out of the
+implementation.
+
+An earlier version of this backend deregistered at the *end* of the callback, reasoning that this made
+"outstanding reached zero" mean "no storage is still pool-owned". That was both unsafe (the race above) and
+unnecessary: the property that matters at teardown -- no callback still touching the context -- comes from
+`WaitForThreadpoolIoCallbacks`, not from the counter. The raw IOCP backend already deregistered before releasing
+storage in both its claim and drop paths, so this also brings the two backends into agreement.
+
+There is deliberately no cancelling variant of `wait`: cancelling a pending I/O callback neither cancels the
+underlying operation nor makes its `OVERLAPPED` safe to free, so the only sound way to stop outstanding I/O is
+`cancel_all` followed by `run_down`.
 
 ### `Drop` cancels rather than only blocking
 

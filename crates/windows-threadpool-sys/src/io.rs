@@ -50,22 +50,6 @@ struct IoContext {
     callback: Box<dyn Fn(&IoCompletion) + Send + Sync + 'static>,
 }
 
-/// Balances one `StartThreadpoolIo` when the callback frame ends, including
-/// while unwinding, so a panicking callback cannot corrupt the accounting.
-///
-/// Removing the operation from the registry is what balances the start: the
-/// registry's length is the number of unbalanced starts.
-struct StartBalance<'state> {
-    live: &'state OperationRegistry,
-    overlapped: *mut OVERLAPPED,
-}
-
-impl Drop for StartBalance<'_> {
-    fn drop(&mut self) {
-        self.live.remove(self.overlapped);
-    }
-}
-
 /// Trampoline from the raw `PTP_WIN32_IO_CALLBACK` ABI into the boxed closure.
 ///
 /// SAFETY: `context` must point to a live [`IoContext`] for the entire duration
@@ -85,22 +69,25 @@ unsafe extern "system" fn io_trampoline(
 
     let overlapped = overlapped.cast::<OVERLAPPED>();
 
+    // Deregister before running any user code, and take the generation from the
+    // same lookup. This balances the `StartThreadpoolIo` for this operation.
+    //
+    // It must happen here rather than after the callback: the kernel is finished
+    // with the operation by the time its callback is entered, and the callback
+    // may take ownership of the storage with `IoCompletion::claim` and drop it
+    // immediately, so the address can become available for reuse at any point
+    // from here on. The invariant is that an address is **never registered while
+    // it is available for reuse** -- otherwise a concurrent submission handed
+    // that address would collide with the entry still sitting in the registry.
+    // Doing it unconditionally before `catch_unwind` also keeps the accounting
+    // exact when the callback panics.
+    let generation = ctx.live.remove(overlapped);
+
     // A panic must never unwind across the FFI boundary into the pool's frame.
-    // Inside the guarded frame, locals drop in reverse declaration order, so the
-    // operation's storage is reclaimed first and the start is balanced second --
-    // on the normal path and while unwinding alike. Balancing last is what makes
-    // "outstanding reached zero" mean "no storage is still pool-owned".
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        let _balance = StartBalance {
-            live: &ctx.live,
-            overlapped,
-        };
         let completion = IoCompletion {
             overlapped,
-            // Read the generation while the operation is still registered, so
-            // the callback can name it exactly; the balance above deregisters it
-            // only after the callback has returned.
-            generation: ctx.live.generation_of(overlapped),
+            generation,
             io_result,
             bytes_transferred,
             claimed: Cell::new(false),
@@ -340,14 +327,26 @@ impl ThreadpoolIo {
         Ok(())
     }
 
-    /// Block until every outstanding operation has completed and been reclaimed.
+    /// Block until every outstanding operation has completed and every
+    /// completion callback has finished running.
     ///
     /// Every outstanding operation must already be cancelled or otherwise
     /// destined to complete -- which [`ThreadpoolIo::cancel_all`] guarantees --
-    /// or this waits indefinitely. Each completion callback reclaims its own
-    /// operation, so rundown is just waiting for the count to reach zero.
+    /// or this waits indefinitely.
+    ///
+    /// Two things are waited for, because an operation is deregistered when its
+    /// callback is *entered* rather than when that callback returns: first that
+    /// no operation is outstanding, then that no callback is still executing.
+    /// Together they mean a caller can read whatever its callbacks recorded as
+    /// soon as this returns.
+    ///
+    /// Must not be called from inside this object's own callback, which would
+    /// wait on the callback's own completion.
     pub fn run_down(&self) {
         self.live.wait_until_empty();
+        // Deregistration happens at callback entry, so an empty registry does
+        // not by itself mean the callbacks have finished.
+        self.wait();
     }
 
     /// Block until no I/O callback for this object is executing.
