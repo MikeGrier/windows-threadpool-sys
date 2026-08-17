@@ -22,6 +22,9 @@ mod config;
 #[cfg(windows)]
 mod endpoint;
 
+#[cfg(all(windows, feature = "fs"))]
+mod fs;
+
 #[cfg(windows)]
 mod iocp;
 
