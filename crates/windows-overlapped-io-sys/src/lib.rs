@@ -25,7 +25,7 @@ mod operation;
 pub use endpoint::UnassociatedEndpoint;
 
 #[cfg(windows)]
-pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, Submitted};
+pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, OperationId, Submitted};
 
 #[cfg(windows)]
 pub use operation::{Operation, OperationState};

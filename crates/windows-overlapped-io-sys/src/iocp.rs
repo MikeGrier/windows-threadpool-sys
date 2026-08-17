@@ -13,7 +13,8 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle,
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::IO::{
-    CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED, PostQueuedCompletionStatus,
+    CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED,
+    PostQueuedCompletionStatus,
 };
 
 use crate::{Operation, OperationState, UnassociatedEndpoint};
@@ -196,7 +197,7 @@ impl<'port> AssociatedEndpoint<'port> {
                 boxed.set_state(OperationState::Pending);
                 // Ownership moves to the kernel until the completion is claimed.
                 let _ = Box::into_raw(boxed);
-                Submitted::Pending
+                Submitted::Pending(OperationId(overlapped))
             }
             Err(error) => {
                 boxed.set_state(OperationState::Idle);
@@ -207,14 +208,59 @@ impl<'port> AssociatedEndpoint<'port> {
             }
         }
     }
+
+    /// Request cancellation of a single outstanding operation.
+    ///
+    /// Cancellation is only a request: the operation still completes, typically
+    /// with `ERROR_OPERATION_ABORTED`, and that completion remains the point at
+    /// which its storage is reclaimed with [`Completion::claim`].
+    pub fn cancel(&self, id: OperationId) -> io::Result<()> {
+        // SAFETY: cancelling by a valid handle and an OVERLAPPED identity.
+        let ok = unsafe { CancelIoEx(self.raw_handle(), id.as_ptr()) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Request cancellation of every outstanding operation on this endpoint.
+    pub fn cancel_all(&self) -> io::Result<()> {
+        // SAFETY: a null OVERLAPPED cancels all operations on the handle.
+        let ok = unsafe { CancelIoEx(self.raw_handle(), std::ptr::null()) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn raw_handle(&self) -> HANDLE {
+        self.handle.as_raw_handle()
+    }
+}
+
+/// An identity for an in-flight operation: the address of its `OVERLAPPED`.
+///
+/// It is used to cancel a specific operation and to match its later completion.
+/// The pointer must not be dereferenced or freed; the kernel owns the storage
+/// until the completion is claimed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperationId(*mut OVERLAPPED);
+
+impl OperationId {
+    /// The `OVERLAPPED` pointer this identity refers to.
+    #[must_use]
+    pub fn as_ptr(self) -> *mut OVERLAPPED {
+        self.0
+    }
 }
 
 /// The outcome of [`AssociatedEndpoint::submit`].
 #[derive(Debug)]
 pub enum Submitted<P> {
     /// A completion will arrive; the storage was transferred to the kernel and
-    /// is recovered later with [`Completion::claim`].
-    Pending,
+    /// is recovered later with [`Completion::claim`]. The [`OperationId`]
+    /// identifies the in-flight operation for cancellation and matching.
+    Pending(OperationId),
     /// Submission failed immediately with no completion; the operation is
     /// returned so its storage can be reused or dropped.
     Failed {
@@ -374,9 +420,13 @@ mod tests {
                 Ok(())
             })
         };
-        assert!(matches!(submitted, Submitted::Pending));
+        assert!(matches!(submitted, Submitted::Pending(_)));
+        let Submitted::Pending(id) = submitted else {
+            unreachable!("just asserted pending");
+        };
 
         let completion = port.get(1_000).expect("get").expect("a packet");
+        assert_eq!(completion.overlapped_ptr(), id.as_ptr());
         // SAFETY: this completion is from the Operation<Vec<u8>> submitted above
         // and is claimed exactly once.
         let operation = unsafe { completion.claim::<Vec<u8>>() };
@@ -406,7 +456,7 @@ mod tests {
                 assert_eq!(operation.state(), OperationState::Idle);
                 assert_eq!(error.raw_os_error(), Some(5));
             }
-            Submitted::Pending => panic!("expected immediate failure"),
+            Submitted::Pending(_) => panic!("expected immediate failure"),
         }
 
         drop(endpoint);
