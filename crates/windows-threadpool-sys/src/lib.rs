@@ -17,9 +17,17 @@
 //! | Type | Wraps | Runs the callback when |
 //! |---|---|---|
 //! | [`work::ThreadpoolWork`] | `TP_WORK` | you submit it |
-//! | [`timer::ThreadpoolTimer`] | `TP_TIMER` | a due time arrives |
+//! | [`timer::Timer`] | `TP_TIMER` | a due time arrives, once per arming |
+//! | [`timer::PeriodicTimer`] | `TP_TIMER` | every period, until stopped |
 //! | [`wait::ThreadpoolWait`] | `TP_WAIT` | a handle signals or a wait times out |
 //! | [`io::ThreadpoolIo`] | `TP_IO` | an overlapped operation completes |
+//!
+//! One-shot and periodic timers are separate types on purpose. The platform
+//! models both with one object and a `period` argument, which hides the property
+//! that matters most when writing the callback: a [`timer::PeriodicTimer`] may
+//! queue its next tick while the previous one is still running, so its callback
+//! must tolerate overlapping with itself, whereas a [`timer::Timer`] never
+//! overlaps. See the [`timer`] module for how to choose.
 //!
 //! Two supporting types shape where and how those callbacks run:
 //! [`pool::ThreadpoolPool`] is an owned private pool, and

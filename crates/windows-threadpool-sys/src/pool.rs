@@ -41,7 +41,7 @@ use windows_sys::Win32::System::Threading::{
 /// ```
 /// use windows_threadpool_sys::callback_env::CallbackEnviron;
 /// use windows_threadpool_sys::pool::ThreadpoolPool;
-/// use windows_threadpool_sys::timer::ThreadpoolTimer;
+/// use windows_threadpool_sys::timer::Timer;
 /// use std::time::Duration;
 ///
 /// // Declared first, so it outlives the objects that use it.
@@ -52,7 +52,7 @@ use windows_sys::Win32::System::Threading::{
 /// let mut env = CallbackEnviron::new();
 /// env.set_pool(&pool);
 ///
-/// let timer = ThreadpoolTimer::new(|| {}, Some(&mut env))?;
+/// let timer = Timer::new(|_firing| {}, Some(&mut env))?;
 /// timer.set_after(Duration::from_millis(1));
 /// timer.wait();
 /// # Ok::<(), std::io::Error>(())

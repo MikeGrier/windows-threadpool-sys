@@ -50,7 +50,30 @@ Execution showed that item was mis-sized and partly already satisfied, so it is 
 - [x] **M4-5** — Test the wait: signalled activation, timeout activation, explicit rearming across several
 	activations, disarming, and destruction with a wait armed.
 
+- [x] **M4-8** — Split the timer into `Timer` (one-shot) and `PeriodicTimer`, and give each callback a token.
+
+	**Why this reopens M4-2/M4-3.** The first implementation followed the platform and modelled both kinds with
+	one object, where a `period` argument silently changed the semantics. That hides the property that makes
+	periodic timers confusing in practice: the pool may queue the next callback **while the previous one is
+	still running**, so a periodic callback must tolerate overlapping with itself. A one-shot timer never has
+	that problem. Two behaviours that differ in their concurrency contract should be two types, so the hazard is
+	attached to the type that has it rather than to an argument.
+
+	**Target:** `timer::Timer` fires exactly once per arming; `timer::PeriodicTimer` is constructed with its
+	period and repeats. Each callback receives a token, because the useful operations are only available from
+	inside a firing: `TimerFiring::rearm_after` / `rearm_at` (which is how a caller gets *non-overlapping*
+	repetition -- the next delay is measured from when the previous callback finished), and
+	`PeriodicTick::stop` (how a periodic timer ends itself). Each type's documentation must state its own
+	concurrency contract and point at the other as the alternative.
+
+	Note the naming: these are `Timer` and `PeriodicTimer`, not `ThreadpoolTimer`, which leaves them
+	inconsistent with `ThreadpoolWork`, `ThreadpoolWait`, `ThreadpoolIo`, and `ThreadpoolPool`.
+
 - [ ] **M4-6** — Design and implement safe cleanup-group membership across every callback object.
+
+	**Decision taken:** option (A) below -- the group creates and owns its members. A draft implementation
+	exists at `.scratch/cleanup_group.draft.rs`; it was parked because M4-8 changes the timer API it builds on,
+	and it must gain a periodic-timer member type before it lands.
 
 	**BLOCKED — awaiting a design decision.** Not blocked on effort; blocked on choosing an ownership model.
 

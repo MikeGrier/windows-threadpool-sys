@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-//! Unit tests for thread-pool timers.
+//! Unit tests for one-shot thread-pool timers.
 //!
 //! Timing tests use generous upper bounds and assert on observable ordering
 //! rather than on precise expiry, because the thread pool coalesces timers and a
@@ -12,38 +12,38 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::callback_env::CallbackEnviron;
 use crate::pool::ThreadpoolPool;
-use crate::timer::ThreadpoolTimer;
+use crate::timer::Timer;
 
 /// Upper bound for waiting on a callback the timer really should deliver.
 const FIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Counts callbacks and lets a test block until a target count is reached.
-struct Fires {
+pub(crate) struct Fires {
     count: Mutex<usize>,
     fired: Condvar,
 }
 
 impl Fires {
-    fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             count: Mutex::new(0),
             fired: Condvar::new(),
         })
     }
 
-    fn record(&self) {
+    pub(crate) fn record(&self) {
         let mut count = self.count.lock().expect("record a fire");
         *count += 1;
         self.fired.notify_all();
     }
 
-    fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         *self.count.lock().expect("read the count")
     }
 
     /// Block until at least `target` callbacks have run, failing rather than
     /// hanging if they never do.
-    fn wait_for(&self, target: usize) {
+    pub(crate) fn wait_for(&self, target: usize) {
         let count = self.count.lock().expect("await fires");
         let (count, timeout) = self
             .fired
@@ -56,10 +56,10 @@ impl Fires {
     }
 }
 
-fn counting_timer() -> (ThreadpoolTimer, Arc<Fires>) {
+fn counting_timer() -> (Timer, Arc<Fires>) {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer = ThreadpoolTimer::new(move || recorder.record(), None).expect("create timer");
+    let timer = Timer::new(move |_firing| recorder.record(), None).expect("create timer");
     (timer, fires)
 }
 
@@ -67,24 +67,24 @@ fn counting_timer() -> (ThreadpoolTimer, Arc<Fires>) {
 
 #[test]
 fn new_timer_succeeds() {
-    assert!(ThreadpoolTimer::new(|| {}, None).is_ok());
+    assert!(Timer::new(|_| {}, None).is_ok());
 }
 
 #[test]
 fn new_timer_with_env_succeeds() {
     let mut env = CallbackEnviron::new();
-    assert!(ThreadpoolTimer::new(|| {}, Some(&mut env)).is_ok());
+    assert!(Timer::new(|_| {}, Some(&mut env)).is_ok());
 }
 
 #[test]
 fn new_timer_is_idle() {
-    let timer = ThreadpoolTimer::new(|| {}, None).expect("create timer");
+    let timer = Timer::new(|_| {}, None).expect("create timer");
     assert!(!timer.is_set(), "a fresh timer must not be armed");
 }
 
 #[test]
 fn drop_without_arming_is_clean() {
-    let _timer = ThreadpoolTimer::new(|| {}, None).expect("create timer");
+    let _timer = Timer::new(|_| {}, None).expect("create timer");
 }
 
 // --- one-shot firing ---
@@ -96,6 +96,19 @@ fn set_after_fires_once() {
     fires.wait_for(1);
     timer.wait();
     assert_eq!(fires.count(), 1, "a one-shot timer must fire exactly once");
+}
+
+/// The defining property of this type: one arming yields one firing, and no
+/// more, even after waiting well past any plausible period.
+#[test]
+fn one_arming_never_fires_twice() {
+    let (timer, fires) = counting_timer();
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(1);
+    timer.wait();
+
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(fires.count(), 1, "a one-shot timer must not repeat");
 }
 
 #[test]
@@ -111,7 +124,7 @@ fn set_after_zero_fires_immediately() {
 /// the contract of `is_set`, which reports "armed and not disarmed" rather than
 /// "will fire again".
 #[test]
-fn a_one_shot_timer_stays_set_after_firing_until_disarmed() {
+fn a_fired_timer_stays_set_until_disarmed() {
     let (timer, fires) = counting_timer();
     timer.set_after(Duration::from_millis(1));
     fires.wait_for(1);
@@ -161,61 +174,106 @@ fn a_timer_can_be_rearmed_after_firing() {
     }
 }
 
-// --- periodic firing ---
+// --- re-arming from inside the callback ---
 
+/// Re-arming from inside the callback is how a caller gets repetition that can
+/// never overlap itself.
 #[test]
-fn set_periodic_fires_repeatedly() {
-    let (timer, fires) = counting_timer();
-    timer.set_periodic(Duration::from_millis(1), Duration::from_millis(2));
-    fires.wait_for(5);
+fn a_callback_can_rearm_itself() {
+    const RUNS: usize = 5;
+
+    let fires = Fires::new();
+    let recorder = Arc::clone(&fires);
+    let timer = Timer::new(
+        move |firing| {
+            let seen = recorder.count();
+            recorder.record();
+            if seen + 1 < RUNS {
+                firing.rearm_after(Duration::from_millis(1));
+            }
+        },
+        None,
+    )
+    .expect("create timer");
+
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(RUNS);
     timer.disarm();
     timer.wait();
-    assert!(
-        fires.count() >= 5,
-        "a periodic timer must keep firing; saw {}",
-        fires.count()
-    );
+    assert_eq!(fires.count(), RUNS, "self-rearming must run exactly {RUNS}");
 }
 
+/// A self-rearming one-shot never overlaps itself, which is the whole reason to
+/// prefer it over a periodic timer for slow callbacks.
 #[test]
-fn a_periodic_timer_stays_set_between_firings() {
-    let (timer, fires) = counting_timer();
-    timer.set_periodic(Duration::from_millis(1), Duration::from_millis(50));
-    fires.wait_for(1);
-    assert!(timer.is_set(), "a periodic timer stays armed after firing");
-    timer.disarm();
-    timer.wait();
-}
+fn a_self_rearming_callback_never_overlaps() {
+    let concurrent = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let fires = Fires::new();
 
-#[test]
-fn a_zero_period_behaves_as_one_shot() {
-    let (timer, fires) = counting_timer();
-    timer.set_periodic(Duration::from_millis(1), Duration::ZERO);
-    fires.wait_for(1);
-    timer.wait();
-    // A zero period must not requeue the callback, which is observable in the
-    // count rather than in `is_set` -- expiry never clears the due time.
-    let settled = fires.count();
-    std::thread::sleep(Duration::from_millis(60));
-    assert_eq!(fires.count(), settled, "a zero period must not rearm");
-    assert_eq!(settled, 1);
-}
+    let in_flight = Arc::clone(&concurrent);
+    let high_water = Arc::clone(&peak);
+    let recorder = Arc::clone(&fires);
 
-#[test]
-fn disarming_a_periodic_timer_stops_further_firing() {
-    let (timer, fires) = counting_timer();
-    timer.set_periodic(Duration::from_millis(1), Duration::from_millis(2));
-    fires.wait_for(3);
+    let timer = Timer::new(
+        move |firing| {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            high_water.fetch_max(now, Ordering::SeqCst);
+            // Hold the callback far longer than the re-arm delay.
+            std::thread::sleep(Duration::from_millis(15));
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            recorder.record();
+            firing.rearm_after(Duration::from_millis(1));
+        },
+        None,
+    )
+    .expect("create timer");
+
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(4);
     timer.disarm();
     timer.wait();
 
-    let settled = fires.count();
-    std::thread::sleep(Duration::from_millis(60));
     assert_eq!(
-        fires.count(),
-        settled,
-        "no callback may run after disarm and drain"
+        peak.load(Ordering::SeqCst),
+        1,
+        "a self-rearming one-shot must never run concurrently with itself"
     );
+}
+
+#[test]
+fn a_callback_that_does_not_rearm_stops() {
+    let (timer, fires) = counting_timer();
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(1);
+    timer.wait();
+    std::thread::sleep(Duration::from_millis(60));
+    assert_eq!(fires.count(), 1);
+}
+
+#[test]
+fn rearm_at_accepts_an_absolute_instant() {
+    let fires = Fires::new();
+    let recorder = Arc::clone(&fires);
+    let rearmed = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&rearmed);
+
+    let timer = Timer::new(
+        move |firing| {
+            recorder.record();
+            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                firing.rearm_at(SystemTime::now() + Duration::from_millis(5));
+            }
+        },
+        None,
+    )
+    .expect("create timer");
+
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(2);
+    timer.disarm();
+    timer.wait();
+    assert_eq!(fires.count(), 2);
 }
 
 // --- absolute due times ---
@@ -273,8 +331,8 @@ fn disarming_an_idle_timer_is_a_no_op() {
 #[test]
 fn cancel_pending_after_disarm_drains_cleanly() {
     let (timer, fires) = counting_timer();
-    timer.set_periodic(Duration::from_millis(1), Duration::from_millis(1));
-    fires.wait_for(2);
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(1);
     timer.disarm();
     timer.cancel_pending();
     let settled = fires.count();
@@ -294,8 +352,8 @@ fn drop_waits_for_an_executing_callback() {
     let entered = Arc::clone(&started);
 
     {
-        let timer = ThreadpoolTimer::new(
-            move || {
+        let timer = Timer::new(
+            move |_firing| {
                 entered.record();
                 std::thread::sleep(Duration::from_millis(30));
                 flag.fetch_add(1, Ordering::SeqCst);
@@ -317,20 +375,28 @@ fn drop_waits_for_an_executing_callback() {
     );
 }
 
-/// Dropping a periodic timer must terminate: `Drop` disarms before draining, so
-/// the timer cannot requeue itself forever.
+/// Dropping a timer whose callback re-arms must terminate: Drop disarms first.
 #[test]
-fn drop_of_a_periodic_timer_terminates() {
+fn drop_of_a_self_rearming_timer_terminates() {
     let started = Instant::now();
     {
-        let (timer, fires) = counting_timer();
-        timer.set_periodic(Duration::from_millis(1), Duration::from_millis(1));
+        let fires = Fires::new();
+        let recorder = Arc::clone(&fires);
+        let timer = Timer::new(
+            move |firing| {
+                recorder.record();
+                firing.rearm_after(Duration::from_millis(1));
+            },
+            None,
+        )
+        .expect("create timer");
+        timer.set_after(Duration::from_millis(1));
         fires.wait_for(3);
-        // Drop here, with the timer still armed and firing.
+        // Drop here, with the callback still re-arming itself.
     }
     assert!(
         started.elapsed() < Duration::from_secs(10),
-        "dropping a periodic timer appears to have hung"
+        "dropping a self-rearming timer appears to have hung"
     );
 }
 
@@ -352,8 +418,8 @@ fn the_callback_may_own_heap_state() {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
 
-    let timer = ThreadpoolTimer::new(
-        move || {
+    let timer = Timer::new(
+        move |_firing| {
             total.fetch_add(data.iter().sum::<u64>() as usize, Ordering::SeqCst);
             recorder.record();
         },
@@ -376,8 +442,7 @@ fn a_timer_runs_on_a_private_pool() {
 
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer =
-        ThreadpoolTimer::new(move || recorder.record(), Some(&mut env)).expect("create timer");
+    let timer = Timer::new(move |_firing| recorder.record(), Some(&mut env)).expect("create timer");
 
     timer.set_after(Duration::from_millis(1));
     fires.wait_for(1);
@@ -385,16 +450,15 @@ fn a_timer_runs_on_a_private_pool() {
     assert_eq!(fires.count(), 1);
 }
 
-/// A panicking callback must be contained at the FFI boundary, and must not stop
-/// a periodic timer from continuing.
+/// A panicking callback must be contained at the FFI boundary.
 ///
 /// The caught panic prints to stderr; that output is expected.
 #[test]
 fn a_panicking_callback_is_contained() {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer = ThreadpoolTimer::new(
-        move || {
+    let timer = Timer::new(
+        move |_firing| {
             recorder.record();
             panic!("timer callback panics on purpose");
         },
@@ -402,19 +466,18 @@ fn a_panicking_callback_is_contained() {
     )
     .expect("create timer");
 
-    timer.set_periodic(Duration::from_millis(1), Duration::from_millis(2));
-    fires.wait_for(3);
-    timer.disarm();
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(1);
     timer.wait();
-    assert!(fires.count() >= 3, "panics must not stop the timer");
+    assert_eq!(fires.count(), 1);
 }
 
 #[test]
 fn a_timer_is_send_and_sync() {
     fn assert_send<T: Send>() {}
     fn assert_sync<T: Sync>() {}
-    assert_send::<ThreadpoolTimer>();
-    assert_sync::<ThreadpoolTimer>();
+    assert_send::<Timer>();
+    assert_sync::<Timer>();
 }
 
 /// Arming from another thread must work, since the type advertises `Sync`.
@@ -435,11 +498,7 @@ fn a_timer_can_be_armed_from_another_thread() {
 #[test]
 fn a_coalescing_window_still_fires() {
     let (timer, fires) = counting_timer();
-    timer.set_after_with_window(
-        Duration::from_millis(1),
-        Duration::ZERO,
-        Duration::from_millis(20),
-    );
+    timer.set_after_with_window(Duration::from_millis(1), Duration::from_millis(20));
     fires.wait_for(1);
     timer.wait();
     assert_eq!(fires.count(), 1);
