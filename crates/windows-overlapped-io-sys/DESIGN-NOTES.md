@@ -302,6 +302,26 @@ owned-operation prototype must resolve this before any public submission API is 
 decide whether safe submission is generic, requires operation-specific safe adapters (possibly downstream), or
 retains a deliberately narrow unsafe extensibility seam.
 
+### Decision — per-family safe adapters, file family first
+
+The Open boundary is resolved for the **file family** by choosing the operation-specific safe-adapter path, in
+this crate behind the `fs` feature, rather than a fully generic safe submission API. The generic problem stays
+open, and the narrow unsafe `submit` / `run` seam stays available for families that do not yet have an adapter.
+The shape below is the template every later family (socket, scatter/gather, `DeviceIoControl`) follows.
+
+- **Blocking backend** -- `BlockingEndpoint::read` / `write` are fully safe and synchronous. The adapter owns the
+	buffer, issues the single `ReadFile` / `WriteFile` internally, waits with `GetOverlappedResult`, and returns
+	`io::Result<(Vec<u8>, usize)>` (read) or `io::Result<usize>` (write). No `unsafe`, no `OVERLAPPED`, and no
+	completion ceremony reaches the caller, because the whole operation finishes within the one call.
+- **IOCP backend** -- `AssociatedEndpoint::read` / `write` are safe on the submission side. The adapter owns the
+	buffer in the operation payload, recovers the buffer pointer from the pinned `OVERLAPPED` through a
+	`pub(crate)` payload-offset primitive (the same offset trick as the reclaim thunk), issues the native call,
+	and returns a typed `FileIo` token instead of a bare `OperationId`. The token carries the payload type as a
+	witness, so its `claim(&Completion)` is safe: it verifies the completion's `OVERLAPPED` identity matches the
+	token and only then performs the typed reclamation the witness justifies, handing back the buffer and byte
+	count. The async claim-time type erasure that keeps the *generic* boundary open is discharged here, for this
+	one family, by the token witness plus the identity check -- not by a general solution.
+
 ## Primary references
 
 - [I/O Completion Ports](https://learn.microsoft.com/windows/win32/fileio/i-o-completion-ports)
