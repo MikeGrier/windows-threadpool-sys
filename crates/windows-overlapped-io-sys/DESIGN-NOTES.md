@@ -180,12 +180,15 @@ may only manage this on a best-effort basis (behind an optional logging feature 
 standard error), and full context may not always be recoverable; the diagnostic is advisory, not a correctness
 mechanism.
 
-The raw IOCP backend implements that diagnostic by recording, for each in-flight operation, the submit call
-site captured with `#[track_caller]` (`&'static Location`, near-free and always on). When the port drops with
-operations outstanding it writes a best-effort message to standard error naming the count and each source
-location. The optional `operation-backtrace` cargo feature additionally captures a full backtrace at submission,
-whose cost is itself gated at run time by `RUST_BACKTRACE`, giving both a build-time and a run-time control over
-how much context is retained.
+The raw IOCP backend keeps rundown correctness lock-free: an atomic outstanding count governs draining, and
+each operation's `repr(C)` header carries a type-erased reclaim thunk that frees it from the `OVERLAPPED` pointer
+alone. Source tracking is a separate, opt-in diagnostic layer: when enabled it records each operation's
+`#[track_caller]` submit `Location` in a per-port map, so the drop-time message can name the sources. It is a
+one-time in-process setting (`set_source_tracking`) that defaults from the `WINDOWS_OVERLAPPED_IO_SYS_TRACK`
+environment variable and is off by default, because when on it takes a mutex on the submission hot path. With
+tracking off, the drop message reports only the count and how to enable sources. The optional
+`operation-backtrace` cargo feature additionally captures a full backtrace per submission -- itself gated at run
+time by `RUST_BACKTRACE` -- giving both build-time and run-time control over how much context is retained.
 
 Because `Drop` must free outstanding storage without knowing each operation's `P`, generic drain is mandatory
 rather than optional: the operation header must record a type-erased reclamation function that frees the storage

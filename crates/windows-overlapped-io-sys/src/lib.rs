@@ -13,6 +13,9 @@
 #![warn(missing_docs)]
 
 #[cfg(windows)]
+mod config;
+
+#[cfg(windows)]
 mod endpoint;
 
 #[cfg(windows)]
@@ -20,6 +23,9 @@ mod iocp;
 
 #[cfg(windows)]
 mod operation;
+
+#[cfg(windows)]
+pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_enabled};
 
 #[cfg(windows)]
 pub use endpoint::UnassociatedEndpoint;

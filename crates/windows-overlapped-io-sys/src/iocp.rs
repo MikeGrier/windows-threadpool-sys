@@ -8,11 +8,13 @@
 //! the reclamation that follows their completion, are built on top of this
 //! module.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::panic::Location;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
@@ -26,25 +28,29 @@ use crate::{Operation, OperationState, UnassociatedEndpoint};
 /// Waits without timeout in `GetQueuedCompletionStatus`; used while draining.
 const INFINITE: u32 = u32::MAX;
 
-/// Per-operation bookkeeping the port keeps while an operation is in flight.
-struct InFlight {
-    /// Frees the leaked `Box<Operation<P>>` from its `OVERLAPPED` pointer.
-    reclaim: unsafe fn(*mut OVERLAPPED),
-    /// The call site that submitted the operation.
+/// Optional per-operation source information, recorded only while source
+/// tracking is enabled.
+struct Track {
     location: &'static Location<'static>,
     #[cfg(feature = "operation-backtrace")]
     backtrace: std::backtrace::Backtrace,
 }
 
-/// State shared between a port, its in-flight operations, and their completions.
+/// State shared between a port, its completions, and the drain path.
+///
+/// `outstanding` is a lock-free count that always governs rundown. `tracked` is
+/// consulted only when source tracking is enabled, so the mutex is never taken
+/// on the submission hot path by default.
 struct PortState {
-    inflight: Mutex<HashMap<usize, InFlight>>,
+    outstanding: AtomicUsize,
+    tracked: Mutex<HashMap<usize, Track>>,
 }
 
 impl PortState {
     fn new() -> Self {
         Self {
-            inflight: Mutex::new(HashMap::new()),
+            outstanding: AtomicUsize::new(0),
+            tracked: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -52,16 +58,6 @@ impl PortState {
 /// Lock a mutex, recovering the guard even if a previous holder panicked.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
-}
-
-/// Reclaim a leaked `Box<Operation<P>>` from its `OVERLAPPED` pointer.
-///
-/// # Safety
-///
-/// `overlapped` must be the base of a live `Box<Operation<P>>` reclaimed exactly
-/// once.
-unsafe fn reclaim_operation<P>(overlapped: *mut OVERLAPPED) {
-    drop(unsafe { Box::from_raw(overlapped.cast::<Operation<P>>()) });
 }
 
 /// An owned I/O completion port.
@@ -115,17 +111,31 @@ impl CompletionPort {
         })
     }
 
-    /// Post a user-defined completion packet to this port.
+    /// Post a user-defined wakeup packet to this port.
     ///
-    /// The `overlapped` value is delivered verbatim and is not dereferenced, so
-    /// it may be null or any sentinel the caller uses to distinguish wakeups.
-    pub fn post(
+    /// The packet carries `key` and `bytes_transferred` with a null `OVERLAPPED`,
+    /// which keeps it distinguishable from operation completions; identify it by
+    /// its `key`.
+    pub fn post(&self, key: usize, bytes_transferred: u32) -> io::Result<()> {
+        // SAFETY: the port handle is valid; a null overlapped marks a user packet.
+        let ok = unsafe {
+            PostQueuedCompletionStatus(self.raw(), bytes_transferred, key, std::ptr::null())
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn post_raw(
         &self,
         key: usize,
         bytes_transferred: u32,
         overlapped: *mut OVERLAPPED,
     ) -> io::Result<()> {
-        // SAFETY: the port handle is valid; the overlapped value is opaque here.
+        // SAFETY: tests use this to simulate an operation completion for a live
+        // operation's OVERLAPPED pointer.
         let ok = unsafe {
             PostQueuedCompletionStatus(self.raw(), bytes_transferred, key, overlapped.cast_const())
         };
@@ -161,6 +171,7 @@ impl CompletionPort {
                 overlapped,
                 error: None,
                 state: Arc::clone(&self.state),
+                claimed: Cell::new(false),
             }));
         }
 
@@ -178,6 +189,7 @@ impl CompletionPort {
             overlapped,
             error: Some(error),
             state: Arc::clone(&self.state),
+            claimed: Cell::new(false),
         }))
     }
 
@@ -189,39 +201,44 @@ impl CompletionPort {
     /// been claimed, reclaimed, or drained.
     #[must_use]
     pub fn outstanding(&self) -> usize {
-        lock(&self.state.inflight).len()
+        self.state.outstanding.load(Ordering::SeqCst)
     }
 
-    /// Block until every outstanding operation has completed and its storage has
-    /// been reclaimed.
+    /// Block until every outstanding operation has completed and been reclaimed.
     ///
     /// Every outstanding operation must already be cancelled or otherwise
     /// destined to complete -- which closing or cancelling the endpoints
-    /// guarantees -- or this waits indefinitely. Dequeued completions that are
-    /// not claimed reclaim their own storage when dropped, so draining is just
-    /// dequeuing until nothing remains.
+    /// guarantees -- or this waits indefinitely. Each dequeued completion
+    /// reclaims its own operation when dropped, so draining is just dequeuing
+    /// until the count reaches zero.
     pub fn run_down(&self) -> io::Result<()> {
-        while !lock(&self.state.inflight).is_empty() {
-            // Dropping the dequeued completion reclaims one outstanding
-            // operation, or is a no-op for a user packet.
+        while self.outstanding() > 0 {
             self.get(INFINITE)?;
         }
         Ok(())
     }
 
     fn report_outstanding_at_drop(&self, count: usize) {
-        let guard = lock(&self.state.inflight);
+        let tracked = lock(&self.state.tracked);
         let mut message = format!(
             "windows-overlapped-io-sys: CompletionPort dropped with {count} operation(s) still \
-             outstanding; call run_down() before dropping to control when this blocks. Sources:"
+             outstanding; call run_down() before dropping to control when this blocks."
         );
-        for inflight in guard.values() {
-            message.push_str("\n  - ");
-            message.push_str(&inflight.location.to_string());
-            #[cfg(feature = "operation-backtrace")]
-            {
-                message.push_str("\n    backtrace:\n");
-                message.push_str(&inflight.backtrace.to_string());
+        if tracked.is_empty() {
+            message.push_str(
+                " Enable source tracking (WINDOWS_OVERLAPPED_IO_SYS_TRACK=1, or \
+                 set_source_tracking) to identify the submit sites.",
+            );
+        } else {
+            message.push_str(" Sources:");
+            for track in tracked.values() {
+                message.push_str("\n  - ");
+                message.push_str(&track.location.to_string());
+                #[cfg(feature = "operation-backtrace")]
+                {
+                    message.push_str("\n    backtrace:\n");
+                    message.push_str(&track.backtrace.to_string());
+                }
             }
         }
         eprintln!("{message}");
@@ -303,23 +320,26 @@ impl<'port> AssociatedEndpoint<'port> {
         P: Send,
         F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<()>,
     {
-        let location = Location::caller();
         let mut boxed = Box::new(operation);
         boxed.set_state(OperationState::Submitted);
+        boxed.arm();
         let overlapped = boxed.overlapped_ptr();
         let identity = overlapped as usize;
 
-        // Register before issuing so a completion cannot arrive ahead of the
-        // bookkeeping the port needs to reclaim or drain the operation.
-        lock(&self.port.state.inflight).insert(
-            identity,
-            InFlight {
-                reclaim: reclaim_operation::<P>,
-                location,
-                #[cfg(feature = "operation-backtrace")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            },
-        );
+        // Count before issuing so a completion cannot race ahead of the count.
+        let state = &self.port.state;
+        state.outstanding.fetch_add(1, Ordering::SeqCst);
+        let tracking = crate::source_tracking_enabled();
+        if tracking {
+            lock(&state.tracked).insert(
+                identity,
+                Track {
+                    location: Location::caller(),
+                    #[cfg(feature = "operation-backtrace")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                },
+            );
+        }
 
         match issue(self.handle(), overlapped) {
             Ok(()) => {
@@ -330,7 +350,10 @@ impl<'port> AssociatedEndpoint<'port> {
                 Submitted::Pending(OperationId(overlapped))
             }
             Err(error) => {
-                lock(&self.port.state.inflight).remove(&identity);
+                state.outstanding.fetch_sub(1, Ordering::SeqCst);
+                if tracking {
+                    lock(&state.tracked).remove(&identity);
+                }
                 boxed.set_state(OperationState::Idle);
                 Submitted::Failed {
                     operation: *boxed,
@@ -409,6 +432,7 @@ pub struct Completion {
     overlapped: *mut OVERLAPPED,
     error: Option<io::Error>,
     state: Arc<PortState>,
+    claimed: Cell<bool>,
 }
 
 impl fmt::Debug for Completion {
@@ -424,14 +448,20 @@ impl fmt::Debug for Completion {
 
 impl Drop for Completion {
     fn drop(&mut self) {
-        // A completion observed but never claimed still owns its operation
-        // storage; reclaim it so rundown can complete.
-        let entry = lock(&self.state.inflight).remove(&(self.overlapped as usize));
-        if let Some(inflight) = entry {
-            // SAFETY: the completion arrived, so the kernel is done with the
-            // storage, and the entry was removed here exactly once.
-            unsafe { (inflight.reclaim)(self.overlapped) };
+        // Claimed completions handed ownership to the caller; user packets carry
+        // a null overlapped and own nothing.
+        if self.claimed.get() || self.overlapped.is_null() {
+            return;
         }
+        // An operation completion observed but never claimed: reclaim it so the
+        // port's rundown can finish.
+        self.state.outstanding.fetch_sub(1, Ordering::SeqCst);
+        if crate::source_tracking_enabled() {
+            lock(&self.state.tracked).remove(&(self.overlapped as usize));
+        }
+        // SAFETY: the completion arrived, so the kernel is done with the storage;
+        // the operation's armed reclaim thunk frees the box exactly once.
+        unsafe { crate::operation::reclaim_from_overlapped(self.overlapped) };
     }
 }
 
@@ -471,9 +501,12 @@ impl Completion {
     /// of this exact type through [`AssociatedEndpoint::submit`], and it must be
     /// claimed exactly once.
     pub unsafe fn claim<P>(&self) -> Operation<P> {
-        // Deregister first so rundown and this completion's own drop will not
-        // also try to reclaim the operation.
-        lock(&self.state.inflight).remove(&(self.overlapped as usize));
+        // Mark claimed so this completion's own drop will not also reclaim it.
+        self.claimed.set(true);
+        self.state.outstanding.fetch_sub(1, Ordering::SeqCst);
+        if crate::source_tracking_enabled() {
+            lock(&self.state.tracked).remove(&(self.overlapped as usize));
+        }
         let ptr = self.overlapped.cast::<Operation<P>>();
         // SAFETY: by this function's contract, `ptr` is the box leaked by a
         // matching submit and is reclaimed exactly once here.
@@ -520,14 +553,13 @@ mod tests {
     #[test]
     fn posts_and_dequeues_a_user_packet() {
         let port = CompletionPort::new(0).expect("create port");
-        let sentinel = 0x1234_usize as *mut _;
 
-        port.post(0xABCD, 42, sentinel).expect("post packet");
+        port.post(0xABCD, 42).expect("post packet");
         let completion = port.get(1_000).expect("get packet").expect("a packet");
 
         assert_eq!(completion.key(), 0xABCD);
         assert_eq!(completion.bytes_transferred(), 42);
-        assert_eq!(completion.overlapped_ptr(), sentinel);
+        assert!(completion.overlapped_ptr().is_null());
         assert!(completion.error().is_none());
     }
 
@@ -574,7 +606,7 @@ mod tests {
         // completion for that pointer, so a packet will arrive.
         let submitted = unsafe {
             endpoint.submit(operation, |_handle, overlapped| {
-                port.post(7, 3, overlapped)?;
+                port.post_raw(7, 3, overlapped)?;
                 Ok(())
             })
         };
@@ -634,7 +666,7 @@ mod tests {
         // pointer; here it simulates a device that queues its completion.
         let submitted = unsafe {
             endpoint.submit(operation, |_handle, overlapped| {
-                port.post(0, 1, overlapped)?;
+                port.post_raw(0, 1, overlapped)?;
                 Ok(())
             })
         };

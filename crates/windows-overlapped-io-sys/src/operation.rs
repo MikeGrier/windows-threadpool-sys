@@ -34,13 +34,49 @@ pub enum OperationState {
 /// the kernel writes to it through [`Operation::overlapped_ptr`] while the owner
 /// holds only a shared reference.
 // `repr(C)` with `overlapped` first keeps the operation pointer identical to its
-// `OVERLAPPED` pointer, so a completion can recover the operation from it.
+// `OVERLAPPED` pointer, so a completion can recover the operation from it. The
+// `reclaim` thunk sits before `payload`, so its offset is the same for every `P`
+// and can be read from the `OVERLAPPED` pointer alone during rundown.
 #[derive(Debug)]
 #[repr(C)]
 pub struct Operation<P> {
     overlapped: UnsafeCell<OVERLAPPED>,
+    // Read only through `reclaim_from_overlapped`, via its fixed offset.
+    #[allow(dead_code)]
+    reclaim: Option<unsafe fn(*mut OVERLAPPED)>,
     state: OperationState,
     payload: P,
+}
+
+/// Offset of the `reclaim` field, identical for every `P`.
+const RECLAIM_OFFSET: usize = core::mem::offset_of!(Operation<()>, reclaim);
+
+/// Drop a leaked `Box<Operation<P>>` given its `OVERLAPPED` pointer.
+///
+/// # Safety
+///
+/// `overlapped` must be the base of a live `Box<Operation<P>>` reclaimed exactly
+/// once.
+pub(crate) unsafe fn reclaim_operation<P>(overlapped: *mut OVERLAPPED) {
+    drop(unsafe { Box::from_raw(overlapped.cast::<Operation<P>>()) });
+}
+
+/// Run the reclaim thunk armed on the operation identified by `overlapped`.
+///
+/// # Safety
+///
+/// `overlapped` must be the identity pointer of a live armed operation reclaimed
+/// exactly once.
+pub(crate) unsafe fn reclaim_from_overlapped(overlapped: *mut OVERLAPPED) {
+    let slot = unsafe {
+        overlapped
+            .cast::<u8>()
+            .add(RECLAIM_OFFSET)
+            .cast::<Option<unsafe fn(*mut OVERLAPPED)>>()
+    };
+    if let Some(reclaim) = unsafe { *slot } {
+        unsafe { reclaim(overlapped) };
+    }
 }
 
 impl<P> Operation<P> {
@@ -60,6 +96,7 @@ impl<P> Operation<P> {
         };
         Self {
             overlapped: UnsafeCell::new(overlapped),
+            reclaim: None,
             state: OperationState::Idle,
             payload,
         }
@@ -73,6 +110,11 @@ impl<P> Operation<P> {
 
     pub(crate) fn set_state(&mut self, state: OperationState) {
         self.state = state;
+    }
+
+    /// Arm the reclaim thunk so rundown can free this operation generically.
+    pub(crate) fn arm(&mut self) {
+        self.reclaim = Some(reclaim_operation::<P>);
     }
 
     /// Borrow the payload.
