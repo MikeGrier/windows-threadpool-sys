@@ -119,6 +119,55 @@ unsafe extern "system" fn timer_trampoline(
 /// [`Drop`] disarms the timer before draining callbacks, so a periodic timer
 /// cannot queue new work during teardown, and the captured closure stays valid
 /// for the full lifetime of every callback execution.
+///
+/// # Examples
+///
+/// A one-shot timer:
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::sync::mpsc;
+/// use std::time::Duration;
+/// use windows_threadpool_sys::timer::ThreadpoolTimer;
+///
+/// let (tx, rx) = mpsc::channel();
+/// let sender = Arc::new(std::sync::Mutex::new(tx));
+///
+/// let timer = ThreadpoolTimer::new(move || {
+///     let _ = sender.lock().expect("send").send(());
+/// }, None)?;
+///
+/// timer.set_after(Duration::from_millis(10));
+/// rx.recv().expect("the timer should fire");
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
+/// A periodic timer, stopped once enough ticks have been seen. Disarm before
+/// dropping if you want teardown to be explicit rather than implicit:
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::sync::atomic::{AtomicUsize, Ordering};
+/// use std::time::Duration;
+/// use windows_threadpool_sys::timer::ThreadpoolTimer;
+///
+/// let ticks = Arc::new(AtomicUsize::new(0));
+/// let counter = Arc::clone(&ticks);
+///
+/// let timer = ThreadpoolTimer::new(move || {
+///     counter.fetch_add(1, Ordering::SeqCst);
+/// }, None)?;
+///
+/// timer.set_periodic(Duration::from_millis(1), Duration::from_millis(1));
+/// while ticks.load(Ordering::SeqCst) < 3 {
+///     std::thread::yield_now();
+/// }
+///
+/// timer.disarm();
+/// timer.wait();
+/// assert!(ticks.load(Ordering::SeqCst) >= 3);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub struct ThreadpoolTimer {
     timer: PTP_TIMER,
     // Kept alive as a raw pointer until Drop has disarmed and drained.

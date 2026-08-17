@@ -42,6 +42,31 @@ unsafe extern "system" fn work_trampoline(
 /// [`Drop`] calls `WaitForThreadpoolWorkCallbacks` (allowing in-flight callbacks
 /// to complete) before releasing the callback context, so the captured closure
 /// remains valid for the full lifetime of every callback execution.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::sync::atomic::{AtomicUsize, Ordering};
+/// use windows_threadpool_sys::work::ThreadpoolWork;
+///
+/// let total = Arc::new(AtomicUsize::new(0));
+/// let counter = Arc::clone(&total);
+///
+/// let work = ThreadpoolWork::new(move || {
+///     counter.fetch_add(1, Ordering::SeqCst);
+/// }, None)?;
+///
+/// // Each submission queues one independent invocation; they may run
+/// // concurrently, so the callback must tolerate that.
+/// for _ in 0..8 {
+///     work.submit();
+/// }
+/// work.wait();
+///
+/// assert_eq!(total.load(Ordering::SeqCst), 8);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub struct ThreadpoolWork {
     handle: PTP_WORK,
     // Kept alive as a raw pointer until Drop has drained all callbacks.

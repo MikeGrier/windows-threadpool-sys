@@ -18,6 +18,12 @@ categories = ["api-bindings", "os::windows-apis"]
 [lib]
 path = "src/lib.rs"
 
+# The crate is Windows-only, so docs.rs must build it on a Windows target or it
+# would fail to compile the thread-pool bindings entirely.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
 [dependencies]
 # The shared overlapped-I/O foundation: owned endpoints, pinned operations, and the
 # submission seam (`into_overlapped` / `from_overlapped` / `reclaim_overlapped`) that

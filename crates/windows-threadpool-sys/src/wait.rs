@@ -192,6 +192,77 @@ unsafe extern "system" fn wait_trampoline(
 ///
 /// [`Drop`] disarms before draining callbacks, then closes the object and only
 /// afterwards releases the callback context and the handle.
+///
+/// # Examples
+///
+/// Watch an event once. The wait takes ownership of the handle, and
+/// [`ThreadpoolWait::handle`] borrows it back for signalling:
+///
+/// ```
+/// use std::os::windows::io::{FromRawHandle, OwnedHandle};
+/// use std::ptr;
+/// use std::sync::mpsc;
+/// use windows_sys::Win32::Foundation::FALSE;
+/// use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
+/// use std::os::windows::io::AsRawHandle;
+/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitResult};
+///
+/// // SAFETY: creates an unnamed, manual-reset event with default security.
+/// let raw = unsafe { CreateEventW(ptr::null(), 1, FALSE, ptr::null()) };
+/// assert!(!raw.is_null());
+/// // SAFETY: the call returned a fresh, exclusively owned handle.
+/// let event = unsafe { OwnedHandle::from_raw_handle(raw) };
+///
+/// let (tx, rx) = mpsc::channel();
+/// let sender = std::sync::Mutex::new(tx);
+/// let wait = ThreadpoolWait::new(event, move |activation| {
+///     let _ = sender.lock().expect("send").send(activation.result());
+/// }, None)?;
+///
+/// wait.arm(None);
+/// // SAFETY: the wait owns the event, so the handle is still open.
+/// unsafe { SetEvent(wait.handle().as_raw_handle()) };
+///
+/// assert_eq!(rx.recv().expect("activation"), WaitResult::Signalled);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
+/// Keep watching across activations by rearming from inside the callback, which
+/// is what the SDK requires -- an activation consumes the arming:
+///
+/// ```
+/// # use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+/// # use std::ptr;
+/// # use std::sync::Arc;
+/// # use std::sync::atomic::{AtomicUsize, Ordering};
+/// # use windows_sys::Win32::Foundation::FALSE;
+/// # use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
+/// use windows_threadpool_sys::wait::ThreadpoolWait;
+///
+/// // SAFETY: creates an unnamed, auto-reset event with default security.
+/// let raw = unsafe { CreateEventW(ptr::null(), FALSE, FALSE, ptr::null()) };
+/// // SAFETY: the call returned a fresh, exclusively owned handle.
+/// let event = unsafe { OwnedHandle::from_raw_handle(raw) };
+///
+/// let seen = Arc::new(AtomicUsize::new(0));
+/// let counter = Arc::clone(&seen);
+/// let wait = ThreadpoolWait::new(event, move |activation| {
+///     counter.fetch_add(1, Ordering::SeqCst);
+///     activation.rearm(None);
+/// }, None)?;
+///
+/// wait.arm(None);
+/// for _ in 0..3 {
+///     // SAFETY: the wait owns the event, so the handle is still open.
+///     unsafe { SetEvent(wait.handle().as_raw_handle()) };
+///     std::thread::sleep(std::time::Duration::from_millis(5));
+/// }
+///
+/// wait.disarm();
+/// wait.wait();
+/// assert!(seen.load(Ordering::SeqCst) >= 1);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub struct ThreadpoolWait {
     wait: PTP_WAIT,
     handle: OwnedHandle,

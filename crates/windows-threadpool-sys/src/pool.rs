@@ -36,6 +36,28 @@ use windows_sys::Win32::System::Threading::{
 /// pool being gone. Declare the pool before the objects that use it, so it is
 /// dropped last.
 ///
+/// # Examples
+///
+/// ```
+/// use windows_threadpool_sys::callback_env::CallbackEnviron;
+/// use windows_threadpool_sys::pool::ThreadpoolPool;
+/// use windows_threadpool_sys::timer::ThreadpoolTimer;
+/// use std::time::Duration;
+///
+/// // Declared first, so it outlives the objects that use it.
+/// let pool = ThreadpoolPool::new()?;
+/// pool.set_min_threads(1)?;
+/// pool.set_max_threads(4);
+///
+/// let mut env = CallbackEnviron::new();
+/// env.set_pool(&pool);
+///
+/// let timer = ThreadpoolTimer::new(|| {}, Some(&mut env))?;
+/// timer.set_after(Duration::from_millis(1));
+/// timer.wait();
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
 /// [`CallbackEnviron::set_pool`]: crate::callback_env::CallbackEnviron::set_pool
 #[derive(Debug)]
 pub struct ThreadpoolPool {

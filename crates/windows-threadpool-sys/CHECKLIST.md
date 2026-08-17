@@ -58,5 +58,5 @@ Execution showed that item was mis-sized and partly already satisfied, so it is 
 	`ThreadpoolTimer`, `ThreadpoolWait`, and `ThreadpoolIo` to know whether it is group-owned and skip its own
 	close, which is why it follows their implementations rather than preceding them.
 
-- [ ] **M4-7** — Add API examples and generated documentation covering the whole surface: crate-level guidance,
+- [x] **M4-7** — Add API examples and generated documentation covering the whole surface: crate-level guidance,
 	runnable doc examples for work, timer, wait, and I/O, and a README that reflects the finished API.

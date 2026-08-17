@@ -109,6 +109,71 @@ unsafe extern "system" fn io_trampoline(
 /// cancels what is outstanding, waits for the resulting callbacks, waits for any
 /// callback still executing, and only then releases the object, the handle, and
 /// the callback context.
+///
+/// # Examples
+///
+/// Read a file with one overlapped operation. Submission is `unsafe` because
+/// only the caller can guarantee the native call it issues matches the operation
+/// it was handed; everything after that is safe.
+///
+/// ```
+/// use std::io;
+/// use std::os::windows::io::AsRawHandle;
+/// use std::ptr;
+/// use std::sync::mpsc;
+/// use windows_overlapped_io_sys::{Issued, Operation, Submitted, UnassociatedEndpoint};
+/// use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
+/// use windows_sys::Win32::Storage::FileSystem::ReadFile;
+/// use windows_threadpool_sys::io::{IoCompletion, ThreadpoolIo};
+///
+/// let path = std::env::temp_dir().join(format!("wtps-doc-{}.tmp", std::process::id()));
+/// std::fs::write(&path, b"overlapped hello")?;
+///
+/// let endpoint = UnassociatedEndpoint::open(&path, true, false, 0)?;
+/// let (tx, rx) = mpsc::channel();
+/// let sender = std::sync::Mutex::new(tx);
+///
+/// let tp = ThreadpoolIo::new(endpoint, move |completion: &IoCompletion| {
+///     // SAFETY: this object only ever carries `Operation<()>`, submitted
+///     // below, and each completion is claimed exactly once.
+///     let _operation = unsafe { completion.claim::<()>() };
+///     let _ = sender.lock().expect("send").send(completion.bytes_transferred());
+/// }, None)?;
+///
+/// let mut buffer = [0_u8; 64];
+/// let buf_ptr = buffer.as_mut_ptr();
+/// let buf_len = buffer.len() as u32;
+///
+/// let mut operation = Operation::new(());
+/// operation.set_offset(0);
+///
+/// // SAFETY: issues exactly one overlapped ReadFile into `buffer`, which stays
+/// // alive until the completion is received below. The handle is not in
+/// // skip-on-success mode, so both synchronous success and ERROR_IO_PENDING
+/// // deliver a completion callback.
+/// let submitted = unsafe {
+///     tp.submit(operation, |handle, overlapped| {
+///         let ok = ReadFile(handle.as_raw_handle(), buf_ptr, buf_len, ptr::null_mut(), overlapped);
+///         if ok != 0 {
+///             return Ok(Issued::Pending);
+///         }
+///         let error = io::Error::last_os_error();
+///         if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+///             return Ok(Issued::Pending);
+///         }
+///         Err(error)
+///     })
+/// };
+/// assert!(matches!(submitted, Submitted::Pending(_)));
+///
+/// let read = rx.recv().expect("a completion");
+/// tp.run_down();
+/// assert_eq!(&buffer[..read], b"overlapped hello");
+///
+/// drop(tp);
+/// let _ = std::fs::remove_file(&path);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub struct ThreadpoolIo {
     tp_io: PTP_IO,
     handle: OwnedHandle,

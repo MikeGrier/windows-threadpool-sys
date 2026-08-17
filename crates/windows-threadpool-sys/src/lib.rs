@@ -2,15 +2,113 @@
 //! Memory-safe access to the Windows thread pool APIs.
 //!
 //! The Windows thread pool integrates work, timers, waits, and asynchronous I/O
-//! with the operating system's own scheduling facilities. This crate will wrap
-//! those facilities while making callback and resource lifetimes explicit in
-//! Rust.
+//! with the operating system's own scheduling facilities. Its distinguishing
+//! property is that an idle workload costs no threads at all: the pool and the
+//! kernel cooperate so a process waiting on timers, events, or I/O holds no
+//! dedicated thread stacks. This crate wraps those facilities while making
+//! callback and resource lifetimes explicit in Rust.
 //!
-//! The crate is currently in its initial development stage. It provides
-//! [`callback_env`] (SDK-equivalent `TP_CALLBACK_ENVIRON_V3` helpers),
-//! [`work`] (owned `TP_WORK` objects), and [`io`] (the `TP_IO` completion
-//! backend built on the overlapped submission seam owned by
-//! `windows-overlapped-io-sys`).
+//! # The object types
+//!
+//! Each thread-pool object is an owned Rust type whose `Drop` performs the
+//! documented teardown for that object, so callbacks can never outlive the state
+//! they capture:
+//!
+//! | Type | Wraps | Runs the callback when |
+//! |---|---|---|
+//! | [`work::ThreadpoolWork`] | `TP_WORK` | you submit it |
+//! | [`timer::ThreadpoolTimer`] | `TP_TIMER` | a due time arrives |
+//! | [`wait::ThreadpoolWait`] | `TP_WAIT` | a handle signals or a wait times out |
+//! | [`io::ThreadpoolIo`] | `TP_IO` | an overlapped operation completes |
+//!
+//! Two supporting types shape where and how those callbacks run:
+//! [`pool::ThreadpoolPool`] is an owned private pool, and
+//! [`callback_env::CallbackEnviron`] is the environment that selects a pool and
+//! a callback priority when an object is created.
+//!
+//! # Submitting work
+//!
+//! ```
+//! use std::sync::Arc;
+//! use std::sync::atomic::{AtomicUsize, Ordering};
+//! use windows_threadpool_sys::work::ThreadpoolWork;
+//!
+//! let count = Arc::new(AtomicUsize::new(0));
+//! let counter = Arc::clone(&count);
+//!
+//! let work = ThreadpoolWork::new(move || {
+//!     counter.fetch_add(1, Ordering::SeqCst);
+//! }, None)?;
+//!
+//! for _ in 0..4 {
+//!     work.submit();
+//! }
+//! work.wait();
+//!
+//! assert_eq!(count.load(Ordering::SeqCst), 4);
+//! # Ok::<(), std::io::Error>(())
+//! ```
+//!
+//! # Running callbacks on a private pool
+//!
+//! A [`pool::ThreadpoolPool`] bounds the threads a subsystem may consume.
+//! Declare the pool before the objects that use it, so it is dropped last.
+//!
+//! ```
+//! use std::sync::Arc;
+//! use std::sync::atomic::{AtomicUsize, Ordering};
+//! use windows_threadpool_sys::callback_env::CallbackEnviron;
+//! use windows_threadpool_sys::pool::ThreadpoolPool;
+//! use windows_threadpool_sys::work::ThreadpoolWork;
+//!
+//! let pool = ThreadpoolPool::new()?;
+//! pool.set_max_threads(2);
+//!
+//! let mut env = CallbackEnviron::new();
+//! env.set_pool(&pool);
+//!
+//! let count = Arc::new(AtomicUsize::new(0));
+//! let counter = Arc::clone(&count);
+//! let work = ThreadpoolWork::new(move || {
+//!     counter.fetch_add(1, Ordering::SeqCst);
+//! }, Some(&mut env))?;
+//!
+//! work.submit();
+//! work.wait();
+//! assert_eq!(count.load(Ordering::SeqCst), 1);
+//! # Ok::<(), std::io::Error>(())
+//! ```
+//!
+//! # Callback rules
+//!
+//! Callbacks run on shared, process-managed threads, so every object type here
+//! holds its callback to the same contract:
+//!
+//! - It must restore any thread-local or thread state it changes before
+//!   returning, and must not terminate its thread.
+//! - It must not block waiting on its own object's rundown, which would wait on
+//!   itself.
+//! - It may panic without breaking the pool: every trampoline catches unwinding
+//!   at the FFI boundary, because unwinding into the pool's frame is undefined.
+//!   The panic is contained, not reported, so a callback that cares should catch
+//!   its own errors.
+//!
+//! # Relationship to `windows-overlapped-io-sys`
+//!
+//! Thread-pool I/O is one of three completion backends for the overlapped model
+//! defined by [`windows-overlapped-io-sys`]. This crate implements the `TP_IO`
+//! backend over that crate's endpoint ownership and pinned operation storage,
+//! adding the balanced `StartThreadpoolIo` accounting that only the thread pool
+//! requires. The pool's internal completion port is never exposed.
+//!
+//! [`windows-overlapped-io-sys`]: https://docs.rs/windows-overlapped-io-sys
+//!
+//! # Status
+//!
+//! The crate is in active development. Work, timers, waits, private pools, and
+//! thread-pool I/O are implemented and tested. Cleanup groups are not yet
+//! modelled safely: [`callback_env::CallbackEnviron::set_cleanup_group`] is
+//! `unsafe` for that reason, and its documentation explains what is missing.
 
 #![warn(missing_docs)]
 
