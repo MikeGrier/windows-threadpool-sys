@@ -37,6 +37,35 @@ jobs:
             exit 1
           fi
           echo "CRATE_NAME=${crate}" >> "$GITHUB_ENV"
+      # windows-threadpool-sys depends on windows-overlapped-io-sys by version as well
+      # as by path, so `cargo publish`'s build verification resolves that dependency
+      # from crates.io, not the workspace checkout. If both crates are released
+      # together, their tags can land in either order, so this step blocks the
+      # threadpool-sys publish until its required overlapped-io-sys version is live on
+      # crates.io, making the effective publish order independent of tag-push timing.
+      - name: Wait for windows-overlapped-io-sys dependency on crates.io
+        if: env.CRATE_NAME == 'windows-threadpool-sys'
+        shell: bash
+        run: |
+          metadata="$(cargo metadata --no-deps --format-version 1)"
+          dep_version="$(printf '%s' "$metadata" | jq -r '.packages[] | select(.name == "windows-threadpool-sys") | .dependencies[] | select(.name == "windows-overlapped-io-sys") | .req' | sed -E 's/^\^//')"
+          if [ -z "$dep_version" ] || [ "$dep_version" = "null" ]; then
+            echo "::error::could not determine required windows-overlapped-io-sys version" >&2
+            exit 1
+          fi
+          echo "waiting for windows-overlapped-io-sys ${dep_version} on crates.io"
+          max_attempts=60
+          for attempt in $(seq 1 "$max_attempts"); do
+            status="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/windows-overlapped-io-sys/${dep_version}")"
+            if [ "$status" = "200" ]; then
+              echo "windows-overlapped-io-sys ${dep_version} is available"
+              exit 0
+            fi
+            echo "attempt ${attempt}/${max_attempts}: not yet available (HTTP ${status}), retrying in 20s"
+            sleep 20
+          done
+          echo "::error::timed out waiting for windows-overlapped-io-sys ${dep_version} to publish; re-run this workflow once it is available" >&2
+          exit 1
       - name: cargo publish
         shell: bash
         env:

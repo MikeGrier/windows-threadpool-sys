@@ -14,10 +14,10 @@ Design decisions for this crate are in the workspace-root
 
 ## M2 — Work submission and callback ownership
 
-- [ ] **M2-1** — Implement and test one end-to-end work submission abstraction over `CreateThreadpoolWork`,
+- [x] **M2-1** — Implement and test one end-to-end work submission abstraction over `CreateThreadpoolWork`,
 	`SubmitThreadpoolWork`, `WaitForThreadpoolWorkCallbacks`, and `CloseThreadpoolWork`.
 
-- [ ] **M2-2** — Validate the callback ownership model with the work abstraction before extending it to timers
+- [x] **M2-2** — Validate the callback ownership model with the work abstraction before extending it to timers
 	and waits.
 
 ## M3 — TP_IO backend over the shared seam
@@ -26,7 +26,7 @@ Design decisions for this crate are in the workspace-root
 > (`into_overlapped` / `from_overlapped` / `reclaim_overlapped`) must be available first. See
 > [../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md](../windows-overlapped-io-sys/COMPLETED-CHECKLIST.md).
 
-- [ ] **M3-1** — Wire the `windows-threadpool-sys` → `windows-overlapped-io-sys` dependency (path plus
+- [x] **M3-1** — Wire the `windows-threadpool-sys` → `windows-overlapped-io-sys` dependency (path plus
 	version), and update the publish workflow so the overlapped crate releases before this one.
 
 - [ ] **M3-2** — Implement the `TP_IO` backend over the shared seam with balanced `StartThreadpoolIo` /
