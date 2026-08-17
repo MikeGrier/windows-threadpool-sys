@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Mike Grier
-use crate::{BlockingEndpoint, CompletionPort, UnassociatedEndpoint};
+use crate::{
+    BlockingEndpoint, CompletionPort, FILE_FLAG_NO_BUFFERING, PageBuffers, UnassociatedEndpoint,
+};
 
 #[test]
 fn blocking_write_then_read_round_trips() {
@@ -53,6 +55,36 @@ fn iocp_read_via_file_io_token() {
     assert_eq!(read, content.len());
     assert_eq!(&buffer[..read], content);
     assert_eq!(port.outstanding(), 0);
+
+    drop(endpoint);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn blocking_scatter_gather_round_trips() {
+    let path = std::env::temp_dir().join(format!(
+        "windows-overlapped-io-sys-fs-sg-{}.tmp",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    std::fs::write(&path, b"").expect("create file");
+
+    let endpoint = BlockingEndpoint::new(
+        UnassociatedEndpoint::open(&path, true, true, FILE_FLAG_NO_BUFFERING)
+            .expect("open endpoint"),
+    );
+
+    let mut src = PageBuffers::new(2);
+    for (i, byte) in src.as_bytes_mut().iter_mut().enumerate() {
+        *byte = (i % 251) as u8;
+    }
+
+    let written = endpoint.write_gather(&src, 0).expect("write_gather");
+    assert_eq!(written, src.len());
+
+    let (dst, read) = endpoint.read_scatter(2, 0).expect("read_scatter");
+    assert_eq!(read, src.len());
+    assert_eq!(dst.as_bytes(), src.as_bytes());
 
     drop(endpoint);
     let _ = std::fs::remove_file(&path);

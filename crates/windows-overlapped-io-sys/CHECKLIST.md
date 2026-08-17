@@ -5,7 +5,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M8 — Safe scatter/gather file adapters (`fs` feature)
 
-- [ ] Add a page-aligned `PageBuffers` type and fully-safe synchronous `BlockingEndpoint::read_scatter` /
+- [x] Add a page-aligned `PageBuffers` type and fully-safe synchronous `BlockingEndpoint::read_scatter` /
 	`write_gather` behind the `fs` feature, owning the buffers and the `FILE_SEGMENT_ELEMENT` array. `PageBuffers`
 	lands with this, its first consumer. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
