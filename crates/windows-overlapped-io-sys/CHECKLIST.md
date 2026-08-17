@@ -11,7 +11,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 - [x] Add the gated `windows-sys` feature layout for file, socket, and device operation families, keeping the
 	published crate's default feature set minimal. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [ ] Integration test: a safe-created endpoint runs a real operation on both the IOCP and blocking backends.
+- [x] Integration test: a safe-created endpoint runs a real operation on both the IOCP and blocking backends.
 
 ## M6 — Behavioral-matrix hardening
 
