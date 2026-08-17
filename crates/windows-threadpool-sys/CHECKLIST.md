@@ -52,11 +52,36 @@ Execution showed that item was mis-sized and partly already satisfied, so it is 
 
 - [ ] **M4-6** — Design and implement safe cleanup-group membership across every callback object.
 
-	**Blocker this resolves:** `CloseThreadpoolCleanupGroupMembers` releases its member objects, which must not
-	then be closed individually. Every object type currently closes itself unconditionally in `Drop`, so a
-	group-owned object would be double-closed. Making this sound requires each of `ThreadpoolWork`,
-	`ThreadpoolTimer`, `ThreadpoolWait`, and `ThreadpoolIo` to know whether it is group-owned and skip its own
-	close, which is why it follows their implementations rather than preceding them.
+	**BLOCKED — awaiting a design decision.** Not blocked on effort; blocked on choosing an ownership model.
+
+	**The problem.** `CloseThreadpoolCleanupGroupMembers` releases every member object at once. Afterwards the
+	members must not be used or closed individually. Two things break today:
+
+	1. Every object type closes itself unconditionally in `Drop`, so a group-owned object would be
+		double-closed.
+	2. Each object also frees its heap callback context in `Drop`. For a group-owned object the context is only
+		safe to free once the group has finished releasing members (that is what guarantees no callback is
+		running), and an individual object cannot know whether that has happened.
+
+	So the group must own both the member lifetimes and the contexts; marking objects "group-owned" is not by
+	itself sufficient.
+
+	**Options considered:**
+
+	- **(A) The group creates and owns its members.** `CleanupGroup::create_work(..) -> WorkMember<'_>`, with
+		members borrowing the group and the group holding the boxed contexts. `close_members` takes `&mut self`,
+		so the borrow checker forbids calling it while a member is alive. Fully sound and compiler-enforced;
+		costs a parallel set of constructors and prevents members outliving the group.
+	- **(B) Objects carry a shared handle to the group.** Each object learns at creation that it is group-owned,
+		skips its own close, and hands its context to the group to free at `close_members`. Keeps one type per
+		object kind, but use-after-release stays a runtime concern rather than a compile-time one.
+	- **(C) Decline to support cleanup groups.** Keep `set_cleanup_group` `unsafe` permanently and document that
+		group members must not be this crate's owned types.
+
+	**Worth weighing before choosing:** per-object `Drop` already performs correct teardown for every type here,
+	so a cleanup group adds bulk-teardown convenience rather than a safety property this crate is missing.
+	Option (C) is therefore a legitimate outcome and not merely a deferral -- but if it is chosen it must be
+	recorded as a deliberate decision in the design notes, not left implicit.
 
 - [x] **M4-7** — Add API examples and generated documentation covering the whole surface: crate-level guidance,
 	runnable doc examples for work, timer, wait, and I/O, and a README that reflects the finished API.
