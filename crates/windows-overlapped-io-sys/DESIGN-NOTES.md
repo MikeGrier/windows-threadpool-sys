@@ -213,10 +213,21 @@ Behavioral matrix every backend must be exercised against:
 	`CreateIoCompletionPort`, `GetQueuedCompletionStatus`, `GetQueuedCompletionStatusEx`,
 	`PostQueuedCompletionStatus`, `CancelIoEx`, and `GetOverlappedResult` / `GetOverlappedResultEx`.
 - The event backend additionally needs `WaitForSingleObject`, which lives under `Win32_System_Threading`.
-- Operation-family bindings are gated behind Cargo features so the core stays minimal: file read / write,
-	scatter / gather, `DeviceIoControl`, and `SetFileCompletionNotificationModes` under `Win32_Storage_FileSystem`;
-	socket operations under `Win32_Networking_WinSock`. Enabling a family turns on only the `windows-sys` features
-	that family needs.
+- The published default feature set is empty (`default = []`): the safe endpoint creator
+	([`UnassociatedEndpoint::open`](src/endpoint.rs)) opens overlapped handles through `std::fs::OpenOptions`
+	(`custom_flags(FILE_FLAG_OVERLAPPED | …)`), so the core completion machinery needs no operation-family
+	`windows-sys` bindings at all.
+- Operation-family bindings are gated behind three additive Cargo features so the core stays minimal, one per the
+	families the checklist enumerates:
+	- `fs` → `Win32_Storage_FileSystem` — file read / write, scatter / gather, and
+		`SetFileCompletionNotificationModes` (`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`).
+	- `socket` → `Win32_Networking_WinSock` — overlapped socket operations.
+	- `device` → `Win32_System_Ioctl` — device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
+		itself is already in the always-on core (`Win32_System_IO`); the feature only adds the control-code
+		constants a device family needs.
+	Enabling a family turns on only the `windows-sys` features that family needs and never changes the completion
+	machinery. Tests that issue real overlapped I/O pull the same bindings in through dev-dependencies, so the
+	families are not required to exercise a backend.
 - Minimum supported Windows version is the shared workspace baseline: the current public releases validated by
 	GitHub CI, namely Windows Server 2025 (`windows-latest`) and Windows 11. `CancelIoEx` and
 	`GetQueuedCompletionStatusEx` are available there without down-level gating; per-handle notification-mode

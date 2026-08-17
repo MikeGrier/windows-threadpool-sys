@@ -19,6 +19,20 @@ categories = ["api-bindings", "os::windows-apis"]
 path = "src/lib.rs"
 
 [features]
+# The default build carries only the core completion machinery: the raw IOCP
+# backend, the blocking backend, owned endpoints, and pinned operations. That
+# needs just Win32_Foundation + Win32_System_IO (declared as direct dependency
+# features below), so the published default feature set stays empty.
+default = []
+
+# Operation-family features widen the windows-sys binding surface for one family
+# of overlapped operations. Downstream crates and this crate's future safe
+# operation adapters opt into exactly the families they use; enabling a family
+# never changes the completion machinery, only which native calls are in scope.
+fs = ["windows-sys/Win32_Storage_FileSystem"]
+socket = ["windows-sys/Win32_Networking_WinSock"]
+device = ["windows-sys/Win32_System_Ioctl"]
+
 # Capture a full backtrace at each operation submission so the drop-time
 # diagnostic can point at the source of any operation still outstanding. The
 # capture itself honors RUST_BACKTRACE / RUST_LIB_BACKTRACE at run time.
