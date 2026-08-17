@@ -97,13 +97,11 @@ directory, which may select the wrong manifest or fail to find a toolchain. Pass
 absolute workspace-root path on every call; the server rejects a directory from which
 no `Cargo.toml` can be found by walking upward.
 
-**Cross-platform (Linux) validation is the one sanctioned exception.** The cargo-mcp
-server drives the **host** (Windows) toolchain only and cannot target the WSL Linux
-toolchain. Linux is validated authoritatively in **CI** (the Ubuntu matrix) and, for
-local iteration, via terminal `cargo` inside `wsl … bash -lc` with an isolated
-`CARGO_TARGET_DIR`. This WSL terminal-cargo use is the **sole** exception to the rule
-above and applies **only** to the Linux toolchain — every host (Windows) cargo
-invocation still goes exclusively through the `cargo_*` MCP tools.
+**This is a Windows-only workspace, so there is no cross-platform exception.** The
+cargo-mcp server drives the **host** (Windows) toolchain, which is the only toolchain
+these crates target; every item is behind `cfg(windows)` and CI builds, tests, and
+lints exclusively on Windows. Every cargo invocation therefore goes through the
+`cargo_*` MCP tools with no WSL/Linux carve-out.
 
 | MCP tool | Replaces |
 |---|---|

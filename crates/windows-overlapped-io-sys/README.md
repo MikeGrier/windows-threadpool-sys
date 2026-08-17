@@ -2,6 +2,9 @@
 
 Owned overlapped I/O endpoints and pinned operations for Windows.
 
+**Windows only.** Every item is behind `cfg(windows)`; the crate builds to an
+empty shell on other platforms.
+
 This crate provides the ownership, association, completion, cancellation, and
 rundown model for overlapped I/O on top of `windows-sys`. It is the reusable
 foundation beneath `windows-threadpool-sys`: raw I/O completion ports and the

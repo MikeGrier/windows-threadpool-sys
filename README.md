@@ -21,8 +21,9 @@ in [`CHECKLIST.md`](CHECKLIST.md).
 
 ## Platform support
 
-The public API targets Windows. The workspace is also checked on non-Windows
-hosts so that package metadata and platform-gated code remain healthy.
+Windows only. The public API and all implementation target Windows, CI builds,
+tests, and lints exclusively on Windows, and platform-specific code lives behind
+`cfg(windows)`.
 
 ## Build
 
@@ -30,9 +31,9 @@ Requires Rust `1.97` or newer.
 
 ```sh
 cargo fmt --all --check
-cargo build --workspace --all-targets --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+cargo build --workspace --all-targets --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
 ```
 
 ## Release

@@ -13,14 +13,14 @@ Run the standard checks from the workspace root:
 
 ```sh
 cargo fmt --all --check
-cargo build --workspace --all-targets --locked
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build --workspace --all-targets --all-features --locked
+cargo test --workspace --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 ```
 
-Windows-specific behavior must be exercised on Windows. Keep platform-specific
-implementation details behind `cfg(windows)` so the non-Windows CI jobs can
-continue checking the platform-independent crate surface.
+This is a Windows-only workspace: all behavior is exercised on Windows, and CI
+builds, tests, and lints exclusively on Windows. Keep platform-specific
+implementation details behind `cfg(windows)`.
 
 ## Release process
 
