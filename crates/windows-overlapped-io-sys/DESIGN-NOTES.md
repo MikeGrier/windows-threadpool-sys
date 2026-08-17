@@ -329,6 +329,24 @@ would require dereferencing storage that may already be freed; and exposing an `
 which invites a time-of-check/time-of-use race when `cancel`'s return value already answers the same question
 atomically.
 
+#### Duplicate registration panics deliberately
+
+`OperationRegistry::insert` panics when an address is registered while an earlier operation is still registered
+at it, rather than overwriting or ignoring the duplicate. The registry's whole purpose is to answer "does this
+identity still name a live operation?", and two live operations sharing one entry makes that answer wrong for
+one of them -- reintroducing precisely the mis-cancellation the generations were added to prevent. A silent
+duplicate would therefore convert a loud, immediate failure into a rare wrong-operation cancellation, which is
+the harder bug by a wide margin.
+
+The panic carries the colliding address and *both* generations, and states that the fault is in the completion
+backend rather than its caller, because that is the only audience able to act on it: the condition is
+unreachable through ordinary use of either backend, since a submitted operation owns freshly boxed storage. The
+invariant it guards -- **an address is never registered while it is available for reuse** -- is stated on the
+type, and the callback-ordering trap that violates it is called out there and in
+[the workspace design notes](../../DESIGN-NOTES.md). This is not hypothetical: the assertion caught a real race
+in the `TP_IO` backend, where deregistering after the callback left a window because `IoCompletion::claim` frees
+the storage inside the callback.
+
 `OperationId`, `Issued`, and `Submitted` are part of that seam rather than IOCP-private types: an operation
 identity, a submission classification, and a submission outcome mean the same thing to any backend. Building
 `TP_IO` outside this crate showed that only `OperationId` was not actually reachable -- it had no public

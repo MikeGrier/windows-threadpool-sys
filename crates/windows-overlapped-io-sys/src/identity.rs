@@ -128,6 +128,21 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// only reusable once the previous operation's storage has been freed -- so the
 /// map is keyed by address and holds the generation of whichever submission owns
 /// it now.
+///
+/// # Invariant enforced by this type
+///
+/// **An address must never be registered while it is available for reuse.**
+/// Equivalently: a backend must deregister an operation *before* anything can
+/// free its storage, never after. [`OperationRegistry::insert`] panics when this
+/// is violated, because the alternative is silent corruption -- two live
+/// operations sharing one map entry would make [`OperationRegistry::is_live`]
+/// answer for the wrong one and let a cancellation reach an unrelated operation,
+/// which is the exact class of bug generations exist to prevent.
+///
+/// The invariant is easy to break in a completion callback, where the natural
+/// place to deregister (after the callback returns) is *later* than the point at
+/// which the callback may free the storage -- for example by taking ownership of
+/// the operation and dropping it. Deregister on callback entry instead.
 #[derive(Debug)]
 pub struct OperationRegistry {
     live: Mutex<HashMap<usize, u64>>,
@@ -146,17 +161,44 @@ impl OperationRegistry {
 
     /// Record a newly submitted operation.
     ///
+    /// Call this once per submission, before the operation can complete.
+    ///
     /// # Panics
     ///
-    /// Panics if the address is already live, which would mean the backend
-    /// submitted two operations against one piece of storage.
+    /// Panics if `id`'s address is **already registered** -- that is, if a
+    /// previous operation at the same storage address has not been removed with
+    /// [`OperationRegistry::remove`] yet.
+    ///
+    /// This is always a defect in the completion backend, never in the code
+    /// calling that backend, and it is deliberately a panic rather than a
+    /// silently-ignored duplicate: two live operations sharing one entry would
+    /// corrupt exactly the guarantee this registry provides, letting a
+    /// cancellation reach an operation the caller never named.
+    ///
+    /// The two ways a backend causes it:
+    ///
+    /// - **Deregistering too late.** If a completed operation is removed only
+    ///   *after* its storage is freed, the allocator can hand that address to a
+    ///   concurrent submission while the stale entry is still present. Remove the
+    ///   operation before anything can free it -- on completion-callback entry
+    ///   rather than on exit, since a callback may take ownership of the
+    ///   operation and drop it part-way through.
+    /// - **Submitting one operation's storage twice**, so a second submission
+    ///   reuses an `OVERLAPPED` that is still in flight.
     pub fn insert(&self, id: OperationId) {
         let mut live = lock(&self.live);
         match live.entry(id.as_ptr() as usize) {
-            Entry::Occupied(_) => panic!(
-                "windows-overlapped-io-sys: operation storage {:p} was submitted while an earlier \
-                 operation on the same storage was still outstanding",
-                id.as_ptr()
+            Entry::Occupied(occupied) => panic!(
+                "windows-overlapped-io-sys: operation storage {address:p} was registered for \
+                 generation {new} while generation {existing} was still registered at the same \
+                 address. An address must never be registered while it is available for reuse. \
+                 This is a defect in the completion backend: it either deregistered a completed \
+                 operation after its storage was freed rather than before (leaving a window in \
+                 which a concurrent submission can be handed the same address), or submitted one \
+                 operation's storage twice while it was still in flight.",
+                address = id.as_ptr(),
+                new = id.generation(),
+                existing = occupied.get(),
             ),
             Entry::Vacant(slot) => {
                 slot.insert(id.generation());

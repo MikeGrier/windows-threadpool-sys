@@ -243,12 +243,53 @@ fn wait_until_empty_unblocks_when_the_last_operation_is_removed() {
 
 // --- backend misuse ---
 
+/// Registering an address that is already registered is a backend defect, and
+/// must fail loudly rather than corrupt the liveness answers silently.
 #[test]
-#[should_panic(expected = "still outstanding")]
+#[should_panic(expected = "must never be registered while it is available for reuse")]
 fn inserting_the_same_address_twice_panics() {
     let registry = OperationRegistry::new();
     let slot = address(0x40_000);
     registry.insert(OperationId::mint(slot));
-    // Submitting a second operation against live storage is a backend bug.
+    // Registering a second operation at live storage is a backend bug.
     registry.insert(OperationId::mint(slot));
+}
+
+/// The panic must name the address and both generations, so a backend author
+/// can tell which submission collided with which.
+#[test]
+fn the_duplicate_registration_panic_identifies_both_operations() {
+    let registry = OperationRegistry::new();
+    let slot = address(0x41_000);
+    let first = OperationId::mint(slot);
+    let second = OperationId::mint(slot);
+    registry.insert(first);
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry.insert(second);
+    }))
+    .expect_err("a duplicate registration must panic");
+
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("the panic payload must be a message");
+
+    assert!(
+        message.contains(&format!("{slot:p}")),
+        "the panic must name the colliding address; got: {message}"
+    );
+    assert!(
+        message.contains(&first.generation().to_string()),
+        "the panic must name the already-registered generation; got: {message}"
+    );
+    assert!(
+        message.contains(&second.generation().to_string()),
+        "the panic must name the incoming generation; got: {message}"
+    );
+    assert!(
+        message.contains("defect in the completion backend"),
+        "the panic must say whose bug this is; got: {message}"
+    );
 }

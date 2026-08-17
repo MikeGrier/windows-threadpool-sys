@@ -399,6 +399,14 @@ impl<'port> AssociatedEndpoint<'port> {
     /// failure paths the operation is returned intact through [`Submitted`] so
     /// its storage can be reused or inspected.
     ///
+    /// # Panics
+    ///
+    /// Panics if this port already has a live operation registered at the new
+    /// operation's storage address. That cannot happen through ordinary use --
+    /// `operation` owns freshly boxed storage -- and indicates a defect in this
+    /// crate's own bookkeeping rather than in the calling code. See
+    /// [`OperationRegistry::insert`] for the invariant involved.
+    ///
     /// # Safety
     ///
     /// `issue` must start exactly one overlapped operation using the provided
