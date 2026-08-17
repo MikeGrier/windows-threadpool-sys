@@ -34,3 +34,19 @@ fn borrows_and_reclaims_the_same_handle() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn open_creates_an_overlapped_endpoint() {
+    let path = std::env::temp_dir().join(format!(
+        "windows-overlapped-io-sys-open-{}.tmp",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"x").expect("write temp file");
+
+    let endpoint = UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint");
+    // The safe creator yields a usable, borrowable handle.
+    assert!(!endpoint.handle().as_raw_handle().is_null());
+    drop(endpoint);
+
+    let _ = std::fs::remove_file(&path);
+}

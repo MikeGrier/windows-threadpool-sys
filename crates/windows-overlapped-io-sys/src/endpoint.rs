@@ -6,7 +6,14 @@
 //! consuming transition; this module models only ownership and the provenance
 //! that must hold before an endpoint may be trusted for safe completion routing.
 
+use std::fs::OpenOptions;
+use std::io;
+use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsHandle, BorrowedHandle, OwnedHandle};
+use std::path::Path;
+
+/// The Win32 `FILE_FLAG_OVERLAPPED` flag. Changing this value is a breaking change.
+const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
 
 /// An overlapped-capable endpoint that has not yet been associated with a
 /// completion backend.
@@ -21,11 +28,40 @@ pub struct UnassociatedEndpoint {
 }
 
 impl UnassociatedEndpoint {
+    /// Open a filesystem path (file, directory, or device) for overlapped I/O
+    /// and wrap it as an endpoint, establishing overlapped provenance safely.
+    ///
+    /// The handle is always opened with `FILE_FLAG_OVERLAPPED`, so the overlapped
+    /// invariant holds without the unsafe [`UnassociatedEndpoint::assume_overlapped`]
+    /// seam. Pass any additional `FILE_FLAG_*` bits in `extra_flags` -- for
+    /// example the backup-semantics flag to open a directory handle for change
+    /// notifications. Set `read` and/or `write` for the access the operations
+    /// will need.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error encountered opening the path.
+    pub fn open(
+        path: impl AsRef<Path>,
+        read: bool,
+        write: bool,
+        extra_flags: u32,
+    ) -> io::Result<Self> {
+        let file = OpenOptions::new()
+            .read(read)
+            .write(write)
+            .custom_flags(FILE_FLAG_OVERLAPPED | extra_flags)
+            .open(path)?;
+        // SAFETY: the handle was just opened with FILE_FLAG_OVERLAPPED, is fresh
+        // and unassociated, has no duplicates, and ownership moves in exclusively.
+        Ok(unsafe { Self::assume_overlapped(OwnedHandle::from(file)) })
+    }
+
     /// Wrap an owned handle whose overlapped provenance the caller vouches for.
     ///
-    /// This is the narrow unsafe seam that exists until the crate offers safe
-    /// endpoint creators. Callers use it to assert the invariants that a safe
-    /// constructor would otherwise establish.
+    /// This is the narrow unsafe extensibility seam for handles the crate cannot
+    /// create itself -- sockets, devices, or handles obtained elsewhere. For
+    /// filesystem paths, prefer the safe [`UnassociatedEndpoint::open`].
     ///
     /// # Safety
     ///

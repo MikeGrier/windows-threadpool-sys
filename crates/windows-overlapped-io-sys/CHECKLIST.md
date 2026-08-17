@@ -5,7 +5,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M5 — Safe endpoint provenance and feature layout
 
-- [ ] Design and implement safe endpoint creators / sealed association to remove reliance on the unsafe
+- [x] Design and implement safe endpoint creators / sealed association to remove reliance on the unsafe
 	`assume_overlapped` seam. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 - [ ] Add the gated `windows-sys` feature layout for file, socket, and device operation families, keeping the
