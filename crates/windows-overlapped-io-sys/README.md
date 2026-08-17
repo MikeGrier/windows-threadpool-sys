@@ -8,6 +8,23 @@ foundation beneath `windows-threadpool-sys`: raw I/O completion ports and the
 object-based thread pool share endpoint and operation storage while remaining
 distinct completion backends.
 
-This crate is in its initial development stage. No safe API has been stabilized
-yet, because the generic overlapped-submission safety boundary is still under
-investigation.
+## Safe API
+
+Endpoints are opened safely with `UnassociatedEndpoint::open`, and each operation
+family has safe adapters behind an opt-in Cargo feature, so callers perform real
+overlapped I/O without writing `unsafe`:
+
+| Feature | Safe adapters |
+|---|---|
+| `fs` | file read/write and scatter/gather, on the blocking and IOCP backends |
+| `socket` | socket send/receive, on the blocking and IOCP backends |
+| `device` | `DeviceIoControl`, on the blocking and IOCP backends |
+
+The default feature set is empty, keeping the core completion machinery (raw IOCP
+and blocking backends, owned endpoints, pinned operations) minimal. A narrow
+unsafe submission seam remains available for families without an adapter, and the
+optional `operation-backtrace` feature captures a submit-site backtrace for the
+drop-time outstanding-operation diagnostic.
+
+Fully generic, fully safe overlapped submission remains intentionally unsolved;
+the per-family adapters are the sanctioned safe path.

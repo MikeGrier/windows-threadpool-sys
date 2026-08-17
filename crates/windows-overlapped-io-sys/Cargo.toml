@@ -18,6 +18,14 @@ categories = ["api-bindings", "os::windows-apis"]
 [lib]
 path = "src/lib.rs"
 
+# The crate is Windows-only and its safe adapters are feature-gated, so docs.rs
+# must build on a Windows target with every feature enabled or it would render an
+# almost-empty crate.
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
 [features]
 # The default build carries only the core completion machinery: the raw IOCP
 # backend, the blocking backend, owned endpoints, and pinned operations. That

@@ -7,9 +7,22 @@
 //! object-based thread pool share endpoint and operation storage while remaining
 //! distinct completion backends.
 //!
-//! The crate is currently in its initial development stage. No safe API has been
-//! stabilized yet, because the generic overlapped-submission safety boundary is
-//! still under investigation.
+//! # Safe API surface
+//!
+//! Endpoints are created safely with [`UnassociatedEndpoint::open`], and each
+//! operation family has safe adapters behind an opt-in feature, so callers issue
+//! real overlapped I/O without writing `unsafe`:
+//!
+//! - `fs`: file read/write and scatter/gather, on the blocking and IOCP backends.
+//! - `socket`: socket send/receive, on the blocking and IOCP backends.
+//! - `device`: `DeviceIoControl`, on the blocking and IOCP backends.
+//!
+//! The default feature set is empty, keeping the core completion machinery (the
+//! raw IOCP and blocking backends, owned endpoints, and pinned operations)
+//! minimal. A narrow unsafe submission seam ([`AssociatedEndpoint::submit`] and
+//! the [`Operation`] primitives) stays available for families without an adapter.
+//! Fully generic, fully safe overlapped submission remains intentionally
+//! unsolved; the per-family adapters are the sanctioned safe path.
 
 #![warn(missing_docs)]
 
