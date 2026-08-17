@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Mike Grier
 //! Process-wide diagnostic configuration.
 //!
 //! Per-operation source tracking records where each operation was submitted so

@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Mike Grier
 //! Memory-safe access to the Windows thread pool APIs.
 //!
 //! The Windows thread pool integrates work, timers, waits, and asynchronous I/O

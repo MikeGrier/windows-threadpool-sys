@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Mike Grier
 //! End-to-end test of the blocking `GetOverlappedResult` backend.
 
 #![cfg(windows)]

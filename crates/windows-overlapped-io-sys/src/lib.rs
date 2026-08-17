@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Mike Grier
 //! Owned overlapped I/O endpoints and pinned operations for Windows.
 //!
 //! This crate provides the ownership, association, completion, cancellation, and

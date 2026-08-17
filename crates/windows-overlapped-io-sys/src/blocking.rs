@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Mike Grier
 //! Blocking backend: complete one overlapped operation at a time by waiting on
 //! the handle with `GetOverlappedResult`.
 //!

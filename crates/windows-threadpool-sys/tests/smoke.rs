@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Mike Grier
 use windows_threadpool_sys as _;
 
 #[test]

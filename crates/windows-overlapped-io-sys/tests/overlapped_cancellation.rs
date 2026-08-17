@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Mike Grier
 //! End-to-end raw-IOCP test against a real, cancellable overlapped device.
 //!
 //! A named-pipe server with no client is used because `ConnectNamedPipe`
