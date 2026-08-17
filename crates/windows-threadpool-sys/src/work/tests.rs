@@ -226,6 +226,35 @@ fn wait_then_resubmit_counts_independently() {
     assert_eq!(count.load(Ordering::SeqCst), 2);
 }
 
+/// A panicking callback must be contained at the FFI boundary rather than
+/// unwinding into the pool, which would abort the process. Later submissions
+/// must still run.
+///
+/// The caught panic prints to stderr; that output is expected.
+#[test]
+fn a_panicking_callback_is_contained() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let c = Arc::clone(&count);
+    let work = ThreadpoolWork::new(
+        move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            panic!("work callback panics on purpose");
+        },
+        None,
+    )
+    .unwrap();
+
+    for _ in 0..5 {
+        work.submit();
+    }
+    work.wait();
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        5,
+        "every submission must run despite panicking callbacks"
+    );
+}
+
 #[test]
 fn no_submit_drop_is_safe() {
     // Creating a work object and dropping it without submitting must not panic or block.

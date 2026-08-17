@@ -8,7 +8,7 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::callback_env::CallbackEnviron;
 
-fn inner(env: &CallbackEnviron) -> &TP_CALLBACK_ENVIRON_V3 {
+fn inner<'a>(env: &'a CallbackEnviron<'_>) -> &'a TP_CALLBACK_ENVIRON_V3 {
     env.as_inner()
 }
 

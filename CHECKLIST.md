@@ -32,7 +32,7 @@ leaving other routes to the same hazard open.
 
 	**Target:** every typed token compares `completion.id()` against the full identity it was issued.
 
-- [ ] **PR-3** — Make `CallbackEnviron` actually retain the pool borrow it appears to take.
+- [x] **PR-3** — Make `CallbackEnviron` actually retain the pool borrow it appears to take.
 
 	**Gap:** `set_pool` accepts `&ThreadpoolPool` but stores only the raw `PTP_POOL`; the environment has no
 	lifetime and no owned field. Safe code can set a pool, drop it, and then create an object from the
@@ -41,7 +41,7 @@ leaving other routes to the same hazard open.
 
 	**Target:** the environment carries the pool's lifetime, so it cannot outlive the pool it names.
 
-- [ ] **PR-4** — Contain panics in the work trampoline.
+- [x] **PR-4** — Contain panics in the work trampoline.
 
 	**Gap:** the `TP_WORK` trampoline invokes the user callback without `catch_unwind`, unlike every other
 	trampoline in the crate. A panicking work callback unwinds into a non-unwind FFI boundary and aborts the

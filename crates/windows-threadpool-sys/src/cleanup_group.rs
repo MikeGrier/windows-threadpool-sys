@@ -164,7 +164,7 @@ impl CleanupGroup {
     /// The caller's environment is copied rather than mutated, so passing one
     /// environment to several groups -- or reusing it for a non-member object --
     /// behaves as written.
-    fn member_environment(&self, env: Option<&CallbackEnviron>) -> CallbackEnviron {
+    fn member_environment(&self, env: Option<&CallbackEnviron<'_>>) -> CallbackEnviron<'_> {
         let mut member_env = match env {
             Some(env) => CallbackEnviron::from_inner(*env.as_inner()),
             None => CallbackEnviron::new(),

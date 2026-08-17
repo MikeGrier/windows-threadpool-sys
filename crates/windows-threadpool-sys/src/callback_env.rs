@@ -7,6 +7,7 @@
 //! mutation methods matching `SetThreadpoolCallback*`.
 
 use core::mem;
+use std::marker::PhantomData;
 
 use windows_sys::Win32::System::Threading::{
     PTP_CLEANUP_GROUP, PTP_CLEANUP_GROUP_CANCEL_CALLBACK, TP_CALLBACK_ENVIRON_V3,
@@ -24,9 +25,37 @@ use crate::pool::ThreadpoolPool;
 ///
 /// `Drop` models `DestroyThreadpoolEnvironment`, which is currently a no-op in
 /// the SDK but marks the lifecycle boundary.
-pub struct CallbackEnviron(TP_CALLBACK_ENVIRON_V3);
+///
+/// # Pool lifetime
+///
+/// An environment that names a [`ThreadpoolPool`] borrows it, so this sequence
+/// -- which would otherwise create an object from a dangling pool value -- does
+/// not compile:
+///
+/// ```compile_fail
+/// use windows_threadpool_sys::callback_env::CallbackEnviron;
+/// use windows_threadpool_sys::pool::ThreadpoolPool;
+///
+/// let mut env = CallbackEnviron::new();
+/// {
+///     let pool = ThreadpoolPool::new().expect("create pool");
+///     env.set_pool(&pool);
+/// } // `pool` is dropped here
+/// let _ptr = env.as_mut_ptr(); // error: `pool` does not live long enough
+/// ```
+pub struct CallbackEnviron<'pool> {
+    inner: TP_CALLBACK_ENVIRON_V3,
+    /// Ties the environment to the [`ThreadpoolPool`] it names.
+    ///
+    /// The environment stores only the pool's raw `PTP_POOL` value, which the
+    /// thread pool dereferences when an object is created from it. Without this
+    /// marker, safe code could set a pool, drop it, and then create an object
+    /// from the still-live environment with a dangling pool -- so the borrow has
+    /// to be real, not merely implied by the `&ThreadpoolPool` parameter.
+    pool: PhantomData<&'pool ThreadpoolPool>,
+}
 
-impl CallbackEnviron {
+impl<'pool> CallbackEnviron<'pool> {
     /// Returns a properly initialized callback environment.
     ///
     /// Equivalent to `InitializeThreadpoolEnvironment`: sets `Version = 3`,
@@ -34,36 +63,47 @@ impl CallbackEnviron {
     /// `Size = sizeof(TP_CALLBACK_ENVIRON_V3)`, with all other fields zeroed
     /// or `None`.
     pub fn new() -> Self {
-        Self(TP_CALLBACK_ENVIRON_V3 {
-            Version: 3,
-            Pool: 0,
-            CleanupGroup: 0,
-            CleanupGroupCancelCallback: None,
-            RaceDll: core::ptr::null_mut(),
-            ActivationContext: 0,
-            FinalizationCallback: None,
-            u: TP_CALLBACK_ENVIRON_V3_0 { Flags: 0 },
-            CallbackPriority: TP_CALLBACK_PRIORITY_NORMAL,
-            Size: mem::size_of::<TP_CALLBACK_ENVIRON_V3>() as u32,
-        })
+        Self {
+            inner: TP_CALLBACK_ENVIRON_V3 {
+                Version: 3,
+                Pool: 0,
+                CleanupGroup: 0,
+                CleanupGroupCancelCallback: None,
+                RaceDll: core::ptr::null_mut(),
+                ActivationContext: 0,
+                FinalizationCallback: None,
+                u: TP_CALLBACK_ENVIRON_V3_0 { Flags: 0 },
+                CallbackPriority: TP_CALLBACK_PRIORITY_NORMAL,
+                Size: mem::size_of::<TP_CALLBACK_ENVIRON_V3>() as u32,
+            },
+            pool: PhantomData,
+        }
     }
 
     /// Equivalent to `SetThreadpoolCallbackPool`.
     ///
     /// Callbacks created with this environment run on `pool` instead of the
-    /// process-default pool. The environment borrows the pool, and objects
-    /// created from the environment copy its contents, so the pool must also
-    /// outlive those objects -- see [`ThreadpoolPool`] for the ordering rule.
+    /// process-default pool.
+    ///
+    /// The environment genuinely borrows the pool for as long as it names it, so
+    /// the pool cannot be dropped while this environment is still usable. That
+    /// borrow is what makes the setter sound: the environment stores only the
+    /// pool's raw value, which the thread pool dereferences when an object is
+    /// created, so a dropped pool would otherwise leave a dangling value behind.
+    ///
+    /// Objects created from the environment copy its contents, so the pool must
+    /// also outlive those objects -- see [`ThreadpoolPool`] for that ordering
+    /// rule, which the compiler cannot check.
     ///
     /// Use [`CallbackEnviron::clear_pool`] to go back to the default pool.
-    pub fn set_pool(&mut self, pool: &ThreadpoolPool) {
-        self.0.Pool = pool.as_raw();
+    pub fn set_pool(&mut self, pool: &'pool ThreadpoolPool) {
+        self.inner.Pool = pool.as_raw();
     }
 
     /// Restore the process-default pool, dropping any [`ThreadpoolPool`] this
     /// environment named.
     pub fn clear_pool(&mut self) {
-        self.0.Pool = 0;
+        self.inner.Pool = 0;
     }
 
     /// Equivalent to `SetThreadpoolCallbackCleanupGroup`.
@@ -91,13 +131,13 @@ impl CallbackEnviron {
         group: PTP_CLEANUP_GROUP,
         cancel_callback: PTP_CLEANUP_GROUP_CANCEL_CALLBACK,
     ) {
-        self.0.CleanupGroup = group;
-        self.0.CleanupGroupCancelCallback = cancel_callback;
+        self.inner.CleanupGroup = group;
+        self.inner.CleanupGroupCancelCallback = cancel_callback;
     }
 
     /// Equivalent to `SetThreadpoolCallbackPriority`.
     pub fn set_priority(&mut self, priority: TP_CALLBACK_PRIORITY) {
-        self.0.CallbackPriority = priority;
+        self.inner.CallbackPriority = priority;
     }
 
     /// Equivalent to `SetThreadpoolCallbackRunsLong`.
@@ -106,7 +146,7 @@ impl CallbackEnviron {
     /// allowing the pool to spawn additional threads.
     pub fn set_runs_long(&mut self) {
         // SAFETY: Flags and s._bitfield alias the same u32; bit 0 is LongFunction.
-        unsafe { self.0.u.Flags |= 1 }
+        unsafe { self.inner.u.Flags |= 1 }
     }
 
     /// Equivalent to `SetThreadpoolCallbackLibrary`.
@@ -116,7 +156,7 @@ impl CallbackEnviron {
     /// `dll` must be a valid `HMODULE` that remains loaded for the lifetime of
     /// all thread-pool objects created with this environment.
     pub unsafe fn set_library(&mut self, dll: *mut core::ffi::c_void) {
-        self.0.RaceDll = dll;
+        self.inner.RaceDll = dll;
     }
 
     /// Wrap an already-initialized environment structure.
@@ -125,29 +165,32 @@ impl CallbackEnviron {
     /// layering a setting on top -- as a cleanup group does when creating a
     /// member -- cannot be observed through the original.
     pub(crate) fn from_inner(inner: TP_CALLBACK_ENVIRON_V3) -> Self {
-        Self(inner)
+        Self {
+            inner,
+            pool: PhantomData,
+        }
     }
 
     /// Returns a mutable pointer to the inner [`TP_CALLBACK_ENVIRON_V3`].
     ///
     /// For passing to thread-pool object creation functions.
     pub fn as_mut_ptr(&mut self) -> *mut TP_CALLBACK_ENVIRON_V3 {
-        &raw mut self.0
+        &raw mut self.inner
     }
 
     /// Returns a shared reference to the inner [`TP_CALLBACK_ENVIRON_V3`].
     pub fn as_inner(&self) -> &TP_CALLBACK_ENVIRON_V3 {
-        &self.0
+        &self.inner
     }
 }
 
-impl Default for CallbackEnviron {
+impl Default for CallbackEnviron<'_> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Drop for CallbackEnviron {
+impl Drop for CallbackEnviron<'_> {
     fn drop(&mut self) {
         // DestroyThreadpoolEnvironment is a no-op in the current SDK; models the lifecycle boundary.
     }
