@@ -17,9 +17,14 @@
 ## windows-overlapped-io-sys
 
 - [x] Specify the rounded-out overlapped-I/O requirements and the crate boundary.
-- [ ] Design the endpoint ownership, provenance, and sealed-association types.
-- [ ] Design pinned operation storage, completion identity, and the result model.
-- [ ] Implement and test the raw IOCP backend across the behavioral matrix.
+- [x] Specify the voluntary-rundown-versus-`Drop` contract.
+- [x] Implement endpoint ownership and the unsafe provenance seam.
+- [x] Implement pinned operation storage and `OVERLAPPED` completion identity.
+- [x] Implement the raw IOCP backend: port, association, submission, and cancellation.
+- [ ] Implement voluntary blocking rundown with outstanding-operation accounting, and a memory-safe,
+	non-blocking, non-panicking `Drop` diagnostic.
+- [ ] Resolve generic completion drain (type-erased reclamation versus caller-typed drain).
+- [ ] Design safe endpoint creators / sealed association to remove reliance on the unsafe seam.
 - [ ] Implement and test the event / `GetOverlappedResult` backend.
 - [ ] Define the backend seam consumed by the thread-pool `TP_IO` implementation.
 - [ ] Add the gated `windows-sys` feature layout for file, socket, and device operations.
