@@ -19,6 +19,9 @@ mod blocking;
 #[cfg(windows)]
 mod config;
 
+#[cfg(all(windows, feature = "device"))]
+mod device;
+
 #[cfg(windows)]
 mod endpoint;
 

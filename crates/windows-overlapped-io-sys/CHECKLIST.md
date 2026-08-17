@@ -5,7 +5,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M11 — Safe `DeviceIoControl` adapters (`device` feature)
 
-- [ ] Implement fully-safe synchronous `BlockingEndpoint::ioctl(code, input, output_len)` behind the `device`
+- [x] Implement fully-safe synchronous `BlockingEndpoint::ioctl(code, input, output_len)` behind the `device`
 	feature, issuing an overlapped `DeviceIoControl` and returning `io::Result<(Vec<u8>, usize)>` with no `unsafe`
 	for the caller. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
