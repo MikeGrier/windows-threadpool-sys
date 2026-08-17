@@ -21,8 +21,9 @@
 - [x] Implement endpoint ownership and the unsafe provenance seam.
 - [x] Implement pinned operation storage and `OVERLAPPED` completion identity.
 - [x] Implement the raw IOCP backend: port, association, submission, and cancellation.
-- [ ] Implement outstanding-operation accounting, type-erased operation reclamation, and blocking rundown for
-	both the voluntary method and `Drop`, with a non-panicking best-effort `Drop` leak diagnostic.
+- [x] Implement outstanding-operation accounting, generic reclamation, and blocking rundown for the voluntary
+	method and `Drop`, with a non-panicking `Drop` diagnostic that names each outstanding operation's submit site
+	(the `operation-backtrace` feature adds full backtraces).
 - [ ] Design safe endpoint creators / sealed association to remove reliance on the unsafe seam.
 - [ ] Implement and test the event / `GetOverlappedResult` backend.
 - [ ] Define the backend seam consumed by the thread-pool `TP_IO` implementation.

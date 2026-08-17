@@ -180,6 +180,13 @@ may only manage this on a best-effort basis (behind an optional logging feature 
 standard error), and full context may not always be recoverable; the diagnostic is advisory, not a correctness
 mechanism.
 
+The raw IOCP backend implements that diagnostic by recording, for each in-flight operation, the submit call
+site captured with `#[track_caller]` (`&'static Location`, near-free and always on). When the port drops with
+operations outstanding it writes a best-effort message to standard error naming the count and each source
+location. The optional `operation-backtrace` cargo feature additionally captures a full backtrace at submission,
+whose cost is itself gated at run time by `RUST_BACKTRACE`, giving both a build-time and a run-time control over
+how much context is retained.
+
 Because `Drop` must free outstanding storage without knowing each operation's `P`, generic drain is mandatory
 rather than optional: the operation header must record a type-erased reclamation function that frees the storage
 from the `OVERLAPPED` pointer alone. That mechanism is what lets both voluntary rundown and `Drop` reclaim

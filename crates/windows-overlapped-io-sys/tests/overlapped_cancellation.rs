@@ -96,3 +96,64 @@ fn connect_named_pipe_is_cancellable_and_completes_as_aborted() {
     let operation = unsafe { completion.claim::<()>() };
     assert_eq!(operation.state(), OperationState::Completed);
 }
+
+#[test]
+fn run_down_drains_a_cancelled_operation() {
+    let name = format!(
+        r"\\.\pipe\windows-overlapped-io-sys-rundown-{}",
+        std::process::id()
+    );
+    let wide_name = wide(&name);
+
+    // SAFETY: standard creation of an overlapped named-pipe server instance.
+    let raw = unsafe {
+        CreateNamedPipeW(
+            wide_name.as_ptr(),
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+            PIPE_TYPE_BYTE | PIPE_WAIT,
+            1,
+            4096,
+            4096,
+            0,
+            std::ptr::null(),
+        )
+    };
+    assert_ne!(
+        raw,
+        INVALID_HANDLE_VALUE,
+        "CreateNamedPipeW failed: {}",
+        io::Error::last_os_error()
+    );
+    // SAFETY: CreateNamedPipeW returned a fresh, exclusively owned handle.
+    let owned = unsafe { OwnedHandle::from_raw_handle(raw) };
+
+    let port = CompletionPort::new(0).expect("create port");
+    // SAFETY: fresh overlapped pipe, unassociated, unique, moved in exclusively.
+    let unassociated = unsafe { UnassociatedEndpoint::assume_overlapped(owned) };
+    let endpoint = port.associate(unassociated, 1).expect("associate");
+
+    // SAFETY: the closure issues exactly one overlapped ConnectNamedPipe using
+    // the provided OVERLAPPED pointer and classifies its outcome.
+    let submitted = unsafe {
+        endpoint.submit(Operation::new(()), |handle, overlapped| {
+            let ok = ConnectNamedPipe(handle.as_raw_handle(), overlapped);
+            if ok != 0 {
+                return Ok(());
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })
+    };
+    assert!(matches!(submitted, Submitted::Pending(_)));
+    assert_eq!(port.outstanding(), 1);
+
+    // Closing the endpoint cancels its pending operation; run_down then drains
+    // the resulting completion and reclaims the storage.
+    drop(endpoint);
+    port.run_down().expect("run_down");
+    assert_eq!(port.outstanding(), 0);
+}

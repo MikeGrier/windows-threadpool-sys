@@ -18,6 +18,12 @@ categories = ["api-bindings", "os::windows-apis"]
 [lib]
 path = "src/lib.rs"
 
+[features]
+# Capture a full backtrace at each operation submission so the drop-time
+# diagnostic can point at the source of any operation still outstanding. The
+# capture itself honors RUST_BACKTRACE / RUST_LIB_BACKTRACE at run time.
+operation-backtrace = []
+
 [dependencies]
 windows-sys = {
 	version = "0.61.2",
