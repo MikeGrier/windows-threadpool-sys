@@ -4,40 +4,23 @@
 //! Every test drives a real event handle, since the wait object's contract is
 //! about handle ownership and per-activation rearming rather than about timing.
 
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::ptr;
+use std::os::windows::io::AsRawHandle;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{FALSE, TRUE};
-use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
+use windows_sys::Win32::System::Threading::{ResetEvent, SetEvent};
 
 use crate::callback_env::CallbackEnviron;
 use crate::pool::ThreadpoolPool;
-use crate::wait::{ThreadpoolWait, WaitResult};
+use crate::wait::{ThreadpoolWait, WaitResult, WaitableHandle};
 
 /// Upper bound for waiting on an activation the object really should deliver.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Create an auto-reset or manual-reset event, initially unsignalled.
-fn event(manual_reset: bool) -> OwnedHandle {
-    // SAFETY: creating an unnamed event with default security attributes.
-    let handle = unsafe {
-        CreateEventW(
-            ptr::null(),
-            if manual_reset { TRUE } else { FALSE },
-            FALSE,
-            ptr::null(),
-        )
-    };
-    assert!(
-        !handle.is_null(),
-        "CreateEventW failed: {}",
-        std::io::Error::last_os_error()
-    );
-    // SAFETY: the call returned a fresh, exclusively owned event handle.
-    unsafe { OwnedHandle::from_raw_handle(handle) }
+fn event(manual_reset: bool) -> WaitableHandle {
+    WaitableHandle::event(manual_reset, false).expect("create an event")
 }
 
 fn signal(handle: std::os::windows::io::BorrowedHandle<'_>) {
@@ -351,6 +334,37 @@ fn a_wait_can_be_rearmed_after_disarming() {
     assert_eq!(results, vec![WaitResult::Signalled]);
 }
 
+// --- waitable handle provenance ---
+
+#[test]
+fn a_manual_reset_event_is_a_valid_wait_target() {
+    assert!(WaitableHandle::event(true, false).is_ok());
+}
+
+#[test]
+fn an_auto_reset_event_is_a_valid_wait_target() {
+    assert!(WaitableHandle::event(false, false).is_ok());
+}
+
+/// An initially-signalled event activates as soon as the wait is armed.
+#[test]
+fn an_initially_signalled_event_activates_on_arming() {
+    let seen = Activations::new();
+    let recorder = Arc::clone(&seen);
+    let handle = WaitableHandle::event(true, true).expect("create a signalled event");
+    let wait = ThreadpoolWait::new(
+        handle,
+        move |activation| recorder.record(activation.result()),
+        None,
+    )
+    .expect("create wait");
+
+    wait.arm(None);
+    let results = seen.wait_for(1);
+    wait.wait();
+    assert_eq!(results, vec![WaitResult::Signalled]);
+}
+
 // --- destruction ---
 
 /// Drop must wait for an executing callback before freeing the context.
@@ -416,6 +430,86 @@ fn drop_of_a_rearming_wait_terminates() {
     assert!(
         started.elapsed() < Duration::from_secs(10),
         "dropping a self-rearming wait appears to have hung"
+    );
+}
+
+/// Outside of teardown, a re-arm request is honoured. This is the control for
+/// [`rearming_during_teardown_is_suppressed`], which asserts the opposite.
+#[test]
+fn rearming_outside_teardown_is_honoured() {
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&outcomes);
+    let started = Activations::new();
+    let entered = Arc::clone(&started);
+
+    let wait = ThreadpoolWait::new(
+        event(true),
+        move |activation| {
+            // Re-arm only on the first activation, so this terminates.
+            if entered.count() == 0 {
+                let armed = activation.rearm_reporting(None);
+                recorder.lock().unwrap().push(armed);
+            }
+            entered.record(activation.result());
+        },
+        None,
+    )
+    .expect("create wait");
+
+    wait.arm(None);
+    signal(wait.handle());
+    started.wait_for(2);
+    wait.disarm();
+    wait.wait();
+
+    assert_eq!(*outcomes.lock().unwrap(), vec![true]);
+}
+
+/// A callback that re-arms while `Drop` is tearing down must not leave the
+/// object armed behind it: the drain would then return with an activation still
+/// possible, and the close and context free would race a fresh callback.
+///
+/// The callback sleeps long enough for the dropping thread to set the teardown
+/// flag, so the re-arm request lands during teardown rather than before it, and
+/// asserts on [`WaitActivation::rearm_reporting`] rather than on the absence of
+/// undefined behaviour -- the latter is not observable, so a test written that
+/// way would pass with the suppression removed.
+#[test]
+fn rearming_during_teardown_is_suppressed() {
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&outcomes);
+    let started = Activations::new();
+    let entered = Arc::clone(&started);
+
+    let elapsed = std::time::Instant::now();
+    {
+        let wait = ThreadpoolWait::new(
+            event(true),
+            move |activation| {
+                entered.record(activation.result());
+                // Give the dropping thread time to flag teardown.
+                std::thread::sleep(Duration::from_millis(200));
+                let armed = activation.rearm_reporting(None);
+                recorder.lock().unwrap().push(armed);
+            },
+            None,
+        )
+        .expect("create wait");
+
+        wait.arm(None);
+        signal(wait.handle());
+        started.wait_for(1);
+        // Drop here, concurrently with the callback's re-arm.
+    }
+
+    assert!(
+        elapsed.elapsed() < Duration::from_secs(10),
+        "teardown appears to have hung"
+    );
+    assert_eq!(
+        *outcomes.lock().unwrap(),
+        vec![false],
+        "the re-arm should have been suppressed by teardown"
     );
 }
 

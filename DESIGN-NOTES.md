@@ -297,8 +297,48 @@ constructor; see
 [crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) for that
 decision, which this crate consumes rather than duplicates.
 
-Primary references:
+## A safe wait constructor takes proven wait provenance, not any handle
 
+The pool's wait objects support only some kinds of handle. A mutex handle in particular is documented by the
+SDK as unsupported, and passing one makes the native behaviour undefined -- there is no error return.
+
+`ThreadpoolWait::new` is a safe function, so it cannot delegate that precondition to its caller by documenting
+it: safe code that can invoke undefined behaviour is unsound however clearly the requirement is written down.
+Both wait constructors therefore take a `WaitableHandle` rather than an `OwnedHandle`. The type mirrors the
+shape `UnassociatedEndpoint` already uses in the sibling crate: safe constructors for the handle kinds this
+crate can create itself, plus one narrow `unsafe fn assume_waitable` for handles obtained elsewhere, where the
+caller takes on the obligation explicitly.
+
+The cleanup group's `create_wait` takes the same type. It is a second safe path to the identical hazard, and
+changing only the individually-owned constructor would have left it unsound -- the reason the constraint lives
+in a type rather than in each function's documentation.
+
+## Re-arming is gated against teardown, under the same lock that arms
+
+Both the timer and the wait let a callback re-arm the object from inside itself, which is what the SDK requires
+for repeated activation. Neither was synchronized with `Drop`.
+
+`Drop` disarms, drains callbacks, then closes the object and frees the context. A callback already running when
+the disarm happens can arm the object again afterwards; the drain then returns -- it only waits for callbacks,
+not for the object to be idle -- and the close and context free race a freshly queued callback.
+
+Each context now holds a `shutting_down` flag. Arming takes that lock and does nothing when the flag is set;
+`Drop` sets the flag and disarms under one acquisition of it. A re-arm request is therefore either applied
+before teardown begins or suppressed, never interleaved. The lock is only ever held across the native setter,
+never across the drain: a callback blocked on it would otherwise never finish, and the draining thread would
+wait on it forever.
+
+The timer half of this was a window the previous review round *introduced*. Deferring the re-arm to after the
+callback returns -- which is what makes the requested delay run from the end of the firing, keeping successive
+firings sequential -- moved the arming past `Drop`'s disarm, where it had previously been inside the callback.
+
+Suppression has no user-visible effect by construction: it only ever happens while the object is being
+destroyed, so no caller can observe the difference, and the absence of undefined behaviour is not testable
+directly. Both objects therefore expose the outcome to their own tests -- `rearm_reporting` on the wait, and a
+test-only observer on the timer, whose `Arc` the test keeps so the record outlives the freed context. Without
+these, a test could only assert that teardown terminated, which it does with the gating removed as well.
+
+Primary references:
 - [Thread Pools](https://learn.microsoft.com/windows/win32/procthread/thread-pools)
 - [Thread Pool API](https://learn.microsoft.com/windows/win32/procthread/thread-pool-api)
 - [Using the Thread Pool Functions](https://learn.microsoft.com/windows/win32/procthread/using-the-thread-pool-functions)

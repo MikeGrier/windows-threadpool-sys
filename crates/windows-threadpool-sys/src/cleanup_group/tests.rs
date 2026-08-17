@@ -6,18 +6,17 @@
 //! checker prevents a member outliving it. The compile-time half of that is
 //! covered by a `compile_fail` doc test on the module.
 
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::ptr;
+use std::os::windows::io::AsRawHandle;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{FALSE, TRUE};
-use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
+use windows_sys::Win32::System::Threading::SetEvent;
 
 use crate::callback_env::CallbackEnviron;
 use crate::cleanup_group::CleanupGroup;
 use crate::pool::ThreadpoolPool;
+use crate::wait::WaitableHandle;
 
 /// Upper bound for waiting on a callback a member really should deliver.
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -60,16 +59,8 @@ impl Ran {
 }
 
 /// Create a manual-reset event, initially unsignalled.
-fn event() -> OwnedHandle {
-    // SAFETY: creating an unnamed event with default security attributes.
-    let handle = unsafe { CreateEventW(ptr::null(), TRUE, FALSE, ptr::null()) };
-    assert!(
-        !handle.is_null(),
-        "CreateEventW failed: {}",
-        std::io::Error::last_os_error()
-    );
-    // SAFETY: the call returned a fresh, exclusively owned event handle.
-    unsafe { OwnedHandle::from_raw_handle(handle) }
+fn event() -> WaitableHandle {
+    WaitableHandle::event(true, false).expect("create an event")
 }
 
 fn signal(handle: std::os::windows::io::BorrowedHandle<'_>) {

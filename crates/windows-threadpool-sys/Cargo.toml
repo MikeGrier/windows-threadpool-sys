@@ -36,7 +36,14 @@ windows-overlapped-io-sys = { version = "0.1.0", path = "../windows-overlapped-i
 windows-sys = {
 	version = "0.61.2",
 	default-features = false,
-	features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Threading"],
+	# Win32_Security is needed only for the SECURITY_ATTRIBUTES parameter of
+	# CreateEventW, which backs the safe WaitableHandle::event constructor.
+	features = [
+		"Win32_Foundation",
+		"Win32_Security",
+		"Win32_System_IO",
+		"Win32_System_Threading",
+	],
 }
 
 # The TP_IO tests issue real overlapped I/O against a named pipe, which needs

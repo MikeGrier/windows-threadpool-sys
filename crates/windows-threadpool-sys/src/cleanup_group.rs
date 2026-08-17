@@ -55,7 +55,7 @@ use crate::timer::{
     PeriodicTick, ThreadpoolPeriodicTimer, ThreadpoolTimer, TimerFiring, absolute_filetime,
     arm_raw, disarm_raw, millis_u32, relative_filetime,
 };
-use crate::wait::{ThreadpoolWait, WaitActivation};
+use crate::wait::{ThreadpoolWait, WaitActivation, WaitableHandle};
 use crate::work::ThreadpoolWork;
 
 /// A heap allocation the group frees once its members have been released.
@@ -277,14 +277,18 @@ impl CleanupGroup {
     /// The group takes ownership of the handle as well as the object, because
     /// the pool may still be watching it until the members are released.
     ///
+    /// Like [`ThreadpoolWait::new`], this takes a [`WaitableHandle`] rather than
+    /// a bare handle, so the group path cannot reach the unsupported wait
+    /// targets that the individually-owned path rejects.
+    ///
     /// # Errors
     ///
     /// Returns the error from `CreateThreadpoolWait`.
     pub fn create_wait<F>(
         &self,
-        handle: OwnedHandle,
+        handle: WaitableHandle,
         callback: F,
-        env: Option<&CallbackEnviron>,
+        env: Option<&CallbackEnviron<'_>>,
     ) -> io::Result<WaitMember<'_>>
     where
         F: Fn(&WaitActivation<'_>) + Send + Sync + 'static,

@@ -407,6 +407,77 @@ fn cancel_pending_after_disarm_drains_cleanly() {
 
 // --- destruction ---
 
+/// Outside of teardown, a deferred re-arm is applied. This is the control for
+/// [`rearming_during_teardown_is_suppressed`], which asserts the opposite.
+#[test]
+fn rearming_outside_teardown_is_applied() {
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let fires = Fires::new();
+    let counter = Arc::clone(&fires);
+
+    let timer = ThreadpoolTimer::new(
+        move |firing| {
+            // Re-arm only on the first firing, so this terminates.
+            if counter.count() == 0 {
+                firing.rearm_after(Duration::from_millis(1));
+            }
+            counter.record();
+        },
+        None,
+    )
+    .expect("create timer");
+    timer.observe_rearms(&outcomes);
+
+    timer.set_after(Duration::from_millis(1));
+    fires.wait_for(2);
+    timer.disarm();
+    timer.cancel_pending();
+
+    assert_eq!(*outcomes.lock().unwrap(), vec![true]);
+}
+
+/// A callback that asks to re-arm while `Drop` is tearing down must not leave a
+/// due time installed behind it. Deferring the re-arm to after the callback
+/// returns -- which is what makes the delay run from the end of the firing --
+/// moves it past `Drop`'s disarm, so the drain could otherwise complete with the
+/// timer armed and the close would race a freshly queued callback.
+#[test]
+fn rearming_during_teardown_is_suppressed() {
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let fires = Fires::new();
+    let counter = Arc::clone(&fires);
+
+    let elapsed = Instant::now();
+    {
+        let timer = ThreadpoolTimer::new(
+            move |firing| {
+                counter.record();
+                firing.rearm_after(Duration::from_millis(1));
+                // Give the dropping thread time to flag teardown, so the
+                // deferred re-arm lands during it rather than before it.
+                std::thread::sleep(Duration::from_millis(200));
+            },
+            None,
+        )
+        .expect("create timer");
+        timer.observe_rearms(&outcomes);
+
+        timer.set_after(Duration::from_millis(1));
+        fires.wait_for(1);
+        // Drop here, concurrently with the callback's deferred re-arm.
+    }
+
+    assert!(
+        elapsed.elapsed() < Duration::from_secs(10),
+        "teardown appears to have hung"
+    );
+    assert_eq!(
+        *outcomes.lock().unwrap(),
+        vec![false],
+        "the re-arm should have been suppressed by teardown"
+    );
+}
+
 /// Drop must wait for an executing callback before freeing the context, or the
 /// captured closure would be freed while still running.
 #[test]

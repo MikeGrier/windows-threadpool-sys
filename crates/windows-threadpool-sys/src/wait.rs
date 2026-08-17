@@ -18,15 +18,16 @@
 //! [`ThreadpoolWait::new`].
 
 use std::io;
-use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{FALSE, FILETIME, HANDLE, TRUE, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
-    CloseThreadpoolWait, CreateThreadpoolWait, PTP_CALLBACK_INSTANCE, PTP_WAIT, SetThreadpoolWait,
-    WaitForThreadpoolWaitCallbacks,
+    CloseThreadpoolWait, CreateEventW, CreateThreadpoolWait, PTP_CALLBACK_INSTANCE, PTP_WAIT,
+    SetThreadpoolWait, WaitForThreadpoolWaitCallbacks,
 };
 
 use crate::callback_env::CallbackEnviron;
@@ -54,6 +55,87 @@ fn relative_filetime(timeout: Duration) -> FILETIME {
     FILETIME {
         dwLowDateTime: bits as u32,
         dwHighDateTime: (bits >> 32) as u32,
+    }
+}
+
+/// A handle the thread pool is able to wait on.
+///
+/// The pool does not support every waitable object: a mutex handle in
+/// particular produces undefined behaviour rather than an error. Requiring this
+/// type instead of a bare [`OwnedHandle`] moves that precondition from prose
+/// into the type system, so a safe caller cannot reach the undefined case.
+///
+/// Construct one safely with [`WaitableHandle::event`], or vouch for a handle
+/// obtained elsewhere with the narrow [`WaitableHandle::assume_waitable`] seam.
+/// This mirrors `UnassociatedEndpoint` in `windows-overlapped-io-sys`, which
+/// pairs a safe `open` with an `assume_overlapped` escape hatch for the same
+/// reason.
+#[derive(Debug)]
+pub struct WaitableHandle {
+    handle: OwnedHandle,
+}
+
+impl WaitableHandle {
+    /// Create an event and wrap it as a waitable handle.
+    ///
+    /// An event is always a supported wait target, so this needs no `unsafe`.
+    /// A `manual_reset` event stays signalled until it is reset; an auto-reset
+    /// event returns to unsignalled as soon as one wait is satisfied, which
+    /// makes it the usual choice for handing off work one activation at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW`.
+    pub fn event(manual_reset: bool, initially_signalled: bool) -> io::Result<Self> {
+        // SAFETY: creating an unnamed event with default security attributes;
+        // all pointer arguments are null by design.
+        let raw = unsafe {
+            CreateEventW(
+                ptr::null(),
+                if manual_reset { TRUE } else { FALSE },
+                if initially_signalled { TRUE } else { FALSE },
+                ptr::null(),
+            )
+        };
+        if raw.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call returned a fresh, exclusively owned event handle.
+        Ok(Self {
+            handle: unsafe { OwnedHandle::from_raw_handle(raw) },
+        })
+    }
+
+    /// Wrap a handle whose wait support the caller vouches for.
+    ///
+    /// This is the extensibility seam for wait targets this crate cannot create
+    /// itself -- semaphores, waitable timers, processes, threads, console input,
+    /// change notifications, and so on.
+    ///
+    /// # Safety
+    ///
+    /// The caller guarantees that:
+    ///
+    /// - the handle is a waitable object the thread pool supports, and in
+    ///   particular is **not a mutex**, which the SDK does not support and which
+    ///   yields undefined behaviour rather than an error; and
+    /// - ownership transfers exclusively into the returned value, so nothing
+    ///   else closes the handle while a wait on it is pending.
+    #[must_use]
+    pub unsafe fn assume_waitable(handle: OwnedHandle) -> Self {
+        Self { handle }
+    }
+
+    /// Borrow the underlying handle, for signalling or inspecting it.
+    #[must_use]
+    pub fn handle(&self) -> BorrowedHandle<'_> {
+        self.handle.as_handle()
+    }
+
+    /// Consume the wrapper and recover the owned handle.
+    #[must_use]
+    pub fn into_handle(self) -> OwnedHandle {
+        self.handle
     }
 }
 
@@ -86,7 +168,28 @@ impl WaitResult {
 struct WaitContext {
     wait: AtomicIsize,
     handle: HANDLE,
+    /// Guards arming against teardown.
+    ///
+    /// `true` once teardown has begun. Arming takes this lock and does nothing
+    /// when it is set, so a callback that re-arms cannot install a due time
+    /// after `Drop` has disarmed: without it, the drain could complete with the
+    /// object armed again, and the object would then be closed and its context
+    /// freed while a fresh callback was queued against them.
+    ///
+    /// The lock is only ever held across the native `SetThreadpoolWait` call,
+    /// never across a callback drain, which would deadlock a callback that
+    /// happened to be blocked on it.
+    shutting_down: Mutex<bool>,
     callback: Box<dyn Fn(&WaitActivation<'_>) + Send + Sync + 'static>,
+}
+
+impl WaitContext {
+    /// Lock the shutdown flag, recovering from a panicking holder.
+    fn shutdown_state(&self) -> std::sync::MutexGuard<'_, bool> {
+        self.shutting_down
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
 }
 
 // SAFETY: `handle` is a raw handle owned by the ThreadpoolWait that outlives
@@ -131,7 +234,28 @@ impl WaitActivation<'_> {
     /// `timeout` of `None` waits indefinitely. This is the mechanism the SDK
     /// requires for repeated waits: an activation consumes the arming, so a
     /// callback that wants to keep watching must rearm from inside itself.
+    ///
+    /// Re-arming after the object has begun tearing down does nothing, so a
+    /// callback racing [`ThreadpoolWait`]'s `Drop` cannot leave the object armed
+    /// behind it.
     pub fn rearm(&self, timeout: Option<Duration>) {
+        let _ = self.rearm_reporting(timeout);
+    }
+
+    /// [`rearm`](Self::rearm), reporting whether the arming actually happened.
+    ///
+    /// Returns `false` when the request was suppressed because the object is
+    /// tearing down. The public entry point discards this, because a caller
+    /// cannot act on it: by the time it could look, the object is gone. Tests
+    /// use it to observe the suppression directly, which is otherwise only
+    /// visible as the absence of undefined behaviour.
+    pub(crate) fn rearm_reporting(&self, timeout: Option<Duration>) -> bool {
+        // Taken before arming and held across it, so this either happens before
+        // teardown sets the flag or is suppressed by it -- never in between.
+        let shutting_down = self.ctx.shutdown_state();
+        if *shutting_down {
+            return false;
+        }
         let wait = self.ctx.wait.load(Ordering::Acquire);
         debug_assert_ne!(
             wait, 0,
@@ -141,6 +265,8 @@ impl WaitActivation<'_> {
         // callback could run, and `handle` is owned by that object so it is
         // still open. The timeout, if any, is a live stack value for the call.
         unsafe { arm_raw(wait, self.ctx.handle, timeout) };
+        drop(shutting_down);
+        true
     }
 }
 
@@ -216,19 +342,12 @@ unsafe extern "system" fn wait_trampoline(
 /// [`ThreadpoolWait::handle`] borrows it back for signalling:
 ///
 /// ```
-/// use std::os::windows::io::{FromRawHandle, OwnedHandle};
-/// use std::ptr;
-/// use std::sync::mpsc;
-/// use windows_sys::Win32::Foundation::FALSE;
-/// use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
 /// use std::os::windows::io::AsRawHandle;
-/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitResult};
+/// use std::sync::mpsc;
+/// use windows_sys::Win32::System::Threading::SetEvent;
+/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitResult, WaitableHandle};
 ///
-/// // SAFETY: creates an unnamed, manual-reset event with default security.
-/// let raw = unsafe { CreateEventW(ptr::null(), 1, FALSE, ptr::null()) };
-/// assert!(!raw.is_null());
-/// // SAFETY: the call returned a fresh, exclusively owned handle.
-/// let event = unsafe { OwnedHandle::from_raw_handle(raw) };
+/// let event = WaitableHandle::event(true, false)?;
 ///
 /// let (tx, rx) = mpsc::channel();
 /// let sender = std::sync::Mutex::new(tx);
@@ -248,26 +367,20 @@ unsafe extern "system" fn wait_trampoline(
 /// is what the SDK requires -- an activation consumes the arming:
 ///
 /// ```
-/// # use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-/// # use std::ptr;
+/// # use std::os::windows::io::AsRawHandle;
 /// # use std::sync::Arc;
 /// # use std::sync::atomic::{AtomicUsize, Ordering};
-/// # use windows_sys::Win32::Foundation::FALSE;
-/// # use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
-/// use windows_threadpool_sys::wait::ThreadpoolWait;
+/// # use windows_sys::Win32::System::Threading::SetEvent;
+/// use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 ///
-/// // SAFETY: creates an unnamed, auto-reset event with default security.
-/// let raw = unsafe { CreateEventW(ptr::null(), FALSE, FALSE, ptr::null()) };
-/// // SAFETY: the call returned a fresh, exclusively owned handle.
-/// let event = unsafe { OwnedHandle::from_raw_handle(raw) };
+/// let event = WaitableHandle::event(false, false)?;
 ///
 /// let seen = Arc::new(AtomicUsize::new(0));
 /// let counter = Arc::clone(&seen);
 /// let wait = ThreadpoolWait::new(event, move |activation| {
 ///     counter.fetch_add(1, Ordering::SeqCst);
 ///     activation.rearm(None);
-/// }, None)?;
-///
+/// }, None)?;///
 /// wait.arm(None);
 /// for _ in 0..3 {
 ///     // SAFETY: the wait owns the event, so the handle is still open.
@@ -307,26 +420,26 @@ impl ThreadpoolWait {
     /// inside it is caught at the FFI boundary rather than unwinding into the
     /// pool.
     ///
+    /// Taking a [`WaitableHandle`] rather than a bare handle is what keeps this
+    /// constructor safe: the thread pool does not support every waitable object,
+    /// and a mutex handle in particular is undefined rather than an error.
+    ///
     /// # Errors
     ///
     /// Returns the error from `CreateThreadpoolWait`.
-    ///
-    /// # Panics
-    ///
-    /// Does not panic. Passing a mutex handle is unsupported by the thread pool
-    /// and produces undefined behaviour rather than an error, so callers must
-    /// not do so.
     pub fn new<F>(
-        handle: OwnedHandle,
+        handle: WaitableHandle,
         callback: F,
-        env: Option<&mut CallbackEnviron>,
+        env: Option<&mut CallbackEnviron<'_>>,
     ) -> io::Result<Self>
     where
         F: Fn(&WaitActivation<'_>) + Send + Sync + 'static,
     {
+        let handle = handle.into_handle();
         let context = Box::into_raw(Box::new(WaitContext {
             wait: AtomicIsize::new(0),
             handle: handle.as_raw_handle(),
+            shutting_down: Mutex::new(false),
             callback: Box::new(callback),
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
@@ -430,9 +543,21 @@ impl ThreadpoolWait {
 
 impl Drop for ThreadpoolWait {
     fn drop(&mut self) {
-        // Disarm before draining: a callback that rearms would otherwise queue a
-        // fresh activation while the drain is in progress and never settle.
-        self.disarm();
+        // Close the door on re-arming before disarming, and do both under the
+        // same lock. Disarming alone is not enough: a callback already running
+        // could re-arm afterwards, the drain below could then return with the
+        // object armed, and the close and context free would race a freshly
+        // queued callback.
+        {
+            // SAFETY: the context outlives every callback; Drop frees it below,
+            // after the drain.
+            let ctx = unsafe { &*self.context };
+            let mut shutting_down = ctx.shutdown_state();
+            *shutting_down = true;
+            self.disarm();
+        }
+        // The lock is released before draining: a callback blocked on it would
+        // otherwise never finish, and this wait would never return.
         self.cancel_pending();
 
         // SAFETY: no callback can be queued or executing, so the object can be

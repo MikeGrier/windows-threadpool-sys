@@ -38,6 +38,7 @@ pub use periodic::{PeriodicTick, ThreadpoolPeriodicTimer};
 use std::cell::Cell;
 use std::io;
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -129,7 +130,35 @@ pub(crate) unsafe fn disarm_raw(timer: PTP_TIMER) {
 /// from inside a callback needs the object the callback belongs to.
 pub(crate) struct TimerContext {
     pub(crate) timer: AtomicIsize,
+    /// Guards arming against teardown.
+    ///
+    /// `true` once teardown has begun. Applying a deferred re-arm takes this
+    /// lock and does nothing when it is set. Deferring the re-arm to after the
+    /// callback returns -- which is what makes the delay run from the end of the
+    /// firing -- moved it *past* the disarm that `Drop` performs, so without
+    /// this the drain could complete with a due time installed and the object
+    /// would be closed and its context freed while a fresh callback was queued.
+    ///
+    /// The lock is only ever held across the native `SetThreadpoolTimer` call,
+    /// never across a callback drain, which would deadlock a callback that
+    /// happened to be blocked on it.
+    shutting_down: Mutex<bool>,
+    /// Records, for tests, whether each deferred re-arm was actually applied.
+    ///
+    /// The suppression this observes happens after the callback returns and
+    /// before the context is freed, so no user-reachable state can witness it;
+    /// this Arc is cloned by the test, which therefore outlives the context.
+    #[cfg(test)]
+    rearm_observer: Mutex<Option<std::sync::Arc<Mutex<Vec<bool>>>>>,
     callback: Box<dyn Fn(&TimerFiring<'_>) + Send + Sync + 'static>,
+}
+impl TimerContext {
+    /// Lock the shutdown flag, recovering from a panicking holder.
+    fn shutdown_state(&self) -> std::sync::MutexGuard<'_, bool> {
+        self.shutting_down
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
 }
 
 /// A re-arming a callback asked for, applied once the callback has returned.
@@ -187,10 +216,41 @@ impl TimerFiring<'_> {
     }
 
     /// Apply whatever the callback asked for, once it has returned.
+    ///
+    /// Suppressed once teardown has begun, so a request made during the last
+    /// callback cannot re-arm the timer behind `Drop`'s disarm.
     fn apply_pending(&self) {
-        let Some(pending) = self.pending.get() else {
-            return;
-        };
+        let applied = self.apply_pending_reporting();
+        #[cfg(test)]
+        if let Some(applied) = applied {
+            let observer = self
+                .ctx
+                .rearm_observer
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone();
+            if let Some(observer) = observer {
+                observer
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .push(applied);
+            }
+        }
+        let _ = applied;
+    }
+
+    /// Apply the pending re-arm, reporting whether it was actually installed.
+    ///
+    /// `None` means the callback asked for nothing; `Some(false)` means it asked
+    /// but teardown suppressed the request.
+    fn apply_pending_reporting(&self) -> Option<bool> {
+        let pending = self.pending.get()?;
+        // Taken before arming and held across it, so this either happens before
+        // teardown sets the flag or is suppressed by it -- never in between.
+        let shutting_down = self.ctx.shutdown_state();
+        if *shutting_down {
+            return Some(false);
+        }
         let timer = self.ctx.timer.load(Ordering::Acquire);
         debug_assert_ne!(timer, 0, "the timer must be published before callbacks");
         let due = match pending {
@@ -200,6 +260,8 @@ impl TimerFiring<'_> {
         // SAFETY: `timer` is this object's live PTP_TIMER, published before any
         // callback could run.
         unsafe { arm_raw(timer, due, 0, 0) };
+        drop(shutting_down);
+        Some(true)
     }
 }
 
@@ -342,6 +404,9 @@ impl ThreadpoolTimer {
     {
         let context = Box::into_raw(Box::new(TimerContext {
             timer: AtomicIsize::new(0),
+            shutting_down: Mutex::new(false),
+            #[cfg(test)]
+            rearm_observer: Mutex::new(None),
             callback: Box::new(callback),
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
@@ -407,6 +472,18 @@ impl ThreadpoolTimer {
         unsafe { disarm_raw(self.timer) };
     }
 
+    /// Record, into `observer`, whether each deferred re-arm is actually applied.
+    ///
+    /// The caller keeps its own clone, so the record survives this timer's
+    /// teardown -- which is the only moment a re-arm is suppressed.
+    #[cfg(test)]
+    pub(crate) fn observe_rearms(&self, observer: &std::sync::Arc<Mutex<Vec<bool>>>) {
+        // SAFETY: the context outlives self; Drop frees it after the drain.
+        let ctx = unsafe { &*self.context };
+        *ctx.rearm_observer
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(std::sync::Arc::clone(observer));
+    }
     /// Whether the timer currently has a due time.
     ///
     /// This reports whether the timer has been armed and not since disarmed. It
@@ -460,9 +537,21 @@ impl ThreadpoolTimer {
 
 impl Drop for ThreadpoolTimer {
     fn drop(&mut self) {
-        // Disarm before draining: a callback that re-arms would otherwise queue a
-        // fresh firing while the drain is in progress and never settle.
-        self.disarm();
+        // Close the door on re-arming before disarming, and do both under the
+        // same lock. Disarming alone is not enough: a callback still running can
+        // have a deferred re-arm that the trampoline applies after it returns,
+        // the drain below could then return with the timer armed, and the close
+        // and context free would race a freshly queued callback.
+        {
+            // SAFETY: the context outlives every callback; Drop frees it below,
+            // after the drain.
+            let ctx = unsafe { &*self.context };
+            let mut shutting_down = ctx.shutdown_state();
+            *shutting_down = true;
+            self.disarm();
+        }
+        // The lock is released before draining: a callback blocked on it would
+        // otherwise never finish, and this wait would never return.
         self.cancel_pending();
 
         // SAFETY: no callback can be queued or executing, so the object can be
