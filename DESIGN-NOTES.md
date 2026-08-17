@@ -191,6 +191,35 @@ destroy helper is a no-op, but the wrapper should still model that lifecycle bou
 `CRITICAL_SECTION` parameter is feature-gated. That feature is intentionally deferred until the safe API has a
 use for this specialized callback-return operation.
 
+## Cleanup groups own their members
+
+`CloseThreadpoolCleanupGroupMembers` releases every member at once, and afterwards a member must not be used or
+closed again. Two things follow that an "individually owned object, flagged as group-owned" design cannot
+satisfy. First, each object also owns a heap callback context, and that context is only safe to free once the
+group has finished releasing members -- which is precisely the moment an individual object cannot observe.
+Second, nothing would stop a caller using a member after the release.
+
+So `CleanupGroup` creates its members (`create_work`, `create_timer`, `create_periodic_timer`, `create_wait`)
+and owns both the member objects and their contexts, plus the watched handle of a wait member. Members are
+handle wrappers with no `Drop`; the group frees everything after the bulk release. Use-after-release is a
+compile error rather than a documented rule: members borrow the group and `close_members` takes `&mut self`, so
+the borrow checker rejects touching a member afterwards. A `compile_fail` doc test pins that.
+
+Two consequences worth recording:
+
+- **Thread-pool I/O is excluded on purpose.** A `TP_IO` object must not be closed while an overlapped operation
+	is outstanding, because the kernel still owns that operation's storage, and a bulk release has no way to
+	satisfy that precondition. `ThreadpoolIo` therefore stays individually owned, where its `Drop` cancels,
+	drains, and only then closes. Adding a `create_io` would trade a guarantee for a convenience.
+- **The caller's environment is copied, not mutated.** Layering the group onto a caller-supplied
+	`CallbackEnviron` in place would be visible to them afterwards, and would break reusing one environment
+	across two groups. Copying costs one struct move per member creation.
+
+Per-object `Drop` was already correct teardown for every type, so a cleanup group buys bulk convenience rather
+than a safety property the crate lacked. It was still worth building safely rather than leaving
+`set_cleanup_group` as the only route, because that route is `unsafe` and easy to get wrong in exactly the way
+described above.
+
 ## `TP_IO` backend realization
 
 `ThreadpoolIo` is the third completion backend for the shared overlapped model, alongside the raw IOCP and

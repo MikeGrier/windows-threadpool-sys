@@ -442,7 +442,8 @@ fn a_timer_runs_on_a_private_pool() {
 
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer = ThreadpoolTimer::new(move |_firing| recorder.record(), Some(&mut env)).expect("create timer");
+    let timer = ThreadpoolTimer::new(move |_firing| recorder.record(), Some(&mut env))
+        .expect("create timer");
 
     timer.set_after(Duration::from_millis(1));
     fires.wait_for(1);

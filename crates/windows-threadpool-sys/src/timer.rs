@@ -378,6 +378,27 @@ impl ThreadpoolTimer {
         // callback owns no storage, so dropping queued callbacks orphans nothing.
         unsafe { WaitForThreadpoolTimerCallbacks(self.timer, TRUE) };
     }
+
+    /// Give up ownership, returning the raw object and its callback context.
+    ///
+    /// Used only by [`crate::cleanup_group::CleanupGroup`], which takes over
+    /// both: a group member is released by `CloseThreadpoolCleanupGroupMembers`
+    /// and must not close itself, so this suppresses this type's `Drop`.
+    pub(crate) fn into_parts(self) -> (PTP_TIMER, *mut core::ffi::c_void) {
+        let this = std::mem::ManuallyDrop::new(self);
+        (this.timer, this.context.cast())
+    }
+
+    /// Free a context returned by [`ThreadpoolTimer::into_parts`].
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from `into_parts` on this type, its object must
+    /// already have been released, and it must be freed exactly once.
+    pub(crate) unsafe fn drop_context(context: *mut core::ffi::c_void) {
+        // SAFETY: forwarded from this function's own contract.
+        drop(unsafe { Box::from_raw(context.cast::<TimerContext>()) });
+    }
 }
 
 impl Drop for ThreadpoolTimer {

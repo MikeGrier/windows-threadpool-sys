@@ -30,11 +30,18 @@ overlapping with itself. A `ThreadpoolTimer` never overlaps, and re-arming it fr
 its own callback gives repetition whose gap is measured from the end of each
 firing.
 
-Two supporting types shape where and how those callbacks run: `pool::ThreadpoolPool`
-is an owned private pool, and `callback_env::CallbackEnviron` is the environment
-that selects a pool and a callback priority when an object is created. The
-latter provides Rust equivalents of the SDK's callback-environment helpers,
-which are header-only inline functions that `windows-sys` cannot emit.
+Three supporting types shape where those callbacks run and how they are torn
+down: `pool::ThreadpoolPool` is an owned private pool,
+`callback_env::CallbackEnviron` is the environment that selects a pool and a
+callback priority when an object is created, and `cleanup_group::CleanupGroup`
+releases many objects in one step instead of dropping each individually. The
+callback environment provides Rust equivalents of the SDK's header-only inline
+helpers, which `windows-sys` cannot emit.
+
+A cleanup group creates its own members, so the borrow checker prevents using
+one after the group has released it. Thread-pool I/O is deliberately excluded: a
+`TP_IO` object must not be closed while an overlapped operation is outstanding,
+and a bulk release cannot satisfy that precondition.
 
 ## Example
 
@@ -82,10 +89,9 @@ exposed.
 
 ## Status
 
-Work, timers, waits, private pools, and thread-pool I/O are implemented and
-tested. Cleanup groups are not yet modelled safely, so
-`CallbackEnviron::set_cleanup_group` is `unsafe`; its documentation explains what
-is missing.
+Work, timers, waits, private pools, cleanup groups, and thread-pool I/O are
+implemented and tested. `CallbackEnviron::set_cleanup_group` remains `unsafe` as
+a raw seam for foreign cleanup groups; use `CleanupGroup` for a safe one.
 
 This crate is Windows-only. Every item is behind `cfg(windows)` semantics, and
 CI builds, tests, and lints exclusively on Windows.

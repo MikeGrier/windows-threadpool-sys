@@ -2,7 +2,9 @@
 //! Thread-pool work objects: `CreateThreadpoolWork` / `SubmitThreadpoolWork` /
 //! `WaitForThreadpoolWorkCallbacks` / `CloseThreadpoolWork`.
 
+use core::ffi::c_void;
 use std::io;
+use std::mem::ManuallyDrop;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{FALSE, TRUE};
@@ -126,6 +128,27 @@ impl ThreadpoolWork {
     pub fn cancel_pending(&self) {
         // SAFETY: handle is valid for the lifetime of self.
         unsafe { WaitForThreadpoolWorkCallbacks(self.handle, TRUE) };
+    }
+
+    /// Give up ownership, returning the raw object and its callback context.
+    ///
+    /// Used only by [`crate::cleanup_group::CleanupGroup`], which takes over
+    /// both: a group member is released by `CloseThreadpoolCleanupGroupMembers`
+    /// and must not close itself, so this suppresses this type's `Drop`.
+    pub(crate) fn into_parts(self) -> (PTP_WORK, *mut c_void) {
+        let this = ManuallyDrop::new(self);
+        (this.handle, this.ctx.cast())
+    }
+
+    /// Free a context returned by [`ThreadpoolWork::into_parts`].
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from `into_parts` on this type, its object must
+    /// already have been released, and it must be freed exactly once.
+    pub(crate) unsafe fn drop_context(context: *mut c_void) {
+        // SAFETY: forwarded from this function's own contract.
+        drop(unsafe { Box::from_raw(context.cast::<WorkContext>()) });
     }
 }
 

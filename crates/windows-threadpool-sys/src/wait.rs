@@ -144,6 +144,23 @@ impl WaitActivation<'_> {
     }
 }
 
+/// Stop a raw wait object.
+///
+/// SAFETY: `wait` must be a live `PTP_WAIT`.
+pub(crate) unsafe fn disarm_raw(wait: PTP_WAIT) {
+    // SAFETY: forwarded; a null handle is the documented way to cancel a wait.
+    unsafe { SetThreadpoolWait(wait, ptr::null_mut(), ptr::null()) };
+}
+
+/// Arm a raw wait object against a borrowed handle.
+///
+/// SAFETY: `wait` must be a live `PTP_WAIT` and `handle` must stay open until
+/// the wait is disarmed or the object released.
+pub(crate) unsafe fn arm_member(wait: PTP_WAIT, handle: &OwnedHandle, timeout: Option<Duration>) {
+    // SAFETY: forwarded from this function's own contract.
+    unsafe { arm_raw(wait, handle.as_raw_handle(), timeout) };
+}
+
 /// Arm or disarm a wait object.
 ///
 /// SAFETY: `wait` must be a live `PTP_WAIT` and `handle` a live waitable handle
@@ -382,6 +399,32 @@ impl ThreadpoolWait {
         // SAFETY: `wait` is valid for the lifetime of self. A cancelled wait
         // callback owns no storage, so dropping queued callbacks orphans nothing.
         unsafe { WaitForThreadpoolWaitCallbacks(self.wait, TRUE) };
+    }
+
+    /// Give up ownership, returning the raw object, its callback context, and
+    /// the watched handle.
+    ///
+    /// Used only by [`crate::cleanup_group::CleanupGroup`], which takes over all
+    /// three. The handle must go with them: the pool may still be watching it
+    /// until the group releases the member, so it cannot be closed when the
+    /// borrowing member goes out of scope.
+    pub(crate) fn into_parts(self) -> (PTP_WAIT, *mut core::ffi::c_void, OwnedHandle) {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: `this` is never dropped, so moving the handle out cannot be
+        // observed by a later drop of the original value.
+        let handle = unsafe { ptr::read(&this.handle) };
+        (this.wait, this.context.cast(), handle)
+    }
+
+    /// Free a context returned by [`ThreadpoolWait::into_parts`].
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from `into_parts` on this type, its object must
+    /// already have been released, and it must be freed exactly once.
+    pub(crate) unsafe fn drop_context(context: *mut core::ffi::c_void) {
+        // SAFETY: forwarded from this function's own contract.
+        drop(unsafe { Box::from_raw(context.cast::<WaitContext>()) });
     }
 }
 

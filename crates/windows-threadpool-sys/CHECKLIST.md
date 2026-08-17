@@ -71,7 +71,7 @@ Execution showed that item was mis-sized and partly already satisfied, so it is 
 	`PeriodicTick`) carry no prefix, matching `WaitActivation`: they are callback parameters rather than
 	owned thread-pool objects.
 
-- [ ] **M4-6** — Design and implement safe cleanup-group membership across every callback object.
+- [x] **M4-6** — Design and implement safe cleanup-group membership across every callback object.
 
 	**Decision taken:** option (A) below -- the group creates and owns its members. A draft implementation
 	exists at `.scratch/cleanup_group.draft.rs`; it was parked because M4-8 changes the timer API it builds on,

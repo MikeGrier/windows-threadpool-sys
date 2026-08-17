@@ -68,19 +68,24 @@ impl CallbackEnviron {
 
     /// Equivalent to `SetThreadpoolCallbackCleanupGroup`.
     ///
+    /// Prefer [`CleanupGroup`], which creates its own members and upholds every
+    /// requirement below for you. This raw seam exists for handing the
+    /// environment to a cleanup group this crate does not own.
+    ///
     /// # Safety
     ///
-    /// This takes a raw `PTP_CLEANUP_GROUP` because the crate has no owned
-    /// cleanup group yet, so the caller must guarantee that:
+    /// This takes a raw `PTP_CLEANUP_GROUP`, so the caller must guarantee that:
     ///
     /// - `group` is a live cleanup group from `CreateThreadpoolCleanupGroup`,
     ///   or `0` to clear the setting;
     /// - it outlives every object created with this environment; and
     /// - once `CloseThreadpoolCleanupGroupMembers` releases those objects, they
-    ///   are neither used nor closed again. This crate's callback objects close
-    ///   themselves on drop, so a group-owned object of any of those types would
-    ///   be closed twice -- do not place them in a cleanup group until the crate
-    ///   models group membership.
+    ///   are neither used nor closed again. This crate's individually-owned
+    ///   callback objects close themselves on drop, so putting one of those in a
+    ///   foreign cleanup group would close it twice. Use [`CleanupGroup`] to get
+    ///   members that are released by the group instead.
+    ///
+    /// [`CleanupGroup`]: crate::cleanup_group::CleanupGroup
     pub unsafe fn set_cleanup_group(
         &mut self,
         group: PTP_CLEANUP_GROUP,
@@ -112,6 +117,15 @@ impl CallbackEnviron {
     /// all thread-pool objects created with this environment.
     pub unsafe fn set_library(&mut self, dll: *mut core::ffi::c_void) {
         self.0.RaceDll = dll;
+    }
+
+    /// Wrap an already-initialized environment structure.
+    ///
+    /// Used to copy an environment rather than mutate a caller's, so that
+    /// layering a setting on top -- as a cleanup group does when creating a
+    /// member -- cannot be observed through the original.
+    pub(crate) fn from_inner(inner: TP_CALLBACK_ENVIRON_V3) -> Self {
+        Self(inner)
     }
 
     /// Returns a mutable pointer to the inner [`TP_CALLBACK_ENVIRON_V3`].

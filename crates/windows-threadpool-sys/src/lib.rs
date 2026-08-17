@@ -29,10 +29,12 @@
 //! must tolerate overlapping with itself, whereas a [`timer::ThreadpoolTimer`] never
 //! overlaps. See the [`timer`] module for how to choose.
 //!
-//! Two supporting types shape where and how those callbacks run:
-//! [`pool::ThreadpoolPool`] is an owned private pool, and
+//! Three supporting types shape where those callbacks run and how they are torn
+//! down: [`pool::ThreadpoolPool`] is an owned private pool,
 //! [`callback_env::CallbackEnviron`] is the environment that selects a pool and
-//! a callback priority when an object is created.
+//! a callback priority when an object is created, and
+//! [`cleanup_group::CleanupGroup`] releases many objects in one step instead of
+//! dropping each individually.
 //!
 //! # Submitting work
 //!
@@ -113,14 +115,17 @@
 //!
 //! # Status
 //!
-//! The crate is in active development. Work, timers, waits, private pools, and
-//! thread-pool I/O are implemented and tested. Cleanup groups are not yet
-//! modelled safely: [`callback_env::CallbackEnviron::set_cleanup_group`] is
-//! `unsafe` for that reason, and its documentation explains what is missing.
+//! The crate is in active development. Work, timers, waits, private pools,
+//! cleanup groups, and thread-pool I/O are implemented and tested.
+//!
+//! Thread-pool I/O is deliberately not a cleanup-group member: a `TP_IO` object
+//! must not be closed while an overlapped operation is outstanding, and a bulk
+//! release cannot satisfy that. See [`cleanup_group`] for the reasoning.
 
 #![warn(missing_docs)]
 
 pub mod callback_env;
+pub mod cleanup_group;
 pub mod io;
 pub mod pool;
 pub mod timer;

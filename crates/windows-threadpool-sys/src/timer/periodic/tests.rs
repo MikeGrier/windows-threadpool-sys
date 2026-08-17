@@ -17,8 +17,8 @@ use crate::timer::tests::Fires;
 fn counting_timer(period: Duration) -> (ThreadpoolPeriodicTimer, Arc<Fires>) {
     let fires = Fires::new();
     let recorder = Arc::clone(&fires);
-    let timer =
-        ThreadpoolPeriodicTimer::new(period, move |_tick| recorder.record(), None).expect("create timer");
+    let timer = ThreadpoolPeriodicTimer::new(period, move |_tick| recorder.record(), None)
+        .expect("create timer");
     (timer, fires)
 }
 
@@ -47,19 +47,22 @@ fn a_zero_period_is_rejected() {
 
 #[test]
 fn new_timer_is_stopped() {
-    let timer = ThreadpoolPeriodicTimer::new(Duration::from_millis(1), |_| {}, None).expect("create timer");
+    let timer =
+        ThreadpoolPeriodicTimer::new(Duration::from_millis(1), |_| {}, None).expect("create timer");
     assert!(!timer.is_running(), "a fresh timer must not be running");
 }
 
 #[test]
 fn the_period_is_reported() {
-    let timer = ThreadpoolPeriodicTimer::new(Duration::from_millis(25), |_| {}, None).expect("create timer");
+    let timer = ThreadpoolPeriodicTimer::new(Duration::from_millis(25), |_| {}, None)
+        .expect("create timer");
     assert_eq!(timer.period(), Duration::from_millis(25));
 }
 
 #[test]
 fn drop_without_starting_is_clean() {
-    let _timer = ThreadpoolPeriodicTimer::new(Duration::from_millis(1), |_| {}, None).expect("create timer");
+    let _timer =
+        ThreadpoolPeriodicTimer::new(Duration::from_millis(1), |_| {}, None).expect("create timer");
 }
 
 // --- repetition ---
