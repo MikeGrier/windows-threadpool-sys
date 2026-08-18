@@ -100,8 +100,13 @@ impl<'pool> CallbackEnviron<'pool> {
         self.inner.Pool = pool.as_raw();
     }
 
-    /// Restore the process-default pool, dropping any [`ThreadpoolPool`] this
-    /// environment named.
+    /// Clear the pool selection, so objects created with this environment use
+    /// the process-default pool again.
+    ///
+    /// This only clears the selection. Any [`ThreadpoolPool`] the environment
+    /// named is borrowed, not owned, so it is neither dropped nor closed, and
+    /// the environment keeps its `'pool` lifetime -- the borrow is released when
+    /// the environment itself is dropped, not here.
     pub fn clear_pool(&mut self) {
         self.inner.Pool = 0;
     }

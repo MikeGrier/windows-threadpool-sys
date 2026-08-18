@@ -193,8 +193,17 @@ impl ThreadpoolIo {
     /// Bind an overlapped endpoint to the thread pool, invoking `callback` for
     /// every operation completion the pool delivers.
     ///
-    /// Pass `Some(env)` to select a private pool, cleanup group, or callback
-    /// priority; `None` uses the process-default pool with default priority.
+    /// Pass `Some(env)` to select a private pool or callback priority; `None`
+    /// uses the process-default pool with default priority.
+    ///
+    /// Do **not** point `env` at a cleanup group. A `TP_IO` object must not be
+    /// closed while an overlapped operation is outstanding, because the kernel
+    /// still owns that operation's storage, and a group's bulk release has no
+    /// way to establish that -- which is why
+    /// [`CleanupGroup`](crate::cleanup_group::CleanupGroup) has no `create_io`.
+    /// A group would also close this object while its own `Drop` still expects
+    /// to, closing it twice. Let `Drop` run it down instead: it cancels, drains,
+    /// and only then closes.
     ///
     /// The callback runs on a shared, process-managed pool thread. It must
     /// restore any thread state it changes, must not terminate its thread, and

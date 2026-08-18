@@ -70,7 +70,7 @@ what it was asked for.
 	unconditionally, so on a non-Windows target it fails to compile rather than resolving to an empty crate.
 	Gate it to match, and verify by checking against a non-Windows target rather than by inspection.
 
-- [ ] **TR-6** — Correct two API documents that describe behaviour the code does not have.
+- [x] **TR-6** — Correct two API documents that describe behaviour the code does not have.
 
 	`ThreadpoolIo::new` offers a cleanup group as an environment option, which the design deliberately excludes
 	-- a `TP_IO` object must not be closed with an operation outstanding, which bulk release cannot guarantee.
