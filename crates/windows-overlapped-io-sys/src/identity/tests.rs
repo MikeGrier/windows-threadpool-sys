@@ -5,6 +5,7 @@
 //! real overlapped I/O is involved, so the addresses are never dereferenced.
 
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
@@ -41,9 +42,8 @@ fn exhausting_the_sequence_panics_rather_than_wrapping() {
     let _ = next_generation(&sequence);
 }
 
-/// The refusal must stick: `fetch_add` has already wrapped the stored value to
-/// zero by the time exhaustion is detected, so without pinning, a caught panic
-/// would let the next call walk the whole sequence again from 0.
+/// The refusal must stick, so a caught panic cannot let the next call walk the
+/// whole sequence again from zero.
 #[test]
 fn an_exhausted_sequence_stays_exhausted() {
     let sequence = std::sync::atomic::AtomicU64::new(u64::MAX);
@@ -58,6 +58,82 @@ fn an_exhausted_sequence_stays_exhausted() {
             "an exhausted sequence handed out another generation"
         );
     }
+}
+
+/// The counter must never hold a wrapped value, even for an instant.
+///
+/// This is the property that makes exhaustion safe under contention, and it is
+/// what an increment-then-repair implementation cannot provide: `fetch_add`
+/// wraps the stored value to zero and only a later `store` pins it, so a thread
+/// arriving between the two takes 0, then 1, 2, ... and mints successfully.
+///
+/// Trying to *catch that mint* is unreliable -- the window is a few instructions
+/// wide -- so this watches the counter instead. An observer sampling it while
+/// other threads hammer the boundary will see the wrapped value long before any
+/// thread happens to consume one, which makes the defect detectable rather than
+/// merely improbable.
+#[test]
+fn the_counter_never_holds_a_wrapped_value() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    // One generation remains, so every attempt after the first is refused.
+    const LAST: u64 = u64::MAX - 1;
+
+    let sequence = Arc::new(AtomicU64::new(LAST));
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let observers: Vec<_> = (0..2)
+        .map(|_| {
+            let sequence = Arc::clone(&sequence);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut lowest = u64::MAX;
+                while !stop.load(Ordering::Relaxed) {
+                    lowest = lowest.min(sequence.load(Ordering::Relaxed));
+                }
+                lowest
+            })
+        })
+        .collect();
+
+    let minters: Vec<_> = (0..4)
+        .map(|_| {
+            let sequence = Arc::clone(&sequence);
+            std::thread::spawn(move || {
+                let previous = std::panic::take_hook();
+                std::panic::set_hook(Box::new(|_| {}));
+                let issued: Vec<u64> = (0..20_000)
+                    .filter_map(|_| std::panic::catch_unwind(|| next_generation(&sequence)).ok())
+                    .collect();
+                std::panic::set_hook(previous);
+                issued
+            })
+        })
+        .collect();
+
+    let issued: Vec<u64> = minters
+        .into_iter()
+        .flat_map(|minter| minter.join().expect("minting thread"))
+        .collect();
+    stop.store(true, Ordering::Relaxed);
+
+    let lowest = observers
+        .into_iter()
+        .map(|observer| observer.join().expect("observing thread"))
+        .min()
+        .expect("an observer");
+
+    assert!(
+        lowest >= LAST,
+        "the counter held a wrapped value ({lowest}); a thread arriving then would \
+         mint a recycled generation"
+    );
+    assert_eq!(
+        issued,
+        vec![LAST],
+        "exactly the one remaining generation should have been issued"
+    );
 }
 
 // --- minting ---

@@ -43,23 +43,28 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 ///
 /// # Panics
 ///
-/// Panics once the sequence is exhausted. The counter is then pinned at its
-/// exhausted value, so a caught panic cannot resume minting recycled
-/// generations on a later call.
+/// Panics once the sequence is exhausted, and every later call panics too: the
+/// counter saturates at `u64::MAX` rather than passing it, so a caught panic
+/// cannot resume minting recycled generations.
 fn next_generation(sequence: &AtomicU64) -> u64 {
-    let generation = sequence.fetch_add(1, Ordering::Relaxed);
-    if generation == u64::MAX {
-        // `fetch_add` has already wrapped the stored value to 0, so without this
-        // a caught panic would let the next call hand out generation 0 and walk
-        // the whole sequence again. Pin it at the exhausted value instead, so
-        // every later call takes this same branch.
-        sequence.store(u64::MAX, Ordering::Relaxed);
-        panic!(
-            "the operation-generation sequence is exhausted; continuing would reissue \
-             generations already in use and reintroduce stale-identity aliasing"
-        );
-    }
-    generation
+    // A single atomic update, not an increment followed by a repair. `fetch_add`
+    // would wrap the stored value to zero and leave it there until a separate
+    // `store` could pin it -- and a thread arriving in that window would take 0,
+    // then 1, 2, ... and mint successfully, which is exactly the recycled
+    // generation this refuses to produce. Saturating inside the update means the
+    // counter never transiently holds a wrapped value, so there is no window.
+    sequence
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            // `then`, not `then_some`: the latter is eager, so `current + 1`
+            // would overflow at the boundary before the guard could apply.
+            (current != u64::MAX).then(|| current + 1)
+        })
+        .unwrap_or_else(|_| {
+            panic!(
+                "the operation-generation sequence is exhausted; continuing would reissue \
+                 generations already in use and reintroduce stale-identity aliasing"
+            )
+        })
 }
 
 /// An identity for an in-flight operation: the address of its `OVERLAPPED`
