@@ -41,7 +41,7 @@ asserted -- under load they are properties of the machine, not of the code.
 	drop while a callback is mid-flight with a deferred re-arm pending. This is the scenario that would surface
 	a regression in the teardown gate as a hang or a crash rather than as a failed assertion.
 
-- [ ] **ST-3** — Periodic timer stress: high-frequency ticking, self-stop, and deliberate tick overlap.
+- [x] **ST-3** — Periodic timer stress: high-frequency ticking, self-stop, and deliberate tick overlap.
 
 	The periodic type documents that ticks may overlap and that `stop` neither retracts queued ticks nor affects
 	running ones. Load is the only way to exercise those paths in bulk: a short period against a slow callback

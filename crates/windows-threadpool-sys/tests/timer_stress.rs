@@ -52,7 +52,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
-use windows_threadpool_sys::timer::ThreadpoolTimer;
+use windows_threadpool_sys::timer::{ThreadpoolPeriodicTimer, ThreadpoolTimer};
 
 // --- gating ---
 
@@ -850,5 +850,363 @@ stress! {
             fired > 0,
             "no teardown raced a firing -- every cycle outran the pool"
         );
+    }
+}
+
+// --- periodic: ticking under load ---
+
+stress! {
+    /// Sustained ticking: a period far shorter than the system tick, run until a
+    /// tick budget is met.
+    ///
+    /// A 1ms period does not produce 1000 ticks a second -- the measured mean is
+    /// ~15.6ms, the tick. That is the pool's resolution rather than a defect, and
+    /// it is why the rate is reported rather than asserted. What is asserted is
+    /// that ticking happens at all and that `stop_and_drain` leaves the timer
+    /// quiescent.
+    stress_periodic_sustained_ticking {
+        let target = load(500);
+        let tally = Tally::new();
+
+        let counter = Arc::clone(&tally);
+        let timer = ThreadpoolPeriodicTimer::new(
+            Duration::from_millis(1),
+            move |_tick| {
+                counter.record();
+            },
+            None,
+        )
+        .expect("create periodic timer");
+
+        let started = Instant::now();
+        timer.start_after(Duration::ZERO);
+        let reached = tally.wait_for(target, Duration::from_secs(300));
+        let elapsed = started.elapsed();
+        timer.stop_and_drain();
+
+        assert_eq!(reached, target, "the timer stopped ticking");
+        assert!(!timer.is_running(), "the timer still reports running");
+        assert_quiescent(&tally, "high-frequency ticks");
+        eprintln!(
+            "stress:   {reached} ticks in {elapsed:?} ({:?} mean per tick)",
+            elapsed / u32::try_from(reached.max(1)).unwrap_or(1)
+        );
+    }
+}
+
+stress! {
+    /// A callback slower than the period, which is how overlapping ticks are
+    /// produced on purpose.
+    ///
+    /// The periodic type documents that ticks may run concurrently, so overlap
+    /// here is correct behaviour rather than a defect -- the opposite of the
+    /// one-shot's guarantee. The peak concurrency reached is reported; only the
+    /// drain is asserted, because how much overlap occurs depends on how many
+    /// pool threads the machine has.
+    stress_periodic_overlapping_ticks_are_tolerated {
+        let target = load(200);
+        let tally = Tally::new();
+        let overlap = Overlap::new();
+
+        let counter = Arc::clone(&tally);
+        let seen = Arc::clone(&overlap);
+        let timer = ThreadpoolPeriodicTimer::new(
+            Duration::from_millis(1),
+            move |_tick| {
+                let _inside = seen.enter();
+                counter.record();
+                // Far longer than the period, so the next tick is due while
+                // this one is still running.
+                std::thread::sleep(Duration::from_millis(20));
+            },
+            None,
+        )
+        .expect("create periodic timer");
+
+        timer.start_after(Duration::ZERO);
+        let reached = tally.wait_for(target, Duration::from_secs(300));
+        timer.stop_and_drain();
+
+        assert_eq!(reached, target, "the timer stopped ticking");
+        assert_quiescent(&tally, "overlapping ticks");
+        eprintln!(
+            "stress:   {reached} ticks, {} overlapping entries, peak {} concurrent",
+            overlap.violations(),
+            overlap.peak_concurrent()
+        );
+    }
+}
+
+stress! {
+    /// A callback that stops its own timer once a threshold is reached.
+    ///
+    /// `PeriodicTick::stop` stops future ticks being queued; it does not retract
+    /// queued ticks and does not affect running ones, so the callback is
+    /// expected to run again afterwards. The assertion is therefore that ticking
+    /// *ends*, not that it ends immediately.
+    stress_periodic_self_stop {
+        let rounds = load(200);
+        let mut overshoot_total = 0usize;
+
+        for _ in 0..rounds {
+            let threshold = 5;
+            let tally = Tally::new();
+            let counter = Arc::clone(&tally);
+            let timer = ThreadpoolPeriodicTimer::new(
+                Duration::from_millis(1),
+                move |tick| {
+                    if counter.record() >= threshold {
+                        tick.stop();
+                    }
+                },
+                None,
+            )
+            .expect("create periodic timer");
+
+            timer.start_after(Duration::ZERO);
+            let reached = tally.wait_for(threshold, Duration::from_secs(30));
+            assert!(
+                reached >= threshold,
+                "the timer stopped before reaching its threshold"
+            );
+
+            timer.stop_and_drain();
+            let settled = tally.count();
+            overshoot_total += settled.saturating_sub(threshold);
+
+            std::thread::sleep(Duration::from_millis(5));
+            assert_eq!(
+                tally.count(),
+                settled,
+                "the timer kept ticking after stopping itself and draining"
+            );
+        }
+
+        eprintln!(
+            "stress:   {rounds} self-stopping timers, {overshoot_total} ticks past the threshold"
+        );
+    }
+}
+
+stress! {
+    /// Many threads starting, stopping, and querying one running timer.
+    ///
+    /// `start` and `stop` are both `&self`, so this is a supported usage; the
+    /// invariant is that whichever call lands last decides the state, and that a
+    /// drain afterwards is final.
+    stress_periodic_start_stop_churn {
+        let threads = 8;
+        let per_thread = load(200);
+        let tally = Tally::new();
+
+        let counter = Arc::clone(&tally);
+        let timer = Arc::new(
+            ThreadpoolPeriodicTimer::new(
+                Duration::from_millis(2),
+                move |_tick| {
+                    counter.record();
+                },
+                None,
+            )
+            .expect("create periodic timer"),
+        );
+
+        let workers: Vec<_> = (0..threads)
+            .map(|t| {
+                let timer = Arc::clone(&timer);
+                std::thread::spawn(move || {
+                    for i in 0..per_thread {
+                        match (t + i) % 8 {
+                            0..=2 => timer.start_after(Duration::ZERO),
+                            3 => timer.start(),
+                            4 => timer.stop(),
+                            _ => {
+                                let _ = timer.is_running();
+                            }
+                        }
+                        // Longer than a timer tick. Every `start_after` resets
+                        // the due time, so without a pause that outlasts a tick
+                        // the threads keep pushing the next tick into the future
+                        // and the timer never actually fires.
+                        if i % 4 == 0 {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for worker in workers {
+            worker.join().expect("churn thread");
+        }
+
+        timer.stop_and_drain();
+
+        let fired = tally.count();
+        eprintln!("stress:   {fired} ticks under start/stop churn");
+        assert!(
+            fired > 0,
+            "the timer never ticked under churn -- the loop is outrunning the pool"
+        );
+        assert!(!timer.is_running(), "the timer still reports running");
+        assert_quiescent(&tally, "start/stop churn");
+    }
+}
+
+// --- periodic: teardown ---
+
+stress! {
+    /// Create, start, and drop while ticking, which is the periodic equivalent
+    /// of the one-shot teardown race.
+    ///
+    /// The timer is left running long enough to tick before the drop, so `Drop`
+    /// runs against a live tick stream rather than a timer that never started.
+    stress_periodic_drop_while_ticking {
+        let cycles = load(300);
+        let tally = Tally::new();
+
+        for i in 0..cycles {
+            let counter = Arc::clone(&tally);
+            let timer = ThreadpoolPeriodicTimer::new(
+                Duration::from_millis(1),
+                move |_tick| {
+                    counter.record();
+                },
+                None,
+            )
+            .expect("create periodic timer");
+
+            timer.start_after(Duration::ZERO);
+            // Walks 0..14ms so drops land before, around, and after ticks.
+            let offset = u64::try_from(i % 8).unwrap_or(0) * 2;
+            std::thread::sleep(Duration::from_millis(offset));
+            drop(timer);
+        }
+
+        let fired = tally.count();
+        eprintln!("stress:   {cycles} periodic timers dropped while ticking, {fired} ticks ran");
+        assert!(
+            fired > 0,
+            "no drop raced a tick -- the offsets no longer span the tick"
+        );
+    }
+}
+
+stress! {
+    /// Drop landing while a tick is inside the callback.
+    ///
+    /// The callback signals entry and then stays inside, so the drop is
+    /// guaranteed to land mid-tick. Nothing may run after `Drop` returns,
+    /// because it has already freed the context by then.
+    stress_periodic_drop_during_tick {
+        let cycles = load(200);
+
+        for _ in 0..cycles {
+            let tally = Tally::new();
+            let counter = Arc::clone(&tally);
+            let timer = ThreadpoolPeriodicTimer::new(
+                Duration::from_millis(1),
+                move |_tick| {
+                    counter.record();
+                    std::thread::sleep(Duration::from_millis(5));
+                },
+                None,
+            )
+            .expect("create periodic timer");
+
+            timer.start_after(Duration::ZERO);
+            let entered = tally.wait_for(1, Duration::from_secs(30));
+            assert!(entered >= 1, "the tick never ran");
+
+            // Drop here, with a tick still inside the callback.
+            drop(timer);
+
+            let after = tally.count();
+            std::thread::sleep(Duration::from_millis(15));
+            assert_eq!(
+                tally.count(),
+                after,
+                "a tick ran after the timer was dropped"
+            );
+        }
+
+        eprintln!("stress:   {cycles} drops landed mid-tick");
+    }
+}
+
+stress! {
+    /// A large population of periodic timers ticking at once, which puts the
+    /// pool's timer queue under sustained pressure rather than any one object.
+    stress_periodic_many_timers_tick {
+        let count = load(300);
+        let per_timer = 3;
+        let tally = Tally::new();
+
+        let timers: Vec<_> = (0..count)
+            .map(|i| {
+                let counter = Arc::clone(&tally);
+                let timer = ThreadpoolPeriodicTimer::new(
+                    Duration::from_millis(2),
+                    move |_tick| {
+                        counter.record();
+                    },
+                    None,
+                )
+                .expect("create periodic timer");
+                // Stagger the first ticks so they do not all land together.
+                timer.start_after(Duration::from_millis(u64::try_from(i % 10).unwrap_or(0)));
+                timer
+            })
+            .collect();
+
+        let reached = tally.wait_for(count * per_timer, Duration::from_secs(300));
+        for timer in &timers {
+            timer.stop_and_drain();
+        }
+
+        assert_eq!(
+            reached,
+            count * per_timer,
+            "the timer population stopped ticking"
+        );
+        for timer in &timers {
+            assert!(!timer.is_running(), "a timer still reports running");
+        }
+        assert_quiescent(&tally, "many periodic timers");
+        eprintln!("stress:   {reached} ticks across {count} periodic timers");
+    }
+}
+
+stress! {
+    /// A zero period is rejected, and rejection under load must not leave
+    /// anything behind: the object is never created, so there is nothing to
+    /// drop, and a valid timer must still be creatable afterwards.
+    stress_periodic_zero_period_is_rejected {
+        let attempts = load(2_000);
+
+        for _ in 0..attempts {
+            let rejected =
+                ThreadpoolPeriodicTimer::new(Duration::ZERO, |_tick| {}, None);
+            assert!(rejected.is_err(), "a zero period was accepted");
+        }
+
+        let tally = Tally::new();
+        let counter = Arc::clone(&tally);
+        let timer = ThreadpoolPeriodicTimer::new(
+            Duration::from_millis(1),
+            move |_tick| {
+                counter.record();
+            },
+            None,
+        )
+        .expect("create periodic timer after rejections");
+        timer.start_after(Duration::ZERO);
+        assert!(
+            tally.wait_for(1, Duration::from_secs(30)) >= 1,
+            "a valid timer would not tick after repeated rejections"
+        );
+        timer.stop_and_drain();
+
+        eprintln!("stress:   {attempts} zero-period rejections");
     }
 }
