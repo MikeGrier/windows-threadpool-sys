@@ -387,6 +387,29 @@ alongside so the incidental cancellation is not mistaken for a contract and quie
 This is the honest shape of the decision: a documented precondition is a weaker thing than an enforced one, and
 saying so is better than either overclaiming or paying for machinery nobody needs.
 
+## Summary prose keeps overclaiming what the reference docs get right
+
+Four consecutive review rounds found an absolute statement in overview or description prose contradicting a
+precise one in the reference documentation next to the code:
+
+- `stop_and_drain` "leaves the object idle on return" -- true only absent concurrent external arming.
+- The crate overview and README: a `ThreadpoolTimer` "never overlaps" -- true only for re-arming through
+	`TimerFiring`, and the type's own docs said so in a section titled *When firings can overlap*.
+- The pull request: `set_pool` "takes an owned `ThreadpoolPool`" -- it takes a borrow, as the signature shows.
+- The pull request: `CallbackEnviron<'pool>` "makes the compiler enforce that the pool outlives the objects
+	created from it" -- it enforces that against the *environment*; `ThreadpoolPool`'s own *Ordering
+	requirement* section explains at length why it cannot reach the objects.
+
+The pattern is consistent enough to be worth naming. Reference documentation gets written while looking at the
+code, with the awkward cases in view. Summary prose gets written while looking at the *intent*, and the
+qualifiers are exactly what summarising drops. Two of these were introduced while correcting a different
+inaccuracy in the same paragraph.
+
+The rule adopted: an unqualified "never", "always", or "the compiler enforces" in overview prose is a claim that
+must be checked against the reference documentation for the same item before it is written, and re-checked when
+the surrounding text is edited. Where the precise statement is too long to summarise, name the guarantee and
+link to it rather than compressing it into an absolute.
+
 ## A thread maximum of zero is refused, and the maximum beats the minimum
 
 Two facts about `SetThreadpoolThreadMaximum`, both established by measurement rather than from the SDK page,

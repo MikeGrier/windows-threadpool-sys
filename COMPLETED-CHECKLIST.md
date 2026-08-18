@@ -436,3 +436,37 @@ to hand over ownership they must in fact keep. Corrected, and the new `set_max_t
 clickable relative link; it now links all three archives, each verified to exist. Both crates' CHECKLIST files
 carried a paragraph summarising everything the crate covers -- historical prose duplicating the archive, in
 files this repository defines as action-only. Removed.
+
+## Moved 2026-08-18 — M13, tenth review round on PR #3
+
+Two findings, both correct. Decisions in [DESIGN-NOTES.md](DESIGN-NOTES.md) and
+[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md).
+
+### <a id="jc-1"></a>JC-1 — Make an operation identity unforgeable by safe code. *(completed 2026-08-18 00:54:28 -04:00)*
+
+`OperationId::from_parts` was safe and took any generation, so safe code holding `(p, g)` could construct
+`(p, g + 1)` and, if the next submission reusing `p` were stamped with that generation, cancel an operation it
+never submitted. The method's own documentation claimed the opposite. An isolation break rather than undefined
+behaviour: cancelling a live operation is well-defined and tokens are not forgeable.
+
+Fixed by removing the pairing step from the normal path rather than guarding it. Every caller was reassembling
+what the registry had just returned, so `OperationRegistry::remove` and `identify` (formerly `generation_of`)
+now return a whole `OperationId`, and both backends store the identity rather than a bare generation. Safe code
+has no way to pair an address with a chosen generation at all.
+
+`unsafe fn forge` remains for the tests that prove a stale or ahead identity is *rejected* -- coverage that has
+to be reachable from the sibling crate, where a `pub(crate)` seam would not be. A `compile_fail` doctest proves
+safe code cannot forge, paired with a positive control differing only in the `unsafe` block so the rejection is
+demonstrably the missing obligation.
+
+### <a id="jc-2"></a>JC-2 — Correct the pool-lifetime claim in the pull request description. *(completed 2026-08-18 00:54:28 -04:00)*
+
+The description claimed `CallbackEnviron<'pool>` "makes the compiler enforce that the pool outlives the objects
+created from it". It enforces that against the *environment*; an environment's contents are copied into each
+object at creation, so no reference survives for the compiler to follow. `ThreadpoolPool` documents this
+accurately under *Ordering requirement* -- only the description was wrong, and it was written in the previous
+round while correcting a different description error.
+
+That makes four consecutive rounds in which summary prose overclaimed something the reference documentation
+states correctly, so the pattern itself is now recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) with a rule for
+writing such prose, rather than being fixed one sentence at a time.

@@ -173,9 +173,9 @@ impl CompletionPort {
                 bytes_transferred,
                 overlapped,
                 error: None,
-                // Recover the generation while the operation is still
+                // Recover the identity while the operation is still
                 // registered, so the completion can name it exactly.
-                generation: self.state.live.generation_of(overlapped),
+                id: self.state.live.identify(overlapped),
                 state: Arc::clone(&self.state),
                 claimed: Cell::new(false),
             }));
@@ -194,7 +194,7 @@ impl CompletionPort {
             bytes_transferred,
             overlapped,
             error: Some(error),
-            generation: self.state.live.generation_of(overlapped),
+            id: self.state.live.identify(overlapped),
             state: Arc::clone(&self.state),
             claimed: Cell::new(false),
         }))
@@ -540,9 +540,11 @@ pub struct Completion {
     bytes_transferred: u32,
     overlapped: *mut OVERLAPPED,
     error: Option<io::Error>,
-    /// The generation of the operation this packet completes, recovered from the
-    /// registry at dequeue time. `None` for a user packet, which has no operation.
-    generation: Option<u64>,
+    /// The identity of the operation this packet completes, recovered from the
+    /// registry at dequeue time. `None` for a user packet, which has no
+    /// operation. Stored whole rather than as a bare generation, so nothing here
+    /// ever re-pairs an address with a generation.
+    id: Option<OperationId>,
     state: Arc<PortState>,
     claimed: Cell<bool>,
 }
@@ -553,7 +555,7 @@ impl fmt::Debug for Completion {
             .field("key", &self.key)
             .field("bytes_transferred", &self.bytes_transferred)
             .field("overlapped", &self.overlapped)
-            .field("generation", &self.generation)
+            .field("id", &self.id)
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
@@ -609,9 +611,7 @@ impl Completion {
     /// operation.
     #[must_use]
     pub fn id(&self) -> Option<OperationId> {
-        // The registry recorded this generation for this address at submission,
-        // so pairing them reproduces the identity that submit returned.
-        Some(OperationId::from_parts(self.overlapped, self.generation?))
+        self.id
     }
 
     /// The failure of the completed operation, if it did not succeed.

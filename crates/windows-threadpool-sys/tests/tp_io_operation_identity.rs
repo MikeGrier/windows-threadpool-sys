@@ -387,7 +387,7 @@ fn a_retained_identity_cannot_cancel_the_operation_that_recycled_its_address() {
 ///
 /// An identity carrying an *older* generation at an address that is currently
 /// live is exactly the value a retained identity would have after the allocator
-/// reissued its storage. Building it directly with `OperationId::from_parts`
+/// reissued its storage. Forging it with `OperationId::forge`
 /// removes the dependence on the allocator actually reusing an address, so this
 /// covers the hazard on every run rather than opportunistically.
 #[test]
@@ -421,7 +421,9 @@ fn a_stale_generation_at_a_live_address_is_rejected() {
     assert_eq!(tp.outstanding(), 1);
 
     // The identity a previous operation at this same storage would have had.
-    let stale = OperationId::from_parts(live.as_ptr(), live.generation() - 1);
+    // SAFETY: deliberately forging an identity the registry never issued, in
+    // order to assert that it is refused. This is the case orge exists for.
+    let stale = unsafe { OperationId::forge(live.as_ptr(), live.generation() - 1) };
     assert_eq!(
         stale.as_ptr(),
         live.as_ptr(),
@@ -478,7 +480,8 @@ fn a_future_generation_at_a_live_address_is_rejected() {
         other => panic!("expected pending, got {other:?}"),
     };
 
-    let ahead = OperationId::from_parts(live.as_ptr(), live.generation() + 1);
+    // SAFETY: as above -- forged so that its rejection can be asserted.
+    let ahead = unsafe { OperationId::forge(live.as_ptr(), live.generation() + 1) };
     let rejected = tp
         .cancel(ahead)
         .expect_err("a generation that was never issued must be rejected");

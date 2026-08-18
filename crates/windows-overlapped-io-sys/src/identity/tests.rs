@@ -281,7 +281,7 @@ fn removed_identity_is_no_longer_live() {
     let registry = OperationRegistry::new();
     let id = OperationId::mint(address(0x8000));
     registry.insert(id);
-    assert_eq!(registry.remove(id.as_ptr()), Some(id.generation()));
+    assert_eq!(registry.remove(id.as_ptr()), Some(id));
     assert!(!registry.is_live(id));
     assert!(registry.is_empty());
 }
@@ -325,25 +325,25 @@ fn a_stale_identity_does_not_match_a_recycled_address() {
 }
 
 #[test]
-fn generation_of_reports_the_current_occupant() {
+fn identify_reports_the_current_occupant() {
     let registry = OperationRegistry::new();
     let slot = address(0xC000);
 
     let first = OperationId::mint(slot);
     registry.insert(first);
-    assert_eq!(registry.generation_of(slot), Some(first.generation()));
+    assert_eq!(registry.identify(slot), Some(first));
 
     registry.remove(slot);
-    assert_eq!(registry.generation_of(slot), None);
+    assert_eq!(registry.identify(slot), None);
 
     let second = OperationId::mint(slot);
     registry.insert(second);
     assert_eq!(
-        registry.generation_of(slot),
-        Some(second.generation()),
-        "the address must report the generation of its current occupant"
+        registry.identify(slot),
+        Some(second),
+        "the address must report the identity of its current occupant"
     );
-    assert_ne!(registry.generation_of(slot), Some(first.generation()));
+    assert_ne!(registry.identify(slot), Some(first));
 }
 
 #[test]

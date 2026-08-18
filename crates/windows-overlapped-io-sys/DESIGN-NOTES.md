@@ -366,6 +366,32 @@ The alternative -- letting the thread-pool crate define its own identity type --
 shared vocabulary the two crates exist to hold in common, and downstream code composing the backends would have
 to translate between two identical types.
 
+### An identity cannot be assembled by safe code
+
+`from_parts` was originally safe, taking an address and a generation from the caller. Its documentation claimed
+that "reconstructing an identity confers no access that observing it did not already confer", which was false: a
+caller holding `(p, g)` could construct `(p, g + 1)`, and if the next submission reusing `p` were stamped with
+that generation, `cancel` would accept the forged identity and abort an operation the caller never submitted.
+The generation defeats *retained* identities, but nothing stopped a *guessed* one.
+
+This is an isolation break rather than undefined behaviour -- cancelling a live operation is well-defined,
+tokens are not forgeable, and no storage can be reclaimed twice by it -- but it is exactly the property
+generations exist to provide.
+
+The fix removes the pairing step from the normal path rather than guarding it. Every caller of `from_parts` was
+reassembling what the registry had just returned, so `OperationRegistry::remove` and `identify` (formerly
+`generation_of`) now return a whole `OperationId`, built from the pair the registry itself recorded. Backends
+never supply a generation, so they cannot supply a wrong one.
+
+A forging constructor remains, as `unsafe fn forge`, because the tests that prove a stale or ahead identity is
+*rejected* must be able to build one -- and that coverage has to live in the sibling crate too, where a
+`pub(crate)` seam would not reach. Marking it `unsafe` for an invariant that is not memory safety is a
+deliberate choice: the obligation is exactly the kind `unsafe` exists to record, and the alternative was either
+losing the regression tests or leaving safe code able to forge.
+
+The `compile_fail` doctest proving safe code cannot forge is paired with a positive control that differs only in
+the `unsafe` block, so the rejection is demonstrably the missing obligation rather than any other compile error.
+
 ## Crate boundary summary
 
 `windows-overlapped-io-sys` exports the endpoint owners, provenance and sealed types, pinned operation storage

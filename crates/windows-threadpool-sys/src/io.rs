@@ -69,7 +69,7 @@ unsafe extern "system" fn io_trampoline(
 
     let overlapped = overlapped.cast::<OVERLAPPED>();
 
-    // Deregister before running any user code, and take the generation from the
+    // Deregister before running any user code, and take the identity from the
     // same lookup. This balances the `StartThreadpoolIo` for this operation.
     //
     // It must happen here rather than after the callback: the kernel is finished
@@ -81,13 +81,13 @@ unsafe extern "system" fn io_trampoline(
     // that address would collide with the entry still sitting in the registry.
     // Doing it unconditionally before `catch_unwind` also keeps the accounting
     // exact when the callback panics.
-    let generation = ctx.live.remove(overlapped);
+    let id = ctx.live.remove(overlapped);
 
     // A panic must never unwind across the FFI boundary into the pool's frame.
     let _ = catch_unwind(AssertUnwindSafe(|| {
         let completion = IoCompletion {
             overlapped,
-            generation,
+            id,
             io_result,
             bytes_transferred,
             claimed: Cell::new(false),
@@ -503,10 +503,10 @@ impl Drop for ThreadpoolIo {
 /// payload types.
 pub struct IoCompletion {
     overlapped: *mut OVERLAPPED,
-    /// The generation of the completing operation, read from the registry while
-    /// it was still registered. `None` only if the entry was already gone, which
-    /// a correctly-operating backend does not produce.
-    generation: Option<u64>,
+    /// The identity of the completing operation, read whole from the registry
+    /// while it was still registered. `None` only if the entry was already gone,
+    /// which a correctly-operating backend does not produce.
+    id: Option<OperationId>,
     io_result: u32,
     bytes_transferred: usize,
     claimed: Cell<bool>,
@@ -516,7 +516,7 @@ impl fmt::Debug for IoCompletion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IoCompletion")
             .field("overlapped", &self.overlapped)
-            .field("generation", &self.generation)
+            .field("id", &self.id)
             .field("io_result", &self.io_result)
             .field("bytes_transferred", &self.bytes_transferred)
             .finish_non_exhaustive()
@@ -555,9 +555,7 @@ impl IoCompletion {
     /// them directly.
     #[must_use]
     pub fn id(&self) -> Option<OperationId> {
-        // The registry recorded this generation for this address at submission,
-        // so pairing them reproduces the identity that submit returned.
-        Some(OperationId::from_parts(self.overlapped, self.generation?))
+        self.id
     }
 
     /// The `OVERLAPPED` pointer identifying the completed operation.

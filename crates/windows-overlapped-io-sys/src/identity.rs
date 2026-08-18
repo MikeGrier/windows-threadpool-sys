@@ -130,20 +130,60 @@ impl OperationId {
         }
     }
 
-    /// Rebuild an identity from an address and a generation a backend already
-    /// observed together.
+    /// Assemble an identity from an address and a generation chosen by the
+    /// caller, without checking that they belong together.
     ///
-    /// This is the backend-facing counterpart to [`OperationId::mint`]: it is
-    /// how a backend reconstructs the identity of an operation it knows only by
-    /// address, such as when the pool hands a completion callback an
-    /// `OVERLAPPED` and the registry supplies the generation recorded for it.
+    /// Backends do not need this: [`OperationRegistry::remove`] and
+    /// [`OperationRegistry::identify`] hand back a whole `OperationId`,
+    /// assembled from the pair the registry itself recorded, so the normal path
+    /// from a completion to its identity never supplies a generation.
     ///
-    /// It cannot be used to defeat the staleness check. An identity built from a
-    /// generation that is no longer the one registered for the address is
-    /// rejected exactly like any other stale identity, so reconstructing an
-    /// identity confers no access that observing it did not already confer.
+    /// This exists for tests that must synthesize an identity the registry never
+    /// issued -- a stale one, or one from a generation ahead of the current --
+    /// in order to prove such an identity is rejected.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have observed `overlapped` and `generation` together as
+    /// one operation's identity, or must be deliberately forging an identity in
+    /// order to assert that it is refused.
+    ///
+    /// Forging is not memory-unsafe -- cancelling a live operation is
+    /// well-defined and no storage can be reclaimed twice by it -- but it defeats
+    /// the isolation the generation exists to provide. A caller holding `(p, g)`
+    /// could otherwise construct `(p, g + 1)` and, if the next submission reusing
+    /// `p` were stamped with that generation, cancel an operation it never
+    /// submitted. That is why this is not a safe constructor:
+    ///
+    /// ```compile_fail
+    /// # use windows_overlapped_io_sys::OperationId;
+    /// fn forge_the_next_one(observed: OperationId) -> OperationId {
+    ///     OperationId::forge(observed.as_ptr(), observed.generation() + 1)
+    /// }
+    /// ```
+    ///
+    /// The same call compiles once the caller takes on the obligation, so what
+    /// the example above rejects is the missing `unsafe` rather than anything
+    /// else about the code:
+    ///
+    /// ```
+    /// # use windows_overlapped_io_sys::OperationId;
+    /// fn rebuild(observed: OperationId) -> OperationId {
+    ///     // SAFETY: both halves came from one identity, so they were observed
+    ///     // together by construction.
+    ///     unsafe { OperationId::forge(observed.as_ptr(), observed.generation()) }
+    /// }
+    /// ```
     #[must_use]
-    pub fn from_parts(overlapped: *mut OVERLAPPED, generation: u64) -> Self {
+    pub unsafe fn forge(overlapped: *mut OVERLAPPED, generation: u64) -> Self {
+        Self {
+            overlapped,
+            generation,
+        }
+    }
+
+    /// Assemble an identity the registry has just looked up, in-crate.
+    pub(crate) fn from_recorded_parts(overlapped: *mut OVERLAPPED, generation: u64) -> Self {
         Self {
             overlapped,
             generation,
@@ -264,14 +304,16 @@ impl OperationRegistry {
 
     /// Remove a reclaimed operation, waking any rundown once the last one clears.
     ///
-    /// Returns the generation that was recorded for the address, if any.
-    pub fn remove(&self, overlapped: *mut OVERLAPPED) -> Option<u64> {
+    /// Returns the identity that was registered for the address, if any --
+    /// assembled here from the pair this registry recorded, so a backend never
+    /// has to supply a generation and cannot get the pairing wrong.
+    pub fn remove(&self, overlapped: *mut OVERLAPPED) -> Option<OperationId> {
         let mut live = lock(&self.live);
         let generation = live.remove(&(overlapped as usize));
         if live.is_empty() {
             self.drained.notify_all();
         }
-        generation
+        generation.map(|generation| OperationId::from_recorded_parts(overlapped, generation))
     }
 
     /// Whether this exact identity -- address *and* generation -- is still live.
@@ -324,13 +366,20 @@ impl OperationRegistry {
         result
     }
 
-    /// The generation currently recorded for an address, if it is live.
+    /// The identity currently registered for an address, if it is live.
     ///
-    /// A backend uses this to rebuild the full identity of an operation it knows
+    /// A backend uses this to recover the full identity of an operation it knows
     /// only by address, as when a completion arrives carrying its `OVERLAPPED`.
+    /// The generation comes from this registry rather than from the caller, so
+    /// the returned identity always names the operation that is actually live at
+    /// that address -- there is no pairing for a caller to get wrong, or to
+    /// choose.
     #[must_use]
-    pub fn generation_of(&self, overlapped: *mut OVERLAPPED) -> Option<u64> {
-        lock(&self.live).get(&(overlapped as usize)).copied()
+    pub fn identify(&self, overlapped: *mut OVERLAPPED) -> Option<OperationId> {
+        lock(&self.live)
+            .get(&(overlapped as usize))
+            .copied()
+            .map(|generation| OperationId::from_recorded_parts(overlapped, generation))
     }
 
     /// The number of operations submitted and not yet reclaimed.
