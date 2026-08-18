@@ -265,9 +265,16 @@ impl ThreadpoolIo {
         self.handle.as_handle()
     }
 
-    /// The number of submitted operations whose storage has not yet been
-    /// reclaimed, which is also the number of unbalanced `StartThreadpoolIo`
-    /// calls.
+    /// The number of submitted operations whose completion callback has not yet
+    /// started.
+    ///
+    /// A `TP_IO` callback deregisters its operation on entry -- before it can
+    /// claim or drop the storage -- so this counts operations still awaiting
+    /// their callback, not live allocations: it can read zero while a final
+    /// callback is still running and its operation's storage is still alive. Use
+    /// [`run_down`](Self::run_down) to wait for callbacks to finish. It is
+    /// equivalently the number of `StartThreadpoolIo` calls not yet balanced by a
+    /// callback start or a `CancelThreadpoolIo`.
     #[must_use]
     pub fn outstanding(&self) -> usize {
         self.live.len()

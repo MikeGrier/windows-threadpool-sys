@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 use crate::{
-    BlockingEndpoint, CompletionPort, FILE_FLAG_NO_BUFFERING, PageBuffers, UnassociatedEndpoint,
+    BlockingEndpoint, CompletionPort, FILE_FLAG_NO_BUFFERING, PAGE_SIZE, PageBuffers,
+    UnassociatedEndpoint,
 };
 
 #[test]
@@ -238,7 +239,7 @@ fn blocking_read_scatter_rejects_an_oversized_page_count() {
 
     // Far more pages than u32::MAX bytes can describe.
     let error = endpoint
-        .read_scatter(usize::MAX / 4096, 0)
+        .read_scatter(usize::MAX / PAGE_SIZE, 0)
         .expect_err("an unrepresentable page count must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(

@@ -2,6 +2,9 @@
 use crate::{BlockingEndpoint, CompletionPort, UnassociatedEndpoint};
 use windows_sys::Win32::System::Ioctl::FSCTL_GET_COMPRESSION;
 
+/// `FSCTL_GET_COMPRESSION` returns a `USHORT` compression state.
+const COMPRESSION_STATE_LEN: usize = 2;
+
 fn temp_file(tag: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "windows-overlapped-io-sys-ioctl-{tag}-{}.tmp",
@@ -20,10 +23,10 @@ fn blocking_ioctl_get_compression() {
 
     // FSCTL_GET_COMPRESSION returns a USHORT compression state (2 bytes).
     let (output, returned) = endpoint
-        .ioctl(FSCTL_GET_COMPRESSION, &[], 2)
+        .ioctl(FSCTL_GET_COMPRESSION, &[], COMPRESSION_STATE_LEN)
         .expect("ioctl");
-    assert_eq!(returned, 2);
-    assert_eq!(output.len(), 2);
+    assert_eq!(returned, COMPRESSION_STATE_LEN);
+    assert_eq!(output.len(), COMPRESSION_STATE_LEN);
 
     drop(endpoint);
     let _ = std::fs::remove_file(&path);
@@ -41,7 +44,7 @@ fn iocp_ioctl_get_compression() {
         .expect("associate");
 
     let token = endpoint
-        .ioctl(FSCTL_GET_COMPRESSION, Vec::new(), 2)
+        .ioctl(FSCTL_GET_COMPRESSION, Vec::new(), COMPRESSION_STATE_LEN)
         .expect("submit ioctl");
     let completion = port.get(5_000).expect("get").expect("a completion");
     let (output, result) = match token.claim(&completion) {
@@ -49,8 +52,8 @@ fn iocp_ioctl_get_compression() {
         Err(_) => panic!("completion did not match its token"),
     };
     let returned = result.expect("ioctl result");
-    assert_eq!(returned, 2);
-    assert!(output.len() >= 2);
+    assert_eq!(returned, COMPRESSION_STATE_LEN);
+    assert!(output.len() >= COMPRESSION_STATE_LEN);
     assert_eq!(port.outstanding(), 0);
 
     drop(endpoint);
