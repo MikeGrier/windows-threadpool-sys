@@ -61,6 +61,59 @@ fn a_sub_millisecond_period_is_rejected() {
     }
 }
 
+/// A fractional period would be truncated by the pool, so the timer would tick
+/// sooner than `period()` reports. Rejecting keeps the two in agreement.
+#[test]
+fn a_fractional_millisecond_period_is_rejected() {
+    for micros in [1_500u64, 2_001, 10_500, 999_999] {
+        let error = ThreadpoolPeriodicTimer::new(Duration::from_micros(micros), |_| {}, None)
+            .expect_err("a fractional-millisecond period must be rejected");
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "period of {micros}us"
+        );
+    }
+    // A sub-millisecond remainder in nanoseconds is the same defect.
+    let error = ThreadpoolPeriodicTimer::new(
+        Duration::from_millis(5) + Duration::from_nanos(1),
+        |_| {},
+        None,
+    )
+    .expect_err("a period with a nanosecond remainder must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+/// Beyond `u32::MAX` milliseconds the period would be capped, making the timer
+/// tick far more often than asked.
+#[test]
+fn a_period_beyond_the_maximum_is_rejected() {
+    let error = ThreadpoolPeriodicTimer::new(
+        ThreadpoolPeriodicTimer::MAX_PERIOD + Duration::from_millis(1),
+        |_| {},
+        None,
+    )
+    .expect_err("a period beyond the maximum must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+    assert!(
+        ThreadpoolPeriodicTimer::new(ThreadpoolPeriodicTimer::MAX_PERIOD, |_| {}, None).is_ok(),
+        "the advertised maximum period must be accepted"
+    );
+}
+
+/// Whole-millisecond periods across the accepted range are reported exactly as
+/// given, which is the property the rejections above exist to preserve.
+#[test]
+fn an_accepted_period_is_reported_exactly() {
+    for millis in [1u64, 2, 15, 1_000, 60_000, u64::from(u32::MAX)] {
+        let period = Duration::from_millis(millis);
+        let timer =
+            ThreadpoolPeriodicTimer::new(period, |_| {}, None).expect("a whole-millisecond period");
+        assert_eq!(timer.period(), period, "period of {millis}ms");
+    }
+}
+
 #[test]
 fn the_shortest_accepted_period_is_one_millisecond() {
     assert_eq!(

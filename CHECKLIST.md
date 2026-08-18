@@ -35,7 +35,7 @@ what it was asked for.
 	callers and a later `Drop` compose instead of one lifting another's suppression. Fix the `wait()` and
 	`cancel_pending` documentation to state what each actually guarantees.
 
-- [ ] **TR-2** — Reject periods a periodic timer cannot honour exactly.
+- [x] **TR-2** — Reject periods a periodic timer cannot honour exactly.
 
 	**Gap:** [`M6`](COMPLETED-CHECKLIST.md) added a lower bound but nothing else. Every start still converts the
 	period with `as_millis()` and clamps to `u32`, so a 1.5ms period is *reported* as 1.5ms and *scheduled* at

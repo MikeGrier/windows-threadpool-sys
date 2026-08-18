@@ -175,6 +175,9 @@ pub struct ThreadpoolPeriodicTimer {
 unsafe impl Send for ThreadpoolPeriodicTimer {}
 unsafe impl Sync for ThreadpoolPeriodicTimer {}
 
+/// Nanoseconds in a millisecond, for checking a period divides evenly.
+const NANOS_PER_MILLI: u32 = 1_000_000;
+
 impl ThreadpoolPeriodicTimer {
     /// The shortest period this timer can express: one millisecond.
     ///
@@ -184,15 +187,31 @@ impl ThreadpoolPeriodicTimer {
     /// which is far coarser (~15.6ms by default).
     pub const MIN_PERIOD: Duration = Duration::from_millis(1);
 
+    /// The longest period this timer can express: `u32::MAX` milliseconds, or
+    /// just under 50 days.
+    ///
+    /// The pool's period field is a `u32` count of milliseconds, so a longer
+    /// period cannot be represented.
+    pub const MAX_PERIOD: Duration = Duration::from_millis(u32::MAX as u64);
+
     /// Create a stopped timer that invokes `callback` every `period`.
     ///
-    /// A period shorter than [`MIN_PERIOD`](Self::MIN_PERIOD) is rejected,
-    /// including zero. The pool takes the period in whole milliseconds, so a
-    /// shorter one rounds down to zero, and a zero period means "do not
-    /// repeat" -- the timer would fire once and stop. Rejecting is what keeps a
-    /// `ThreadpoolPeriodicTimer` from silently being a one-shot; use
-    /// [`ThreadpoolTimer`](crate::timer::ThreadpoolTimer) when that is what is
-    /// wanted.
+    /// `period` must be a whole number of milliseconds between
+    /// [`MIN_PERIOD`](Self::MIN_PERIOD) and [`MAX_PERIOD`](Self::MAX_PERIOD);
+    /// anything else is rejected. The pool takes the period as a `u32` count of
+    /// milliseconds, so every other value would be quietly altered to fit:
+    ///
+    /// - a period below a millisecond rounds down to zero, and a zero period
+    ///   means "do not repeat" -- the timer would fire once and stop, which is a
+    ///   `ThreadpoolPeriodicTimer` silently behaving like a
+    ///   [`ThreadpoolTimer`](crate::timer::ThreadpoolTimer);
+    /// - a fractional period such as 1.5ms is truncated, so the timer would tick
+    ///   at 1ms while [`period`](Self::period) still reported 1.5ms;
+    /// - a period beyond `u32::MAX` milliseconds would be capped, ticking far
+    ///   more often than asked.
+    ///
+    /// Rejecting rather than rounding keeps [`period`](Self::period) an accurate
+    /// report of what was scheduled.
     ///
     /// Pass `Some(env)` to select a private pool or callback priority; `None`
     /// uses the process-default pool with default priority.
@@ -205,8 +224,9 @@ impl ThreadpoolPeriodicTimer {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `period` is shorter than
-    /// [`MIN_PERIOD`](Self::MIN_PERIOD), or the error from
+    /// Returns [`io::ErrorKind::InvalidInput`] if `period` is outside
+    /// [`MIN_PERIOD`](Self::MIN_PERIOD)..=[`MAX_PERIOD`](Self::MAX_PERIOD) or is
+    /// not a whole number of milliseconds, or the error from
     /// `CreateThreadpoolTimer`.
     pub fn new<F>(
         period: Duration,
@@ -220,6 +240,18 @@ impl ThreadpoolPeriodicTimer {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "a ThreadpoolPeriodicTimer needs a period of at least 1ms: the pool takes the period in whole milliseconds, so anything shorter rounds to zero and a zero period means do not repeat; use ThreadpoolTimer for a one-shot",
+            ));
+        }
+        if period > Self::MAX_PERIOD {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a ThreadpoolPeriodicTimer period must fit in u32 milliseconds (just under 50 days); a longer one would be capped and tick far more often than asked",
+            ));
+        }
+        if !period.subsec_nanos().is_multiple_of(NANOS_PER_MILLI) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a ThreadpoolPeriodicTimer period must be a whole number of milliseconds: the pool truncates the remainder, so the timer would tick sooner than the period it reports",
             ));
         }
 
