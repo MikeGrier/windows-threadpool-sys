@@ -103,8 +103,9 @@
 //!   itself.
 //! - It may panic without breaking the pool: every trampoline catches unwinding
 //!   at the FFI boundary, because unwinding into the pool's frame is undefined.
-//!   The panic is contained, not reported, so a callback that cares should catch
-//!   its own errors.
+//!   No error is propagated to whoever queued the callback -- but the process's
+//!   panic hook still runs first, so by default the panic is written to stderr.
+//!   A callback that cares should catch its own errors.
 //!
 //! # Relationship to `windows-overlapped-io-sys`
 //!

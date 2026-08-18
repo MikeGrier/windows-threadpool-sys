@@ -77,8 +77,9 @@ callback to the same contract: restore any thread state you change, do not
 terminate the thread, and do not block waiting on your own object's rundown. A
 callback may panic without breaking the pool — every trampoline catches
 unwinding at the FFI boundary, because unwinding into the pool's frame is
-undefined — but the panic is contained rather than reported, so a callback that
-cares should catch its own errors.
+undefined — and no error is propagated to whoever queued the callback, but the
+process's panic hook still runs first, so by default the panic is written to
+stderr; a callback that cares should catch its own errors.
 
 ## Safety highlights
 
