@@ -37,12 +37,12 @@ release is guarded against running twice when what breaks is members arriving af
 	whatever members exist and free whatever resources are currently tracked, which fixes the leak and makes
 	reuse work rather than merely rejecting it.
 
-- [ ] **RW-3** — Correct the wait-handle provenance claim in the crate README.
+- [x] **RW-3** — Correct the wait-handle provenance claim in the crate README.
 
 	The safety summary still says `ThreadpoolWait` takes an `OwnedHandle`. It takes a `WaitableHandle`, and that
 	difference is the whole point of the change: it is what keeps unsupported handles out of the safe API.
 
-- [ ] **RW-4** — Remove the stale `SESSION-CONTEXT.md` snapshot.
+- [x] **RW-4** — Remove the stale `SESSION-CONTEXT.md` snapshot.
 
 	It is a design-phase snapshot added on this branch which states that no safe API has been implemented and
 	lists the safety boundary as unresolved. Both are now false. Every contract it records is already in
@@ -50,7 +50,7 @@ release is guarded against running twice when what breaks is members arriving af
 	[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md)
 	(verified before removal), so deleting it loses nothing and stops a contradictory document reaching `main`.
 
-- [ ] **RW-5** — Update the operation-identity seam decision to the API that exists.
+- [x] **RW-5** — Update the operation-identity seam decision to the API that exists.
 
 	[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) still
 	justifies `OperationId::from_ptr`, which the generation-stamped redesign removed. The decision needs to

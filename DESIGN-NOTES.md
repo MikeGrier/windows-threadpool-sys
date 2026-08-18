@@ -338,6 +338,41 @@ directly. Both objects therefore expose the outcome to their own tests -- `rearm
 test-only observer on the timer, whose `Arc` the test keeps so the record outlives the freed context. Without
 these, a test could only assert that teardown terminated, which it does with the gating removed as well.
 
+## A periodic timer rejects any period it cannot actually repeat at
+
+`SetThreadpoolTimer` takes the period as whole milliseconds. A period under 1ms therefore rounds down to zero,
+and a zero period tells the pool not to repeat -- so a sub-millisecond `ThreadpoolPeriodicTimer` fired exactly
+once and stopped. Measured before the fix: 999us fired once in 300ms where 1000us fired 31 times, with no error
+at any point.
+
+`ThreadpoolPeriodicTimer::new` now rejects anything below `MIN_PERIOD` (one millisecond), a public constant so
+callers can see the limit rather than discover it. Rejecting was chosen over silently rounding up because the
+constructor already rejects zero for the same underlying reason, and because substituting a different period
+than the caller asked for is the kind of hidden behaviour this crate avoids elsewhere.
+
+`MIN_PERIOD` is a floor on what can be *asked for*, not a delivery guarantee: ticks arrive on the system timer
+tick, ~15.6ms by default. The two limits are unrelated -- one is the width of a field, the other is the
+resolution of the clock -- and conflating them would suggest a 1ms period ticks at 1ms, which it does not.
+
+The regression test asserts the behaviour rather than the guard: the shortest accepted period must actually
+repeat. Lowering `MIN_PERIOD` makes it fail by timing out, which is how the original defect presented.
+
+## A cleanup group's release does not latch
+
+`release_members` used to set a `released` flag and return early on every later call. Because the `create_*`
+methods take `&self`, a group could gain new members after a release returned -- and those members were then
+skipped by both a later `close_members` and by `Drop`. Measured before the fix: `owned_resources` remained at 1
+after a second `close_members`, so the context leaked and `CloseThreadpoolCleanupGroup` ran with a live member.
+
+The flag was removed rather than reset per batch. `CloseThreadpoolCleanupGroupMembers` is idempotent -- with no
+members it does nothing -- so releasing unconditionally costs nothing and makes the group genuinely reusable.
+That is a better answer than the alternative of rejecting member creation after a release: it turns a latent
+leak into a supported lifecycle rather than into a new error path.
+
+The general shape is worth remembering, because it is the same mistake as the period check above: both guards
+tested the condition that had been *written down* (has this run before; is the period zero) rather than the one
+that actually mattered (are there members to release; will the period round to zero).
+
 ## The timer stress suite is opt-in, and asserts only what load cannot perturb
 
 The timer types carry the crate's subtlest concurrency contracts, and the unit tests establish each one once,

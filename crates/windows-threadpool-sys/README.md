@@ -83,9 +83,19 @@ cares should catch its own errors.
 Each type carries the invariant its SDK object needs, rather than leaving it to
 the caller to remember:
 
-- **Waits own their handle.** A waitable handle must stay valid while a wait is
-  pending, so `ThreadpoolWait` takes an `OwnedHandle` and hands it back only as
-  a borrow. The handle cannot be closed underneath a pending wait.
+- **Waits own a handle of proven provenance.** The pool supports only some kinds
+  of handle — a mutex handle, for instance, makes the native behaviour undefined
+  with no error returned — so `ThreadpoolWait` takes a `WaitableHandle` rather
+  than any `OwnedHandle`. It offers safe constructors for the handle kinds this
+  crate creates itself and one narrow `unsafe` seam for handles obtained
+  elsewhere, which keeps unsupported handles out of the safe API instead of
+  documenting a rule the caller must remember. The wait then owns the handle and
+  hands it back only as a borrow, so it cannot be closed underneath a pending
+  wait.
+- **Periodic timers reject a period they cannot honour.** The pool takes the
+  period in whole milliseconds, so anything shorter rounds to zero and means "do
+  not repeat". `ThreadpoolPeriodicTimer` rejects periods below `MIN_PERIOD`
+  rather than returning a "periodic" timer that fires once.
 - **Callbacks get a token for the operations only they can perform.**
   `TimerFiring::rearm_after` re-arms a one-shot from inside its own firing,
   `PeriodicTick::stop` lets a periodic timer end itself, and

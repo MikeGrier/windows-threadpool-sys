@@ -350,11 +350,21 @@ the storage inside the callback.
 `OperationId`, `Issued`, and `Submitted` are part of that seam rather than IOCP-private types: an operation
 identity, a submission classification, and a submission outcome mean the same thing to any backend. Building
 `TP_IO` outside this crate showed that only `OperationId` was not actually reachable -- it had no public
-constructor, so a backend in another crate could read an identity but never produce one. `OperationId::from_ptr`
-closes that gap. It is safe because the value is only an address that `OperationId::as_ptr` already exposes, and
-the type is documented as never to be dereferenced or freed. The alternative -- letting the thread-pool crate
-define its own identity type -- was rejected: it would fork the shared vocabulary the two crates exist to hold
-in common, and downstream code composing the backends would have to translate between two identical types.
+constructor, so a backend in another crate could read an identity but never produce one. `OperationId::mint`
+closes that gap: it takes the operation's storage address and pairs it with the next value of a process-wide
+monotonic counter, which is what makes the identity unique rather than merely descriptive. `OperationId::from_parts`
+reconstructs one from an address and a generation the caller already holds, for a backend that carries the two
+halves separately across an FFI boundary; it is the seam's escape hatch, not its normal entry point.
+
+Both are safe because an `OperationId` is only an address plus a counter -- the address is what
+`OperationId::as_ptr` already exposes, and the type is documented as never to be dereferenced or freed. The
+generation is what an address alone could not provide: storage is reclaimed and reissued, so an identity minted
+from an address alone could silently name a later operation. That failure was reproduced before the redesign, at
+cycle 21 of a reclaim loop.
+
+The alternative -- letting the thread-pool crate define its own identity type -- was rejected: it would fork the
+shared vocabulary the two crates exist to hold in common, and downstream code composing the backends would have
+to translate between two identical types.
 
 ## Crate boundary summary
 
