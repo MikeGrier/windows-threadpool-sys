@@ -37,3 +37,15 @@ previous round -- worth stating plainly rather than filing as routine.
 	`unsafe` with its precondition, which is the right home for that obligation; a caller who genuinely wants to
 	share an endpoint wraps it in a `Mutex` explicitly. Record the reasoning, since "the blocking backend is
 	single-operation" is now enforced by the type rather than only stated in the module documentation.
+
+- [ ] **FR-3** — Reject file and scatter/gather lengths too large for the Win32 field.
+
+	**Not from the review.** Found while working FR-2: `fs.rs` carries its own copy of the `clamp_u32` helper
+	that [`TR-4`](COMPLETED-CHECKLIST.md) removed from `device.rs`, with eight call sites across `read`,
+	`write`, `read_scatter` and `write_gather` on both backends. It is the identical defect -- a length beyond
+	`u32::MAX` is silently capped, so the call transfers a prefix and reports success -- and the scatter/gather
+	sites reach it through a page count, which is a more plausible route to a large total than a single buffer.
+
+	**Target:** the same treatment TR-4 applied, so the crate has one answer to "a length does not fit" rather
+	than two. Fixing the module the review happened to name while leaving its neighbour would be shipping a
+	defect already agreed to be one.
