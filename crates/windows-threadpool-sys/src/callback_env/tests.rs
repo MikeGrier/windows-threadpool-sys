@@ -6,7 +6,7 @@ use windows_sys::Win32::System::Threading::{
     TP_CALLBACK_PRIORITY_NORMAL,
 };
 
-use crate::callback_env::CallbackEnviron;
+use crate::callback_env::{CallbackEnviron, CallbackPriority};
 
 fn inner<'a>(env: &'a CallbackEnviron<'_>) -> &'a TP_CALLBACK_ENVIRON_V3 {
     env.as_inner()
@@ -171,29 +171,29 @@ fn set_cleanup_group_zero_clears() {
 #[test]
 fn set_priority_high() {
     let mut env = CallbackEnviron::new();
-    env.set_priority(TP_CALLBACK_PRIORITY_HIGH);
+    env.set_priority(CallbackPriority::High);
     assert_eq!(inner(&env).CallbackPriority, TP_CALLBACK_PRIORITY_HIGH);
 }
 
 #[test]
 fn set_priority_low() {
     let mut env = CallbackEnviron::new();
-    env.set_priority(TP_CALLBACK_PRIORITY_LOW);
+    env.set_priority(CallbackPriority::Low);
     assert_eq!(inner(&env).CallbackPriority, TP_CALLBACK_PRIORITY_LOW);
 }
 
 #[test]
 fn set_priority_normal_is_idempotent() {
     let mut env = CallbackEnviron::new();
-    env.set_priority(TP_CALLBACK_PRIORITY_NORMAL);
+    env.set_priority(CallbackPriority::Normal);
     assert_eq!(inner(&env).CallbackPriority, TP_CALLBACK_PRIORITY_NORMAL);
 }
 
 #[test]
 fn set_priority_round_trip() {
     let mut env = CallbackEnviron::new();
-    env.set_priority(TP_CALLBACK_PRIORITY_HIGH);
-    env.set_priority(TP_CALLBACK_PRIORITY_NORMAL);
+    env.set_priority(CallbackPriority::High);
+    env.set_priority(CallbackPriority::Normal);
     assert_eq!(inner(&env).CallbackPriority, TP_CALLBACK_PRIORITY_NORMAL);
 }
 

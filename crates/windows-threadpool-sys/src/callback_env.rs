@@ -11,10 +11,42 @@ use std::marker::PhantomData;
 
 use windows_sys::Win32::System::Threading::{
     PTP_CLEANUP_GROUP, PTP_CLEANUP_GROUP_CANCEL_CALLBACK, TP_CALLBACK_ENVIRON_V3,
-    TP_CALLBACK_ENVIRON_V3_0, TP_CALLBACK_PRIORITY, TP_CALLBACK_PRIORITY_NORMAL,
+    TP_CALLBACK_ENVIRON_V3_0, TP_CALLBACK_PRIORITY, TP_CALLBACK_PRIORITY_HIGH,
+    TP_CALLBACK_PRIORITY_LOW, TP_CALLBACK_PRIORITY_NORMAL,
 };
 
 use crate::pool::ThreadpoolPool;
+
+/// Priority at which the thread pool schedules callbacks created with a
+/// [`CallbackEnviron`].
+///
+/// Win32 types the priority as `TP_CALLBACK_PRIORITY`, an open integer alias
+/// whose only defined values are the three below; a fourth constant,
+/// `TP_CALLBACK_PRIORITY_INVALID`, is a count sentinel rather than a priority.
+/// This crate owns its priority surface as a closed enum so safe code cannot
+/// hand an out-of-contract value to native object creation -- the very thing the
+/// bare alias would allow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallbackPriority {
+    /// Highest scheduling priority (`TP_CALLBACK_PRIORITY_HIGH`).
+    High,
+    /// Default scheduling priority (`TP_CALLBACK_PRIORITY_NORMAL`); the value a
+    /// freshly initialized environment carries.
+    Normal,
+    /// Lowest scheduling priority (`TP_CALLBACK_PRIORITY_LOW`).
+    Low,
+}
+
+impl CallbackPriority {
+    /// The Win32 `TP_CALLBACK_PRIORITY` constant this priority maps to.
+    fn to_win32(self) -> TP_CALLBACK_PRIORITY {
+        match self {
+            Self::High => TP_CALLBACK_PRIORITY_HIGH,
+            Self::Normal => TP_CALLBACK_PRIORITY_NORMAL,
+            Self::Low => TP_CALLBACK_PRIORITY_LOW,
+        }
+    }
+}
 
 /// Bit positions within `TP_CALLBACK_ENVIRON_V3`'s flags word.
 ///
@@ -165,8 +197,12 @@ impl<'pool> CallbackEnviron<'pool> {
     }
 
     /// Equivalent to `SetThreadpoolCallbackPriority`.
-    pub fn set_priority(&mut self, priority: TP_CALLBACK_PRIORITY) {
-        self.inner.CallbackPriority = priority;
+    ///
+    /// Takes the crate's closed [`CallbackPriority`] rather than the open Win32
+    /// `TP_CALLBACK_PRIORITY` alias, so only the three priorities the API
+    /// actually defines can reach native object creation.
+    pub fn set_priority(&mut self, priority: CallbackPriority) {
+        self.inner.CallbackPriority = priority.to_win32();
     }
 
     /// Equivalent to `SetThreadpoolCallbackRunsLong`.
