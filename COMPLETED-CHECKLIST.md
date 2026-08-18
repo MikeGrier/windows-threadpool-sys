@@ -242,3 +242,38 @@ A stress scenario from M5, `stress_one_shot_arm_and_await_fire`, was found faili
 worktree at the previous commit failed the same way, so it was pre-existing rather than caused by TR-1: it
 recorded its firing count while still holding the overlap guard, releasing the driving thread mid-callback so it
 armed into an overlap that is permitted for external arming. The test, not the timer, was wrong.
+
+## Moved 2026-08-17 — M8, fifth review round on PR #3
+
+Two review findings, both verified, and both in code this branch introduced -- one of them in the previous
+round's fix. A third item was added mid-milestone after the second finding turned out to have an unreported
+twin. Decisions in [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+### <a id="fr-1"></a>FR-1 — Close the wrap window in the generation sequence. *(completed 2026-08-17 22:22:19 -04:00)*
+
+[`TR-3`](#tr-3) replaced a wrapping `fetch_add` with `fetch_add` plus a `store` to pin the counter. Those are
+two operations and the counter is already wrapped to zero between them, so a thread arriving in that window
+takes 0, then 1, 2, ... and mints successfully -- the exact aliasing the guard existed to prevent. A single
+saturating `fetch_update` replaces both, so the counter never transiently holds a wrapped value.
+
+The first regression test tried to catch a thread minting a recycled generation and passed against the broken
+implementation, the window being a few instructions wide. It now watches the counter itself, and fails with
+`the counter held a wrapped value (0)`.
+
+### <a id="fr-2"></a>FR-2 — Require exclusive access for the safe blocking adapters. *(completed 2026-08-17 22:22:19 -04:00)*
+
+`BlockingEndpoint` is automatically `Send + Sync`, and its five safe adapters took `&self` while calling an
+`unsafe` `run` whose contract forbids a second outstanding operation. Two threads could therefore each have an
+`OVERLAPPED` in flight; `run` waits on the handle, which either completion signals, so a call could return the
+other's result and free buffers the kernel was still using. Safe code could reach it.
+
+The adapters now take `&mut self`, making it a borrow-check error. Pinned by a `compile_fail` doctest paired
+with a positive control differing only in single ownership versus an `Arc`, so the rejection is demonstrably the
+borrow requirement rather than any compile error.
+
+### <a id="fr-3"></a>FR-3 — Reject file and scatter/gather lengths too large for the Win32 field. *(completed 2026-08-17 22:22:19 -04:00)*
+
+Not from the review. Found while working FR-2: `fs.rs` carried its own copy of the capping helper that
+[`TR-4`](#tr-4) removed from `device.rs`, across eight call sites. The scatter/gather adapters reach the limit
+through a page count, and now check before allocating, which also converts `PageBuffers::new`'s overflow panic
+into an ordinary error.
