@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use crate::callback_env::CallbackEnviron;
 use crate::pool::ThreadpoolPool;
@@ -34,13 +35,71 @@ fn drop_without_members_is_clean() {
 #[test]
 fn set_max_threads_accepts_one() {
     let pool = ThreadpoolPool::new().expect("create pool");
-    pool.set_max_threads(1);
+    pool.set_max_threads(1).expect("a non-zero maximum");
 }
 
 #[test]
 fn set_max_threads_accepts_a_large_value() {
     let pool = ThreadpoolPool::new().expect("create pool");
-    pool.set_max_threads(512);
+    pool.set_max_threads(512).expect("a non-zero maximum");
+}
+
+/// A maximum of zero leaves a pool that runs nothing at all: work submitted to
+/// it is queued and never executed, and `SetThreadpoolThreadMaximum` returns
+/// void, so nothing else could report it.
+#[test]
+fn set_max_threads_rejects_zero() {
+    let pool = ThreadpoolPool::new().expect("create pool");
+    let error = pool
+        .set_max_threads(0)
+        .expect_err("a maximum of zero must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.raw_os_error().is_none(),
+        "the rejection is ours, not the platform's: {error}"
+    );
+    // The pool is unaffected and still usable.
+    pool.set_max_threads(2).expect("a non-zero maximum");
+}
+
+/// The maximum takes precedence over the minimum rather than being raised to
+/// meet it. This pins the behaviour the method documents, which is the opposite
+/// of what it used to claim.
+#[test]
+fn the_maximum_takes_precedence_over_the_minimum() {
+    let pool = ThreadpoolPool::new().expect("create pool");
+    pool.set_min_threads(4).expect("set minimum");
+    pool.set_max_threads(2).expect("set maximum");
+
+    let mut env = CallbackEnviron::new();
+    env.set_pool(&pool);
+
+    let concurrent = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let inside = Arc::clone(&concurrent);
+    let highest = Arc::clone(&peak);
+
+    let work = ThreadpoolWork::new(
+        move || {
+            let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+            highest.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(80));
+            inside.fetch_sub(1, Ordering::SeqCst);
+        },
+        Some(&mut env),
+    )
+    .expect("create work");
+
+    for _ in 0..8 {
+        work.submit();
+    }
+    work.wait();
+
+    assert!(
+        peak.load(Ordering::SeqCst) <= 2,
+        "the maximum was not honoured: peak was {}",
+        peak.load(Ordering::SeqCst)
+    );
 }
 
 #[test]
@@ -58,17 +117,21 @@ fn set_min_threads_one_succeeds() {
 #[test]
 fn min_and_max_together_are_accepted() {
     let pool = ThreadpoolPool::new().expect("create pool");
-    pool.set_max_threads(4);
+    pool.set_max_threads(4).expect("a non-zero maximum");
     assert!(pool.set_min_threads(2).is_ok());
 }
 
-/// The pool clamps a maximum below the minimum rather than failing.
+/// Setting a maximum below the current minimum is accepted rather than failing,
+/// and the pool keeps working. Which of the two wins is a separate question,
+/// answered by [`the_maximum_takes_precedence_over_the_minimum`] -- this test
+/// was previously named for the "clamped upward" behaviour, which measurement
+/// showed does not happen.
 #[test]
-fn max_below_min_is_clamped_not_rejected() {
+fn max_below_min_is_accepted_not_rejected() {
     let pool = ThreadpoolPool::new().expect("create pool");
     pool.set_min_threads(4).expect("set minimum");
-    pool.set_max_threads(1);
-    // Still usable afterwards, which is what "clamped" means in practice.
+    pool.set_max_threads(1).expect("a non-zero maximum");
+    // Still usable afterwards, which is the property being checked here.
     let mut env = CallbackEnviron::new();
     env.set_pool(&pool);
     let ran = Arc::new(AtomicUsize::new(0));
@@ -124,7 +187,7 @@ fn set_pool_does_not_disturb_other_fields() {
 fn work_runs_on_a_private_pool() {
     // Declared before the work object, so it is dropped last.
     let pool = ThreadpoolPool::new().expect("create pool");
-    pool.set_max_threads(2);
+    pool.set_max_threads(2).expect("a non-zero maximum");
 
     let mut env = CallbackEnviron::new();
     env.set_pool(&pool);
@@ -150,7 +213,7 @@ fn work_runs_on_a_private_pool() {
 #[test]
 fn a_single_thread_pool_runs_every_submission() {
     let pool = ThreadpoolPool::new().expect("create pool");
-    pool.set_max_threads(1);
+    pool.set_max_threads(1).expect("a non-zero maximum");
     pool.set_min_threads(1).expect("set minimum");
 
     let mut env = CallbackEnviron::new();

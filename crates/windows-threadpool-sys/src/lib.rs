@@ -26,8 +26,11 @@
 //! models both with one object and a `period` argument, which hides the property
 //! that matters most when writing the callback: a [`timer::ThreadpoolPeriodicTimer`] may
 //! queue its next tick while the previous one is still running, so its callback
-//! must tolerate overlapping with itself, whereas a [`timer::ThreadpoolTimer`] never
-//! overlaps. See the [`timer`] module for how to choose.
+//! must tolerate overlapping with itself, whereas a [`timer::ThreadpoolTimer`]
+//! re-armed from *inside* its callback never does -- that request is applied
+//! only once the callback returns. Arming a one-shot from outside while its
+//! callback runs can still overlap it; see the [`timer`] module for both the
+//! choice and that distinction.
 //!
 //! Three supporting types shape where those callbacks run and how they are torn
 //! down: [`pool::ThreadpoolPool`] is an owned private pool,
@@ -72,7 +75,7 @@
 //! use windows_threadpool_sys::work::ThreadpoolWork;
 //!
 //! let pool = ThreadpoolPool::new()?;
-//! pool.set_max_threads(2);
+//! pool.set_max_threads(2)?;
 //!
 //! let mut env = CallbackEnviron::new();
 //! env.set_pool(&pool);

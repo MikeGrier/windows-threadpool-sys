@@ -398,3 +398,41 @@ watching a manual-reset event -- which stays signalled, so the re-arm queues the
 two callbacks could both observe zero. That is exactly the overlap documented in [`FZ-1`](#fz-1), latent in this
 test since the round that introduced it. The activation is now selected atomically: 25 runs clean, and 12 full
 workspace runs clean afterwards.
+
+## Moved 2026-08-18 — M12, ninth review round on PR #3
+
+Seven findings, all verified and all correct. Two were overclaims of exactly the kind the previous round was
+spent removing, and two were violations of this repository's own documented conventions. Decisions in
+[DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+### <a id="ib-1"></a>IB-1 — Reject a zero thread maximum, and correct what the maximum actually does. *(completed 2026-08-18 00:25:15 -04:00)*
+
+Both parts measured, since the SDK page states neither. `set_max_threads(0)` leaves a pool that runs nothing --
+a submitted work item did not execute in three seconds, and `SetThreadpoolThreadMaximum` returns void so nothing
+could report it. And the documented claim that "the pool clamps the value to at least the current minimum" is
+false: a minimum of 4 followed by a maximum of 2 peaked at **2** concurrent callbacks, so the maximum wins.
+
+Owner decision: reject zero, returning `io::Result<()>` as `set_min_threads` already does. The clamping sentence
+is replaced by the measured behaviour, which is now pinned by a test -- as is the rejection. An existing unit
+test carried the false claim in its *name* (`max_below_min_is_clamped_not_rejected`) and was renamed to describe
+what it actually checks.
+
+### <a id="ib-2"></a>IB-2 — Scope the "never overlaps" claim to callback-driven re-arming. *(completed 2026-08-18 00:25:15 -04:00)*
+
+The crate overview and README both stated flatly that a `ThreadpoolTimer` never overlaps, while the type's own
+documentation has a *When firings can overlap* section saying the opposite for external arming. A reader
+choosing between the timer types from the overview was being given the wrong basis for the choice. Both now
+scope the guarantee to re-arming through `TimerFiring` and name the exception.
+
+### <a id="ib-3"></a>IB-3 — Correct the `set_pool` migration note in the pull request description. *(completed 2026-08-18 00:25:15 -04:00)*
+
+The breaking-changes list said `set_pool` "takes an owned `ThreadpoolPool`". It takes a *borrow*, deliberately
+retained as `CallbackEnviron<'pool>` -- which is the entire point of the change. As written it told a consumer
+to hand over ownership they must in fact keep. Corrected, and the new `set_max_threads` break added.
+
+### <a id="ib-4"></a>IB-4 — Make the planning documents obey the repository's own rules. *(completed 2026-08-18 00:25:15 -04:00)*
+
+[COMPLETED-PLANS.md](COMPLETED-PLANS.md) referred to `COMPLETED-CHECKLIST.md` as inline code rather than a
+clickable relative link; it now links all three archives, each verified to exist. Both crates' CHECKLIST files
+carried a paragraph summarising everything the crate covers -- historical prose duplicating the archive, in
+files this repository defines as action-only. Removed.

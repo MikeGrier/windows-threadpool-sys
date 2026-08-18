@@ -387,6 +387,22 @@ alongside so the incidental cancellation is not mistaken for a contract and quie
 This is the honest shape of the decision: a documented precondition is a weaker thing than an enforced one, and
 saying so is better than either overclaiming or paying for machinery nobody needs.
 
+## A thread maximum of zero is refused, and the maximum beats the minimum
+
+Two facts about `SetThreadpoolThreadMaximum`, both established by measurement rather than from the SDK page,
+which states neither:
+
+- **A maximum of zero leaves a pool that runs nothing.** A submitted work item was measured never executing;
+	the call returns void, so the mistake is unreportable and undiscoverable except by the callbacks never
+	arriving. `set_max_threads` therefore returns `io::Result<()>` and rejects zero, matching
+	`set_min_threads`. This is a slightly different case from the period and length rejections elsewhere: there
+	the platform did something *other* than what was asked, whereas here it does exactly what was asked -- the
+	request is simply never useful, and a safe API should not hand back a pool that cannot run anything.
+- **The maximum takes precedence over the minimum.** Setting a minimum of 4 and then a maximum of 2 was
+	measured peaking at 2 concurrent callbacks. The method previously documented the opposite ("the pool clamps
+	the value to at least the current minimum"), and a unit test carried that claim in its *name*. Both are
+	corrected, and the measured behaviour is now pinned by a test rather than asserted in prose.
+
 ## A periodic timer rejects any period it cannot actually repeat at
 
 `SetThreadpoolTimer` takes the period as whole milliseconds. A period under 1ms therefore rounds down to zero,

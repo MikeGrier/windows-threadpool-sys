@@ -26,9 +26,11 @@ One-shot and periodic timers are separate types on purpose. The platform models
 both with one object and a `period` argument, which hides the property that
 matters most when writing the callback: a `ThreadpoolPeriodicTimer` may queue its next
 tick while the previous one is still running, so its callback must tolerate
-overlapping with itself. A `ThreadpoolTimer` never overlaps, and re-arming it from inside
-its own callback gives repetition whose gap is measured from the end of each
-firing.
+overlapping with itself. Re-arming a `ThreadpoolTimer` from inside its own
+callback never overlaps — the request is applied only after the callback
+returns, so the gap is measured from the end of each firing. Arming a one-shot
+from outside while its callback is running is the one case that can still
+overlap it.
 
 Three supporting types shape where those callbacks run and how they are torn
 down: `pool::ThreadpoolPool` is an owned private pool,

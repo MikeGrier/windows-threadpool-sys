@@ -2,7 +2,9 @@
 
 Checklists whose planned work is complete, across the repository. A checklist reappears in
 [PLANS.md](PLANS.md) if new work is planned against it; the row here stays as the record of the work that was
-finished. Individual milestones are archived in each component's `COMPLETED-CHECKLIST.md`.
+finished. Individual milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) here, in
+[crates/windows-overlapped-io-sys/COMPLETED-CHECKLIST.md](crates/windows-overlapped-io-sys/COMPLETED-CHECKLIST.md),
+and in [crates/windows-threadpool-sys/COMPLETED-CHECKLIST.md](crates/windows-threadpool-sys/COMPLETED-CHECKLIST.md).
 
 | Path to CHECKLIST.md | Completion Date | Brief description | Design Notes |
 |---|---|---|---|

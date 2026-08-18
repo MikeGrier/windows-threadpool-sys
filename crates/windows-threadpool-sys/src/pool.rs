@@ -47,7 +47,7 @@ use windows_sys::Win32::System::Threading::{
 /// // Declared first, so it outlives the objects that use it.
 /// let pool = ThreadpoolPool::new()?;
 /// pool.set_min_threads(1)?;
-/// pool.set_max_threads(4);
+/// pool.set_max_threads(4)?;
 ///
 /// let mut env = CallbackEnviron::new();
 /// env.set_pool(&pool);
@@ -87,10 +87,29 @@ impl ThreadpoolPool {
 
     /// Set the maximum number of threads this pool may allocate.
     ///
-    /// The pool clamps the value to at least the current minimum.
-    pub fn set_max_threads(&self, maximum: u32) {
+    /// The maximum takes precedence over the minimum rather than being raised to
+    /// meet it: a pool set to a minimum of 4 and then a maximum of 2 was
+    /// measured running at most 2 callbacks concurrently.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] if `maximum` is zero. Such a pool
+    /// runs no callbacks at all -- work submitted to it is queued and never
+    /// executed -- and `SetThreadpoolThreadMaximum` returns void, so nothing
+    /// else could report the mistake. Use
+    /// [`CleanupGroup`](crate::cleanup_group::CleanupGroup) or the objects' own
+    /// teardown to stop callbacks, rather than starving the pool that runs them.
+    pub fn set_max_threads(&self, maximum: u32) -> io::Result<()> {
+        if maximum == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a thread pool needs a maximum of at least one thread; a maximum of zero runs no \
+                 callbacks at all and the native call cannot report it",
+            ));
+        }
         // SAFETY: pool is valid for the lifetime of self.
         unsafe { SetThreadpoolThreadMaximum(self.pool, maximum) };
+        Ok(())
     }
 
     /// Set the minimum number of threads this pool keeps available.
