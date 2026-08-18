@@ -29,35 +29,13 @@ use crate::{Operation, OperationState, UnassociatedEndpoint};
 /// or shared behind a `Mutex`; what it cannot do is have two operations in
 /// flight, which is what the mutual exclusion buys.
 ///
-/// One owner issuing operations in sequence is the supported shape, and
-/// compiles:
-///
-/// ```
-/// use windows_overlapped_io_sys::BlockingEndpoint;
-///
-/// fn read_twice(endpoint: &mut BlockingEndpoint) -> std::io::Result<()> {
-///     let (_first, _) = endpoint.read(64, 0)?;
-///     let (_second, _) = endpoint.read(64, 64)?;
-///     Ok(())
-/// }
-/// ```
-///
-/// Sharing one endpoint across threads and reading from both is rejected at
-/// compile time rather than corrupting a result at run time. This is the same
-/// example with the single owner replaced by an `Arc`, which can only hand out
-/// `&BlockingEndpoint`:
-///
-/// ```compile_fail
-/// use std::sync::Arc;
-/// use windows_overlapped_io_sys::BlockingEndpoint;
-///
-/// fn read_from_two_threads(endpoint: BlockingEndpoint) {
-///     let shared = Arc::new(endpoint);
-///     let other = Arc::clone(&shared);
-///     std::thread::spawn(move || other.read(64, 0));
-///     let _ = shared.read(64, 64);
-/// }
-/// ```
+/// One owner issuing operations in sequence is the supported shape; sharing one
+/// endpoint across threads and operating from both is rejected at compile time
+/// rather than corrupting a result at run time, since every operation method
+/// takes `&mut self` while an `Arc` hands out only `&BlockingEndpoint`. See the
+/// `read` method (available with the `fs` feature) for runnable examples of
+/// both -- the examples live there because they call `read`, which the `fs`
+/// feature provides, so they compile in every configuration that has it.
 #[derive(Debug)]
 pub struct BlockingEndpoint {
     handle: OwnedHandle,

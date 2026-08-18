@@ -37,6 +37,36 @@ impl BlockingEndpoint {
     /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`,
     /// which the read's byte count cannot express, or any error from issuing or
     /// completing the read.
+    ///
+    /// # Examples
+    ///
+    /// One owner issuing reads in sequence is the supported shape, and compiles:
+    ///
+    /// ```
+    /// use windows_overlapped_io_sys::BlockingEndpoint;
+    ///
+    /// fn read_twice(endpoint: &mut BlockingEndpoint) -> std::io::Result<()> {
+    ///     let (_first, _) = endpoint.read(64, 0)?;
+    ///     let (_second, _) = endpoint.read(64, 64)?;
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// Sharing one endpoint across threads and reading from both is rejected at
+    /// compile time rather than corrupting a result at run time, because `read`
+    /// takes `&mut self` while an `Arc` can only hand out `&BlockingEndpoint`:
+    ///
+    /// ```compile_fail
+    /// use std::sync::Arc;
+    /// use windows_overlapped_io_sys::BlockingEndpoint;
+    ///
+    /// fn read_from_two_threads(endpoint: BlockingEndpoint) {
+    ///     let shared = Arc::new(endpoint);
+    ///     let other = Arc::clone(&shared);
+    ///     std::thread::spawn(move || other.read(64, 0));
+    ///     let _ = shared.read(64, 64);
+    /// }
+    /// ```
     pub fn read(&mut self, len: usize, offset: u64) -> io::Result<(Vec<u8>, usize)> {
         // Checked before allocating, so an unusable request costs nothing.
         let buf_len = checked_len(len, "read buffer")?;
