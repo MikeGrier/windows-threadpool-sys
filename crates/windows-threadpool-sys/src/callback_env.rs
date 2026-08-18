@@ -16,6 +16,21 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::pool::ThreadpoolPool;
 
+/// Bit positions within `TP_CALLBACK_ENVIRON_V3`'s flags word.
+///
+/// The SDK declares these as a bitfield on `TP_CALLBACK_ENVIRON_V3_0`, which
+/// `windows-sys` exposes only as the aliasing `Flags: u32`. The bit positions
+/// are therefore part of the ABI this crate depends on, and are named here
+/// rather than written inline at the point of use.
+///
+/// Changing any value is a breaking change: these describe the layout the
+/// operating system reads, not a private encoding.
+mod environ_flags {
+    /// `LongFunction`: the callback may run long, so the pool may add threads.
+    /// Set by `SetThreadpoolCallbackRunsLong`.
+    pub(super) const LONG_FUNCTION: u32 = 1 << 0;
+}
+
 /// Equivalent to `InitializeThreadpoolEnvironment` / `DestroyThreadpoolEnvironment`.
 ///
 /// Wraps [`TP_CALLBACK_ENVIRON_V3`] with a guaranteed-valid initial state and a
@@ -150,8 +165,9 @@ impl<'pool> CallbackEnviron<'pool> {
     /// Hints to the thread pool that this callback may run for a long time,
     /// allowing the pool to spawn additional threads.
     pub fn set_runs_long(&mut self) {
-        // SAFETY: Flags and s._bitfield alias the same u32; bit 0 is LongFunction.
-        unsafe { self.inner.u.Flags |= 1 }
+        // SAFETY: `Flags` and `s._bitfield` are the two halves of a union over the
+        // same u32, so writing through `Flags` sets the bitfield the SDK reads.
+        unsafe { self.inner.u.Flags |= environ_flags::LONG_FUNCTION }
     }
 
     /// Equivalent to `SetThreadpoolCallbackLibrary`.

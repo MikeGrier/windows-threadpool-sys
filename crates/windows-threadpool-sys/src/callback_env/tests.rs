@@ -195,6 +195,15 @@ fn set_priority_round_trip() {
 
 // --- set_runs_long ---
 
+/// The bit position is ABI, so this pins the named constant to the value the
+/// operating system reads. The assertions below deliberately keep the bare `1`
+/// rather than using the constant: comparing the implementation against itself
+/// would pass even if the constant were changed to the wrong bit.
+#[test]
+fn the_long_function_flag_is_bit_zero() {
+    assert_eq!(crate::callback_env::environ_flags::LONG_FUNCTION, 1);
+}
+
 #[test]
 fn set_runs_long_sets_bit_zero() {
     let mut env = CallbackEnviron::new();

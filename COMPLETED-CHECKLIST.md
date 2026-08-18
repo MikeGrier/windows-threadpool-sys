@@ -319,3 +319,36 @@ scheduled after the minters finished, sampling nothing and passing against the b
 Fixed by a non-panicking `try_next_generation` seam -- so the concurrent test raises no panics and touches no
 hook -- and a barrier so observers are provably running before the boundary is crossed. Verified to still fail
 four times out of four against the broken implementation, and pass four out of four with the fix.
+
+## Moved 2026-08-17 — M10, seventh review round on PR #3
+
+Six findings, four of which were one claim -- and that claim is the first in this PR to be **rejected on
+evidence** rather than fixed. Decisions in [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+### <a id="ga-1"></a>GA-1 — Record that the scatter/gather 64 MiB limit does not exist. *(completed 2026-08-17 23:23:05 -04:00)*
+
+The review asserted, in four separate comments, that `ReadFileScatter` and `WriteFileGather` have a documented
+per-call ceiling of 2^26 bytes and that all four scatter/gather paths should reject anything larger.
+
+Checked twice, negative both times. Both Microsoft Learn pages were read in full and neither states any per-call
+byte ceiling. Measured directly on this machine: scatter reads of 16383, 16384, 16385 and **32768** pages all
+succeeded, the last returning 134,217,728 bytes -- 128 MiB, twice the claimed limit.
+
+No length change was made. Implementing the suggestion would have rejected requests the platform accepts,
+introducing a defect while appearing to remove one. The investigation and its evidence are recorded so the claim
+is not re-raised and nobody later "fixes" its absence.
+
+### <a id="ga-2"></a>GA-2 — Name the `LongFunction` flag instead of writing its bit inline. *(completed 2026-08-17 23:23:05 -04:00)*
+
+`CallbackEnviron::set_runs_long` ORed a bare `1` into the environment's flags word -- the manifest identity of an
+ABI bit, which this repository's conventions forbid inline. Now an `environ_flags::LONG_FUNCTION` constant,
+declared once with a note that changing it is a breaking change. The behavioural tests deliberately keep their
+literal `1`, since asserting against the constant would pass even if the constant were wrong; a separate test
+pins the constant itself.
+
+### <a id="ga-3"></a>GA-3 — Bring the pull request's breaking-changes list up to date. *(completed 2026-08-17 23:23:05 -04:00)*
+
+The list still described only the original PR after six rounds of hardening. Rebuilt from the commit history
+rather than memory, split into signature changes, inputs now rejected rather than silently altered, and additive
+items worth knowing. The validation section was refreshed too (285 tests to 363, plus the non-Windows build and
+the opt-in stress suite).

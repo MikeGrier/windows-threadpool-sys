@@ -399,7 +399,33 @@ The scatter/gather adapters reach the limit through a page *count*, which is the
 oversized total, and checking before allocating additionally converts what would have been `PageBuffers::new`'s
 overflow panic into an ordinary `InvalidInput` error.
 
-One saturation is kept deliberately. A coalescing *window* is a permission -- "you may delay this firing by up to
+### There is no 64 MiB ceiling on scatter/gather, and we checked
+
+A review round asserted that `ReadFileScatter` and `WriteFileGather` have a documented per-call limit of 2^26
+bytes (64 MiB), and that all four scatter/gather adapters should reject anything larger. **They do not, and we
+did not.** This is recorded so the claim is not re-raised, and so nobody later "fixes" the absence.
+
+Two independent checks, both negative:
+
+- The Microsoft Learn pages for both functions were read in full -- parameters, return value, remarks. Neither
+	states any per-call byte ceiling. The only size constraints documented are that the segment array must have
+	enough elements for the byte count, that each buffer is one page and page-aligned, and that the total must be
+	a multiple of the volume sector size because the handle is opened `FILE_FLAG_NO_BUFFERING`.
+- Measured directly: scatter reads of 16383, 16384, 16385 and **32768** pages all succeeded, the last returning
+	134,217,728 bytes -- 128 MiB, twice the claimed ceiling, straddling it in both directions.
+
+Adding the suggested check would have rejected requests the platform accepts, introducing a defect while
+appearing to remove one. Where a real environment-specific ceiling exists -- a filesystem, a redirector, a
+driver -- it surfaces as an ordinary native error, which these adapters already return unaltered. That is the
+right division: reject what the *API contract* cannot express (a length that does not fit the `u32` field),
+and report what the *platform* refuses.
+
+The general point is worth keeping: a review finding is a hypothesis, not an instruction. This one was specific,
+plausible and confidently worded, and still wrong.
+
+### One saturation is deliberate
+
+A coalescing *window* is a permission -- "you may delay this firing by up to
 this much to batch it" -- and the pool is always free to fire earlier, so a saturated window asks for less
 coalescing rather than producing a wrong result. Periods pass through the same helper but cannot reach the
 saturation, being validated at construction. The distinction that matters is whether capping loses data or only
