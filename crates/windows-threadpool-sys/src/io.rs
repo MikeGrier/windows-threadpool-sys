@@ -319,6 +319,13 @@ impl ThreadpoolIo {
     /// is already complete and no callback will arrive, and `Err` only when the
     /// submission failed and no callback will arrive. Misclassifying either
     /// unbalances the pool's accounting or frees storage the kernel still owns.
+    ///
+    /// `issue` must not unwind. `StartThreadpoolIo` is issued before it runs and
+    /// is balanced only on the paths below; a panic out of `issue` skips that
+    /// balancing while leaving the start pending, and -- because a panic before
+    /// starting the I/O is indistinguishable from one after -- rundown could then
+    /// wait forever for a callback that will never arrive. A closure that might
+    /// panic must catch it and return `Err` instead.
     pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
         P: Send,
@@ -482,9 +489,10 @@ impl Drop for ThreadpoolIo {
             self.live.wait_until_empty();
         }
 
-        // The count reaches zero inside the last callback, just before it
-        // returns, so a callback frame may still be live here. Both calls below
-        // must happen before the context is freed and before the handle closes.
+        // The count reaches zero when the last callback is *entered*, not when
+        // it returns, so a callback frame may still be running here. Both calls
+        // below must happen before the context is freed and before the handle
+        // closes.
         //
         // SAFETY: tp_io is valid and no operation is outstanding, so waiting
         // without cancelling cannot orphan any storage, and closing the object

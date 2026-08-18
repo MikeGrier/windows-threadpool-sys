@@ -311,6 +311,12 @@ impl CompletionPort {
     /// delivered to this port, [`Issued::Completed`] only when the operation is
     /// already complete and no packet will arrive, and `Err` only when the
     /// submission failed and no completion will arrive.
+    ///
+    /// `issue` must not unwind. The operation is registered before it runs and
+    /// deregistered only on the paths below; a panic out of `issue` skips that
+    /// and -- because a panic before starting the I/O is indistinguishable from
+    /// one after -- rundown could then wait forever for a packet that will never
+    /// arrive. A closure that might panic must catch it and return `Err`.
     #[track_caller]
     pub(crate) unsafe fn submit_with<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
@@ -484,6 +490,10 @@ impl<'port> AssociatedEndpoint<'port> {
     /// delivered to this endpoint's port, [`Issued::Completed`] only when the
     /// operation is already complete and no packet will arrive, and `Err` only
     /// when the submission failed and no completion will arrive.
+    ///
+    /// `issue` must not unwind: a panic out of it can leave an operation
+    /// registered with no completion coming, which makes rundown wait forever. A
+    /// closure that might panic must catch it and return `Err`.
     #[track_caller]
     pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where

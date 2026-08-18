@@ -28,9 +28,9 @@ targets = ["x86_64-pc-windows-msvc"]
 # The shared overlapped-I/O foundation: owned endpoints, pinned operations, and the
 # submission seam (`into_overlapped` / `from_overlapped` / `reclaim_overlapped`) that
 # the `TP_IO` backend builds on. Published independently, so both a path (for the
-# workspace) and a version (for consumers building from crates.io) are required. The
-# default feature set is used; the `TP_IO` backend needs only the core completion
-# machinery, not any operation-family adapter.
+# workspace) and a version (for consumers building from crates.io) are required. No
+# features are enabled (`default-features = false`): the `TP_IO` backend needs only
+# the core completion machinery, not any operation-family adapter (fs, socket, device).
 windows-overlapped-io-sys = { version = "0.1.0", path = "../windows-overlapped-io-sys", default-features = false }
 
 windows-sys = {
