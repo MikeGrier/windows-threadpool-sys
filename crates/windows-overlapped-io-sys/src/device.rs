@@ -3,9 +3,16 @@
 //!
 //! These wrappers own the input and output buffers and issue the single native
 //! `DeviceIoControl` internally, so a caller performs an overlapped device
-//! control without touching `OVERLAPPED`, the submission seam, or `unsafe`. A
-//! device is a `HANDLE`, so the adapters extend the existing handle endpoints
-//! rather than introducing a device-specific type.
+//! control without touching `OVERLAPPED` or the submission seam. A device is a
+//! `HANDLE`, so the adapters extend the existing handle endpoints rather than
+//! introducing a device-specific type.
+//!
+//! The `ioctl` methods are `unsafe` because they take an arbitrary control code:
+//! a code whose input structure embeds raw pointers to separate buffers (such as
+//! `SCSI_PASS_THROUGH_DIRECT`) reaches storage these adapters do not own, so only
+//! the caller can guarantee that storage outlives the operation. A self-contained
+//! code -- an `FSCTL` query, say -- needs nothing beyond the owned buffers, but
+//! the seam cannot tell the two apart, so the obligation lives in the contract.
 
 use std::ffi::c_void;
 use std::io;
@@ -32,7 +39,20 @@ impl BlockingEndpoint {
     /// Returns [`io::ErrorKind::InvalidInput`] if either buffer is longer than
     /// `u32::MAX` bytes, which the control code's byte counts cannot express, or
     /// any error from issuing or completing the control operation.
-    pub fn ioctl(
+    ///
+    /// # Safety
+    ///
+    /// `code`'s input layout must be *self-contained*: the driver may read or
+    /// write only the bytes inside `input` and the output buffer, never memory
+    /// reached through a pointer embedded in `input`. Some control codes take an
+    /// input structure that carries raw pointers to separate buffers --
+    /// `SCSI_PASS_THROUGH_DIRECT::DataBuffer` is one -- which this adapter neither
+    /// owns nor keeps alive. For such a code the caller must keep every referenced
+    /// buffer valid for the whole call; the adapter cannot, because it does not
+    /// know the code's layout. This is why the generic raw-code seam is `unsafe`
+    /// even though a self-contained code (an `FSCTL` query, say) needs nothing
+    /// more than owned buffers.
+    pub unsafe fn ioctl(
         &mut self,
         code: u32,
         input: &[u8],
@@ -140,8 +160,23 @@ impl AssociatedEndpoint<'_> {
     /// Returns [`io::ErrorKind::InvalidInput`] if either buffer is longer than
     /// `u32::MAX` bytes, which the control code's byte counts cannot express, or
     /// any immediate failure from issuing the control operation.
+    ///
+    /// # Safety
+    ///
+    /// `code`'s input layout must be *self-contained*: the driver may read or
+    /// write only the bytes inside `input` and the output buffer, never memory
+    /// reached through a pointer embedded in `input`. Some control codes take an
+    /// input structure that carries raw pointers to separate buffers --
+    /// `SCSI_PASS_THROUGH_DIRECT::DataBuffer` is one -- which this adapter neither
+    /// owns nor keeps alive. Because the operation outlives this call, such a
+    /// pointee could be freed while the driver is still using it. For such a code
+    /// the caller must keep every referenced buffer alive until the operation
+    /// completes; the adapter cannot, because it does not know the code's layout.
+    /// This is why the generic raw-code seam is `unsafe` even though a
+    /// self-contained code (an `FSCTL` query, say) needs nothing more than owned
+    /// buffers.
     #[track_caller]
-    pub fn ioctl(
+    pub unsafe fn ioctl(
         &self,
         code: u32,
         input: Vec<u8>,

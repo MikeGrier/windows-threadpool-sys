@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Mike Grier
 //! Integration test (`device` feature): an `FSCTL` query on a real file through
-//! both the blocking and IOCP `ioctl` adapters, with no `unsafe` in the test's
-//! I/O path.
+//! both the blocking and IOCP `ioctl` adapters. `ioctl` is `unsafe` because it
+//! takes an arbitrary control code; `FSCTL_GET_COMPRESSION` is self-contained,
+//! which is what the `unsafe` blocks below assert.
 
 #![cfg(all(windows, feature = "device"))]
 
@@ -29,9 +30,11 @@ fn blocking_backend_queries_compression() {
         UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
     );
 
-    let (output, returned) = endpoint
-        .ioctl(FSCTL_GET_COMPRESSION, &[], COMPRESSION_STATE_LEN)
-        .expect("ioctl");
+    // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- empty input, and it
+    // writes only the owned output buffer, embedding no pointers.
+    let (output, returned) =
+        unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, &[], COMPRESSION_STATE_LEN) }
+            .expect("ioctl");
     assert_eq!(returned, COMPRESSION_STATE_LEN);
     assert_eq!(output.len(), COMPRESSION_STATE_LEN);
 
@@ -50,8 +53,9 @@ fn iocp_backend_queries_compression() {
         )
         .expect("associate");
 
-    let token = endpoint
-        .ioctl(FSCTL_GET_COMPRESSION, Vec::new(), COMPRESSION_STATE_LEN)
+    // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- empty input, and it
+    // writes only the owned output buffer, embedding no pointers.
+    let token = unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, Vec::new(), COMPRESSION_STATE_LEN) }
         .expect("submit ioctl");
     let completion = port.get(5_000).expect("get").expect("a completion");
     let (output, result) = token

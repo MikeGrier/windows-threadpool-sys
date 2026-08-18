@@ -22,9 +22,11 @@ fn blocking_ioctl_get_compression() {
     );
 
     // FSCTL_GET_COMPRESSION returns a USHORT compression state (2 bytes).
-    let (output, returned) = endpoint
-        .ioctl(FSCTL_GET_COMPRESSION, &[], COMPRESSION_STATE_LEN)
-        .expect("ioctl");
+    // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- its input is empty and
+    // it writes only the owned output buffer, embedding no pointers.
+    let (output, returned) =
+        unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, &[], COMPRESSION_STATE_LEN) }
+            .expect("ioctl");
     assert_eq!(returned, COMPRESSION_STATE_LEN);
     assert_eq!(output.len(), COMPRESSION_STATE_LEN);
 
@@ -43,8 +45,9 @@ fn iocp_ioctl_get_compression() {
         )
         .expect("associate");
 
-    let token = endpoint
-        .ioctl(FSCTL_GET_COMPRESSION, Vec::new(), COMPRESSION_STATE_LEN)
+    // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- its input is empty and
+    // it writes only the owned output buffer, embedding no pointers.
+    let token = unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, Vec::new(), COMPRESSION_STATE_LEN) }
         .expect("submit ioctl");
     let completion = port.get(5_000).expect("get").expect("a completion");
     let (output, result) = match token.claim(&completion) {
@@ -104,8 +107,9 @@ fn blocking_ioctl_rejects_an_oversized_output_buffer() {
         UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
     );
 
-    let error = endpoint
-        .ioctl(FSCTL_GET_COMPRESSION, &[], u32::MAX as usize + 1)
+    // SAFETY: FSCTL_GET_COMPRESSION is self-contained; the oversized output
+    // length is rejected before any native call, so this never reaches a driver.
+    let error = unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, &[], u32::MAX as usize + 1) }
         .expect_err("an unrepresentable output length must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(
@@ -131,8 +135,9 @@ fn submitted_ioctl_rejects_an_oversized_output_buffer() {
         )
         .expect("associate endpoint");
 
-    let error = endpoint
-        .ioctl(FSCTL_GET_COMPRESSION, Vec::new(), u32::MAX as usize + 1)
+    // SAFETY: FSCTL_GET_COMPRESSION is self-contained; the oversized output
+    // length is rejected before any native call, so this never reaches a driver.
+    let error = unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, Vec::new(), u32::MAX as usize + 1) }
         .expect_err("an unrepresentable output length must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(
