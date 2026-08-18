@@ -334,6 +334,81 @@ fn a_wait_can_be_rearmed_after_disarming() {
     assert_eq!(results, vec![WaitResult::Signalled]);
 }
 
+// --- the overlap contract ---
+
+/// Run a self-re-arming wait for `window`, re-arming at the *start* of a slow
+/// callback, and report `(entries, overlapping entries)`.
+fn measure_overlap(manual_reset: bool, reset_before_rearm: bool) -> (usize, usize) {
+    let inside = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let overlaps = Arc::new(AtomicUsize::new(0));
+    let entries = Arc::new(AtomicUsize::new(0));
+
+    let in_callback = Arc::clone(&inside);
+    let violations = Arc::clone(&overlaps);
+    let counter = Arc::clone(&entries);
+
+    let wait = ThreadpoolWait::new(
+        WaitableHandle::event(manual_reset, true).expect("create a signalled event"),
+        move |activation| {
+            if in_callback.swap(true, Ordering::SeqCst) {
+                violations.fetch_add(1, Ordering::SeqCst);
+            }
+            counter.fetch_add(1, Ordering::SeqCst);
+            if reset_before_rearm {
+                reset(activation.handle());
+            }
+            // Re-arm first, then keep working: the shape that overlaps.
+            activation.rearm(None);
+            std::thread::sleep(Duration::from_millis(10));
+            in_callback.store(false, Ordering::SeqCst);
+        },
+        None,
+    )
+    .expect("create wait");
+
+    wait.arm(None);
+    std::thread::sleep(Duration::from_millis(200));
+    wait.stop_and_drain();
+
+    (
+        entries.load(Ordering::SeqCst),
+        overlaps.load(Ordering::SeqCst),
+    )
+}
+
+/// A manual-reset event stays signalled, so re-arming inside the callback queues
+/// the next activation before this one returns. This is the documented hazard,
+/// and the opposite of the one-shot timer's guarantee -- pinned by a test so the
+/// documentation cannot quietly stop being true.
+#[test]
+fn rearming_a_still_signalled_wait_overlaps_the_callback() {
+    let (entries, overlaps) = measure_overlap(true, false);
+    assert!(entries > 1, "the wait should have re-activated repeatedly");
+    assert!(
+        overlaps > 0,
+        "expected the callback to overlap itself ({entries} entries, {overlaps} overlapping)"
+    );
+}
+
+/// An auto-reset event does not have the problem: the wait consumes the signal,
+/// so re-arming waits for a fresh one.
+#[test]
+fn rearming_an_auto_reset_wait_does_not_overlap() {
+    let (_entries, overlaps) = measure_overlap(false, false);
+    assert_eq!(overlaps, 0, "an auto-reset wait should not overlap");
+}
+
+/// Resetting the handle before re-arming is the documented way out for a
+/// manual-reset event.
+#[test]
+fn resetting_before_rearming_avoids_the_overlap() {
+    let (_entries, overlaps) = measure_overlap(true, true);
+    assert_eq!(
+        overlaps, 0,
+        "resetting before re-arming should stop the overlap"
+    );
+}
+
 // --- quiescing without dropping ---
 
 /// Build a wait whose callback always re-arms, on a manual-reset event that

@@ -257,11 +257,65 @@ impl WaitActivation<'_> {
         self.result == WaitResult::Signalled
     }
 
+    /// Borrow the handle this activation was for.
+    ///
+    /// The wait owns the handle and outlives every callback, so it is open for
+    /// the duration of this borrow. This is what makes the documented way out of
+    /// [the overlap hazard](Self::rearm#this-can-overlap-the-callback-with-itself)
+    /// reachable: a callback watching a manual-reset event can reset it before
+    /// re-arming, so the next activation waits for a fresh signal instead of
+    /// starting immediately alongside this one.
+    #[must_use]
+    pub fn handle(&self) -> BorrowedHandle<'_> {
+        // SAFETY: the wait owns this handle and cannot be dropped while a
+        // callback is running, so it is open for at least this borrow.
+        unsafe { BorrowedHandle::borrow_raw(self.ctx.handle) }
+    }
+
     /// Arm the wait again, so the next signal or timeout activates it.
     ///
     /// `timeout` of `None` waits indefinitely. This is the mechanism the SDK
     /// requires for repeated waits: an activation consumes the arming, so a
     /// callback that wants to keep watching must rearm from inside itself.
+    ///
+    /// # This can overlap the callback with itself
+    ///
+    /// Re-arming takes effect immediately, and the pool activates as soon as the
+    /// handle is signalled. If the handle is *still signalled* when this is
+    /// called -- which is the normal state of a manual-reset event -- the next
+    /// activation is queued at once and can begin before the current callback
+    /// returns. Re-arming early in a long callback therefore runs it
+    /// concurrently with itself, repeatedly: a 20ms callback that re-armed at
+    /// its start was measured entering 7529 times in 400ms, 5110 of those
+    /// overlapping an earlier entry.
+    ///
+    /// This is not the guarantee [`TimerFiring::rearm_after`] gives. A one-shot
+    /// timer's re-arm is deferred until the callback returns, precisely so
+    /// firings stay sequential; a wait's re-arm is not, because the SDK requires
+    /// the wait to be re-armed for the handle's *current* signal state to be
+    /// observed.
+    ///
+    /// Either reset the handle before re-arming, using
+    /// [`handle`](Self::handle), so the next activation waits for a fresh
+    /// signal:
+    ///
+    /// ```no_run
+    /// # use std::os::windows::io::AsRawHandle;
+    /// # use windows_sys::Win32::System::Threading::ResetEvent;
+    /// # fn example(activation: &windows_threadpool_sys::wait::WaitActivation<'_>) {
+    /// // SAFETY: the wait owns the event, so the handle is open here.
+    /// unsafe { ResetEvent(activation.handle().as_raw_handle()) };
+    /// activation.rearm(None);
+    /// # }
+    /// ```
+    ///
+    /// or accept the concurrency and make everything the callback touches
+    /// tolerate it. An auto-reset event does not have this problem, because the
+    /// wait consumes the signal.
+    ///
+    /// [`TimerFiring::rearm_after`]: crate::timer::TimerFiring::rearm_after
+    ///
+    /// # Teardown
     ///
     /// Re-arming after the object has begun tearing down does nothing, so a
     /// callback racing [`ThreadpoolWait`]'s `Drop` cannot leave the object armed
@@ -364,6 +418,12 @@ unsafe extern "system" fn wait_trampoline(
 ///
 /// [`Drop`] disarms before draining callbacks, then closes the object and only
 /// afterwards releases the callback context and the handle.
+///
+/// Unlike [`ThreadpoolTimer`](crate::timer::ThreadpoolTimer), **the callback can
+/// run concurrently with itself**: a wait's re-arm takes effect immediately, so
+/// re-arming while the handle is still signalled queues the next activation
+/// before the current callback returns. See [`WaitActivation::rearm`] for the
+/// measurements and the two ways to avoid it.
 ///
 /// # Examples
 ///
