@@ -352,45 +352,40 @@ identity, a submission classification, and a submission outcome mean the same th
 `TP_IO` outside this crate showed that only `OperationId` was not actually reachable -- it had no public
 constructor, so a backend in another crate could read an identity but never produce one. `OperationId::mint`
 closes that gap: it takes the operation's storage address and pairs it with the next value of a process-wide
-monotonic counter, which is what makes the identity unique rather than merely descriptive. `OperationId::from_parts`
-reconstructs one from an address and a generation the caller already holds, for a backend that carries the two
-halves separately across an FFI boundary; it is the seam's escape hatch, not its normal entry point.
+monotonic counter, which is what makes the identity unique rather than merely descriptive.
 
-Both are safe because an `OperationId` is only an address plus a counter -- the address is what
+`mint` is safe because an `OperationId` is only an address plus a counter -- the address is what
 `OperationId::as_ptr` already exposes, and the type is documented as never to be dereferenced or freed. The
 generation is what an address alone could not provide: storage is reclaimed and reissued, so an identity minted
 from an address alone could silently name a later operation. That failure was reproduced before the redesign, at
 cycle 21 of a reclaim loop.
 
+**Minting is the only way safe code can obtain an identity.** There is deliberately no safe constructor that
+pairs an address with a generation of the caller's choosing. An earlier `from_parts` did exactly that, and its
+documentation claimed that "reconstructing an identity confers no access that observing it did not already
+confer" -- which was false. A caller holding `(p, g)` could construct `(p, g + 1)`, and if the next submission
+reusing `p` were stamped with that generation, `cancel` would accept the forged identity and abort an operation
+the caller never submitted. The generation defeats a *retained* identity; nothing stopped a *guessed* one. That
+is an isolation break rather than undefined behaviour -- cancelling a live operation is well-defined, tokens are
+not forgeable, and no storage can be reclaimed twice by it -- but it is precisely the property generations exist
+to provide.
+
+The fix removed the pairing step from the normal path rather than guarding it. Every caller of `from_parts` was
+reassembling what the registry had just returned, so `OperationRegistry::remove` and `OperationRegistry::identify`
+return a whole `OperationId`, built from the pair the registry itself recorded. A backend recovering the identity
+of a completion it knows only by address asks the registry for it and never supplies a generation, so it cannot
+supply a wrong one.
+
+`unsafe fn forge` remains, for the tests that prove a stale or ahead identity is *rejected*: that coverage has to
+be reachable from the sibling crate, where a `pub(crate)` seam would not be. Marking it `unsafe` for an invariant
+that is not memory safety is a deliberate choice -- the obligation is the kind `unsafe` exists to record, and the
+alternative was losing those regression tests or leaving safe code able to forge. The `compile_fail` doctest
+proving safe code cannot forge is paired with a positive control differing only in the `unsafe` block, so the
+rejection is demonstrably the missing obligation rather than any other compile error.
+
 The alternative -- letting the thread-pool crate define its own identity type -- was rejected: it would fork the
 shared vocabulary the two crates exist to hold in common, and downstream code composing the backends would have
 to translate between two identical types.
-
-### An identity cannot be assembled by safe code
-
-`from_parts` was originally safe, taking an address and a generation from the caller. Its documentation claimed
-that "reconstructing an identity confers no access that observing it did not already confer", which was false: a
-caller holding `(p, g)` could construct `(p, g + 1)`, and if the next submission reusing `p` were stamped with
-that generation, `cancel` would accept the forged identity and abort an operation the caller never submitted.
-The generation defeats *retained* identities, but nothing stopped a *guessed* one.
-
-This is an isolation break rather than undefined behaviour -- cancelling a live operation is well-defined,
-tokens are not forgeable, and no storage can be reclaimed twice by it -- but it is exactly the property
-generations exist to provide.
-
-The fix removes the pairing step from the normal path rather than guarding it. Every caller of `from_parts` was
-reassembling what the registry had just returned, so `OperationRegistry::remove` and `identify` (formerly
-`generation_of`) now return a whole `OperationId`, built from the pair the registry itself recorded. Backends
-never supply a generation, so they cannot supply a wrong one.
-
-A forging constructor remains, as `unsafe fn forge`, because the tests that prove a stale or ahead identity is
-*rejected* must be able to build one -- and that coverage has to live in the sibling crate too, where a
-`pub(crate)` seam would not reach. Marking it `unsafe` for an invariant that is not memory safety is a
-deliberate choice: the obligation is exactly the kind `unsafe` exists to record, and the alternative was either
-losing the regression tests or leaving safe code able to forge.
-
-The `compile_fail` doctest proving safe code cannot forge is paired with a positive control that differs only in
-the `unsafe` block, so the rejection is demonstrably the missing obligation rather than any other compile error.
 
 ## Crate boundary summary
 

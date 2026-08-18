@@ -292,8 +292,9 @@ vocabulary the two crates are supposed to hold in common.
 
 Building the second backend then exposed a deeper problem in the same seam: an identity was only an address, so
 one retained past its operation's completion could name a later operation that had been given the same storage.
-`OperationId::mint` / `from_parts` and the shared `OperationRegistry` replaced the original address-only
-constructor; see
+`OperationId::mint` and the shared `OperationRegistry` replaced the original address-only constructor, and the
+registry hands a backend the whole identity for an address rather than a generation to re-pair, so safe code
+cannot assemble one at all. See
 [crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) for that
 decision, which this crate consumes rather than duplicates.
 
@@ -386,6 +387,23 @@ alongside so the incidental cancellation is not mistaken for a contract and quie
 
 This is the honest shape of the decision: a documented precondition is a weaker thing than an enforced one, and
 saying so is better than either overclaiming or paying for machinery nobody needs.
+
+## The encoding check rejects stray control characters
+
+A form feed reached two committed source comments. The cause was a PowerShell replacement containing
+`` `forge` `` in a double-quoted string: PowerShell reads the backtick-`f` as its **form-feed escape**, so the
+text became `<FF>orge`. Invisible in every editor and diff, and it survived review twice.
+
+[tools/check-encoding.ps1](tools/check-encoding.ps1) did not catch it, because it tested only for invalid UTF-8
+and for mojibake digraphs -- and a form feed is valid UTF-8 and is not mojibake. It now also rejects any C0
+control or DEL other than tab, line feed and carriage return, reporting the byte value and line. The check was
+verified against a planted form feed, not just against the repaired files.
+
+The wider point is about tooling rather than encoding: **a shell that rewrites the text it is passed is the
+wrong tool for editing source.** This repository's instructions already say to use the file tools instead of
+PowerShell for file content, precisely because of escape hazards like this one; the damage happened in a
+`String.Replace` chain that looked innocuous. Where a shell must be used, prefer single-quoted strings, and
+verify the result by reading the file back rather than trusting the command's exit status.
 
 ## Summary prose keeps overclaiming what the reference docs get right
 

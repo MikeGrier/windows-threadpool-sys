@@ -470,3 +470,34 @@ round while correcting a different description error.
 That makes four consecutive rounds in which summary prose overclaimed something the reference documentation
 states correctly, so the pattern itself is now recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) with a rule for
 writing such prose, rather than being fixed one sentence at a time.
+
+## Moved 2026-08-18 — M14, eleventh review round on PR #3
+
+Two findings, both correct, and both introduced by the previous round. Decisions in
+[DESIGN-NOTES.md](DESIGN-NOTES.md) and
+[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md).
+
+### <a id="kd-1"></a>KD-1 — Remove the form-feed characters, and make the encoding check able to see them. *(completed 2026-08-18 01:19:11 -04:00)*
+
+A PowerShell replacement in the previous round contained `` `forge` `` in a double-quoted string, and PowerShell
+read the backtick-`f` as its form-feed escape, committing `<FF>orge` into a source comment.
+
+Wider than reported: the review named the thread-pool test, but the same replacement ran over the overlapped
+crate's test, which had identical damage. A repository-wide byte scan found these two and no others.
+
+The guard missed it. [tools/check-encoding.ps1](tools/check-encoding.ps1) tested only for invalid UTF-8 and
+mojibake digraphs, and a form feed is neither, so CI passed both damaged files. It now rejects any C0 control or
+DEL other than tab, line feed and carriage return, reporting byte value and line -- verified against a planted
+form feed rather than only against the repaired files.
+
+### <a id="kd-2"></a>KD-2 — Make the operation-identity decision describe the API that exists. *(completed 2026-08-18 01:19:11 -04:00)*
+
+The seam paragraph still introduced `OperationId::from_parts` as the escape hatch and said both constructors were
+safe, while a subsection immediately below explained that safe assembly is forbidden -- so the canonical decision
+contradicted both the API and itself.
+
+This was the second time that paragraph went stale the same way: [`RW-5`](#rw-5) corrected it when `from_ptr`
+was replaced, and the two accounts drifted again. Rather than patch it a third time, the subsection was folded
+into the paragraph so there is one account to keep current. Applying the check-for-siblings rule also found the
+same stale claim in the workspace [DESIGN-NOTES.md](DESIGN-NOTES.md), which the review had not flagged;
+`COMPLETED-CHECKLIST` mentions were left alone, being append-only history that was accurate when written.

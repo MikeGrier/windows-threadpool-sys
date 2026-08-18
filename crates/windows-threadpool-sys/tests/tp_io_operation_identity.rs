@@ -422,7 +422,7 @@ fn a_stale_generation_at_a_live_address_is_rejected() {
 
     // The identity a previous operation at this same storage would have had.
     // SAFETY: deliberately forging an identity the registry never issued, in
-    // order to assert that it is refused. This is the case orge exists for.
+    // order to assert that it is refused. This is the case `forge` exists for.
     let stale = unsafe { OperationId::forge(live.as_ptr(), live.generation() - 1) };
     assert_eq!(
         stale.as_ptr(),

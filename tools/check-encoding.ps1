@@ -1,7 +1,8 @@
 # Copyright (c) Michael Grier
 #
 # tools/check-encoding.ps1 -- fail if any tracked text file is not valid
-# UTF-8 or contains characteristic mojibake digraphs.
+# UTF-8, contains a stray C0 control character, or contains characteristic
+# mojibake digraphs.
 #
 # encoding-check: allow-mojibake  (this file contains literal examples
 # of mojibake patterns in regexes and comments)
@@ -108,7 +109,26 @@ foreach ($file in $files) {
         continue
     }
 
-    # 2. Must not contain characteristic mojibake patterns -- unless the
+    # 2. Must not contain stray C0 control characters or DEL.
+    #
+    #    Tab, line feed and carriage return are the only ones a text file has
+    #    any business containing. The rest are invisible in every editor and
+    #    diff, so they survive review unless something looks for them.
+    #
+    #    This exists because a form feed (0x0C) was committed into two source
+    #    comments: a PowerShell replacement contained a backtick followed by
+    #    `f`, which PowerShell reads as its form-feed escape. Such a character
+    #    is valid UTF-8 and is not mojibake, so both checks above passed it.
+    $control = [regex]::Match($text, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]')
+    if ($control.Success) {
+        $prefix = $text.Substring(0, $control.Index)
+        $line = ($prefix -split "`n").Count
+        $code = '0x{0:X2}' -f [int][char]$control.Value
+        $failures += "CONTROL CHARACTER: $file [$code at line $line]"
+        continue
+    }
+
+    # 3. Must not contain characteristic mojibake patterns -- unless the
     #    file explicitly opts out.
     if ($text.Contains($AllowMojibakeMarker)) { continue }
     foreach ($p in $Patterns) {
