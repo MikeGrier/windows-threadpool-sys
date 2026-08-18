@@ -137,3 +137,44 @@ callback blocked on it.
 Suppression is not observable from outside, so each object exposes the outcome to its own tests
 (`rearm_reporting`; a test-only observer on the timer). Both regression tests were confirmed to fail with the
 gating removed -- an earlier version that only asserted teardown terminated passed either way.
+
+## Moved 2026-08-17 — M6, third review round on PR #3
+
+Five findings, raised as suppressed comments and all verified against the code before being fixed. Two were
+functional defects in safe APIs, three were documents that no longer described the code beside them.
+
+Both defects had the same shape, recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md): each guard tested the condition
+that had been *written down* rather than the one that actually mattered.
+
+### <a id="rw-1"></a>RW-1 — Reject periods below one millisecond in `ThreadpoolPeriodicTimer`. *(completed 2026-08-17 20:52:23 -04:00)*
+
+`new` rejected only a zero period, but every arming converts with `Duration::as_millis()`, flooring anything
+under 1ms to zero -- which `SetThreadpoolTimer` reads as "do not repeat". Measured: 999us fired **once** in
+300ms, 1000us fired 31 times, with no error. Rejection now sits at a public `MIN_PERIOD` constant, mirrored on
+`CleanupGroup::create_periodic_timer`. The regression test asserts that the shortest accepted period actually
+repeats, so lowering the constant makes it fail by timing out.
+
+### <a id="rw-2"></a>RW-2 — Release cleanup-group members created after a previous release. *(completed 2026-08-17 20:52:23 -04:00)*
+
+`release_members` latched a `released` flag. Since `create_*` take `&self`, members could arrive after a release
+returned and were then skipped by both a later `close_members` and by `Drop`: measured `owned_resources` still 1
+after a second close, leaking the context and closing the group with a live member. The flag was removed rather
+than reset, since the native release is idempotent -- which fixes the leak and makes the group reusable instead
+of merely rejecting reuse.
+
+### <a id="rw-3"></a>RW-3 — Correct the wait-handle provenance claim in the crate README. *(completed 2026-08-17 20:52:23 -04:00)*
+
+The safety summary still said `ThreadpoolWait` takes an `OwnedHandle`; it takes a `WaitableHandle`, which is
+what keeps unsupported handles out of the safe API. The periodic period floor was added to the same list.
+
+### <a id="rw-4"></a>RW-4 — Remove the stale `SESSION-CONTEXT.md` snapshot. *(completed 2026-08-17 20:52:23 -04:00)*
+
+A design-phase snapshot added on this branch, stating that no safe API had been implemented and that the safety
+boundary was unresolved -- both false by the end of the PR. Every contract it recorded was verified present in
+the two DESIGN-NOTES files before removal.
+
+### <a id="rw-5"></a>RW-5 — Update the operation-identity seam decision to the API that exists. *(completed 2026-08-17 20:52:23 -04:00)*
+
+The decision still justified `OperationId::from_ptr`, removed by the generation-stamped redesign. It now
+describes `mint` and `from_parts`, why an identity carries a generation, and the aliasing failure that motivated
+it.
