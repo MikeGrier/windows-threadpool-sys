@@ -108,6 +108,45 @@ pinned operation storage, adding the balanced `StartThreadpoolIo` accounting
 that only the thread pool requires. The pool's internal completion port is never
 exposed.
 
+## Timer stress suite
+
+[`tests/timer_stress.rs`](tests/timer_stress.rs) applies sustained load to the
+timer types: self-re-arming chains, arming churn from many threads, teardown
+racing live callbacks, deliberately overlapping periodic ticks, cleanup groups
+holding armed members, and a mixed scenario running all of it at once.
+
+It is **opt-in** and deliberately excluded from CI, where it would be slow and
+where a contended shared runner makes timing-sensitive scenarios unreliable.
+Nothing runs unless `WINDOWS_THREADPOOL_STRESS` is set:
+
+```powershell
+$env:WINDOWS_THREADPOOL_STRESS = "1"
+cargo test -p windows-threadpool-sys --test timer_stress -- --nocapture
+```
+
+`WINDOWS_THREADPOOL_STRESS_SCALE` multiplies every load count, so the same
+scenarios run harder without editing them:
+
+```powershell
+$env:WINDOWS_THREADPOOL_STRESS_SCALE = "10"
+```
+
+The suite still compiles and lints in CI, so it cannot rot; only the load is
+skipped. A full run at scale 1 takes about a minute.
+
+Two things worth knowing before reading the output. Pool timers fire on the
+system timer tick (~15.6ms measured), so a zero-delay re-arm chain advances at
+roughly 64 links a second however trivial the callback -- scenarios are sized
+for wall-clock time rather than round iteration counts. And a loop that arms and
+disarms without pausing outruns the pool entirely, never reaching a tick with the
+timer armed; scenarios that need firings pause past a tick and assert a floor, so
+they cannot silently degenerate into testing the arming calls alone.
+
+Assertions are limited to what is invariant under load: non-overlap where the
+type guarantees it, quiescence after a drain, and the absence of a hang or a
+crash. Rates, latencies, and exact firing counts are reported rather than
+asserted, because under load those describe the machine rather than the code.
+
 ## Status
 
 Work, timers, waits, private pools, cleanup groups, and thread-pool I/O are

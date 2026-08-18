@@ -338,6 +338,37 @@ directly. Both objects therefore expose the outcome to their own tests -- `rearm
 test-only observer on the timer, whose `Arc` the test keeps so the record outlives the freed context. Without
 these, a test could only assert that teardown terminated, which it does with the gating removed as well.
 
+## The timer stress suite is opt-in, and asserts only what load cannot perturb
+
+The timer types carry the crate's subtlest concurrency contracts, and the unit tests establish each one once,
+deterministically. [crates/windows-threadpool-sys/tests/timer_stress.rs](crates/windows-threadpool-sys/tests/timer_stress.rs)
+applies pressure to them instead.
+
+It is gated on the `WINDOWS_THREADPOOL_STRESS` environment variable, with `WINDOWS_THREADPOOL_STRESS_SCALE`
+multiplying every load count. An environment variable rather than `#[ignore]` because one knob turns the whole
+suite on and the tests still compile and lint in CI, so the suite cannot rot while nobody runs it. The gate is
+applied by a macro rather than a line inside each test: a gate that has to be remembered per test is one that
+gets forgotten in exactly one of them, and that test is then a load test running in CI. Scenarios also take a
+process-wide lane, because Cargo runs them on parallel threads against one shared pool, where they would
+otherwise measure each other.
+
+Assertions are confined to what load cannot perturb: non-overlap where the type guarantees it, quiescence after
+a drain, `owned_resources` reaching zero, and the absence of a hang or a crash. Rates, latencies, and exact
+firing counts are reported instead, because under load they describe the machine.
+
+Two measurements shaped every scenario, and are recorded here because they are not obvious and they will
+otherwise be rediscovered the hard way:
+
+- **Pool timers fire on the system timer tick, ~15.6ms.** A zero-delay re-arm does not fire immediately; it
+	fires on the next tick. A self-re-arming chain therefore advances at roughly 64 links a second however
+	trivial its callback, so chain lengths are sized for wall-clock time -- raising them buys duration, not
+	coverage.
+- **A loop that arms without pausing outruns the pool completely.** Early versions of the churn, rapid-drop, and
+	start/stop scenarios recorded *zero* callbacks: the loop never left the timer armed when a tick arrived, so
+	each was silently testing the arming calls alone. Scenarios that need firings now pause past a tick and
+	assert a floor, so the same degeneration cannot recur unnoticed. The rapid create/arm/drop scenario keeps its
+	zero -- there it is the point, and it is documented rather than asserted away.
+
 Primary references:
 - [Thread Pools](https://learn.microsoft.com/windows/win32/procthread/thread-pools)
 - [Thread Pool API](https://learn.microsoft.com/windows/win32/procthread/thread-pool-api)

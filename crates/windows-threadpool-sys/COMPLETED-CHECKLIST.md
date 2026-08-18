@@ -119,3 +119,45 @@ M4-8 (the one-shot/periodic timer split).
 
 	Crate-level guidance, runnable doc examples for every object type, a rewritten README, and docs.rs metadata
 	pinning a Windows target — without which documentation for this Windows-only crate would fail to build.
+
+## Moved 2026-08-17 — M5 timer stress suite
+
+An opt-in load suite for the timer types, gated on `WINDOWS_THREADPOOL_STRESS` and scaled by
+`WINDOWS_THREADPOOL_STRESS_SCALE`. 24 scenarios, about a minute at scale 1. See
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md) for the decision, and the crate [README.md](README.md) for how to run
+it.
+
+Two measurements shaped the whole suite and are recorded in the design note: pool timers fire on the ~15.6ms
+system tick, and a loop that arms without pausing outruns the pool entirely -- which made three early scenarios
+record zero callbacks while appearing to pass.
+
+- [x] **ST-1** — Stress harness plus the one-shot arming and re-arming scenarios. *(completed 2026-08-17 20:14:49 -04:00)*
+
+	Env-var gate applied by a macro so it cannot be forgotten per test, a scale knob, and a serialization lane
+	so two heavy scenarios never measure each other. Scenarios: self-re-arm chains asserting the documented
+	non-overlap guarantee, past-instant `rearm_at` chains, arming churn across eight threads, arm/disarm races,
+	deterministic arm-fire cycles, a large one-shot population, coalescing windows, and contained panics.
+
+- [x] **ST-2** — One-shot teardown stress: `Drop` racing a firing and a re-arming callback. *(completed 2026-08-17 20:14:49 -04:00)*
+
+	Rapid create/arm/drop churn, drops walking across the due time, drops landing mid-callback with a deferred
+	re-arm pending, and concurrent teardown across eight threads. Targets the window closed by the second PR
+	review round, where a regression appears as a hang or a crash rather than a failed assertion.
+
+- [x] **ST-3** — Periodic timer stress: high-frequency ticking, self-stop, and deliberate tick overlap. *(completed 2026-08-17 20:14:49 -04:00)*
+
+	Sustained ticking, deliberately overlapping ticks (peak 3 concurrent, confirming the documented contract
+	empirically), self-stop from inside the callback, start/stop churn, drops while ticking and mid-tick, a
+	large ticking population, and zero-period rejection under repetition.
+
+- [x] **ST-4** — Cleanup-group timer members and a mixed load scenario. *(completed 2026-08-17 20:14:49 -04:00)*
+
+	A group releasing its members is a distinct teardown path: large member populations released as a unit under
+	both dispositions of `cancel_pending`, concurrent release across threads, and a group left to drop. The
+	mixed scenario runs a self-re-arming one-shot, a periodic population, and timer and group churn together,
+	asserting the non-overlap guarantee survives a loaded pool.
+
+- [x] **ST-5** — Document how to run the suite. *(completed 2026-08-17 20:14:49 -04:00)*
+
+	Crate README section covering both environment variables, the deliberate CI exclusion, the two measurements
+	that shape the scenarios, and what is asserted versus reported.
