@@ -338,6 +338,28 @@ directly. Both objects therefore expose the outcome to their own tests -- `rearm
 test-only observer on the timer, whose `Arc` the test keeps so the record outlives the freed context. Without
 these, a test could only assert that teardown terminated, which it does with the gating removed as well.
 
+## Quiescing without dropping is `stop_and_drain`, and it is ours to guarantee
+
+`ThreadpoolTimer` and `ThreadpoolWait` both let a callback re-arm from inside itself, so "stop this and wait
+until it is idle" is not expressible as disarm-plus-drain. `wait()` demonstrably does not do it: after
+`disarm(); wait();` a self-re-arming timer was measured still set and firing, because the deferred re-arm is
+applied after the callback returns, which is after the external disarm.
+
+`cancel_pending()` *was* measured to leave the object quiescent -- but only because the pool drops a callback
+armed by the trampoline during an in-flight cancel. No SDK contract promises that, so relying on it would make
+our quiescence guarantee a property of the dependency rather than of this crate. Both types therefore have a
+`stop_and_drain` that suppresses re-arming under the same lock `Drop` uses, disarms, drains, and lifts the
+suppression so the object stays usable. `ThreadpoolPeriodicTimer` already had one, so this also removes an
+asymmetry between the three timer-shaped types.
+
+The suppression is a **depth count**, not a flag. It has two users with different lifetimes: `stop_and_drain`
+raises and lowers it, while `Drop` raises it permanently. With a flag, one `stop_and_drain` finishing would
+clear a suppression a concurrent one still needed.
+
+Suppression is not observable from outside -- dropping queued callbacks leaves the object idle either way -- so
+the regression test asserts the *mechanism*, checking that the in-flight callback's re-arm request was actually
+refused. A first version asserted quiescence instead and passed with the suppression removed.
+
 ## A periodic timer rejects any period it cannot actually repeat at
 
 `SetThreadpoolTimer` takes the period as whole milliseconds. A period under 1ms therefore rounds down to zero,
@@ -353,6 +375,36 @@ than the caller asked for is the kind of hidden behaviour this crate avoids else
 `MIN_PERIOD` is a floor on what can be *asked for*, not a delivery guarantee: ticks arrive on the system timer
 tick, ~15.6ms by default. The two limits are unrelated -- one is the width of a field, the other is the
 resolution of the clock -- and conflating them would suggest a 1ms period ticks at 1ms, which it does not.
+
+The lower bound alone turned out to be only a third of the problem, because the same `as_millis()` conversion
+alters two other classes of period. A **fractional** one such as 1.5ms is truncated, so the timer ticks at 1ms
+while `period()` still reports 1.5ms; a period beyond **`u32::MAX` milliseconds** is capped, ticking far more
+often than asked. Both are now rejected too, alongside a `MAX_PERIOD` constant, so `period()` can never disagree
+with what was scheduled. Accepting a value and then quietly altering it is the recurring defect in this crate's
+history -- see the ioctl length limits below, which are the same mistake in a different module.
+
+## Lengths that do not fit the Win32 field are rejected, not capped
+
+`DeviceIoControl` takes its input and output sizes as `u32`. The helpers that produced them capped with
+`unwrap_or(u32::MAX)`, so a buffer larger than 4GiB submitted only a prefix -- or described the output buffer as
+smaller than it was -- and then reported success for an operation that did something other than what was asked.
+
+Both entry points now validate before allocating, so an unusable request costs nothing. The submitting path
+measures the lengths up front rather than inside its submission closure, which runs at the FFI boundary and has
+no way to report an error; the closure derives only pointers. That ordering is also what makes the tests
+affordable: they ask for 4GiB and never allocate it.
+
+## Exhausting the generation sequence fails rather than wraps
+
+`OperationId::mint` took generations with `fetch_add`, which wraps at `u64::MAX` and then reissues generations
+from zero -- reintroducing exactly the stale-identity aliasing that generations were added to prevent, against a
+type that states an (address, generation) pair names one submission *for the life of the process*.
+
+Minting now panics at exhaustion, and the refusal is sticky: `fetch_add` has already wrapped the stored value to
+zero by the time exhaustion is detectable, so the counter is pinned at its exhausted value and a caught panic
+cannot resume walking the sequence. Exhaustion remains unreachable in practice -- centuries at one submission
+per nanosecond -- so this is about the invariant being enforced rather than merely asserted. The counter is a
+parameter of a small helper purely so the boundary is testable; production code always passes the static.
 
 The regression test asserts the behaviour rather than the guard: the shortest accepted period must actually
 repeat. Lowering `MIN_PERIOD` makes it fail by timing out, which is how the original defect presented.

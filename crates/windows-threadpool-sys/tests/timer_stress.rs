@@ -481,6 +481,14 @@ stress! {
     /// proceed until the firing it is waiting for has happened, so every round
     /// is guaranteed to exercise the dispatch path and the exact firing count is
     /// a safe assertion rather than a timing measurement.
+    ///
+    /// The count is recorded *after* the overlap guard is released, which is
+    /// what makes the driving loop genuinely serial. Recording it while still
+    /// inside the guard -- as an earlier version did -- released the waiting
+    /// thread mid-callback, so it armed again while the previous callback was
+    /// still running and the two overlapped. That is permitted behaviour for an
+    /// external arming, so the resulting failure was the test contradicting
+    /// itself rather than the timer misbehaving.
     stress_one_shot_arm_and_await_fire {
         let threads = 8;
         let rounds = load(40);
@@ -494,9 +502,13 @@ stress! {
                     let seen = Arc::clone(&overlap);
                     let timer = ThreadpoolTimer::new(
                         move |_firing| {
-                            let _inside = seen.enter();
-                            let n = counter.record();
-                            work_for(n);
+                            {
+                                let _inside = seen.enter();
+                                work_for(counter.count());
+                            }
+                            // Only now is this firing over, so a thread waiting
+                            // on the count cannot arm into an overlap.
+                            counter.record();
                         },
                         None,
                     )
