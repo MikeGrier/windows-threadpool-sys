@@ -57,7 +57,7 @@ what it was asked for.
 	the point is that the invariant is enforced rather than asserted in prose. Make the counter injectable so the
 	boundary is actually testable.
 
-- [ ] **TR-4** — Reject ioctl buffers too large for the Win32 length field.
+- [x] **TR-4** — Reject ioctl buffers too large for the Win32 length field.
 
 	`clamp_u32` silently caps input and output lengths at `u32::MAX`, so a larger buffer submits only a prefix
 	while the API's signature and documentation accept the whole slice. Return `InvalidInput` instead, before

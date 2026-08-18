@@ -29,16 +29,22 @@ impl BlockingEndpoint {
     ///
     /// # Errors
     ///
-    /// Returns any error from issuing or completing the control operation.
+    /// Returns [`io::ErrorKind::InvalidInput`] if either buffer is longer than
+    /// `u32::MAX` bytes, which the control code's byte counts cannot express, or
+    /// any error from issuing or completing the control operation.
     pub fn ioctl(
         &self,
         code: u32,
         input: &[u8],
         output_len: usize,
     ) -> io::Result<(Vec<u8>, usize)> {
+        // Checked before allocating, so an unusable request costs nothing.
+        let in_len = checked_len(input.len(), "input")?;
+        let out_len = checked_len(output_len, "output")?;
+
         let mut output = vec![0_u8; output_len];
-        let (in_ptr, in_len) = in_buf(input);
-        let (out_ptr, out_len) = out_buf(&mut output);
+        let in_ptr = in_ptr(input);
+        let out_ptr = out_ptr(&mut output);
 
         let mut operation = Operation::new(());
         // SAFETY: issues exactly one DeviceIoControl reading `input` and writing
@@ -65,21 +71,21 @@ impl BlockingEndpoint {
     }
 }
 
-/// The input buffer pointer and size, `NULL`/0 for an empty buffer.
-fn in_buf(input: &[u8]) -> (*const c_void, u32) {
+/// The input buffer pointer, `NULL` for an empty buffer.
+fn in_ptr(input: &[u8]) -> *const c_void {
     if input.is_empty() {
-        (std::ptr::null(), 0)
+        std::ptr::null()
     } else {
-        (input.as_ptr().cast(), clamp_u32(input.len()))
+        input.as_ptr().cast()
     }
 }
 
-/// The output buffer pointer and size, `NULL`/0 for an empty buffer.
-fn out_buf(output: &mut [u8]) -> (*mut c_void, u32) {
+/// The output buffer pointer, `NULL` for an empty buffer.
+fn out_ptr(output: &mut [u8]) -> *mut c_void {
     if output.is_empty() {
-        (std::ptr::null_mut(), 0)
+        std::ptr::null_mut()
     } else {
-        (output.as_mut_ptr().cast(), clamp_u32(output.len()))
+        output.as_mut_ptr().cast()
     }
 }
 
@@ -97,9 +103,20 @@ fn classify(ok: i32) -> io::Result<()> {
     }
 }
 
-/// Clamp a length to the `u32` byte-count parameter the Win32 call takes.
-fn clamp_u32(len: usize) -> u32 {
-    u32::try_from(len).unwrap_or(u32::MAX)
+/// Convert a buffer length to the `u32` byte count `DeviceIoControl` takes.
+///
+/// Rejects rather than caps. Capping would submit a prefix of the caller's
+/// input, or tell the device an output buffer is smaller than it is, and report
+/// success for an operation that did something other than what was asked.
+fn checked_len(len: usize, which: &str) -> io::Result<u32> {
+    u32::try_from(len).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "a DeviceIoControl {which} buffer is limited to u32::MAX bytes; {len} does not fit"
+            ),
+        )
+    })
 }
 
 /// The pinned payload for an in-flight device-control operation: the input and
@@ -120,7 +137,9 @@ impl AssociatedEndpoint<'_> {
     ///
     /// # Errors
     ///
-    /// Returns any immediate failure from issuing the control operation.
+    /// Returns [`io::ErrorKind::InvalidInput`] if either buffer is longer than
+    /// `u32::MAX` bytes, which the control code's byte counts cannot express, or
+    /// any immediate failure from issuing the control operation.
     #[track_caller]
     pub fn ioctl(
         &self,
@@ -128,6 +147,12 @@ impl AssociatedEndpoint<'_> {
         input: Vec<u8>,
         output_len: usize,
     ) -> io::Result<DeviceIoControlIo> {
+        // Checked before allocating, so an unusable request costs nothing. The
+        // lengths are captured here rather than measured inside the submission
+        // closure, which runs at the FFI boundary and cannot report an error.
+        let in_len = checked_len(input.len(), "input")?;
+        let out_len = checked_len(output_len, "output")?;
+
         let operation = Operation::new(DeviceIoPayload {
             input,
             output: vec![0_u8; output_len],
@@ -138,8 +163,8 @@ impl AssociatedEndpoint<'_> {
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
                 let payload = payload_ptr_from_overlapped::<DeviceIoPayload>(overlapped);
-                let (in_ptr, in_len) = in_buf(&(*payload).input);
-                let (out_ptr, out_len) = out_buf(&mut (*payload).output);
+                let in_ptr = in_ptr(&(*payload).input);
+                let out_ptr = out_ptr(&mut (*payload).output);
                 let ok = DeviceIoControl(
                     handle.as_raw_handle(),
                     code,
