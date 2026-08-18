@@ -6,4 +6,4 @@ finished. Individual milestones are archived in [COMPLETED-CHECKLIST.md](COMPLET
 
 | Path to CHECKLIST.md | Completion Date | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | 2026-08-17 | Overlapped-I/O foundation complete: endpoints/provenance, operation storage, raw IOCP and blocking backends, cancellation/rundown, submission seam, and safe per-family adapters for file read/write, scatter/gather (`fs`), sockets on both backends (`socket`), and `DeviceIoControl` (`device`). | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [CHECKLIST.md](CHECKLIST.md) | 2026-08-17 | Overlapped-I/O foundation complete: endpoints/provenance, operation storage, raw IOCP and blocking backends, cancellation/rundown, submission seam, safe per-family adapters for file read/write and scatter/gather (`fs`) and sockets on both backends (`socket`), and a buffer-owning but `unsafe` raw-control-code `DeviceIoControl` seam (`device`). | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

@@ -11,17 +11,18 @@ foundation beneath `windows-threadpool-sys`: raw I/O completion ports and the
 object-based thread pool share endpoint and operation storage while remaining
 distinct completion backends.
 
-## Safe API
+## Operation-family adapters
 
 Endpoints are opened safely with `UnassociatedEndpoint::open`, and each operation
-family has safe adapters behind an opt-in Cargo feature, so callers perform real
-overlapped I/O without writing `unsafe`:
+family has an adapter behind an opt-in Cargo feature. The `fs` and `socket`
+adapters are fully safe; the `device` adapter owns its buffers but its `ioctl` is
+`unsafe`, because an arbitrary control code may embed pointers it cannot own:
 
-| Feature | Safe adapters |
-|---|---|
-| `fs` | file read/write and scatter/gather, on the blocking and IOCP backends |
-| `socket` | socket send/receive, on the blocking and IOCP backends |
-| `device` | `DeviceIoControl`, on the blocking and IOCP backends |
+| Feature | Adapter | Safe? |
+|---|---|---|
+| `fs` | file read/write and scatter/gather, on the blocking and IOCP backends | yes |
+| `socket` | socket send/receive, on the blocking and IOCP backends | yes |
+| `device` | `DeviceIoControl`, on the blocking and IOCP backends | no — buffer-owning `unsafe` raw-code seam |
 
 The default feature set is empty, keeping the core completion machinery (raw IOCP
 and blocking backends, owned endpoints, pinned operations) minimal. A narrow

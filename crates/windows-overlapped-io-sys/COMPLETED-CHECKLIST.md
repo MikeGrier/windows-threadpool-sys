@@ -110,20 +110,21 @@ Append-only record of completed checklist groups. Design decisions are in
 - [x] Integration test (`socket`): a loopback TCP round-trip through `BlockingSocket`, with no `unsafe` in the
 	test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-## Moved 2026-08-16 — Safe `DeviceIoControl` adapters (M11)
+## Moved 2026-08-16 — Buffer-owning `DeviceIoControl` adapters (M11)
 
-### M11 — Safe `DeviceIoControl` adapters (`device` feature)
+### M11 — `DeviceIoControl` adapters (`device` feature)
 
-- [x] Implement fully-safe synchronous `BlockingEndpoint::ioctl(code, input, output_len)` behind the `device`
-	feature, issuing an overlapped `DeviceIoControl` and returning `io::Result<(Vec<u8>, usize)>` with no `unsafe`
-	for the caller. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+- [x] Implement synchronous `BlockingEndpoint::ioctl(code, input, output_len)` behind the `device`
+	feature, issuing an overlapped `DeviceIoControl` and returning `io::Result<(Vec<u8>, usize)>`. The adapter
+	owns its buffers, but the generic raw-code seam is `unsafe`: an arbitrary control code may embed pointers to
+	storage the adapter cannot own. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-- [x] Implement safe-submission `AssociatedEndpoint::ioctl(code, input, output_len)` behind `device` returning a
-	typed `DeviceIoControlIo` token whose `claim(&Completion)` recovers the output buffer and byte count. See
-	[DESIGN-NOTES.md](DESIGN-NOTES.md).
+- [x] Implement submission `AssociatedEndpoint::ioctl(code, input, output_len)` behind `device` returning a
+	typed `DeviceIoControlIo` token whose `claim(&Completion)` recovers the output buffer and byte count; the
+	generic raw-code seam is `unsafe` for the same reason. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 - [x] Integration test (`device`): an `FSCTL` query on a real file through both the blocking and IOCP `ioctl`
-	adapters, with no `unsafe` in the test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+	adapters, upholding the self-contained safety contract in an `unsafe` block. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 ## Moved 2026-08-18 — M16, thirteenth review round on PR #3
 

@@ -7,15 +7,20 @@
 //! object-based thread pool share endpoint and operation storage while remaining
 //! distinct completion backends.
 //!
-//! # Safe API surface
+//! # Operation-family adapters
 //!
 //! Endpoints are created safely with [`UnassociatedEndpoint::open`], and each
-//! operation family has safe adapters behind an opt-in feature, so callers issue
-//! real overlapped I/O without writing `unsafe`:
+//! operation family has an adapter behind an opt-in feature. The `fs` and
+//! `socket` adapters are fully safe; the `device` adapter owns its buffers but
+//! its `ioctl` is `unsafe`, because an arbitrary control code may embed pointers
+//! to buffers the adapter cannot own:
 //!
 //! - `fs`: file read/write and scatter/gather, on the blocking and IOCP backends.
-//! - `socket`: socket send/receive, on the blocking and IOCP backends.
-//! - `device`: `DeviceIoControl`, on the blocking and IOCP backends.
+//!   Fully safe.
+//! - `socket`: socket send/receive, on the blocking and IOCP backends. Fully
+//!   safe.
+//! - `device`: `DeviceIoControl` on both backends, through a buffer-owning but
+//!   `unsafe` raw-control-code seam.
 //!
 //! The default feature set is empty, keeping the core completion machinery (the
 //! raw IOCP and blocking backends, owned endpoints, and pinned operations)

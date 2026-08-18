@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mike Grier
-//! Safe device-control operation adapters, gated behind the `device` feature.
+//! Buffer-owning device-control operation adapters, gated behind the `device`
+//! feature.
 //!
 //! These wrappers own the input and output buffers and issue the single native
 //! `DeviceIoControl` internally, so a caller performs an overlapped device

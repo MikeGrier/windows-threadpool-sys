@@ -280,7 +280,7 @@ impl CompletionPort {
     /// this returns and after the port itself is gone.
     ///
     /// The port is shareable, so another thread may be consuming completions at
-    /// the same time. Each wait here is therefore bounded ([`RUN_DOWN_POLL_MS`])
+    /// the same time. Each wait here is therefore bounded (`RUN_DOWN_POLL_MS`)
     /// and the live count is rechecked after it: a concurrent consumer can
     /// dequeue the last packet -- and clear its registry entry -- in the window
     /// between this loop observing a nonzero count and beginning its own wait,
