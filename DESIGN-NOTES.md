@@ -385,14 +385,43 @@ history -- see the ioctl length limits below, which are the same mistake in a di
 
 ## Lengths that do not fit the Win32 field are rejected, not capped
 
-`DeviceIoControl` takes its input and output sizes as `u32`. The helpers that produced them capped with
-`unwrap_or(u32::MAX)`, so a buffer larger than 4GiB submitted only a prefix -- or described the output buffer as
-smaller than it was -- and then reported success for an operation that did something other than what was asked.
+`DeviceIoControl`, `ReadFile`/`WriteFile` and the scatter/gather calls all take their sizes as `u32`. The
+helpers that produced them capped with `unwrap_or(u32::MAX)`, so a buffer larger than 4GiB submitted only a
+prefix -- or described the output buffer as smaller than it was -- and then reported success for an operation
+that did something other than what was asked.
 
-Both entry points now validate before allocating, so an unusable request costs nothing. The submitting path
-measures the lengths up front rather than inside its submission closure, which runs at the FFI boundary and has
-no way to report an error; the closure derives only pointers. That ordering is also what makes the tests
+Every entry point now validates before allocating, so an unusable request costs nothing. The submitting paths
+measure the lengths up front rather than inside their submission closures, which run at the FFI boundary and
+have no way to report an error; the closures derive only pointers. That ordering is also what makes the tests
 affordable: they ask for 4GiB and never allocate it.
+
+The scatter/gather adapters reach the limit through a page *count*, which is the more plausible route to an
+oversized total, and checking before allocating additionally converts what would have been `PageBuffers::new`'s
+overflow panic into an ordinary `InvalidInput` error.
+
+Worth recording as process rather than design: `device.rs` and `fs.rs` each carried their own copy of the
+capping helper, and the review that found the defect named only `device.rs`. Fixing the named module and leaving
+its neighbour would have shipped a defect already agreed to be one, so both were fixed together. When a defect
+is found in a helper, check whether the helper has siblings.
+
+## The blocking backend's "one operation at a time" is enforced by `&mut self`
+
+`BlockingEndpoint` completes one operation at a time by waiting on the *handle* with `GetOverlappedResult`. With
+two operations outstanding the handle is signalled by whichever finishes, so a call can return the other's
+result and hand back buffers the kernel is still writing into.
+
+That constraint used to live only in `run`'s safety comment, while every safe adapter took `&self` on a type
+that is automatically `Send + Sync` -- so safe code could break it by sharing an endpoint across threads. The
+safe adapters now take `&mut self`, which turns it into a borrow-check error, the same protection cleanup-group
+members get and at the same cost: none. A caller who genuinely wants to share an endpoint wraps it in a `Mutex`,
+which is explicit about the serialization it is buying.
+
+`run` keeps `&self` and stays `unsafe`. A caller driving the raw seam may legitimately hold other borrows, and
+an `unsafe` function's contract is the right home for an obligation the type system is not being asked to check.
+
+The guarantee is pinned by a `compile_fail` doctest paired with a positive control that differs *only* in single
+ownership versus an `Arc`. That pairing matters: a `compile_fail` test passes for any compile error, including a
+typo, so on its own it proves nothing about the reason.
 
 ## Exhausting the generation sequence fails rather than wraps
 
@@ -400,11 +429,21 @@ affordable: they ask for 4GiB and never allocate it.
 from zero -- reintroducing exactly the stale-identity aliasing that generations were added to prevent, against a
 type that states an (address, generation) pair names one submission *for the life of the process*.
 
-Minting now panics at exhaustion, and the refusal is sticky: `fetch_add` has already wrapped the stored value to
-zero by the time exhaustion is detectable, so the counter is pinned at its exhausted value and a caught panic
-cannot resume walking the sequence. Exhaustion remains unreachable in practice -- centuries at one submission
-per nanosecond -- so this is about the invariant being enforced rather than merely asserted. The counter is a
-parameter of a small helper purely so the boundary is testable; production code always passes the static.
+Minting now refuses to pass `u64::MAX`, in a **single** atomic update. The first attempt at this used `fetch_add`
+followed by a `store` to pin the counter, which only narrowed the window: `fetch_add` leaves the counter wrapped
+to zero until the `store` lands, and a thread arriving in between takes 0, then 1, 2, ... and mints
+successfully. A `fetch_update` that saturates means the counter never transiently holds a wrapped value, so
+there is no window to arrive in. (Use `then`, not `then_some`, inside it -- the latter is eager and overflows at
+the boundary.)
+
+Exhaustion remains unreachable in practice -- centuries at one submission per nanosecond -- so this is about the
+invariant being enforced rather than merely asserted. The counter is a parameter of a small helper purely so the
+boundary is testable; production code always passes the static.
+
+The regression test watches the *counter*, not the mint. An earlier version tried to catch a thread minting a
+recycled generation and passed against the broken implementation, because the window is a few instructions wide
+and hitting it is luck. An observer sampling the counter sees the wrapped value long before any thread happens
+to consume one, which is the difference between a test that detects the defect and one that merely might.
 
 The regression test asserts the behaviour rather than the guard: the shortest accepted period must actually
 repeat. Lowering `MIN_PERIOD` makes it fail by timing out, which is how the original defect presented.

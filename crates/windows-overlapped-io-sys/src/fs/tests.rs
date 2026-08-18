@@ -139,3 +139,86 @@ fn blocking_scatter_gather_round_trips() {
     drop(endpoint);
     let _ = std::fs::remove_file(&path);
 }
+
+// --- buffer length limits ---
+
+/// The byte counts `ReadFile`, `WriteFile` and the scatter/gather calls take are
+/// `u32`, so a longer buffer cannot be described to them. Capping would transfer
+/// a prefix and report success, which is the defect `checked_len` replaced.
+#[test]
+fn checked_len_rejects_lengths_beyond_u32() {
+    use crate::fs::checked_len;
+
+    assert_eq!(checked_len(0, "read buffer").expect("empty fits"), 0);
+    assert_eq!(
+        checked_len(u32::MAX as usize, "read buffer").expect("the largest fitting length"),
+        u32::MAX
+    );
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        let too_long = u32::MAX as usize + 1;
+        let error = checked_len(too_long, "read buffer").expect_err("must not cap");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            error.to_string().contains("read buffer"),
+            "the error should name the offending buffer: {error}"
+        );
+    }
+}
+
+/// The length is checked before the buffer is allocated, so an unrepresentable
+/// request costs nothing -- which is also what makes this test affordable: it
+/// never allocates the 4GiB it asks for.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn blocking_read_rejects_an_oversized_length() {
+    let path = std::env::temp_dir().join(format!(
+        "windows-overlapped-io-sys-fs-oversized-{}.tmp",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"oversized read test").expect("create file");
+    let mut endpoint = BlockingEndpoint::new(
+        UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
+    );
+
+    let error = endpoint
+        .read(u32::MAX as usize + 1, 0)
+        .expect_err("an unrepresentable length must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.raw_os_error().is_none(),
+        "the request should be rejected before reaching the kernel: {error}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A scatter-read reaches the same limit through a page count, and is likewise
+/// rejected before any pages are allocated -- so a request that would need
+/// terabytes of page buffers costs nothing.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn blocking_read_scatter_rejects_an_oversized_page_count() {
+    let path = std::env::temp_dir().join(format!(
+        "windows-overlapped-io-sys-fs-oversized-scatter-{}.tmp",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"oversized scatter test").expect("create file");
+    let mut endpoint = BlockingEndpoint::new(
+        UnassociatedEndpoint::open(&path, true, false, FILE_FLAG_NO_BUFFERING)
+            .expect("open endpoint"),
+    );
+
+    // Far more pages than u32::MAX bytes can describe.
+    let error = endpoint
+        .read_scatter(usize::MAX / 4096, 0)
+        .expect_err("an unrepresentable page count must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.raw_os_error().is_none(),
+        "the request should be rejected before reaching the kernel: {error}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}

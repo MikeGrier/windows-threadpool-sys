@@ -38,7 +38,7 @@ previous round -- worth stating plainly rather than filing as routine.
 	share an endpoint wraps it in a `Mutex` explicitly. Record the reasoning, since "the blocking backend is
 	single-operation" is now enforced by the type rather than only stated in the module documentation.
 
-- [ ] **FR-3** — Reject file and scatter/gather lengths too large for the Win32 field.
+- [x] **FR-3** — Reject file and scatter/gather lengths too large for the Win32 field.
 
 	**Not from the review.** Found while working FR-2: `fs.rs` carries its own copy of the `clamp_u32` helper
 	that [`TR-4`](COMPLETED-CHECKLIST.md) removed from `device.rs`, with eight call sites across `read`,
