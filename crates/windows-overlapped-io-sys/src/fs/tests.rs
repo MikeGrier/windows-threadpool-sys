@@ -194,6 +194,17 @@ fn an_overflowing_page_count_is_rejected() {
     );
 }
 
+/// A zero page count is rejected before it reaches `PageBuffers::new`, which
+/// panics on zero, so the scatter adapters return `InvalidInput` on a degenerate
+/// request rather than panicking.
+#[test]
+fn a_zero_page_count_is_rejected() {
+    use crate::fs::scatter_gather_len;
+
+    let error = scatter_gather_len(0).expect_err("zero pages must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
 /// The length is checked before the buffer is allocated, so an unrepresentable
 /// request costs nothing -- which is also what makes this test affordable: it
 /// never allocates the 4GiB it asks for.
@@ -241,6 +252,32 @@ fn blocking_read_scatter_rejects_an_oversized_page_count() {
     let error = endpoint
         .read_scatter(usize::MAX / PAGE_SIZE, 0)
         .expect_err("an unrepresentable page count must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.raw_os_error().is_none(),
+        "the request should be rejected before reaching the kernel: {error}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `read_scatter(0, ..)` must return `InvalidInput` rather than panicking in
+/// `PageBuffers::new(0)`.
+#[test]
+fn blocking_read_scatter_rejects_a_zero_page_count() {
+    let path = std::env::temp_dir().join(format!(
+        "windows-overlapped-io-sys-fs-zero-scatter-{}.tmp",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"zero scatter test").expect("create file");
+    let mut endpoint = BlockingEndpoint::new(
+        UnassociatedEndpoint::open(&path, true, false, FILE_FLAG_NO_BUFFERING)
+            .expect("open endpoint"),
+    );
+
+    let error = endpoint
+        .read_scatter(0, 0)
+        .expect_err("a zero page count must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(
         error.raw_os_error().is_none(),

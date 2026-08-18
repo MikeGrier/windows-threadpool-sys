@@ -143,12 +143,23 @@ fn classify(ok: i32) -> io::Result<()> {
 
 /// The byte total for `pages` pages, or an error if it cannot be expressed.
 ///
+/// A zero page count is rejected as well: the scatter adapters call
+/// [`PageBuffers::new`] with `pages`, which panics on zero, so validating here
+/// keeps those safe, fallible APIs returning `InvalidInput` instead of panicking
+/// on an invalid request.
+///
 /// The multiplication is checked rather than saturating. Saturating defeats the
 /// validation on 32-bit Windows, where `usize::MAX` *is* `u32::MAX`: an
 /// overflowing page count would saturate to a value [`checked_len`] accepts, and
 /// `PageBuffers::new` would then panic on its own checked multiplication instead
 /// of the adapter returning the documented `InvalidInput`.
 fn scatter_gather_len(pages: usize) -> io::Result<u32> {
+    if pages == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a scatter/gather request must name at least one page",
+        ));
+    }
     let bytes = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -439,13 +450,13 @@ impl BlockingEndpoint {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if the pages total more than
-    /// `u32::MAX` bytes, or any error from issuing or completing the
-    /// scatter-read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or the pages
+    /// total more than `u32::MAX` bytes, or any error from issuing or completing
+    /// the scatter-read.
     pub fn read_scatter(&mut self, pages: usize, offset: u64) -> io::Result<(PageBuffers, usize)> {
         // Checked before allocating, so an unusable request costs nothing. This
-        // also turns what would be `PageBuffers::new`'s overflow panic for an
-        // absurd page count into an ordinary error.
+        // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
+        // page count into an ordinary error.
         let total = scatter_gather_len(pages)?;
         let buffers = PageBuffers::new(pages);
         let segments = buffers.segment_array();
@@ -531,13 +542,14 @@ impl AssociatedEndpoint<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if the pages total more than
-    /// `u32::MAX` bytes, or any immediate failure from issuing the scatter-read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or the pages
+    /// total more than `u32::MAX` bytes, or any immediate failure from issuing
+    /// the scatter-read.
     #[track_caller]
     pub fn read_scatter(&self, pages: usize, offset: u64) -> io::Result<ScatterGatherIo> {
         // Checked before allocating, so an unusable request costs nothing. This
-        // also turns what would be `PageBuffers::new`'s overflow panic for an
-        // absurd page count into an ordinary error.
+        // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
+        // page count into an ordinary error.
         let total = scatter_gather_len(pages)?;
         let buffers = PageBuffers::new(pages);
         let segments = buffers.segment_array();
