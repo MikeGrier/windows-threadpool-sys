@@ -377,7 +377,7 @@ stress! {
                         // and the scenario degenerates into a test of the arming
                         // calls with the callback path barely reached.
                         match (t + i) % 8 {
-                            0 | 1 | 2 => timer.set_after(Duration::ZERO),
+                            0..=2 => timer.set_after(Duration::ZERO),
                             3 => timer.set_after(Duration::from_micros(50)),
                             4 => timer.disarm(),
                             _ => {
@@ -659,6 +659,196 @@ stress! {
             control.wait_for(1, Duration::from_secs(30)),
             1,
             "the pool stopped running timers after contained panics"
+        );
+    }
+}
+
+// --- one-shot: teardown ---
+
+stress! {
+    /// Create, arm, and drop as fast as the loop can go.
+    ///
+    /// The drop always beats the tick here, so no callback runs -- measured, not
+    /// assumed. What this exercises is object churn and the teardown of a timer
+    /// that is armed but has never fired, which is the common shape when a
+    /// component is torn down while idle.
+    ///
+    /// A regression in the teardown path shows up as a hang or a crash rather
+    /// than a failed assertion, which is why the scenario is worth having: no
+    /// assertion can observe a use-after-free directly.
+    stress_one_shot_rapid_create_arm_drop {
+        let cycles = load(5_000);
+        let tally = Tally::new();
+
+        for i in 0..cycles {
+            let counter = Arc::clone(&tally);
+            let timer = ThreadpoolTimer::new(
+                move |_firing| {
+                    counter.record();
+                },
+                None,
+            )
+            .expect("create timer");
+
+            match i % 3 {
+                0 => timer.set_after(Duration::ZERO),
+                1 => timer.set_after(Duration::from_millis(16)),
+                _ => timer.set_after(Duration::from_millis(50)),
+            }
+            drop(timer);
+        }
+
+        eprintln!(
+            "stress:   {cycles} create/arm/drop cycles, {} callbacks ran",
+            tally.count()
+        );
+    }
+}
+
+stress! {
+    /// Drop deliberately straddling the due time, so some drops land before the
+    /// firing, some around it, and some after it.
+    ///
+    /// The rapid loop above cannot do this: it drops microseconds after arming,
+    /// so the disarm always wins and no firing is ever raced. Here the timer is
+    /// armed a tick out and the drop is delayed by a walking offset that spans
+    /// the tick, which is what puts drops on both sides of the firing.
+    stress_one_shot_drop_racing_the_due_time {
+        let cycles = load(200);
+        let tally = Tally::new();
+
+        for i in 0..cycles {
+            let counter = Arc::clone(&tally);
+            let timer = ThreadpoolTimer::new(
+                move |_firing| {
+                    counter.record();
+                },
+                None,
+            )
+            .expect("create timer");
+
+            timer.set_after(Duration::from_millis(16));
+            // Walks 0..28ms, spanning the ~15.6ms tick in both directions.
+            let offset = u64::try_from(i % 8).unwrap_or(0) * 4;
+            std::thread::sleep(Duration::from_millis(offset));
+            drop(timer);
+        }
+
+        let fired = tally.count();
+        eprintln!("stress:   {cycles} drops straddling the due time, {fired} callbacks ran");
+        // Offsets past the tick guarantee some drops land after the firing; if
+        // none did, the scenario has degenerated into the rapid loop above.
+        assert!(
+            fired > 0,
+            "no drop landed after a firing -- the offsets no longer span the tick"
+        );
+    }
+}
+
+stress! {
+    /// Drop while a callback is *inside* the timer with a deferred re-arm
+    /// pending, which is the exact window the teardown gate exists to close.
+    ///
+    /// The callback signals that it has been entered and then sleeps, so the
+    /// drop is guaranteed to land mid-callback rather than merely near one. Each
+    /// cycle therefore exercises the gate rather than hoping to.
+    stress_one_shot_drop_during_rearming_callback {
+        let cycles = load(300);
+        let mut entered_total = 0usize;
+
+        for _ in 0..cycles {
+            let tally = Tally::new();
+            let counter = Arc::clone(&tally);
+            let timer = ThreadpoolTimer::new(
+                move |firing| {
+                    counter.record();
+                    // Ask to re-arm, then stay inside long enough for the drop
+                    // to reach its disarm before the request is applied.
+                    firing.rearm_after(Duration::ZERO);
+                    std::thread::sleep(Duration::from_millis(5));
+                },
+                None,
+            )
+            .expect("create timer");
+
+            timer.set_after(Duration::ZERO);
+            let entered = tally.wait_for(1, Duration::from_secs(30));
+            assert_eq!(entered, 1, "the callback never ran");
+            entered_total += entered;
+
+            // Drop here, with the callback still inside and a re-arm pending.
+            drop(timer);
+
+            // The re-arm must not have survived the teardown. Nothing may run
+            // after Drop returns, because Drop has already freed the context.
+            let after = tally.count();
+            std::thread::sleep(Duration::from_millis(25));
+            assert_eq!(
+                tally.count(),
+                after,
+                "a callback ran after the timer was dropped"
+            );
+        }
+
+        eprintln!("stress:   {cycles} drops landed mid-callback ({entered_total} callbacks entered)");
+    }
+}
+
+stress! {
+    /// Drops racing from many threads at once, each thread churning its own
+    /// timers, so teardown runs concurrently with other teardowns and with the
+    /// pool dispatching for unrelated objects.
+    stress_one_shot_concurrent_teardown {
+        let threads = 8;
+        let per_thread = load(300);
+        let tally = Tally::new();
+
+        let workers: Vec<_> = (0..threads)
+            .map(|t| {
+                let tally = Arc::clone(&tally);
+                std::thread::spawn(move || {
+                    for i in 0..per_thread {
+                        let counter = Arc::clone(&tally);
+                        let timer = ThreadpoolTimer::new(
+                            move |_firing| {
+                                counter.record();
+                            },
+                            None,
+                        )
+                        .expect("create timer");
+
+                        timer.set_after(Duration::ZERO);
+                        // A third of the cycles drain explicitly first, so the
+                        // drained and undrained teardown paths both run, and a
+                        // third outlive a tick so teardown races a real firing
+                        // rather than only an armed-but-never-fired timer.
+                        match (t + i) % 3 {
+                            0 => timer.cancel_pending(),
+                            1 => {
+                                std::thread::sleep(Duration::from_millis(20));
+                                timer.disarm();
+                                timer.wait();
+                            }
+                            _ => {}
+                        }
+                        drop(timer);
+                    }
+                })
+            })
+            .collect();
+
+        for worker in workers {
+            worker.join().expect("teardown thread");
+        }
+
+        let fired = tally.count();
+        eprintln!(
+            "stress:   {} concurrent teardowns, {fired} callbacks ran",
+            threads * per_thread
+        );
+        assert!(
+            fired > 0,
+            "no teardown raced a firing -- every cycle outran the pool"
         );
     }
 }

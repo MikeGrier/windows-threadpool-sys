@@ -35,7 +35,7 @@ asserted -- under load they are properties of the machine, not of the code.
 	Scenarios: self-re-arm chains asserting the documented non-overlap guarantee, external arming churn from
 	many threads, arm/disarm races, past-instant `rearm_at` chains, and coalescing windows under load.
 
-- [ ] **ST-2** — One-shot teardown stress: `Drop` racing a firing and a re-arming callback.
+- [x] **ST-2** — One-shot teardown stress: `Drop` racing a firing and a re-arming callback.
 
 	Directly targets the window closed by the previous review round: create, arm, and drop in a tight loop, and
 	drop while a callback is mid-flight with a deferred re-arm pending. This is the scenario that would surface
