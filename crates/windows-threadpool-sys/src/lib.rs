@@ -124,10 +124,22 @@
 
 #![warn(missing_docs)]
 
+// Every module wraps a Win32 thread-pool object, so the whole public surface is
+// gated on Windows and the crate resolves to an empty one elsewhere. This
+// matches the sibling `windows-overlapped-io-sys`, and it is what lets a
+// cross-platform dependency tree name this crate unconditionally instead of
+// failing to compile on other targets.
+#[cfg(windows)]
 pub mod callback_env;
+#[cfg(windows)]
 pub mod cleanup_group;
+#[cfg(windows)]
 pub mod io;
+#[cfg(windows)]
 pub mod pool;
+#[cfg(windows)]
 pub mod timer;
+#[cfg(windows)]
 pub mod wait;
+#[cfg(windows)]
 pub mod work;

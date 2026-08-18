@@ -63,7 +63,7 @@ what it was asked for.
 	while the API's signature and documentation accept the whole slice. Return `InvalidInput` instead, before
 	allocating the output buffer.
 
-- [ ] **TR-5** — Gate `windows-threadpool-sys` behind `cfg(windows)` like its sibling.
+- [x] **TR-5** — Gate `windows-threadpool-sys` behind `cfg(windows)` like its sibling.
 
 	The root [README.md](README.md) states that platform-specific code lives behind `cfg(windows)`.
 	`windows-overlapped-io-sys` gates every module; `windows-threadpool-sys` declares its modules

@@ -163,5 +163,6 @@ Work, timers, waits, private pools, cleanup groups, and thread-pool I/O are
 implemented and tested. `CallbackEnviron::set_cleanup_group` remains `unsafe` as
 a raw seam for foreign cleanup groups; use `CleanupGroup` for a safe one.
 
-This crate is Windows-only. Every item is behind `cfg(windows)` semantics, and
+This crate is Windows-only. Every item is behind `cfg(windows)`, so the crate
+builds to an empty one on other targets rather than failing to compile, and
 CI builds, tests, and lints exclusively on Windows.
