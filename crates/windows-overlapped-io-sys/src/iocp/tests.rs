@@ -241,6 +241,52 @@ fn dropping_the_port_while_a_completion_is_held_does_not_hang() {
         .expect("dropping the port with a completion held must not block");
 }
 
+/// `run_down` must not block forever when another thread drains the last
+/// operation. The port is shareable and `get` takes `&self`, so a concurrent
+/// consumer can dequeue the final packet -- and clear its registry entry --
+/// after `run_down` has observed a nonzero outstanding count but before its own
+/// wait begins. An unbounded wait would then block on a packet no longer coming,
+/// and clearing a registry entry does not wake a `GetQueuedCompletionStatus`
+/// already in progress, so only a bounded wait that rechecks the count recovers.
+///
+/// The race is modeled directly rather than provoked by chance: a live operation
+/// is registered with no packet ever queued -- so `run_down`'s wait can never
+/// complete by dequeuing -- and a second thread deregisters it as a concurrent
+/// consumer that took the last packet would. The old unbounded wait hangs here
+/// unconditionally; the bounded, rechecked wait returns. The work runs on a
+/// thread with a timeout so a regression is a test failure rather than a wedged
+/// run.
+#[test]
+fn run_down_does_not_hang_when_another_thread_clears_the_last_operation() {
+    use crate::OperationId;
+    use std::sync::Arc;
+    use std::sync::mpsc;
+
+    let port = Arc::new(CompletionPort::new(0).expect("create port"));
+    // A non-null address used only as a registry key: no storage stands behind
+    // it and it is never dereferenced, claimed, or reclaimed. The registry only
+    // compares it, which is all `run_down`'s count depends on.
+    let overlapped = 0x1000_usize as *mut super::OVERLAPPED;
+    port.state.live.insert(OperationId::mint(overlapped));
+    assert_eq!(port.outstanding(), 1);
+
+    let (tx, rx) = mpsc::channel::<()>();
+    let drainer = Arc::clone(&port);
+    std::thread::spawn(move || {
+        drainer.run_down().expect("run_down");
+        let _ = tx.send(());
+    });
+
+    // Let run_down enter its wait, then clear the entry as a concurrent consumer
+    // that dequeued the last packet would -- without any packet to wake it.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    port.state.live.remove(overlapped);
+
+    rx.recv_timeout(std::time::Duration::from_secs(20))
+        .expect("run_down must return once the last operation is cleared by another thread");
+    assert_eq!(port.outstanding(), 0);
+}
+
 #[test]
 fn synchronous_completion_reclaims_inline_without_a_packet() {
     let port = CompletionPort::new(0).expect("create port");

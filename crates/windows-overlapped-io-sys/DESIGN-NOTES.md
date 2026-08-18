@@ -196,6 +196,27 @@ it is freed, a new operation there registers a fresh generation, which an `Opera
 This does change what `outstanding()` reports: a dequeued-but-held completion no longer counts. That is the
 intended meaning -- the count measures what the port still owes the caller.
 
+### Rundown waits are bounded and rechecked, not unbounded
+
+`run_down` is `while outstanding() > 0 { get(...) }`. The wait inside the loop is **bounded**
+(`RUN_DOWN_POLL_MS`) and the count is rechecked after it, rather than an unbounded `get`.
+
+A `CompletionPort` is shareable and `get` takes `&self`, so another thread may consume completions concurrently
+with a rundown. That opens a race an unbounded wait cannot survive: this loop can observe `outstanding() == 1`,
+a concurrent consumer can then dequeue that last packet -- and clear its registry entry -- and only afterwards
+does this loop call `get`. There is no packet left to deliver, so an unbounded `get` blocks forever. Clearing a
+registry entry does not wake a `GetQueuedCompletionStatus` already in progress, so nothing rescues the wait; the
+recheck must. A bounded wait wakes on its own after the interval, the loop re-reads `outstanding()`, sees zero,
+and returns.
+
+This is distinct from the [registration-ends-at-dequeue](#registration-ends-at-dequeue-not-at-reclamation) hang:
+that one was a single thread waiting for a packet it had itself already dequeued; this one is one thread waiting
+for a packet a *different* thread dequeued. Registration timing does not close it, because the count is correct
+throughout -- the defect is purely that an unbounded wait cannot notice the count reaching zero by another path.
+A wakeable count-to-wait transition would also work; a bounded recheck is chosen as the smaller mechanism, and
+the interval only bounds recheck latency -- a packet genuinely destined for the rundown thread is still returned
+the instant it arrives, so this is not a busy-poll of a live operation.
+
 ### Voluntary rundown and `Drop`
 
 Rundown has two entry points that share the same blocking semantics; the difference is only who initiates it.

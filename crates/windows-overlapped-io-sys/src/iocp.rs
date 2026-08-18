@@ -26,8 +26,18 @@ use windows_sys::Win32::System::IO::{
 use crate::identity::{OperationId, OperationRegistry};
 use crate::{Operation, OperationState, UnassociatedEndpoint};
 
-/// Waits without timeout in `GetQueuedCompletionStatus`; used while draining.
-const INFINITE: u32 = u32::MAX;
+/// Bound on each `GetQueuedCompletionStatus` wait inside [`CompletionPort::run_down`].
+///
+/// `run_down` cannot wait without timeout: the port is shareable and
+/// [`CompletionPort::get`] takes `&self`, so a concurrent consumer can dequeue
+/// the last packet -- and clear the registry entry -- after `run_down` has
+/// observed a nonzero outstanding count but before its own wait begins. An
+/// unbounded wait would then block forever on a packet that is no longer coming.
+/// A bounded wait wakes periodically so the loop can recheck the live count and
+/// return once it reaches zero. The interval only bounds that recheck latency; a
+/// packet genuinely destined for `run_down` is still returned the instant it
+/// arrives, so this is not a busy-poll of a live operation.
+const RUN_DOWN_POLL_MS: u32 = 5;
 
 /// Optional per-operation source information, recorded only while source
 /// tracking is enabled.
@@ -214,8 +224,8 @@ impl CompletionPort {
     ///
     /// Keeping the entry until the [`Completion`] was dropped instead made a
     /// held completion indistinguishable from an undelivered packet, so dropping
-    /// the port while one was held blocked forever in `get(INFINITE)` waiting for
-    /// a packet that had already been delivered. The completion still owns the
+    /// the port while one was held blocked forever in an unbounded `get` waiting
+    /// for a packet that had already been delivered. The completion still owns the
     /// operation's storage and still frees it on drop; that ownership is simply
     /// no longer expressed through the registry.
     ///
@@ -268,9 +278,18 @@ impl CompletionPort {
     /// already been delivered, so it is not outstanding. It still owns the
     /// operation's storage, and still frees it when dropped, which may be after
     /// this returns and after the port itself is gone.
+    ///
+    /// The port is shareable, so another thread may be consuming completions at
+    /// the same time. Each wait here is therefore bounded ([`RUN_DOWN_POLL_MS`])
+    /// and the live count is rechecked after it: a concurrent consumer can
+    /// dequeue the last packet -- and clear its registry entry -- in the window
+    /// between this loop observing a nonzero count and beginning its own wait,
+    /// and an unbounded wait would then block forever on a packet no longer
+    /// coming. Removing a registry entry does not wake a `GetQueuedCompletionStatus`
+    /// already in progress, so the recheck, not a wakeup, is what ends the wait.
     pub fn run_down(&self) -> io::Result<()> {
         while self.outstanding() > 0 {
-            self.get(INFINITE)?;
+            self.get(RUN_DOWN_POLL_MS)?;
         }
         Ok(())
     }
