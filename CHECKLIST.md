@@ -26,7 +26,7 @@ release is guarded against running twice when what breaks is members arriving af
 	millisecond field as the reason. Cover the 999us/1000us boundary in the tests, and mirror the contract on
 	`CleanupGroup::create_periodic_timer`.
 
-- [ ] **RW-2** — Release cleanup-group members created after a previous release.
+- [x] **RW-2** — Release cleanup-group members created after a previous release.
 
 	**Gap:** `release_members` latches `released` and returns early forever after. The `create_*` methods take
 	`&self`, so once `close_members` has returned, new members can still be created; their contexts are appended

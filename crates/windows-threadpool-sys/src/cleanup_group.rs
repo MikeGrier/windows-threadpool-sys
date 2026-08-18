@@ -128,10 +128,13 @@ unsafe fn free_boxed<T>(ptr: *mut c_void) {
 pub struct CleanupGroup {
     group: PTP_CLEANUP_GROUP,
     /// Contexts and handles owned on behalf of members, freed after release.
+    ///
+    /// This is the only record of what is outstanding, and it is deliberately
+    /// not paired with a "already released" flag. Such a flag would latch: the
+    /// `create_*` methods take `&self`, so members can be created after a
+    /// release returns, and a latched release would then skip them -- leaking
+    /// their contexts and closing the group with live members.
     resources: Mutex<Vec<OwnedResource>>,
-    /// Whether the members have already been released, so `Drop` does not
-    /// release them twice.
-    released: bool,
 }
 
 // SAFETY: PTP_CLEANUP_GROUP is a kernel-managed object usable from any thread,
@@ -154,7 +157,6 @@ impl CleanupGroup {
         Ok(Self {
             group,
             resources: Mutex::new(Vec::new()),
-            released: false,
         })
     }
 
@@ -323,6 +325,10 @@ impl CleanupGroup {
     /// Taking `&mut self` is what makes members unusable afterwards: they borrow
     /// the group, so the compiler rejects any later use of one. Calling this
     /// twice is harmless -- the second call finds no members.
+    ///
+    /// The group remains usable afterwards. New members may be created on it,
+    /// and they are released by the next call or by `Drop`, exactly as the first
+    /// batch was.
     pub fn close_members(&mut self, cancel_pending: bool) {
         self.release_members(cancel_pending);
     }
@@ -338,12 +344,14 @@ impl CleanupGroup {
             .len()
     }
 
+    /// Release whatever members exist right now.
+    ///
+    /// Runs in full every time rather than latching after the first call. The
+    /// native release is idempotent -- with no members it does nothing -- and
+    /// running unconditionally is what makes a group usable again afterwards:
+    /// members created after an earlier release are released by the next one,
+    /// instead of being skipped and leaked.
     fn release_members(&mut self, cancel_pending: bool) {
-        if self.released {
-            return;
-        }
-        self.released = true;
-
         // SAFETY: the group is live. This waits for executing callbacks and
         // releases every member, so afterwards nothing can reach the contexts.
         unsafe {
@@ -381,7 +389,6 @@ impl std::fmt::Debug for CleanupGroup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CleanupGroup")
             .field("owned_resources", &self.owned_resources())
-            .field("released", &self.released)
             .finish_non_exhaustive()
     }
 }

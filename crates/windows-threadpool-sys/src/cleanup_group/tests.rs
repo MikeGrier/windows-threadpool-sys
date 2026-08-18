@@ -281,6 +281,85 @@ fn close_members_is_idempotent() {
     assert_eq!(group.owned_resources(), 0);
 }
 
+/// The `create_*` methods take `&self`, so a group can gain new members after a
+/// release has returned. Those members must be released like any others: a
+/// release that latched after its first run would skip them, leaking their
+/// contexts and leaving the group to be closed with members still live.
+#[test]
+fn members_created_after_a_release_are_still_released() {
+    let mut group = CleanupGroup::new().expect("create group");
+    {
+        let work = group.create_work(|| {}, None).expect("create work");
+        work.submit();
+        work.wait();
+    }
+    group.close_members(false);
+    assert_eq!(
+        group.owned_resources(),
+        0,
+        "the first batch was not released"
+    );
+
+    {
+        let work = group.create_work(|| {}, None).expect("create second work");
+        work.submit();
+        work.wait();
+    }
+    assert_eq!(
+        group.owned_resources(),
+        1,
+        "the group is not tracking the second batch"
+    );
+
+    group.close_members(false);
+    assert_eq!(
+        group.owned_resources(),
+        0,
+        "the second batch was not released"
+    );
+}
+
+/// The same reuse across every member kind, and left to `Drop` rather than an
+/// explicit close, which is the path that would otherwise close the group with
+/// live members.
+#[test]
+fn a_reused_group_releases_its_second_batch_on_drop() {
+    let ran = Ran::new();
+    {
+        let mut group = CleanupGroup::new().expect("create group");
+        {
+            let work = group.create_work(|| {}, None).expect("create work");
+            work.submit();
+            work.wait();
+        }
+        group.close_members(true);
+
+        {
+            let counter = Arc::clone(&ran);
+            let timer = group
+                .create_timer(move |_| counter.record(), None)
+                .expect("create timer member");
+            timer.set_after(Duration::from_millis(1));
+            let periodic = group
+                .create_periodic_timer(Duration::from_millis(1), |_| {}, None)
+                .expect("create periodic member");
+            periodic.start_after(Duration::from_millis(1));
+            let wait = group
+                .create_wait(event(), |_| {}, None)
+                .expect("create wait member");
+            wait.arm(None);
+        }
+        assert_eq!(
+            group.owned_resources(),
+            4,
+            "the group is not tracking the second batch"
+        );
+        // Dropped here without another close_members.
+    }
+    // Reaching here without a hang or a crash is the assertion: Drop released
+    // the second batch before closing the group.
+}
+
 #[test]
 fn close_members_waits_for_an_executing_callback() {
     let done = Arc::new(AtomicUsize::new(0));
