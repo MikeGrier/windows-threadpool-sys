@@ -47,7 +47,7 @@ asserted -- under load they are properties of the machine, not of the code.
 	running ones. Load is the only way to exercise those paths in bulk: a short period against a slow callback
 	forces overlap, and a self-stopping callback under concurrent external `start`/`stop` exercises the rest.
 
-- [ ] **ST-4** — Cleanup-group timer members and a mixed load scenario.
+- [x] **ST-4** — Cleanup-group timer members and a mixed load scenario.
 
 	A group releases its members' contexts itself, so a group holding many armed timers is a different teardown
 	path from dropping the timers individually. The mixed scenario runs one-shots, periodics, and create/drop

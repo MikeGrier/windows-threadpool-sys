@@ -52,6 +52,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
+use windows_threadpool_sys::cleanup_group::CleanupGroup;
 use windows_threadpool_sys::timer::{ThreadpoolPeriodicTimer, ThreadpoolTimer};
 
 // --- gating ---
@@ -1208,5 +1209,342 @@ stress! {
         timer.stop_and_drain();
 
         eprintln!("stress:   {attempts} zero-period rejections");
+    }
+}
+
+// --- cleanup groups holding timer members ---
+
+stress! {
+    /// A group holding a large population of armed one-shot and ticking
+    /// periodic members, released as a unit.
+    ///
+    /// A group releases its members' contexts itself, so this is a different
+    /// teardown path from dropping the timers individually: one release drains
+    /// every member at once. Both dispositions are exercised, because cancelling
+    /// pending callbacks and running them first are different paths through it.
+    stress_cleanup_group_timer_members {
+        let rounds = load(60);
+        let per_round = 40;
+        let tally = Tally::new();
+        let mut released = 0usize;
+
+        for round in 0..rounds {
+            let mut group = CleanupGroup::new().expect("create cleanup group");
+
+            {
+                let one_shots: Vec<_> = (0..per_round)
+                    .map(|_| {
+                        let counter = Arc::clone(&tally);
+                        group
+                            .create_timer(move |_firing| {
+                                counter.record();
+                            }, None)
+                            .expect("create timer member")
+                    })
+                    .collect();
+                let periodics: Vec<_> = (0..per_round)
+                    .map(|_| {
+                        let counter = Arc::clone(&tally);
+                        group
+                            .create_periodic_timer(
+                                Duration::from_millis(1),
+                                move |_tick| {
+                                    counter.record();
+                                },
+                                None,
+                            )
+                            .expect("create periodic member")
+                    })
+                    .collect();
+
+                for member in &one_shots {
+                    member.set_after(Duration::ZERO);
+                }
+                for member in &periodics {
+                    member.start_after(Duration::ZERO);
+                }
+
+                assert_eq!(
+                    group.owned_resources(),
+                    per_round * 2,
+                    "the group is not holding every member's context"
+                );
+
+                // Let some of the rounds tick before release, so the group is
+                // torn down both while idle and while its members are firing.
+                if round % 2 == 0 {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+
+            // Alternate cancelling pending callbacks and letting them run.
+            group.close_members(round % 2 == 0);
+            assert_eq!(
+                group.owned_resources(),
+                0,
+                "the group still holds member resources after release"
+            );
+            released += per_round * 2;
+
+            // Nothing may run once the group has released its members: it has
+            // freed their contexts by then.
+            let settled = tally.count();
+            std::thread::sleep(Duration::from_millis(10));
+            assert_eq!(
+                tally.count(),
+                settled,
+                "a member callback ran after the group released it"
+            );
+        }
+
+        eprintln!(
+            "stress:   {released} timer members across {rounds} groups, {} callbacks ran",
+            tally.count()
+        );
+    }
+}
+
+stress! {
+    /// Groups created, populated, and released concurrently from many threads,
+    /// so one group's release runs against other groups' live callbacks.
+    stress_cleanup_group_concurrent_release {
+        let threads = 8;
+        let per_thread = load(40);
+        let tally = Tally::new();
+
+        let workers: Vec<_> = (0..threads)
+            .map(|t| {
+                let tally = Arc::clone(&tally);
+                std::thread::spawn(move || {
+                    for i in 0..per_thread {
+                        let mut group = CleanupGroup::new().expect("create cleanup group");
+                        {
+                            let counter = Arc::clone(&tally);
+                            let one_shot = group
+                                .create_timer(move |_firing| {
+                                    counter.record();
+                                }, None)
+                                .expect("create timer member");
+                            let counter = Arc::clone(&tally);
+                            let periodic = group
+                                .create_periodic_timer(
+                                    Duration::from_millis(1),
+                                    move |_tick| {
+                                        counter.record();
+                                    },
+                                    None,
+                                )
+                                .expect("create periodic member");
+
+                            one_shot.set_after(Duration::ZERO);
+                            periodic.start_after(Duration::ZERO);
+
+                            // A third of the groups outlive a tick, so their
+                            // release races callbacks that are actually running.
+                            if (t + i) % 3 == 0 {
+                                std::thread::sleep(Duration::from_millis(20));
+                            }
+                        }
+                        group.close_members((t + i) % 2 == 0);
+                        assert_eq!(
+                            group.owned_resources(),
+                            0,
+                            "a concurrently released group still holds resources"
+                        );
+                    }
+                })
+            })
+            .collect();
+
+        for worker in workers {
+            worker.join().expect("group thread");
+        }
+
+        let fired = tally.count();
+        eprintln!(
+            "stress:   {} groups released concurrently, {fired} callbacks ran",
+            threads * per_thread
+        );
+        assert!(
+            fired > 0,
+            "no group release raced a callback -- every round outran the pool"
+        );
+    }
+}
+
+stress! {
+    /// A group left to drop rather than closed explicitly, which must release
+    /// its members just the same.
+    stress_cleanup_group_drop_without_close {
+        let rounds = load(200);
+        let tally = Tally::new();
+
+        for round in 0..rounds {
+            let group = CleanupGroup::new().expect("create cleanup group");
+            {
+                let counter = Arc::clone(&tally);
+                let one_shot = group
+                    .create_timer(move |_firing| {
+                        counter.record();
+                    }, None)
+                    .expect("create timer member");
+                let counter = Arc::clone(&tally);
+                let periodic = group
+                    .create_periodic_timer(
+                        Duration::from_millis(1),
+                        move |_tick| {
+                            counter.record();
+                        },
+                        None,
+                    )
+                    .expect("create periodic member");
+
+                one_shot.set_after(Duration::ZERO);
+                periodic.start_after(Duration::ZERO);
+
+                if round % 3 == 0 {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+            // Dropped here without close_members, with members possibly firing.
+            drop(group);
+        }
+
+        let fired = tally.count();
+        eprintln!("stress:   {rounds} groups dropped without closing, {fired} callbacks ran");
+        assert!(
+            fired > 0,
+            "no group drop raced a callback -- every round outran the pool"
+        );
+    }
+}
+
+// --- everything at once ---
+
+stress! {
+    /// One-shots, periodics, cleanup groups, and object churn all running
+    /// together, which is the closest this suite gets to how the crate would be
+    /// driven under real load.
+    ///
+    /// Each participant asserts its own invariant, so a failure names the shape
+    /// of work that broke rather than merely reporting that the mix did.
+    stress_mixed_timer_load {
+        let duration = Duration::from_secs(u64::try_from(load(3)).unwrap_or(3).min(60));
+        let deadline = Instant::now() + duration;
+
+        let chain_tally = Tally::new();
+        let chain_overlap = Overlap::new();
+        let tick_tally = Tally::new();
+        let churn_tally = Tally::new();
+
+        // A self-re-arming one-shot, which must still never overlap itself
+        // however loaded the pool is around it.
+        let counter = Arc::clone(&chain_tally);
+        let seen = Arc::clone(&chain_overlap);
+        let chain = ThreadpoolTimer::new(
+            move |firing| {
+                let _inside = seen.enter();
+                let n = counter.record();
+                work_for(n);
+                firing.rearm_after(Duration::ZERO);
+            },
+            None,
+        )
+        .expect("create chain timer");
+        chain.set_after(Duration::ZERO);
+
+        // A population of periodics ticking throughout.
+        let periodics: Vec<_> = (0..16)
+            .map(|i| {
+                let counter = Arc::clone(&tick_tally);
+                let timer = ThreadpoolPeriodicTimer::new(
+                    Duration::from_millis(2),
+                    move |_tick| {
+                        counter.record();
+                    },
+                    None,
+                )
+                .expect("create periodic timer");
+                timer.start_after(Duration::from_millis(i));
+                timer
+            })
+            .collect();
+
+        // Threads churning short-lived timers and groups underneath all of it.
+        let workers: Vec<_> = (0..4)
+            .map(|t| {
+                let churn_tally = Arc::clone(&churn_tally);
+                std::thread::spawn(move || {
+                    let mut cycles = 0usize;
+                    while Instant::now() < deadline {
+                        let counter = Arc::clone(&churn_tally);
+                        if t % 2 == 0 {
+                            let timer = ThreadpoolTimer::new(
+                                move |_firing| {
+                                    counter.record();
+                                },
+                                None,
+                            )
+                            .expect("create churn timer");
+                            timer.set_after(Duration::ZERO);
+                            std::thread::sleep(Duration::from_millis(20));
+                            drop(timer);
+                        } else {
+                            let mut group = CleanupGroup::new().expect("create churn group");
+                            {
+                                let member = group
+                                    .create_timer(move |_firing| {
+                                        counter.record();
+                                    }, None)
+                                    .expect("create churn member");
+                                member.set_after(Duration::ZERO);
+                                std::thread::sleep(Duration::from_millis(20));
+                            }
+                            group.close_members(false);
+                        }
+                        cycles += 1;
+                    }
+                    cycles
+                })
+            })
+            .collect();
+
+        let churn_cycles: usize = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("churn thread"))
+            .sum();
+
+        chain.disarm();
+        chain.cancel_pending();
+        for timer in &periodics {
+            timer.stop_and_drain();
+        }
+
+        assert_eq!(
+            chain_overlap.violations(),
+            0,
+            "the self-re-arming one-shot overlapped itself under mixed load"
+        );
+        assert!(
+            chain_tally.count() > 0,
+            "the self-re-arming chain never advanced under mixed load"
+        );
+        assert!(
+            tick_tally.count() > 0,
+            "the periodic population never ticked under mixed load"
+        );
+        assert!(
+            churn_tally.count() > 0,
+            "no churned timer ever fired under mixed load"
+        );
+        assert_quiescent(&chain_tally, "mixed load chain");
+        assert_quiescent(&tick_tally, "mixed load periodics");
+
+        eprintln!(
+            "stress:   {duration:?} of mixed load: {} chain links, {} ticks, {churn_cycles} churn cycles, {} churn firings",
+            chain_tally.count(),
+            tick_tally.count(),
+            churn_tally.count()
+        );
     }
 }
