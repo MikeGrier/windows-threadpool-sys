@@ -34,11 +34,44 @@ impl BlockingEndpoint {
     ///
     /// # Errors
     ///
-    /// Returns any error from issuing or completing the read.
-    pub fn read(&self, len: usize, offset: u64) -> io::Result<(Vec<u8>, usize)> {
+    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`,
+    /// which the read's byte count cannot express, or any error from issuing or
+    /// completing the read.
+    ///
+    /// # Examples
+    ///
+    /// One owner issuing reads in sequence is the supported shape, and compiles:
+    ///
+    /// ```
+    /// use windows_overlapped_io_sys::BlockingEndpoint;
+    ///
+    /// fn read_twice(endpoint: &mut BlockingEndpoint) -> std::io::Result<()> {
+    ///     let (_first, _) = endpoint.read(64, 0)?;
+    ///     let (_second, _) = endpoint.read(64, 64)?;
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// Sharing one endpoint across threads and reading from both is rejected at
+    /// compile time rather than corrupting a result at run time, because `read`
+    /// takes `&mut self` while an `Arc` can only hand out `&BlockingEndpoint`:
+    ///
+    /// ```compile_fail
+    /// use std::sync::Arc;
+    /// use windows_overlapped_io_sys::BlockingEndpoint;
+    ///
+    /// fn read_from_two_threads(endpoint: BlockingEndpoint) {
+    ///     let shared = Arc::new(endpoint);
+    ///     let other = Arc::clone(&shared);
+    ///     std::thread::spawn(move || other.read(64, 0));
+    ///     let _ = shared.read(64, 64);
+    /// }
+    /// ```
+    pub fn read(&mut self, len: usize, offset: u64) -> io::Result<(Vec<u8>, usize)> {
+        // Checked before allocating, so an unusable request costs nothing.
+        let buf_len = checked_len(len, "read buffer")?;
         let mut buffer = vec![0_u8; len];
         let buf_ptr = buffer.as_mut_ptr();
-        let buf_len = clamp_u32(len);
 
         let mut operation = Operation::new(());
         operation.set_offset(offset);
@@ -66,10 +99,12 @@ impl BlockingEndpoint {
     ///
     /// # Errors
     ///
-    /// Returns any error from issuing or completing the write.
-    pub fn write(&self, data: &[u8], offset: u64) -> io::Result<usize> {
+    /// Returns [`io::ErrorKind::InvalidInput`] if `data` is longer than
+    /// `u32::MAX`, which the write's byte count cannot express, or any error
+    /// from issuing or completing the write.
+    pub fn write(&mut self, data: &[u8], offset: u64) -> io::Result<usize> {
         let data_ptr = data.as_ptr();
-        let data_len = clamp_u32(data.len());
+        let data_len = checked_len(data.len(), "write buffer")?;
 
         let mut operation = Operation::new(());
         operation.set_offset(offset);
@@ -106,9 +141,46 @@ fn classify(ok: i32) -> io::Result<()> {
     }
 }
 
-/// Clamp a length to the `u32` byte-count parameter the Win32 calls take.
-fn clamp_u32(len: usize) -> u32 {
-    u32::try_from(len).unwrap_or(u32::MAX)
+/// The byte total for `pages` pages, or an error if it cannot be expressed.
+///
+/// A zero page count is rejected as well: the scatter adapters call
+/// [`PageBuffers::new`] with `pages`, which panics on zero, so validating here
+/// keeps those safe, fallible APIs returning `InvalidInput` instead of panicking
+/// on an invalid request.
+///
+/// The multiplication is checked rather than saturating. Saturating defeats the
+/// validation on 32-bit Windows, where `usize::MAX` *is* `u32::MAX`: an
+/// overflowing page count would saturate to a value [`checked_len`] accepts, and
+/// `PageBuffers::new` would then panic on its own checked multiplication instead
+/// of the adapter returning the documented `InvalidInput`.
+fn scatter_gather_len(pages: usize) -> io::Result<u32> {
+    if pages == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a scatter/gather request must name at least one page",
+        ));
+    }
+    let bytes = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{pages} pages of {PAGE_SIZE} bytes overflows a byte count"),
+        )
+    })?;
+    checked_len(bytes, "scatter/gather buffer set")
+}
+
+/// Convert a buffer length to the `u32` byte count the Win32 calls take.
+///
+/// Rejects rather than caps, for the same reason as the device-control helper:
+/// capping would transfer a prefix of the caller's buffer and then report
+/// success for an operation that did something other than what was asked.
+fn checked_len(len: usize, which: &str) -> io::Result<u32> {
+    u32::try_from(len).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("a {which} is limited to u32::MAX bytes; {len} does not fit"),
+        )
+    })
 }
 
 impl AssociatedEndpoint<'_> {
@@ -121,10 +193,11 @@ impl AssociatedEndpoint<'_> {
     ///
     /// # Errors
     ///
-    /// Returns any immediate failure from issuing the read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`, or
+    /// any immediate failure from issuing the read.
     #[track_caller]
     pub fn read(&self, len: usize, offset: u64) -> io::Result<FileIo> {
-        let buf_len = clamp_u32(len);
+        let buf_len = checked_len(len, "read buffer")?;
         let mut operation = Operation::new(vec![0_u8; len]);
         operation.set_offset(offset);
         // SAFETY: issues exactly one ReadFile into the operation's own payload
@@ -154,10 +227,11 @@ impl AssociatedEndpoint<'_> {
     ///
     /// # Errors
     ///
-    /// Returns any immediate failure from issuing the write.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `data` is longer than
+    /// `u32::MAX`, or any immediate failure from issuing the write.
     #[track_caller]
     pub fn write(&self, data: Vec<u8>, offset: u64) -> io::Result<FileIo> {
-        let data_len = clamp_u32(data.len());
+        let data_len = checked_len(data.len(), "write buffer")?;
         let mut operation = Operation::new(data);
         operation.set_offset(offset);
         // SAFETY: issues exactly one WriteFile from the operation's own payload
@@ -231,10 +305,13 @@ impl FileIo {
     /// operation's error. Returns `Err(self)` when `completion` belongs to a
     /// different operation, so the caller can try the token against another one.
     pub fn claim(self, completion: &Completion) -> Result<(Vec<u8>, io::Result<usize>), Self> {
-        if completion.overlapped_ptr() != self.id.as_ptr() {
+        if completion.id() != Some(self.id) {
             return Err(self);
         }
-        // SAFETY: the identity match proves this completion is the
+        // SAFETY: the full identity -- address *and* generation -- matches, which
+        // an address alone would not: a recycled address can belong to a later
+        // operation of a different payload type. The match therefore proves this
+        // completion is the
         // Operation<Vec<u8>> this token submitted; claim it exactly once.
         let operation = unsafe { completion.claim::<Vec<u8>>() };
         let buffer = operation.into_payload();
@@ -373,11 +450,16 @@ impl BlockingEndpoint {
     ///
     /// # Errors
     ///
-    /// Returns any error from issuing or completing the scatter-read.
-    pub fn read_scatter(&self, pages: usize, offset: u64) -> io::Result<(PageBuffers, usize)> {
+    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or the pages
+    /// total more than `u32::MAX` bytes, or any error from issuing or completing
+    /// the scatter-read.
+    pub fn read_scatter(&mut self, pages: usize, offset: u64) -> io::Result<(PageBuffers, usize)> {
+        // Checked before allocating, so an unusable request costs nothing. This
+        // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
+        // page count into an ordinary error.
+        let total = scatter_gather_len(pages)?;
         let buffers = PageBuffers::new(pages);
         let segments = buffers.segment_array();
-        let total = clamp_u32(buffers.len());
         let seg_ptr = segments.as_ptr();
 
         let mut operation = Operation::new(());
@@ -409,10 +491,12 @@ impl BlockingEndpoint {
     ///
     /// # Errors
     ///
-    /// Returns any error from issuing or completing the gather-write.
-    pub fn write_gather(&self, buffers: &PageBuffers, offset: u64) -> io::Result<usize> {
+    /// Returns [`io::ErrorKind::InvalidInput`] if the buffers total more than
+    /// `u32::MAX` bytes, or any error from issuing or completing the
+    /// gather-write.
+    pub fn write_gather(&mut self, buffers: &PageBuffers, offset: u64) -> io::Result<usize> {
         let segments = buffers.segment_array();
-        let total = clamp_u32(buffers.len());
+        let total = checked_len(buffers.len(), "scatter/gather buffer set")?;
         let seg_ptr = segments.as_ptr();
 
         let mut operation = Operation::new(());
@@ -458,11 +542,16 @@ impl AssociatedEndpoint<'_> {
     ///
     /// # Errors
     ///
-    /// Returns any immediate failure from issuing the scatter-read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or the pages
+    /// total more than `u32::MAX` bytes, or any immediate failure from issuing
+    /// the scatter-read.
     #[track_caller]
     pub fn read_scatter(&self, pages: usize, offset: u64) -> io::Result<ScatterGatherIo> {
+        // Checked before allocating, so an unusable request costs nothing. This
+        // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
+        // page count into an ordinary error.
+        let total = scatter_gather_len(pages)?;
         let buffers = PageBuffers::new(pages);
-        let total = clamp_u32(buffers.len());
         let segments = buffers.segment_array();
         let mut operation = Operation::new(ScatterPayload { buffers, segments });
         operation.set_offset(offset);
@@ -493,10 +582,11 @@ impl AssociatedEndpoint<'_> {
     ///
     /// # Errors
     ///
-    /// Returns any immediate failure from issuing the gather-write.
+    /// Returns [`io::ErrorKind::InvalidInput`] if the buffers total more than
+    /// `u32::MAX` bytes, or any immediate failure from issuing the gather-write.
     #[track_caller]
     pub fn write_gather(&self, buffers: PageBuffers, offset: u64) -> io::Result<ScatterGatherIo> {
-        let total = clamp_u32(buffers.len());
+        let total = checked_len(buffers.len(), "scatter/gather buffer set")?;
         let segments = buffers.segment_array();
         let mut operation = Operation::new(ScatterPayload { buffers, segments });
         operation.set_offset(offset);
@@ -557,10 +647,13 @@ impl ScatterGatherIo {
     /// operation's error. Returns `Err(self)` when `completion` belongs to a
     /// different operation.
     pub fn claim(self, completion: &Completion) -> Result<(PageBuffers, io::Result<usize>), Self> {
-        if completion.overlapped_ptr() != self.id.as_ptr() {
+        if completion.id() != Some(self.id) {
             return Err(self);
         }
-        // SAFETY: the identity match proves this completion is the
+        // SAFETY: the full identity -- address *and* generation -- matches, which
+        // an address alone would not: a recycled address can belong to a later
+        // operation of a different payload type. The match therefore proves this
+        // completion is the
         // Operation<ScatterPayload> this token submitted; claim it exactly once.
         let operation = unsafe { completion.claim::<ScatterPayload>() };
         let buffers = operation.into_payload().buffers;

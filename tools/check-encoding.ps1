@@ -1,7 +1,13 @@
 # Copyright (c) Michael Grier
 #
-# tools/check-encoding.ps1 -- fail if any tracked text file is not valid
-# UTF-8 or contains characteristic mojibake digraphs.
+# tools/check-encoding.ps1 -- text hygiene for tracked files. Fails if a file
+# is not valid UTF-8, contains a stray C0 control character, glues a doc-comment
+# marker onto the end of a line of code, or contains characteristic mojibake
+# digraphs.
+#
+# The last two are not encoding faults. They are here because this is the check
+# CI already runs over every tracked file, and because each of them is damage a
+# text-rewriting tool produced and every other check passed.
 #
 # encoding-check: allow-mojibake  (this file contains literal examples
 # of mojibake patterns in regexes and comments)
@@ -108,7 +114,43 @@ foreach ($file in $files) {
         continue
     }
 
-    # 2. Must not contain characteristic mojibake patterns -- unless the
+    # 2. Must not contain stray C0 control characters or DEL.
+    #
+    #    Tab, line feed and carriage return are the only ones a text file has
+    #    any business containing. The rest are invisible in every editor and
+    #    diff, so they survive review unless something looks for them.
+    #
+    #    This exists because a form feed (0x0C) was committed into two source
+    #    comments: a PowerShell replacement contained a backtick followed by
+    #    `f`, which PowerShell reads as its form-feed escape. Such a character
+    #    is valid UTF-8 and is not mojibake, so both checks above passed it.
+    $control = [regex]::Match($text, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]')
+    if ($control.Success) {
+        $prefix = $text.Substring(0, $control.Index)
+        $line = ($prefix -split "`n").Count
+        $code = '0x{0:X2}' -f [int][char]$control.Value
+        $failures += "CONTROL CHARACTER: $file [$code at line $line]"
+        continue
+    }
+
+    # 3. Must not glue a doc-comment marker onto the end of a line of code.
+    #
+    #    `let x = 1;///` compiles -- it is only an `unused_doc_comment`
+    #    warning, and doctest warnings do not fail a build -- so this survives
+    #    every check the toolchain applies. It is never intentional: it is what
+    #    a mis-joined edit looks like, and one lived in a doc example for nine
+    #    review rounds before being spotted by eye.
+    if ([System.IO.Path]::GetExtension($file) -eq '.rs') {
+        $glued = [regex]::Match($text, '(?m)^.*\S///\s*$')
+        if ($glued.Success) {
+            $prefix = $text.Substring(0, $glued.Index)
+            $line = ($prefix -split "`n").Count
+            $failures += "GLUED DOC COMMENT: $file [line $line]"
+            continue
+        }
+    }
+
+    # 4. Must not contain characteristic mojibake patterns -- unless the
     #    file explicitly opts out.
     if ($text.Contains($AllowMojibakeMarker)) { continue }
     foreach ($p in $Patterns) {

@@ -7,9 +7,36 @@
 //! object-based thread pool share endpoint and operation storage while remaining
 //! distinct completion backends.
 //!
-//! The crate is currently in its initial development stage. No safe API has been
-//! stabilized yet, because the generic overlapped-submission safety boundary is
-//! still under investigation.
+//! # Operation-family adapters
+//!
+//! Endpoints are created safely with [`UnassociatedEndpoint::open`], and each
+//! operation family has an adapter behind an opt-in feature. The `fs` and
+//! `socket` adapters are fully safe; the `device` adapter owns its buffers but
+//! its `ioctl` is `unsafe`, because an arbitrary control code may embed pointers
+//! to buffers the adapter cannot own:
+//!
+//! - `fs`: file read/write and scatter/gather, on the blocking and IOCP backends.
+//!   Fully safe.
+//! - `socket`: socket send/receive, on the blocking and IOCP backends. Fully
+//!   safe.
+//! - `device`: `DeviceIoControl` on both backends, through a buffer-owning but
+//!   `unsafe` raw-control-code seam.
+//!
+//! The default feature set is empty, keeping the core completion machinery (the
+//! raw IOCP and blocking backends, owned endpoints, and pinned operations)
+//! minimal. A narrow unsafe submission seam ([`AssociatedEndpoint::submit`] and
+//! the [`Operation`] primitives) stays available for families without an adapter.
+//! Fully generic, fully safe overlapped submission remains intentionally
+//! unsolved; the per-family adapters are the sanctioned safe path.
+//!
+//! # Operation identity
+//!
+//! Submitting returns an [`OperationId`] that names that operation for the life
+//! of the process, not merely while its storage address stays put. Cancelling
+//! validates the identity against the backend's live operations first, so an
+//! identity kept past its operation's completion is rejected rather than applied
+//! to a later operation that reused the same storage. Holding an identity too
+//! long is therefore safe, and cancellation races safely against completion.
 
 #![warn(missing_docs)]
 
@@ -19,11 +46,17 @@ mod blocking;
 #[cfg(windows)]
 mod config;
 
+#[cfg(all(windows, feature = "device"))]
+mod device;
+
 #[cfg(windows)]
 mod endpoint;
 
 #[cfg(all(windows, feature = "fs"))]
 mod fs;
+
+#[cfg(windows)]
+mod identity;
 
 #[cfg(windows)]
 mod iocp;
@@ -40,6 +73,9 @@ pub use blocking::BlockingEndpoint;
 #[cfg(windows)]
 pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_enabled};
 
+#[cfg(all(windows, feature = "device"))]
+pub use device::DeviceIoControlIo;
+
 #[cfg(windows)]
 pub use endpoint::UnassociatedEndpoint;
 
@@ -47,7 +83,10 @@ pub use endpoint::UnassociatedEndpoint;
 pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PAGE_SIZE, PageBuffers, ScatterGatherIo};
 
 #[cfg(windows)]
-pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, Issued, OperationId, Submitted};
+pub use identity::{OperationId, OperationRegistry};
+
+#[cfg(windows)]
+pub use iocp::{AssociatedEndpoint, Completion, CompletionPort, Issued, Submitted};
 
 #[cfg(windows)]
 pub use operation::{Operation, OperationState, reclaim_overlapped};

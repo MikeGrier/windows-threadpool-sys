@@ -18,9 +18,46 @@ categories = ["api-bindings", "os::windows-apis"]
 [lib]
 path = "src/lib.rs"
 
+# The crate is Windows-only, so docs.rs must build it on a Windows target or it
+# would fail to compile the thread-pool bindings entirely.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
 [dependencies]
+# The shared overlapped-I/O foundation: owned endpoints, pinned operations, and the
+# submission seam (`into_overlapped` / `from_overlapped` / `reclaim_overlapped`) that
+# the `TP_IO` backend builds on. Published independently, so both a path (for the
+# workspace) and a version (for consumers building from crates.io) are required. No
+# features are enabled (`default-features = false`): the `TP_IO` backend needs only
+# the core completion machinery, not any operation-family adapter (fs, socket, device).
+windows-overlapped-io-sys = { version = "0.1.0", path = "../windows-overlapped-io-sys", default-features = false }
+
 windows-sys = {
 	version = "0.61.2",
 	default-features = false,
-	features = ["Win32_System_IO", "Win32_System_Threading"],
+	# Win32_Security is needed only for the SECURITY_ATTRIBUTES parameter of
+	# CreateEventW, which backs the safe WaitableHandle::event constructor.
+	features = [
+		"Win32_Foundation",
+		"Win32_Security",
+		"Win32_System_IO",
+		"Win32_System_Threading",
+	],
+}
+
+# The TP_IO tests issue real overlapped I/O against a named pipe, which needs
+# binding surface the published crate itself does not use.
+[dev-dependencies]
+windows-sys = {
+	version = "0.61.2",
+	default-features = false,
+	features = [
+		"Win32_Foundation",
+		"Win32_System_IO",
+		"Win32_System_Threading",
+		"Win32_Security",
+		"Win32_Storage_FileSystem",
+		"Win32_System_Pipes",
+	],
 }

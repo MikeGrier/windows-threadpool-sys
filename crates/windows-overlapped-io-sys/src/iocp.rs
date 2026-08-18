@@ -15,7 +15,6 @@ use std::fmt;
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::panic::Location;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
@@ -24,10 +23,21 @@ use windows_sys::Win32::System::IO::{
     PostQueuedCompletionStatus,
 };
 
+use crate::identity::{OperationId, OperationRegistry};
 use crate::{Operation, OperationState, UnassociatedEndpoint};
 
-/// Waits without timeout in `GetQueuedCompletionStatus`; used while draining.
-const INFINITE: u32 = u32::MAX;
+/// Bound on each `GetQueuedCompletionStatus` wait inside [`CompletionPort::run_down`].
+///
+/// `run_down` cannot wait without timeout: the port is shareable and
+/// [`CompletionPort::get`] takes `&self`, so a concurrent consumer can dequeue
+/// the last packet -- and clear the registry entry -- after `run_down` has
+/// observed a nonzero outstanding count but before its own wait begins. An
+/// unbounded wait would then block forever on a packet that is no longer coming.
+/// A bounded wait wakes periodically so the loop can recheck the live count and
+/// return once it reaches zero. The interval only bounds that recheck latency; a
+/// packet genuinely destined for `run_down` is still returned the instant it
+/// arrives, so this is not a busy-poll of a live operation.
+const RUN_DOWN_POLL_MS: u32 = 5;
 
 /// Optional per-operation source information, recorded only while source
 /// tracking is enabled.
@@ -39,18 +49,24 @@ struct Track {
 
 /// State shared between a port, its completions, and the drain path.
 ///
-/// `outstanding` is a lock-free count that always governs rundown. `tracked` is
-/// consulted only when source tracking is enabled, so the mutex is never taken
-/// on the submission hot path by default.
+/// `live` is the registry of operations submitted through this port whose
+/// completion packet has not yet been dequeued. It governs rundown (its length
+/// is the outstanding count) and answers whether an [`OperationId`] still names
+/// an operation a packet is still coming for, which is what keeps a retained
+/// identity from cancelling an operation that merely recycled its address.
+/// Registration ends at dequeue, not at reclamation: a held [`Completion`] owns
+/// its operation's storage but is no longer awaiting anything, and counting it
+/// would make rundown wait for a packet it had already received.
+/// `tracked` is consulted only when source tracking is enabled.
 struct PortState {
-    outstanding: AtomicUsize,
+    live: OperationRegistry,
     tracked: Mutex<HashMap<usize, Track>>,
 }
 
 impl PortState {
     fn new() -> Self {
         Self {
-            outstanding: AtomicUsize::new(0),
+            live: OperationRegistry::new(),
             tracked: Mutex::new(HashMap::new()),
         }
     }
@@ -171,7 +187,9 @@ impl CompletionPort {
                 bytes_transferred,
                 overlapped,
                 error: None,
-                state: Arc::clone(&self.state),
+                // Deregister as the packet leaves the queue, recovering the
+                // identity in the same step. See `deregister_dequeued`.
+                id: self.deregister_dequeued(overlapped),
                 claimed: Cell::new(false),
             }));
         }
@@ -189,32 +207,90 @@ impl CompletionPort {
             bytes_transferred,
             overlapped,
             error: Some(error),
-            state: Arc::clone(&self.state),
+            id: self.deregister_dequeued(overlapped),
             claimed: Cell::new(false),
         }))
+    }
+
+    /// Deregister an operation whose packet has just been dequeued, returning the
+    /// identity the registry recorded for it.
+    ///
+    /// Registration ends at *dequeue*, not at reclamation, because the registry
+    /// answers "is a packet still coming for this operation?" -- which is what
+    /// [`run_down`](Self::run_down) waits on and what
+    /// [`cancel`](AssociatedEndpoint::cancel) must not act against. Once the
+    /// packet is off the queue neither is true any longer, and no further packet
+    /// will ever arrive for it.
+    ///
+    /// Keeping the entry until the [`Completion`] was dropped instead made a
+    /// held completion indistinguishable from an undelivered packet, so dropping
+    /// the port while one was held blocked forever in an unbounded `get` waiting
+    /// for a packet that had already been delivered. The completion still owns the
+    /// operation's storage and still frees it on drop; that ownership is simply
+    /// no longer expressed through the registry.
+    ///
+    /// A null pointer (a user packet) and an address this port never registered
+    /// both return `None`, since `remove` reports only what it held.
+    fn deregister_dequeued(&self, overlapped: *mut OVERLAPPED) -> Option<OperationId> {
+        let id = self.state.live.remove(overlapped);
+        if id.is_some() && crate::source_tracking_enabled() {
+            lock(&self.state.tracked).remove(&(overlapped as usize));
+        }
+        id
     }
 
     pub(crate) fn raw(&self) -> HANDLE {
         self.handle.as_raw_handle()
     }
 
-    /// The number of operations submitted through this port that have not yet
-    /// been claimed, reclaimed, or drained.
-    #[must_use]
-    pub fn outstanding(&self) -> usize {
-        self.state.outstanding.load(Ordering::SeqCst)
+    /// The registry of operations submitted through this port whose completion
+    /// packet has not yet been dequeued, for backends that must validate an
+    /// identity before cancelling.
+    ///
+    /// Only the socket backend reaches for this; the file backend cancels
+    /// through `AssociatedEndpoint`, which already holds the port.
+    #[cfg(feature = "socket")]
+    pub(crate) fn live_operations(&self) -> &OperationRegistry {
+        &self.state.live
     }
 
-    /// Block until every outstanding operation has completed and been reclaimed.
+    /// The number of operations submitted through this port whose completion
+    /// packet has not yet been dequeued.
+    ///
+    /// A packet that has been dequeued is *not* counted, even if the
+    /// [`Completion`] is still held and its storage not yet released. The count
+    /// measures what the port is still waiting to deliver, which is what
+    /// [`run_down`](Self::run_down) blocks on.
+    #[must_use]
+    pub fn outstanding(&self) -> usize {
+        self.state.live.len()
+    }
+
+    /// Block until a completion packet has been dequeued for every outstanding
+    /// operation.
     ///
     /// Every outstanding operation must already be cancelled or otherwise
     /// destined to complete -- which closing or cancelling the endpoints
-    /// guarantees -- or this waits indefinitely. Each dequeued completion
-    /// reclaims its own operation when dropped, so draining is just dequeuing
-    /// until the count reaches zero.
+    /// guarantees -- or this waits indefinitely. Each packet dequeued here is
+    /// reclaimed immediately, since the [`Completion`] this creates is dropped
+    /// within the loop.
+    ///
+    /// A [`Completion`] held elsewhere does not keep this waiting: its packet has
+    /// already been delivered, so it is not outstanding. It still owns the
+    /// operation's storage, and still frees it when dropped, which may be after
+    /// this returns and after the port itself is gone.
+    ///
+    /// The port is shareable, so another thread may be consuming completions at
+    /// the same time. Each wait here is therefore bounded (`RUN_DOWN_POLL_MS`)
+    /// and the live count is rechecked after it: a concurrent consumer can
+    /// dequeue the last packet -- and clear its registry entry -- in the window
+    /// between this loop observing a nonzero count and beginning its own wait,
+    /// and an unbounded wait would then block forever on a packet no longer
+    /// coming. Removing a registry entry does not wake a `GetQueuedCompletionStatus`
+    /// already in progress, so the recheck, not a wakeup, is what ends the wait.
     pub fn run_down(&self) -> io::Result<()> {
         while self.outstanding() > 0 {
-            self.get(INFINITE)?;
+            self.get(RUN_DOWN_POLL_MS)?;
         }
         Ok(())
     }
@@ -236,6 +312,12 @@ impl CompletionPort {
     /// delivered to this port, [`Issued::Completed`] only when the operation is
     /// already complete and no packet will arrive, and `Err` only when the
     /// submission failed and no completion will arrive.
+    ///
+    /// `issue` must not unwind. The operation is registered before it runs and
+    /// deregistered only on the paths below; a panic out of `issue` skips that
+    /// and -- because a panic before starting the I/O is indistinguishable from
+    /// one after -- rundown could then wait forever for a packet that will never
+    /// arrive. A closure that might panic must catch it and return `Err`.
     #[track_caller]
     pub(crate) unsafe fn submit_with<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
@@ -246,10 +328,13 @@ impl CompletionPort {
         // it is reclaimed. `into_overlapped` arms the type-erased reclaim thunk.
         let overlapped = operation.into_overlapped();
         let identity = overlapped as usize;
+        // Stamp this submission with a fresh generation, so the identity names
+        // this operation and not whatever later operation may reuse the address.
+        let id = OperationId::mint(overlapped);
 
-        // Count before issuing so a completion cannot race ahead of the count.
+        // Register before issuing so a completion cannot race ahead of the count.
         let state = &self.state;
-        state.outstanding.fetch_add(1, Ordering::SeqCst);
+        state.live.insert(id);
         let tracking = crate::source_tracking_enabled();
         if tracking {
             lock(&state.tracked).insert(
@@ -263,11 +348,11 @@ impl CompletionPort {
         }
 
         match issue(overlapped) {
-            Ok(Issued::Pending) => Submitted::Pending(OperationId(overlapped)),
+            Ok(Issued::Pending) => Submitted::Pending(id),
             Ok(Issued::Completed { bytes_transferred }) => {
                 // Synchronous completion with no packet to arrive (the
                 // skip-on-success case): balance the count and reclaim inline.
-                state.outstanding.fetch_sub(1, Ordering::SeqCst);
+                state.live.remove(overlapped);
                 if tracking {
                     lock(&state.tracked).remove(&identity);
                 }
@@ -282,7 +367,7 @@ impl CompletionPort {
                 }
             }
             Err(error) => {
-                state.outstanding.fetch_sub(1, Ordering::SeqCst);
+                state.live.remove(overlapped);
                 if tracking {
                     lock(&state.tracked).remove(&identity);
                 }
@@ -390,6 +475,14 @@ impl<'port> AssociatedEndpoint<'port> {
     /// failure paths the operation is returned intact through [`Submitted`] so
     /// its storage can be reused or inspected.
     ///
+    /// # Panics
+    ///
+    /// Panics if this port already has a live operation registered at the new
+    /// operation's storage address. That cannot happen through ordinary use --
+    /// `operation` owns freshly boxed storage -- and indicates a defect in this
+    /// crate's own bookkeeping rather than in the calling code. See
+    /// [`OperationRegistry::insert`] for the invariant involved.
+    ///
     /// # Safety
     ///
     /// `issue` must start exactly one overlapped operation using the provided
@@ -398,6 +491,10 @@ impl<'port> AssociatedEndpoint<'port> {
     /// delivered to this endpoint's port, [`Issued::Completed`] only when the
     /// operation is already complete and no packet will arrive, and `Err` only
     /// when the submission failed and no completion will arrive.
+    ///
+    /// `issue` must not unwind: a panic out of it can leave an operation
+    /// registered with no completion coming, which makes rundown wait forever. A
+    /// closure that might panic must catch it and return `Err`.
     #[track_caller]
     pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
@@ -418,13 +515,30 @@ impl<'port> AssociatedEndpoint<'port> {
     /// Cancellation is only a request: the operation still completes, typically
     /// with `ERROR_OPERATION_ABORTED`, and that completion remains the point at
     /// which its storage is reclaimed with [`Completion::claim`].
+    ///
+    /// The identity is checked against this port's live operations first. An
+    /// identity whose operation has already completed is rejected with
+    /// [`io::ErrorKind::NotFound`] and no native call is made, even if another
+    /// operation has since been given the same storage address -- so retaining
+    /// an identity too long can never cancel an unrelated operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::NotFound`] if `id` no longer names a live
+    /// operation, or the error from `CancelIoEx` if the native request fails.
     pub fn cancel(&self, id: OperationId) -> io::Result<()> {
-        // SAFETY: cancelling by a valid handle and an OVERLAPPED identity.
-        let ok = unsafe { CancelIoEx(self.raw_handle(), id.as_ptr()) };
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        // The liveness check and the native call happen under one registry
+        // guard; splitting them would let the address be recycled in between.
+        self.port.state.live.cancel_if_live(id, || {
+            // SAFETY: cancelling by a valid handle and an OVERLAPPED identity
+            // the registry has confirmed still names a live operation, and which
+            // cannot be reclaimed and reissued while the guard is held.
+            let ok = unsafe { CancelIoEx(self.raw_handle(), id.as_ptr()) };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        })
     }
 
     /// Request cancellation of every outstanding operation on this endpoint.
@@ -439,22 +553,6 @@ impl<'port> AssociatedEndpoint<'port> {
 
     fn raw_handle(&self) -> HANDLE {
         self.handle.as_raw_handle()
-    }
-}
-
-/// An identity for an in-flight operation: the address of its `OVERLAPPED`.
-///
-/// It is used to cancel a specific operation and to match its later completion.
-/// The pointer must not be dereferenced or freed; the kernel owns the storage
-/// until the completion is claimed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OperationId(*mut OVERLAPPED);
-
-impl OperationId {
-    /// The `OVERLAPPED` pointer this identity refers to.
-    #[must_use]
-    pub fn as_ptr(self) -> *mut OVERLAPPED {
-        self.0
     }
 }
 
@@ -507,12 +605,21 @@ pub enum Submitted<P> {
 }
 
 /// A completion packet dequeued from a [`CompletionPort`].
+///
+/// Dequeuing removes the operation from the port's outstanding set, so holding a
+/// completion never blocks [`CompletionPort::run_down`] or the port's `Drop`. The
+/// completion still owns the operation's storage until it is dropped or
+/// [`claim`](Self::claim)ed, and may outlive the port it came from.
 pub struct Completion {
     key: usize,
     bytes_transferred: u32,
     overlapped: *mut OVERLAPPED,
     error: Option<io::Error>,
-    state: Arc<PortState>,
+    /// The identity of the operation this packet completes, recovered from the
+    /// registry at dequeue time. `None` for a user packet, which has no
+    /// operation. Stored whole rather than as a bare generation, so nothing here
+    /// ever re-pairs an address with a generation.
+    id: Option<OperationId>,
     claimed: Cell<bool>,
 }
 
@@ -522,6 +629,7 @@ impl fmt::Debug for Completion {
             .field("key", &self.key)
             .field("bytes_transferred", &self.bytes_transferred)
             .field("overlapped", &self.overlapped)
+            .field("id", &self.id)
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
@@ -534,12 +642,8 @@ impl Drop for Completion {
         if self.claimed.get() || self.overlapped.is_null() {
             return;
         }
-        // An operation completion observed but never claimed: reclaim it so the
-        // port's rundown can finish.
-        self.state.outstanding.fetch_sub(1, Ordering::SeqCst);
-        if crate::source_tracking_enabled() {
-            lock(&self.state.tracked).remove(&(self.overlapped as usize));
-        }
+        // The registry entry is already gone -- dequeue removed it -- so this
+        // only has to release the storage the completion still owns.
         // SAFETY: the completion arrived, so the kernel is done with the storage;
         // the operation's armed reclaim thunk frees the box exactly once.
         unsafe { crate::operation::reclaim_from_overlapped(self.overlapped) };
@@ -568,6 +672,18 @@ impl Completion {
         self.overlapped
     }
 
+    /// The identity of the operation this packet completes.
+    ///
+    /// It matches the [`OperationId`] that [`AssociatedEndpoint::submit`]
+    /// returned for the operation, so a caller holding submission-time
+    /// identities can match a completion against them directly. Returns `None`
+    /// for a user packet from [`CompletionPort::post`], which completes no
+    /// operation.
+    #[must_use]
+    pub fn id(&self) -> Option<OperationId> {
+        self.id
+    }
+
     /// The failure of the completed operation, if it did not succeed.
     #[must_use]
     pub fn error(&self) -> Option<&io::Error> {
@@ -583,11 +699,8 @@ impl Completion {
     /// claimed exactly once.
     pub unsafe fn claim<P>(&self) -> Operation<P> {
         // Mark claimed so this completion's own drop will not also reclaim it.
+        // The registry entry was already removed at dequeue.
         self.claimed.set(true);
-        self.state.outstanding.fetch_sub(1, Ordering::SeqCst);
-        if crate::source_tracking_enabled() {
-            lock(&self.state.tracked).remove(&(self.overlapped as usize));
-        }
         // SAFETY: by this function's contract, the identity is a matching leaked
         // Operation<P>, reclaimed exactly once here.
         let mut operation = unsafe { Operation::<P>::from_overlapped(self.overlapped) };

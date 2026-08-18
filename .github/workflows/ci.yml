@@ -16,10 +16,15 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+# These crates are Windows-only (every item is behind `cfg(windows)`), so CI
+# builds, tests, and lints exclusively on Windows. Both the `--all-features`
+# union and the minimal default (no-feature) configuration are exercised: the
+# default set is a supported, published configuration, and a feature-union-only
+# build can hide a missing `cfg` or an item that depends on an opt-in feature.
 jobs:
   encoding:
     name: encoding sanity check
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - name: Run check-encoding.ps1
@@ -27,19 +32,22 @@ jobs:
         run: ./tools/check-encoding.ps1
 
   build-test:
-    name: build + test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    name: build + test
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: cargo build
+      - name: cargo build (all features)
+        run: cargo build --workspace --all-targets --all-features --locked
+      - name: cargo build (default features)
         run: cargo build --workspace --all-targets --locked
-      - name: cargo test
+      - name: cargo test (all features)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test --workspace --all-features --locked --no-fail-fast
+      - name: cargo test (default features)
         env:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
@@ -47,7 +55,7 @@ jobs:
 
   fmt:
     name: rustfmt
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -57,31 +65,25 @@ jobs:
         run: cargo fmt --all --check
 
   clippy:
-    name: clippy (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    name: clippy
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: cargo clippy
+      - name: cargo clippy (all features)
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: cargo clippy (default features)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   msrv:
-    name: MSRV check 1.97 (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    name: MSRV check 1.97
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
       - name: cargo check (MSRV)
-        run: cargo check --workspace --all-targets --locked
+        run: cargo check --workspace --all-targets --all-features --locked

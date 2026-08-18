@@ -28,5 +28,6 @@ dependencies = [
 name = "windows-threadpool-sys"
 version = "0.1.0"
 dependencies = [
+ "windows-overlapped-io-sys",
  "windows-sys",
 ]

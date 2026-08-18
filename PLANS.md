@@ -1,11 +1,13 @@
 # Plans
 
-Master tracker for every CHECKLIST.md in the repository. Each source-component also keeps its own PLANS.md:
-[crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overlapped-io-sys/PLANS.md) and
-[crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md).
+Master tracker for every active CHECKLIST.md in the repository. Each source-component also keeps its own
+PLANS.md: [crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overlapped-io-sys/PLANS.md) and
+[crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md). Checklists whose work is
+finished move to [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
+
+No checklists are active.
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | completed | Workspace metadata, release automation, name reservation, and shared cross-crate invariants; all current milestones complete (archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md)). Reopens for future cross-cutting work. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
-| [crates/windows-overlapped-io-sys/CHECKLIST.md](crates/windows-overlapped-io-sys/CHECKLIST.md) | in progress | Overlapped-I/O foundation: horizon `DeviceIoControl` adapters remain. Provenance, gated features, hardening, file read/write plus scatter/gather (`fs`), and IOCP plus blocking socket adapters (`socket`) complete. | [crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) |
-| [crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md) | not started | Thread pool: callback environment, work/timer/wait, and the TP_IO backend over the shared seam. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+
+Add a row here when new work is planned, against [CHECKLIST.md](CHECKLIST.md) or either crate's.

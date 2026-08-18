@@ -157,6 +157,66 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	`StartThreadpoolIo` with a callback or a `CancelThreadpoolIo`, whereas the raw IOCP and event backends have no
 	such counter. The core exposes the hooks these require without encoding thread-pool accounting itself.
 
+### Registration ends at dequeue, not at reclamation
+
+The registry answers one question: **is a completion packet still coming for this operation?** It stops being
+true the moment the packet is dequeued, so that is where an operation is deregistered.
+
+It did not start that way. Registration originally ended when the `Completion`'s storage was reclaimed --
+dropped or claimed -- which conflated two different lifetimes: the port's obligation to deliver a packet, and
+the completion's ownership of the operation's storage. A `Completion` holds neither a borrow of the port nor
+any tie to it, so entirely safe code could dequeue one, hold it, and drop the port:
+
+```text
+let completion = port.get(INFINITE)?.unwrap();  // packet delivered; still registered
+drop(endpoint);
+drop(port);                                     // run_down() sees 1 outstanding
+```
+
+`Drop` runs `run_down`, which blocks in `get(INFINITE)` waiting for a packet that has **already been
+delivered**. Reproduced: an unconditional hang, no timeout, no diagnostic beyond the outstanding-at-drop
+warning. Dropping the completion from another thread would not help either -- it updates the registry but
+nothing wakes `GetQueuedCompletionStatus`.
+
+Moving deregistration to dequeue separates the two lifetimes cleanly:
+
+- **Rundown** counts only undelivered packets, so a held completion cannot make the port wait for itself.
+- **Cancellation** (`cancel_if_live`) now reports `NotFound` for an operation whose packet has been dequeued.
+	That is more correct than before, not a regression: the operation is finished, and cancelling it was always
+	meaningless.
+- **Storage ownership** stays with the `Completion`, which still frees the box on drop and may now legitimately
+	outlive the port it came from. `reclaim_from_overlapped` reads a thunk inside the operation's own
+	allocation, so it needs nothing from the port -- which is why the completion no longer holds an
+	`Arc<PortState>` at all.
+
+Address reuse is not a hazard in the window this opens. The box is not freed until the completion is dropped,
+so no later operation can be issued at that address while a stale identity might still be presented; and once
+it is freed, a new operation there registers a fresh generation, which an `OperationId` compares.
+
+This does change what `outstanding()` reports: a dequeued-but-held completion no longer counts. That is the
+intended meaning -- the count measures what the port still owes the caller.
+
+### Rundown waits are bounded and rechecked, not unbounded
+
+`run_down` is `while outstanding() > 0 { get(...) }`. The wait inside the loop is **bounded**
+(`RUN_DOWN_POLL_MS`) and the count is rechecked after it, rather than an unbounded `get`.
+
+A `CompletionPort` is shareable and `get` takes `&self`, so another thread may consume completions concurrently
+with a rundown. That opens a race an unbounded wait cannot survive: this loop can observe `outstanding() == 1`,
+a concurrent consumer can then dequeue that last packet -- and clear its registry entry -- and only afterwards
+does this loop call `get`. There is no packet left to deliver, so an unbounded `get` blocks forever. Clearing a
+registry entry does not wake a `GetQueuedCompletionStatus` already in progress, so nothing rescues the wait; the
+recheck must. A bounded wait wakes on its own after the interval, the loop re-reads `outstanding()`, sees zero,
+and returns.
+
+This is distinct from the [registration-ends-at-dequeue](#registration-ends-at-dequeue-not-at-reclamation) hang:
+that one was a single thread waiting for a packet it had itself already dequeued; this one is one thread waiting
+for a packet a *different* thread dequeued. Registration timing does not close it, because the count is correct
+throughout -- the defect is purely that an unbounded wait cannot notice the count reaching zero by another path.
+A wakeable count-to-wait transition would also work; a bounded recheck is chosen as the smaller mechanism, and
+the interval only bounds recheck latency -- a packet genuinely destined for the rundown thread is still returned
+the instant it arrives, so this is not a busy-poll of a live operation.
+
 ### Voluntary rundown and `Drop`
 
 Rundown has two entry points that share the same blocking semantics; the difference is only who initiates it.
@@ -189,13 +249,17 @@ may only manage this on a best-effort basis (behind an optional logging feature 
 standard error), and full context may not always be recoverable; the diagnostic is advisory, not a correctness
 mechanism.
 
-The raw IOCP backend keeps rundown correctness lock-free: an atomic outstanding count governs draining, and
-each operation's `repr(C)` header carries a type-erased reclaim thunk that frees it from the `OVERLAPPED` pointer
-alone. Source tracking is a separate, opt-in diagnostic layer: when enabled it records each operation's
+Rundown correctness rests on the live-operation registry: its length is the outstanding count that governs
+draining, and each operation's `repr(C)` header carries a type-erased reclaim thunk that frees it from the
+`OVERLAPPED` pointer alone. The registry was originally a lock-free `AtomicUsize`; it became a mutex-guarded map
+when identities gained generations, because liveness has to be checked per identity and not merely counted (see
+[the identity decision](#decision--identities-are-generation-stamped-and-validated-not-bare-addresses)).
+
+Source tracking is a separate, opt-in diagnostic layer: when enabled it records each operation's
 `#[track_caller]` submit `Location` in a per-port map, so the drop-time message can name the sources. It is a
 one-time in-process setting (`set_source_tracking`) that defaults from the `WINDOWS_OVERLAPPED_IO_SYS_TRACK`
-environment variable and is off by default, because when on it takes a mutex on the submission hot path. With
-tracking off, the drop message reports only the count and how to enable sources. The optional
+environment variable and is off by default. Its cost is now a second map insertion rather than the only lock on
+the path. With tracking off, the drop message reports only the count and how to enable sources. The optional
 `operation-backtrace` cargo feature additionally captures a full backtrace per submission -- itself gated at run
 time by `RUST_BACKTRACE` -- giving both build-time and run-time control over how much context is retained.
 
@@ -283,6 +347,105 @@ a real backend. `TP_IO` reuses them unchanged and adds only its own concerns: `S
 submission, `CancelThreadpoolIo` to balance an immediate failure, and reclamation from its callback (typed when
 the operation family is known, or `reclaim_overlapped` during object rundown). This crate never links the
 thread-pool functions or references `TP_*`.
+
+### Decision — identities are generation-stamped and validated, not bare addresses
+
+An operation's storage address alone is not a durable name for it. Reclaiming an operation returns that address
+to the allocator, which may hand it to a later operation, so an address retained past its operation's completion
+can name a different, live operation. This was originally treated as a documentation matter -- "an identity is
+unique only among simultaneously outstanding operations" -- but that was the wrong call, because it left a
+**safe** function able to do something silently wrong: `cancel` acts purely on the address, so a stale identity
+could cancel an unrelated operation. It was reproduced directly, recycling an address within 64 cancel-and-
+resubmit cycles.
+
+The severity comes from the triggering pattern being the *primary* use of cancellation -- a timeout firing while
+a completion is in flight. A caller cannot atomically know whether the operation is still outstanding; that is
+precisely what it needs the API to establish.
+
+`OperationId` therefore carries a process-wide monotonic generation taken at submission, and each backend keeps
+an `OperationRegistry` of live identities. Cancellation consults the registry and rejects an identity that is
+not live under its own generation, with `ErrorKind::NotFound` and **without** calling `CancelIoEx` -- a recycled
+address is never handed to the kernel on the caller's behalf. Retaining an identity indefinitely is now
+harmless.
+
+Consequences accepted:
+
+- **The IOCP backend's lock-free submission path is gone.** `PortState` previously kept `outstanding` as an
+	`AtomicUsize` specifically so the mutex was untouched on the hot path by default. The registry must be
+	consulted on every submission and completion, so that property is deliberately reversed: correctness of a
+	safe API outranks an uncontended-atomic-versus-mutex difference on the submission path. The registry replaces
+	the counter rather than joining it (`outstanding` is now `live.len()`), so there is one lock rather than a
+	lock plus an atomic, and the count and the liveness set cannot disagree.
+- **The generation sequence is process-wide, not per-backend.** Per-object counters would let two objects mint
+	the same (address, generation) pair, so an identity from one object could alias an operation in another. A
+	single `AtomicU64` costs one relaxed increment and makes every identity unique for the life of the process;
+	at one submission per nanosecond it still takes centuries to wrap.
+- **`OperationId` is `Send + Sync`.** The raw pointer would otherwise make it neither, which would put
+	cancelling from a different thread -- the entire point of holding an identity -- out of reach. The identity
+	is inert data that no backend dereferences, so this is sound.
+
+Alternatives rejected: storing the generation inside the operation header and validating by reading it, which
+would require dereferencing storage that may already be freed; and exposing an `is_outstanding(id)` predicate,
+which invites a time-of-check/time-of-use race when `cancel`'s return value already answers the same question
+atomically.
+
+#### Duplicate registration panics deliberately
+
+`OperationRegistry::insert` panics when an address is registered while an earlier operation is still registered
+at it, rather than overwriting or ignoring the duplicate. The registry's whole purpose is to answer "does this
+identity still name a live operation?", and two live operations sharing one entry makes that answer wrong for
+one of them -- reintroducing precisely the mis-cancellation the generations were added to prevent. A silent
+duplicate would therefore convert a loud, immediate failure into a rare wrong-operation cancellation, which is
+the harder bug by a wide margin.
+
+The panic carries the colliding address and *both* generations, and states that the fault is in the completion
+backend rather than its caller, because that is the only audience able to act on it: the condition is
+unreachable through ordinary use of either backend, since a submitted operation owns freshly boxed storage. The
+invariant it guards -- **an address is never registered while it is available for reuse** -- is stated on the
+type, and the callback-ordering trap that violates it is called out there and in
+[the workspace design notes](../../DESIGN-NOTES.md). This is not hypothetical: the assertion caught a real race
+in the `TP_IO` backend, where deregistering after the callback left a window because `IoCompletion::claim` frees
+the storage inside the callback.
+
+`OperationId`, `Issued`, and `Submitted` are part of that seam rather than IOCP-private types: an operation
+identity, a submission classification, and a submission outcome mean the same thing to any backend. Building
+`TP_IO` outside this crate showed that only `OperationId` was not actually reachable -- it had no public
+constructor, so a backend in another crate could read an identity but never produce one. `OperationId::mint`
+closes that gap: it takes the operation's storage address and pairs it with the next value of a process-wide
+monotonic counter, which is what makes the identity unique rather than merely descriptive.
+
+`mint` is safe because an `OperationId` is only an address plus a counter -- the address is what
+`OperationId::as_ptr` already exposes, and the type is documented as never to be dereferenced or freed. The
+generation is what an address alone could not provide: storage is reclaimed and reissued, so an identity minted
+from an address alone could silently name a later operation. That failure was reproduced before the redesign, at
+cycle 21 of a reclaim loop.
+
+**Minting is the only way safe code can obtain an identity.** There is deliberately no safe constructor that
+pairs an address with a generation of the caller's choosing. An earlier `from_parts` did exactly that, and its
+documentation claimed that "reconstructing an identity confers no access that observing it did not already
+confer" -- which was false. A caller holding `(p, g)` could construct `(p, g + 1)`, and if the next submission
+reusing `p` were stamped with that generation, `cancel` would accept the forged identity and abort an operation
+the caller never submitted. The generation defeats a *retained* identity; nothing stopped a *guessed* one. That
+is an isolation break rather than undefined behaviour -- cancelling a live operation is well-defined, tokens are
+not forgeable, and no storage can be reclaimed twice by it -- but it is precisely the property generations exist
+to provide.
+
+The fix removed the pairing step from the normal path rather than guarding it. Every caller of `from_parts` was
+reassembling what the registry had just returned, so `OperationRegistry::remove` and `OperationRegistry::identify`
+return a whole `OperationId`, built from the pair the registry itself recorded. A backend recovering the identity
+of a completion it knows only by address asks the registry for it and never supplies a generation, so it cannot
+supply a wrong one.
+
+`unsafe fn forge` remains, for the tests that prove a stale or ahead identity is *rejected*: that coverage has to
+be reachable from the sibling crate, where a `pub(crate)` seam would not be. Marking it `unsafe` for an invariant
+that is not memory safety is a deliberate choice -- the obligation is the kind `unsafe` exists to record, and the
+alternative was losing those regression tests or leaving safe code able to forge. The `compile_fail` doctest
+proving safe code cannot forge is paired with a positive control differing only in the `unsafe` block, so the
+rejection is demonstrably the missing obligation rather than any other compile error.
+
+The alternative -- letting the thread-pool crate define its own identity type -- was rejected: it would fork the
+shared vocabulary the two crates exist to hold in common, and downstream code composing the backends would have
+to translate between two identical types.
 
 ## Crate boundary summary
 

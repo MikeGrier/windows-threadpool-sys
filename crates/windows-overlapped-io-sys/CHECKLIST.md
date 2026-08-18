@@ -1,9 +1,6 @@
 # Checklist: windows-overlapped-io-sys
 
-Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Design decisions are in
-[DESIGN-NOTES.md](DESIGN-NOTES.md).
+All planned milestones are complete; there are no pending work items. Completed milestones are archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md), and design decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-## M∞ — Horizon (ungated)
-
-- [ ] Safe adapters for the `DeviceIoControl` family, here or in downstream crates, following the file-family
-	adapter shape. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+This file reopens when new work (a new operation family, a new backend, or hardening) is planned.

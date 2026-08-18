@@ -20,7 +20,7 @@ fn empty_temp_file(tag: &str) -> PathBuf {
 #[test]
 fn blocking_backend_round_trips_a_file() {
     let path = empty_temp_file("blocking");
-    let endpoint = BlockingEndpoint::new(
+    let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, true, 0).expect("open endpoint"),
     );
 

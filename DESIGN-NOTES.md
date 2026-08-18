@@ -86,6 +86,11 @@ below are the common surface both must satisfy.
 - The matching completion -- delivered even for a cancelled operation, typically as `ERROR_OPERATION_ABORTED`
 	-- remains the sole trigger that reclaims the operation's storage. Targeted and whole-endpoint cancellation
 	both leave that completion path intact.
+- Targeted cancellation names an operation by an `OperationId`, which pairs the storage address with a
+	process-wide generation taken at submission. Both crates validate the identity against their live-operation
+	registry before issuing a native cancel, so an identity retained past its operation's completion is rejected
+	rather than applied to whatever operation has since been given that address. Cancelling therefore races
+	safely against completion in both crates: a late cancel fails, it never hits an unrelated operation.
 
 ### Callback lifetime and teardown
 
@@ -186,8 +191,576 @@ destroy helper is a no-op, but the wrapper should still model that lifecycle bou
 `CRITICAL_SECTION` parameter is feature-gated. That feature is intentionally deferred until the safe API has a
 use for this specialized callback-return operation.
 
-Primary references:
+## Cleanup groups own their members
 
+`CloseThreadpoolCleanupGroupMembers` releases every member at once, and afterwards a member must not be used or
+closed again. Two things follow that an "individually owned object, flagged as group-owned" design cannot
+satisfy. First, each object also owns a heap callback context, and that context is only safe to free once the
+group has finished releasing members -- which is precisely the moment an individual object cannot observe.
+Second, nothing would stop a caller using a member after the release.
+
+So `CleanupGroup` creates its members (`create_work`, `create_timer`, `create_periodic_timer`, `create_wait`)
+and owns both the member objects and their contexts, plus the watched handle of a wait member. Members are
+handle wrappers with no `Drop`; the group frees everything after the bulk release. Use-after-release is a
+compile error rather than a documented rule: members borrow the group and `close_members` takes `&mut self`, so
+the borrow checker rejects touching a member afterwards. A `compile_fail` doc test pins that.
+
+Two consequences worth recording:
+
+- **Thread-pool I/O is excluded on purpose.** A `TP_IO` object must not be closed while an overlapped operation
+	is outstanding, because the kernel still owns that operation's storage, and a bulk release has no way to
+	satisfy that precondition. `ThreadpoolIo` therefore stays individually owned, where its `Drop` cancels,
+	drains, and only then closes. Adding a `create_io` would trade a guarantee for a convenience.
+- **The caller's environment is copied, not mutated.** Layering the group onto a caller-supplied
+	`CallbackEnviron` in place would be visible to them afterwards, and would break reusing one environment
+	across two groups. Copying costs one struct move per member creation.
+
+Per-object `Drop` was already correct teardown for every type, so a cleanup group buys bulk convenience rather
+than a safety property the crate lacked. It was still worth building safely rather than leaving
+`set_cleanup_group` as the only route, because that route is `unsafe` and easy to get wrong in exactly the way
+described above.
+
+## `TP_IO` backend realization
+
+`ThreadpoolIo` is the third completion backend for the shared overlapped model, alongside the raw IOCP and
+blocking backends owned by `windows-overlapped-io-sys`. It reuses that crate's endpoint ownership and pinned
+operation storage unchanged and adds only the two concerns the thread pool imposes.
+
+### Balanced accounting is the type's central invariant
+
+One counter -- the number of `StartThreadpoolIo` calls not yet balanced -- serves as both the pool's accounting
+and the crate's rundown state, because they are the same quantity: an unbalanced start is exactly an operation
+whose storage the kernel or pool still owns. `submit` increments before issuing `StartThreadpoolIo`, so a
+completion delivered on a pool thread can never race ahead of the count. It is then balanced on exactly one of
+three paths: the I/O callback (pending), or `CancelThreadpoolIo` inline in `submit` for an immediate failure or
+for a synchronous completion on a handle in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode. The unsafe contract on
+`submit` exists to make the caller's `Issued` classification the single point where this can go wrong.
+
+The accounting is the shared `OperationRegistry` from `windows-overlapped-io-sys`: its length is the number of
+unbalanced starts, and its condition variable is what rundown blocks on. Using the shared type rather than a
+private counter means the two backends cannot drift apart on what "outstanding" means, and it gives `TP_IO` the
+identity validation described under [Cancellation](#cancellation) for free. Rundown must block on a condition
+variable rather than pump a dequeue loop as the IOCP backend does, because these completions arrive on pool
+threads the owner does not drive.
+
+### Callback ordering: deregister on entry, and what that costs `run_down`
+
+The governing invariant is that **an address is never registered while it is available for reuse**. Violating it
+is a real race, not a theoretical one: the registry's duplicate-address assertion caught it during
+multi-threaded testing, where one thread's completion freed storage that another thread's submission was
+immediately handed while the freed operation's entry was still present.
+
+Satisfying it requires deregistering the operation **before any user code runs**, at the top of the callback.
+Deregistering afterwards is not sufficient no matter how the guards are ordered, because `IoCompletion::claim`
+hands the storage to the callback, which may drop it -- freeing the address -- part-way through its own body.
+The kernel is finished with the operation by the time its callback is entered, so there is nothing to lose by
+deregistering there, and it makes `cancel` correctly reject an operation whose completion is already being
+delivered. Doing it unconditionally before `catch_unwind` also keeps the accounting exact when a callback
+panics, which is why no drop guard is needed for it.
+
+The cost is that an empty registry no longer implies the callbacks have finished, so `run_down` waits for two
+things: first that no operation is outstanding, then -- via `WaitForThreadpoolIoCallbacks` -- that no callback
+is still executing. Without the second wait, `cancel_all(); run_down(); read results` is a race, which is
+exactly how the weaker version was caught. Keeping both inside `run_down` means callers get the contract they
+would assume ("when this returns, my callbacks have run") rather than the one that happens to fall out of the
+implementation.
+
+An earlier version of this backend deregistered at the *end* of the callback, reasoning that this made
+"outstanding reached zero" mean "no storage is still pool-owned". That was both unsafe (the race above) and
+unnecessary: the property that matters at teardown -- no callback still touching the context -- comes from
+`WaitForThreadpoolIoCallbacks`, not from the counter. The raw IOCP backend already deregistered before releasing
+storage in both its claim and drop paths, so this also brings the two backends into agreement.
+
+There is deliberately no cancelling variant of `wait`: cancelling a pending I/O callback neither cancels the
+underlying operation nor makes its `OVERLAPPED` safe to free, so the only sound way to stop outstanding I/O is
+`cancel_all` followed by `run_down`.
+
+### `Drop` cancels rather than only blocking
+
+The raw IOCP `CompletionPort::drop` blocks on a drain that the caller must already have made terminating. A
+`ThreadpoolIo` owns its endpoint handle, so it can do better: `Drop` reports the skipped rundown once, then
+issues `cancel_all` itself, which guarantees every outstanding operation delivers its callback and therefore
+that the block terminates. Cancelling a handle that is about to be closed anyway costs nothing and converts a
+potential permanent hang into a bounded wait.
+
+### Seam change this required
+
+`OperationId` had no public constructor, so only backends inside `windows-overlapped-io-sys` could name their
+in-flight operations. Implementing the second backend outside that crate revealed the gap, and it was fixed at
+the source rather than by defining a competing identity type here -- a duplicate would have split the shared
+vocabulary the two crates are supposed to hold in common.
+
+Building the second backend then exposed a deeper problem in the same seam: an identity was only an address, so
+one retained past its operation's completion could name a later operation that had been given the same storage.
+`OperationId::mint` and the shared `OperationRegistry` replaced the original address-only constructor, and the
+registry hands a backend the whole identity for an address rather than a generation to re-pair, so safe code
+cannot assemble one at all. See
+[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) for that
+decision, which this crate consumes rather than duplicates.
+
+## A safe wait constructor takes proven wait provenance, not any handle
+
+The pool's wait objects support only some kinds of handle. A mutex handle in particular is documented by the
+SDK as unsupported, and passing one makes the native behaviour undefined -- there is no error return.
+
+`ThreadpoolWait::new` is a safe function, so it cannot delegate that precondition to its caller by documenting
+it: safe code that can invoke undefined behaviour is unsound however clearly the requirement is written down.
+Both wait constructors therefore take a `WaitableHandle` rather than an `OwnedHandle`. The type mirrors the
+shape `UnassociatedEndpoint` already uses in the sibling crate: safe constructors for the handle kinds this
+crate can create itself, plus one narrow `unsafe fn assume_waitable` for handles obtained elsewhere, where the
+caller takes on the obligation explicitly.
+
+The cleanup group's `create_wait` takes the same type. It is a second safe path to the identical hazard, and
+changing only the individually-owned constructor would have left it unsound -- the reason the constraint lives
+in a type rather than in each function's documentation.
+
+## Re-arming is gated against teardown, under the same lock that arms
+
+Both the timer and the wait let a callback re-arm the object from inside itself, which is what the SDK requires
+for repeated activation. Neither was synchronized with `Drop`.
+
+`Drop` disarms, drains callbacks, then closes the object and frees the context. A callback already running when
+the disarm happens can arm the object again afterwards; the drain then returns -- it only waits for callbacks,
+not for the object to be idle -- and the close and context free race a freshly queued callback.
+
+Each context now holds a `shutting_down` flag. Arming takes that lock and does nothing when the flag is set;
+`Drop` sets the flag and disarms under one acquisition of it. A re-arm request is therefore either applied
+before teardown begins or suppressed, never interleaved. The lock is only ever held across the native setter,
+never across the drain: a callback blocked on it would otherwise never finish, and the draining thread would
+wait on it forever.
+
+The timer half of this was a window the previous review round *introduced*. Deferring the re-arm to after the
+callback returns -- which is what makes the requested delay run from the end of the firing, keeping successive
+firings sequential -- moved the arming past `Drop`'s disarm, where it had previously been inside the callback.
+
+Suppression has no user-visible effect by construction: it only ever happens while the object is being
+destroyed, so no caller can observe the difference, and the absence of undefined behaviour is not testable
+directly. Both objects therefore expose the outcome to their own tests -- `rearm_reporting` on the wait, and a
+test-only observer on the timer, whose `Arc` the test keeps so the record outlives the freed context. Without
+these, a test could only assert that teardown terminated, which it does with the gating removed as well.
+
+## Quiescing without dropping is `stop_and_drain`, and it covers the callback only
+
+`ThreadpoolTimer` and `ThreadpoolWait` both let a callback re-arm from inside itself, so "stop this and wait
+until it is idle" is not expressible as disarm-plus-drain. `wait()` demonstrably does not do it: after
+`disarm(); wait();` a self-re-arming timer was measured still set and firing, because the deferred re-arm is
+applied after the callback returns, which is after the external disarm.
+
+`cancel_pending()` *was* measured to leave the object quiescent -- but only because the pool drops a callback
+armed by the trampoline during an in-flight cancel. No SDK contract promises that, so relying on it would make
+our quiescence guarantee a property of the dependency rather than of this crate. Both types therefore have a
+`stop_and_drain` that suppresses re-arming under the same lock `Drop` uses, disarms, drains, and lifts the
+suppression so the object stays usable. `ThreadpoolPeriodicTimer` already had one, so this also removes an
+asymmetry between the three timer-shaped types.
+
+The suppression is a **depth count**, not a flag. It has two users with different lifetimes: `stop_and_drain`
+raises and lowers it, while `Drop` raises it permanently. With a flag, one `stop_and_drain` finishing would
+clear a suppression a concurrent one still needed.
+
+Suppression is not observable from outside -- dropping queued callbacks leaves the object idle either way -- so
+the regression test asserts the *mechanism*, checking that the in-flight callback's re-arm request was actually
+refused. A first version asserted quiescence instead and passed with the suppression removed.
+
+### The suppression covers the callback's re-arm, not an external one
+
+A later review round pointed out the limit of all this: the external arming methods -- `set_after`, `set_at`,
+`set_after_with_window`, `arm`, `start*` -- take `&self` on `Sync` types and do **not** pass through the
+suppression lock. A concurrent arm from another thread landing inside the stop window is therefore not excluded
+by anything in this crate, and the original documentation claimed flatly that the object was idle on return.
+
+No observable failure could be produced, and the reason is instructive: `WaitForThreadpoolTimerCallbacks` with
+cancellation clears a due time *even when no callback is queued* (measured: `is_set` true then false), whereas
+`wait()` leaves it set. The drain therefore cancels a racing arm incidentally -- which is the same undocumented
+behaviour this decision opens by refusing to depend on. The guarantee is real today and is not ours.
+
+Two ways to make it ours were considered: route external arming through the same lock, or require exclusive
+access for `stop_and_drain` as `BlockingEndpoint` does. **Neither was taken.** The gate costs a mutex on every
+arm and, for the cleanup-group members, plumbing a context pointer into types that currently hold only a raw
+handle; exclusive access would remove the ability to stop an `Arc`-shared timer from another thread, which is a
+legitimate pattern the type otherwise supports. Against a race with no demonstrated failure, both were judged to
+buy less than they cost.
+
+What was fixed is the claim. Each `stop_and_drain` now separates what it enforces -- no callback queued or
+executing, and a callback's own re-arm discarded -- from what it assumes: that nothing else arms the object for
+the duration, which a caller obtains by owning it exclusively or serializing access. The measurement is recorded
+alongside so the incidental cancellation is not mistaken for a contract and quietly relied upon later.
+
+This is the honest shape of the decision: a documented precondition is a weaker thing than an enforced one, and
+saying so is better than either overclaiming or paying for machinery nobody needs.
+
+## The encoding check rejects stray control characters
+
+A form feed reached two committed source comments. The cause was a PowerShell replacement containing
+`` `forge` `` in a double-quoted string: PowerShell reads the backtick-`f` as its **form-feed escape**, so the
+text became `<FF>orge`. Invisible in every editor and diff, and it survived review twice.
+
+[tools/check-encoding.ps1](tools/check-encoding.ps1) did not catch it, because it tested only for invalid UTF-8
+and for mojibake digraphs -- and a form feed is valid UTF-8 and is not mojibake. It now also rejects any C0
+control or DEL other than tab, line feed and carriage return, reporting the byte value and line. The check was
+verified against a planted form feed, not just against the repaired files.
+
+The wider point is about tooling rather than encoding: **a shell that rewrites the text it is passed is the
+wrong tool for editing source.** This repository's instructions already say to use the file tools instead of
+PowerShell for file content, precisely because of escape hazards like this one; the damage happened in a
+`String.Replace` chain that looked innocuous. Where a shell must be used, prefer single-quoted strings, and
+verify the result by reading the file back rather than trusting the command's exit status.
+
+## The encoding check also rejects a doc-comment marker glued to code
+
+A stray `///` was found appended to a line inside a doc example: `/// }, None)?;///`. It was introduced by an
+edit splice of mine four rounds earlier and survived every gate since.
+
+The reviewer reported it as a compile failure. It is not: tested against a scratch file, a `///` in that
+position is only an `unused_doc_comment` **warning**, and the doctest still compiles and passes. Running
+rustdoc with `RUSTDOCFLAGS=-D warnings` does **not** catch it either, which was checked rather than assumed. So
+the damage was real and the stated consequence was not -- worth separating, because the wrong consequence is
+what would have driven the wrong fix (a lint setting that does nothing).
+
+[tools/check-encoding.ps1](tools/check-encoding.ps1) now rejects `///` immediately following a non-space
+character at end of line, in `.rs` files. The pattern was checked for false positives across the whole
+repository before being adopted: there are none, because a legitimate doc comment is always preceded by
+whitespace or begins its line. The script's own description was widened from "encoding" to **text hygiene**,
+since neither this rule nor the control-character rule is an encoding fault; they live here because this is the
+check CI already runs over every tracked file.
+
+The first version of this guard was a **no-op**: it gated on a `$ext` variable that was not in scope inside the
+file loop, so it silently matched nothing and the planted probe passed. This is the second time in this project
+that a guard has been written, observed to pass, and believed. The rule that caught it is worth restating: **a
+guard you have only seen pass is untested.** Plant the defect it is meant to catch and watch it fail, then
+remove the defect and watch it pass. Both directions, every time.
+
+## Restoring a file with an old timestamp silently disables the rebuild
+
+Verifying a fix by planting the defect back requires *building* both states. Restoring the fixed file with
+PowerShell's `Copy-Item` breaks that, because it **preserves the source file's `LastWriteTime`**. The restored
+file is then older than the artifact built from the defective version, Cargo judges it up to date, and every
+subsequent run silently executes the **defective binary**.
+
+Observed exactly that: source stamped 02:08:34, test executable 02:09:51, `Finished in 0.01s` with no
+`Compiling` line, and a test failing against source that was provably correct (the restored file hashed
+identically to the known-good backup). Roughly twenty minutes went into hunting a defect in the fix before the
+timestamps were compared. The near-miss is worse than the delay: had the *fixed* state been the one built from
+a stale artifact, a broken fix would have appeared to pass.
+
+Rules adopted:
+
+- After restoring a file by copy, **stamp it**: `(Get-Item $p).LastWriteTime = Get-Date`. Editing through the
+	file tools does this implicitly, which is why the problem only appears with shell copies.
+- **Read the build output, not just the test summary.** A revert-verification run that does not print
+	`Compiling` for the crate under test proves nothing at all.
+- Prefer plant-and-restore through the file tools over shell copies, for the same reason the tools are already
+	preferred for content: the shell's convenience operations have side effects on the metadata builds depend on.
+
+## An ABI expectation in a test is written independently of the constant it checks
+
+`environ_flags::LONG_FUNCTION` and `ENVIRON_VERSION` are ABI identities -- values the operating system reads --
+so the repository's no-inline-numeric-constants rule applies and they are named at the point of definition.
+
+Their *tests* are the exception that needed thinking about. `assert_eq!(LONG_FUNCTION, LONG_FUNCTION)` passes
+however the constant is changed, so a test that imports the implementation's constant to check the
+implementation's constant pins nothing. The first response to that was to keep bare `1` and `3` literals in the
+assertions, with a comment explaining why -- which traded one rule away for the other.
+
+Both hold at once with a test-local `expected_abi` module restating the values independently. The assertion is
+still against a number written separately from the implementation, so changing the implementation constant
+fails the test; and the number is still named, so what it *is* stays legible. This is the general shape for
+pinning any ABI or wire value: name it twice, deliberately, on either side of the test boundary.
+
+## Summary prose keeps overclaiming what the reference docs get right
+
+
+Four consecutive review rounds found an absolute statement in overview or description prose contradicting a
+precise one in the reference documentation next to the code:
+
+- `stop_and_drain` "leaves the object idle on return" -- true only absent concurrent external arming.
+- The crate overview and README: a `ThreadpoolTimer` "never overlaps" -- true only for re-arming through
+	`TimerFiring`, and the type's own docs said so in a section titled *When firings can overlap*.
+- The pull request: `set_pool` "takes an owned `ThreadpoolPool`" -- it takes a borrow, as the signature shows.
+- The pull request: `CallbackEnviron<'pool>` "makes the compiler enforce that the pool outlives the objects
+	created from it" -- it enforces that against the *environment*; `ThreadpoolPool`'s own *Ordering
+	requirement* section explains at length why it cannot reach the objects.
+
+The pattern is consistent enough to be worth naming. Reference documentation gets written while looking at the
+code, with the awkward cases in view. Summary prose gets written while looking at the *intent*, and the
+qualifiers are exactly what summarising drops. Two of these were introduced while correcting a different
+inaccuracy in the same paragraph.
+
+The rule adopted: an unqualified "never", "always", or "the compiler enforces" in overview prose is a claim that
+must be checked against the reference documentation for the same item before it is written, and re-checked when
+the surrounding text is edited. Where the precise statement is too long to summarise, name the guarantee and
+link to it rather than compressing it into an absolute.
+
+## A thread maximum of zero is refused, and the maximum beats the minimum
+
+**Partly superseded: the "maximum beats the minimum" bullet is wrong. See
+[Conflicting thread limits are refused, because Win32 resolves them silently](#conflicting-thread-limits-are-refused-because-win32-resolves-them-silently).**
+The zero-maximum bullet stands.
+
+Two facts about `SetThreadpoolThreadMaximum`, both established by measurement rather than from the SDK page,
+which states neither:
+
+- **A maximum of zero leaves a pool that runs nothing.** A submitted work item was measured never executing;
+	the call returns void, so the mistake is unreportable and undiscoverable except by the callbacks never
+	arriving. `set_max_threads` therefore returns `io::Result<()>` and rejects zero, matching
+	`set_min_threads`. This is a slightly different case from the period and length rejections elsewhere: there
+	the platform did something *other* than what was asked, whereas here it does exactly what was asked -- the
+	request is simply never useful, and a safe API should not hand back a pool that cannot run anything.
+- **The maximum takes precedence over the minimum.** *(Superseded -- this holds only for the min-then-max
+	ordering, and even then only in steady state.)* Setting a minimum of 4 and then a maximum of 2 was
+	measured peaking at 2 concurrent callbacks. The method previously documented the opposite ("the pool clamps
+	the value to at least the current minimum"), and a unit test carried that claim in its *name*. Both are
+	corrected, and the measured behaviour is now pinned by a test rather than asserted in prose.
+
+## <a id="conflicting-thread-limits-are-refused-because-win32-resolves-them-silently"></a>Conflicting thread limits are refused, because Win32 resolves them silently
+
+The previous decision recorded that "the maximum takes precedence over the minimum", from a single measurement
+of one ordering. That generalisation was wrong, and the test pinning it was intermittently failing at roughly 1
+run in 30 of the full suite. Measuring both orderings and both regimes:
+
+| Sequence | Peak concurrent callbacks |
+|---|---|
+| `set_min_threads(4)` then `set_max_threads(2)` | 2 in steady state (40/40 isolated, 60/60 under CPU load) |
+| `set_min_threads(4)` then `set_max_threads(2)`, many pools created concurrently | 3 observed in 1 trial of 240 |
+| `set_max_threads(2)` then `set_min_threads(4)` | **4**, in every one of 60 trials, and it does not settle back after 250ms |
+
+So the real rule is **last call wins**, not "the maximum wins". A minimum set after a lower maximum annuls that
+maximum outright: the pool runs `minimum` callbacks concurrently and stays there. Both setters return void or a
+bare success, so nothing reports the conflict, and Win32 offers no getter with which a caller could notice.
+
+Two consequences were adopted.
+
+**The wrapper tracks the limits it has set and refuses a pair that cannot both hold.** `set_max_threads` rejects
+a value below a minimum we previously set, and `set_min_threads` rejects a value above a maximum we previously
+set; both with `io::ErrorKind::InvalidInput` and no `raw_os_error`, matching the zero-maximum rejection above.
+This is the same principle as that rejection -- the platform will do something the caller did not intend and
+cannot observe -- applied to the pair rather than to a single argument. The alternative of silently clamping was
+rejected: clamping would also annul one of the two limits, differing only in which one, and would still be
+invisible.
+
+Each tracked limit is an `Option<u32>` that stays `None` until the corresponding setter succeeds, because there
+is no way to read a pool's current limits back from Win32. A limit we were never told cannot be used to reject
+its counterpart, so a fresh pool accepts either setter at any value. This is a deliberate limit on the check
+rather than an oversight: guessing at the documented default maximum in order to reject more would mean
+enforcing a number we had not verified.
+
+**The maximum is documented as a steady-state target, not an instantaneous ceiling.** Raising the minimum
+creates threads eagerly, and those surplus threads are not retired the moment a lower maximum is applied -- the
+peak of 3 above. Refusing the conflicting pair makes that window unreachable through the safe API, which is what
+removed the flaky test, but the underlying property is worth stating: the maximum bounds resource consumption,
+and is not a mutual-exclusion mechanism.
+
+This is the fifth round in which summary prose overclaimed a precise result -- see [Summary prose keeps
+overclaiming what the reference docs get right](#summary-prose-keeps-overclaiming-what-the-reference-docs-get-right).
+The difference is instructive: the earlier four were summaries contradicting correct reference documentation,
+whereas here the reference documentation itself generalised one measurement into a rule. **A measurement
+establishes what happens in the case measured.** Where the statement is about which of two settings wins, the
+other ordering is a different case and has to be measured too.
+
+
+## A periodic timer rejects any period it cannot actually repeat at
+
+`SetThreadpoolTimer` takes the period as whole milliseconds. A period under 1ms therefore rounds down to zero,
+and a zero period tells the pool not to repeat -- so a sub-millisecond `ThreadpoolPeriodicTimer` fired exactly
+once and stopped. Measured before the fix: 999us fired once in 300ms where 1000us fired 31 times, with no error
+at any point.
+
+`ThreadpoolPeriodicTimer::new` now rejects anything below `MIN_PERIOD` (one millisecond), a public constant so
+callers can see the limit rather than discover it. Rejecting was chosen over silently rounding up because the
+constructor already rejects zero for the same underlying reason, and because substituting a different period
+than the caller asked for is the kind of hidden behaviour this crate avoids elsewhere.
+
+`MIN_PERIOD` is a floor on what can be *asked for*, not a delivery guarantee: ticks arrive on the system timer
+tick, ~15.6ms by default. The two limits are unrelated -- one is the width of a field, the other is the
+resolution of the clock -- and conflating them would suggest a 1ms period ticks at 1ms, which it does not.
+
+The lower bound alone turned out to be only a third of the problem, because the same `as_millis()` conversion
+alters two other classes of period. A **fractional** one such as 1.5ms is truncated, so the timer ticks at 1ms
+while `period()` still reports 1.5ms; a period beyond **`u32::MAX` milliseconds** is capped, ticking far more
+often than asked. Both are now rejected too, alongside a `MAX_PERIOD` constant, so `period()` can never disagree
+with what was scheduled. Accepting a value and then quietly altering it is the recurring defect in this crate's
+history -- see the ioctl length limits below, which are the same mistake in a different module.
+
+## Lengths that do not fit the Win32 field are rejected, not capped
+
+`DeviceIoControl`, `ReadFile`/`WriteFile` and the scatter/gather calls all take their sizes as `u32`. The
+helpers that produced them capped with `unwrap_or(u32::MAX)`, so a buffer larger than 4GiB submitted only a
+prefix -- or described the output buffer as smaller than it was -- and then reported success for an operation
+that did something other than what was asked.
+
+Every entry point now validates before allocating, so an unusable request costs nothing. The submitting paths
+measure the lengths up front rather than inside their submission closures, which run at the FFI boundary and
+have no way to report an error; the closures derive only pointers. That ordering is also what makes the tests
+affordable: they ask for 4GiB and never allocate it.
+
+The scatter/gather adapters reach the limit through a page *count*, which is the more plausible route to an
+oversized total, and checking before allocating additionally converts what would have been `PageBuffers::new`'s
+overflow panic into an ordinary `InvalidInput` error.
+
+### There is no 64 MiB ceiling on scatter/gather, and we checked
+
+A review round asserted that `ReadFileScatter` and `WriteFileGather` have a documented per-call limit of 2^26
+bytes (64 MiB), and that all four scatter/gather adapters should reject anything larger. **They do not, and we
+did not.** This is recorded so the claim is not re-raised, and so nobody later "fixes" the absence.
+
+Two independent checks, both negative:
+
+- The Microsoft Learn pages for both functions were read in full -- parameters, return value, remarks. Neither
+	states any per-call byte ceiling. The only size constraints documented are that the segment array must have
+	enough elements for the byte count, that each buffer is one page and page-aligned, and that the total must be
+	a multiple of the volume sector size because the handle is opened `FILE_FLAG_NO_BUFFERING`.
+- Measured directly: scatter reads of 16383, 16384, 16385 and **32768** pages all succeeded, the last returning
+	134,217,728 bytes -- 128 MiB, twice the claimed ceiling, straddling it in both directions.
+
+Adding the suggested check would have rejected requests the platform accepts, introducing a defect while
+appearing to remove one. Where a real environment-specific ceiling exists -- a filesystem, a redirector, a
+driver -- it surfaces as an ordinary native error, which these adapters already return unaltered. That is the
+right division: reject what the *API contract* cannot express (a length that does not fit the `u32` field),
+and report what the *platform* refuses.
+
+The general point is worth keeping: a review finding is a hypothesis, not an instruction. This one was specific,
+plausible and confidently worded, and still wrong.
+
+### One saturation is deliberate
+
+A coalescing *window* is a permission -- "you may delay this firing by up to
+this much to batch it" -- and the pool is always free to fire earlier, so a saturated window asks for less
+coalescing rather than producing a wrong result. Periods pass through the same helper but cannot reach the
+saturation, being validated at construction. The distinction that matters is whether capping loses data or only
+loses an optimisation.
+
+Worth recording as process rather than design, and worth reading twice: **`device.rs`, `fs.rs` and `socket.rs`
+each carried their own copy of the capping helper.** The first review named only `device.rs`; the second round
+found `fs.rs` and closed with "when a defect is found in a helper, check whether the helper has siblings"; the
+third round then found `socket.rs`, which that very advice would have caught had it been acted on rather than
+merely written down. Writing a lesson in a design note is not the same as applying it -- when a defect class is
+identified, grep the workspace for the whole class before declaring it fixed.
+
+## A wait's re-arm is immediate, so its callback can overlap itself
+
+`TimerFiring::rearm_after` is deferred until the callback returns, precisely so a one-shot timer's firings stay
+sequential. `WaitActivation::rearm` cannot work that way: the SDK requires the wait to be armed for the handle's
+*current* signal state to be observed, so the arming takes effect immediately.
+
+The consequence is easy to miss and expensive to meet. On a manual-reset event the handle stays signalled, so
+re-arming from inside the callback queues the next activation at once -- before the current one returns.
+Measured: re-arming at the top of a 20ms callback entered it 7529 times in 400ms, 5110 of those overlapping an
+earlier entry. An auto-reset event does not do this, because the wait consumes the signal.
+
+Nothing about that is wrong, but it is the *opposite* of the guarantee the timer next door gives, and a caller
+who carries the assumption across gets what looks like a runaway pool. It is now documented on both the method
+and the type, contrasted explicitly with the timer, and pinned by tests covering the overlap, the auto-reset
+case, and the mitigation -- so the documentation cannot quietly stop being true.
+
+Writing the mitigation exposed that it was unreachable: the advice is to reset the event before re-arming, but
+`WaitActivation` exposed no way to reach the handle, and a callback cannot capture it because the wait owns it.
+`WaitActivation::handle` closes that gap. Documenting a way out is worth nothing if the API does not provide one.
+
+## The blocking backend's "one operation at a time" is enforced by `&mut self`
+
+`BlockingEndpoint` completes one operation at a time by waiting on the *handle* with `GetOverlappedResult`. With
+two operations outstanding the handle is signalled by whichever finishes, so a call can return the other's
+result and hand back buffers the kernel is still writing into.
+
+That constraint used to live only in `run`'s safety comment, while every safe adapter took `&self` on a type
+that is automatically `Send + Sync` -- so safe code could break it by sharing an endpoint across threads. The
+safe adapters now take `&mut self`, which turns it into a borrow-check error, the same protection cleanup-group
+members get and at the same cost: none. A caller who genuinely wants to share an endpoint wraps it in a `Mutex`,
+which is explicit about the serialization it is buying.
+
+`run` keeps `&self` and stays `unsafe`. A caller driving the raw seam may legitimately hold other borrows, and
+an `unsafe` function's contract is the right home for an obligation the type system is not being asked to check.
+
+The guarantee is pinned by a `compile_fail` doctest paired with a positive control that differs *only* in single
+ownership versus an `Arc`. That pairing matters: a `compile_fail` test passes for any compile error, including a
+typo, so on its own it proves nothing about the reason.
+
+## Exhausting the generation sequence fails rather than wraps
+
+`OperationId::mint` took generations with `fetch_add`, which wraps at `u64::MAX` and then reissues generations
+from zero -- reintroducing exactly the stale-identity aliasing that generations were added to prevent, against a
+type that states an (address, generation) pair names one submission *for the life of the process*.
+
+Minting now refuses to pass `u64::MAX`, in a **single** atomic update. The first attempt at this used `fetch_add`
+followed by a `store` to pin the counter, which only narrowed the window: `fetch_add` leaves the counter wrapped
+to zero until the `store` lands, and a thread arriving in between takes 0, then 1, 2, ... and mints
+successfully. A `fetch_update` that saturates means the counter never transiently holds a wrapped value, so
+there is no window to arrive in. (Use `then`, not `then_some`, inside it -- the latter is eager and overflows at
+the boundary.)
+
+Exhaustion remains unreachable in practice -- centuries at one submission per nanosecond -- so this is about the
+invariant being enforced rather than merely asserted. The counter is a parameter of a small helper purely so the
+boundary is testable; production code always passes the static.
+
+The regression test watches the *counter*, not the mint. An earlier version tried to catch a thread minting a
+recycled generation and passed against the broken implementation, because the window is a few instructions wide
+and hitting it is luck. An observer sampling the counter sees the wrapped value long before any thread happens
+to consume one, which is the difference between a test that detects the defect and one that merely might.
+
+Two further corrections to that test are worth recording, because both are hazards any concurrent test can hit:
+
+- **A barrier, not a hope.** Its observers could be scheduled *after* the minters had finished, in which case
+	they sampled nothing and the test passed against the very implementation it existed to catch. A barrier
+	across observers and minters makes the observers provably running before the boundary is crossed. Detection
+	is still probabilistic -- but across 80,000 wrap events rather than one, and no longer vacuous.
+- **Never swap the panic hook from worker threads.** The test had four threads each calling `take_hook` /
+	`set_hook` / restore around `catch_unwind`. The hook is *process-global* and Cargo runs tests in parallel
+	threads of one process, so an unlucky interleaving leaves the no-op hook installed and silently strips
+	diagnostics from unrelated tests. The fix is not more careful hook juggling: `try_next_generation` gives the
+	test a non-panicking form, so it raises no panics and touches no hook at all. Where the hook genuinely must
+	be swapped -- the stress suite's deliberate-panic scenario -- it is done on the scenario's own thread while
+	holding the lane that serializes the binary, and the comment there now says why both conditions are needed.
+
+The regression test asserts the behaviour rather than the guard: the shortest accepted period must actually
+repeat. Lowering `MIN_PERIOD` makes it fail by timing out, which is how the original defect presented.
+
+## A cleanup group's release does not latch
+
+`release_members` used to set a `released` flag and return early on every later call. Because the `create_*`
+methods take `&self`, a group could gain new members after a release returned -- and those members were then
+skipped by both a later `close_members` and by `Drop`. Measured before the fix: `owned_resources` remained at 1
+after a second `close_members`, so the context leaked and `CloseThreadpoolCleanupGroup` ran with a live member.
+
+The flag was removed rather than reset per batch. `CloseThreadpoolCleanupGroupMembers` is idempotent -- with no
+members it does nothing -- so releasing unconditionally costs nothing and makes the group genuinely reusable.
+That is a better answer than the alternative of rejecting member creation after a release: it turns a latent
+leak into a supported lifecycle rather than into a new error path.
+
+The general shape is worth remembering, because it is the same mistake as the period check above: both guards
+tested the condition that had been *written down* (has this run before; is the period zero) rather than the one
+that actually mattered (are there members to release; will the period round to zero).
+
+## The timer stress suite is opt-in, and asserts only what load cannot perturb
+
+The timer types carry the crate's subtlest concurrency contracts, and the unit tests establish each one once,
+deterministically. [crates/windows-threadpool-sys/tests/timer_stress.rs](crates/windows-threadpool-sys/tests/timer_stress.rs)
+applies pressure to them instead.
+
+It is gated on the `WINDOWS_THREADPOOL_STRESS` environment variable, with `WINDOWS_THREADPOOL_STRESS_SCALE`
+multiplying every load count. An environment variable rather than `#[ignore]` because one knob turns the whole
+suite on and the tests still compile and lint in CI, so the suite cannot rot while nobody runs it. The gate is
+applied by a macro rather than a line inside each test: a gate that has to be remembered per test is one that
+gets forgotten in exactly one of them, and that test is then a load test running in CI. Scenarios also take a
+process-wide lane, because Cargo runs them on parallel threads against one shared pool, where they would
+otherwise measure each other.
+
+Assertions are confined to what load cannot perturb: non-overlap where the type guarantees it, quiescence after
+a drain, `owned_resources` reaching zero, and the absence of a hang or a crash. Rates, latencies, and exact
+firing counts are reported instead, because under load they describe the machine.
+
+Two measurements shaped every scenario, and are recorded here because they are not obvious and they will
+otherwise be rediscovered the hard way:
+
+- **Pool timers fire on the system timer tick, ~15.6ms.** A zero-delay re-arm does not fire immediately; it
+	fires on the next tick. A self-re-arming chain therefore advances at roughly 64 links a second however
+	trivial its callback, so chain lengths are sized for wall-clock time -- raising them buys duration, not
+	coverage.
+- **A loop that arms without pausing outruns the pool completely.** Early versions of the churn, rapid-drop, and
+	start/stop scenarios recorded *zero* callbacks: the loop never left the timer armed when a tick arrived, so
+	each was silently testing the arming calls alone. Scenarios that need firings now pause past a tick and
+	assert a floor, so the same degeneration cannot recur unnoticed. The rapid create/arm/drop scenario keeps its
+	zero -- there it is the point, and it is documented rather than asserted away.
+
+Primary references:
 - [Thread Pools](https://learn.microsoft.com/windows/win32/procthread/thread-pools)
 - [Thread Pool API](https://learn.microsoft.com/windows/win32/procthread/thread-pool-api)
 - [Using the Thread Pool Functions](https://learn.microsoft.com/windows/win32/procthread/using-the-thread-pool-functions)
