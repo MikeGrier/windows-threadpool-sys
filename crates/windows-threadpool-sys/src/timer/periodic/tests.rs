@@ -45,6 +45,62 @@ fn a_zero_period_is_rejected() {
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }
 
+/// The boundary is at one millisecond, because the pool takes the period as
+/// whole milliseconds and anything shorter rounds down to zero -- which the pool
+/// reads as "do not repeat".
+#[test]
+fn a_sub_millisecond_period_is_rejected() {
+    for micros in [1u64, 100, 500, 999] {
+        let error = ThreadpoolPeriodicTimer::new(Duration::from_micros(micros), |_| {}, None)
+            .expect_err("a sub-millisecond period must be rejected");
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "period of {micros}us"
+        );
+    }
+}
+
+#[test]
+fn the_shortest_accepted_period_is_one_millisecond() {
+    assert_eq!(
+        ThreadpoolPeriodicTimer::MIN_PERIOD,
+        Duration::from_millis(1)
+    );
+    assert!(
+        ThreadpoolPeriodicTimer::new(ThreadpoolPeriodicTimer::MIN_PERIOD, |_| {}, None).is_ok(),
+        "the advertised minimum period must be accepted"
+    );
+}
+
+/// The guard exists to keep a periodic timer from silently being a one-shot, so
+/// this checks the behaviour rather than the guard: the shortest accepted period
+/// must actually repeat.
+#[test]
+fn the_shortest_accepted_period_actually_repeats() {
+    let fires = Fires::new();
+    let counter = Arc::clone(&fires);
+    let timer = ThreadpoolPeriodicTimer::new(
+        ThreadpoolPeriodicTimer::MIN_PERIOD,
+        move |_| {
+            counter.record();
+        },
+        None,
+    )
+    .expect("create timer");
+
+    timer.start_after(Duration::ZERO);
+    // Fails rather than hangs if the timer only ever fires once, which is what
+    // a period that rounded down to zero would do.
+    fires.wait_for(3);
+    timer.stop_and_drain();
+
+    assert!(
+        fires.count() >= 3,
+        "a timer at the minimum period is not repeating"
+    );
+}
+
 #[test]
 fn new_timer_is_stopped() {
     let timer =

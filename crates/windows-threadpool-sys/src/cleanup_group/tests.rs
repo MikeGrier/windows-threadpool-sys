@@ -181,14 +181,22 @@ fn a_periodic_timer_member_ticks() {
     assert!(ran.count() >= 3);
 }
 
+/// The group path must reject the same periods the standalone constructor does,
+/// including sub-millisecond ones that would round down to a non-repeating zero.
 #[test]
-fn a_periodic_timer_member_rejects_a_zero_period() {
+fn a_periodic_timer_member_rejects_a_period_below_the_minimum() {
     let group = CleanupGroup::new().expect("create group");
-    let error = group
-        .create_periodic_timer(Duration::ZERO, |_| {}, None)
-        .expect_err("a zero period must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(group.owned_resources(), 0, "a failed creation owns nothing");
+    for period in [
+        Duration::ZERO,
+        Duration::from_micros(1),
+        Duration::from_micros(999),
+    ] {
+        let error = group
+            .create_periodic_timer(period, |_| {}, None)
+            .expect_err("a period below the minimum must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{period:?}");
+        assert_eq!(group.owned_resources(), 0, "a failed creation owns nothing");
+    }
 }
 
 #[test]

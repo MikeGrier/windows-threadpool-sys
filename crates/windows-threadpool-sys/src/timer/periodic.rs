@@ -176,11 +176,23 @@ unsafe impl Send for ThreadpoolPeriodicTimer {}
 unsafe impl Sync for ThreadpoolPeriodicTimer {}
 
 impl ThreadpoolPeriodicTimer {
+    /// The shortest period this timer can express: one millisecond.
+    ///
+    /// `SetThreadpoolTimer` takes the period as whole milliseconds, so nothing
+    /// shorter can be represented. This is a floor on what may be *asked for*,
+    /// not a promise about delivery: ticks arrive on the system timer tick,
+    /// which is far coarser (~15.6ms by default).
+    pub const MIN_PERIOD: Duration = Duration::from_millis(1);
+
     /// Create a stopped timer that invokes `callback` every `period`.
     ///
-    /// A zero period is rejected, because it would describe a timer that never
-    /// repeats -- use [`ThreadpoolTimer`](crate::timer::ThreadpoolTimer) for that rather than a `ThreadpoolPeriodicTimer` that
-    /// silently behaves like one.
+    /// A period shorter than [`MIN_PERIOD`](Self::MIN_PERIOD) is rejected,
+    /// including zero. The pool takes the period in whole milliseconds, so a
+    /// shorter one rounds down to zero, and a zero period means "do not
+    /// repeat" -- the timer would fire once and stop. Rejecting is what keeps a
+    /// `ThreadpoolPeriodicTimer` from silently being a one-shot; use
+    /// [`ThreadpoolTimer`](crate::timer::ThreadpoolTimer) when that is what is
+    /// wanted.
     ///
     /// Pass `Some(env)` to select a private pool or callback priority; `None`
     /// uses the process-default pool with default priority.
@@ -193,8 +205,9 @@ impl ThreadpoolPeriodicTimer {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `period` is zero, or the error
-    /// from `CreateThreadpoolTimer`.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `period` is shorter than
+    /// [`MIN_PERIOD`](Self::MIN_PERIOD), or the error from
+    /// `CreateThreadpoolTimer`.
     pub fn new<F>(
         period: Duration,
         callback: F,
@@ -203,10 +216,10 @@ impl ThreadpoolPeriodicTimer {
     where
         F: Fn(&PeriodicTick<'_>) + Send + Sync + 'static,
     {
-        if period.is_zero() {
+        if period < Self::MIN_PERIOD {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "a ThreadpoolPeriodicTimer needs a non-zero period; use ThreadpoolTimer for a one-shot",
+                "a ThreadpoolPeriodicTimer needs a period of at least 1ms: the pool takes the period in whole milliseconds, so anything shorter rounds to zero and a zero period means do not repeat; use ThreadpoolTimer for a one-shot",
             ));
         }
 

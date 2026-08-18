@@ -1179,16 +1179,22 @@ stress! {
 }
 
 stress! {
-    /// A zero period is rejected, and rejection under load must not leave
-    /// anything behind: the object is never created, so there is nothing to
-    /// drop, and a valid timer must still be creatable afterwards.
-    stress_periodic_zero_period_is_rejected {
+    /// Periods below the minimum are rejected, and rejection under load must not
+    /// leave anything behind: the object is never created, so there is nothing
+    /// to drop, and a valid timer must still be creatable afterwards.
+    stress_periodic_short_period_is_rejected {
         let attempts = load(2_000);
+        let too_short = [
+            Duration::ZERO,
+            Duration::from_micros(1),
+            Duration::from_micros(500),
+            Duration::from_micros(999),
+        ];
 
-        for _ in 0..attempts {
-            let rejected =
-                ThreadpoolPeriodicTimer::new(Duration::ZERO, |_tick| {}, None);
-            assert!(rejected.is_err(), "a zero period was accepted");
+        for i in 0..attempts {
+            let period = too_short[i % too_short.len()];
+            let rejected = ThreadpoolPeriodicTimer::new(period, |_tick| {}, None);
+            assert!(rejected.is_err(), "a period of {period:?} was accepted");
         }
 
         let tally = Tally::new();
@@ -1208,7 +1214,7 @@ stress! {
         );
         timer.stop_and_drain();
 
-        eprintln!("stress:   {attempts} zero-period rejections");
+        eprintln!("stress:   {attempts} short-period rejections");
     }
 }
 

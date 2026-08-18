@@ -247,8 +247,9 @@ impl CleanupGroup {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `period` is zero, or the error
-    /// from `CreateThreadpoolTimer`.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `period` is shorter than
+    /// [`ThreadpoolPeriodicTimer::MIN_PERIOD`], or the error from
+    /// `CreateThreadpoolTimer`.
     pub fn create_periodic_timer<F>(
         &self,
         period: Duration,
