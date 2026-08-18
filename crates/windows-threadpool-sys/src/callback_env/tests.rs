@@ -288,5 +288,5 @@ fn as_mut_ptr_points_to_correct_version() {
     let mut env = CallbackEnviron::new();
     let ptr = env.as_mut_ptr();
     // SAFETY: ptr is valid for the lifetime of env.
-    assert_eq!(unsafe { (*ptr).Version }, 3);
+    assert_eq!(unsafe { (*ptr).Version }, expected_abi::ENVIRON_VERSION);
 }

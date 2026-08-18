@@ -213,10 +213,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
-/// The set of operations a backend has submitted and not yet reclaimed.
+/// The set of identities a backend currently considers live.
+///
+/// An identity is registered while a backend still treats its operation as
+/// outstanding, and removed the moment the backend stops -- at *dequeue* for the
+/// IOCP backend and on *callback entry* for TP_IO, both of which precede the
+/// completion's or callback's own reclamation of the operation's storage. An
+/// empty registry therefore means only that no operation is still considered
+/// live; it is **not** proof that every operation's storage has been freed or
+/// that every callback has finished.
 ///
 /// The registry is the single source of truth for both questions a backend must
-/// answer: how many operations are outstanding (rundown), and whether a given
+/// answer: how many operations are still live (rundown), and whether a given
 /// identity still names a live operation (cancellation). Keeping them in one
 /// structure means they cannot disagree.
 ///
@@ -302,11 +310,14 @@ impl OperationRegistry {
         }
     }
 
-    /// Remove a reclaimed operation, waking any rundown once the last one clears.
+    /// Deregister an operation the backend no longer considers live, waking any
+    /// rundown once the last one clears.
     ///
-    /// Returns the identity that was registered for the address, if any --
-    /// assembled here from the pair this registry recorded, so a backend never
-    /// has to supply a generation and cannot get the pairing wrong.
+    /// Called when the backend stops treating the operation as outstanding
+    /// (dequeue for IOCP, callback entry for TP_IO), which precedes reclamation
+    /// of the storage. Returns the identity that was registered for the address,
+    /// if any -- assembled here from the pair this registry recorded, so a
+    /// backend never has to supply a generation and cannot get the pairing wrong.
     pub fn remove(&self, overlapped: *mut OVERLAPPED) -> Option<OperationId> {
         let mut live = lock(&self.live);
         let generation = live.remove(&(overlapped as usize));
@@ -382,24 +393,29 @@ impl OperationRegistry {
             .map(|generation| OperationId::from_recorded_parts(overlapped, generation))
     }
 
-    /// The number of operations submitted and not yet reclaimed.
+    /// The number of identities the backend currently considers live.
     #[must_use]
     pub fn len(&self) -> usize {
         lock(&self.live).len()
     }
 
-    /// Whether no operation is outstanding.
+    /// Whether no operation is still considered live.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Block until every outstanding operation has been reclaimed.
+    /// Block until the registry is empty -- until every operation the backend
+    /// still considers live has been removed.
     ///
-    /// The caller must have arranged for the outstanding operations to complete
-    /// -- by cancelling them, or because they are destined to finish -- or this
-    /// waits indefinitely. It is used by backends whose completions arrive on
-    /// threads the owner does not drive.
+    /// Removal happens when a backend stops considering an operation live
+    /// (dequeue for IOCP, callback entry for TP_IO), which precedes the
+    /// completion's reclamation of the storage, so this waits for liveness to
+    /// clear, not for every allocation to be freed. The caller must have arranged
+    /// for the outstanding operations to complete -- by cancelling them, or
+    /// because they are destined to finish -- or this waits indefinitely. It is
+    /// used by backends whose completions arrive on threads the owner does not
+    /// drive.
     pub fn wait_until_empty(&self) {
         let mut live = lock(&self.live);
         while !live.is_empty() {
