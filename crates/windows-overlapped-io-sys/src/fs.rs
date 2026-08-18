@@ -116,6 +116,23 @@ fn classify(ok: i32) -> io::Result<()> {
 /// Rejects rather than caps, for the same reason as the device-control helper:
 /// capping would transfer a prefix of the caller's buffer and then report
 /// success for an operation that did something other than what was asked.
+/// The byte total for `pages` pages, or an error if it cannot be expressed.
+///
+/// The multiplication is checked rather than saturating. Saturating defeats the
+/// validation on 32-bit Windows, where `usize::MAX` *is* `u32::MAX`: an
+/// overflowing page count would saturate to a value [`checked_len`] accepts, and
+/// `PageBuffers::new` would then panic on its own checked multiplication instead
+/// of the adapter returning the documented `InvalidInput`.
+fn scatter_gather_len(pages: usize) -> io::Result<u32> {
+    let bytes = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{pages} pages of {PAGE_SIZE} bytes overflows a byte count"),
+        )
+    })?;
+    checked_len(bytes, "scatter/gather buffer set")
+}
+
 fn checked_len(len: usize, which: &str) -> io::Result<u32> {
     u32::try_from(len).map_err(|_| {
         io::Error::new(
@@ -399,7 +416,7 @@ impl BlockingEndpoint {
         // Checked before allocating, so an unusable request costs nothing. This
         // also turns what would be `PageBuffers::new`'s overflow panic for an
         // absurd page count into an ordinary error.
-        let total = checked_len(pages.saturating_mul(PAGE_SIZE), "scatter/gather buffer set")?;
+        let total = scatter_gather_len(pages)?;
         let buffers = PageBuffers::new(pages);
         let segments = buffers.segment_array();
         let seg_ptr = segments.as_ptr();
@@ -491,7 +508,7 @@ impl AssociatedEndpoint<'_> {
         // Checked before allocating, so an unusable request costs nothing. This
         // also turns what would be `PageBuffers::new`'s overflow panic for an
         // absurd page count into an ordinary error.
-        let total = checked_len(pages.saturating_mul(PAGE_SIZE), "scatter/gather buffer set")?;
+        let total = scatter_gather_len(pages)?;
         let buffers = PageBuffers::new(pages);
         let segments = buffers.segment_array();
         let mut operation = Operation::new(ScatterPayload { buffers, segments });

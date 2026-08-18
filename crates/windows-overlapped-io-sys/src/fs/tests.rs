@@ -167,6 +167,32 @@ fn checked_len_rejects_lengths_beyond_u32() {
     }
 }
 
+/// A page count whose byte total overflows `usize` must be an error, not a
+/// panic. This is checked rather than saturating multiplication precisely
+/// because on 32-bit Windows `usize::MAX` *is* `u32::MAX`, so saturating would
+/// produce a value the length check accepts and `PageBuffers::new` would then
+/// panic on its own checked multiplication.
+#[test]
+fn an_overflowing_page_count_is_rejected() {
+    use crate::fs::scatter_gather_len;
+
+    let error = scatter_gather_len(usize::MAX).expect_err("overflow must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+    // Just past the largest total that fits, on any pointer width.
+    let overflowing = (usize::MAX / crate::fs::PAGE_SIZE) + 1;
+    assert!(
+        scatter_gather_len(overflowing).is_err(),
+        "a page count whose total overflows must be rejected"
+    );
+
+    // And a representable one still works.
+    assert_eq!(
+        scatter_gather_len(1).expect("one page fits"),
+        crate::fs::PAGE_SIZE as u32
+    );
+}
+
 /// The length is checked before the buffer is allocated, so an unrepresentable
 /// request costs nothing -- which is also what makes this test affordable: it
 /// never allocates the 4GiB it asks for.

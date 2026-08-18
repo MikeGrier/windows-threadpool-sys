@@ -631,12 +631,21 @@ fn rearming_outside_teardown_is_honoured() {
     let recorder = Arc::clone(&outcomes);
     let started = Activations::new();
     let entered = Arc::clone(&started);
+    // Selects exactly one activation to re-arm from. This must be atomic rather
+    // than a read of the activation count: the event is manual-reset and so
+    // stays signalled, meaning the re-arm queues the next activation before this
+    // callback returns. Two callbacks could otherwise both observe zero, both
+    // re-arm, and both record -- which is the overlap documented on
+    // `WaitActivation::rearm`, and which made this test fail about once in
+    // twenty runs.
+    let first = Arc::new(AtomicUsize::new(0));
+    let selector = Arc::clone(&first);
 
     let wait = ThreadpoolWait::new(
         event(true),
         move |activation| {
             // Re-arm only on the first activation, so this terminates.
-            if entered.count() == 0 {
+            if selector.fetch_add(1, Ordering::SeqCst) == 0 {
                 let armed = activation.rearm_reporting(None);
                 recorder.lock().unwrap().push(armed);
             }

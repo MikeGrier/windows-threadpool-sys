@@ -534,6 +534,11 @@ impl PeriodicTimerMember<'_> {
     }
 
     /// Stop the timer and wait until no tick is queued or executing.
+    ///
+    /// As with [`ThreadpoolPeriodicTimer::stop_and_drain`], this holds provided
+    /// no other thread starts the member during the call: the `start*` methods
+    /// take `&self`, so a start landing between the stop and the drain would
+    /// leave a schedule installed on return.
     pub fn stop_and_drain(&self) {
         self.stop();
         // SAFETY: as above.

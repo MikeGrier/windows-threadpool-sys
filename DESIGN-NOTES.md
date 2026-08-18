@@ -338,7 +338,7 @@ directly. Both objects therefore expose the outcome to their own tests -- `rearm
 test-only observer on the timer, whose `Arc` the test keeps so the record outlives the freed context. Without
 these, a test could only assert that teardown terminated, which it does with the gating removed as well.
 
-## Quiescing without dropping is `stop_and_drain`, and it is ours to guarantee
+## Quiescing without dropping is `stop_and_drain`, and it covers the callback only
 
 `ThreadpoolTimer` and `ThreadpoolWait` both let a callback re-arm from inside itself, so "stop this and wait
 until it is idle" is not expressible as disarm-plus-drain. `wait()` demonstrably does not do it: after
@@ -359,6 +359,33 @@ clear a suppression a concurrent one still needed.
 Suppression is not observable from outside -- dropping queued callbacks leaves the object idle either way -- so
 the regression test asserts the *mechanism*, checking that the in-flight callback's re-arm request was actually
 refused. A first version asserted quiescence instead and passed with the suppression removed.
+
+### The suppression covers the callback's re-arm, not an external one
+
+A later review round pointed out the limit of all this: the external arming methods -- `set_after`, `set_at`,
+`set_after_with_window`, `arm`, `start*` -- take `&self` on `Sync` types and do **not** pass through the
+suppression lock. A concurrent arm from another thread landing inside the stop window is therefore not excluded
+by anything in this crate, and the original documentation claimed flatly that the object was idle on return.
+
+No observable failure could be produced, and the reason is instructive: `WaitForThreadpoolTimerCallbacks` with
+cancellation clears a due time *even when no callback is queued* (measured: `is_set` true then false), whereas
+`wait()` leaves it set. The drain therefore cancels a racing arm incidentally -- which is the same undocumented
+behaviour this decision opens by refusing to depend on. The guarantee is real today and is not ours.
+
+Two ways to make it ours were considered: route external arming through the same lock, or require exclusive
+access for `stop_and_drain` as `BlockingEndpoint` does. **Neither was taken.** The gate costs a mutex on every
+arm and, for the cleanup-group members, plumbing a context pointer into types that currently hold only a raw
+handle; exclusive access would remove the ability to stop an `Arc`-shared timer from another thread, which is a
+legitimate pattern the type otherwise supports. Against a race with no demonstrated failure, both were judged to
+buy less than they cost.
+
+What was fixed is the claim. Each `stop_and_drain` now separates what it enforces -- no callback queued or
+executing, and a callback's own re-arm discarded -- from what it assumes: that nothing else arms the object for
+the duration, which a caller obtains by owning it exclusively or serializing access. The measurement is recorded
+alongside so the incidental cancellation is not mistaken for a contract and quietly relied upon later.
+
+This is the honest shape of the decision: a documented precondition is a weaker thing than an enforced one, and
+saying so is better than either overclaiming or paying for machinery nobody needs.
 
 ## A periodic timer rejects any period it cannot actually repeat at
 

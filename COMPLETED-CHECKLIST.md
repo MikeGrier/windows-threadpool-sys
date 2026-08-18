@@ -352,3 +352,49 @@ The list still described only the original PR after six rounds of hardening. Reb
 rather than memory, split into signature changes, inputs now rejected rather than silently altered, and additive
 items worth knowing. The validation section was refreshed too (285 tests to 363, plus the non-Windows build and
 the opt-in stress suite).
+
+## Moved 2026-08-18 — M11, eighth review round on PR #3
+
+Three review findings plus one found while validating them. The first was resolved by **correcting the claim
+rather than the code** -- an owner decision, recorded as such rather than presented as a fix. Decisions in
+[DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+### <a id="ha-1"></a>HA-1 — Stop `stop_and_drain` promising quiescence it cannot enforce. *(completed 2026-08-18 00:03:36 -04:00)*
+
+The four `stop_and_drain` methods suppress a *callback's* re-arm under a lock, but the external arming methods
+take `&self` on `Sync` types and bypass it, so a concurrent arm inside the stop window is not excluded by
+anything in this crate -- while the documentation stated flatly that the object was idle on return.
+
+No observable failure could be produced, and the reason matters: `WaitForThreadpoolTimerCallbacks` with
+cancellation was measured clearing a due time even with no callback queued (`is_set` true then false), where
+`wait()` leaves it set. The drain cancels a racing arm incidentally -- the same undocumented behaviour this crate
+had already declared it would not depend on.
+
+Owner decision: add neither a lifecycle gate nor forced exclusive access, and correct the documentation instead.
+Each method now separates what it enforces from what it assumes, the assumption is stated with the way to
+satisfy it, and the measurement is recorded so the incidental cancellation is not later mistaken for a contract.
+All four methods, the type docs and the design note were corrected, not just the one line the review quoted.
+
+### <a id="ha-2"></a>HA-2 — Detect page-count overflow instead of saturating it. *(completed 2026-08-18 00:03:36 -04:00)*
+
+`pages.saturating_mul(PAGE_SIZE)` defeats its own validation on 32-bit Windows, where `usize::MAX` *is*
+`u32::MAX`: an overflowing count saturates into a value the length check accepts, and `PageBuffers::new` then
+panics instead of the adapter returning `InvalidInput`. Both scatter-read paths now share a checked
+`scatter_gather_len`.
+
+### <a id="ha-3"></a>HA-3 — Prove the identity observers sampled before the boundary is crossed. *(completed 2026-08-18 00:03:36 -04:00)*
+
+The single barrier proved only that each observer had *reached* it; the scheduler could still run every minter
+and the stop store before an observer looped once, which both removed all detection power and tripped the
+sampled-at-least-once assertion, making the test fail at random. A second handshake, passed only after each
+observer has sampled, makes the precondition hold. Still detects the broken implementation 5 times out of 5, and
+passes 10 out of 10 with the fix.
+
+### <a id="ha-4"></a>HA-4 — Fix a wait test that races the overlap it now documents. *(completed 2026-08-18 00:03:36 -04:00)*
+
+Not from the review. Found by re-running the suite while validating HA-1: `rearming_outside_teardown_is_honoured`
+failed once in twenty runs. It took its "first activation only" branch on a non-atomic `count() == 0` while
+watching a manual-reset event -- which stays signalled, so the re-arm queues the next activation immediately and
+two callbacks could both observe zero. That is exactly the overlap documented in [`FZ-1`](#fz-1), latent in this
+test since the round that introduced it. The activation is now selected atomically: 25 runs clean, and 12 full
+workspace runs clean afterwards.

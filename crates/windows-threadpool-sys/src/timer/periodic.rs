@@ -385,6 +385,14 @@ impl ThreadpoolPeriodicTimer {
     /// This is the correct teardown order -- stop first, drain second -- and is
     /// what [`Drop`] performs. Ticks that have not started are dropped rather
     /// than run.
+    ///
+    /// The result holds provided no other thread starts the timer during the
+    /// call. `ThreadpoolPeriodicTimer` is `Sync` and the `start*` methods take
+    /// `&self`, so a start landing between the stop and the drain is not
+    /// excluded by anything here, and would leave a schedule installed on
+    /// return. A caller needing the timer to be provably stopped must own it
+    /// exclusively or serialize access to it. Unlike the one-shot timer there is
+    /// no re-arm to suppress: [`PeriodicTick::stop`] only ever stops.
     pub fn stop_and_drain(&self) {
         self.stop();
         // SAFETY: timer is valid for the lifetime of self. A cancelled timer

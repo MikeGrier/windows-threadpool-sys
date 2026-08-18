@@ -563,17 +563,37 @@ impl ThreadpoolTimer {
 
     /// Stop the timer and block until it is idle, leaving it reusable.
     ///
-    /// On return the timer has no due time and no callback is queued or
-    /// executing -- including for a timer whose callback re-arms itself, which
-    /// neither [`disarm`](Self::disarm) nor [`cancel_pending`](Self::cancel_pending)
-    /// can guarantee on its own: a callback already running requests its re-arm
-    /// through [`TimerFiring::rearm_after`], and the trampoline applies it after
-    /// the callback returns, which is after any disarm from outside.
+    /// This exists because neither [`disarm`](Self::disarm) nor
+    /// [`cancel_pending`](Self::cancel_pending) can stop a self-re-arming timer
+    /// on its own: a callback already running requests its re-arm through
+    /// [`TimerFiring::rearm_after`], and the trampoline applies it *after* the
+    /// callback returns -- which is after any disarm from outside. This
+    /// suppresses that deferred re-arm for the duration of the call, using the
+    /// same mechanism `Drop` uses, and lifts the suppression before returning so
+    /// the timer can be armed again afterwards.
     ///
-    /// This suppresses that deferred re-arm for the duration of the call, using
-    /// the same mechanism `Drop` uses, and lifts the suppression before
-    /// returning -- so the timer can be armed again afterwards. Re-arm requests
-    /// made by callbacks that ran during the call are discarded, not deferred.
+    /// # What this guarantees
+    ///
+    /// On return, provided no other thread arms the timer during the call:
+    ///
+    /// - no callback is queued or executing, and
+    /// - the timer has no due time -- a re-arm requested by a callback that ran
+    ///   during the call is discarded rather than deferred.
+    ///
+    /// # What it does not
+    ///
+    /// **A concurrent arm from another thread is not excluded.** `ThreadpoolTimer`
+    /// is `Sync` and [`set_after`](Self::set_after), [`set_at`](Self::set_at) and
+    /// [`set_after_with_window`](Self::set_after_with_window) all take `&self`,
+    /// so they do not pass through the suppression this uses. Nothing in this
+    /// crate orders such a call against this one.
+    ///
+    /// In practice the drain currently cancels a due time installed that way --
+    /// `WaitForThreadpoolTimerCallbacks` with cancellation clears one even when
+    /// no callback is queued, measurably so. That is not a documented contract
+    /// and is not relied upon here: if a caller needs the timer to be provably
+    /// idle, it must ensure nothing else arms it for the duration, by owning it
+    /// exclusively or serializing access to it.
     ///
     /// Calling this from inside the timer's own callback would deadlock, because
     /// it waits for that callback to finish.

@@ -611,16 +611,29 @@ impl ThreadpoolWait {
 
     /// Stop watching and block until the wait is idle, leaving it reusable.
     ///
-    /// On return the object is not watching and no callback is queued or
-    /// executing -- including for a callback that re-arms itself, which neither
-    /// [`disarm`](Self::disarm) nor [`cancel_pending`](Self::cancel_pending) can
-    /// guarantee on its own: a callback already running can call
-    /// [`WaitActivation::rearm`] after a disarm from outside has taken effect.
+    /// This exists because neither [`disarm`](Self::disarm) nor
+    /// [`cancel_pending`](Self::cancel_pending) can stop a self-re-arming wait on
+    /// its own: a callback already running can call [`WaitActivation::rearm`]
+    /// after a disarm from outside has taken effect. This suppresses re-arming
+    /// for the duration of the call, using the same mechanism `Drop` uses, and
+    /// lifts the suppression before returning so the wait can be armed again.
     ///
-    /// This suppresses re-arming for the duration of the call, using the same
-    /// mechanism `Drop` uses, and lifts the suppression before returning -- so
-    /// the wait can be armed again afterwards. Re-arm requests made by callbacks
-    /// that ran during the call are discarded, not deferred.
+    /// # What this guarantees
+    ///
+    /// On return, provided no other thread arms the wait during the call:
+    ///
+    /// - no callback is queued or executing, and
+    /// - the object is not watching -- a re-arm requested by a callback that ran
+    ///   during the call is discarded rather than deferred.
+    ///
+    /// # What it does not
+    ///
+    /// **A concurrent [`arm`](Self::arm) from another thread is not excluded.**
+    /// `ThreadpoolWait` is `Sync` and `arm` takes `&self`, so it does not pass
+    /// through the suppression this uses, and nothing in this crate orders such
+    /// a call against this one. A caller needing the wait to be provably idle
+    /// must ensure nothing else arms it for the duration, by owning it
+    /// exclusively or serializing access to it.
     ///
     /// Calling this from inside the wait's own callback would deadlock, because
     /// it waits for that callback to finish.

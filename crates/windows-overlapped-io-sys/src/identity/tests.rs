@@ -78,11 +78,18 @@ fn an_exhausted_sequence_stays_exhausted() {
 /// on every one of the 80_000 refused attempts below, so an observer that is
 /// genuinely running has many chances to see it.
 ///
-/// What this does and does not guarantee: the barrier guarantees the observers
-/// are *running* before the boundary is crossed, which removes the failure mode
-/// where minters finish first and the observers sample nothing and pass. It does
-/// not guarantee sampling any particular instant, so detection remains
-/// probabilistic -- but across 80_000 wrap events rather than one.
+/// What this does and does not guarantee. Two handshakes, not one: the first
+/// releases the observers, and the second is passed only after every observer
+/// has *already sampled the counter at least once*, so the minters cannot cross
+/// the exhaustion boundary while an observer is still unscheduled. A single
+/// barrier proved only that each observer had reached it -- the scheduler was
+/// still free to run every minter and the `stop` store before an observer
+/// executed its first loop iteration, which both removed all detection power and
+/// tripped the sampled-at-least-once assertion, making the test fail at random.
+///
+/// Detection is still probabilistic: nothing guarantees a sample lands in any
+/// particular instant. But the observers are provably sampling before the
+/// boundary is reached, against 80_000 wrap events rather than one.
 ///
 /// It uses [`try_next_generation`] rather than the panicking form on purpose:
 /// catching 80_000 panics would either flood the output or require swapping the
@@ -101,19 +108,25 @@ fn the_counter_never_holds_a_wrapped_value() {
 
     let sequence = Arc::new(AtomicU64::new(LAST));
     let stop = Arc::new(AtomicBool::new(false));
-    // Every observer and every minter waits here, so no minter can cross the
-    // boundary before the observers are running.
+    // Everyone meets here, so the observers are started before any minting.
     let ready = Arc::new(Barrier::new(OBSERVERS + MINTERS));
+    // And again here, which the observers reach only after sampling once. The
+    // minters therefore cannot reach the boundary while an observer has yet to
+    // run at all.
+    let sampling = Arc::new(Barrier::new(OBSERVERS + MINTERS));
 
     let observers: Vec<_> = (0..OBSERVERS)
         .map(|_| {
             let sequence = Arc::clone(&sequence);
             let stop = Arc::clone(&stop);
             let ready = Arc::clone(&ready);
+            let sampling = Arc::clone(&sampling);
             std::thread::spawn(move || {
                 ready.wait();
-                let mut lowest = u64::MAX;
-                let mut samples = 0_u64;
+                let mut lowest = sequence.load(Ordering::Relaxed);
+                let mut samples = 1_u64;
+                // Only now, having sampled, is this observer counted as live.
+                sampling.wait();
                 while !stop.load(Ordering::Relaxed) {
                     lowest = lowest.min(sequence.load(Ordering::Relaxed));
                     samples += 1;
@@ -127,8 +140,10 @@ fn the_counter_never_holds_a_wrapped_value() {
         .map(|_| {
             let sequence = Arc::clone(&sequence);
             let ready = Arc::clone(&ready);
+            let sampling = Arc::clone(&sampling);
             std::thread::spawn(move || {
                 ready.wait();
+                sampling.wait();
                 (0..ATTEMPTS)
                     .filter_map(|_| try_next_generation(&sequence))
                     .collect::<Vec<u64>>()
@@ -148,6 +163,8 @@ fn the_counter_never_holds_a_wrapped_value() {
         .collect();
 
     for (_, samples) in &observations {
+        // Guaranteed by the second handshake rather than hoped for, so this
+        // cannot fail by scheduling.
         assert!(
             *samples > 0,
             "an observer never sampled the counter, so it could not have detected a wrap"
