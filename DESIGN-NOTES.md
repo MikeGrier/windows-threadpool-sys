@@ -429,6 +429,43 @@ that a guard has been written, observed to pass, and believed. The rule that cau
 guard you have only seen pass is untested.** Plant the defect it is meant to catch and watch it fail, then
 remove the defect and watch it pass. Both directions, every time.
 
+## Restoring a file with an old timestamp silently disables the rebuild
+
+Verifying a fix by planting the defect back requires *building* both states. Restoring the fixed file with
+PowerShell's `Copy-Item` breaks that, because it **preserves the source file's `LastWriteTime`**. The restored
+file is then older than the artifact built from the defective version, Cargo judges it up to date, and every
+subsequent run silently executes the **defective binary**.
+
+Observed exactly that: source stamped 02:08:34, test executable 02:09:51, `Finished in 0.01s` with no
+`Compiling` line, and a test failing against source that was provably correct (the restored file hashed
+identically to the known-good backup). Roughly twenty minutes went into hunting a defect in the fix before the
+timestamps were compared. The near-miss is worse than the delay: had the *fixed* state been the one built from
+a stale artifact, a broken fix would have appeared to pass.
+
+Rules adopted:
+
+- After restoring a file by copy, **stamp it**: `(Get-Item $p).LastWriteTime = Get-Date`. Editing through the
+	file tools does this implicitly, which is why the problem only appears with shell copies.
+- **Read the build output, not just the test summary.** A revert-verification run that does not print
+	`Compiling` for the crate under test proves nothing at all.
+- Prefer plant-and-restore through the file tools over shell copies, for the same reason the tools are already
+	preferred for content: the shell's convenience operations have side effects on the metadata builds depend on.
+
+## An ABI expectation in a test is written independently of the constant it checks
+
+`environ_flags::LONG_FUNCTION` and `ENVIRON_VERSION` are ABI identities -- values the operating system reads --
+so the repository's no-inline-numeric-constants rule applies and they are named at the point of definition.
+
+Their *tests* are the exception that needed thinking about. `assert_eq!(LONG_FUNCTION, LONG_FUNCTION)` passes
+however the constant is changed, so a test that imports the implementation's constant to check the
+implementation's constant pins nothing. The first response to that was to keep bare `1` and `3` literals in the
+assertions, with a comment explaining why -- which traded one rule away for the other.
+
+Both hold at once with a test-local `expected_abi` module restating the values independently. The assertion is
+still against a number written separately from the implementation, so changing the implementation constant
+fails the test; and the number is still named, so what it *is* stays legible. This is the general shape for
+pinning any ABI or wire value: name it twice, deliberately, on either side of the test boundary.
+
 ## Summary prose keeps overclaiming what the reference docs get right
 
 

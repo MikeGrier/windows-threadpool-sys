@@ -111,11 +111,6 @@ fn classify(ok: i32) -> io::Result<()> {
     }
 }
 
-/// Convert a buffer length to the `u32` byte count the Win32 calls take.
-///
-/// Rejects rather than caps, for the same reason as the device-control helper:
-/// capping would transfer a prefix of the caller's buffer and then report
-/// success for an operation that did something other than what was asked.
 /// The byte total for `pages` pages, or an error if it cannot be expressed.
 ///
 /// The multiplication is checked rather than saturating. Saturating defeats the
@@ -133,6 +128,11 @@ fn scatter_gather_len(pages: usize) -> io::Result<u32> {
     checked_len(bytes, "scatter/gather buffer set")
 }
 
+/// Convert a buffer length to the `u32` byte count the Win32 calls take.
+///
+/// Rejects rather than caps, for the same reason as the device-control helper:
+/// capping would transfer a prefix of the caller's buffer and then report
+/// success for an operation that did something other than what was asked.
 fn checked_len(len: usize, which: &str) -> io::Result<u32> {
     u32::try_from(len).map_err(|_| {
         io::Error::new(

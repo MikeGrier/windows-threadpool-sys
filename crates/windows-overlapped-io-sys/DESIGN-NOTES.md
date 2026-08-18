@@ -157,6 +157,45 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	`StartThreadpoolIo` with a callback or a `CancelThreadpoolIo`, whereas the raw IOCP and event backends have no
 	such counter. The core exposes the hooks these require without encoding thread-pool accounting itself.
 
+### Registration ends at dequeue, not at reclamation
+
+The registry answers one question: **is a completion packet still coming for this operation?** It stops being
+true the moment the packet is dequeued, so that is where an operation is deregistered.
+
+It did not start that way. Registration originally ended when the `Completion`'s storage was reclaimed --
+dropped or claimed -- which conflated two different lifetimes: the port's obligation to deliver a packet, and
+the completion's ownership of the operation's storage. A `Completion` holds neither a borrow of the port nor
+any tie to it, so entirely safe code could dequeue one, hold it, and drop the port:
+
+```text
+let completion = port.get(INFINITE)?.unwrap();  // packet delivered; still registered
+drop(endpoint);
+drop(port);                                     // run_down() sees 1 outstanding
+```
+
+`Drop` runs `run_down`, which blocks in `get(INFINITE)` waiting for a packet that has **already been
+delivered**. Reproduced: an unconditional hang, no timeout, no diagnostic beyond the outstanding-at-drop
+warning. Dropping the completion from another thread would not help either -- it updates the registry but
+nothing wakes `GetQueuedCompletionStatus`.
+
+Moving deregistration to dequeue separates the two lifetimes cleanly:
+
+- **Rundown** counts only undelivered packets, so a held completion cannot make the port wait for itself.
+- **Cancellation** (`cancel_if_live`) now reports `NotFound` for an operation whose packet has been dequeued.
+	That is more correct than before, not a regression: the operation is finished, and cancelling it was always
+	meaningless.
+- **Storage ownership** stays with the `Completion`, which still frees the box on drop and may now legitimately
+	outlive the port it came from. `reclaim_from_overlapped` reads a thunk inside the operation's own
+	allocation, so it needs nothing from the port -- which is why the completion no longer holds an
+	`Arc<PortState>` at all.
+
+Address reuse is not a hazard in the window this opens. The box is not freed until the completion is dropped,
+so no later operation can be issued at that address while a stale identity might still be presented; and once
+it is freed, a new operation there registers a fresh generation, which an `OperationId` compares.
+
+This does change what `outstanding()` reports: a dequeued-but-held completion no longer counts. That is the
+intended meaning -- the count measures what the port still owes the caller.
+
 ### Voluntary rundown and `Drop`
 
 Rundown has two entry points that share the same blocking semantics; the difference is only who initiates it.

@@ -16,7 +16,10 @@ fn inner<'a>(env: &'a CallbackEnviron<'_>) -> &'a TP_CALLBACK_ENVIRON_V3 {
 
 #[test]
 fn new_version_is_3() {
-    assert_eq!(inner(&CallbackEnviron::new()).Version, 3);
+    assert_eq!(
+        inner(&CallbackEnviron::new()).Version,
+        expected_abi::ENVIRON_VERSION
+    );
 }
 
 #[test]
@@ -99,9 +102,10 @@ fn default_matches_new() {
 
 // --- set_pool ---
 //
-// `set_pool` now takes an owned `ThreadpoolPool`, so it cannot be handed an
-// invented value. Its behaviour is covered in the pool module's own tests, next
-// to the type that makes it sound.
+// `set_pool` takes `&ThreadpoolPool`, so it cannot be handed an invented value,
+// and the environment records the borrow as `CallbackEnviron<'pool>`. Its
+// behaviour is covered in the pool module's own tests, next to the type that
+// makes it sound.
 
 #[test]
 fn clear_pool_leaves_the_default_pool() {
@@ -195,13 +199,28 @@ fn set_priority_round_trip() {
 
 // --- set_runs_long ---
 
+/// The ABI values this module's assertions expect, written independently of the
+/// implementation's own constants.
+///
+/// Asserting `environ_flags::LONG_FUNCTION == environ_flags::LONG_FUNCTION`
+/// would pass however the implementation constant were changed, so the expected
+/// values are restated here rather than imported. They are named rather than
+/// written inline so that what each number *is* stays legible.
+mod expected_abi {
+    /// The bit `SetThreadpoolCallbackRunsLong` sets in the environment's flags.
+    pub(super) const LONG_FUNCTION_BIT: u32 = 1;
+    /// The `TP_CALLBACK_ENVIRON_V3` structure version.
+    pub(super) const ENVIRON_VERSION: u32 = 3;
+}
+
 /// The bit position is ABI, so this pins the named constant to the value the
-/// operating system reads. The assertions below deliberately keep the bare `1`
-/// rather than using the constant: comparing the implementation against itself
-/// would pass even if the constant were changed to the wrong bit.
+/// operating system reads, using an independently written expectation.
 #[test]
 fn the_long_function_flag_is_bit_zero() {
-    assert_eq!(crate::callback_env::environ_flags::LONG_FUNCTION, 1);
+    assert_eq!(
+        crate::callback_env::environ_flags::LONG_FUNCTION,
+        expected_abi::LONG_FUNCTION_BIT
+    );
 }
 
 #[test]
@@ -209,7 +228,10 @@ fn set_runs_long_sets_bit_zero() {
     let mut env = CallbackEnviron::new();
     env.set_runs_long();
     // SAFETY: Flags aliases s._bitfield as u32.
-    assert_eq!(unsafe { inner(&env).u.Flags } & 1, 1);
+    assert_eq!(
+        unsafe { inner(&env).u.Flags } & expected_abi::LONG_FUNCTION_BIT,
+        expected_abi::LONG_FUNCTION_BIT
+    );
 }
 
 #[test]
@@ -218,7 +240,10 @@ fn set_runs_long_is_idempotent() {
     env.set_runs_long();
     env.set_runs_long();
     // SAFETY: Flags aliases s._bitfield as u32.
-    assert_eq!(unsafe { inner(&env).u.Flags }, 1);
+    assert_eq!(
+        unsafe { inner(&env).u.Flags },
+        expected_abi::LONG_FUNCTION_BIT
+    );
 }
 
 #[test]
@@ -226,7 +251,7 @@ fn set_runs_long_preserves_version_size_priority() {
     let mut env = CallbackEnviron::new();
     env.set_runs_long();
     let i = inner(&env);
-    assert_eq!(i.Version, 3);
+    assert_eq!(i.Version, expected_abi::ENVIRON_VERSION);
     assert_eq!(i.Size, mem::size_of::<TP_CALLBACK_ENVIRON_V3>() as u32);
     assert_eq!(i.CallbackPriority, TP_CALLBACK_PRIORITY_NORMAL);
 }

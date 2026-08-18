@@ -164,6 +164,83 @@ fn unclaimed_completion_reclaims_on_drop() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// Dequeuing removes the operation from the outstanding set. The completion
+/// still owns the storage, but the port is no longer waiting to deliver
+/// anything for it, which is what `outstanding` measures.
+#[test]
+fn dequeuing_clears_the_outstanding_count_even_while_held() {
+    let port = CompletionPort::new(0).expect("create port");
+    let (endpoint, path) = associate_temp_file(&port, "held-outstanding");
+
+    let operation = Operation::new(vec![7_u8]);
+    // SAFETY: the closure issues one operation using the given OVERLAPPED
+    // pointer; here it simulates a device that queues its completion.
+    let submitted = unsafe {
+        endpoint.submit(operation, |_handle, overlapped| {
+            port.post_raw(0, 1, overlapped)?;
+            Ok(Issued::Pending)
+        })
+    };
+    assert!(matches!(submitted, Submitted::Pending(_)));
+    assert_eq!(port.outstanding(), 1, "queued, not yet delivered");
+
+    let completion = port.get(1_000).expect("get").expect("a packet");
+    assert_eq!(
+        port.outstanding(),
+        0,
+        "the packet has been delivered, so nothing is outstanding while it is held"
+    );
+
+    drop(completion);
+    assert_eq!(port.outstanding(), 0);
+
+    drop(endpoint);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Dropping the port while a completion is still held must not block. The
+/// packet has already left the queue, so counting it as outstanding made
+/// `run_down` wait in `get(INFINITE)` for a packet that could never arrive --
+/// an unconditional hang reachable from entirely safe code.
+///
+/// The work runs on a thread so a regression is a test failure rather than a
+/// wedged test run.
+#[test]
+fn dropping_the_port_while_a_completion_is_held_does_not_hang() {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let port = CompletionPort::new(0).expect("create port");
+        let (endpoint, path) = associate_temp_file(&port, "held-port-drop");
+
+        let operation = Operation::new(vec![9_u8]);
+        // SAFETY: the closure issues one operation using the given OVERLAPPED
+        // pointer; here it simulates a device that queues its completion.
+        let submitted = unsafe {
+            endpoint.submit(operation, |_handle, overlapped| {
+                port.post_raw(1, 1, overlapped)?;
+                Ok(Issued::Pending)
+            })
+        };
+        assert!(matches!(submitted, Submitted::Pending(_)));
+
+        // Dequeue but neither claim nor drop: the completion outlives the port.
+        let completion = port.get(1_000).expect("get").expect("a packet");
+        drop(endpoint);
+        drop(port);
+
+        // The held completion still owns the storage and frees it here, after
+        // the port it came from is already gone.
+        drop(completion);
+        let _ = std::fs::remove_file(&path);
+        let _ = tx.send(());
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(20))
+        .expect("dropping the port with a completion held must not block");
+}
+
 #[test]
 fn synchronous_completion_reclaims_inline_without_a_packet() {
     let port = CompletionPort::new(0).expect("create port");

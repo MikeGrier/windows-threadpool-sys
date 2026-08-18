@@ -31,6 +31,14 @@ mod environ_flags {
     pub(super) const LONG_FUNCTION: u32 = 1 << 0;
 }
 
+/// The `TP_CALLBACK_ENVIRON_V3` structure version this crate initializes.
+///
+/// Like the flag bits above, this is an ABI identity the operating system reads,
+/// not a private encoding: it selects which layout the pool expects at the
+/// address it is handed. Changing it is a breaking change, and it must stay
+/// consistent with the `Size` field, which is taken from the V3 struct.
+const ENVIRON_VERSION: u32 = 3;
+
 /// Equivalent to `InitializeThreadpoolEnvironment` / `DestroyThreadpoolEnvironment`.
 ///
 /// Wraps [`TP_CALLBACK_ENVIRON_V3`] with a guaranteed-valid initial state and a
@@ -73,14 +81,15 @@ pub struct CallbackEnviron<'pool> {
 impl<'pool> CallbackEnviron<'pool> {
     /// Returns a properly initialized callback environment.
     ///
-    /// Equivalent to `InitializeThreadpoolEnvironment`: sets `Version = 3`,
+    /// Equivalent to `InitializeThreadpoolEnvironment`: sets
+    /// `Version = ENVIRON_VERSION`,
     /// `CallbackPriority = TP_CALLBACK_PRIORITY_NORMAL`, and
     /// `Size = sizeof(TP_CALLBACK_ENVIRON_V3)`, with all other fields zeroed
     /// or `None`.
     pub fn new() -> Self {
         Self {
             inner: TP_CALLBACK_ENVIRON_V3 {
-                Version: 3,
+                Version: ENVIRON_VERSION,
                 Pool: 0,
                 CleanupGroup: 0,
                 CleanupGroupCancelCallback: None,

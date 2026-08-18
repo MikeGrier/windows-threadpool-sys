@@ -124,3 +124,26 @@ Append-only record of completed checklist groups. Design decisions are in
 
 - [x] Integration test (`device`): an `FSCTL` query on a real file through both the blocking and IOCP `ioctl`
 	adapters, with no `unsafe` in the test's I/O path. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+## Moved 2026-08-18 — M16, thirteenth review round on PR #3
+
+### <a id="mf-1"></a>MF-1 — Deregister an operation when its packet is dequeued, so a held completion cannot deadlock the port. *(completed 2026-08-18 02:42:11 -04:00)*
+
+Reported by review and **confirmed by reproduction**: safe code could dequeue a `Completion`, hold it, and drop
+the `CompletionPort`. `Drop` runs `run_down`, which blocked in `get(INFINITE)` waiting for a packet that had
+already been delivered -- an unconditional hang with no timeout.
+
+Registration now ends at dequeue rather than at reclamation, separating the port's obligation to deliver a
+packet from the completion's ownership of the operation's storage. `Completion` no longer holds an
+`Arc<PortState>`, since nothing it does needs one. `outstanding()` correspondingly no longer counts a
+dequeued-but-held completion. Recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md) under *Registration ends at dequeue, not at reclamation*.
+
+Two regression tests were added and verified against a faithful revert: with the old behaviour restored exactly,
+those two fail and the other 61 pass, so they target this defect and nothing else.
+
+### <a id="mf-2"></a>MF-2 — Reattach the `checked_len` documentation to `checked_len`. *(completed 2026-08-18 02:42:11 -04:00)*
+
+`scatter_gather_len` carried an opening paragraph describing the conversion `checked_len` performs, while
+`checked_len` itself had no documentation at all -- an edit splice, the same class of damage as the stray `///`
+in the previous round. The paragraph was moved back to the function it describes.

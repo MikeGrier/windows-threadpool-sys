@@ -161,3 +161,21 @@ record zero callbacks while appearing to pass.
 
 	Crate README section covering both environment variables, the deliberate CI exclusion, the two measurements
 	that shape the scenarios, and what is asserted versus reported.
+
+## Moved 2026-08-18 — M16, thirteenth review round on PR #3
+
+### <a id="mf-3"></a>MF-3 — Name the callback-environment ABI version, and pin ABI values against independently written expectations. *(completed 2026-08-18 02:42:11 -04:00)*
+
+`Version: 3` was written inline while the flag bit beside it was a named constant, contrary to the repository's
+rule against inline numeric identities. It is now `ENVIRON_VERSION`, documented as a breaking ABI change.
+
+The assertions were the harder half. They had deliberately kept bare `1` and `3` literals, on the sound ground
+that importing the implementation's constant to check the implementation's constant pins nothing. A test-local
+`expected_abi` module satisfies both rules at once: the expectation is written independently of the
+implementation, and it is still named. Recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
+
+### <a id="mf-4"></a>MF-4 — Correct the `set_pool` ownership comment in the callback-environment tests. *(completed 2026-08-18 02:42:11 -04:00)*
+
+The comment said `set_pool` takes an owned `ThreadpoolPool`; it takes `&ThreadpoolPool` and records the borrow
+as `CallbackEnviron<'pool>`. The fourth instance of this same false claim about `set_pool`, and the first found
+in test commentary rather than in documentation or the pull request description.
