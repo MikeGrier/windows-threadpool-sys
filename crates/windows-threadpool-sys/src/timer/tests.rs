@@ -405,6 +405,165 @@ fn cancel_pending_after_disarm_drains_cleanly() {
     assert_eq!(fires.count(), settled);
 }
 
+// --- quiescing without dropping ---
+
+/// Build a timer whose callback always re-arms, and whose firing is slow enough
+/// that a caller can reliably act while one is executing.
+fn always_rearming_timer() -> (ThreadpoolTimer, Arc<Fires>) {
+    let fires = Fires::new();
+    let counter = Arc::clone(&fires);
+    let timer = ThreadpoolTimer::new(
+        move |firing| {
+            counter.record();
+            std::thread::sleep(Duration::from_millis(60));
+            firing.rearm_after(Duration::from_millis(1));
+        },
+        None,
+    )
+    .expect("create timer");
+    (timer, fires)
+}
+
+/// Wait until a callback has been entered, so the caller acts while one runs.
+fn wait_until_firing(fires: &Fires) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while fires.count() == 0 {
+        assert!(Instant::now() < deadline, "the timer never fired");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// `stop_and_drain` must leave a self-re-arming timer idle, which is what
+/// distinguishes it from `disarm` plus a drain.
+#[test]
+fn stop_and_drain_quiesces_a_self_rearming_timer() {
+    let (timer, fires) = always_rearming_timer();
+
+    timer.set_after(Duration::ZERO);
+    wait_until_firing(&fires);
+    timer.stop_and_drain();
+
+    let settled = fires.count();
+    assert!(!timer.is_set(), "the timer still has a due time");
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        fires.count(),
+        settled,
+        "the timer kept firing after stop_and_drain"
+    );
+}
+
+/// Quiescence alone does not prove *this* type delivered it: dropping queued
+/// callbacks happens to leave the timer idle as well, so the observable outcome
+/// is the same either way. This asserts the mechanism instead -- the in-flight
+/// callback's deferred re-arm must be actively suppressed, so quiescence rests
+/// on our own lock rather than on how the pool treats an arming that races a
+/// cancel, which no SDK contract promises.
+#[test]
+fn stop_and_drain_suppresses_the_in_flight_rearm() {
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let (timer, fires) = always_rearming_timer();
+    timer.observe_rearms(&outcomes);
+
+    timer.set_after(Duration::ZERO);
+    wait_until_firing(&fires);
+    timer.stop_and_drain();
+
+    let applied = outcomes.lock().unwrap().clone();
+    assert!(
+        !applied.is_empty(),
+        "the callback made no re-arm request to suppress"
+    );
+    assert!(
+        applied.iter().all(|&applied| !applied),
+        "a re-arm was applied during stop_and_drain: {applied:?}"
+    );
+}
+
+/// The contrast that motivates the method: `disarm` followed by `wait` cannot
+/// quiesce the same timer, because the re-arm is applied after the callback
+/// returns -- which is after the disarm.
+#[test]
+fn disarm_then_wait_does_not_quiesce_a_self_rearming_timer() {
+    let (timer, fires) = always_rearming_timer();
+
+    timer.set_after(Duration::ZERO);
+    wait_until_firing(&fires);
+    timer.disarm();
+    timer.wait();
+
+    assert!(
+        timer.is_set(),
+        "expected the deferred re-arm to have re-armed the timer"
+    );
+    timer.stop_and_drain();
+}
+
+/// The suppression must be lifted on return, or the timer would be permanently
+/// dead rather than merely idle.
+#[test]
+fn a_timer_is_reusable_after_stop_and_drain() {
+    let (timer, fires) = always_rearming_timer();
+
+    timer.set_after(Duration::ZERO);
+    wait_until_firing(&fires);
+    timer.stop_and_drain();
+    let settled = fires.count();
+
+    timer.set_after(Duration::ZERO);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while fires.count() == settled {
+        assert!(
+            Instant::now() < deadline,
+            "the timer never fired again after stop_and_drain"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    timer.stop_and_drain();
+}
+
+/// Concurrent callers must not lift one another's suppression, which is why the
+/// suppression is a count rather than a flag.
+#[test]
+fn concurrent_stop_and_drain_calls_all_quiesce() {
+    let (timer, fires) = always_rearming_timer();
+    let timer = Arc::new(timer);
+
+    timer.set_after(Duration::ZERO);
+    wait_until_firing(&fires);
+
+    let callers: Vec<_> = (0..4)
+        .map(|_| {
+            let timer = Arc::clone(&timer);
+            std::thread::spawn(move || timer.stop_and_drain())
+        })
+        .collect();
+    for caller in callers {
+        caller.join().expect("stop_and_drain thread");
+    }
+
+    let settled = fires.count();
+    assert!(!timer.is_set(), "the timer still has a due time");
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        fires.count(),
+        settled,
+        "the timer kept firing after concurrent stop_and_drain calls"
+    );
+}
+
+#[test]
+fn stop_and_drain_on_an_idle_timer_is_a_no_op() {
+    let (timer, fires) = counting_timer();
+    timer.stop_and_drain();
+    assert!(!timer.is_set());
+    assert_eq!(fires.count(), 0);
+    // Still usable afterwards.
+    timer.set_after(Duration::ZERO);
+    fires.wait_for(1);
+    timer.stop_and_drain();
+}
+
 // --- destruction ---
 
 /// Outside of teardown, a deferred re-arm is applied. This is the control for

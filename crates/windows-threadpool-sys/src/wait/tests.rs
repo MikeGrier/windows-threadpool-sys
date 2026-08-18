@@ -334,6 +334,121 @@ fn a_wait_can_be_rearmed_after_disarming() {
     assert_eq!(results, vec![WaitResult::Signalled]);
 }
 
+// --- quiescing without dropping ---
+
+/// Build a wait whose callback always re-arms, on a manual-reset event that
+/// stays signalled so activations keep coming.
+fn always_rearming_wait() -> (ThreadpoolWait, Arc<Activations>) {
+    let seen = Activations::new();
+    let recorder = Arc::clone(&seen);
+    let wait = ThreadpoolWait::new(
+        WaitableHandle::event(true, true).expect("create a signalled event"),
+        move |activation| {
+            recorder.record(activation.result());
+            std::thread::sleep(Duration::from_millis(60));
+            activation.rearm(None);
+        },
+        None,
+    )
+    .expect("create wait");
+    (wait, seen)
+}
+
+/// Wait until a callback has been entered, so the caller acts while one runs.
+fn wait_until_activated(seen: &Activations) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while seen.count() == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the wait never activated"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// `stop_and_drain` must leave a self-re-arming wait idle, which is what
+/// distinguishes it from `disarm` plus a drain.
+#[test]
+fn stop_and_drain_quiesces_a_self_rearming_wait() {
+    let (wait, seen) = always_rearming_wait();
+
+    wait.arm(None);
+    wait_until_activated(&seen);
+    wait.stop_and_drain();
+
+    let settled = seen.count();
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        seen.count(),
+        settled,
+        "the wait kept activating after stop_and_drain"
+    );
+}
+
+/// The suppression must be lifted on return, or the wait would be permanently
+/// dead rather than merely idle.
+#[test]
+fn a_wait_is_reusable_after_stop_and_drain() {
+    let (wait, seen) = always_rearming_wait();
+
+    wait.arm(None);
+    wait_until_activated(&seen);
+    wait.stop_and_drain();
+    let settled = seen.count();
+
+    wait.arm(None);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while seen.count() == settled {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the wait never activated again after stop_and_drain"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    wait.stop_and_drain();
+}
+
+/// Concurrent callers must not lift one another's suppression, which is why the
+/// suppression is a count rather than a flag.
+#[test]
+fn concurrent_stop_and_drain_calls_all_quiesce_a_wait() {
+    let (wait, seen) = always_rearming_wait();
+    let wait = Arc::new(wait);
+
+    wait.arm(None);
+    wait_until_activated(&seen);
+
+    let callers: Vec<_> = (0..4)
+        .map(|_| {
+            let wait = Arc::clone(&wait);
+            std::thread::spawn(move || wait.stop_and_drain())
+        })
+        .collect();
+    for caller in callers {
+        caller.join().expect("stop_and_drain thread");
+    }
+
+    let settled = seen.count();
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        seen.count(),
+        settled,
+        "the wait kept activating after concurrent stop_and_drain calls"
+    );
+}
+
+#[test]
+fn stop_and_drain_on_an_idle_wait_is_a_no_op() {
+    let (wait, seen) = recording_wait(true);
+    wait.stop_and_drain();
+    assert_eq!(seen.count(), 0);
+    // Still usable afterwards.
+    wait.arm(None);
+    signal(wait.handle());
+    seen.wait_for(1);
+    wait.stop_and_drain();
+}
+
 // --- waitable handle provenance ---
 
 #[test]

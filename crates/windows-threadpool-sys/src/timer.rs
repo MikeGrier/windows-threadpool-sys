@@ -130,19 +130,25 @@ pub(crate) unsafe fn disarm_raw(timer: PTP_TIMER) {
 /// from inside a callback needs the object the callback belongs to.
 pub(crate) struct TimerContext {
     pub(crate) timer: AtomicIsize,
-    /// Guards arming against teardown.
+    /// How many callers are currently suppressing re-arming: zero means allowed.
     ///
-    /// `true` once teardown has begun. Applying a deferred re-arm takes this
-    /// lock and does nothing when it is set. Deferring the re-arm to after the
-    /// callback returns -- which is what makes the delay run from the end of the
-    /// firing -- moved it *past* the disarm that `Drop` performs, so without
-    /// this the drain could complete with a due time installed and the object
-    /// would be closed and its context freed while a fresh callback was queued.
+    /// Applying a deferred re-arm takes this lock and does nothing while the
+    /// count is non-zero. Deferring the re-arm to after the callback returns --
+    /// which is what makes the delay run from the end of the firing -- moves it
+    /// *past* any disarm performed from outside, so without this a drain could
+    /// complete with a due time installed. For `Drop` that meant closing the
+    /// object and freeing its context with a fresh callback queued against it.
+    ///
+    /// A count rather than a flag because suppression has two users with
+    /// different lifetimes: [`ThreadpoolTimer::stop_and_drain`] raises it and
+    /// lowers it again, while `Drop` raises it permanently. With a flag, a
+    /// `stop_and_drain` finishing would clear a suppression that another
+    /// concurrent one still needed.
     ///
     /// The lock is only ever held across the native `SetThreadpoolTimer` call,
     /// never across a callback drain, which would deadlock a callback that
     /// happened to be blocked on it.
-    shutting_down: Mutex<bool>,
+    suppress_rearm: Mutex<u32>,
     /// Records, for tests, whether each deferred re-arm was actually applied.
     ///
     /// The suppression this observes happens after the callback returns and
@@ -153,11 +159,33 @@ pub(crate) struct TimerContext {
     callback: Box<dyn Fn(&TimerFiring<'_>) + Send + Sync + 'static>,
 }
 impl TimerContext {
-    /// Lock the shutdown flag, recovering from a panicking holder.
-    fn shutdown_state(&self) -> std::sync::MutexGuard<'_, bool> {
-        self.shutting_down
+    /// Lock the suppression count, recovering from a panicking holder.
+    fn suppression(&self) -> std::sync::MutexGuard<'_, u32> {
+        self.suppress_rearm
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Start suppressing re-arming, and disarm under the same acquisition.
+    ///
+    /// Doing both under one lock is what makes the pair atomic against a
+    /// callback: a deferred re-arm either lands entirely before this, or is
+    /// suppressed by it. The lock is released before any drain.
+    fn suppress_and_disarm(&self) {
+        let mut suppressed = self.suppression();
+        *suppressed = suppressed.saturating_add(1);
+        let timer = self.timer.load(Ordering::Acquire);
+        if timer != 0 {
+            // SAFETY: `timer` is this object's live PTP_TIMER, published before
+            // any callback could run and valid until Drop closes it.
+            unsafe { disarm_raw(timer) };
+        }
+    }
+
+    /// Stop suppressing re-arming.
+    fn release_suppression(&self) {
+        let mut suppressed = self.suppression();
+        *suppressed = suppressed.saturating_sub(1);
     }
 }
 
@@ -246,9 +274,10 @@ impl TimerFiring<'_> {
     fn apply_pending_reporting(&self) -> Option<bool> {
         let pending = self.pending.get()?;
         // Taken before arming and held across it, so this either happens before
-        // teardown sets the flag or is suppressed by it -- never in between.
-        let shutting_down = self.ctx.shutdown_state();
-        if *shutting_down {
+        // a suppressing caller raises the count or is suppressed by it -- never
+        // in between.
+        let suppressed = self.ctx.suppression();
+        if *suppressed > 0 {
             return Some(false);
         }
         let timer = self.ctx.timer.load(Ordering::Acquire);
@@ -260,7 +289,7 @@ impl TimerFiring<'_> {
         // SAFETY: `timer` is this object's live PTP_TIMER, published before any
         // callback could run.
         unsafe { arm_raw(timer, due, 0, 0) };
-        drop(shutting_down);
+        drop(suppressed);
         Some(true)
     }
 }
@@ -404,7 +433,7 @@ impl ThreadpoolTimer {
     {
         let context = Box::into_raw(Box::new(TimerContext {
             timer: AtomicIsize::new(0),
-            shutting_down: Mutex::new(false),
+            suppress_rearm: Mutex::new(0),
             #[cfg(test)]
             rearm_observer: Mutex::new(None),
             callback: Box::new(callback),
@@ -496,21 +525,55 @@ impl ThreadpoolTimer {
         unsafe { IsThreadpoolTimerSet(self.timer) != 0 }
     }
 
-    /// Block until all queued and executing callbacks have completed.
+    /// Let every queued callback run, and block until none is executing.
+    ///
+    /// This does **not** leave a self-re-arming timer idle. A callback's
+    /// [`TimerFiring::rearm_after`] is applied after the callback returns, so a
+    /// firing that runs during this call installs a fresh due time and the timer
+    /// is armed again when it returns. Use
+    /// [`stop_and_drain`](Self::stop_and_drain) to reach quiescence.
     pub fn wait(&self) {
         // SAFETY: timer is valid for the lifetime of self.
         unsafe { WaitForThreadpoolTimerCallbacks(self.timer, FALSE) };
     }
 
-    /// Cancel callbacks that have not yet started, then wait for any currently
-    /// executing callback to finish.
+    /// Drop callbacks that have not started, then wait for any executing one.
     ///
-    /// Disarm first if the callback re-arms, or it may queue a fresh firing
-    /// while this is draining.
+    /// Like [`wait`](Self::wait), this does not by itself leave a self-re-arming
+    /// timer idle: it does not suppress the deferred re-arm of a callback that
+    /// is already running. Use [`stop_and_drain`](Self::stop_and_drain) when the
+    /// timer must actually be quiescent afterwards.
     pub fn cancel_pending(&self) {
         // SAFETY: timer is valid for the lifetime of self. A cancelled timer
         // callback owns no storage, so dropping queued callbacks orphans nothing.
         unsafe { WaitForThreadpoolTimerCallbacks(self.timer, TRUE) };
+    }
+
+    /// Stop the timer and block until it is idle, leaving it reusable.
+    ///
+    /// On return the timer has no due time and no callback is queued or
+    /// executing -- including for a timer whose callback re-arms itself, which
+    /// neither [`disarm`](Self::disarm) nor [`cancel_pending`](Self::cancel_pending)
+    /// can guarantee on its own: a callback already running requests its re-arm
+    /// through [`TimerFiring::rearm_after`], and the trampoline applies it after
+    /// the callback returns, which is after any disarm from outside.
+    ///
+    /// This suppresses that deferred re-arm for the duration of the call, using
+    /// the same mechanism `Drop` uses, and lifts the suppression before
+    /// returning -- so the timer can be armed again afterwards. Re-arm requests
+    /// made by callbacks that ran during the call are discarded, not deferred.
+    ///
+    /// Calling this from inside the timer's own callback would deadlock, because
+    /// it waits for that callback to finish.
+    pub fn stop_and_drain(&self) {
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        let ctx = unsafe { &*self.context };
+        ctx.suppress_and_disarm();
+        // Drained with the lock released: a callback blocked on it would
+        // otherwise never finish, and this would never return.
+        self.cancel_pending();
+        ctx.release_suppression();
     }
 
     /// Give up ownership, returning the raw object and its callback context.
@@ -542,14 +605,12 @@ impl Drop for ThreadpoolTimer {
         // have a deferred re-arm that the trampoline applies after it returns,
         // the drain below could then return with the timer armed, and the close
         // and context free would race a freshly queued callback.
-        {
-            // SAFETY: the context outlives every callback; Drop frees it below,
-            // after the drain.
-            let ctx = unsafe { &*self.context };
-            let mut shutting_down = ctx.shutdown_state();
-            *shutting_down = true;
-            self.disarm();
-        }
+        // SAFETY: the context outlives every callback; Drop frees it below,
+        // after the drain.
+        let ctx = unsafe { &*self.context };
+        // Raised and never released: unlike `stop_and_drain`, there is no
+        // afterwards for this object.
+        ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.
         self.cancel_pending();

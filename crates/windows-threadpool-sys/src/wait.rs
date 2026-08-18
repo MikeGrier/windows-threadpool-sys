@@ -168,27 +168,55 @@ impl WaitResult {
 struct WaitContext {
     wait: AtomicIsize,
     handle: HANDLE,
-    /// Guards arming against teardown.
+    /// How many callers are currently suppressing re-arming: zero means allowed.
     ///
-    /// `true` once teardown has begun. Arming takes this lock and does nothing
-    /// when it is set, so a callback that re-arms cannot install a due time
-    /// after `Drop` has disarmed: without it, the drain could complete with the
-    /// object armed again, and the object would then be closed and its context
-    /// freed while a fresh callback was queued against them.
+    /// Arming takes this lock and does nothing while the count is non-zero, so a
+    /// callback that re-arms cannot start watching again after a disarm from
+    /// outside: without it, a drain could complete with the object armed again,
+    /// and for `Drop` that meant closing the object and freeing its context with
+    /// a fresh callback queued against them.
+    ///
+    /// A count rather than a flag because suppression has two users with
+    /// different lifetimes: [`ThreadpoolWait::stop_and_drain`] raises it and
+    /// lowers it again, while `Drop` raises it permanently. With a flag, a
+    /// `stop_and_drain` finishing would clear a suppression that another
+    /// concurrent one still needed.
     ///
     /// The lock is only ever held across the native `SetThreadpoolWait` call,
     /// never across a callback drain, which would deadlock a callback that
     /// happened to be blocked on it.
-    shutting_down: Mutex<bool>,
+    suppress_rearm: Mutex<u32>,
     callback: Box<dyn Fn(&WaitActivation<'_>) + Send + Sync + 'static>,
 }
 
 impl WaitContext {
-    /// Lock the shutdown flag, recovering from a panicking holder.
-    fn shutdown_state(&self) -> std::sync::MutexGuard<'_, bool> {
-        self.shutting_down
+    /// Lock the suppression count, recovering from a panicking holder.
+    fn suppression(&self) -> std::sync::MutexGuard<'_, u32> {
+        self.suppress_rearm
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Start suppressing re-arming, and disarm under the same acquisition.
+    ///
+    /// Doing both under one lock is what makes the pair atomic against a
+    /// callback: a re-arm either lands entirely before this, or is suppressed by
+    /// it. The lock is released before any drain.
+    fn suppress_and_disarm(&self) {
+        let mut suppressed = self.suppression();
+        *suppressed = suppressed.saturating_add(1);
+        let wait = self.wait.load(Ordering::Acquire);
+        if wait != 0 {
+            // SAFETY: `wait` is this object's live PTP_WAIT, published before any
+            // callback could run and valid until Drop closes it.
+            unsafe { disarm_raw(wait) };
+        }
+    }
+
+    /// Stop suppressing re-arming.
+    fn release_suppression(&self) {
+        let mut suppressed = self.suppression();
+        *suppressed = suppressed.saturating_sub(1);
     }
 }
 
@@ -251,9 +279,10 @@ impl WaitActivation<'_> {
     /// visible as the absence of undefined behaviour.
     pub(crate) fn rearm_reporting(&self, timeout: Option<Duration>) -> bool {
         // Taken before arming and held across it, so this either happens before
-        // teardown sets the flag or is suppressed by it -- never in between.
-        let shutting_down = self.ctx.shutdown_state();
-        if *shutting_down {
+        // a suppressing caller raises the count or is suppressed by it -- never
+        // in between.
+        let suppressed = self.ctx.suppression();
+        if *suppressed > 0 {
             return false;
         }
         let wait = self.ctx.wait.load(Ordering::Acquire);
@@ -265,7 +294,7 @@ impl WaitActivation<'_> {
         // callback could run, and `handle` is owned by that object so it is
         // still open. The timeout, if any, is a live stack value for the call.
         unsafe { arm_raw(wait, self.ctx.handle, timeout) };
-        drop(shutting_down);
+        drop(suppressed);
         true
     }
 }
@@ -439,7 +468,7 @@ impl ThreadpoolWait {
         let context = Box::into_raw(Box::new(WaitContext {
             wait: AtomicIsize::new(0),
             handle: handle.as_raw_handle(),
-            shutting_down: Mutex::new(false),
+            suppress_rearm: Mutex::new(0),
             callback: Box::new(callback),
         }));
         let env_ptr = env.map_or(ptr::null_mut(), |e| e.as_mut_ptr());
@@ -497,21 +526,53 @@ impl ThreadpoolWait {
         unsafe { SetThreadpoolWait(self.wait, ptr::null_mut(), ptr::null()) };
     }
 
-    /// Block until all queued and executing callbacks have completed.
+    /// Let every queued callback run, and block until none is executing.
+    ///
+    /// This does **not** leave a self-re-arming wait idle: a callback running
+    /// during this call can [`rearm`](WaitActivation::rearm) before it returns,
+    /// so the object is watching again when this returns. Use
+    /// [`stop_and_drain`](Self::stop_and_drain) to reach quiescence.
     pub fn wait(&self) {
         // SAFETY: `wait` is valid for the lifetime of self.
         unsafe { WaitForThreadpoolWaitCallbacks(self.wait, FALSE) };
     }
 
-    /// Cancel callbacks that have not yet started, then wait for any currently
-    /// executing callback to finish.
+    /// Drop callbacks that have not started, then wait for any executing one.
     ///
-    /// Disarm first, or a callback that rearms could queue a fresh activation
-    /// while this is draining.
+    /// Like [`wait`](Self::wait), this does not by itself leave a self-re-arming
+    /// wait idle: it does not suppress the re-arm of a callback that is already
+    /// running. Use [`stop_and_drain`](Self::stop_and_drain) when the wait must
+    /// actually be quiescent afterwards.
     pub fn cancel_pending(&self) {
         // SAFETY: `wait` is valid for the lifetime of self. A cancelled wait
         // callback owns no storage, so dropping queued callbacks orphans nothing.
         unsafe { WaitForThreadpoolWaitCallbacks(self.wait, TRUE) };
+    }
+
+    /// Stop watching and block until the wait is idle, leaving it reusable.
+    ///
+    /// On return the object is not watching and no callback is queued or
+    /// executing -- including for a callback that re-arms itself, which neither
+    /// [`disarm`](Self::disarm) nor [`cancel_pending`](Self::cancel_pending) can
+    /// guarantee on its own: a callback already running can call
+    /// [`WaitActivation::rearm`] after a disarm from outside has taken effect.
+    ///
+    /// This suppresses re-arming for the duration of the call, using the same
+    /// mechanism `Drop` uses, and lifts the suppression before returning -- so
+    /// the wait can be armed again afterwards. Re-arm requests made by callbacks
+    /// that ran during the call are discarded, not deferred.
+    ///
+    /// Calling this from inside the wait's own callback would deadlock, because
+    /// it waits for that callback to finish.
+    pub fn stop_and_drain(&self) {
+        // SAFETY: the context outlives every callback and is freed only by Drop,
+        // which cannot run while this borrow of self is alive.
+        let ctx = unsafe { &*self.context };
+        ctx.suppress_and_disarm();
+        // Drained with the lock released: a callback blocked on it would
+        // otherwise never finish, and this would never return.
+        self.cancel_pending();
+        ctx.release_suppression();
     }
 
     /// Give up ownership, returning the raw object, its callback context, and
@@ -548,14 +609,12 @@ impl Drop for ThreadpoolWait {
         // could re-arm afterwards, the drain below could then return with the
         // object armed, and the close and context free would race a freshly
         // queued callback.
-        {
-            // SAFETY: the context outlives every callback; Drop frees it below,
-            // after the drain.
-            let ctx = unsafe { &*self.context };
-            let mut shutting_down = ctx.shutdown_state();
-            *shutting_down = true;
-            self.disarm();
-        }
+        // SAFETY: the context outlives every callback; Drop frees it below,
+        // after the drain.
+        let ctx = unsafe { &*self.context };
+        // Raised and never released: unlike `stop_and_drain`, there is no
+        // afterwards for this object.
+        ctx.suppress_and_disarm();
         // The lock is released before draining: a callback blocked on it would
         // otherwise never finish, and this wait would never return.
         self.cancel_pending();
