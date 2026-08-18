@@ -143,13 +143,19 @@ impl<'pool> CallbackEnviron<'pool> {
     ///
     /// The environment genuinely borrows the pool for as long as it names it, so
     /// the pool cannot be dropped while this environment is still usable. That
-    /// borrow is what makes the setter sound: the environment stores only the
-    /// pool's raw value, which the thread pool dereferences when an object is
-    /// created, so a dropped pool would otherwise leave a dangling value behind.
+    /// borrow is what makes the setter sound: until an object is created the pool
+    /// has no member keeping it alive, so `CloseThreadpool` on a freshly created
+    /// pool frees it immediately -- and an environment still naming it would then
+    /// hand that dangling value to `CreateThreadpool*`. The borrow forbids exactly
+    /// that.
     ///
-    /// Objects created from the environment copy its contents, so the pool must
-    /// also outlive those objects -- see [`ThreadpoolPool`] for that ordering
-    /// rule, which the compiler cannot check.
+    /// Objects created from the environment copy its contents rather than
+    /// retaining the borrow, but they do not need it: creating an object binds it
+    /// to the pool, and `CloseThreadpool` then releases the pool only *after*
+    /// every bound object is freed (its documented behaviour), so a live object
+    /// can never observe a freed pool however the two are dropped. Declaring the
+    /// pool before the objects it serves therefore controls only when teardown
+    /// blocks, not memory safety -- see [`ThreadpoolPool`].
     ///
     /// Use [`CallbackEnviron::clear_pool`] to go back to the default pool.
     pub fn set_pool(&mut self, pool: &'pool ThreadpoolPool) {

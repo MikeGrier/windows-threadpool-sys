@@ -34,19 +34,22 @@ struct Limits {
 /// pool instead of the process-default one. The environment borrows the pool, so
 /// the pool cannot be closed while an environment still names it.
 ///
-/// # Ordering requirement
+/// # Ordering and teardown
 ///
-/// The borrow from [`CallbackEnviron::set_pool`] keeps the pool alive while the
-/// *environment* exists, but an environment's contents are **copied** into each
-/// callback object at creation time; the object does not keep a reference the
-/// compiler can follow. So the pool must also outlive every object created from
-/// an environment that named it.
+/// Creating a callback object from an environment that names this pool **binds**
+/// the object to the pool. `CloseThreadpool` -- which this type's `Drop` calls --
+/// frees the pool immediately only when no object is bound; otherwise it defers
+/// the release until every bound object has been freed. A live object can
+/// therefore never observe a freed pool, whatever order the pool and its objects
+/// are dropped in, so this is not a memory-safety obligation on the caller. (The
+/// `CallbackEnviron` borrow of the pool covers the one case binding does not: a
+/// freshly created pool with no bound object yet is freed at once, so an
+/// environment must not outlive it.)
 ///
-/// `Drop` calls `CloseThreadpool`, which the OS defers until the pool's last
-/// member is released, so dropping the pool early is not itself a use-after-free
-/// -- but the objects must still be dropped before the process relies on the
-/// pool being gone. Declare the pool before the objects that use it, so it is
-/// dropped last.
+/// What the order *does* control is when teardown blocks. Each object's `Drop`
+/// waits for its in-flight callbacks; the pool's deferred release then completes
+/// once the last object is gone. Declare the pool before the objects that use
+/// it, so it is dropped last and that blocking happens where you expect.
 ///
 /// # Examples
 ///
