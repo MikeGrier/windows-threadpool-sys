@@ -1,0 +1,664 @@
+// Copyright (c) Mike Grier.
+
+//! Opt-in stress tests for the timer APIs.
+//!
+//! These apply load to the contracts the timer types make: a one-shot's
+//! self-re-arm never overlaps itself, a periodic's ticks explicitly may, and
+//! both gate re-arming against teardown. The unit tests establish each contract
+//! once and deterministically; this suite pushes on it.
+//!
+//! # Running
+//!
+//! Nothing here runs unless `WINDOWS_THREADPOOL_STRESS` is set to `1`, `true`,
+//! `yes`, or `on`. Every test still compiles and lints, so the suite cannot rot,
+//! but a plain `cargo test` -- including the one CI runs -- skips the load.
+//!
+//! ```text
+//! $env:WINDOWS_THREADPOOL_STRESS = "1"
+//! cargo test -p windows-threadpool-sys --test timer_stress -- --nocapture
+//! ```
+//!
+//! `WINDOWS_THREADPOOL_STRESS_SCALE` multiplies every load count, so the same
+//! scenarios can be run harder without editing them:
+//!
+//! ```text
+//! $env:WINDOWS_THREADPOOL_STRESS_SCALE = "10"
+//! ```
+//!
+//! # Timer resolution shapes these scenarios
+//!
+//! Pool timers fire on the system timer tick, which is ~15.6ms by default. A
+//! re-arm with a zero delay therefore does not fire "immediately" -- it fires on
+//! the next tick. A self-re-arming chain runs at roughly 64 iterations a second
+//! however little the callback does, so chain lengths here are deliberately
+//! modest; raising them buys wall-clock time, not additional coverage.
+//!
+//! The same tick explains why a scenario that arms and disarms in a tight loop
+//! records few firings or none: the pool never reaches a tick with the timer
+//! still armed. Those scenarios stress the arming path and the object's state
+//! integrity, and report their firing counts rather than asserting them.
+//!
+//! # What is asserted
+//!
+//! Only what is genuinely invariant under load: non-overlap where the type
+//! guarantees it, quiescence after a drain, and the absence of a hang or a
+//! crash. Rates, latencies, and exact fire counts are *reported* rather than
+//! asserted -- under load those are properties of the machine, not of the code,
+//! and asserting them would produce a suite that fails for the wrong reasons.
+
+#![cfg(windows)]
+
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant, SystemTime};
+
+use windows_threadpool_sys::timer::ThreadpoolTimer;
+
+// --- gating ---
+
+/// Set this to `1` to run the suite. Absent, every scenario returns immediately.
+const ENABLE_VAR: &str = "WINDOWS_THREADPOOL_STRESS";
+
+/// Multiplies every load count, so the suite can be run harder unedited.
+const SCALE_VAR: &str = "WINDOWS_THREADPOOL_STRESS_SCALE";
+
+fn enabled() -> bool {
+    std::env::var_os(ENABLE_VAR).is_some_and(|raw| {
+        matches!(
+            raw.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn scale() -> usize {
+    std::env::var(SCALE_VAR)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(1)
+}
+
+/// A load count, scaled by [`SCALE_VAR`].
+fn load(base: usize) -> usize {
+    base.saturating_mul(scale())
+}
+
+/// Heavy scenarios run one at a time.
+///
+/// Cargo runs the tests in a binary on parallel threads, and every scenario here
+/// drives the same process-wide thread pool. Left to overlap they would contend
+/// for pool threads and for the CPU, which makes the timing-dependent parts of
+/// each scenario a measurement of the other scenarios rather than of the code.
+static LANE: Mutex<()> = Mutex::new(());
+
+fn enter_lane(name: &str) -> Option<MutexGuard<'static, ()>> {
+    if !enabled() {
+        eprintln!("stress: skipping {name} -- set {ENABLE_VAR}=1 to run");
+        return None;
+    }
+    let lane = LANE.lock().unwrap_or_else(|poison| poison.into_inner());
+    eprintln!("stress: running {name} at scale {}", scale());
+    Some(lane)
+}
+
+/// Define a stress scenario, gated on [`ENABLE_VAR`].
+///
+/// The gate is a macro rather than a line inside each test on purpose: a gate
+/// that must be remembered per test is one that will eventually be forgotten in
+/// exactly one of them, and that test is then a load test running in CI.
+macro_rules! stress {
+    ($(#[$meta:meta])* $name:ident $body:block) => {
+        $(#[$meta])*
+        #[test]
+        fn $name() {
+            let Some(_lane) = enter_lane(stringify!($name)) else {
+                return;
+            };
+            let started = Instant::now();
+            $body
+            eprintln!("stress: {} finished in {:?}", stringify!($name), started.elapsed());
+        }
+    };
+}
+
+// --- observation helpers ---
+
+/// A counter a callback can bump and a test can wait on.
+struct Tally {
+    count: Mutex<usize>,
+    changed: Condvar,
+}
+
+impl Tally {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            count: Mutex::new(0),
+            changed: Condvar::new(),
+        })
+    }
+
+    fn record(&self) -> usize {
+        let mut count = self.count.lock().unwrap_or_else(|p| p.into_inner());
+        *count += 1;
+        let now = *count;
+        self.changed.notify_all();
+        now
+    }
+
+    fn count(&self) -> usize {
+        *self.count.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Wait until the count reaches `target`, or `timeout` elapses.
+    ///
+    /// Returns the count actually reached, so a caller can report a shortfall
+    /// rather than deadlocking on one.
+    fn wait_for(&self, target: usize, timeout: Duration) -> usize {
+        let deadline = Instant::now() + timeout;
+        let mut count = self.count.lock().unwrap_or_else(|p| p.into_inner());
+        while *count < target {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            let (next, _) = self
+                .changed
+                .wait_timeout(count, remaining)
+                .unwrap_or_else(|p| p.into_inner());
+            count = next;
+        }
+        *count
+    }
+}
+
+/// Detects whether two callbacks of the same object are ever inside at once.
+///
+/// A one-shot that re-arms itself is documented never to overlap, because the
+/// re-arm is applied after the callback returns. This is how that is checked
+/// under load: any entry that finds the flag already set is a violation.
+struct Overlap {
+    inside: AtomicBool,
+    violations: AtomicUsize,
+    peak_concurrent: AtomicUsize,
+    concurrent: AtomicUsize,
+}
+
+impl Overlap {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inside: AtomicBool::new(false),
+            violations: AtomicUsize::new(0),
+            peak_concurrent: AtomicUsize::new(0),
+            concurrent: AtomicUsize::new(0),
+        })
+    }
+
+    fn enter(self: &Arc<Self>) -> OverlapGuard<'_> {
+        if self.inside.swap(true, Ordering::SeqCst) {
+            self.violations.fetch_add(1, Ordering::SeqCst);
+        }
+        let now = self.concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak_concurrent.fetch_max(now, Ordering::SeqCst);
+        OverlapGuard(self)
+    }
+
+    fn violations(&self) -> usize {
+        self.violations.load(Ordering::SeqCst)
+    }
+
+    fn peak_concurrent(&self) -> usize {
+        self.peak_concurrent.load(Ordering::SeqCst)
+    }
+}
+
+struct OverlapGuard<'a>(&'a Arc<Overlap>);
+
+impl Drop for OverlapGuard<'_> {
+    fn drop(&mut self) {
+        self.0.concurrent.fetch_sub(1, Ordering::SeqCst);
+        self.0.inside.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Burn a little time inside a callback, varying deterministically with `step`.
+///
+/// Deterministic rather than random so a failure is reproducible; the point is
+/// only that callbacks do not all take exactly the same time, which would make
+/// them line up and hide interleavings.
+fn work_for(step: usize) {
+    let micros = u64::try_from(step % 5).unwrap_or(0) * 200;
+    if micros > 0 {
+        std::thread::sleep(Duration::from_micros(micros));
+    }
+}
+
+/// Assert that nothing more fires once the caller has drained the object.
+///
+/// A drained timer is quiescent, and that *is* invariant under load: it is the
+/// property teardown and cancellation exist to provide.
+fn assert_quiescent(tally: &Tally, label: &str) {
+    let settled = tally.count();
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        tally.count(),
+        settled,
+        "{label}: a callback ran after the timer was drained"
+    );
+}
+
+// --- one-shot: self-re-arming chains ---
+
+stress! {
+    /// A one-shot that re-arms itself must never be entered twice at once. The
+    /// re-arm is applied after the callback returns, so the delay runs from the
+    /// end of the firing; that is the guarantee this hammers.
+    stress_one_shot_self_rearm_never_overlaps {
+        // Each link in the chain costs a timer tick (~15.6ms), so this is sized
+        // for wall-clock time rather than for a round number of iterations.
+        let target = load(300);
+        let overlap = Overlap::new();
+        let tally = Tally::new();
+
+        let seen = Arc::clone(&overlap);
+        let counter = Arc::clone(&tally);
+        let timer = ThreadpoolTimer::new(
+            move |firing| {
+                let _inside = seen.enter();
+                let n = counter.record();
+                work_for(n);
+                if n < target {
+                    // Zero delay: re-arm as aggressively as the API allows.
+                    firing.rearm_after(Duration::ZERO);
+                }
+            },
+            None,
+        )
+        .expect("create timer");
+
+        let chain_started = Instant::now();
+        timer.set_after(Duration::ZERO);
+        let reached = tally.wait_for(target, Duration::from_secs(300));
+        let chain_elapsed = chain_started.elapsed();
+        timer.disarm();
+        timer.cancel_pending();
+
+        assert_eq!(
+            overlap.violations(),
+            0,
+            "a self-re-arming one-shot overlapped itself"
+        );
+        assert_eq!(reached, target, "the re-arm chain stalled");
+        assert_quiescent(&tally, "self-re-arm chain");
+
+        // Reported so the tick granularity is visible to whoever runs this: a
+        // mean near 15.6ms is the timer, not the callback.
+        eprintln!(
+            "stress:   {reached} links in {chain_elapsed:?} ({:?} mean per link)",
+            chain_elapsed / u32::try_from(reached.max(1)).unwrap_or(1)
+        );
+    }
+}
+
+stress! {
+    /// The same chain driven through `rearm_at` with instants already in the
+    /// past, which the type documents as firing immediately. This is the path
+    /// that converts an absolute time to a due time, rather than a relative one.
+    stress_one_shot_rearm_at_past_instants {
+        let target = load(200);
+        let overlap = Overlap::new();
+        let tally = Tally::new();
+
+        let seen = Arc::clone(&overlap);
+        let counter = Arc::clone(&tally);
+        let timer = ThreadpoolTimer::new(
+            move |firing| {
+                let _inside = seen.enter();
+                let n = counter.record();
+                if n < target {
+                    let past = SystemTime::now() - Duration::from_secs(1);
+                    firing.rearm_at(past);
+                }
+            },
+            None,
+        )
+        .expect("create timer");
+
+        timer.set_at(SystemTime::now() - Duration::from_secs(1));
+        let reached = tally.wait_for(target, Duration::from_secs(300));
+        timer.disarm();
+        timer.cancel_pending();
+
+        assert_eq!(overlap.violations(), 0, "a past-instant chain overlapped");
+        assert_eq!(reached, target, "the past-instant chain stalled");
+        assert_quiescent(&tally, "past-instant chain");
+    }
+}
+
+// --- one-shot: external arming under contention ---
+
+stress! {
+    /// Many threads arming, disarming, and querying one timer while it fires.
+    ///
+    /// Non-overlap is deliberately *not* asserted here: it is guaranteed for a
+    /// callback's own re-arm, not for an external `set_after` landing while a
+    /// callback runs, which the type documents. What must hold is that the churn
+    /// neither hangs nor leaves the timer live after it is drained.
+    stress_one_shot_external_arming_churn {
+        let threads = 8;
+        // Sized against the pause below rather than raw op count: without pauses
+        // longer than a timer tick, the loop outruns the pool and the callback
+        // never runs at all, which would make this a test of arming only.
+        let per_thread = load(400);
+        let tally = Tally::new();
+        let overlap = Overlap::new();
+
+        let counter = Arc::clone(&tally);
+        let seen = Arc::clone(&overlap);
+        let timer = Arc::new(
+            ThreadpoolTimer::new(
+                move |_firing| {
+                    let _inside = seen.enter();
+                    let n = counter.record();
+                    work_for(n);
+                },
+                None,
+            )
+            .expect("create timer"),
+        );
+
+        let workers: Vec<_> = (0..threads)
+            .map(|t| {
+                let timer = Arc::clone(&timer);
+                std::thread::spawn(move || {
+                    for i in 0..per_thread {
+                        // Arming dominates the mix deliberately. With disarms at
+                        // a quarter of the operations across eight threads the
+                        // timer is almost never left armed when a tick arrives,
+                        // and the scenario degenerates into a test of the arming
+                        // calls with the callback path barely reached.
+                        match (t + i) % 8 {
+                            0 | 1 | 2 => timer.set_after(Duration::ZERO),
+                            3 => timer.set_after(Duration::from_micros(50)),
+                            4 => timer.disarm(),
+                            _ => {
+                                let _ = timer.is_set();
+                            }
+                        }
+                        // Long enough for the pool to reach a tick with the
+                        // timer still armed, so callbacks genuinely interleave
+                        // with the arming rather than being outrun by it.
+                        if i % 4 == 0 {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for worker in workers {
+            worker.join().expect("arming thread");
+        }
+
+        timer.disarm();
+        timer.cancel_pending();
+
+        // The overlap counts are reported, not asserted, in either direction: an
+        // external arming that lands while a callback runs is allowed to overlap
+        // it, so a non-zero count is correct behaviour, and a zero count only
+        // means this run did not happen to hit the window.
+        let fired = tally.count();
+        eprintln!(
+            "stress:   fired {fired} times under arming churn; {} overlapping entries, peak {} concurrent",
+            overlap.violations(),
+            overlap.peak_concurrent()
+        );
+        // This one *is* asserted: each thread leaves the timer armed across many
+        // pauses longer than a timer tick, so a run that never fires means the
+        // scenario silently degraded into a test of the arming calls alone.
+        assert!(
+            fired > 0,
+            "the timer never fired under arming churn -- the loop is outrunning the pool"
+        );
+        assert!(!timer.is_set(), "the timer is still armed after disarm");
+        assert_quiescent(&tally, "arming churn");
+    }
+}
+
+stress! {
+    /// Two threads racing `set_after(0)` against `disarm`, which is the tightest
+    /// arm/disarm window the API exposes. The final state must follow the last
+    /// call, not the race.
+    stress_one_shot_arm_disarm_race {
+        let rounds = load(20_000);
+        let tally = Tally::new();
+
+        let counter = Arc::clone(&tally);
+        let timer = Arc::new(
+            ThreadpoolTimer::new(
+                move |_firing| {
+                    counter.record();
+                },
+                None,
+            )
+            .expect("create timer"),
+        );
+
+        let armer = {
+            let timer = Arc::clone(&timer);
+            std::thread::spawn(move || {
+                for _ in 0..rounds {
+                    timer.set_after(Duration::ZERO);
+                }
+            })
+        };
+        let disarmer = {
+            let timer = Arc::clone(&timer);
+            std::thread::spawn(move || {
+                for _ in 0..rounds {
+                    timer.disarm();
+                }
+            })
+        };
+
+        armer.join().expect("arming thread");
+        disarmer.join().expect("disarming thread");
+
+        timer.disarm();
+        timer.cancel_pending();
+
+        eprintln!("stress:   fired {} times across {rounds} races", tally.count());
+        assert!(!timer.is_set(), "the timer is still armed after disarm");
+        assert_quiescent(&tally, "arm/disarm race");
+    }
+}
+
+stress! {
+    /// Many threads each driving their own timer through a full arm-fire-rearm
+    /// cycle, waiting for each firing before arming again.
+    ///
+    /// Unlike the churn scenarios, this one controls its own timing: it does not
+    /// proceed until the firing it is waiting for has happened, so every round
+    /// is guaranteed to exercise the dispatch path and the exact firing count is
+    /// a safe assertion rather than a timing measurement.
+    stress_one_shot_arm_and_await_fire {
+        let threads = 8;
+        let rounds = load(40);
+
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let tally = Tally::new();
+                    let overlap = Overlap::new();
+                    let counter = Arc::clone(&tally);
+                    let seen = Arc::clone(&overlap);
+                    let timer = ThreadpoolTimer::new(
+                        move |_firing| {
+                            let _inside = seen.enter();
+                            let n = counter.record();
+                            work_for(n);
+                        },
+                        None,
+                    )
+                    .expect("create timer");
+
+                    for round in 1..=rounds {
+                        timer.set_after(Duration::ZERO);
+                        let reached = tally.wait_for(round, Duration::from_secs(30));
+                        assert_eq!(reached, round, "a timer stopped firing mid-cycle");
+                    }
+
+                    timer.disarm();
+                    timer.cancel_pending();
+                    assert_eq!(
+                        overlap.violations(),
+                        0,
+                        "a timer overlapped itself across arm-fire cycles"
+                    );
+                    tally.count()
+                })
+            })
+            .collect();
+
+        let total: usize = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("cycle thread"))
+            .sum();
+
+        assert_eq!(total, threads * rounds, "not every arm-fire cycle completed");
+        eprintln!("stress:   completed {total} arm-fire cycles across {threads} threads");
+    }
+}
+
+// --- one-shot: many objects at once ---
+
+stress! {
+    /// A large population of independent one-shots armed together, which puts
+    /// the pool's own timer queue under pressure rather than any one object.
+    stress_one_shot_many_timers_fire {
+        let count = load(2_000);
+        let tally = Tally::new();
+
+        let timers: Vec<_> = (0..count)
+            .map(|i| {
+                let counter = Arc::clone(&tally);
+                let timer = ThreadpoolTimer::new(
+                    move |_firing| {
+                        counter.record();
+                    },
+                    None,
+                )
+                .expect("create timer");
+                // Spread the due times so they do not all land in one burst.
+                timer.set_after(Duration::from_micros(u64::try_from(i % 500).unwrap_or(0) * 20));
+                timer
+            })
+            .collect();
+
+        let fired = tally.wait_for(count, Duration::from_secs(120));
+        for timer in &timers {
+            timer.disarm();
+            timer.cancel_pending();
+        }
+
+        assert_eq!(fired, count, "not every timer fired");
+        assert_quiescent(&tally, "many timers");
+    }
+}
+
+stress! {
+    /// The coalescing path under load. A window lets the pool move a due time
+    /// later to batch timers together, so the only invariant is that every timer
+    /// still fires -- not when.
+    stress_one_shot_coalescing_windows {
+        let count = load(1_000);
+        let tally = Tally::new();
+
+        let timers: Vec<_> = (0..count)
+            .map(|i| {
+                let counter = Arc::clone(&tally);
+                let timer = ThreadpoolTimer::new(
+                    move |_firing| {
+                        counter.record();
+                    },
+                    None,
+                )
+                .expect("create timer");
+                timer.set_after_with_window(
+                    Duration::from_millis(u64::try_from(i % 10).unwrap_or(0)),
+                    Duration::from_millis(50),
+                );
+                timer
+            })
+            .collect();
+
+        let fired = tally.wait_for(count, Duration::from_secs(120));
+        for timer in &timers {
+            timer.disarm();
+            timer.cancel_pending();
+        }
+
+        assert_eq!(fired, count, "a coalesced timer never fired");
+        assert_quiescent(&tally, "coalescing windows");
+    }
+}
+
+stress! {
+    /// A panicking callback is contained by the trampoline. Under load the
+    /// question is whether containment leaks state that stops *other* timers
+    /// from running, so a control timer must still fire afterwards.
+    stress_one_shot_panicking_callbacks_are_contained {
+        let count = load(100);
+        let panics = Tally::new();
+
+        // Every one of these panics is expected, and the default hook would emit
+        // a message per firing. Silence it for the duration so the suite's own
+        // output stays readable; the lane makes this safe, since no other
+        // scenario is running to have its panics swallowed.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let timers: Vec<_> = (0..count)
+            .map(|_| {
+                let counter = Arc::clone(&panics);
+                let timer = ThreadpoolTimer::new(
+                    move |_firing| {
+                        counter.record();
+                        panic!("stress: deliberate panic from a timer callback");
+                    },
+                    None,
+                )
+                .expect("create timer");
+                timer.set_after(Duration::ZERO);
+                timer
+            })
+            .collect();
+
+        let entered = panics.wait_for(count, Duration::from_secs(120));
+        for timer in &timers {
+            timer.disarm();
+            timer.cancel_pending();
+        }
+        drop(timers);
+        std::panic::set_hook(previous_hook);
+
+        assert_eq!(entered, count, "not every panicking callback ran");
+        eprintln!("stress:   contained {entered} panicking callbacks");
+
+        let control = Tally::new();
+        let counter = Arc::clone(&control);
+        let timer = ThreadpoolTimer::new(
+            move |_firing| {
+                counter.record();
+            },
+            None,
+        )
+        .expect("create control timer");
+        timer.set_after(Duration::ZERO);
+
+        assert_eq!(
+            control.wait_for(1, Duration::from_secs(30)),
+            1,
+            "the pool stopped running timers after contained panics"
+        );
+    }
+}
