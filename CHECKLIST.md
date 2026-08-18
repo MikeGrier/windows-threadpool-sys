@@ -45,7 +45,7 @@ what it was asked for.
 	`period()` can never disagree with what was scheduled. Same treatment as the lower bound: reject rather than
 	silently substitute.
 
-- [ ] **TR-3** — Fail generation minting at exhaustion instead of wrapping.
+- [x] **TR-3** — Fail generation minting at exhaustion instead of wrapping.
 
 	**Gap:** `OperationId::mint` uses `fetch_add`, which wraps at `u64::MAX` and then reissues generations from
 	zero. The type states that a (address, generation) pair names exactly one submission *for the life of the

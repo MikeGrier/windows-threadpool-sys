@@ -27,9 +27,40 @@ use windows_sys::Win32::System::IO::OVERLAPPED;
 /// Generations start at 1, so 0 is never a generation any real submission was
 /// given. The sequence is process-wide rather than per-backend so that an
 /// identity minted by one backend object can never collide with one minted by
-/// another; at one submission per nanosecond a `u64` still takes centuries to
-/// wrap, so exhaustion is not a practical concern.
+/// another.
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Take the next generation from `sequence`, refusing to wrap.
+///
+/// Wrapping would restart the sequence and hand out generations already in use,
+/// which is exactly the stale-identity aliasing generations exist to prevent --
+/// so the invariant is enforced here rather than only asserted in prose.
+/// Exhaustion is not reachable in practice: at one submission per nanosecond a
+/// `u64` still takes centuries.
+///
+/// The counter is a parameter so this boundary can be tested; production code
+/// always passes [`NEXT_GENERATION`].
+///
+/// # Panics
+///
+/// Panics once the sequence is exhausted. The counter is then pinned at its
+/// exhausted value, so a caught panic cannot resume minting recycled
+/// generations on a later call.
+fn next_generation(sequence: &AtomicU64) -> u64 {
+    let generation = sequence.fetch_add(1, Ordering::Relaxed);
+    if generation == u64::MAX {
+        // `fetch_add` has already wrapped the stored value to 0, so without this
+        // a caught panic would let the next call hand out generation 0 and walk
+        // the whole sequence again. Pin it at the exhausted value instead, so
+        // every later call takes this same branch.
+        sequence.store(u64::MAX, Ordering::Relaxed);
+        panic!(
+            "the operation-generation sequence is exhausted; continuing would reissue \
+             generations already in use and reintroduce stale-identity aliasing"
+        );
+    }
+    generation
+}
 
 /// An identity for an in-flight operation: the address of its `OVERLAPPED`
 /// together with the generation stamped on it at submission.
@@ -67,11 +98,18 @@ impl OperationId {
     /// yields a distinct identity even when `overlapped` repeats an address used
     /// by an earlier, already-reclaimed operation. A backend calls this exactly
     /// once per submission, at the moment it hands the storage to the kernel.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the process-wide generation sequence is exhausted, rather than
+    /// wrapping and reissuing generations already in use. A `u64` takes
+    /// centuries to exhaust at one submission per nanosecond, so this is a
+    /// guard on the type's uniqueness invariant rather than a reachable case.
     #[must_use]
     pub fn mint(overlapped: *mut OVERLAPPED) -> Self {
         Self {
             overlapped,
-            generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
+            generation: next_generation(&NEXT_GENERATION),
         }
     }
 

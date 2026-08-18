@@ -8,11 +8,56 @@ use std::collections::HashSet;
 
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
-use crate::identity::{OperationId, OperationRegistry};
+use crate::identity::{OperationId, OperationRegistry, next_generation};
 
 /// A stand-in storage address. Never dereferenced.
 fn address(value: usize) -> *mut OVERLAPPED {
     value as *mut OVERLAPPED
+}
+
+// --- the generation sequence ---
+
+#[test]
+fn the_sequence_hands_out_increasing_generations() {
+    let sequence = std::sync::atomic::AtomicU64::new(1);
+    let taken: Vec<_> = (0..5).map(|_| next_generation(&sequence)).collect();
+    assert_eq!(taken, vec![1, 2, 3, 4, 5]);
+}
+
+/// The last representable generation is still a valid one to hand out; only
+/// going past it is refused.
+#[test]
+fn the_final_generation_is_still_issued() {
+    let sequence = std::sync::atomic::AtomicU64::new(u64::MAX - 1);
+    assert_eq!(next_generation(&sequence), u64::MAX - 1);
+}
+
+/// Wrapping would restart the sequence and reissue generations already in use,
+/// which is the stale-identity aliasing generations exist to prevent.
+#[test]
+#[should_panic(expected = "generation sequence is exhausted")]
+fn exhausting_the_sequence_panics_rather_than_wrapping() {
+    let sequence = std::sync::atomic::AtomicU64::new(u64::MAX);
+    let _ = next_generation(&sequence);
+}
+
+/// The refusal must stick: `fetch_add` has already wrapped the stored value to
+/// zero by the time exhaustion is detected, so without pinning, a caught panic
+/// would let the next call walk the whole sequence again from 0.
+#[test]
+fn an_exhausted_sequence_stays_exhausted() {
+    let sequence = std::sync::atomic::AtomicU64::new(u64::MAX);
+
+    let first = std::panic::catch_unwind(|| next_generation(&sequence));
+    assert!(first.is_err(), "the first call past the end must panic");
+
+    for _ in 0..3 {
+        let again = std::panic::catch_unwind(|| next_generation(&sequence));
+        assert!(
+            again.is_err(),
+            "an exhausted sequence handed out another generation"
+        );
+    }
 }
 
 // --- minting ---
