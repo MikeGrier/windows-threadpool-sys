@@ -15,7 +15,7 @@ All notable changes to this project will be documented in this file.
 * ThreadpoolPeriodicTimer::new and CleanupGroup::create_periodic_timer now reject a period that is not a whole number of milliseconds, or that exceeds u32::MAX milliseconds. Neither was honoured as given, so no working configuration is affected.
 * ThreadpoolPeriodicTimer::new and CleanupGroup::create_periodic_timer now reject any period shorter than one millisecond, not only zero. Such periods never repeated, so no working configuration is affected.
 * ThreadpoolWait::new and CleanupGroup::create_wait take a WaitableHandle instead of an OwnedHandle. Construct one with WaitableHandle::event, or with the unsafe assume_waitable for a handle obtained elsewhere.
-* OperationId carries a generation in addition to the OVERLAPPED address, so it is no longer a bare pointer wrapper. OperationId::from_ptr is replaced by OperationId::mint and OperationId::from_parts, and Completion::id returns Option<OperationId>. AssociatedEndpoint::cancel now rejects an identity that no longer names a live operation with ErrorKind::NotFound rather than passing the address to CancelIoEx.
+* OperationId carries a generation in addition to the OVERLAPPED address, so it is no longer a bare pointer wrapper. OperationId::from_ptr is replaced by OperationId::mint and the unsafe OperationId::forge, and Completion::id returns Option<OperationId>. AssociatedEndpoint::cancel now rejects an identity that no longer names a live operation with ErrorKind::NotFound rather than passing the address to CancelIoEx.
 
 ### Features
 
