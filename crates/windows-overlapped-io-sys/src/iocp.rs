@@ -243,8 +243,9 @@ impl CompletionPort {
         self.handle.as_raw_handle()
     }
 
-    /// The registry of operations submitted through this port and not yet
-    /// reclaimed, for backends that must validate an identity before cancelling.
+    /// The registry of operations submitted through this port whose completion
+    /// packet has not yet been dequeued, for backends that must validate an
+    /// identity before cancelling.
     ///
     /// Only the socket backend reaches for this; the file backend cancels
     /// through `AssociatedEndpoint`, which already holds the port.
