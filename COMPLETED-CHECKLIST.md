@@ -178,3 +178,67 @@ the two DESIGN-NOTES files before removal.
 The decision still justified `OperationId::from_ptr`, removed by the generation-stamped redesign. It now
 describes `mint` and `from_parts`, why an identity carries a generation, and the aliasing failure that motivated
 it.
+
+## Moved 2026-08-17 — M7, fourth review round on PR #3
+
+Ten findings, verified against the code before being planned. Nine were correct as stated; one named the wrong
+method, and the measurement is recorded below rather than glossed over.
+
+Several were one recurring defect: a value accepted by a safe API and then not honoured -- a period that rounds
+away, a buffer length that truncates, a counter that wraps. Each is fixed the same way, by rejecting what cannot
+be honoured, so the API never returns an object that does something other than what it was asked for. That theme
+is recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+### <a id="tr-1"></a>TR-1 — Give the timer and the wait a real stop-and-drain. *(completed 2026-08-17 21:45:42 -04:00)*
+
+The review claimed `cancel_pending` cannot quiesce a self-re-arming object. Measured, it can: `disarm()` +
+`cancel_pending()` is quiescent, as is `cancel_pending()` alone. The method that fails is `wait()` -- after
+`disarm(); wait();` a self-re-arming timer was still set and fired four more times -- while its documentation
+promised exactly that quiescence.
+
+`cancel_pending`'s success also depends on the pool dropping a callback armed by the trampoline during an
+in-flight cancel, which no SDK contract promises. Both types now have `stop_and_drain`, suppressing re-arming
+under the same lock `Drop` uses and lifting it before returning, matching the `ThreadpoolPeriodicTimer` method
+that already existed. The suppression became a depth count so concurrent callers and a later `Drop` compose.
+
+### <a id="tr-2"></a>TR-2 — Reject periods a periodic timer cannot honour exactly. *(completed 2026-08-17 21:45:42 -04:00)*
+
+M6 added a lower bound; `as_millis()` still truncated a fractional period (1.5ms scheduled at 1ms while
+`period()` reported 1.5ms) and capped anything beyond `u32::MAX` ms. Both now rejected, with a `MAX_PERIOD`
+constant.
+
+### <a id="tr-3"></a>TR-3 — Fail generation minting at exhaustion instead of wrapping. *(completed 2026-08-17 21:45:42 -04:00)*
+
+`fetch_add` wrapped at `u64::MAX` and reissued generations from zero, against a type documenting uniqueness for
+the life of the process. Minting now panics, stickily -- the counter is pinned, since `fetch_add` has already
+wrapped it to zero by the time exhaustion is detectable. The counter is a parameter so the boundary is testable.
+
+### <a id="tr-4"></a>TR-4 — Reject ioctl buffers too large for the Win32 length field. *(completed 2026-08-17 21:45:42 -04:00)*
+
+`clamp_u32` capped at `u32::MAX`, submitting a prefix of the caller's input and reporting success. Both entry
+points validate before allocating; the submitting path measures lengths up front because its closure runs at the
+FFI boundary and cannot report errors.
+
+### <a id="tr-5"></a>TR-5 — Gate `windows-threadpool-sys` behind `cfg(windows)`. *(completed 2026-08-17 21:45:42 -04:00)*
+
+Measured rather than inferred: `cargo check --target x86_64-unknown-linux-gnu` gave 5 errors for the threadpool
+crate and 0 for the sibling. After gating, the whole workspace including test targets gives 0, and the root
+README's claim is true.
+
+### <a id="tr-6"></a>TR-6 — Correct two API documents. *(completed 2026-08-17 21:45:42 -04:00)*
+
+`ThreadpoolIo::new` offered a cleanup group the design deliberately excludes; `CallbackEnviron::clear_pool`
+claimed to drop a borrowed pool.
+
+### <a id="tr-7"></a>TR-7 — Archive the completed plans per the repository's own convention. *(completed 2026-08-17 21:45:42 -04:00)*
+
+Both crates' checklists sat in the active `PLANS.md` tables marked completed, with no `COMPLETED-PLANS.md`
+anywhere. Created at both crate level and the workspace root; the root's own row is marked in progress, which it
+actually was.
+
+### Also in this milestone
+
+A stress scenario from M5, `stress_one_shot_arm_and_await_fire`, was found failing during the milestone gate. A
+worktree at the previous commit failed the same way, so it was pre-existing rather than caused by TR-1: it
+recorded its firing count while still holding the overlap guard, releasing the driving thread mid-callback so it
+armed into an overlap that is permitted for external arming. The test, not the timer, was wrong.
