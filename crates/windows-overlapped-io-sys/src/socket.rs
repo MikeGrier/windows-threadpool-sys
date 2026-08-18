@@ -104,11 +104,13 @@ impl<'port> AssociatedSocket<'port> {
     ///
     /// # Errors
     ///
-    /// Returns any immediate failure from issuing the receive.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`,
+    /// which `WSABUF`'s byte count cannot express, or any immediate failure from
+    /// issuing the receive.
     #[track_caller]
     pub fn recv(&self, len: usize) -> io::Result<SocketIo> {
         let socket = self.raw_socket();
-        let operation = Operation::new(recv_payload(len));
+        let operation = Operation::new(recv_payload(len)?);
         // SAFETY: issues exactly one WSARecv into the payload's buffer via its
         // WSABUF and flags word, both reached through the pinned OVERLAPPED; they
         // live until the completion is claimed.
@@ -137,11 +139,13 @@ impl<'port> AssociatedSocket<'port> {
     ///
     /// # Errors
     ///
-    /// Returns any immediate failure from issuing the send.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `data` is longer than
+    /// `u32::MAX`, which `WSABUF`'s byte count cannot express, or any immediate
+    /// failure from issuing the send.
     #[track_caller]
     pub fn send(&self, data: Vec<u8>) -> io::Result<SocketIo> {
         let socket = self.raw_socket();
-        let operation = Operation::new(send_payload(data));
+        let operation = Operation::new(send_payload(data)?);
         // SAFETY: issues exactly one WSASend from the payload's buffer via its
         // WSABUF, reached through the pinned OVERLAPPED; it lives until the
         // completion is claimed.
@@ -218,29 +222,31 @@ struct SocketPayload {
 // access, so it is `Send` like the `Vec<u8>` it wraps.
 unsafe impl Send for SocketPayload {}
 
-fn recv_payload(len: usize) -> SocketPayload {
+fn recv_payload(len: usize) -> io::Result<SocketPayload> {
+    // Checked before allocating, so an unusable request costs nothing.
+    let wsalen = checked_len(len, "receive buffer")?;
     let mut buffer = vec![0_u8; len];
     let wsabuf = WSABUF {
-        len: clamp_u32(len),
+        len: wsalen,
         buf: buffer.as_mut_ptr(),
     };
-    SocketPayload {
+    Ok(SocketPayload {
         buffer,
         wsabuf,
         flags: 0,
-    }
+    })
 }
 
-fn send_payload(mut data: Vec<u8>) -> SocketPayload {
+fn send_payload(mut data: Vec<u8>) -> io::Result<SocketPayload> {
     let wsabuf = WSABUF {
-        len: clamp_u32(data.len()),
+        len: checked_len(data.len(), "send buffer")?,
         buf: data.as_mut_ptr(),
     };
-    SocketPayload {
+    Ok(SocketPayload {
         buffer: data,
         wsabuf,
         flags: 0,
-    }
+    })
 }
 
 /// Map a Winsock call's return value into the submission contract, expecting a
@@ -269,9 +275,18 @@ fn finish_socket(submitted: Submitted<SocketPayload>) -> io::Result<SocketIo> {
     }
 }
 
-/// Clamp a length to the `u32` byte-count field the Winsock calls take.
-fn clamp_u32(len: usize) -> u32 {
-    u32::try_from(len).unwrap_or(u32::MAX)
+/// Convert a buffer length to the `u32` byte count `WSABUF` carries.
+///
+/// Rejects rather than caps, for the same reason as the file and device
+/// helpers: capping would transfer a prefix of the caller's buffer and then
+/// report success for an operation that did something other than what was asked.
+fn checked_len(len: usize, which: &str) -> io::Result<u32> {
+    u32::try_from(len).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("a {which} is limited to u32::MAX bytes; {len} does not fit"),
+        )
+    })
 }
 
 /// A pending socket operation submitted through [`AssociatedSocket::recv`] or
@@ -355,11 +370,15 @@ impl BlockingSocket {
     ///
     /// # Errors
     ///
-    /// Returns any error from issuing or completing the receive.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`,
+    /// which `WSABUF`'s byte count cannot express, or any error from issuing or
+    /// completing the receive.
     pub fn recv(&self, len: usize) -> io::Result<(Vec<u8>, usize)> {
+        // Checked before allocating, so an unusable request costs nothing.
+        let wsalen = checked_len(len, "receive buffer")?;
         let mut buffer = vec![0_u8; len];
         let wsabuf = WSABUF {
-            len: clamp_u32(len),
+            len: wsalen,
             buf: buffer.as_mut_ptr(),
         };
         // SAFETY: issues exactly one WSARecv into `buffer` via `wsabuf`, both of
@@ -386,10 +405,12 @@ impl BlockingSocket {
     ///
     /// # Errors
     ///
-    /// Returns any error from issuing or completing the send.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `data` is longer than
+    /// `u32::MAX`, which `WSABUF`'s byte count cannot express, or any error from
+    /// issuing or completing the send.
     pub fn send(&self, data: &[u8]) -> io::Result<usize> {
         let wsabuf = WSABUF {
-            len: clamp_u32(data.len()),
+            len: checked_len(data.len(), "send buffer")?,
             buf: data.as_ptr().cast_mut(),
         };
         // SAFETY: issues exactly one WSASend from `data` via `wsabuf`, both of

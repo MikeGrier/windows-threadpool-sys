@@ -23,14 +23,14 @@ including one that is a direct failure to apply a lesson written down in the las
 	event before re-arming, or make the callback tolerate concurrency), and cover it with a test so the
 	behaviour is pinned rather than merely described.
 
-- [ ] **FZ-2** — Validate file read lengths before allocating.
+- [x] **FZ-2** — Validate file read lengths before allocating.
 
 	**Gap:** [`FR-3`](COMPLETED-CHECKLIST.md) put the length check *after* `vec![0_u8; len]` in both `read`
 	adapters, so `read(u32::MAX as usize + 1, ..)` tries to allocate more than 4GiB before returning
 	`InvalidInput`. The regression test added with it can therefore abort instead of exercising the error path,
 	and the design note claiming "checked before allocating" was true only of the scatter and ioctl paths.
 
-- [ ] **FZ-3** — Reject oversized socket lengths.
+- [x] **FZ-3** — Reject oversized socket lengths.
 
 	**Gap:** `socket.rs` holds a *third* copy of the capping helper, with four call sites across both backends,
 	and allocates its receive buffer before capping. This is the same unhonoured-length defect fixed for

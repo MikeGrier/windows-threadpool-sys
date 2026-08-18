@@ -102,7 +102,19 @@ pub(crate) fn absolute_filetime(when: SystemTime) -> FILETIME {
     filetime_from_ticks(i64::try_from(ticks).unwrap_or(i64::MAX))
 }
 
-/// Clamp a period or coalescing window to the `u32` millisecond field.
+/// Saturate a coalescing window to the `u32` millisecond field.
+///
+/// This is the one length in either crate that saturates rather than being
+/// rejected, and deliberately so. A window is a permission -- "you may delay
+/// this firing by up to this much to batch it with others" -- and the pool is
+/// always free to fire earlier, so a saturated window asks for less coalescing
+/// rather than producing a wrong result. A truncated *buffer* silently loses
+/// data, which is why those are rejected instead.
+///
+/// Periods also pass through this, but cannot reach the saturation: they are
+/// validated against
+/// [`MAX_PERIOD`](crate::timer::ThreadpoolPeriodicTimer::MAX_PERIOD) at
+/// construction.
 pub(crate) fn millis_u32(duration: Duration) -> u32 {
     u32::try_from(duration.as_millis()).unwrap_or(u32::MAX)
 }

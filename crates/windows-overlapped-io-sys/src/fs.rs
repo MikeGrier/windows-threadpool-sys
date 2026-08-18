@@ -38,9 +38,10 @@ impl BlockingEndpoint {
     /// which the read's byte count cannot express, or any error from issuing or
     /// completing the read.
     pub fn read(&mut self, len: usize, offset: u64) -> io::Result<(Vec<u8>, usize)> {
+        // Checked before allocating, so an unusable request costs nothing.
+        let buf_len = checked_len(len, "read buffer")?;
         let mut buffer = vec![0_u8; len];
         let buf_ptr = buffer.as_mut_ptr();
-        let buf_len = checked_len(len, "read buffer")?;
 
         let mut operation = Operation::new(());
         operation.set_offset(offset);

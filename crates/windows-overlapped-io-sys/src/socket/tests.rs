@@ -66,3 +66,84 @@ fn blocking_socket_recv_and_send_round_trip() {
     server.read_exact(&mut got).expect("peer read");
     assert_eq!(&got, b"pong");
 }
+
+// --- buffer length limits ---
+
+/// `WSABUF` carries its byte count as a `u32`, so a longer buffer cannot be
+/// described to Winsock. Capping would transfer a prefix and report success,
+/// which is the defect `checked_len` replaced -- the same one already fixed for
+/// the file and device adapters.
+#[test]
+fn checked_len_rejects_lengths_beyond_u32() {
+    use crate::socket::checked_len;
+
+    assert_eq!(checked_len(0, "receive buffer").expect("empty fits"), 0);
+    assert_eq!(
+        checked_len(u32::MAX as usize, "receive buffer").expect("the largest fitting length"),
+        u32::MAX
+    );
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        let too_long = u32::MAX as usize + 1;
+        let error = checked_len(too_long, "receive buffer").expect_err("must not cap");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            error.to_string().contains("receive buffer"),
+            "the error should name the offending buffer: {error}"
+        );
+        assert!(
+            checked_len(too_long, "send buffer").is_err(),
+            "the send buffer has the same limit"
+        );
+    }
+}
+
+/// A connected loopback pair, returning the client socket and the server end,
+/// which must be kept alive for the connection to stay up.
+#[cfg(target_pointer_width = "64")]
+fn connected_pair() -> (OwnedSocket, TcpStream) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    let client = TcpStream::connect(addr).expect("connect");
+    let (server, _peer) = listener.accept().expect("accept");
+    (OwnedSocket::from(client), server)
+}
+
+/// The length is checked before the buffer is allocated, so an unrepresentable
+/// request costs nothing -- which is also what makes this test affordable: it
+/// never allocates the 4GiB it asks for.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn blocking_recv_rejects_an_oversized_length() {
+    let (client, _server) = connected_pair();
+    let client = BlockingSocket::new(client);
+
+    let error = client
+        .recv(u32::MAX as usize + 1)
+        .expect_err("an unrepresentable length must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.raw_os_error().is_none(),
+        "the request should be rejected before reaching Winsock: {error}"
+    );
+}
+
+/// The same limit on the submitting path, which validates before building the
+/// operation rather than inside its submission closure.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn submitted_recv_rejects_an_oversized_length() {
+    let (client, _server) = connected_pair();
+    let port = CompletionPort::new(0).expect("create port");
+    let socket = port.associate_socket(client, 0).expect("associate socket");
+
+    let error = socket
+        .recv(u32::MAX as usize + 1)
+        .expect_err("an unrepresentable length must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.raw_os_error().is_none(),
+        "the request should be rejected before reaching Winsock: {error}"
+    );
+}
