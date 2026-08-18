@@ -501,3 +501,36 @@ was replaced, and the two accounts drifted again. Rather than patch it a third t
 into the paragraph so there is one account to keep current. Applying the check-for-siblings rule also found the
 same stale claim in the workspace [DESIGN-NOTES.md](DESIGN-NOTES.md), which the review had not flagged;
 `COMPLETED-CHECKLIST` mentions were left alone, being append-only history that was accurate when written.
+
+## Moved 2026-08-18 — M15, twelfth review round on PR #3
+
+### <a id="le-1"></a>LE-1 — Restore the doc-comment separator glued to a code line, and make CI reject the pattern. *(completed 2026-08-18 01:51:59 -04:00)*
+
+`crates/windows-threadpool-sys/src/wait.rs` carried `/// }, None)?;///` -- a doc-comment marker appended to the
+end of a code line inside a doc example, spliced in by an earlier edit of mine and unnoticed for four rounds.
+
+The review reported it as a compile failure. Verified against a scratch file: it is only an `unused_doc_comment`
+warning and the doctest compiles and passes, and `RUSTDOCFLAGS=-D warnings` does not catch it either. The damage
+was real; the stated consequence was not.
+
+[tools/check-encoding.ps1](tools/check-encoding.ps1) now rejects `///` after a non-space character at end of
+line in `.rs` files, verified to have zero false positives across the repository. The first version of the guard
+was a **no-op** -- it gated on a variable not in scope inside the file loop -- which was caught only by planting
+the defect. Recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+### <a id="le-2"></a>LE-2 — Refuse a thread minimum and maximum that contradict each other. *(completed 2026-08-18 01:51:59 -04:00)*
+
+Self-found while chasing a test failing about 1 run in 30. `the_maximum_takes_precedence_over_the_minimum`
+asserted a rule generalised from a single measurement of one ordering, and the rule is false.
+
+Measured: `set_max_threads(2)` then `set_min_threads(4)` peaks at **4** concurrent callbacks in every one of 60
+trials and does not settle back -- the minimum annuls the lower maximum silently. The reverse ordering holds at
+2 in steady state but was observed peaking at 3 in 1 trial of 240 when many pools were created at once, so the
+maximum is a steady-state target rather than an instantaneous ceiling.
+
+Owner decision: track the limits the wrapper has set and reject a conflicting pair with `InvalidInput`, rather
+than documenting the silent override or clamping. Each limit is tracked as an `Option<u32>` because Win32 has no
+getter, so a limit we were never told cannot constrain its counterpart. Refusing the pair also makes the
+overshoot window unreachable through the safe API, which removed the flake at its root rather than by loosening
+the assertion. The superseded claim is marked in [DESIGN-NOTES.md](DESIGN-NOTES.md) and the new decision recorded
+beside it.

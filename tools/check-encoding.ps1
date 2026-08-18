@@ -1,8 +1,13 @@
 # Copyright (c) Michael Grier
 #
-# tools/check-encoding.ps1 -- fail if any tracked text file is not valid
-# UTF-8, contains a stray C0 control character, or contains characteristic
-# mojibake digraphs.
+# tools/check-encoding.ps1 -- text hygiene for tracked files. Fails if a file
+# is not valid UTF-8, contains a stray C0 control character, glues a doc-comment
+# marker onto the end of a line of code, or contains characteristic mojibake
+# digraphs.
+#
+# The last two are not encoding faults. They are here because this is the check
+# CI already runs over every tracked file, and because each of them is damage a
+# text-rewriting tool produced and every other check passed.
 #
 # encoding-check: allow-mojibake  (this file contains literal examples
 # of mojibake patterns in regexes and comments)
@@ -128,7 +133,24 @@ foreach ($file in $files) {
         continue
     }
 
-    # 3. Must not contain characteristic mojibake patterns -- unless the
+    # 3. Must not glue a doc-comment marker onto the end of a line of code.
+    #
+    #    `let x = 1;///` compiles -- it is only an `unused_doc_comment`
+    #    warning, and doctest warnings do not fail a build -- so this survives
+    #    every check the toolchain applies. It is never intentional: it is what
+    #    a mis-joined edit looks like, and one lived in a doc example for nine
+    #    review rounds before being spotted by eye.
+    if ([System.IO.Path]::GetExtension($file) -eq '.rs') {
+        $glued = [regex]::Match($text, '(?m)^.*\S///\s*$')
+        if ($glued.Success) {
+            $prefix = $text.Substring(0, $glued.Index)
+            $line = ($prefix -split "`n").Count
+            $failures += "GLUED DOC COMMENT: $file [line $line]"
+            continue
+        }
+    }
+
+    # 4. Must not contain characteristic mojibake patterns -- unless the
     #    file explicitly opts out.
     if ($text.Contains($AllowMojibakeMarker)) { continue }
     foreach ($p in $Patterns) {

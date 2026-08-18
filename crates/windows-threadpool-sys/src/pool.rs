@@ -10,11 +10,23 @@
 
 use std::io;
 use std::ptr;
+use std::sync::Mutex;
 
 use windows_sys::Win32::System::Threading::{
     CloseThreadpool, CreateThreadpool, PTP_POOL, SetThreadpoolThreadMaximum,
     SetThreadpoolThreadMinimum,
 };
+
+/// The thread limits this wrapper has been told about.
+///
+/// Each field is `None` until the corresponding setter succeeds, because Win32
+/// offers no way to read a pool's current limits back. A limit we were never
+/// given cannot be used to reject its counterpart.
+#[derive(Debug, Default)]
+struct Limits {
+    minimum: Option<u32>,
+    maximum: Option<u32>,
+}
 
 /// An owned private thread pool.
 ///
@@ -62,6 +74,7 @@ use windows_sys::Win32::System::Threading::{
 #[derive(Debug)]
 pub struct ThreadpoolPool {
     pool: PTP_POOL,
+    limits: Mutex<Limits>,
 }
 
 // SAFETY: PTP_POOL is a kernel-managed object usable from any thread; this type
@@ -82,14 +95,32 @@ impl ThreadpoolPool {
         if pool == 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            limits: Mutex::new(Limits::default()),
+        })
     }
 
     /// Set the maximum number of threads this pool may allocate.
     ///
-    /// The maximum takes precedence over the minimum rather than being raised to
-    /// meet it: a pool set to a minimum of 4 and then a maximum of 2 was
-    /// measured running at most 2 callbacks concurrently.
+    /// # Conflicting limits
+    ///
+    /// Win32 lets the two limits contradict each other and resolves the conflict
+    /// by *last call wins*, silently and unreportably. A pool given a maximum of
+    /// 2 and then a minimum of 4 was measured running **4** callbacks
+    /// concurrently, and it did not settle back to 2. This wrapper therefore
+    /// tracks the limits it has set and rejects a pair that cannot both hold,
+    /// rather than letting one quietly annul the other.
+    ///
+    /// # The maximum is a steady-state target, not an instantaneous ceiling
+    ///
+    /// Even where the maximum is the effective limit, it bounds the pool once it
+    /// has settled, not every instant. Raising the minimum creates threads
+    /// eagerly, and those surplus threads are not retired the moment a lower
+    /// maximum is applied: with a minimum of 4 then a maximum of 2, a third
+    /// callback was observed running concurrently in roughly 1 trial in 240 when
+    /// many pools were being created at once. Do not rely on the maximum as a
+    /// mutual-exclusion mechanism; use it to bound resource consumption.
     ///
     /// # Errors
     ///
@@ -99,6 +130,23 @@ impl ThreadpoolPool {
     /// else could report the mistake. Use
     /// [`CleanupGroup`](crate::cleanup_group::CleanupGroup) or the objects' own
     /// teardown to stop callbacks, rather than starving the pool that runs them.
+    ///
+    /// Also returns [`io::ErrorKind::InvalidInput`] if `maximum` is below a
+    /// minimum previously set through [`set_min_threads`](Self::set_min_threads).
+    ///
+    /// # Examples
+    ///
+    /// A maximum below an established minimum is refused instead of silently
+    /// overriding it:
+    ///
+    /// ```
+    /// use windows_threadpool_sys::pool::ThreadpoolPool;
+    ///
+    /// let pool = ThreadpoolPool::new()?;
+    /// pool.set_min_threads(4)?;
+    /// assert!(pool.set_max_threads(2).is_err());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn set_max_threads(&self, maximum: u32) -> io::Result<()> {
         if maximum == 0 {
             return Err(io::Error::new(
@@ -107,8 +155,21 @@ impl ThreadpoolPool {
                  callbacks at all and the native call cannot report it",
             ));
         }
+        let mut limits = self.limits.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(minimum) = limits.minimum
+            && maximum < minimum
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "a maximum of {maximum} is below this pool's minimum of {minimum}; Win32 \
+                     would let the minimum win silently, so the conflict is refused instead"
+                ),
+            ));
+        }
         // SAFETY: pool is valid for the lifetime of self.
         unsafe { SetThreadpoolThreadMaximum(self.pool, maximum) };
+        limits.maximum = Some(maximum);
         Ok(())
     }
 
@@ -121,12 +182,44 @@ impl ThreadpoolPool {
     ///
     /// Returns the error from `SetThreadpoolThreadMinimum`, which fails when the
     /// pool cannot create the requested threads.
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] if `minimum` exceeds a maximum
+    /// previously set through [`set_max_threads`](Self::set_max_threads). Win32
+    /// would accept it and run up to `minimum` callbacks concurrently, annulling
+    /// the maximum without reporting anything; see
+    /// [`set_max_threads`](Self::set_max_threads) for the measurements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use windows_threadpool_sys::pool::ThreadpoolPool;
+    ///
+    /// let pool = ThreadpoolPool::new()?;
+    /// pool.set_max_threads(2)?;
+    /// assert!(pool.set_min_threads(4).is_err());
+    /// pool.set_min_threads(2)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn set_min_threads(&self, minimum: u32) -> io::Result<()> {
+        let mut limits = self.limits.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(maximum) = limits.maximum
+            && minimum > maximum
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "a minimum of {minimum} exceeds this pool's maximum of {maximum}; Win32 \
+                     would honour the minimum and annul the maximum silently, so the conflict \
+                     is refused instead"
+                ),
+            ));
+        }
         // SAFETY: pool is valid for the lifetime of self.
         let ok = unsafe { SetThreadpoolThreadMinimum(self.pool, minimum) };
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
+        limits.minimum = Some(minimum);
         Ok(())
     }
 

@@ -469,7 +469,8 @@ unsafe extern "system" fn wait_trampoline(
 /// let wait = ThreadpoolWait::new(event, move |activation| {
 ///     counter.fetch_add(1, Ordering::SeqCst);
 ///     activation.rearm(None);
-/// }, None)?;///
+/// }, None)?;
+///
 /// wait.arm(None);
 /// for _ in 0..3 {
 ///     // SAFETY: the wait owns the event, so the handle is still open.

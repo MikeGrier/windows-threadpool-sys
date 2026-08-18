@@ -405,7 +405,32 @@ PowerShell for file content, precisely because of escape hazards like this one; 
 `String.Replace` chain that looked innocuous. Where a shell must be used, prefer single-quoted strings, and
 verify the result by reading the file back rather than trusting the command's exit status.
 
+## The encoding check also rejects a doc-comment marker glued to code
+
+A stray `///` was found appended to a line inside a doc example: `/// }, None)?;///`. It was introduced by an
+edit splice of mine four rounds earlier and survived every gate since.
+
+The reviewer reported it as a compile failure. It is not: tested against a scratch file, a `///` in that
+position is only an `unused_doc_comment` **warning**, and the doctest still compiles and passes. Running
+rustdoc with `RUSTDOCFLAGS=-D warnings` does **not** catch it either, which was checked rather than assumed. So
+the damage was real and the stated consequence was not -- worth separating, because the wrong consequence is
+what would have driven the wrong fix (a lint setting that does nothing).
+
+[tools/check-encoding.ps1](tools/check-encoding.ps1) now rejects `///` immediately following a non-space
+character at end of line, in `.rs` files. The pattern was checked for false positives across the whole
+repository before being adopted: there are none, because a legitimate doc comment is always preceded by
+whitespace or begins its line. The script's own description was widened from "encoding" to **text hygiene**,
+since neither this rule nor the control-character rule is an encoding fault; they live here because this is the
+check CI already runs over every tracked file.
+
+The first version of this guard was a **no-op**: it gated on a `$ext` variable that was not in scope inside the
+file loop, so it silently matched nothing and the planted probe passed. This is the second time in this project
+that a guard has been written, observed to pass, and believed. The rule that caught it is worth restating: **a
+guard you have only seen pass is untested.** Plant the defect it is meant to catch and watch it fail, then
+remove the defect and watch it pass. Both directions, every time.
+
 ## Summary prose keeps overclaiming what the reference docs get right
+
 
 Four consecutive review rounds found an absolute statement in overview or description prose contradicting a
 precise one in the reference documentation next to the code:
@@ -430,6 +455,10 @@ link to it rather than compressing it into an absolute.
 
 ## A thread maximum of zero is refused, and the maximum beats the minimum
 
+**Partly superseded: the "maximum beats the minimum" bullet is wrong. See
+[Conflicting thread limits are refused, because Win32 resolves them silently](#conflicting-thread-limits-are-refused-because-win32-resolves-them-silently).**
+The zero-maximum bullet stands.
+
 Two facts about `SetThreadpoolThreadMaximum`, both established by measurement rather than from the SDK page,
 which states neither:
 
@@ -439,10 +468,57 @@ which states neither:
 	`set_min_threads`. This is a slightly different case from the period and length rejections elsewhere: there
 	the platform did something *other* than what was asked, whereas here it does exactly what was asked -- the
 	request is simply never useful, and a safe API should not hand back a pool that cannot run anything.
-- **The maximum takes precedence over the minimum.** Setting a minimum of 4 and then a maximum of 2 was
+- **The maximum takes precedence over the minimum.** *(Superseded -- this holds only for the min-then-max
+	ordering, and even then only in steady state.)* Setting a minimum of 4 and then a maximum of 2 was
 	measured peaking at 2 concurrent callbacks. The method previously documented the opposite ("the pool clamps
 	the value to at least the current minimum"), and a unit test carried that claim in its *name*. Both are
 	corrected, and the measured behaviour is now pinned by a test rather than asserted in prose.
+
+## <a id="conflicting-thread-limits-are-refused-because-win32-resolves-them-silently"></a>Conflicting thread limits are refused, because Win32 resolves them silently
+
+The previous decision recorded that "the maximum takes precedence over the minimum", from a single measurement
+of one ordering. That generalisation was wrong, and the test pinning it was intermittently failing at roughly 1
+run in 30 of the full suite. Measuring both orderings and both regimes:
+
+| Sequence | Peak concurrent callbacks |
+|---|---|
+| `set_min_threads(4)` then `set_max_threads(2)` | 2 in steady state (40/40 isolated, 60/60 under CPU load) |
+| `set_min_threads(4)` then `set_max_threads(2)`, many pools created concurrently | 3 observed in 1 trial of 240 |
+| `set_max_threads(2)` then `set_min_threads(4)` | **4**, in every one of 60 trials, and it does not settle back after 250ms |
+
+So the real rule is **last call wins**, not "the maximum wins". A minimum set after a lower maximum annuls that
+maximum outright: the pool runs `minimum` callbacks concurrently and stays there. Both setters return void or a
+bare success, so nothing reports the conflict, and Win32 offers no getter with which a caller could notice.
+
+Two consequences were adopted.
+
+**The wrapper tracks the limits it has set and refuses a pair that cannot both hold.** `set_max_threads` rejects
+a value below a minimum we previously set, and `set_min_threads` rejects a value above a maximum we previously
+set; both with `io::ErrorKind::InvalidInput` and no `raw_os_error`, matching the zero-maximum rejection above.
+This is the same principle as that rejection -- the platform will do something the caller did not intend and
+cannot observe -- applied to the pair rather than to a single argument. The alternative of silently clamping was
+rejected: clamping would also annul one of the two limits, differing only in which one, and would still be
+invisible.
+
+Each tracked limit is an `Option<u32>` that stays `None` until the corresponding setter succeeds, because there
+is no way to read a pool's current limits back from Win32. A limit we were never told cannot be used to reject
+its counterpart, so a fresh pool accepts either setter at any value. This is a deliberate limit on the check
+rather than an oversight: guessing at the documented default maximum in order to reject more would mean
+enforcing a number we had not verified.
+
+**The maximum is documented as a steady-state target, not an instantaneous ceiling.** Raising the minimum
+creates threads eagerly, and those surplus threads are not retired the moment a lower maximum is applied -- the
+peak of 3 above. Refusing the conflicting pair makes that window unreachable through the safe API, which is what
+removed the flaky test, but the underlying property is worth stating: the maximum bounds resource consumption,
+and is not a mutual-exclusion mechanism.
+
+This is the fifth round in which summary prose overclaimed a precise result -- see [Summary prose keeps
+overclaiming what the reference docs get right](#summary-prose-keeps-overclaiming-what-the-reference-docs-get-right).
+The difference is instructive: the earlier four were summaries contradicting correct reference documentation,
+whereas here the reference documentation itself generalised one measurement into a rule. **A measurement
+establishes what happens in the case measured.** Where the statement is about which of two settings wins, the
+other ordering is a different case and has to be measured too.
+
 
 ## A periodic timer rejects any period it cannot actually repeat at
 

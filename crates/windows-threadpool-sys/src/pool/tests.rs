@@ -62,13 +62,71 @@ fn set_max_threads_rejects_zero() {
     pool.set_max_threads(2).expect("a non-zero maximum");
 }
 
-/// The maximum takes precedence over the minimum rather than being raised to
-/// meet it. This pins the behaviour the method documents, which is the opposite
-/// of what it used to claim.
+/// A maximum below an established minimum is refused. Win32 would resolve the
+/// conflict by last-call-wins and silently annul one of the two limits, so the
+/// wrapper rejects the pair instead.
 #[test]
-fn the_maximum_takes_precedence_over_the_minimum() {
+fn a_maximum_below_the_minimum_is_rejected() {
     let pool = ThreadpoolPool::new().expect("create pool");
     pool.set_min_threads(4).expect("set minimum");
+
+    let error = pool
+        .set_max_threads(2)
+        .expect_err("a maximum below the minimum must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.raw_os_error().is_none(),
+        "the rejection is ours, not the platform's: {error}"
+    );
+
+    // A maximum that can coexist with the minimum is still accepted.
+    pool.set_max_threads(4)
+        .expect("a maximum meeting the minimum");
+}
+
+/// A minimum above an established maximum is refused. Left to Win32 this is the
+/// dangerous direction: the minimum is honoured and the maximum stops applying,
+/// with no error and no way to observe it.
+#[test]
+fn a_minimum_above_the_maximum_is_rejected() {
+    let pool = ThreadpoolPool::new().expect("create pool");
+    pool.set_max_threads(2).expect("set maximum");
+
+    let error = pool
+        .set_min_threads(4)
+        .expect_err("a minimum above the maximum must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.raw_os_error().is_none(),
+        "the rejection is ours, not the platform's: {error}"
+    );
+
+    // A minimum within the maximum is still accepted.
+    pool.set_min_threads(2)
+        .expect("a minimum within the maximum");
+}
+
+/// A limit we were never told cannot constrain its counterpart: Win32 offers no
+/// way to read a pool's current limits back, so a fresh pool accepts either
+/// setter at any value.
+#[test]
+fn an_unset_counterpart_does_not_constrain() {
+    let pool = ThreadpoolPool::new().expect("create pool");
+    pool.set_min_threads(64)
+        .expect("minimum with no maximum set");
+
+    let other = ThreadpoolPool::new().expect("create pool");
+    other
+        .set_max_threads(1)
+        .expect("maximum with no minimum set");
+}
+
+/// The maximum bounds concurrency when it is the effective limit. This is the
+/// non-conflicting case; see `set_max_threads` for why the maximum is a
+/// steady-state target rather than an instantaneous ceiling.
+#[test]
+fn the_maximum_bounds_concurrency() {
+    let pool = ThreadpoolPool::new().expect("create pool");
     pool.set_max_threads(2).expect("set maximum");
 
     let mut env = CallbackEnviron::new();
@@ -121,16 +179,14 @@ fn min_and_max_together_are_accepted() {
     assert!(pool.set_min_threads(2).is_ok());
 }
 
-/// Setting a maximum below the current minimum is accepted rather than failing,
-/// and the pool keeps working. Which of the two wins is a separate question,
-/// answered by [`the_maximum_takes_precedence_over_the_minimum`] -- this test
-/// was previously named for the "clamped upward" behaviour, which measurement
-/// showed does not happen.
+/// A rejected conflicting limit leaves the pool untouched and still usable: the
+/// wrapper refuses the pair before calling into Win32, so nothing is half-applied.
 #[test]
-fn max_below_min_is_accepted_not_rejected() {
+fn a_rejected_conflict_leaves_the_pool_usable() {
     let pool = ThreadpoolPool::new().expect("create pool");
     pool.set_min_threads(4).expect("set minimum");
-    pool.set_max_threads(1).expect("a non-zero maximum");
+    pool.set_max_threads(1)
+        .expect_err("a maximum below the minimum must be rejected");
     // Still usable afterwards, which is the property being checked here.
     let mut env = CallbackEnviron::new();
     env.set_pool(&pool);
