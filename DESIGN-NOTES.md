@@ -399,10 +399,38 @@ The scatter/gather adapters reach the limit through a page *count*, which is the
 oversized total, and checking before allocating additionally converts what would have been `PageBuffers::new`'s
 overflow panic into an ordinary `InvalidInput` error.
 
-Worth recording as process rather than design: `device.rs` and `fs.rs` each carried their own copy of the
-capping helper, and the review that found the defect named only `device.rs`. Fixing the named module and leaving
-its neighbour would have shipped a defect already agreed to be one, so both were fixed together. When a defect
-is found in a helper, check whether the helper has siblings.
+One saturation is kept deliberately. A coalescing *window* is a permission -- "you may delay this firing by up to
+this much to batch it" -- and the pool is always free to fire earlier, so a saturated window asks for less
+coalescing rather than producing a wrong result. Periods pass through the same helper but cannot reach the
+saturation, being validated at construction. The distinction that matters is whether capping loses data or only
+loses an optimisation.
+
+Worth recording as process rather than design, and worth reading twice: **`device.rs`, `fs.rs` and `socket.rs`
+each carried their own copy of the capping helper.** The first review named only `device.rs`; the second round
+found `fs.rs` and closed with "when a defect is found in a helper, check whether the helper has siblings"; the
+third round then found `socket.rs`, which that very advice would have caught had it been acted on rather than
+merely written down. Writing a lesson in a design note is not the same as applying it -- when a defect class is
+identified, grep the workspace for the whole class before declaring it fixed.
+
+## A wait's re-arm is immediate, so its callback can overlap itself
+
+`TimerFiring::rearm_after` is deferred until the callback returns, precisely so a one-shot timer's firings stay
+sequential. `WaitActivation::rearm` cannot work that way: the SDK requires the wait to be armed for the handle's
+*current* signal state to be observed, so the arming takes effect immediately.
+
+The consequence is easy to miss and expensive to meet. On a manual-reset event the handle stays signalled, so
+re-arming from inside the callback queues the next activation at once -- before the current one returns.
+Measured: re-arming at the top of a 20ms callback entered it 7529 times in 400ms, 5110 of those overlapping an
+earlier entry. An auto-reset event does not do this, because the wait consumes the signal.
+
+Nothing about that is wrong, but it is the *opposite* of the guarantee the timer next door gives, and a caller
+who carries the assumption across gets what looks like a runaway pool. It is now documented on both the method
+and the type, contrasted explicitly with the timer, and pinned by tests covering the overlap, the auto-reset
+case, and the mitigation -- so the documentation cannot quietly stop being true.
+
+Writing the mitigation exposed that it was unreachable: the advice is to reset the event before re-arming, but
+`WaitActivation` exposed no way to reach the handle, and a callback cannot capture it because the wait owns it.
+`WaitActivation::handle` closes that gap. Documenting a way out is worth nothing if the API does not provide one.
 
 ## The blocking backend's "one operation at a time" is enforced by `&mut self`
 
@@ -444,6 +472,20 @@ The regression test watches the *counter*, not the mint. An earlier version trie
 recycled generation and passed against the broken implementation, because the window is a few instructions wide
 and hitting it is luck. An observer sampling the counter sees the wrapped value long before any thread happens
 to consume one, which is the difference between a test that detects the defect and one that merely might.
+
+Two further corrections to that test are worth recording, because both are hazards any concurrent test can hit:
+
+- **A barrier, not a hope.** Its observers could be scheduled *after* the minters had finished, in which case
+	they sampled nothing and the test passed against the very implementation it existed to catch. A barrier
+	across observers and minters makes the observers provably running before the boundary is crossed. Detection
+	is still probabilistic -- but across 80,000 wrap events rather than one, and no longer vacuous.
+- **Never swap the panic hook from worker threads.** The test had four threads each calling `take_hook` /
+	`set_hook` / restore around `catch_unwind`. The hook is *process-global* and Cargo runs tests in parallel
+	threads of one process, so an unlucky interleaving leaves the no-op hook installed and silently strips
+	diagnostics from unrelated tests. The fix is not more careful hook juggling: `try_next_generation` gives the
+	test a non-panicking form, so it raises no panics and touches no hook at all. Where the hook genuinely must
+	be swapped -- the stress suite's deliberate-panic scenario -- it is done on the scenario's own thread while
+	holding the lane that serializes the binary, and the comment there now says why both conditions are needed.
 
 The regression test asserts the behaviour rather than the guard: the shortest accepted period must actually
 repeat. Lowering `MIN_PERIOD` makes it fail by timing out, which is how the original defect presented.

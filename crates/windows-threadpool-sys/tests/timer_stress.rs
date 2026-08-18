@@ -625,8 +625,16 @@ stress! {
 
         // Every one of these panics is expected, and the default hook would emit
         // a message per firing. Silence it for the duration so the suite's own
-        // output stays readable; the lane makes this safe, since no other
-        // scenario is running to have its panics swallowed.
+        // output stays readable.
+        //
+        // The panic hook is process-global, so swapping it is only safe under two
+        // conditions, both of which hold here and neither of which is accidental:
+        // this runs on the scenario's own thread rather than in workers, so there
+        // is no race to install or restore it; and every scenario in this binary
+        // holds the lane, so no other test is running to have its diagnostics
+        // swallowed. Where those conditions do not hold -- the generation
+        // exhaustion tests, which hammer a boundary from several threads -- the
+        // code under test offers a non-panicking form instead.
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
 

@@ -261,10 +261,10 @@ impl WaitActivation<'_> {
     ///
     /// The wait owns the handle and outlives every callback, so it is open for
     /// the duration of this borrow. This is what makes the documented way out of
-    /// [the overlap hazard](Self::rearm#this-can-overlap-the-callback-with-itself)
-    /// reachable: a callback watching a manual-reset event can reset it before
-    /// re-arming, so the next activation waits for a fresh signal instead of
-    /// starting immediately alongside this one.
+    /// the overlap hazard on [`rearm`](Self::rearm) reachable: a callback
+    /// watching a manual-reset event can reset it before re-arming, so the next
+    /// activation waits for a fresh signal instead of starting immediately
+    /// alongside this one.
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
         // SAFETY: the wait owns this handle and cannot be dropped while a

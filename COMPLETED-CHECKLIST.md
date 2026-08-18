@@ -277,3 +277,45 @@ Not from the review. Found while working FR-2: `fs.rs` carried its own copy of t
 [`TR-4`](#tr-4) removed from `device.rs`, across eight call sites. The scatter/gather adapters reach the limit
 through a page count, and now check before allocating, which also converts `PageBuffers::new`'s overflow panic
 into an ordinary error.
+
+## Moved 2026-08-17 — M9, sixth review round on PR #3
+
+Five findings, all verified and all correct. Three were in work this branch introduced in the two preceding
+rounds, including one that is a direct failure to act on a lesson written into the previous round's own design
+note. Decisions in [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+### <a id="fz-1"></a>FZ-1 — Document that re-arming a still-signalled wait overlaps its own callback. *(completed 2026-08-17 23:00:36 -04:00)*
+
+`WaitActivation::rearm` said nothing about concurrency. On a manual-reset event the handle stays signalled, so
+re-arming from inside the callback queues the next activation before the current one returns. Measured:
+re-arming at the top of a 20ms callback entered it **7529 times in 400ms, 5110 of those overlapping**, against 1
+entry and no overlap for an auto-reset event. Documented on both the method and the type, contrasted with
+`TimerFiring::rearm_after`, and pinned by three tests.
+
+Writing the mitigation exposed that it was unreachable -- the advice is to reset the event before re-arming, but
+nothing exposed the handle to the callback -- so `WaitActivation::handle` was added.
+
+### <a id="fz-2"></a>FZ-2 — Validate file read lengths before allocating. *(completed 2026-08-17 23:00:36 -04:00)*
+
+[`FR-3`](#fr-3) put the check after `vec![0_u8; len]` in the blocking read, so an oversized request tried to
+allocate over 4GiB before failing and its own regression test could abort instead of exercising the error path.
+The IOCP read was already correct.
+
+### <a id="fz-3"></a>FZ-3 — Reject oversized socket lengths. *(completed 2026-08-17 23:00:36 -04:00)*
+
+`socket.rs` held a **third** copy of the capping helper, four call sites across both backends, allocating before
+capping. Same defect as `device` and `fs`. No capping helper now remains in either crate; the one surviving
+saturation, a coalescing window, is deliberate and documented as such.
+
+Also checked `BlockingSocket` for the exclusivity hole fixed in [`FR-2`](#fr-2): it does not have it, because
+its `run` creates a fresh event per call rather than waiting on the shared socket.
+
+### <a id="fz-4"></a>FZ-4 — Stop the identity tests mutating global state, and remove their false-pass mode. *(completed 2026-08-17 23:00:36 -04:00)*
+
+Two defects in one test. Four worker threads each swapped the *process-global* panic hook, which can leave the
+no-op hook installed and strip diagnostics from every other test in the binary; and the observers could be
+scheduled after the minters finished, sampling nothing and passing against the broken implementation.
+
+Fixed by a non-panicking `try_next_generation` seam -- so the concurrent test raises no panics and touches no
+hook -- and a barrier so observers are provably running before the boundary is crossed. Verified to still fail
+four times out of four against the broken implementation, and pass four out of four with the fix.

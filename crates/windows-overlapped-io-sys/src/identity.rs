@@ -30,23 +30,18 @@ use windows_sys::Win32::System::IO::OVERLAPPED;
 /// another.
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
-/// Take the next generation from `sequence`, refusing to wrap.
+/// Take the next generation from `sequence`, or `None` once it is exhausted.
 ///
-/// Wrapping would restart the sequence and hand out generations already in use,
-/// which is exactly the stale-identity aliasing generations exist to prevent --
-/// so the invariant is enforced here rather than only asserted in prose.
-/// Exhaustion is not reachable in practice: at one submission per nanosecond a
-/// `u64` still takes centuries.
+/// This is the whole mechanism; [`next_generation`] only adds the panic. Having
+/// a non-panicking form is not merely tidy: the concurrent exhaustion test hits
+/// the boundary tens of thousands of times across several threads, and doing
+/// that through the panicking form would mean either a flood of panic output or
+/// worker threads swapping the *process-global* panic hook, which would race
+/// each other and silence diagnostics for every other test in the binary.
 ///
-/// The counter is a parameter so this boundary can be tested; production code
+/// The counter is a parameter so the boundary can be tested; production code
 /// always passes [`NEXT_GENERATION`].
-///
-/// # Panics
-///
-/// Panics once the sequence is exhausted, and every later call panics too: the
-/// counter saturates at `u64::MAX` rather than passing it, so a caught panic
-/// cannot resume minting recycled generations.
-fn next_generation(sequence: &AtomicU64) -> u64 {
+fn try_next_generation(sequence: &AtomicU64) -> Option<u64> {
     // A single atomic update, not an increment followed by a repair. `fetch_add`
     // would wrap the stored value to zero and leave it there until a separate
     // `store` could pin it -- and a thread arriving in that window would take 0,
@@ -59,12 +54,29 @@ fn next_generation(sequence: &AtomicU64) -> u64 {
             // would overflow at the boundary before the guard could apply.
             (current != u64::MAX).then(|| current + 1)
         })
-        .unwrap_or_else(|_| {
-            panic!(
-                "the operation-generation sequence is exhausted; continuing would reissue \
-                 generations already in use and reintroduce stale-identity aliasing"
-            )
-        })
+        .ok()
+}
+
+/// Take the next generation from `sequence`, refusing to wrap.
+///
+/// Wrapping would restart the sequence and hand out generations already in use,
+/// which is exactly the stale-identity aliasing generations exist to prevent --
+/// so the invariant is enforced here rather than only asserted in prose.
+/// Exhaustion is not reachable in practice: at one submission per nanosecond a
+/// `u64` still takes centuries.
+///
+/// # Panics
+///
+/// Panics once the sequence is exhausted, and every later call panics too: the
+/// counter saturates at `u64::MAX` rather than passing it, so a caught panic
+/// cannot resume minting recycled generations.
+fn next_generation(sequence: &AtomicU64) -> u64 {
+    try_next_generation(sequence).unwrap_or_else(|| {
+        panic!(
+            "the operation-generation sequence is exhausted; continuing would reissue \
+             generations already in use and reintroduce stale-identity aliasing"
+        )
+    })
 }
 
 /// An identity for an in-flight operation: the address of its `OVERLAPPED`

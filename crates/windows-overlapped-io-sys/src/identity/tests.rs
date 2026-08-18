@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
-use crate::identity::{OperationId, OperationRegistry, next_generation};
+use crate::identity::{OperationId, OperationRegistry, next_generation, try_next_generation};
 
 /// A stand-in storage address. Never dereferenced.
 fn address(value: usize) -> *mut OVERLAPPED {
@@ -44,18 +44,24 @@ fn exhausting_the_sequence_panics_rather_than_wrapping() {
 
 /// The refusal must stick, so a caught panic cannot let the next call walk the
 /// whole sequence again from zero.
+///
+/// Uses the non-panicking form so repeated attempts need no `catch_unwind` and
+/// no panic output; the panic itself is covered by
+/// [`exhausting_the_sequence_panics_rather_than_wrapping`].
 #[test]
 fn an_exhausted_sequence_stays_exhausted() {
     let sequence = std::sync::atomic::AtomicU64::new(u64::MAX);
 
-    let first = std::panic::catch_unwind(|| next_generation(&sequence));
-    assert!(first.is_err(), "the first call past the end must panic");
-
-    for _ in 0..3 {
-        let again = std::panic::catch_unwind(|| next_generation(&sequence));
-        assert!(
-            again.is_err(),
-            "an exhausted sequence handed out another generation"
+    for attempt in 0..5 {
+        assert_eq!(
+            try_next_generation(&sequence),
+            None,
+            "attempt {attempt} handed out a generation past the end"
+        );
+        assert_eq!(
+            sequence.load(Ordering::Relaxed),
+            u64::MAX,
+            "attempt {attempt} left the counter somewhere other than exhausted"
         );
     }
 }
@@ -68,46 +74,64 @@ fn an_exhausted_sequence_stays_exhausted() {
 /// arriving between the two takes 0, then 1, 2, ... and mints successfully.
 ///
 /// Trying to *catch that mint* is unreliable -- the window is a few instructions
-/// wide -- so this watches the counter instead. An observer sampling it while
-/// other threads hammer the boundary will see the wrapped value long before any
-/// thread happens to consume one, which makes the defect detectable rather than
-/// merely improbable.
+/// wide -- so this watches the counter instead. A broken implementation wraps it
+/// on every one of the 80_000 refused attempts below, so an observer that is
+/// genuinely running has many chances to see it.
+///
+/// What this does and does not guarantee: the barrier guarantees the observers
+/// are *running* before the boundary is crossed, which removes the failure mode
+/// where minters finish first and the observers sample nothing and pass. It does
+/// not guarantee sampling any particular instant, so detection remains
+/// probabilistic -- but across 80_000 wrap events rather than one.
+///
+/// It uses [`try_next_generation`] rather than the panicking form on purpose:
+/// catching 80_000 panics would either flood the output or require swapping the
+/// process-global panic hook from worker threads, which would race and could
+/// leave every other test in the binary without diagnostics.
 #[test]
 fn the_counter_never_holds_a_wrapped_value() {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::{Arc, Barrier};
 
+    const OBSERVERS: usize = 2;
+    const MINTERS: usize = 4;
+    const ATTEMPTS: usize = 20_000;
     // One generation remains, so every attempt after the first is refused.
     const LAST: u64 = u64::MAX - 1;
 
     let sequence = Arc::new(AtomicU64::new(LAST));
     let stop = Arc::new(AtomicBool::new(false));
+    // Every observer and every minter waits here, so no minter can cross the
+    // boundary before the observers are running.
+    let ready = Arc::new(Barrier::new(OBSERVERS + MINTERS));
 
-    let observers: Vec<_> = (0..2)
+    let observers: Vec<_> = (0..OBSERVERS)
         .map(|_| {
             let sequence = Arc::clone(&sequence);
             let stop = Arc::clone(&stop);
+            let ready = Arc::clone(&ready);
             std::thread::spawn(move || {
+                ready.wait();
                 let mut lowest = u64::MAX;
+                let mut samples = 0_u64;
                 while !stop.load(Ordering::Relaxed) {
                     lowest = lowest.min(sequence.load(Ordering::Relaxed));
+                    samples += 1;
                 }
-                lowest
+                (lowest, samples)
             })
         })
         .collect();
 
-    let minters: Vec<_> = (0..4)
+    let minters: Vec<_> = (0..MINTERS)
         .map(|_| {
             let sequence = Arc::clone(&sequence);
+            let ready = Arc::clone(&ready);
             std::thread::spawn(move || {
-                let previous = std::panic::take_hook();
-                std::panic::set_hook(Box::new(|_| {}));
-                let issued: Vec<u64> = (0..20_000)
-                    .filter_map(|_| std::panic::catch_unwind(|| next_generation(&sequence)).ok())
-                    .collect();
-                std::panic::set_hook(previous);
-                issued
+                ready.wait();
+                (0..ATTEMPTS)
+                    .filter_map(|_| try_next_generation(&sequence))
+                    .collect::<Vec<u64>>()
             })
         })
         .collect();
@@ -118,9 +142,20 @@ fn the_counter_never_holds_a_wrapped_value() {
         .collect();
     stop.store(true, Ordering::Relaxed);
 
-    let lowest = observers
+    let observations: Vec<(u64, u64)> = observers
         .into_iter()
         .map(|observer| observer.join().expect("observing thread"))
+        .collect();
+
+    for (_, samples) in &observations {
+        assert!(
+            *samples > 0,
+            "an observer never sampled the counter, so it could not have detected a wrap"
+        );
+    }
+    let lowest = observations
+        .iter()
+        .map(|(lowest, _)| *lowest)
         .min()
         .expect("an observer");
 
