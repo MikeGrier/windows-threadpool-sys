@@ -77,7 +77,7 @@ what it was asked for.
 	`CallbackEnviron::clear_pool` says it drops the `ThreadpoolPool` the environment named; it clears the
 	selection and drops nothing.
 
-- [ ] **TR-7** — Archive the completed plans per the repository's own convention.
+- [x] **TR-7** — Archive the completed plans per the repository's own convention.
 
 	Both crates' [PLANS.md](PLANS.md) files keep their checklists in the active table marked "completed". The
 	convention is that a completed checklist moves to a `COMPLETED-PLANS.md` table in the same directory and
