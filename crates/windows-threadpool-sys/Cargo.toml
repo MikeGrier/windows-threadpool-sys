@@ -31,7 +31,7 @@ targets = ["x86_64-pc-windows-msvc"]
 # workspace) and a version (for consumers building from crates.io) are required. No
 # features are enabled (`default-features = false`): the `TP_IO` backend needs only
 # the core completion machinery, not any operation-family adapter (fs, socket, device).
-windows-overlapped-io-sys = { version = "0.1.0", path = "../windows-overlapped-io-sys", default-features = false }
+windows-overlapped-io-sys = { version = "1.0.0", path = "../windows-overlapped-io-sys", default-features = false }
 
 windows-sys = {
 	version = "0.61.2",
