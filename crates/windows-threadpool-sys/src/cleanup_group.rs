@@ -61,9 +61,14 @@ use crate::work::ThreadpoolWork;
 /// A heap allocation the group frees once its members have been released.
 ///
 /// Resources are type-erased because one group holds members of several kinds;
-/// each entry carries the function that knows how to free it.
+/// each entry carries the function that knows how to free it, and the function
+/// that prepares its member for the bulk release.
 struct OwnedResource {
     ptr: *mut c_void,
+    /// Suppress the member's deferred re-arm and disarm it before
+    /// `CloseThreadpoolCleanupGroupMembers` runs. A no-op for kinds with no
+    /// callback-driven re-arm (work, periodic timers, watched handles).
+    prepare_shutdown: unsafe fn(*mut c_void),
     free: unsafe fn(*mut c_void),
 }
 
@@ -78,6 +83,14 @@ unsafe fn free_boxed<T>(ptr: *mut c_void) {
     // SAFETY: forwarded from this function's own contract.
     drop(unsafe { Box::from_raw(ptr.cast::<T>()) });
 }
+
+/// A shutdown preparation for a member with no callback-driven re-arm to
+/// suppress: work objects, periodic timers, and watched handles.
+///
+/// `CloseThreadpoolCleanupGroupMembers` already disarms and cancels these; only
+/// a one-shot timer or a wait can re-arm itself from inside a callback, so only
+/// those need the real preparation.
+fn prepare_shutdown_noop(_ptr: *mut c_void) {}
 
 /// An owned thread-pool cleanup group.
 ///
@@ -206,6 +219,7 @@ impl CleanupGroup {
         let (handle, context) = work.into_parts();
         self.adopt(OwnedResource {
             ptr: context,
+            prepare_shutdown: prepare_shutdown_noop,
             free: ThreadpoolWork::drop_context,
         });
         Ok(WorkMember {
@@ -234,6 +248,7 @@ impl CleanupGroup {
         let (handle, context) = timer.into_parts();
         self.adopt(OwnedResource {
             ptr: context,
+            prepare_shutdown: ThreadpoolTimer::prepare_shutdown,
             free: ThreadpoolTimer::drop_context,
         });
         Ok(TimerMember {
@@ -267,6 +282,7 @@ impl CleanupGroup {
         let (handle, context, period) = timer.into_parts();
         self.adopt(OwnedResource {
             ptr: context,
+            prepare_shutdown: prepare_shutdown_noop,
             free: ThreadpoolPeriodicTimer::drop_context,
         });
         Ok(PeriodicTimerMember {
@@ -302,12 +318,14 @@ impl CleanupGroup {
         let (raw, context, handle) = wait.into_parts();
         self.adopt(OwnedResource {
             ptr: context,
+            prepare_shutdown: ThreadpoolWait::prepare_shutdown,
             free: ThreadpoolWait::drop_context,
         });
         // The handle outlives the member for the same reason the context does.
         let handle = Box::into_raw(Box::new(handle));
         self.adopt(OwnedResource {
             ptr: handle.cast(),
+            prepare_shutdown: prepare_shutdown_noop,
             free: free_boxed::<OwnedHandle>,
         });
         Ok(WaitMember {
@@ -353,6 +371,27 @@ impl CleanupGroup {
     /// members created after an earlier release are released by the next one,
     /// instead of being skipped and leaked.
     fn release_members(&mut self, cancel_pending: bool) {
+        // Close the door on any deferred re-arm before the bulk release.
+        // `CloseThreadpoolCleanupGroupMembers` waits for executing callbacks but
+        // does not stop one from re-arming: a one-shot timer or wait whose
+        // callback is running can request a re-arm the trampoline applies after
+        // it returns, which would re-arm an object the release is tearing down
+        // and then free its context under a freshly queued callback. Suppressing
+        // and disarming each member first mirrors what each object's own `Drop`
+        // does. The lock is dropped before the release, which blocks.
+        {
+            let resources = self
+                .resources
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            for resource in resources.iter() {
+                // SAFETY: the members are still live and unreleased; each hook
+                // matches the context kind this resource holds and only
+                // suppresses/disarms that one object.
+                unsafe { (resource.prepare_shutdown)(resource.ptr) };
+            }
+        }
+
         // SAFETY: the group is live. This waits for executing callbacks and
         // releases every member, so afterwards nothing can reach the contexts.
         unsafe {

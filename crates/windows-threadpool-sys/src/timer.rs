@@ -628,6 +628,29 @@ impl ThreadpoolTimer {
         // SAFETY: forwarded from this function's own contract.
         drop(unsafe { Box::from_raw(context.cast::<TimerContext>()) });
     }
+
+    /// Suppress this member's deferred re-arm and disarm it, before a
+    /// [`crate::cleanup_group::CleanupGroup`] bulk-releases its members.
+    ///
+    /// `CloseThreadpoolCleanupGroupMembers` waits for executing callbacks but
+    /// does not stop one from re-arming: a callback still running can request a
+    /// re-arm through [`TimerFiring::rearm_after`] that the trampoline applies
+    /// after it returns, which would re-arm an object the bulk release is
+    /// tearing down and then free its context under a freshly queued callback.
+    /// Raising the suppression before the release closes that door, exactly as
+    /// this type's own `Drop` does; the suppression is never lifted because the
+    /// member is being destroyed.
+    ///
+    /// # Safety
+    ///
+    /// `context` must come from [`into_parts`](Self::into_parts) on this type
+    /// and name a still-live object whose context the caller has not yet freed.
+    pub(crate) unsafe fn prepare_shutdown(context: *mut core::ffi::c_void) {
+        // SAFETY: forwarded; the context outlives the member until the group
+        // frees it, and `suppress_and_disarm` only touches this object.
+        let ctx = unsafe { &*context.cast::<TimerContext>() };
+        ctx.suppress_and_disarm();
+    }
 }
 
 impl Drop for ThreadpoolTimer {

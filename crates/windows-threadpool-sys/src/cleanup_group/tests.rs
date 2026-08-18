@@ -7,7 +7,7 @@
 //! covered by a `compile_fail` doc test on the module.
 
 use std::os::windows::io::AsRawHandle;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -597,4 +597,162 @@ fn many_members_are_all_released() {
     group.close_members(false);
     assert_eq!(group.owned_resources(), 0);
     assert_eq!(ran.count(), MEMBERS);
+}
+
+/// A two-phase gate that parks the first callback inside its body until the
+/// test has begun the group's release, so a re-arm requested from the callback
+/// happens while `CloseThreadpoolCleanupGroupMembers` is waiting on it.
+struct RearmGate {
+    entered: (Mutex<bool>, Condvar),
+    release: (Mutex<bool>, Condvar),
+    parked_once: AtomicBool,
+}
+
+impl RearmGate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            entered: (Mutex::new(false), Condvar::new()),
+            release: (Mutex::new(false), Condvar::new()),
+            parked_once: AtomicBool::new(false),
+        })
+    }
+
+    /// First call announces entry and blocks until `let_go`; later calls return
+    /// at once, so only the first firing is held mid-flight.
+    fn park_first(&self) {
+        if self.parked_once.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (m, c) = &self.entered;
+        *m.lock().expect("entered") = true;
+        c.notify_all();
+        let (m, c) = &self.release;
+        let mut go = m.lock().expect("release");
+        while !*go {
+            go = c.wait(go).expect("release");
+        }
+    }
+
+    fn await_entered(&self) {
+        let (m, c) = &self.entered;
+        let mut seen = m.lock().expect("entered");
+        while !*seen {
+            seen = c.wait(seen).expect("entered");
+        }
+    }
+
+    fn let_go(&self) {
+        let (m, c) = &self.release;
+        *m.lock().expect("release") = true;
+        c.notify_all();
+    }
+}
+
+/// Releasing a group while a self-re-arming timer callback is mid-flight must
+/// leave the timer quiescent. `CloseThreadpoolCleanupGroupMembers` waits for the
+/// executing callback but does not suppress the deferred re-arm it requests
+/// through [`TimerFiring::rearm_after`]; the group must suppress and disarm each
+/// member first, as an individual timer's own `Drop` does. Without that the
+/// re-arm re-arms an object being torn down and queues a callback against a
+/// context the group is about to free. Run under a bounded thread so a
+/// regression surfaces as a failure rather than a wedged run.
+///
+/// [`TimerFiring::rearm_after`]: crate::timer::TimerFiring::rearm_after
+#[test]
+fn releasing_a_group_while_a_timer_callback_rearms_leaves_it_quiescent() {
+    let gate = RearmGate::new();
+    let count = Arc::new(AtomicUsize::new(0));
+
+    let mut group = CleanupGroup::new().expect("create group");
+    {
+        let cb_gate = Arc::clone(&gate);
+        let cb_count = Arc::clone(&count);
+        let timer = group
+            .create_timer(
+                move |firing| {
+                    cb_count.fetch_add(1, Ordering::SeqCst);
+                    cb_gate.park_first();
+                    // Ask to keep firing; the teardown must suppress this.
+                    firing.rearm_after(Duration::from_millis(1));
+                },
+                None,
+            )
+            .expect("create timer");
+        timer.set_after(Duration::from_millis(1));
+    }
+
+    gate.await_entered();
+    let releaser = {
+        let gate = Arc::clone(&gate);
+        std::thread::spawn(move || {
+            // Give close_members time to reach its wait on the parked callback.
+            std::thread::sleep(Duration::from_millis(50));
+            gate.let_go();
+        })
+    };
+
+    group.close_members(false);
+    releaser.join().expect("releaser");
+
+    // The suppressed re-arm must not have re-armed a torn-down object.
+    let after_release = count.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        after_release,
+        "the timer re-armed past the group's release",
+    );
+}
+
+/// The wait counterpart of the timer teardown race: a wait callback that
+/// re-arms through [`WaitActivation::rearm`] while the group is releasing its
+/// members must be suppressed, not applied to an object being torn down.
+///
+/// [`WaitActivation::rearm`]: crate::wait::WaitActivation::rearm
+#[test]
+fn releasing_a_group_while_a_wait_callback_rearms_leaves_it_quiescent() {
+    let gate = RearmGate::new();
+    let count = Arc::new(AtomicUsize::new(0));
+    // A manual-reset event stays signalled, so a re-arm re-fires immediately.
+    let handle = event();
+
+    let mut group = CleanupGroup::new().expect("create group");
+    {
+        let cb_gate = Arc::clone(&gate);
+        let cb_count = Arc::clone(&count);
+        let wait = group
+            .create_wait(
+                handle,
+                move |activation| {
+                    cb_count.fetch_add(1, Ordering::SeqCst);
+                    cb_gate.park_first();
+                    // Ask to keep watching; the teardown must suppress this.
+                    activation.rearm(None);
+                },
+                None,
+            )
+            .expect("create wait");
+        signal(wait.handle());
+        wait.arm(None);
+    }
+
+    gate.await_entered();
+    let releaser = {
+        let gate = Arc::clone(&gate);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            gate.let_go();
+        })
+    };
+
+    group.close_members(false);
+    releaser.join().expect("releaser");
+
+    let after_release = count.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        after_release,
+        "the wait re-armed past the group's release",
+    );
 }
