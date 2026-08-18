@@ -17,6 +17,47 @@ use crate::{Operation, OperationState, UnassociatedEndpoint};
 
 /// An overlapped endpoint that completes operations synchronously, one at a
 /// time, via `GetOverlappedResult`.
+///
+/// "One at a time" is enforced, not merely documented: every safe adapter on
+/// this type takes `&mut self`, so a second operation while one is in flight is
+/// a borrow-check error. That matters because `GetOverlappedResult` waits on the
+/// *handle*, which is signalled by whichever operation completes -- with two
+/// outstanding, a call could return the other one's result and hand back buffers
+/// the kernel is still writing into.
+///
+/// The type is still `Send + Sync`, so an endpoint can be moved between threads
+/// or shared behind a `Mutex`; what it cannot do is have two operations in
+/// flight, which is what the mutual exclusion buys.
+///
+/// One owner issuing operations in sequence is the supported shape, and
+/// compiles:
+///
+/// ```
+/// use windows_overlapped_io_sys::BlockingEndpoint;
+///
+/// fn read_twice(endpoint: &mut BlockingEndpoint) -> std::io::Result<()> {
+///     let (_first, _) = endpoint.read(64, 0)?;
+///     let (_second, _) = endpoint.read(64, 64)?;
+///     Ok(())
+/// }
+/// ```
+///
+/// Sharing one endpoint across threads and reading from both is rejected at
+/// compile time rather than corrupting a result at run time. This is the same
+/// example with the single owner replaced by an `Arc`, which can only hand out
+/// `&BlockingEndpoint`:
+///
+/// ```compile_fail
+/// use std::sync::Arc;
+/// use windows_overlapped_io_sys::BlockingEndpoint;
+///
+/// fn read_from_two_threads(endpoint: BlockingEndpoint) {
+///     let shared = Arc::new(endpoint);
+///     let other = Arc::clone(&shared);
+///     std::thread::spawn(move || other.read(64, 0));
+///     let _ = shared.read(64, 64);
+/// }
+/// ```
 #[derive(Debug)]
 pub struct BlockingEndpoint {
     handle: OwnedHandle,
@@ -50,6 +91,11 @@ impl BlockingEndpoint {
     /// `OVERLAPPED` pointer and no other storage, and no other operation may be
     /// outstanding on this endpoint until this call returns. Any buffers the
     /// operation reads or writes must stay valid for the duration of the call.
+    ///
+    /// This takes `&self` rather than `&mut self` so a caller driving the raw
+    /// seam can hold other borrows of the endpoint; the exclusivity requirement
+    /// is theirs to uphold, which is what makes this `unsafe`. The safe adapters
+    /// built on it take `&mut self` instead, so they cannot violate it.
     pub unsafe fn run<P, F>(&self, operation: &mut Operation<P>, issue: F) -> io::Result<usize>
     where
         F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<()>,

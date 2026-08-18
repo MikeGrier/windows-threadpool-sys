@@ -22,7 +22,7 @@ previous round -- worth stating plainly rather than filing as routine.
 	transiently holds a wrapped value and there is no window to arrive in. Test it under contention at the
 	boundary, not just single-threaded, since single-threaded tests are exactly what missed this.
 
-- [ ] **FR-2** — Require exclusive access for the safe blocking adapters.
+- [x] **FR-2** — Require exclusive access for the safe blocking adapters.
 
 	**Gap:** `BlockingEndpoint` holds only an `OwnedHandle`, so it is automatically `Send + Sync`. Its five safe
 	adapters -- `read`, `write`, `read_scatter`, `write_gather` and `ioctl` -- all take `&self` and call the

@@ -35,7 +35,7 @@ impl BlockingEndpoint {
     /// # Errors
     ///
     /// Returns any error from issuing or completing the read.
-    pub fn read(&self, len: usize, offset: u64) -> io::Result<(Vec<u8>, usize)> {
+    pub fn read(&mut self, len: usize, offset: u64) -> io::Result<(Vec<u8>, usize)> {
         let mut buffer = vec![0_u8; len];
         let buf_ptr = buffer.as_mut_ptr();
         let buf_len = clamp_u32(len);
@@ -67,7 +67,7 @@ impl BlockingEndpoint {
     /// # Errors
     ///
     /// Returns any error from issuing or completing the write.
-    pub fn write(&self, data: &[u8], offset: u64) -> io::Result<usize> {
+    pub fn write(&mut self, data: &[u8], offset: u64) -> io::Result<usize> {
         let data_ptr = data.as_ptr();
         let data_len = clamp_u32(data.len());
 
@@ -377,7 +377,7 @@ impl BlockingEndpoint {
     /// # Errors
     ///
     /// Returns any error from issuing or completing the scatter-read.
-    pub fn read_scatter(&self, pages: usize, offset: u64) -> io::Result<(PageBuffers, usize)> {
+    pub fn read_scatter(&mut self, pages: usize, offset: u64) -> io::Result<(PageBuffers, usize)> {
         let buffers = PageBuffers::new(pages);
         let segments = buffers.segment_array();
         let total = clamp_u32(buffers.len());
@@ -413,7 +413,7 @@ impl BlockingEndpoint {
     /// # Errors
     ///
     /// Returns any error from issuing or completing the gather-write.
-    pub fn write_gather(&self, buffers: &PageBuffers, offset: u64) -> io::Result<usize> {
+    pub fn write_gather(&mut self, buffers: &PageBuffers, offset: u64) -> io::Result<usize> {
         let segments = buffers.segment_array();
         let total = clamp_u32(buffers.len());
         let seg_ptr = segments.as_ptr();

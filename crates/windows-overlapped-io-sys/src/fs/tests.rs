@@ -12,7 +12,7 @@ fn blocking_write_then_read_round_trips() {
     let _ = std::fs::remove_file(&path);
     std::fs::write(&path, b"").expect("create file");
 
-    let endpoint = BlockingEndpoint::new(
+    let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, true, 0).expect("open endpoint"),
     );
 
@@ -119,7 +119,7 @@ fn blocking_scatter_gather_round_trips() {
     let _ = std::fs::remove_file(&path);
     std::fs::write(&path, b"").expect("create file");
 
-    let endpoint = BlockingEndpoint::new(
+    let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, true, FILE_FLAG_NO_BUFFERING)
             .expect("open endpoint"),
     );

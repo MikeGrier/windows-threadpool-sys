@@ -33,7 +33,7 @@ fn filled_pages(pages: usize) -> PageBuffers {
 #[test]
 fn blocking_backend_scatter_gather_round_trips() {
     let path = empty_temp_file("blocking");
-    let endpoint = BlockingEndpoint::new(
+    let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, true, FILE_FLAG_NO_BUFFERING)
             .expect("open endpoint"),
     );

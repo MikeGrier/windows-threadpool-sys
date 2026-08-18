@@ -25,7 +25,7 @@ fn temp_file(tag: &str) -> PathBuf {
 #[test]
 fn blocking_backend_queries_compression() {
     let path = temp_file("blocking");
-    let endpoint = BlockingEndpoint::new(
+    let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
     );
 

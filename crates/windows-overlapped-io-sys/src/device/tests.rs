@@ -14,7 +14,7 @@ fn temp_file(tag: &str) -> std::path::PathBuf {
 #[test]
 fn blocking_ioctl_get_compression() {
     let path = temp_file("blocking");
-    let endpoint = BlockingEndpoint::new(
+    let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
     );
 
@@ -97,7 +97,7 @@ fn checked_len_rejects_lengths_beyond_u32() {
 #[test]
 fn blocking_ioctl_rejects_an_oversized_output_buffer() {
     let path = temp_file("oversized-output");
-    let endpoint = BlockingEndpoint::new(
+    let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
     );
 

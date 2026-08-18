@@ -33,7 +33,7 @@ impl BlockingEndpoint {
     /// `u32::MAX` bytes, which the control code's byte counts cannot express, or
     /// any error from issuing or completing the control operation.
     pub fn ioctl(
-        &self,
+        &mut self,
         code: u32,
         input: &[u8],
         output_len: usize,
