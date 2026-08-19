@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "wtf-string"
+version = "0.1.0" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/wtf-string"
+description = "OsString-shaped strings with native, conversion-free u16 (WTF-16) storage for Windows FFI."
+keywords = ["windows", "utf-16", "wtf-16", "osstring", "ffi"]
+categories = ["encoding", "os::windows-apis", "text-processing"]
+
+[lib]
+path = "src/lib.rs"
+
+# The storage and str/String conversions are portable; only the OsStr/OsString
+# interop is Windows-only. Build docs on a Windows target so that surface is
+# documented as well.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]

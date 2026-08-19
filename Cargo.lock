@@ -40,3 +40,7 @@ dependencies = [
  "windows-overlapped-io-sys",
  "windows-sys",
 ]
+
+[[package]]
+name = "wtf-string"
+version = "0.1.0"

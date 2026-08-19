@@ -136,6 +136,15 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 - [ ] **M7.5** — Publication readiness: crate metadata, changelog, and a final review pass over the public
   surface for the v1 scope (D-18) and the deferred seams (D-19).
 
+## M8 — Adopt wtf-string for relative names
+
+- [ ] **M8.1** — Migrate `RelativeName` from its hand-rolled `Box<[u16]>` to [wtf-string](../wtf-string/README.md)'s
+  `Wtf16Str` / `Wtf16String`, so decoded names carry the native-`u16`, conversion-free representation and feed
+  Windows APIs without re-encoding. Preserve the lossless `OsString`/`Path` and raw-`&[u16]` surface (D-8).
+
+  > **CROSS-COMPONENT PREREQUISITE:** requires component `crates/wtf-string` → M5 (Windows `OsStr`/`OsString`
+  > interop) to land first. See [../wtf-string/CHECKLIST.md](../wtf-string/CHECKLIST.md).
+
 ## M∞ — Horizon (ungated, post-v1)
 
 Parked, not pending: these items are gated on nothing and belong to no numbered milestone. They are the
