@@ -27,7 +27,7 @@ Completed milestones are archived in
 - [x] **M2.1** — `WtfEncoding` trait (associated `Unit`, the `NUL` terminator unit) and the `Wtf16`
   encoding (`Unit = u16`) (D-2/D-3).
 
-- [ ] **M2.2** — `WtfString<E>` (owns `Vec<E::Unit>`) and `WtfStr<E>` (`#[repr(transparent)]` over
+- [x] **M2.2** — `WtfString<E>` (owns `Vec<E::Unit>`) and `WtfStr<E>` (`#[repr(transparent)]` over
   `[E::Unit]`): the **always-terminated** storage invariant (hidden trailing `0x0000`; `len()`/spans exclude
   it), construction (`new`, `from_units`), content access on `WtfStr` (`as_units`, `len`, `is_empty`,
   `has_interior_nul`), the `Wtf16String`/`Wtf16Str` aliases, and std parity

@@ -28,5 +28,7 @@
 #![warn(missing_docs)]
 
 mod encoding;
+mod string;
 
 pub use encoding::{Wtf16, WtfEncoding};
+pub use string::{Wtf16Str, Wtf16String, WtfStr, WtfString};

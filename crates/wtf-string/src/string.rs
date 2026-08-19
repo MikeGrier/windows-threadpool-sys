@@ -1,0 +1,149 @@
+// Copyright (c) 2026 Mike Grier
+//! The owned [`WtfString`] and borrowed [`WtfStr`] string types.
+
+use std::borrow::Borrow;
+use std::ops::Deref;
+
+use crate::encoding::{Wtf16, WtfEncoding};
+
+/// A borrowed string slice of code units in encoding `E` (the analog of
+/// [`OsStr`](std::ffi::OsStr) / [`str`]).
+///
+/// This is `#[repr(transparent)]` over `[E::Unit]`, so a `&WtfStr<E>` can be
+/// created from a `&[E::Unit]` without copying. The units are the string's
+/// *content*: there is no terminator here, since the always-terminated invariant
+/// is a property of the owned [`WtfString`], not of an arbitrary borrowed slice.
+#[repr(transparent)]
+pub struct WtfStr<E: WtfEncoding> {
+    units: [E::Unit],
+}
+
+impl<E: WtfEncoding> WtfStr<E> {
+    /// Wrap a slice of code units as a `&WtfStr<E>` without copying.
+    #[must_use]
+    pub fn from_units(units: &[E::Unit]) -> &WtfStr<E> {
+        // SAFETY: `WtfStr<E>` is `#[repr(transparent)]` over `[E::Unit]`, so the
+        // two have identical layout and the slice's length metadata carries over.
+        unsafe { &*(units as *const [E::Unit] as *const WtfStr<E>) }
+    }
+
+    /// The content code units (there is no terminator on a borrowed slice).
+    #[must_use]
+    pub fn as_units(&self) -> &[E::Unit] {
+        &self.units
+    }
+
+    /// The number of content code units (not bytes, not code points).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.units.len()
+    }
+
+    /// Whether the string has no content units.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.units.is_empty()
+    }
+
+    /// Whether the content contains a NUL (`E::NUL`) code unit.
+    ///
+    /// A terminated `LPCWSTR` view of an owned string is a valid C string only
+    /// when this is `false`; counted access is always valid regardless.
+    #[must_use]
+    pub fn has_interior_nul(&self) -> bool {
+        self.units.contains(&E::NUL)
+    }
+}
+
+/// An owned, growable string of code units in encoding `E` (the analog of
+/// [`OsString`](std::ffi::OsString) / [`String`]).
+///
+/// The backing buffer always carries a trailing `E::NUL` beyond the logical
+/// content, so a terminated pointer for wide (`*W`) Win32 APIs is available with
+/// no extra allocation, while content access (via [`Deref`] to [`WtfStr`])
+/// excludes the terminator. Content may itself contain interior NULs (parity with
+/// [`OsString`](std::ffi::OsString)); see [`WtfStr::has_interior_nul`].
+pub struct WtfString<E: WtfEncoding> {
+    // Invariant: non-empty; `units[..units.len() - 1]` is the content and the
+    // final element is the always-present `E::NUL` terminator.
+    units: Vec<E::Unit>,
+}
+
+impl<E: WtfEncoding> WtfString<E> {
+    /// Create an empty string (a buffer holding only the terminator).
+    #[must_use]
+    pub fn new() -> Self {
+        WtfString {
+            units: vec![E::NUL],
+        }
+    }
+
+    /// Create an owned string from content code units, appending the terminator.
+    #[must_use]
+    pub fn from_units(units: &[E::Unit]) -> Self {
+        let mut buf = Vec::with_capacity(units.len() + 1);
+        buf.extend_from_slice(units);
+        buf.push(E::NUL);
+        WtfString { units: buf }
+    }
+
+    /// The content code units, excluding the terminator.
+    fn content(&self) -> &[E::Unit] {
+        // The invariant guarantees at least the terminator element is present.
+        &self.units[..self.units.len() - 1]
+    }
+}
+
+impl<E: WtfEncoding> Deref for WtfString<E> {
+    type Target = WtfStr<E>;
+
+    fn deref(&self) -> &WtfStr<E> {
+        WtfStr::from_units(self.content())
+    }
+}
+
+impl<E: WtfEncoding> AsRef<WtfStr<E>> for WtfString<E> {
+    fn as_ref(&self) -> &WtfStr<E> {
+        self
+    }
+}
+
+impl<E: WtfEncoding> AsRef<WtfStr<E>> for WtfStr<E> {
+    fn as_ref(&self) -> &WtfStr<E> {
+        self
+    }
+}
+
+impl<E: WtfEncoding> Borrow<WtfStr<E>> for WtfString<E> {
+    fn borrow(&self) -> &WtfStr<E> {
+        self
+    }
+}
+
+impl<E: WtfEncoding> ToOwned for WtfStr<E> {
+    type Owned = WtfString<E>;
+
+    fn to_owned(&self) -> WtfString<E> {
+        WtfString::from_units(self.as_units())
+    }
+}
+
+impl<E: WtfEncoding> Default for WtfString<E> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<E: WtfEncoding> Clone for WtfString<E> {
+    fn clone(&self) -> Self {
+        WtfString {
+            units: self.units.clone(),
+        }
+    }
+}
+
+/// A [`WtfString`] whose storage is WTF-16 (`u16` code units).
+pub type Wtf16String = WtfString<Wtf16>;
+
+/// A [`WtfStr`] whose storage is WTF-16 (`u16` code units).
+pub type Wtf16Str = WtfStr<Wtf16>;
