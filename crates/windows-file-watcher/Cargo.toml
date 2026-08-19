@@ -48,11 +48,13 @@ windows-sys = {
 }
 
 # Integration tests exercise the decoder against a buffer produced by a real
-# blocking ReadDirectoryChangesW call, which needs binding surface the published
-# crate does not itself use.
+# overlapped ReadDirectoryChangesW call, which needs binding surface the
+# published crate does not itself use. `Win32_System_Threading` supplies the
+# event + bounded wait the test uses so the worker can never block forever.
 [dev-dependencies]
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
 	"Win32_Storage_FileSystem",
 	"Win32_System_IO",
+	"Win32_System_Threading",
 ] }

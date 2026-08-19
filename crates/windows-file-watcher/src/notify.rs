@@ -130,16 +130,18 @@ impl Iterator for Records<'_> {
         };
         let name = decode_utf16(&rec[HEADER_LEN..name_end]);
 
-        // Advance to the next record, or finish. A non-zero offset must make
-        // forward progress without overflowing; the bounds check at the top of
-        // the next call rejects an offset that points past the buffer.
+        // Advance to the next record, or finish. A well-formed `NextEntryOffset`
+        // is a DWORD-aligned byte offset, measured from this record's start, that
+        // clears this record's own header+name span. An offset that is unaligned,
+        // points back into the current record (overlap), or would overflow is
+        // malformed and stops iteration; the bounds check at the top of the next
+        // call rejects one that points past the buffer.
         self.pos = if next_offset == 0 {
             None
+        } else if next_offset.is_multiple_of(4) && next_offset >= name_end {
+            pos.checked_add(next_offset)
         } else {
-            match pos.checked_add(next_offset) {
-                Some(next) if next > pos => Some(next),
-                _ => None,
-            }
+            None
         };
 
         Some(RawChange { action, name })

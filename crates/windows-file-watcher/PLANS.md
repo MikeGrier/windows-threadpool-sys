@@ -1,7 +1,8 @@
 # Plans: windows-file-watcher
 
-Active planned work for the crate. Completed checklists move to `COMPLETED-PLANS.md`, and their milestones
-archive to `COMPLETED-CHECKLIST.md`, both in this directory.
+Active planned work for the crate. Completed checklists move to a COMPLETED-PLANS.md tracker, and their
+milestones archive to a COMPLETED-CHECKLIST.md; both are created in this directory when the first work
+completes.
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|

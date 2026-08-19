@@ -213,6 +213,31 @@ fn next_offset_out_of_bounds_stops_after_current() {
 }
 
 #[test]
+fn next_offset_pointing_into_current_record_stops_after_current() {
+    // NextEntryOffset = 4 points back inside this record's own header+name span
+    // (an overlapping/garbage link). The first record still decodes, then
+    // iteration stops rather than re-reading overlapping bytes.
+    let buf = record(4, FILE_ACTION_ADDED, &w("ab"));
+    let c = changes(&buf);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].name.as_wide(), w("ab").as_slice());
+}
+
+#[test]
+fn unaligned_next_offset_stops_after_current() {
+    // A well-formed NextEntryOffset is DWORD-aligned. An offset that clears the
+    // current record but is not a multiple of 4 is malformed: the first record
+    // decodes, then iteration stops.
+    let first = record(0, FILE_ACTION_ADDED, &w("a")); // 12 + 2 = 14 bytes
+    let mut buf = record(15, FILE_ACTION_ADDED, &w("a")); // 15 is >= span but unaligned
+    buf.resize(15, 0);
+    buf.extend(first);
+    let c = changes(&buf);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].name.as_wide(), w("a").as_slice());
+}
+
+#[test]
 fn odd_name_length_drops_the_trailing_byte() {
     let mut buf = Vec::new();
     buf.extend_from_slice(&0_u32.to_le_bytes());

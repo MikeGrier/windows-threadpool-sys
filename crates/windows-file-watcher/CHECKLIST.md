@@ -2,7 +2,7 @@
 
 Memory-safe Windows path-change watcher. Design and decisions (D-1…D-20) are recorded in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md);
-Tier-1 decisions land in `DESIGN-NOTES.md` as milestones complete.
+Tier-1 decisions land in [DESIGN-NOTES.md](DESIGN-NOTES.md) as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
 end-of-milestone gate (default **and** `--all-features` build/test/clippy/doc clean, encoding check, sync
@@ -15,7 +15,7 @@ with origin) is standard procedure and is not listed as an item.
   with the needed feature groups; `src/lib.rs` crate-doc skeleton; add the crate to the workspace members.
   Everything is `cfg(windows)`, so the crate resolves to an empty crate elsewhere.
 
-- [x] **M1.2** — Seed Tier-1 [`DESIGN-NOTES.md`](DESIGN-NOTES.md) and Tier-2 `DESIGN-RATIONALE.md` from
+- [x] **M1.2** — Seed Tier-1 [DESIGN-NOTES.md](DESIGN-NOTES.md) and Tier-2 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) from
   [the design session](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md) (D-1…D-20), and
   wire the crate into CI so the default and `--all-features` configurations both build, test, and lint.
 
