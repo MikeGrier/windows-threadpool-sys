@@ -13,8 +13,8 @@ and [windows-threadpool-sys](../../windows-threadpool-sys/README.md)
 
 > **Note — this is the raw session record, not canonical.** Tier-1
 > [DESIGN-NOTES.md](../DESIGN-NOTES.md) is authoritative and wins on any
-> conflict. Two entries here were refined afterward; see the **Refined /
-> Superseded** markers on **D-8** and **D-11** below.
+> conflict. Three entries here were refined afterward; see the **Refined /
+> Superseded** markers on **D-8**, **D-11**, and **D-17** below.
 
 Reference studied: the C++ `Azure/m` filesystem monitor (the participant was its
 author). Its state-machine shape is the good part; several of its behaviours are
@@ -93,7 +93,7 @@ explicitly *not* reproduced (see "Hazards from Azure/m").
   monitor's single serialized fault handler. There is **no reactive per-fault
   message and no closure on the cadence path**, so there is nothing to race and
   no client code can stall recovery.
-- **D-17 — Two-tier watcher; downgrade is a volume property.** Detailed
+- **D-17 — Two-tier watcher; downgrade is a volume property.** **Refined by [DESIGN-NOTES.md](../DESIGN-NOTES.md) D-17 (with prerequisite [windows-threadpool-sys](../../windows-threadpool-sys/CHECKLIST.md) M17.1):** the coarse handle reaches `ThreadpoolWait` through a **custom-close waitable owner**, not `WaitableHandle::assume_waitable` — the latter consumes a std `OwnedHandle` and would close the handle with `CloseHandle`, which is wrong for a `FindFirstChangeNotification` handle. Detailed
   (`ReadDirectoryChangesW` + `ThreadpoolIo`) is preferred; Coarse
   (`FindFirstChangeNotification` + `ThreadpoolWait`) is the universal floor. The
   mode is resolved **at establish / re-establish** by attempting to arm the
@@ -102,7 +102,7 @@ explicitly *not* reproduced (see "Hazards from Azure/m").
   error uses the reopen loop instead. Coarse activations carry no detail and thus
   emit `Desync { Coarse }`. The coarse handle is closed with
   `FindCloseChangeNotification` (not `CloseHandle`) and reaches `ThreadpoolWait`
-  via `WaitableHandle::assume_waitable`.
+  through that custom-close owner.
 - **D-18 — v1 record scope.** Basic `FILE_NOTIFY_INFORMATION` for v1.
 - **D-19 — Deferred seams.** `ReadDirectoryChangesExW` /
   `FILE_NOTIFY_EXTENDED_INFORMATION` (file id, timestamps, size); digest/hash
