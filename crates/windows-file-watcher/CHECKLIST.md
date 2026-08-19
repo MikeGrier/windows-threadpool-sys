@@ -135,7 +135,10 @@ post-v1 if and when it is chosen. None is an open obligation of any current mile
 
 - [ ] **M∞.1** — `ReadDirectoryChangesExW` extended records (`FILE_NOTIFY_EXTENDED_INFORMATION`): surface the
   richer per-record fields on OS versions that support it, behind capability detection, without disturbing
-  the basic `FILE_NOTIFY_INFORMATION` surface (D-18/D-19).
+  the basic `FILE_NOTIFY_INFORMATION` surface (D-18/D-19). **Availability is per-filesystem, not merely
+  per-OS-version:** even on a build that exposes the API, some filesystems reject the extended structure —
+  e.g. ReFS still does not support it (for no good reason) — so detection must probe the actual target
+  volume and fall back to `FILE_NOTIFY_INFORMATION`, never inferring support from the OS version alone.
 
 - [ ] **M∞.2** — Digest-based change *verification*: an optional mode that confirms a reported change by
   hashing content, trading cost for fewer spurious notifications (D-19).
