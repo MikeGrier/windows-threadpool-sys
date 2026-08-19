@@ -27,5 +27,6 @@
 
 #![warn(missing_docs)]
 
-// The types land in later milestones (see CHECKLIST.md): M2 introduces the
-// `WtfEncoding` trait plus `WtfString`/`WtfStr` and the `Wtf16` encoding.
+mod encoding;
+
+pub use encoding::{Wtf16, WtfEncoding};

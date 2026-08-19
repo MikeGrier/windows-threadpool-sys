@@ -24,7 +24,7 @@ Completed milestones are archived in
 
 ## M2 — Encoding seam and core types
 
-- [ ] **M2.1** — `WtfEncoding` trait (associated `Unit`, the `NUL` terminator unit) and the `Wtf16`
+- [x] **M2.1** — `WtfEncoding` trait (associated `Unit`, the `NUL` terminator unit) and the `Wtf16`
   encoding (`Unit = u16`) (D-2/D-3).
 
 - [ ] **M2.2** — `WtfString<E>` (owns `Vec<E::Unit>`) and `WtfStr<E>` (`#[repr(transparent)]` over
