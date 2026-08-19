@@ -26,7 +26,7 @@ threads of its own.
 | D-5 | Subscribing returns an affine, move-only `#[must_use]` `Watch`: `Drop` enqueues cancellation, `cancel()` is the explicit form, and a `Copy` `WatchId` tags every notification. |
 | D-6 | Coalesce watchers **by directory**: one read per directory, the union of `FILE_NOTIFY_CHANGE_*` filters and the max subtree flag, de-multiplexed to subscriptions on decode. See [Coalescing](#coalescing-by-directory). |
 | D-7 | A subscription targets a *path*. A file is watched via its parent directory (non-recursive) filtered on the leaf; a directory is watched directly, optionally recursively. |
-| D-8 | Names are delivered raw and **relative** to the watched target. `OsString`/`Path` (lossless WTF-8) is primary; a raw `&[u16]` escape hatch is available. |
+| D-8 | Names are delivered raw and **relative to the directory opened for the read**: for a directory target that directory itself, and for a file target (D-7) its parent — so a file watch reports the leaf name, not a name relative to the file. `OsString`/`Path` (lossless WTF-8) is primary; a raw `&[u16]` escape hatch is available. |
 | D-9 | Raw `FILE_ACTION_*` kinds, `RenamedOldName`/`RenamedNewName` kept distinct; the crate never joins renames or joins across a buffer. |
 | D-10 | Notifications are delivered as batches (one decoded `ReadDirectoryChangesW` completion = one batch). |
 | D-11 | `NotificationSink: Send + Sync`, non-blocking + infallible `deliver`. The crate forces **multi-producer** safety (MPSC minimum); consumer cardinality is the client's business. |
@@ -37,7 +37,7 @@ threads of its own.
 | D-16 | Retry policy is **resident data**, never a reactive callback: a backoff value mutated only through serialized request-queue items and read by the single serialized fault handler. Race-free; no client code on the cadence path. |
 | D-17 | Two-tier watcher: Detailed (`ReadDirectoryChangesW` + `ThreadpoolIo`) preferred, Coarse (`FindFirstChangeNotification` + `ThreadpoolWait`) fallback. Mode is a volume property resolved at establish/re-establish. See [Two-tier watching](#two-tier-watching). |
 | D-18 | v1 delivers basic `FILE_NOTIFY_INFORMATION`. |
-| D-19 | Deferred seams: `ReadDirectoryChangesExW` extended records; digest-based change *verification*; an optional per-volume capability cache. |
+| D-19 | Deferred seams, **reserved with no scheduled v1 work** (not gated on any blocker): `ReadDirectoryChangesExW` extended records; digest-based change *verification*; an optional per-volume capability cache. Revisit post-v1; no CHECKLIST item is queued for them, and M7.5 only reviews the public surface against this reservation. |
 | D-20 | `Monitor::Drop` blocks on full rundown (cancel + drain every read/wait, then free), inheriting the `windows-threadpool-sys` teardown discipline. |
 
 ## Detail

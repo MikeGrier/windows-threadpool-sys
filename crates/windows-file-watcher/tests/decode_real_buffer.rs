@@ -11,6 +11,7 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
@@ -43,12 +44,16 @@ fn decodes_a_real_read_directory_changes_buffer() {
     ));
     std::fs::create_dir(&dir).expect("create temp dir");
 
+    let (armed_tx, armed_rx) = mpsc::channel::<()>();
     let watch_dir = dir.clone();
-    let worker = std::thread::spawn(move || watch_once(&watch_dir));
+    let worker = std::thread::spawn(move || watch_once(&watch_dir, &armed_tx));
 
-    // Give the worker time to open the directory and arm the read, then make the
-    // change it must observe.
-    std::thread::sleep(Duration::from_millis(500));
+    // Wait until the worker has actually armed the read before making the change,
+    // so the test is deterministic on a slow runner instead of relying on a fixed
+    // sleep that could fire before ReadDirectoryChangesW is even issued.
+    armed_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the worker must arm the read");
     std::fs::write(dir.join("created.txt"), b"hi").expect("create file");
 
     // Joining cannot hang: the worker's overlapped read has a bounded wait and is
@@ -68,10 +73,11 @@ fn decodes_a_real_read_directory_changes_buffer() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Open `dir`, arm one overlapped `ReadDirectoryChangesW`, wait for it under a
-/// bounded timeout, and decode the completion into `(kind, name)` pairs. The
-/// directory handle is closed exactly once before returning.
-fn watch_once(dir: &Path) -> Result<Vec<(ChangeKind, OsString)>, String> {
+/// Open `dir`, arm one overlapped `ReadDirectoryChangesW`, signal `armed` once
+/// the read is queued, then wait for it under a bounded timeout and decode the
+/// completion into `(kind, name)` pairs. The directory handle is closed exactly
+/// once before returning.
+fn watch_once(dir: &Path, armed: &mpsc::Sender<()>) -> Result<Vec<(ChangeKind, OsString)>, String> {
     let name = wide_z(dir);
     // SAFETY: `name` is a valid NUL-terminated wide path; the returned handle is
     // closed exactly once below before this function returns.
@@ -93,17 +99,21 @@ fn watch_once(dir: &Path) -> Result<Vec<(ChangeKind, OsString)>, String> {
         ));
     }
 
-    let result = read_overlapped(handle);
+    let result = read_overlapped(handle, armed);
 
     // SAFETY: `handle` came from `CreateFileW` and is closed exactly once.
     unsafe { CloseHandle(handle) };
     result
 }
 
-/// Arm a single overlapped read on `handle` and wait for it under a bounded
-/// timeout, cancelling and draining the read if it does not complete in time so
-/// the kernel is no longer referencing the buffer when this function returns.
-fn read_overlapped(handle: HANDLE) -> Result<Vec<(ChangeKind, OsString)>, String> {
+/// Arm a single overlapped read on `handle`, signal `armed` once it is queued in
+/// the kernel, and wait for it under a bounded timeout, cancelling and draining
+/// the read if it does not complete in time so the kernel is no longer
+/// referencing the buffer when this function returns.
+fn read_overlapped(
+    handle: HANDLE,
+    armed: &mpsc::Sender<()>,
+) -> Result<Vec<(ChangeKind, OsString)>, String> {
     /// The read is bounded so a missed change surfaces as an error, never a hang.
     const TIMEOUT_MS: u32 = 30_000;
 
@@ -128,7 +138,7 @@ fn read_overlapped(handle: HANDLE) -> Result<Vec<(ChangeKind, OsString)>, String
     // non-null overlapped issues the read asynchronously and signals `event` on
     // completion. `lpBytesReturned` is undefined for overlapped reads, so it is
     // null and `GetOverlappedResult` supplies the count instead.
-    let armed = unsafe {
+    let arm_ok = unsafe {
         ReadDirectoryChangesW(
             handle,
             buffer.as_mut_ptr().cast(),
@@ -140,7 +150,7 @@ fn read_overlapped(handle: HANDLE) -> Result<Vec<(ChangeKind, OsString)>, String
             None,
         )
     };
-    if armed == 0 {
+    if arm_ok == 0 {
         let err = format!(
             "ReadDirectoryChangesW failed to arm: {}",
             std::io::Error::last_os_error()
@@ -149,6 +159,9 @@ fn read_overlapped(handle: HANDLE) -> Result<Vec<(ChangeKind, OsString)>, String
         unsafe { CloseHandle(event) };
         return Err(err);
     }
+
+    // The read is now queued in the kernel; the test may safely make its change.
+    let _ = armed.send(());
 
     // SAFETY: `event` is a valid manual-reset event handle.
     let waited = unsafe { WaitForSingleObject(event, TIMEOUT_MS) };

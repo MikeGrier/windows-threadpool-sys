@@ -84,17 +84,23 @@ pub(crate) struct RawChange {
 /// Iterate the `FILE_NOTIFY_INFORMATION` chain in `buffer`.
 ///
 /// `buffer` is the completion buffer truncated to the bytes the kernel returned.
-/// Iteration stops at the first record that would read out of bounds -- a
+/// Iteration stops at the first record that cannot be parsed cleanly -- a
 /// truncated header, a name length that overruns the buffer, or a
-/// `NextEntryOffset` that points outside it -- so a malformed or partial buffer
-/// can never cause an out-of-bounds read. A zero-length buffer yields nothing
-/// (a zero-byte completion is the kernel's overflow signal, handled by the
-/// caller, not here).
+/// `NextEntryOffset` that is unaligned, points into the current record, or falls
+/// outside the buffer -- so a malformed or partial buffer can never cause an
+/// out-of-bounds read. When iteration stops for such a reason the iterator sets
+/// [`Records::malformed`]: the caller treats a malformed buffer as a desync
+/// rather than a successful (possibly empty) batch, since a truncated buffer may
+/// hide changes the client would otherwise believe it had seen. A clean end (a
+/// final record with `NextEntryOffset == 0`) leaves `malformed` unset. A
+/// zero-length buffer is the kernel's overflow signal and is handled by the
+/// caller, not here.
 #[must_use]
 pub(crate) fn records(buffer: &[u8]) -> Records<'_> {
     Records {
         buffer,
         pos: Some(0),
+        malformed: false,
     }
 }
 
@@ -102,6 +108,9 @@ pub(crate) fn records(buffer: &[u8]) -> Records<'_> {
 pub(crate) struct Records<'a> {
     buffer: &'a [u8],
     pos: Option<usize>,
+    /// Set once iteration stops because a record could not be parsed cleanly, as
+    /// opposed to reaching a well-formed end of chain.
+    malformed: bool,
 }
 
 impl Iterator for Records<'_> {
@@ -109,9 +118,17 @@ impl Iterator for Records<'_> {
 
     fn next(&mut self) -> Option<RawChange> {
         let pos = self.pos?;
-        let rec = self.buffer.get(pos..)?;
-        if rec.len() < HEADER_LEN {
+        let Some(rec) = self.buffer.get(pos..) else {
+            // A followed `NextEntryOffset` pointed past the buffer end.
             self.pos = None;
+            self.malformed = true;
+            return None;
+        };
+        if rec.len() < HEADER_LEN {
+            // Too few bytes for a header: a truncated leading buffer, or a
+            // followed offset that landed in a short tail.
+            self.pos = None;
+            self.malformed = true;
             return None;
         }
 
@@ -125,6 +142,7 @@ impl Iterator for Records<'_> {
             Some(end) if end <= rec.len() => end,
             _ => {
                 self.pos = None;
+                self.malformed = true;
                 return None;
             }
         };
@@ -133,14 +151,21 @@ impl Iterator for Records<'_> {
         // Advance to the next record, or finish. A well-formed `NextEntryOffset`
         // is a DWORD-aligned byte offset, measured from this record's start, that
         // clears this record's own header+name span. An offset that is unaligned,
-        // points back into the current record (overlap), or would overflow is
-        // malformed and stops iteration; the bounds check at the top of the next
-        // call rejects one that points past the buffer.
+        // points back into the current record (overlap), or would overflow is a
+        // corrupt link: the current record is still yielded, but the chain is
+        // marked malformed and iteration stops.
         self.pos = if next_offset == 0 {
             None
         } else if next_offset.is_multiple_of(4) && next_offset >= name_end {
-            pos.checked_add(next_offset)
+            match pos.checked_add(next_offset) {
+                Some(next) => Some(next),
+                None => {
+                    self.malformed = true;
+                    None
+                }
+            }
         } else {
+            self.malformed = true;
             None
         };
 
@@ -225,7 +250,10 @@ pub struct Change {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DesyncCause {
     /// The kernel change buffer overflowed (a zero-byte completion): changes were
-    /// dropped by the OS before this crate observed them.
+    /// dropped by the OS before this crate observed them. A completion buffer the
+    /// crate could not fully parse (truncated, overrunning, or a corrupt record
+    /// chain) is reported with this cause as well: it too means changes may be
+    /// missing, and the client's response -- re-scan -- is identical.
     Overflow,
     /// The client's bounded notification queue was full, so a batch was dropped
     /// rather than block the monitor. Produced by the delivery layer.
@@ -251,20 +279,29 @@ pub enum DecodedBatch {
 /// Decode one `ReadDirectoryChangesW` completion buffer into a batch.
 ///
 /// A zero-byte completion is the kernel's overflow signal and decodes to
-/// [`DecodedBatch::Desync`] with [`DesyncCause::Overflow`]; otherwise the record
-/// chain (see the module docs for the defensive parsing) is decoded into
+/// [`DecodedBatch::Desync`] with [`DesyncCause::Overflow`]. A non-empty buffer
+/// the crate cannot fully parse -- a truncated or overrunning record, or a
+/// corrupt `NextEntryOffset` chain -- is likewise a [`DesyncCause::Overflow`]
+/// desync rather than a successful (possibly partial) batch, so a client is
+/// never falsely told it stayed synchronized. Otherwise the record chain (see
+/// the module docs for the defensive parsing) is decoded into
 /// [`DecodedBatch::Changes`].
 #[must_use]
 pub fn decode_batch(buffer: &[u8]) -> DecodedBatch {
     if buffer.is_empty() {
         return DecodedBatch::Desync(DesyncCause::Overflow);
     }
-    let changes = records(buffer)
+    let mut iter = records(buffer);
+    let changes: Vec<Change> = iter
+        .by_ref()
         .map(|raw| Change {
             kind: ChangeKind::from_action(raw.action),
             name: raw.name,
         })
         .collect();
+    if iter.malformed {
+        return DecodedBatch::Desync(DesyncCause::Overflow);
+    }
     DecodedBatch::Changes(changes)
 }
 

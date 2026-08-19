@@ -54,6 +54,15 @@ fn changes(buf: &[u8]) -> Vec<Change> {
     }
 }
 
+/// Decode `buf`, asserting it signalled a desync rather than changes, and return
+/// the cause.
+fn desync(buf: &[u8]) -> DesyncCause {
+    match decode_batch(buf) {
+        DecodedBatch::Desync(cause) => cause,
+        DecodedBatch::Changes(c) => panic!("expected a desync, got changes {c:?}"),
+    }
+}
+
 // --- normal cases ---
 
 #[test]
@@ -184,61 +193,57 @@ fn empty_buffer_is_overflow_desync() {
     );
 }
 
-// --- malformed buffers must not read out of bounds ---
+// --- malformed buffers desync rather than silently claiming success ---
 
 #[test]
-fn truncated_header_yields_no_records() {
-    // Non-empty but shorter than a header: decodes to no changes, no panic.
-    assert_eq!(changes(&[1, 2, 3, 4, 5]), Vec::new());
+fn truncated_header_is_desync() {
+    // Non-empty but shorter than a header: a partial buffer the crate cannot
+    // parse must desync (re-scan), not decode to an empty "synchronized" batch.
+    assert_eq!(desync(&[1, 2, 3, 4, 5]), DesyncCause::Overflow);
 }
 
 #[test]
-fn name_length_overrunning_the_buffer_stops() {
+fn name_length_overrunning_the_buffer_is_desync() {
     let mut buf = Vec::new();
     buf.extend_from_slice(&0_u32.to_le_bytes()); // NextEntryOffset = last
     buf.extend_from_slice(&FILE_ACTION_ADDED.to_le_bytes());
     buf.extend_from_slice(&100_u32.to_le_bytes()); // claims 100 name bytes
     buf.extend_from_slice(&[0x41, 0x00]); // but only 2 are present
-    assert_eq!(changes(&buf), Vec::new());
+    assert_eq!(desync(&buf), DesyncCause::Overflow);
 }
 
 #[test]
-fn next_offset_out_of_bounds_stops_after_current() {
-    // First record is valid; its NextEntryOffset points past the buffer, so only
-    // the first record is decoded and iteration stops without an OOB read.
+fn next_offset_out_of_bounds_is_desync() {
+    // A dangling NextEntryOffset (points past the buffer) is a corrupt chain: the
+    // decode desyncs rather than returning the valid-looking prefix as success.
     let buf = record(10_000, FILE_ACTION_ADDED, &w("a"));
-    let c = changes(&buf);
-    assert_eq!(c.len(), 1);
-    assert_eq!(c[0].name.as_wide(), w("a").as_slice());
+    assert_eq!(desync(&buf), DesyncCause::Overflow);
 }
 
 #[test]
-fn next_offset_pointing_into_current_record_stops_after_current() {
+fn next_offset_pointing_into_current_record_is_desync() {
     // NextEntryOffset = 4 points back inside this record's own header+name span
-    // (an overlapping/garbage link). The first record still decodes, then
-    // iteration stops rather than re-reading overlapping bytes.
+    // (an overlapping/garbage link): a corrupt chain, so the decode desyncs.
     let buf = record(4, FILE_ACTION_ADDED, &w("ab"));
-    let c = changes(&buf);
-    assert_eq!(c.len(), 1);
-    assert_eq!(c[0].name.as_wide(), w("ab").as_slice());
+    assert_eq!(desync(&buf), DesyncCause::Overflow);
 }
 
 #[test]
-fn unaligned_next_offset_stops_after_current() {
+fn unaligned_next_offset_is_desync() {
     // A well-formed NextEntryOffset is DWORD-aligned. An offset that clears the
-    // current record but is not a multiple of 4 is malformed: the first record
-    // decodes, then iteration stops.
-    let first = record(0, FILE_ACTION_ADDED, &w("a")); // 12 + 2 = 14 bytes
-    let mut buf = record(15, FILE_ACTION_ADDED, &w("a")); // 15 is >= span but unaligned
+    // current record but is not a multiple of 4 is a corrupt chain, so the decode
+    // desyncs rather than following it.
+    let first = record(0, FILE_ACTION_ADDED, &w("a"));
+    let mut buf = record(15, FILE_ACTION_ADDED, &w("a")); // 15 >= span but unaligned
     buf.resize(15, 0);
     buf.extend(first);
-    let c = changes(&buf);
-    assert_eq!(c.len(), 1);
-    assert_eq!(c[0].name.as_wide(), w("a").as_slice());
+    assert_eq!(desync(&buf), DesyncCause::Overflow);
 }
 
 #[test]
 fn odd_name_length_drops_the_trailing_byte() {
+    // A complete record whose FileNameLength is odd is tolerated (the stray byte
+    // is dropped), not treated as malformed: the chain still ends cleanly.
     let mut buf = Vec::new();
     buf.extend_from_slice(&0_u32.to_le_bytes());
     buf.extend_from_slice(&FILE_ACTION_ADDED.to_le_bytes());
