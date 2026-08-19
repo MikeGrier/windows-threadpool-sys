@@ -17,4 +17,4 @@
 mod notify;
 
 #[cfg(windows)]
-pub use notify::{RawChange, Records, RelativeName, records};
+pub use notify::{Change, ChangeKind, DecodedBatch, DesyncCause, RelativeName, decode_batch};

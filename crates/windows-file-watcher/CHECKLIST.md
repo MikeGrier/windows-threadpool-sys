@@ -24,7 +24,7 @@ with origin) is standard procedure and is not listed as an item.
   relative-name type exposing both `OsString`/`Path` (WTF-8) and raw `&[u16]` (D-8). Malformed offsets are
   handled without out-of-bounds reads.
 
-- [ ] **M1.4** — Change-record surface: map raw `FILE_ACTION_*` to a `ChangeKind` that keeps
+- [x] **M1.4** — Change-record surface: map raw `FILE_ACTION_*` to a `ChangeKind` that keeps
   `RenamedOldName` / `RenamedNewName` distinct (D-9); a batch type; and recognition of the zero-byte
   completion as overflow → `Desync { Overflow }` at the decode boundary (D-12).
 

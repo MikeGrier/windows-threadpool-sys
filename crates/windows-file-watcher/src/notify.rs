@@ -16,6 +16,11 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ACTION_ADDED, FILE_ACTION_MODIFIED, FILE_ACTION_REMOVED, FILE_ACTION_RENAMED_NEW_NAME,
+    FILE_ACTION_RENAMED_OLD_NAME,
+};
+
 /// The fixed portion of a `FILE_NOTIFY_INFORMATION` record: three `u32` fields
 /// (`NextEntryOffset`, `Action`, `FileNameLength`) ahead of the name.
 const HEADER_LEN: usize = 12;
@@ -63,10 +68,10 @@ impl std::fmt::Debug for RelativeName {
 
 /// One decoded record: the raw `FILE_ACTION_*` code and the relative name.
 ///
-/// The action is the raw `u32` the kernel wrote; mapping it to a typed change
-/// kind is a separate concern.
+/// Internal to the crate: the public surface is the typed [`Change`], which loses
+/// no fidelity ([`ChangeKind::Unknown`] preserves an unrecognised action code).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RawChange {
+pub(crate) struct RawChange {
     /// The raw `FILE_ACTION_*` value.
     pub action: u32,
     /// The reported name, relative to the watched directory.
@@ -83,7 +88,7 @@ pub struct RawChange {
 /// (a zero-byte completion is the kernel's overflow signal, handled by the
 /// caller, not here).
 #[must_use]
-pub fn records(buffer: &[u8]) -> Records<'_> {
+pub(crate) fn records(buffer: &[u8]) -> Records<'_> {
     Records {
         buffer,
         pos: Some(0),
@@ -91,7 +96,7 @@ pub fn records(buffer: &[u8]) -> Records<'_> {
 }
 
 /// Iterator over the record chain, returned by [`records`].
-pub struct Records<'a> {
+pub(crate) struct Records<'a> {
     buffer: &'a [u8],
     pos: Option<usize>,
 }
@@ -157,4 +162,103 @@ fn decode_utf16(bytes: &[u8]) -> RelativeName {
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     RelativeName { units }
+}
+
+/// The kind of change a `FILE_ACTION_*` code names.
+///
+/// `RenamedOldName` and `RenamedNewName` are kept distinct and are never joined
+/// into a single rename event: a rename can straddle a completion boundary, and
+/// pairing them is the client's decision. An action code this crate does not
+/// recognise is preserved as [`ChangeKind::Unknown`] rather than dropped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChangeKind {
+    /// `FILE_ACTION_ADDED`.
+    Added,
+    /// `FILE_ACTION_REMOVED`.
+    Removed,
+    /// `FILE_ACTION_MODIFIED`.
+    Modified,
+    /// `FILE_ACTION_RENAMED_OLD_NAME`: the old name of a rename within the watched
+    /// tree; the matching new name follows as a separate record.
+    RenamedOldName,
+    /// `FILE_ACTION_RENAMED_NEW_NAME`: the new name of a rename within the watched
+    /// tree.
+    RenamedNewName,
+    /// An action code this crate does not recognise, preserved verbatim.
+    Unknown(u32),
+}
+
+impl ChangeKind {
+    /// Map a raw `FILE_ACTION_*` code to its kind, preserving an unrecognised
+    /// code in [`ChangeKind::Unknown`].
+    fn from_action(action: u32) -> ChangeKind {
+        match action {
+            FILE_ACTION_ADDED => ChangeKind::Added,
+            FILE_ACTION_REMOVED => ChangeKind::Removed,
+            FILE_ACTION_MODIFIED => ChangeKind::Modified,
+            FILE_ACTION_RENAMED_OLD_NAME => ChangeKind::RenamedOldName,
+            FILE_ACTION_RENAMED_NEW_NAME => ChangeKind::RenamedNewName,
+            other => ChangeKind::Unknown(other),
+        }
+    }
+}
+
+/// One decoded change: its [`ChangeKind`] and the [`RelativeName`] it applies to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Change {
+    /// What kind of change occurred.
+    pub kind: ChangeKind,
+    /// The affected name, relative to the watched directory.
+    pub name: RelativeName,
+}
+
+/// Why a [`DecodedBatch::Desync`] -- a "you may have missed changes, re-scan"
+/// signal -- was raised.
+///
+/// The cause is advisory: the client's response is the same in every case (a
+/// re-scan). It exists so a client can diagnose *how* it fell behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DesyncCause {
+    /// The kernel change buffer overflowed (a zero-byte completion): changes were
+    /// dropped by the OS before this crate observed them.
+    Overflow,
+    /// The client's bounded notification queue was full, so a batch was dropped
+    /// rather than block the monitor. Produced by the delivery layer.
+    QueueFull,
+    /// The watch is in coarse mode (`FindFirstChangeNotification`), which reports
+    /// only that *something* changed, never what. Produced by the coarse watcher.
+    Coarse,
+    /// The watch was re-established after an outage; changes during the gap were
+    /// lost. Produced by the fault-recovery path.
+    Reestablished,
+}
+
+/// The result of decoding one `ReadDirectoryChangesW` completion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DecodedBatch {
+    /// The changes the completion carried, in the order the kernel reported them.
+    Changes(Vec<Change>),
+    /// The completion signalled lost changes rather than carrying any; the client
+    /// is told to re-scan.
+    Desync(DesyncCause),
+}
+
+/// Decode one `ReadDirectoryChangesW` completion buffer into a batch.
+///
+/// A zero-byte completion is the kernel's overflow signal and decodes to
+/// [`DecodedBatch::Desync`] with [`DesyncCause::Overflow`]; otherwise the record
+/// chain (see the module docs for the defensive parsing) is decoded into
+/// [`DecodedBatch::Changes`].
+#[must_use]
+pub fn decode_batch(buffer: &[u8]) -> DecodedBatch {
+    if buffer.is_empty() {
+        return DecodedBatch::Desync(DesyncCause::Overflow);
+    }
+    let changes = records(buffer)
+        .map(|raw| Change {
+            kind: ChangeKind::from_action(raw.action),
+            name: raw.name,
+        })
+        .collect();
+    DecodedBatch::Changes(changes)
 }
