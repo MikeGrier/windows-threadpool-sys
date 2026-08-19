@@ -92,9 +92,14 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M6 — Coarse fallback
 
-- [ ] **M6.1** — Coarse handle: `FindFirstChangeNotification`; an owned wrapper whose `Drop` calls
-  `FindCloseChangeNotification` (not `CloseHandle`), reaching `ThreadpoolWait` via
-  `WaitableHandle::assume_waitable` (D-17).
+- [ ] **M6.1** — Coarse handle: `FindFirstChangeNotification`, owned and closed with
+  `FindCloseChangeNotification` (not `CloseHandle`), reaching `ThreadpoolWait` through the custom-close
+  waitable owner (D-17) — a std `OwnedHandle` would be closed with `CloseHandle` by the pool on teardown,
+  which is the wrong routine for a change-notification handle.
+
+  > **CROSS-COMPONENT PREREQUISITE:** requires component `crates/windows-threadpool-sys` → M17 → M17.1
+  > (custom-close owner for non-`CloseHandle` wait targets) to land first. See
+  > [../windows-threadpool-sys/CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
 
 - [ ] **M6.2** — Coarse watcher: `ThreadpoolWait` per activation → emit `Desync { Coarse }` to the
   directory's subscriptions → `FindNextChangeNotification` re-arm, under the same fault/backoff discipline

@@ -5,6 +5,19 @@ Design decisions for this crate are in the workspace-root
 [windows-overlapped-io-sys](../windows-overlapped-io-sys/CHECKLIST.md). Completed milestones are archived in
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-All planned milestones are complete; there are no pending work items.
+## M17 — Custom-close owner for non-`CloseHandle` wait targets
+
+- [ ] **M17.1** — Let `ThreadpoolWait` own a wait target whose close routine is **not** `CloseHandle`. Today
+  `WaitableHandle` wraps a std `OwnedHandle`, so `ThreadpoolWait` always closes its handle with `CloseHandle`
+  on teardown (see [src/wait.rs](src/wait.rs) `Drop`). Add a seam — e.g. `WaitableHandle::assume_waitable_with(raw,
+  closer)` or a small `WaitClose` owner — so the caller supplies the close function (for a
+  `FindFirstChangeNotification` handle, `FindCloseChangeNotification`), and `ThreadpoolWait` drains the wait
+  **before** invoking it exactly once. Keep the existing `OwnedHandle` path as the default. Unit-test that the
+  custom closer runs exactly once and only after the wait is drained.
+
+  > **➡ CROSS-COMPONENT HANDOFF:** unblocks component `crates/windows-file-watcher` → M6 → M6.1 (the coarse
+  > `FindFirstChangeNotification` watcher). See [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
+
+When M17 completes, this file returns to its closed state below.
 
 This file reopens when new work (a new object type, a new capability, or hardening) is planned.

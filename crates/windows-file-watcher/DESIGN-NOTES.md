@@ -107,5 +107,8 @@ directory uses is a property of its **volume**, resolved during establish and
 re-establish by attempting the detailed arm: an unsupported-class error
 (`ERROR_INVALID_FUNCTION` / `ERROR_NOT_SUPPORTED`) downgrades to coarse; a
 retryable error uses the reopen loop instead. The coarse handle is closed with
-`FindCloseChangeNotification` (not `CloseHandle`) and reaches `ThreadpoolWait`
-through `WaitableHandle::assume_waitable`. (D-17)
+`FindCloseChangeNotification` (not `CloseHandle`); because `ThreadpoolWait`'s
+default `OwnedHandle` path would close it with `CloseHandle`, it reaches the pool
+through a **custom-close waitable owner** that `windows-threadpool-sys` must
+provide (its M17.1, a prerequisite for M6.1) and that drains the wait before
+invoking `FindCloseChangeNotification`. (D-17)
