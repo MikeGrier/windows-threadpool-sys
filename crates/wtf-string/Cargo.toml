@@ -9,6 +9,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 documentation = "https://docs.rs/wtf-string"
 description = "OsString-shaped strings with native, conversion-free u16 (WTF-16) storage for Windows FFI."
 keywords = ["windows", "utf-16", "wtf-16", "osstring", "ffi"]

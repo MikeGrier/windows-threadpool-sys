@@ -29,6 +29,6 @@ Design decisions for this crate are in the workspace-root
   > **➡ CROSS-COMPONENT HANDOFF:** completing M17 unblocks component `crates/windows-file-watcher` → M6 → M6.1
   > (the coarse `FindFirstChangeNotification` watcher). See [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
 
-When M17 completes, this file returns to its closed state below.
-
-This file reopens when new work (a new object type, a new capability, or hardening) is planned.
+When M17 completes, its items move to [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) and this file returns
+to its closed state — no pending work, reopening only when new work (a new object type, a new capability, or
+hardening) is planned.
