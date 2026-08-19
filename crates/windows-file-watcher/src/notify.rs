@@ -25,6 +25,19 @@ use windows_sys::Win32::Storage::FileSystem::{
 /// (`NextEntryOffset`, `Action`, `FileNameLength`) ahead of the name.
 const HEADER_LEN: usize = 12;
 
+/// Byte offsets of the fixed `FILE_NOTIFY_INFORMATION` fields within a record.
+///
+/// These describe the kernel's wire layout; changing any value is a breaking
+/// change to the parser.
+mod field {
+    /// `NextEntryOffset` (`u32`).
+    pub const NEXT_ENTRY_OFFSET: usize = 0;
+    /// `Action` (`u32`).
+    pub const ACTION: usize = 4;
+    /// `FileNameLength` (`u32`, in bytes).
+    pub const FILE_NAME_LENGTH: usize = 8;
+}
+
 /// A file name reported by `ReadDirectoryChangesW`, relative to the watched
 /// directory, preserved as raw UTF-16 so no information is lost.
 ///
@@ -136,9 +149,9 @@ impl Iterator for Records<'_> {
             return None;
         }
 
-        let next_offset = read_u32(rec, 0) as usize;
-        let action = read_u32(rec, 4);
-        let name_len_bytes = read_u32(rec, 8) as usize;
+        let next_offset = read_u32(rec, field::NEXT_ENTRY_OFFSET) as usize;
+        let action = read_u32(rec, field::ACTION);
+        let name_len_bytes = read_u32(rec, field::FILE_NAME_LENGTH) as usize;
 
         // This record spans from its header to the next record (`NextEntryOffset`),
         // or to the end of the buffer when it is the last record. The name must be

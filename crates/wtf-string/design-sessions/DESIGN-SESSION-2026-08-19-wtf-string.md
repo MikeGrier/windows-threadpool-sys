@@ -40,8 +40,9 @@ the new implementation, and consumers pick whichever suits their needs.
 
 - **NUL termination.** Practice adopted: always allocate with a trailing NUL even
   when not requested, so returning a terminated string never re-allocates and
-  span callers still get NUL-free spans. The interior-NUL tension is made
-  explicit rather than papered over. (-> D-7)
+  span callers still get spans that exclude only the trailing terminator (interior
+  NULs in content are preserved). The interior-NUL tension is made explicit rather
+  than papered over. (-> D-7)
 
 - **Build vs adopt (the real fork).** Stress-tested honestly: `widestring`'s
   `U16String`/`U16CString` already cover the capabilities; only the encoding

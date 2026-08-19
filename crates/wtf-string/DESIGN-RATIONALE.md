@@ -38,8 +38,8 @@ type. What differs across designs is the native storage, which decides the cost:
 - **std `OsString`** stores WTF-8: `to_str()` is a cheap validity scan (no
   re-encode), but every *Windows* call re-encodes WTF-8 -> UTF-16.
 - **This crate / `widestring::U16String`** store `u16`: Windows calls are free,
-  but a trip to `String` is a full UTF-16 decode (`to_string() -> Result`,
-  `to_string_lossy()` with U+FFFD).
+  but a trip to `String` is a full UTF-16 decode (`into_string() -> Result` /
+  `to_string_checked() -> Option`, `to_string_lossy()` with U+FFFD).
 
 The lossless "keep the weird surrogates" property lives in the *native* storage
 (WTF-8 for `OsString`, `u16` for us), never in the UTF-8 projection. The bridge

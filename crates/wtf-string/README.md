@@ -11,7 +11,8 @@ conversion and no per-call allocation.
 - **Encoding-generic core** — `WtfString<E>` / `WtfStr<E>`; v1 ships the `Wtf16`
   arm as `Wtf16String` / `Wtf16Str`.
 - **Always-terminated storage** — a hidden trailing NUL makes `LPCWSTR` return
-  allocation-free, while spans stay NUL-free.
+  allocation-free, while content spans exclude only that terminator (interior
+  NULs in content are still preserved).
 - **Portable core** — storage and `str`/`String` conversions work everywhere;
   only the `OsStr`/`OsString` interop is Windows-only.
 

@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Mike Grier
 //! Integration test: decode a buffer produced by a real `ReadDirectoryChangesW`
-//! call. The watch is armed on a worker thread and the change is made from the
-//! test thread after a short delay. The read is issued *overlapped* with a
-//! bounded wait and is cancelled on timeout, so the worker can never block
-//! forever, and the test joins it before returning rather than leaving a
-//! detached thread that could wedge the rest of the suite.
+//! call. The read is issued *overlapped* with a bounded wait and is cancelled on
+//! timeout, so the worker can never block forever. A worker thread arms the read
+//! and signals an "armed" channel; the test thread waits for that signal -- a
+//! deterministic handshake, not a fixed delay -- before making the change, and
+//! the worker is joined on every exit path rather than left detached to wedge the
+//! rest of the suite.
 #![cfg(windows)]
 
 use std::ffi::OsString;
@@ -32,6 +33,22 @@ fn wide_z(p: &Path) -> Vec<u16> {
     p.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
+/// The `(kind, name)` pairs the worker decodes, or an error string.
+type WatchResult = Result<Vec<(ChangeKind, OsString)>, String>;
+
+/// Joins its worker on drop, so a panic before the explicit join cannot detach an
+/// armed read into later tests. The worker's read is bounded and self-cancelling,
+/// so the join always returns.
+struct JoinOnDrop(Option<std::thread::JoinHandle<WatchResult>>);
+
+impl Drop for JoinOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 #[test]
 fn decodes_a_real_read_directory_changes_buffer() {
     let nonce = std::time::SystemTime::now()
@@ -51,7 +68,12 @@ fn decodes_a_real_read_directory_changes_buffer() {
 
     let (armed_tx, armed_rx) = mpsc::channel::<()>();
     let watch_dir = dir.clone();
-    let worker = std::thread::spawn(move || watch_once(&watch_dir, &armed_tx));
+    // Held by a guard that joins the (bounded) worker on every exit path: if a
+    // pre-join `expect` below panics, the guard's Drop joins it rather than
+    // detaching an armed read into later tests.
+    let mut worker = JoinOnDrop(Some(std::thread::spawn(move || {
+        watch_once(&watch_dir, &armed_tx)
+    })));
 
     // Wait until the worker has actually armed the read before making the change,
     // so the test is deterministic on a slow runner instead of relying on a fixed
@@ -61,9 +83,13 @@ fn decodes_a_real_read_directory_changes_buffer() {
         .expect("the worker must arm the read");
     std::fs::write(dir.join("created.txt"), b"hi").expect("create file");
 
-    // Joining cannot hang: the worker's overlapped read has a bounded wait and is
+    // Take the handle and join it for the result (the guard's Drop then does
+    // nothing). Joining cannot hang: the overlapped read has a bounded wait and is
     // cancelled on timeout, so it always returns.
     let changes = worker
+        .0
+        .take()
+        .expect("worker handle present")
         .join()
         .expect("the worker thread must not panic")
         .expect("the completion must decode to changes, not a desync");
