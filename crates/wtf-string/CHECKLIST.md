@@ -10,8 +10,8 @@ Work items are dependency-ordered. Each milestone ends with tests. The implicit
 end-of-milestone gate (default build/test/clippy/doc clean, encoding check, sync
 with origin) is standard procedure and is not listed as an item.
 
-Completed milestones are archived in
-[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) once fully done.
+Completed milestones are archived to a sibling completed-checklist tracker (created in this directory when
+the first group is done).
 
 ## M1 — Crate scaffold and design record
 
