@@ -16,6 +16,18 @@ pub trait WtfEncoding {
     ///
     /// Changing this value is a breaking change to the storage format.
     const NUL: Self::Unit;
+
+    /// Encode a UTF-8 `str` into this encoding's code units.
+    fn encode_str(s: &str) -> Vec<Self::Unit>;
+
+    /// Decode content code units to a `String` if they are well-formed for this
+    /// encoding, or `None` if they are ill-formed (e.g. an unpaired surrogate),
+    /// which a strict `String` cannot represent.
+    fn decode(units: &[Self::Unit]) -> Option<String>;
+
+    /// Decode content code units to a `String`, replacing any ill-formed sequence
+    /// with the Unicode replacement character (`U+FFFD`).
+    fn decode_lossy(units: &[Self::Unit]) -> String;
 }
 
 /// The WTF-16 encoding: arbitrary, ill-formed-surrogate-tolerant UTF-16 stored as
@@ -28,4 +40,16 @@ pub enum Wtf16 {}
 impl WtfEncoding for Wtf16 {
     type Unit = u16;
     const NUL: u16 = 0;
+
+    fn encode_str(s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+
+    fn decode(units: &[u16]) -> Option<String> {
+        String::from_utf16(units).ok()
+    }
+
+    fn decode_lossy(units: &[u16]) -> String {
+        String::from_utf16_lossy(units)
+    }
 }

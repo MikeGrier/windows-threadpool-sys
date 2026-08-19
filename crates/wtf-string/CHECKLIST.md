@@ -41,8 +41,9 @@ Completed milestones are archived in
 
 ## M3 — str/String conversions and comparison
 
-- [ ] **M3.1** — Boundary conversions: `From<&str>` / `From<String>` (encode once), `to_string() -> Result`
-  (fallible exact), `to_string_lossy()` (U+FFFD) (D-8).
+- [x] **M3.1** — Boundary conversions: `From<&str>` / `From<String>` (encode once), `into_string() -> Result`
+  and `to_string_checked() -> Option` (fallible exact — `to_string` is avoided since it would collide with
+  `ToString` once `Display` lands in M3.2), and `to_string_lossy()` (U+FFFD) (D-8).
 
 - [ ] **M3.2** — `Display` (lossy) and `OsStr`-style escaped `Debug`.
 

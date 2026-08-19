@@ -53,6 +53,22 @@ impl<E: WtfEncoding> WtfStr<E> {
     pub fn has_interior_nul(&self) -> bool {
         self.units.contains(&E::NUL)
     }
+
+    /// Decode to a `String` if the content is well-formed for this encoding.
+    ///
+    /// Returns `None` for content a strict `String` cannot hold (e.g. an unpaired
+    /// surrogate in WTF-16); use [`to_string_lossy`](Self::to_string_lossy) to
+    /// decode with replacement instead.
+    #[must_use]
+    pub fn to_string_checked(&self) -> Option<String> {
+        E::decode(self.as_units())
+    }
+
+    /// Decode to a `String`, replacing any ill-formed sequence with `U+FFFD`.
+    #[must_use]
+    pub fn to_string_lossy(&self) -> String {
+        E::decode_lossy(self.as_units())
+    }
 }
 
 /// An owned, growable string of code units in encoding `E` (the analog of
@@ -91,6 +107,25 @@ impl<E: WtfEncoding> WtfString<E> {
     fn content(&self) -> &[E::Unit] {
         // The invariant guarantees at least the terminator element is present.
         &self.units[..self.units.len() - 1]
+    }
+
+    /// Build an owned string from already-encoded content units, appending the
+    /// terminator without re-copying the input.
+    fn from_encoded(mut units: Vec<E::Unit>) -> Self {
+        units.push(E::NUL);
+        WtfString { units }
+    }
+
+    /// Consume the string and decode it to a `String` if its content is
+    /// well-formed for this encoding, otherwise return the original unchanged.
+    ///
+    /// The native-`u16` analog of
+    /// [`OsString::into_string`](std::ffi::OsString::into_string).
+    pub fn into_string(self) -> Result<String, Self> {
+        match E::decode(self.content()) {
+            Some(s) => Ok(s),
+            None => Err(self),
+        }
     }
 }
 
@@ -139,6 +174,18 @@ impl<E: WtfEncoding> Clone for WtfString<E> {
         WtfString {
             units: self.units.clone(),
         }
+    }
+}
+
+impl<E: WtfEncoding> From<&str> for WtfString<E> {
+    fn from(s: &str) -> Self {
+        Self::from_encoded(E::encode_str(s))
+    }
+}
+
+impl<E: WtfEncoding> From<String> for WtfString<E> {
+    fn from(s: String) -> Self {
+        Self::from_encoded(E::encode_str(&s))
     }
 }
 
