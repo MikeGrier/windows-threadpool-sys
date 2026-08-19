@@ -112,7 +112,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M7 — Documentation, examples, stress
 
-- [ ] **M7.1** — Crate `README.md` and `lib.rs` top-level docs: the monitor/session/watch model, the
+- [ ] **M7.1** — A crate README and the [lib.rs](src/lib.rs) top-level docs: the monitor/session/watch model, the
   fidelity-and-limitation contract, and the `Desync` primitive.
 
 - [ ] **M7.2** — Runnable examples: a minimal directory watch, a single-file watch, and a fault-recovery

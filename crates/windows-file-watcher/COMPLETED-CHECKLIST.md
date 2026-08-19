@@ -4,10 +4,10 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
 
 ## Moved 2026-08-19 — M1: crate scaffold and notification decode
 
-- [x] **M1.1** — Scaffold `crates/windows-file-watcher`: `Cargo.toml` with a `cfg(windows)`-gated `lib`,
+- [x] **M1.1** — Scaffold `crates/windows-file-watcher`: [Cargo.toml](Cargo.toml) with a `cfg(windows)`-gated `lib`,
   path+version dependencies on [windows-overlapped-io-sys](../windows-overlapped-io-sys/README.md) and
   [windows-threadpool-sys](../windows-threadpool-sys/README.md), and `windows-sys` with the needed feature
-  groups; `src/lib.rs` crate-doc skeleton; add the crate to the workspace members. Everything is
+  groups; [src/lib.rs](src/lib.rs) crate-doc skeleton; add the crate to the workspace members. Everything is
   `cfg(windows)`, so the crate resolves to an empty crate elsewhere.
 
 - [x] **M1.2** — Seed Tier-1 [DESIGN-NOTES.md](DESIGN-NOTES.md) and Tier-2 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md)
@@ -24,6 +24,8 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
   completion as overflow → `Desync { Overflow }` at the decode boundary (D-12).
 
 - [x] **M1.5** — Tests: ≥10 normal decode cases plus edge cases (empty buffer, single record, multi-record
-  chains, maximum-length names, unpaired surrogates, `> MAX_PATH`, zero/truncated buffer → overflow,
-  malformed `NextEntryOffset`). Integration: decode a buffer produced by a real overlapped
+  chains, long names past `MAX_PATH` and a name filling the record to the buffer edge — the crate imposes no
+  maximum, `FileNameLength` being a `u32` bounded only by the completion buffer — empty and unpaired-surrogate
+  names, and malformed buffers: truncated/overrunning/odd-length and unaligned or out-of-range
+  `NextEntryOffset`, all surfacing as `Desync`). Integration: decode a buffer produced by a real overlapped
   `ReadDirectoryChangesW` on a temp-directory mutation.

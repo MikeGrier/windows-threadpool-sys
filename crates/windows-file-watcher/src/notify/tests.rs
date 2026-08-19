@@ -156,6 +156,24 @@ fn long_name_beyond_max_path() {
 }
 
 #[test]
+fn name_filling_the_record_to_the_buffer_edge() {
+    // Upper boundary of the in-bounds check: a single record whose name runs
+    // exactly to the end of the buffer (name_end == rec.len(), no trailing
+    // padding) must decode cleanly rather than desync. The crate imposes no
+    // maximum name length; `FileNameLength` is bounded only by the buffer.
+    let name = w("boundary-name");
+    let buf = record(0, FILE_ACTION_ADDED, &name);
+    assert_eq!(
+        buf.len(),
+        12 + name.len() * 2,
+        "name must reach the buffer edge"
+    );
+    let c = changes(&buf);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].name.as_wide(), name.as_slice());
+}
+
+#[test]
 fn non_ascii_bmp_name() {
     let c = changes(&chain(&[(FILE_ACTION_ADDED, w("日本語.txt"))]));
     assert_eq!(
