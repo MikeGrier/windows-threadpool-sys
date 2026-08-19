@@ -8,6 +8,10 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use super::{Change, ChangeKind, DecodedBatch, DesyncCause, decode_batch, records};
 
+/// A synthetic `FILE_ACTION_*` code the decoder does not recognise, used to check
+/// it is preserved verbatim as `ChangeKind::Unknown`. Not a real Windows action.
+const UNRECOGNISED_ACTION: u32 = 4242;
+
 /// UTF-16 code units of `s`.
 fn w(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
@@ -108,8 +112,8 @@ fn rename_pair_is_kept_distinct_not_joined() {
 
 #[test]
 fn unknown_action_is_preserved() {
-    let c = changes(&chain(&[(4242, w("mystery"))]));
-    assert_eq!(c[0].kind, ChangeKind::Unknown(4242));
+    let c = changes(&chain(&[(UNRECOGNISED_ACTION, w("mystery"))]));
+    assert_eq!(c[0].kind, ChangeKind::Unknown(UNRECOGNISED_ACTION));
 }
 
 #[test]

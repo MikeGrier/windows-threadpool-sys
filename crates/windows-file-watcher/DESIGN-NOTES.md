@@ -29,7 +29,7 @@ threads of its own.
 | D-8 | Names are delivered raw and **relative to the directory opened for the read**: for a directory target that directory itself, and for a file target (D-7) its parent — so a file watch reports the leaf name, not a name relative to the file. `OsString`/`Path` (lossless WTF-8) is primary; a raw `&[u16]` escape hatch is available. |
 | D-9 | Raw `FILE_ACTION_*` kinds, `RenamedOldName`/`RenamedNewName` kept distinct; the crate never joins renames or joins across a buffer. |
 | D-10 | Notifications are delivered as batches (one decoded `ReadDirectoryChangesW` completion = one batch). |
-| D-11 | Delivery is a **crate-owned concrete queue sender** (`Send + Sync`, multi-producer), never a client-implemented trait: its `deliver` only enqueues onto a queue the crate owns, so no client code ever runs on a monitor/threadpool thread (D-2). The client holds the matching receiver and drains on its own thread(s); consumer cardinality is the client's business (MPSC is the floor). A full bounded queue degrades to `Desync { QueueFull }` rather than blocking. |
+| D-11 | Delivery is a **crate-owned concrete queue sender** (`Send + Sync`, multi-producer), never a client-implemented trait: its `deliver` only enqueues onto a queue the crate owns, so no client code ever runs on a monitor/threadpool thread (D-2). The client holds the matching receiver and drains on its own thread(s); consumer cardinality is the client's business (MPSC is the floor). A full bounded queue drops the batch but keeps saturation observable via a latched, out-of-band `Desync { QueueFull }` per affected `WatchId` (bound ≥ 1; a zero bound is rejected). See [Delivery and saturation](#delivery-and-saturation). |
 | D-12 | `Desync { cause }` is the single "you missed changes — re-scan" primitive. Kernel overflow, a full client queue, coarse-mode signals, and post-outage gaps all collapse to it. See [The Desync primitive](#the-desync-primitive). |
 | D-13 | `Suspended`/`Resumed` liveness brackets and `Established { mode }` are opt-in per subscription. |
 | D-14 | No terminal fault state — only "not yet re-established." The monitor retries autonomously and indefinitely; the client may cancel from any state. See [Fault model](#fault-model). |
@@ -55,6 +55,26 @@ is an enqueue the crate performs, and the client observes notifications only by
 draining the matching receiver on its own thread — so the "no client code on a
 pool thread" guarantee holds by construction, not by asking the client to keep a
 callback well-behaved. (D-2, D-11)
+
+### Delivery and saturation
+
+Delivery is a crate-owned bounded queue: the monitor enqueues decoded batches and
+the client drains the matching receiver. Enqueue never blocks — a slow client must
+not stall the cadence (D-2) — so a full queue drops the batch. The core contract is
+that a client is *never silently* left out of sync, which a naive design breaks
+here: the `Desync { QueueFull }` that reports the drop cannot be pushed onto the
+very queue that is full (and reserving one data slot only defers the problem — a
+second overflow has nowhere to go).
+
+The signal is therefore kept **out of band**. The sender holds a latched overflow
+set — the `WatchId`s with a pending `QueueFull` — as control state separate from the
+bounded data queue, so it never competes for data capacity. A failed enqueue drops
+the batch and adds each affected `WatchId` to that set; repeats coalesce, which
+loses nothing because `Desync` is idempotent (the response is always a re-scan).
+The receiver is guaranteed to observe a synthesized `Desync { QueueFull }` for each
+latched `WatchId`, surfaced ahead of the next successful batch and cleared once
+observed — so the dropped batch and its desync can never both vanish, at any queue
+depth ≥ 1. A zero-capacity bound is rejected at construction. (D-11, D-12)
 
 ### Coalescing by directory
 

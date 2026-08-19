@@ -41,15 +41,18 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   the client-side receiver, and a variant accepting a caller-supplied bound.
 
 - [ ] **M3.3** — Finalise the notification queue (D-11): a crate-owned, `Send + Sync`, multi-producer
-  bounded sender whose enqueue is non-blocking and infallible and emits `Desync { QueueFull }` on overflow
-  (D-12), paired with the client-side receiver the session hands back. No client code runs on a pool thread.
+  bounded sender whose enqueue is non-blocking and infallible, paired with the client-side receiver the
+  session hands back. On overflow it drops the batch and latches a per-`WatchId` `Desync { QueueFull }` as
+  control state *outside* the bounded queue (coalesced, idempotent), guaranteed to reach the receiver before
+  the next batch (D-12); reject a zero bound at construction. No client code runs on a pool thread.
 
 - [ ] **M3.4** — Affine `Watch` (D-5): `#[must_use]`, `Drop` enqueues cancellation, explicit `cancel()`,
   and a `Copy` `WatchId`; subscribe/unsubscribe requests plumbed through the serialised request queue.
 
 - [ ] **M3.5** — Integration: several subscriptions through one session delivering to one receiver; cancel via
   `Drop` and via `cancel()`; assert no delivery after cancellation completes and in-order delivery within a
-  subscription.
+  subscription; saturate the queue and assert the dropped batch surfaces as `Desync { QueueFull }` for each
+  affected `WatchId` and that delivery recovers once the receiver drains.
 
 ## M4 — Coalescing by directory and file targets
 

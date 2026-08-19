@@ -85,8 +85,19 @@ different pool threads concurrently — so the sender must be **multi-producer**
 (`Send + Sync`, concurrent enqueue): MPSC is the floor the crate imposes. It
 never requires multi-*consumer*; draining from several threads is the client's
 choice (MPMC only if they want it). Enqueue must be non-blocking and infallible
-so it cannot stall the cadence, which is why a full bounded queue degrades to
-`Desync { QueueFull }` rather than blocking.
+so it cannot stall the cadence, which is why a full bounded queue drops the batch
+and latches a `Desync { QueueFull }` (see below) rather than blocking.
+
+### Keeping QueueFull observable when the queue is full (D-11, D-12)
+
+The obvious way to report a dropped batch — enqueue a `Desync { QueueFull }` — fails
+exactly when it is needed, because the queue is full. Reserving a data slot for it
+only defers the problem: a second overflow has nowhere to go. We instead keep the
+overflow signal as latched control state *outside* the bounded queue: a set of
+`WatchId`s with a pending `QueueFull`, coalesced (idempotent) and guaranteed to
+reach the receiver before the next batch. This makes "never silently miss changes"
+hold for any queue depth ≥ 1, including a client that has stopped draining. A
+zero-capacity bound would make the guarantee vacuous, so it is rejected.
 
 ## The Desync unification (D-12)
 
