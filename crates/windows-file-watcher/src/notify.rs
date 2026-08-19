@@ -74,7 +74,7 @@ impl std::fmt::Debug for RelativeName {
 /// Internal to the crate: the public surface is the typed [`Change`], which loses
 /// no fidelity ([`ChangeKind::Unknown`] preserves an unrecognised action code).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RawChange {
+struct RawChange {
     /// The raw `FILE_ACTION_*` value.
     pub action: u32,
     /// The reported name, relative to the watched directory.
@@ -95,8 +95,12 @@ pub(crate) struct RawChange {
 /// final record with `NextEntryOffset == 0`) leaves `malformed` unset. A
 /// zero-length buffer is the kernel's overflow signal and is handled by the
 /// caller, not here.
+///
+/// Module-private: [`decode_batch`] is the crate-facing entrypoint, and it (the
+/// sole non-test caller) inspects [`Records::malformed`] to turn a malformed
+/// chain into a desync.
 #[must_use]
-pub(crate) fn records(buffer: &[u8]) -> Records<'_> {
+fn records(buffer: &[u8]) -> Records<'_> {
     Records {
         buffer,
         pos: Some(0),
@@ -105,7 +109,7 @@ pub(crate) fn records(buffer: &[u8]) -> Records<'_> {
 }
 
 /// Iterator over the record chain, returned by [`records`].
-pub(crate) struct Records<'a> {
+struct Records<'a> {
     buffer: &'a [u8],
     pos: Option<usize>,
     /// Set once iteration stops because a record could not be parsed cleanly, as
