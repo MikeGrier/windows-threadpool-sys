@@ -201,7 +201,14 @@ fn read_overlapped(
     // event rather than blocking unbounded in `GetOverlappedResult(.., TRUE)`.
     // SAFETY: `handle`/`overlapped` name the single in-flight read.
     let cancelled = unsafe { CancelIoEx(handle, &*overlapped) } != 0;
-    let cancel_err = std::io::Error::last_os_error();
+    // GetLastError is only meaningful when `CancelIoEx` reported failure; Win32
+    // does not clear it on success, so reading it unconditionally could capture a
+    // stale, unrelated error.
+    let cancel_err = if cancelled {
+        None
+    } else {
+        Some(std::io::Error::last_os_error())
+    };
     // SAFETY: `event` is a valid handle.
     let retired = unsafe { WaitForSingleObject(event, TIMEOUT_MS) } == WAIT_OBJECT_0;
 
@@ -216,16 +223,20 @@ fn read_overlapped(
         ));
     }
 
-    // The read could not be confirmed retired within the bound (cancel reported
-    // {cancel_err}). The kernel may still write into `buffer`/`overlapped`, so
-    // dropping them would be unsound. Leak the heap `buffer` and the boxed
-    // `overlapped`, and leave `event` open, rather than free live storage; this
-    // path is not expected to occur for a cancelled directory read.
+    // The read could not be confirmed retired within the bound. The kernel may
+    // still write into `buffer`/`overlapped`, so dropping them would be unsound.
+    // Leak the heap `buffer` and the boxed `overlapped`, and leave `event` open,
+    // rather than free live storage; this path is not expected to occur for a
+    // cancelled directory read.
+    let cancel_note = match cancel_err {
+        None => "CancelIoEx succeeded".to_owned(),
+        Some(e) => format!("CancelIoEx failed: {e}"),
+    };
     std::mem::forget(buffer);
     std::mem::forget(overlapped);
     Err(format!(
-        "overlapped read could not be retired within {TIMEOUT_MS} ms after CancelIoEx \
-         (cancel error {cancel_err}); leaked buffer/overlapped to stay sound"
+        "overlapped read could not be retired within {TIMEOUT_MS} ms ({cancel_note}); \
+         leaked buffer/overlapped to stay sound"
     ))
 }
 
