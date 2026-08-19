@@ -147,3 +147,6 @@ pub type Wtf16String = WtfString<Wtf16>;
 
 /// A [`WtfStr`] whose storage is WTF-16 (`u16` code units).
 pub type Wtf16Str = WtfStr<Wtf16>;
+
+#[cfg(test)]
+mod tests;

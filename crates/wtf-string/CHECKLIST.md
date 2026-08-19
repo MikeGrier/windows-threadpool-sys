@@ -35,7 +35,7 @@ Completed milestones are archived in
   are merged: the owned type exposes content access *through* `Deref`, so the type definitions and the
   std-parity plumbing cannot compile independently.) (D-4/D-6/D-7)
 
-- [ ] **M2.3** — Tests (sibling `tests.rs`): the terminator invariant survives construction/clone; spans
+- [x] **M2.3** — Tests (sibling `tests.rs`): the terminator invariant survives construction/clone; spans
   never include the terminator; interior-NUL content is preserved and `has_interior_nul()` reports it;
   `Deref`/`ToOwned` round-trip; empty and large inputs.
 
