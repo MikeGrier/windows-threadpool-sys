@@ -111,3 +111,131 @@ fn large_input_keeps_one_terminator() {
     assert_eq!(*s.units.last().unwrap(), 0);
     assert_eq!(s.as_units(), content.as_slice());
 }
+
+// --- M3: conversions, formatting, comparison ---
+
+/// A representative spread of well-formed strings for round-trip checks.
+fn well_formed_samples() -> Vec<&'static str> {
+    vec![
+        "",
+        "a",
+        "ascii only",
+        "café",      // Latin-1 supplement (BMP, 2-byte UTF-8)
+        "日本語",    // CJK (BMP, 3-byte UTF-8)
+        "😀",        // astral (U+1F600, a UTF-16 surrogate pair)
+        "aé日😀mix", // mixed BMP + astral
+    ]
+}
+
+#[test]
+fn from_str_encodes_to_utf16_units() {
+    let s = Wtf16String::from("abc");
+    assert_eq!(s.as_units(), &[97, 98, 99]);
+    assert_eq!(*s.units.last().unwrap(), 0);
+}
+
+#[test]
+fn from_string_matches_from_str() {
+    assert_eq!(
+        Wtf16String::from(String::from("hi ☃")).units,
+        Wtf16String::from("hi ☃").units
+    );
+}
+
+#[test]
+fn round_trips_str_string_and_lossy() {
+    for s in well_formed_samples() {
+        let owned = Wtf16String::from(s);
+        // Storage matches a direct UTF-16 encoding of the input.
+        let expected: Vec<u16> = s.encode_utf16().collect();
+        assert_eq!(owned.as_units(), expected.as_slice(), "units for {s:?}");
+        // All three decode paths recover the original for well-formed input.
+        assert_eq!(
+            owned.to_string_checked().as_deref(),
+            Some(s),
+            "checked {s:?}"
+        );
+        assert_eq!(owned.to_string_lossy(), s, "lossy {s:?}");
+        assert_eq!(owned.clone().into_string().unwrap(), s, "into_string {s:?}");
+    }
+}
+
+#[test]
+fn astral_pair_is_two_units_and_round_trips() {
+    let owned = Wtf16String::from("😀");
+    assert_eq!(owned.as_units().len(), 2); // one surrogate pair
+    assert_eq!(owned.into_string().unwrap(), "😀");
+}
+
+#[test]
+fn ill_formed_surrogate_checked_none_lossy_replaces() {
+    let s = Wtf16Str::from_units(&[0xD800]);
+    assert_eq!(s.to_string_checked(), None);
+    assert_eq!(s.to_string_lossy(), "\u{FFFD}");
+}
+
+#[test]
+fn into_string_returns_the_original_on_ill_formed() {
+    let s = Wtf16String::from_units(&[0xD800]);
+    match s.into_string() {
+        Ok(decoded) => panic!("ill-formed content must not decode, got {decoded:?}"),
+        Err(original) => assert_eq!(original.as_units(), &[0xD800]),
+    }
+}
+
+#[test]
+fn long_name_beyond_max_path_round_trips() {
+    let long = "a".repeat(500);
+    let owned = Wtf16String::from(long.as_str());
+    assert_eq!(owned.as_units().len(), 500);
+    assert_eq!(owned.into_string().unwrap(), long);
+}
+
+#[test]
+fn display_is_lossy() {
+    let s = Wtf16Str::from_units(&[0xD800, 97]); // ill-formed then 'a'
+    assert_eq!(format!("{s}"), "\u{FFFD}a");
+    assert_eq!(format!("{}", Wtf16String::from("plain")), "plain");
+}
+
+#[test]
+fn debug_quotes_and_escapes() {
+    assert_eq!(format!("{:?}", Wtf16String::from("ab")), "\"ab\"");
+    assert_eq!(format!("{:?}", Wtf16String::from("a\nb")), "\"a\\nb\"");
+}
+
+#[test]
+fn ordering_is_binary_over_units() {
+    let a = Wtf16String::from("a");
+    let b = Wtf16String::from("b");
+    let ab = Wtf16String::from("ab");
+    let same1 = Wtf16String::from("same");
+    let same2 = Wtf16String::from("same");
+    assert!(a < b);
+    assert!(a < ab); // a prefix orders before the longer string
+    assert_eq!(same1, same2);
+}
+
+#[test]
+fn equality_and_hash_are_consistent_for_borrow() {
+    use std::collections::HashSet;
+    let mut set: HashSet<Wtf16String> = HashSet::new();
+    set.insert(Wtf16String::from("key"));
+    let probe = Wtf16String::from("key");
+    // Borrow<WtfStr> + matching Hash/Eq lets a borrowed slice find the owned key.
+    assert!(set.contains(&*probe));
+    assert!(!set.contains(&*Wtf16String::from("other")));
+}
+
+#[test]
+fn cross_type_comparison_with_str() {
+    let hello = Wtf16String::from("hello");
+    assert_eq!(hello, "hello");
+    assert!(hello != "world");
+    // A borrowed slice compares against a `str` too.
+    let owned = Wtf16String::from("hi");
+    assert!(&*owned == "hi");
+    // Ill-formed content never equals any (well-formed) `str`.
+    let ill = Wtf16String::from_units(&[0xD800]);
+    assert!(ill != "x");
+}

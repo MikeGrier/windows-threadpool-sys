@@ -50,7 +50,7 @@ Completed milestones are archived in
 - [x] **M3.3** — `Ord` / `PartialOrd` / `Eq` / `PartialEq` / `Hash` (binary over units), and cross-type
   comparison with `&str` where it is unambiguous.
 
-- [ ] **M3.4** — Property tests: round-trips through `str`/`String`, ill-formed surrogates preserved in
+- [x] **M3.4** — Property tests: round-trips through `str`/`String`, ill-formed surrogates preserved in
   storage and replaced by lossy conversion, `> MAX_PATH` lengths, mixed BMP/astral content.
 
 ## M4 — FFI surface
