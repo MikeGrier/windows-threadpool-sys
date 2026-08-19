@@ -163,10 +163,12 @@ impl Iterator for Records<'_> {
 
         // Advance to the next record, or finish. A well-formed `NextEntryOffset`
         // is a DWORD-aligned byte offset, measured from this record's start, that
-        // clears this record's own header+name span. An offset that is unaligned,
-        // points back into the current record (overlap), or would overflow is a
-        // corrupt link: the current record is still yielded, but the chain is
-        // marked malformed and iteration stops.
+        // clears this record's own header+name span. (An offset that reaches back
+        // into the current record is already rejected above, by the
+        // `name_end <= record_span` check, before this record is yielded.) An
+        // offset that is unaligned or would overflow the position is a corrupt
+        // link: the current record is still yielded, but the chain is marked
+        // malformed and iteration stops.
         self.pos = if next_offset == 0 {
             None
         } else if next_offset.is_multiple_of(4) && next_offset >= name_end {

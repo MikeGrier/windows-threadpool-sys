@@ -1,8 +1,8 @@
 # Plans: wtf-string
 
-Active planned work for the crate. When the whole checklist completes its entry moves to a
-COMPLETED-PLANS.md tracker, and completed milestones archive to a COMPLETED-CHECKLIST.md, both created in
-this directory at that time.
+Active planned work for the crate. When the whole checklist completes, its entry and its completed
+milestones are archived to sibling completed-plans and completed-checklist trackers created in this
+directory at that time.
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
