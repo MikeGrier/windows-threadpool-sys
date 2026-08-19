@@ -262,3 +262,6 @@ pub fn decode_batch(buffer: &[u8]) -> DecodedBatch {
         .collect();
     DecodedBatch::Changes(changes)
 }
+
+#[cfg(test)]
+mod tests;

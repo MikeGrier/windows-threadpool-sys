@@ -46,3 +46,13 @@ windows-sys = {
 		"Win32_System_IO",
 	],
 }
+
+# Integration tests exercise the decoder against a buffer produced by a real
+# blocking ReadDirectoryChangesW call, which needs binding surface the published
+# crate does not itself use.
+[dev-dependencies]
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_Storage_FileSystem",
+	"Win32_System_IO",
+] }

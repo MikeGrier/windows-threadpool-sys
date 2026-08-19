@@ -28,7 +28,7 @@ with origin) is standard procedure and is not listed as an item.
   `RenamedOldName` / `RenamedNewName` distinct (D-9); a batch type; and recognition of the zero-byte
   completion as overflow → `Desync { Overflow }` at the decode boundary (D-12).
 
-- [ ] **M1.5** — Tests: ≥10 normal decode cases plus edge cases (empty buffer, single record, multi-record
+- [x] **M1.5** — Tests: ≥10 normal decode cases plus edge cases (empty buffer, single record, multi-record
   chains, maximum-length names, unpaired surrogates, `> MAX_PATH`, zero/truncated buffer → overflow,
   malformed `NextEntryOffset`). Integration: decode a buffer produced by a real blocking
   `ReadDirectoryChangesW` on a temp-directory mutation.
