@@ -42,6 +42,11 @@ fn decodes_a_real_read_directory_changes_buffer() {
         "windows-file-watcher-decode-{}-{nonce}",
         std::process::id()
     ));
+    // Uniquely named (pid + nanosecond nonce), so repeated runs never collide. It
+    // is removed only on a clean pass (the final line of this test). If any
+    // `expect`/assertion panics, unwinding skips that cleanup and the directory is
+    // deliberately left behind for post-mortem inspection of the failure — there
+    // is intentionally no RAII always-cleanup guard.
     std::fs::create_dir(&dir).expect("create temp dir");
 
     let (armed_tx, armed_rx) = mpsc::channel::<()>();
@@ -70,6 +75,8 @@ fn decodes_a_real_read_directory_changes_buffer() {
         "expected an Added record for created.txt; got {changes:?}"
     );
 
+    // Reached only on a clean pass; on failure the directory is intentionally
+    // left for analysis (see the note at creation).
     let _ = std::fs::remove_dir_all(&dir);
 }
 
