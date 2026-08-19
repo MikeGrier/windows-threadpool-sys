@@ -30,9 +30,12 @@ const HEADER_LEN: usize = 12;
 ///
 /// The kernel delivers names as UTF-16 that need not be well-formed Unicode
 /// (unpaired surrogates are possible on NTFS) and that are not NUL-terminated.
-/// [`RelativeName::as_wide`] exposes the raw units; [`RelativeName::to_os_string`]
-/// and [`RelativeName::to_path_buf`] round-trip them losslessly through the
-/// platform's WTF-8 `OsString`.
+/// [`RelativeName::as_wide`] exposes the raw units as the ground truth;
+/// [`RelativeName::to_os_string`] and [`RelativeName::to_path_buf`] round-trip
+/// them losslessly through the platform's WTF-8 `OsString` -- the standard
+/// library guarantees `from_wide` followed by `encode_wide` returns the original
+/// code units even for ill-formed UTF-16, so no fidelity is lost. (`OsStr::to_str`
+/// and `to_string_lossy` remain lossy *views*, for display only.)
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct RelativeName {
     units: Box<[u16]>,
