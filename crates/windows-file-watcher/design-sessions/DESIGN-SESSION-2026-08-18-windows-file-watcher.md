@@ -93,7 +93,7 @@ explicitly *not* reproduced (see "Hazards from Azure/m").
   monitor's single serialized fault handler. There is **no reactive per-fault
   message and no closure on the cadence path**, so there is nothing to race and
   no client code can stall recovery.
-- **D-17 — Two-tier watcher; downgrade is a volume property.** **Refined by [DESIGN-NOTES.md](../DESIGN-NOTES.md) D-17 (with prerequisite [windows-threadpool-sys](../../windows-threadpool-sys/CHECKLIST.md) M17.1):** the coarse handle reaches `ThreadpoolWait` through a **custom-close waitable owner**, not `WaitableHandle::assume_waitable` — the latter consumes a std `OwnedHandle` and would close the handle with `CloseHandle`, which is wrong for a `FindFirstChangeNotification` handle. Detailed
+- **D-17 — Two-tier watcher; downgrade is a volume property.** **Refined by [DESIGN-NOTES.md](../DESIGN-NOTES.md) D-17 (with prerequisite [windows-threadpool-sys](../../windows-threadpool-sys/CHECKLIST.md) M17):** the coarse handle reaches `ThreadpoolWait` through a **custom-close waitable owner**, not `WaitableHandle::assume_waitable` — the latter consumes a std `OwnedHandle` and would close the handle with `CloseHandle`, which is wrong for a `FindFirstChangeNotification` handle. Detailed
   (`ReadDirectoryChangesW` + `ThreadpoolIo`) is preferred; Coarse
   (`FindFirstChangeNotification` + `ThreadpoolWait`) is the universal floor. The
   mode is resolved **at establish / re-establish** by attempting to arm the

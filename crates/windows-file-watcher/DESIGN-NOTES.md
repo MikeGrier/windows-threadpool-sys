@@ -130,5 +130,6 @@ retryable error uses the reopen loop instead. The coarse handle is closed with
 `FindCloseChangeNotification` (not `CloseHandle`); because `ThreadpoolWait`'s
 default `OwnedHandle` path would close it with `CloseHandle`, it reaches the pool
 through a **custom-close waitable owner** that `windows-threadpool-sys` must
-provide (its M17.1, a prerequisite for M6.1) and that drains the wait before
-invoking `FindCloseChangeNotification`. (D-17)
+provide (its M17, a prerequisite for M6.1, covering both the direct and
+`CleanupGroup` teardown paths) and that drains the wait before invoking
+`FindCloseChangeNotification`. (D-17)
