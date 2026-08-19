@@ -2,7 +2,9 @@
 //! The owned [`WtfString`] and borrowed [`WtfStr`] string types.
 
 use std::borrow::Borrow;
+use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 use crate::encoding::{Wtf16, WtfEncoding};
@@ -213,6 +215,88 @@ impl<E: WtfEncoding> Debug for WtfStr<E> {
 impl<E: WtfEncoding> Debug for WtfString<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Debug::fmt(&**self, f)
+    }
+}
+
+// Ordering, equality, and hashing are a binary comparison of the content code
+// units, so they are the same across every encoding.
+
+impl<E: WtfEncoding> PartialEq for WtfStr<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.units == other.units
+    }
+}
+
+impl<E: WtfEncoding> Eq for WtfStr<E> {}
+
+impl<E: WtfEncoding> Ord for WtfStr<E> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.units.cmp(&other.units)
+    }
+}
+
+impl<E: WtfEncoding> PartialOrd for WtfStr<E> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<E: WtfEncoding> Hash for WtfStr<E> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.units.hash(state);
+    }
+}
+
+impl<E: WtfEncoding> PartialEq for WtfString<E> {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl<E: WtfEncoding> Eq for WtfString<E> {}
+
+impl<E: WtfEncoding> Ord for WtfString<E> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (**self).cmp(&**other)
+    }
+}
+
+impl<E: WtfEncoding> PartialOrd for WtfString<E> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<E: WtfEncoding> Hash for WtfString<E> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (**self).hash(state);
+    }
+}
+
+// Cross-type comparison with `str`: a `str` is encoded to units and compared
+// exactly, so a `WtfStr` holding ill-formed units is never equal to any `str`.
+
+impl<E: WtfEncoding> PartialEq<str> for WtfStr<E> {
+    fn eq(&self, other: &str) -> bool {
+        self.as_units() == E::encode_str(other).as_slice()
+    }
+}
+
+impl<E: WtfEncoding> PartialEq<&str> for WtfStr<E> {
+    fn eq(&self, other: &&str) -> bool {
+        *self == **other
+    }
+}
+
+impl<E: WtfEncoding> PartialEq<str> for WtfString<E> {
+    fn eq(&self, other: &str) -> bool {
+        **self == *other
+    }
+}
+
+impl<E: WtfEncoding> PartialEq<&str> for WtfString<E> {
+    fn eq(&self, other: &&str) -> bool {
+        **self == **other
     }
 }
 

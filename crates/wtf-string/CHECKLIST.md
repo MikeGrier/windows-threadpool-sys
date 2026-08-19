@@ -47,7 +47,7 @@ Completed milestones are archived in
 
 - [x] **M3.2** — `Display` (lossy) and `OsStr`-style escaped `Debug`.
 
-- [ ] **M3.3** — `Ord` / `PartialOrd` / `Eq` / `PartialEq` / `Hash` (binary over units), and cross-type
+- [x] **M3.3** — `Ord` / `PartialOrd` / `Eq` / `PartialEq` / `Hash` (binary over units), and cross-type
   comparison with `&str` where it is unambiguous.
 
 - [ ] **M3.4** — Property tests: round-trips through `str`/`String`, ill-formed surrogates preserved in
