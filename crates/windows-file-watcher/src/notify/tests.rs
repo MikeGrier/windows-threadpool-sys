@@ -169,7 +169,7 @@ fn name_filling_the_record_to_the_buffer_edge() {
     let buf = record(0, FILE_ACTION_ADDED, &name);
     assert_eq!(
         buf.len(),
-        12 + name.len() * 2,
+        super::HEADER_LEN + name.len() * super::UNIT_LEN,
         "name must reach the buffer edge"
     );
     let c = changes(&buf);

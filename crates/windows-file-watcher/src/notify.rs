@@ -224,7 +224,7 @@ fn read_u32(rec: &[u8], offset: usize) -> u32 {
 /// remainder to drop.
 fn decode_utf16(bytes: &[u8]) -> RelativeName {
     let units: Box<[u16]> = bytes
-        .chunks_exact(2)
+        .chunks_exact(UNIT_LEN)
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     RelativeName { units }

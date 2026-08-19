@@ -178,8 +178,8 @@ fn read_overlapped(
         ReadDirectoryChangesW(
             handle,
             buffer.as_mut_ptr().cast(),
-            (buffer.len() * 4) as u32,
-            0, // bWatchSubtree = FALSE
+            std::mem::size_of_val(buffer.as_slice()) as u32,
+            FALSE, // bWatchSubtree
             FILE_NOTIFY_CHANGE_FILE_NAME,
             ptr::null_mut(),
             &mut *overlapped,

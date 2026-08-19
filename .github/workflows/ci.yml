@@ -16,11 +16,13 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-# These crates are Windows-only (every item is behind `cfg(windows)`), so CI
-# builds, tests, and lints exclusively on Windows. Both the `--all-features`
+# Most crates are Windows-only (every item is behind `cfg(windows)`), so their
+# build, test, and lint run exclusively on Windows. Both the `--all-features`
 # union and the minimal default (no-feature) configuration are exercised: the
 # default set is a supported, published configuration, and a feature-union-only
 # build can hide a missing `cfg` or an item that depends on an opt-in feature.
+# `wtf-string` is portable, so it is additionally built, tested, and linted on
+# Linux and macOS (the `portable` job) to keep its non-Windows support verified.
 jobs:
   encoding:
     name: encoding sanity check
@@ -87,3 +89,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets --all-features --locked
+
+  portable:
+    name: wtf-string (non-Windows)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build (wtf-string)
+        run: cargo build -p wtf-string --all-targets --locked
+      - name: cargo test (wtf-string)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p wtf-string --locked --no-fail-fast
+      - name: cargo clippy (wtf-string)
+        run: cargo clippy -p wtf-string --all-targets --locked -- -D warnings
