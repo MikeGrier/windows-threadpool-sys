@@ -278,7 +278,7 @@ impl<E: WtfEncoding> Hash for WtfString<E> {
 
 impl<E: WtfEncoding> PartialEq<str> for WtfStr<E> {
     fn eq(&self, other: &str) -> bool {
-        self.as_units() == E::encode_str(other).as_slice()
+        E::eq_str(self.as_units(), other)
     }
 }
 

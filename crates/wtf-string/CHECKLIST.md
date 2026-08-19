@@ -89,8 +89,8 @@ the first group is done).
 
 ## M∞ — Horizon (ungated, post-v1)
 
-Parked, not pending: designed-in seams with no numbered milestone. Each graduates when a real consumer
-appears. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+Parked, not pending: designed-in seams with no numbered milestone, gated on nothing — unscheduled post-v1
+work that graduates to a numbered milestone when it is picked up. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 - [ ] **M∞.1** — The `Wtf8` encoding arm: `WtfString<Wtf8>` delegating to std `OsString`, giving a uniform
   API across storage widths (D-3).

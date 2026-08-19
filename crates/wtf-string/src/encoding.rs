@@ -28,6 +28,14 @@ pub trait WtfEncoding {
     /// Decode content code units to a `String`, replacing any ill-formed sequence
     /// with the Unicode replacement character (`U+FFFD`).
     fn decode_lossy(units: &[Self::Unit]) -> String;
+
+    /// Whether content code `units` equal the UTF-8 `str` `s` under this encoding.
+    ///
+    /// The default encodes `s` and compares slices; an encoding can override with
+    /// an allocation-free lazy comparison (as [`Wtf16`] does).
+    fn eq_str(units: &[Self::Unit], s: &str) -> bool {
+        units == Self::encode_str(s).as_slice()
+    }
 }
 
 /// The WTF-16 encoding: arbitrary, ill-formed-surrogate-tolerant UTF-16 stored as
@@ -51,5 +59,10 @@ impl WtfEncoding for Wtf16 {
 
     fn decode_lossy(units: &[u16]) -> String {
         String::from_utf16_lossy(units)
+    }
+
+    fn eq_str(units: &[u16], s: &str) -> bool {
+        // Compare against the lazily-encoded UTF-16 of `s`; no allocation.
+        units.iter().copied().eq(s.encode_utf16())
     }
 }
