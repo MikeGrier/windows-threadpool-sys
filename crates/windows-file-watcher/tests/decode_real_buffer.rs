@@ -15,7 +15,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE, WAIT_OBJECT_0,
+    CloseHandle, ERROR_IO_PENDING, FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY,
@@ -151,13 +151,16 @@ fn read_overlapped(
         )
     };
     if arm_ok == 0 {
-        let err = format!(
-            "ReadDirectoryChangesW failed to arm: {}",
-            std::io::Error::last_os_error()
-        );
-        // SAFETY: `event` is valid and not associated with any in-flight read.
-        unsafe { CloseHandle(event) };
-        return Err(err);
+        // An overlapped read reports a successfully *queued* read as FALSE +
+        // ERROR_IO_PENDING; only a different error is a genuine arm failure.
+        // Treating ERROR_IO_PENDING as failure here would close the event and drop
+        // `buffer`/`overlapped` while the kernel still references them.
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
+            // SAFETY: `event` is valid and not associated with any in-flight read.
+            unsafe { CloseHandle(event) };
+            return Err(format!("ReadDirectoryChangesW failed to arm: {err}"));
+        }
     }
 
     // The read is now queued in the kernel; the test may safely make its change.

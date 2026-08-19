@@ -7,10 +7,9 @@
 //! meant to be built at a higher layer -- this crate is about excellent Windows
 //! behaviour (path-name and notification-limitation fidelity) with memory safety.
 //!
-//! The public surface is a queue-mediated `Monitor` / `Session` / `Watch` model
-//! and is built out across milestones; see [CHECKLIST.md](../CHECKLIST.md) and the
-//! design sessions in [design-sessions/](../design-sessions/) for the shape and
-//! the decisions behind it.
+//! The public surface is a queue-mediated `Monitor` / `Session` / `Watch` model,
+//! built out across milestones; its design decisions, rationale, and schedule are
+//! recorded in the crate's source repository.
 
 #![warn(missing_docs)]
 

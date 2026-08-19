@@ -126,3 +126,19 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 - [ ] **M7.5** — Publication readiness: crate metadata, changelog, and a final review pass over the public
   surface for the v1 scope (D-18) and the deferred seams (D-19).
+
+## M∞ — Horizon (ungated, post-v1)
+
+Parked, not pending: these items are gated on nothing and belong to no numbered milestone. They are the
+deferred seams of [DESIGN-NOTES.md](DESIGN-NOTES.md) → D-19, and each graduates to a numbered milestone
+post-v1 if and when it is chosen. None is an open obligation of any current milestone.
+
+- [ ] **M∞.1** — `ReadDirectoryChangesExW` extended records (`FILE_NOTIFY_EXTENDED_INFORMATION`): surface the
+  richer per-record fields on OS versions that support it, behind capability detection, without disturbing
+  the basic `FILE_NOTIFY_INFORMATION` surface (D-18/D-19).
+
+- [ ] **M∞.2** — Digest-based change *verification*: an optional mode that confirms a reported change by
+  hashing content, trading cost for fewer spurious notifications (D-19).
+
+- [ ] **M∞.3** — Per-volume capability cache: remember detailed-vs-coarse (and extended-record) support per
+  volume so establish/re-establish need not re-probe each time (D-17/D-19).

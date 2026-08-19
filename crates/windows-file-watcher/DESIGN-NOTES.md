@@ -37,7 +37,7 @@ threads of its own.
 | D-16 | Retry policy is **resident data**, never a reactive callback: a backoff value mutated only through serialized request-queue items and read by the single serialized fault handler. Race-free; no client code on the cadence path. Because a directory has one coalesced watcher (D-6) but several subscriptions may set different policies, the watcher's *effective* policy is a deterministic **soonest-recovering** reduction across its subscriptions (see [Fault model](#fault-model)). |
 | D-17 | Two-tier watcher: Detailed (`ReadDirectoryChangesW` + `ThreadpoolIo`) preferred, Coarse (`FindFirstChangeNotification` + `ThreadpoolWait`) fallback. Mode is a volume property resolved at establish/re-establish. See [Two-tier watching](#two-tier-watching). |
 | D-18 | v1 delivers basic `FILE_NOTIFY_INFORMATION`. |
-| D-19 | Deferred seams, **reserved with no scheduled v1 work** (not gated on any blocker): `ReadDirectoryChangesExW` extended records; digest-based change *verification*; an optional per-volume capability cache. Revisit post-v1; no CHECKLIST item is queued for them, and M7.5 only reviews the public surface against this reservation. |
+| D-19 | Deferred seams, parked as **horizon (M∞) checklist items** — gated on nothing, scheduled for no numbered milestone, and pulled into a numbered milestone post-v1 when chosen: `ReadDirectoryChangesExW` extended records; digest-based change *verification*; an optional per-volume capability cache. See [CHECKLIST.md](CHECKLIST.md) → M∞. |
 | D-20 | `Monitor::Drop` blocks on full rundown (cancel + drain every read/wait, then free), inheriting the `windows-threadpool-sys` teardown discipline. |
 
 ## Detail
