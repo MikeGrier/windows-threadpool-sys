@@ -19,7 +19,7 @@ with origin) is standard procedure and is not listed as an item.
   [the design session](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md) (D-1…D-20), and
   wire the crate into CI so the default and `--all-features` configurations both build, test, and lint.
 
-- [ ] **M1.3** — `FILE_NOTIFY_INFORMATION` record-walk decoder: follow the `NextEntryOffset` chain and
+- [x] **M1.3** — `FILE_NOTIFY_INFORMATION` record-walk decoder: follow the `NextEntryOffset` chain and
   extract `Action` plus the UTF-16 `FileName` (`FileNameLength` bytes, not NUL-terminated) into a lossless
   relative-name type exposing both `OsString`/`Path` (WTF-8) and raw `&[u16]` (D-8). Malformed offsets are
   handled without out-of-bounds reads.

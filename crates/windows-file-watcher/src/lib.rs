@@ -12,3 +12,9 @@
 //! in `design-sessions/` for the shape and the decisions behind it.
 
 #![warn(missing_docs)]
+
+#[cfg(windows)]
+mod notify;
+
+#[cfg(windows)]
+pub use notify::{RawChange, Records, RelativeName, records};
