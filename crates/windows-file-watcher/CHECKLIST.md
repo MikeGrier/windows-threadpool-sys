@@ -20,8 +20,9 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   `ThreadpoolIo` (the overlapped seam with the generation-stamped identity, D-3/D-4); decode the completion
   into a batch (M1) and re-arm around processing to minimise the inherent loss window.
 
-- [ ] **M2.3** — Deliver batches through a crate-owned concrete queue sender (interim direct sender for
-  this milestone, D-11); tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte completion.
+- [ ] **M2.3** — Deliver batches into a crate-owned queue endpoint (the interim, entirely in-crate delivery
+  target for this milestone; the session/receiver split lands in M3, D-11) so no client code runs on the pool
+  thread at any milestone; tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte completion.
 
 - [ ] **M2.4** — Teardown: cancel the outstanding read, drain the pool I/O, and free the context via
   owned-object `Drop` (D-20), with re-arm suppression inherited from `ThreadpoolIo` rundown.

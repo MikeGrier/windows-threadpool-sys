@@ -85,7 +85,7 @@ pub(crate) struct RawChange {
 ///
 /// `buffer` is the completion buffer truncated to the bytes the kernel returned.
 /// Iteration stops at the first record that cannot be parsed cleanly -- a
-/// truncated header, a name length that overruns the buffer, or a
+/// truncated header, a name length that is odd or overruns the buffer, or a
 /// `NextEntryOffset` that is unaligned, points into the current record, or falls
 /// outside the buffer -- so a malformed or partial buffer can never cause an
 /// out-of-bounds read. When iteration stops for such a reason the iterator sets
@@ -136,10 +136,12 @@ impl Iterator for Records<'_> {
         let action = read_u32(rec, 4);
         let name_len_bytes = read_u32(rec, 8) as usize;
 
-        // The name must lie entirely within this record's span, or the buffer is
-        // malformed and we stop rather than read past the end.
+        // The name must be a whole number of UTF-16 code units (an even byte
+        // count) and lie entirely within this record's span. An odd length or one
+        // that overruns the record is malformed: we stop rather than read a
+        // partial code unit or past the end.
         let name_end = match HEADER_LEN.checked_add(name_len_bytes) {
-            Some(end) if end <= rec.len() => end,
+            Some(end) if end <= rec.len() && name_len_bytes.is_multiple_of(2) => end,
             _ => {
                 self.pos = None;
                 self.malformed = true;
@@ -184,8 +186,9 @@ fn read_u32(rec: &[u8], offset: usize) -> u32 {
     ])
 }
 
-/// Copy a UTF-16LE byte region into owned code units. A trailing odd byte (only
-/// possible from a malformed length) is dropped rather than misread.
+/// Copy a UTF-16LE byte region into owned code units. The caller rejects an odd
+/// byte length as malformed before calling this, so `chunks_exact` never has a
+/// remainder to drop.
 fn decode_utf16(bytes: &[u8]) -> RelativeName {
     let units: Box<[u16]> = bytes
         .chunks_exact(2)

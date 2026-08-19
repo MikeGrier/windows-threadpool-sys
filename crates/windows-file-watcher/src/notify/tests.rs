@@ -241,17 +241,16 @@ fn unaligned_next_offset_is_desync() {
 }
 
 #[test]
-fn odd_name_length_drops_the_trailing_byte() {
-    // A complete record whose FileNameLength is odd is tolerated (the stray byte
-    // is dropped), not treated as malformed: the chain still ends cleanly.
+fn odd_name_length_is_desync() {
+    // FileNameLength is the byte length of a UTF-16 sequence, so an odd value is
+    // malformed: rather than silently drop the stray byte and claim success, the
+    // decode desyncs.
     let mut buf = Vec::new();
     buf.extend_from_slice(&0_u32.to_le_bytes());
     buf.extend_from_slice(&FILE_ACTION_ADDED.to_le_bytes());
     buf.extend_from_slice(&3_u32.to_le_bytes()); // odd byte length
     buf.extend_from_slice(&[0x41, 0x00, 0x42]); // 'A' then a stray byte
-    let c = changes(&buf);
-    assert_eq!(c.len(), 1);
-    assert_eq!(c[0].name.as_wide(), &[u16::from(b'A')]);
+    assert_eq!(desync(&buf), DesyncCause::Overflow);
 }
 
 // --- the internal raw walk ---
