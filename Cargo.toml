@@ -2,6 +2,7 @@
 
 [workspace]
 members = [
+	"crates/windows-file-watcher",
 	"crates/windows-overlapped-io-sys",
 	"crates/windows-threadpool-sys",
 ]

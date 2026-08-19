@@ -1,0 +1,48 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-file-watcher"
+version = "0.1.0" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/windows-file-watcher"
+description = "Memory-safe Windows path-change watching with full ReadDirectoryChangesW fidelity."
+keywords = ["windows", "filesystem", "notify", "watcher", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "filesystem"]
+
+[lib]
+path = "src/lib.rs"
+
+# The crate is Windows-only, so docs.rs must build it on a Windows target or it
+# would resolve to an empty crate and document nothing.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+[dependencies]
+# The owned overlapped-I/O foundation. Directory reads are issued through its
+# submission seam, and its generation-stamped `OperationId` keeps a stale
+# completion from being misattributed to the next read that reuses the same
+# `OVERLAPPED` across a re-arm. No features are enabled; only the core completion
+# machinery is needed.
+windows-overlapped-io-sys = { version = "0.1.0", path = "../windows-overlapped-io-sys", default-features = false }
+
+# The thread pool the monitor runs on: `ThreadpoolIo` services detailed reads,
+# `ThreadpoolWait` the coarse fallback, `ThreadpoolTimer` the retry backoff, and
+# `ThreadpoolWork` drains the request queue. The monitor owns no threads of its
+# own.
+windows-threadpool-sys = { version = "0.1.0", path = "../windows-threadpool-sys" }
+
+windows-sys = {
+	version = "0.61.2",
+	default-features = false,
+	features = [
+		"Win32_Foundation",
+		"Win32_Storage_FileSystem",
+		"Win32_System_IO",
+	],
+}

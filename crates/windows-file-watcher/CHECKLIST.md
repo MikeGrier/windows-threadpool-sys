@@ -10,7 +10,7 @@ with origin) is standard procedure and is not listed as an item.
 
 ## M1 — Crate scaffold and notification decode
 
-- [ ] **M1.1** — Scaffold `crates/windows-file-watcher`: `Cargo.toml` with a `cfg(windows)`-gated `lib`,
+- [x] **M1.1** — Scaffold `crates/windows-file-watcher`: `Cargo.toml` with a `cfg(windows)`-gated `lib`,
   path+version dependencies on `windows-overlapped-io-sys` and `windows-threadpool-sys`, and `windows-sys`
   with the needed feature groups; `src/lib.rs` crate-doc skeleton; add the crate to the workspace members.
   Everything is `cfg(windows)`, so the crate resolves to an empty crate elsewhere.
