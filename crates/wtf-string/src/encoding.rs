@@ -6,8 +6,9 @@
 /// This trait is the storage-width seam: the API common to every width is written
 /// against `E: WtfEncoding`, while width-specific API (such as the `*const u16`
 /// FFI surface) lives in inherent impls on the concrete instantiations. v1
-/// implements only [`Wtf16`]; a `Wtf8` arm delegating to `OsString` slots into the
-/// same seam later.
+/// implements only [`Wtf16`]; a `Wtf8` arm — `u8`/WTF-8 units with this crate's
+/// own encode/decode/comparison/formatting semantics, for which std `OsString` is
+/// the intended backing implementation — slots into the same seam later.
 pub trait WtfEncoding {
     /// The code unit this encoding stores (`u16` for [`Wtf16`]).
     type Unit: Copy + Ord + core::hash::Hash + core::fmt::Debug;
@@ -35,6 +36,16 @@ pub trait WtfEncoding {
     /// an allocation-free lazy comparison (as [`Wtf16`] does).
     fn eq_str(units: &[Self::Unit], s: &str) -> bool {
         units == Self::encode_str(s).as_slice()
+    }
+
+    /// Write the escaped debug form of `units`, like [`OsStr`](std::ffi::OsStr):
+    /// quoted, with control and non-printable characters escaped.
+    ///
+    /// The default decodes lossily and escapes; an encoding can override to also
+    /// escape *ill-formed* sequences losslessly (as [`Wtf16`] does for a lone
+    /// surrogate), so distinct ill-formed inputs remain distinguishable.
+    fn debug_fmt(units: &[Self::Unit], f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", Self::decode_lossy(units))
     }
 }
 
@@ -64,5 +75,22 @@ impl WtfEncoding for Wtf16 {
     fn eq_str(units: &[u16], s: &str) -> bool {
         // Compare against the lazily-encoded UTF-16 of `s`; no allocation.
         units.iter().copied().eq(s.encode_utf16())
+    }
+
+    fn debug_fmt(units: &[u16], f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use core::fmt::Write as _;
+        f.write_char('"')?;
+        for unit in core::char::decode_utf16(units.iter().copied()) {
+            match unit {
+                Ok(c) => {
+                    for esc in c.escape_debug() {
+                        f.write_char(esc)?;
+                    }
+                }
+                // Preserve a lone surrogate losslessly as an escape, not U+FFFD.
+                Err(e) => write!(f, "\\u{{{:x}}}", e.unpaired_surrogate())?,
+            }
+        }
+        f.write_char('"')
     }
 }

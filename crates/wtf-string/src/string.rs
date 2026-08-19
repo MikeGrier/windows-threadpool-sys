@@ -206,9 +206,7 @@ impl<E: WtfEncoding> Display for WtfString<E> {
 
 impl<E: WtfEncoding> Debug for WtfStr<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        // Rendered like `OsStr`: the (lossy) text, quoted and escaped. Ill-formed
-        // units appear as `U+FFFD` in this view.
-        Debug::fmt(&self.to_string_lossy(), f)
+        E::debug_fmt(self.as_units(), f)
     }
 }
 

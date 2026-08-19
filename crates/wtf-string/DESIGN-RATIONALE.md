@@ -18,8 +18,10 @@ Apache-2.0), and `no_std`-capable.
 The one thing it does **not** offer is a single encoding-generic
 `WtfString<Encoding>` with per-width inherent impls; it uses macro-duplicated
 concrete types (`U16String`, `U32String`, `Utf16String`, ...). But that
-difference is architectural, and its most defensible payoff (a `Wtf8` arm
-delegating to std `OsString` for a uniform cross-width API) is exactly the part
+difference is architectural, and its most defensible payoff (a `Wtf8` arm — this
+crate's `u8`/WTF-8 storage variant, for which std `OsString` is the intended
+backing implementation because its WTF-8 storage matches — giving a uniform
+cross-width API) is exactly the part
 v1 defers.
 
 So the build decision is **not** justified as a capability win. It is an

@@ -22,7 +22,7 @@ Windows-specific.
 |---|---|
 | D-1 | **Build, not adopt.** We re-own this layer rather than depend on [`widestring`](https://crates.io/crates/widestring). This is an **ownership/evolvability** decision, not a capability gap (`widestring` technically suffices today). See [Build vs adopt](DESIGN-RATIONALE.md#build-vs-adopt-d-1). |
 | D-2 | Encoding-generic core: `WtfString<E: WtfEncoding>` owns `Vec<E::Unit>`; `WtfStr<E>` is a `#[repr(transparent)]` slice over `[E::Unit]`. Shared API in `impl<E>`; width-specific API via **inherent impls on concrete instantiations** (the specialization-shaped pattern). See [The generic seam](#the-generic-seam). |
-| D-3 | v1 ships **only** the `Wtf16` encoding, exposed as `Wtf16String` = `WtfString<Wtf16>` and `Wtf16Str` = `WtfStr<Wtf16>`. The `Wtf8` arm (delegating to std `OsString`) is a designed-in seam, **deferred** — parked as unscheduled post-v1 horizon work ([CHECKLIST.md](CHECKLIST.md) `M∞.1`), gated on nothing. |
+| D-3 | v1 ships **only** the `Wtf16` encoding, exposed as `Wtf16String` = `WtfString<Wtf16>` and `Wtf16Str` = `WtfStr<Wtf16>`. The `Wtf8` arm — a `u8`/WTF-8 storage variant whose encode/decode, comparison, and formatting semantics this crate defines (std `OsString` is the intended backing implementation, chosen because its WTF-8 storage matches those semantics) — is a designed-in seam, **deferred**: unscheduled post-v1 horizon work ([CHECKLIST.md](CHECKLIST.md) `M∞.1`), gated on nothing. |
 | D-4 | **WTF-16 semantics:** storage is arbitrary `[u16]`, ill-formed-surrogate-tolerant; construction from units performs **no validation** (mirrors `OsStr`'s WTF-8). |
 | D-5 | **Portable core.** Storage and `str` <-> units use std (`str::encode_utf16`, `char::decode_utf16`, `String::from_utf16[_lossy]`); no `cfg(windows)`. Only the `OsStr`/`from_wide`/`encode_wide` interop is behind `cfg(windows)`. |
 | D-6 | std parity: `WtfString: Deref<Target = WtfStr>`, plus `AsRef`/`Borrow`/`ToOwned`, `Ord`/`Eq`/`Hash` (binary over units), lossy `Display`, and `OsStr`-style escaped `Debug`. |
@@ -46,8 +46,9 @@ rules; `impl<E: WtfEncoding>` holds the API common to every width; and
 carry width-specific API such as the `*const u16` FFI surface, which only makes
 sense for `Wtf16`. Rust allows inherent methods on a specific instantiation, so
 this yields specialization-shaped APIs with no unstable features. v1 implements
-only `Wtf16`; `Wtf8` (delegating to std `OsString`) slots into the same seam
-later. (D-2, D-3)
+only `Wtf16`; a `Wtf8` arm — `u8`/WTF-8 units whose semantics this crate owns (std
+`OsString` is the intended backing implementation, chosen because its WTF-8
+storage matches) — slots into the same seam later. (D-2, D-3)
 
 ### Always-terminated storage
 

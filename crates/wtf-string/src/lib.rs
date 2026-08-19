@@ -17,8 +17,10 @@
 //! The core is generic over a [code-unit encoding](WtfEncoding): `WtfString<E>`
 //! owns the units and `WtfStr<E>` is the borrowed slice. v1 ships only the
 //! `Wtf16` encoding, exposed as the aliases `Wtf16String` / `Wtf16Str`; the
-//! `Wtf8` arm (which delegates to std `OsString`) is a designed-in seam that is
-//! not yet implemented.
+//! `Wtf8` arm — a `u8`/WTF-8 storage variant whose encode/decode, comparison, and
+//! formatting semantics this crate defines (std `OsString` is the intended
+//! backing implementation, since its WTF-8 storage matches) — is a designed-in
+//! seam that is not yet implemented.
 //!
 //! The storage and `str`/`String` conversions are portable; the `OsStr` /
 //! `OsString` interop is Windows-only.

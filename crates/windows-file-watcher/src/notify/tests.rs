@@ -33,7 +33,7 @@ fn record(next_offset: u32, action: u32, name: &[u16]) -> Vec<u8> {
 /// DWORD-aligned byte length of a record with `name_units` code units, matching
 /// how the kernel lays records out.
 fn aligned(name_units: usize) -> usize {
-    (12 + name_units * 2).next_multiple_of(4)
+    (super::HEADER_LEN + name_units * super::UNIT_LEN).next_multiple_of(super::RECORD_ALIGNMENT)
 }
 
 /// Build a properly chained, DWORD-aligned buffer of `(action, name)` records.

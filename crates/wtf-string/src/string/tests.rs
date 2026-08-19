@@ -205,6 +205,20 @@ fn debug_quotes_and_escapes() {
 }
 
 #[test]
+fn debug_escapes_lone_surrogate_losslessly() {
+    // A lone surrogate is escaped OsStr-style, not collapsed to U+FFFD, so it
+    // stays distinguishable from the real replacement character.
+    assert_eq!(
+        format!("{:?}", Wtf16Str::from_units(&[0xD800])),
+        "\"\\u{d800}\""
+    );
+    assert_ne!(
+        format!("{:?}", Wtf16Str::from_units(&[0xD800])),
+        format!("{:?}", Wtf16Str::from_units(&[0xFFFD]))
+    );
+}
+
+#[test]
 fn ordering_is_binary_over_units() {
     let a = Wtf16String::from("a");
     let b = Wtf16String::from("b");

@@ -25,6 +25,13 @@ use windows_sys::Win32::Storage::FileSystem::{
 /// (`NextEntryOffset`, `Action`, `FileNameLength`) ahead of the name.
 const HEADER_LEN: usize = 12;
 
+/// The size in bytes of one UTF-16 code unit in the wire format.
+const UNIT_LEN: usize = 2;
+
+/// The DWORD alignment of `FILE_NOTIFY_INFORMATION` records: every
+/// `NextEntryOffset` is a multiple of this, and records begin on this boundary.
+const RECORD_ALIGNMENT: usize = 4;
+
 /// Byte offsets of the fixed `FILE_NOTIFY_INFORMATION` fields within a record.
 ///
 /// These describe the kernel's wire layout; changing any value is a breaking
@@ -165,7 +172,7 @@ impl Iterator for Records<'_> {
             next_offset.min(rec.len())
         };
         let name_end = match HEADER_LEN.checked_add(name_len_bytes) {
-            Some(end) if end <= record_span && name_len_bytes.is_multiple_of(2) => end,
+            Some(end) if end <= record_span && name_len_bytes.is_multiple_of(UNIT_LEN) => end,
             _ => {
                 self.pos = None;
                 self.malformed = true;
@@ -184,7 +191,7 @@ impl Iterator for Records<'_> {
         // malformed and iteration stops.
         self.pos = if next_offset == 0 {
             None
-        } else if next_offset.is_multiple_of(4) && next_offset >= name_end {
+        } else if next_offset.is_multiple_of(RECORD_ALIGNMENT) && next_offset >= name_end {
             match pos.checked_add(next_offset) {
                 Some(next) => Some(next),
                 None => {
