@@ -140,12 +140,19 @@ impl Iterator for Records<'_> {
         let action = read_u32(rec, 4);
         let name_len_bytes = read_u32(rec, 8) as usize;
 
-        // The name must be a whole number of UTF-16 code units (an even byte
-        // count) and lie entirely within this record's span. An odd length or one
-        // that overruns the record is malformed: we stop rather than read a
-        // partial code unit or past the end.
+        // This record spans from its header to the next record (`NextEntryOffset`),
+        // or to the end of the buffer when it is the last record. The name must be
+        // a whole number of UTF-16 code units (an even byte count) and lie entirely
+        // within that span; a name that is odd, overruns the buffer, or reaches
+        // past `NextEntryOffset` into the following record is malformed, and we
+        // stop rather than read a partial code unit or another record's bytes.
+        let record_span = if next_offset == 0 {
+            rec.len()
+        } else {
+            next_offset.min(rec.len())
+        };
         let name_end = match HEADER_LEN.checked_add(name_len_bytes) {
-            Some(end) if end <= rec.len() && name_len_bytes.is_multiple_of(2) => end,
+            Some(end) if end <= record_span && name_len_bytes.is_multiple_of(2) => end,
             _ => {
                 self.pos = None;
                 self.malformed = true;

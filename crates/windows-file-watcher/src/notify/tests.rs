@@ -275,6 +275,26 @@ fn odd_name_length_is_desync() {
     assert_eq!(desync(&buf), DesyncCause::Overflow);
 }
 
+#[test]
+fn name_overrunning_next_entry_offset_is_desync() {
+    // A non-last record whose FileNameLength reaches past its NextEntryOffset into
+    // the following record is malformed: the decoder must desync rather than read
+    // the next record's bytes as this record's name.
+    let mut buf = Vec::new();
+    // Record 0: NextEntryOffset = 16 (so its span is 16 bytes), but a name length
+    // claiming 8 bytes would end at 20 — four bytes into record 1.
+    buf.extend_from_slice(&16_u32.to_le_bytes());
+    buf.extend_from_slice(&FILE_ACTION_ADDED.to_le_bytes());
+    buf.extend_from_slice(&8_u32.to_le_bytes()); // claims 8 name bytes
+    buf.extend_from_slice(&[0x41, 0x00, 0x42, 0x00]); // only 4 fit before offset 16
+    // Record 1 at offset 16: a valid last record whose bytes must not be consumed.
+    buf.extend_from_slice(&0_u32.to_le_bytes());
+    buf.extend_from_slice(&FILE_ACTION_ADDED.to_le_bytes());
+    buf.extend_from_slice(&2_u32.to_le_bytes());
+    buf.extend_from_slice(&[0x43, 0x00]);
+    assert_eq!(desync(&buf), DesyncCause::Overflow);
+}
+
 // --- the internal raw walk ---
 
 #[test]

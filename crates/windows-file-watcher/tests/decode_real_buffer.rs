@@ -129,9 +129,12 @@ fn read_overlapped(
 
     // A `Vec<u32>` guarantees the DWORD alignment `ReadDirectoryChangesW` requires.
     let mut buffer = vec![0_u32; 1024];
+    // The OVERLAPPED lives on the heap (a `Box`) so that, on the unlikely path
+    // where a cancelled read cannot be confirmed retired, it can be *leaked*
+    // rather than freed while the kernel might still write to it.
     // SAFETY: `OVERLAPPED` is plain data; zeroing then setting `hEvent` is the
     // documented way to bind the read to our wait event.
-    let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+    let mut overlapped: Box<OVERLAPPED> = Box::new(unsafe { std::mem::zeroed() });
     overlapped.hEvent = event;
 
     // SAFETY: `buffer`, `overlapped`, and `event` all outlive the read below; a
@@ -146,7 +149,7 @@ fn read_overlapped(
             0, // bWatchSubtree = FALSE
             FILE_NOTIFY_CHANGE_FILE_NAME,
             ptr::null_mut(),
-            &mut overlapped,
+            &mut *overlapped,
             None,
         )
     };
@@ -170,11 +173,12 @@ fn read_overlapped(
     let waited = unsafe { WaitForSingleObject(event, TIMEOUT_MS) };
     let mut transferred: u32 = 0;
 
-    let outcome = if waited == WAIT_OBJECT_0 {
-        // SAFETY: the event signaled, so the overlapped result is available; the
-        // read has completed, so the buffer is safe to read.
-        let ok = unsafe { GetOverlappedResult(handle, &overlapped, &mut transferred, FALSE) };
-        if ok == 0 {
+    if waited == WAIT_OBJECT_0 {
+        // The event signaled: the read has completed and is retired, so the buffer
+        // is safe to read and the locals are safe to drop.
+        // SAFETY: the overlapped result is available.
+        let ok = unsafe { GetOverlappedResult(handle, &*overlapped, &mut transferred, FALSE) };
+        let outcome = if ok == 0 {
             Err(format!(
                 "GetOverlappedResult failed: {}",
                 std::io::Error::last_os_error()
@@ -185,23 +189,44 @@ fn read_overlapped(
                 std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), transferred as usize)
             };
             decode(bytes)
-        }
-    } else {
-        // Timeout or wait failure: cancel the pending read and block until it is
-        // fully retired so `buffer`/`overlapped` are no longer referenced by the
-        // kernel before they are dropped at the end of this function.
-        // SAFETY: `handle`/`overlapped` name the single in-flight read.
-        unsafe { CancelIoEx(handle, &overlapped) };
-        // SAFETY: `bWait = TRUE` blocks until the cancelled read is retired.
-        unsafe { GetOverlappedResult(handle, &overlapped, &mut transferred, TRUE) };
-        Err(format!(
-            "the watch did not report a change within {TIMEOUT_MS} ms (wait result {waited})"
-        ))
-    };
+        };
+        // SAFETY: the read is retired; the event is closed exactly once.
+        unsafe { CloseHandle(event) };
+        return outcome;
+    }
 
-    // SAFETY: `event` is closed exactly once, after the read has been retired.
-    unsafe { CloseHandle(event) };
-    outcome
+    // Timeout or wait failure. Cancel the pending read, then confirm it is retired
+    // within a *bounded* wait before `buffer`/`overlapped` are dropped. A cancelled
+    // overlapped read still signals its event on completion, so we wait on the
+    // event rather than blocking unbounded in `GetOverlappedResult(.., TRUE)`.
+    // SAFETY: `handle`/`overlapped` name the single in-flight read.
+    let cancelled = unsafe { CancelIoEx(handle, &*overlapped) } != 0;
+    let cancel_err = std::io::Error::last_os_error();
+    // SAFETY: `event` is a valid handle.
+    let retired = unsafe { WaitForSingleObject(event, TIMEOUT_MS) } == WAIT_OBJECT_0;
+
+    if retired {
+        // SAFETY: the read is retired; collect and discard the aborted result.
+        unsafe { GetOverlappedResult(handle, &*overlapped, &mut transferred, FALSE) };
+        // SAFETY: the read is retired; the event is closed exactly once.
+        unsafe { CloseHandle(event) };
+        return Err(format!(
+            "the watch did not report a change within {TIMEOUT_MS} ms \
+             (wait result {waited}, cancelled = {cancelled})"
+        ));
+    }
+
+    // The read could not be confirmed retired within the bound (cancel reported
+    // {cancel_err}). The kernel may still write into `buffer`/`overlapped`, so
+    // dropping them would be unsound. Leak the heap `buffer` and the boxed
+    // `overlapped`, and leave `event` open, rather than free live storage; this
+    // path is not expected to occur for a cancelled directory read.
+    std::mem::forget(buffer);
+    std::mem::forget(overlapped);
+    Err(format!(
+        "overlapped read could not be retired within {TIMEOUT_MS} ms after CancelIoEx \
+         (cancel error {cancel_err}); leaked buffer/overlapped to stay sound"
+    ))
 }
 
 /// Decode a completion buffer into `(kind, name)` pairs, mapping a desync to an
