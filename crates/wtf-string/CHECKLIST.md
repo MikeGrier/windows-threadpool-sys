@@ -22,20 +22,22 @@ Completed milestones are archived in
   and the Tier-3 session (D-1…D-13); register the crate in the master and crate-local plans. CI covers it
   automatically via the workspace build.
 
-## M2 — Encoding seam and core storage
+## M2 — Encoding seam and core types
 
-- [ ] **M2.1** — `WtfEncoding` trait (associated `Unit`, plus the conversion/validity hooks the shared API
-  needs) and the `Wtf16` encoding (`Unit = u16`), with the concrete aliases `Wtf16String` / `Wtf16Str` (D-2/D-3).
+- [ ] **M2.1** — `WtfEncoding` trait (associated `Unit`, the `NUL` terminator unit) and the `Wtf16`
+  encoding (`Unit = u16`) (D-2/D-3).
 
 - [ ] **M2.2** — `WtfString<E>` (owns `Vec<E::Unit>`) and `WtfStr<E>` (`#[repr(transparent)]` over
-  `[E::Unit]`) with the **always-terminated** storage invariant (hidden trailing `0x0000`; `len()`/spans
-  exclude it) (D-4/D-7).
+  `[E::Unit]`): the **always-terminated** storage invariant (hidden trailing `0x0000`; `len()`/spans exclude
+  it), construction (`new`, `from_units`), content access on `WtfStr` (`as_units`, `len`, `is_empty`,
+  `has_interior_nul`), the `Wtf16String`/`Wtf16Str` aliases, and std parity
+  (`Deref`/`AsRef`/`Borrow`/`ToOwned`/`Default`/`Clone`). The FFI pointer surface is M4. (The old M2.2/M2.3
+  are merged: the owned type exposes content access *through* `Deref`, so the type definitions and the
+  std-parity plumbing cannot compile independently.) (D-4/D-6/D-7)
 
-- [ ] **M2.3** — std-parity plumbing: `Deref<Target = WtfStr>`, `AsRef`, `Borrow`, `ToOwned`, `Default`,
-  `Clone`, and unit access (`as_units` excluding the terminator, `as_ptr`, `len`, `is_empty`) (D-6).
-
-- [ ] **M2.4** — Tests: the terminator invariant survives construction/clone/reserve; spans never include the
-  terminator; interior-NUL content is preserved and `has_interior_nul()` reports it; empty and large inputs.
+- [ ] **M2.3** — Tests (sibling `tests.rs`): the terminator invariant survives construction/clone; spans
+  never include the terminator; interior-NUL content is preserved and `has_interior_nul()` reports it;
+  `Deref`/`ToOwned` round-trip; empty and large inputs.
 
 ## M3 — str/String conversions and comparison
 
