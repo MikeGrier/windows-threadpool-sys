@@ -45,7 +45,7 @@ Completed milestones are archived in
   and `to_string_checked() -> Option` (fallible exact — `to_string` is avoided since it would collide with
   `ToString` once `Display` lands in M3.2), and `to_string_lossy()` (U+FFFD) (D-8).
 
-- [ ] **M3.2** — `Display` (lossy) and `OsStr`-style escaped `Debug`.
+- [x] **M3.2** — `Display` (lossy) and `OsStr`-style escaped `Debug`.
 
 - [ ] **M3.3** — `Ord` / `PartialOrd` / `Eq` / `PartialEq` / `Hash` (binary over units), and cross-type
   comparison with `&str` where it is unambiguous.

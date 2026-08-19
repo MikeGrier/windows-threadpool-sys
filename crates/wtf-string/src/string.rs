@@ -2,6 +2,7 @@
 //! The owned [`WtfString`] and borrowed [`WtfStr`] string types.
 
 use std::borrow::Borrow;
+use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
 
 use crate::encoding::{Wtf16, WtfEncoding};
@@ -186,6 +187,32 @@ impl<E: WtfEncoding> From<&str> for WtfString<E> {
 impl<E: WtfEncoding> From<String> for WtfString<E> {
     fn from(s: String) -> Self {
         Self::from_encoded(E::encode_str(&s))
+    }
+}
+
+impl<E: WtfEncoding> Display for WtfStr<E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.to_string_lossy(), f)
+    }
+}
+
+impl<E: WtfEncoding> Display for WtfString<E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&**self, f)
+    }
+}
+
+impl<E: WtfEncoding> Debug for WtfStr<E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Rendered like `OsStr`: the (lossy) text, quoted and escaped. Ill-formed
+        // units appear as `U+FFFD` in this view.
+        Debug::fmt(&self.to_string_lossy(), f)
+    }
+}
+
+impl<E: WtfEncoding> Debug for WtfString<E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&**self, f)
     }
 }
 
