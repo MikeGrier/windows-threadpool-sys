@@ -29,7 +29,7 @@ threads of its own.
 | D-8 | Names are delivered raw and **relative to the directory opened for the read**: for a directory target that directory itself, and for a file target (D-7) its parent — so a file watch reports the leaf name, not a name relative to the file. `OsString`/`Path` (lossless WTF-8) is primary; a raw `&[u16]` escape hatch is available. |
 | D-9 | Raw `FILE_ACTION_*` kinds, `RenamedOldName`/`RenamedNewName` kept distinct; the crate never joins renames or joins across a buffer. |
 | D-10 | Notifications are delivered as batches (one decoded `ReadDirectoryChangesW` completion = one batch). |
-| D-11 | `NotificationSink: Send + Sync`, non-blocking + infallible `deliver`. The crate forces **multi-producer** safety (MPSC minimum); consumer cardinality is the client's business. |
+| D-11 | Delivery is a **crate-owned concrete queue sender** (`Send + Sync`, multi-producer), never a client-implemented trait: its `deliver` only enqueues onto a queue the crate owns, so no client code ever runs on a monitor/threadpool thread (D-2). The client holds the matching receiver and drains on its own thread(s); consumer cardinality is the client's business (MPSC is the floor). A full bounded queue degrades to `Desync { QueueFull }` rather than blocking. |
 | D-12 | `Desync { cause }` is the single "you missed changes — re-scan" primitive. Kernel overflow, a full client queue, coarse-mode signals, and post-outage gaps all collapse to it. See [The Desync primitive](#the-desync-primitive). |
 | D-13 | `Suspended`/`Resumed` liveness brackets and `Established { mode }` are opt-in per subscription. |
 | D-14 | No terminal fault state — only "not yet re-established." The monitor retries autonomously and indefinitely; the client may cancel from any state. See [Fault model](#fault-model). |
@@ -49,7 +49,12 @@ queued notification (monitor → client). The monitor's servicing is driven by a
 `ThreadpoolWork` that serializes all resident-state mutations, so there is a
 single logical authority and no client code executes on a monitor/threadpool
 thread. A `Session` binds a request-submission handle to a notification sink;
-every `Watch` created through a session delivers to that session's sink. (D-2)
+every `Watch` created through a session delivers to that session's sink. The sink
+is a **crate-owned concrete queue sender**, not a client trait object: delivery
+is an enqueue the crate performs, and the client observes notifications only by
+draining the matching receiver on its own thread — so the "no client code on a
+pool thread" guarantee holds by construction, not by asking the client to keep a
+callback well-behaved. (D-2, D-11)
 
 ### Coalescing by directory
 

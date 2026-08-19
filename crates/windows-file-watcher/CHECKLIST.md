@@ -20,8 +20,8 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   `ThreadpoolIo` (the overlapped seam with the generation-stamped identity, D-3/D-4); decode the completion
   into a batch (M1) and re-arm around processing to minimise the inherent loss window.
 
-- [ ] **M2.3** — Deliver batches through a `NotificationSink` (interim direct sink for this milestone);
-  tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte completion.
+- [ ] **M2.3** — Deliver batches through a crate-owned concrete queue sender (interim direct sender for
+  this milestone, D-11); tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte completion.
 
 - [ ] **M2.4** — Teardown: cancel the outstanding read, drain the pool I/O, and free the context via
   owned-object `Drop` (D-20), with re-arm suppression inherited from `ThreadpoolIo` rundown.
@@ -36,15 +36,17 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   that serialises resident-state mutations (D-2); `Monitor::Drop` blocks on full rundown (D-20).
 
 - [ ] **M3.2** — `Session` obtained from the monitor: bundles a request-submission handle (MPSC producers)
-  and the notification sink (D-2); provide `monitor.session(sink)` and a default-sink variant.
+  and the crate-owned notification sender (D-2/D-11); provide `monitor.session()` returning the session plus
+  the client-side receiver, and a variant accepting a caller-supplied bound.
 
-- [ ] **M3.3** — Finalise `NotificationSink`: `Send + Sync`, non-blocking, infallible `deliver`; ship a
-  bounded default sink that emits `Desync { QueueFull }` on overflow (D-11/D-12).
+- [ ] **M3.3** — Finalise the notification queue (D-11): a crate-owned, `Send + Sync`, multi-producer
+  bounded sender whose enqueue is non-blocking and infallible and emits `Desync { QueueFull }` on overflow
+  (D-12), paired with the client-side receiver the session hands back. No client code runs on a pool thread.
 
 - [ ] **M3.4** — Affine `Watch` (D-5): `#[must_use]`, `Drop` enqueues cancellation, explicit `cancel()`,
   and a `Copy` `WatchId`; subscribe/unsubscribe requests plumbed through the serialised request queue.
 
-- [ ] **M3.5** — Integration: several subscriptions through one session delivering to one sink; cancel via
+- [ ] **M3.5** — Integration: several subscriptions through one session delivering to one receiver; cancel via
   `Drop` and via `cancel()`; assert no delivery after cancellation completes and in-order delivery within a
   subscription.
 

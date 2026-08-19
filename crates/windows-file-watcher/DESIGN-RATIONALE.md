@@ -50,16 +50,28 @@ serialized fault handler reads it as inert data. Nothing decides concurrently
 update's effect relative to a fault is fixed by their order in the queue, not by
 timing. (D-16)
 
+### The sink is a concrete sender, not a client trait (D-11)
+
+Delivery could have been a client-implemented `NotificationSink` trait whose
+`deliver` the monitor calls. It was rejected: a trait method invoked from an I/O
+completion *is* client code running on a pool thread — the precise thing D-2
+exists to forbid — and a `Send + Sync` bound cannot enforce the promised
+non-blocking, infallible, panic-free behavior. A client `deliver` that blocks,
+panics, or is slow would stall or unwind the cadence path. So the sink is instead
+a **crate-owned concrete queue sender**: `deliver` is a crate-internal enqueue,
+and the client only ever *receives*. The guarantee then holds structurally rather
+than by trusting a callback.
+
 ### MPSC vs MPMC for the sink (D-11)
 
 Delivery is serialized *per subscription* (one outstanding read per handle,
 re-armed only after decode), so a single subscription is a single producer. But a
 session's sink aggregates several subscriptions, whose completions run on
-different pool threads concurrently — so the sink must be **multi-producer**
-(`Send + Sync`, concurrent `deliver`): MPSC is the floor the crate imposes. It
+different pool threads concurrently — so the sender must be **multi-producer**
+(`Send + Sync`, concurrent enqueue): MPSC is the floor the crate imposes. It
 never requires multi-*consumer*; draining from several threads is the client's
-choice (MPMC only if they want it). Delivery must be non-blocking and infallible
-so it cannot stall the cadence, which is why a full bounded sink degrades to
+choice (MPMC only if they want it). Enqueue must be non-blocking and infallible
+so it cannot stall the cadence, which is why a full bounded queue degrades to
 `Desync { QueueFull }` rather than blocking.
 
 ## The Desync unification (D-12)
