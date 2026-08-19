@@ -11,6 +11,11 @@ and [windows-threadpool-sys](../../windows-threadpool-sys/README.md)
 (`ThreadpoolIo` / `ThreadpoolWait` / `ThreadpoolTimer` / `ThreadpoolWork` /
 `CleanupGroup`).
 
+> **Note — this is the raw session record, not canonical.** Tier-1
+> [DESIGN-NOTES.md](../DESIGN-NOTES.md) is authoritative and wins on any
+> conflict. Two entries here were refined afterward; see the **Refined /
+> Superseded** markers on **D-8** and **D-11** below.
+
 Reference studied: the C++ `Azure/m` filesystem monitor (the participant was its
 author). Its state-machine shape is the good part; several of its behaviours are
 explicitly *not* reproduced (see "Hazards from Azure/m").
@@ -47,7 +52,7 @@ explicitly *not* reproduced (see "Hazards from Azure/m").
   watched by opening its **parent** directory non-recursively and filtering the
   leaf name (the capability `Azure/m` lacked). A **directory** target is watched
   directly, optionally recursively.
-- **D-8 — Names relative and lossless.** Names are delivered **raw and relative**
+- **D-8 — Names relative and lossless.** **Refined by [DESIGN-NOTES.md](../DESIGN-NOTES.md) D-8:** names are relative to the *opened directory* — for a file target, its parent — not the target itself. Names are delivered **raw and relative**
   to the watched target. `OsString` / `Path` is the primary surface (WTF-8
   round-trips arbitrary UTF-16 losslessly, including unpaired surrogates and
   `> MAX_PATH`); a raw `&[u16]` escape hatch is available.
@@ -56,7 +61,7 @@ explicitly *not* reproduced (see "Hazards from Azure/m").
   and never joins across a buffer boundary. Clients pair if they wish.
 - **D-10 — Batch delivery.** One decoded `ReadDirectoryChangesW` completion is
   delivered as one batch of records.
-- **D-11 — `NotificationSink` contract.** `trait NotificationSink: Send + Sync`
+- **D-11 — `NotificationSink` contract.** **Superseded by [DESIGN-NOTES.md](../DESIGN-NOTES.md) D-11:** delivery is a crate-owned concrete queue sender (with a client-side receiver), not a client-implemented trait. `trait NotificationSink: Send + Sync`
   with a non-blocking, infallible `deliver(&self, batch)`. The crate forces
   **multi-producer** safety (a session sink aggregates several subscriptions,
   whose completions run on different pool threads) — i.e. **MPSC minimum**.

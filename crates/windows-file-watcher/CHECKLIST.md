@@ -75,8 +75,10 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   downgrade; no terminal state.
 
 - [ ] **M5.2** — Resident retry-policy data (D-16): a backoff value (initial/multiplier/cap/jitter and
-  per-error-kind overrides), a monitor default overridable per subscription, mutated only through serialised
-  request-queue items and scheduled with `ThreadpoolTimer` — no reactive callback, race-free.
+  per-error-kind overrides), a monitor default overridable per subscription and reduced to a coalesced
+  directory watcher's effective policy by the deterministic soonest-recovering rule (min of each field
+  across the directory's subscriptions, D-6), mutated only through serialised request-queue items and
+  scheduled with `ThreadpoolTimer` — no reactive callback, race-free.
 
 - [ ] **M5.3** — Recovery notifications: `Desync { Reestablished }` for the post-outage gap, and the opt-in
   `Suspended` / `Resumed` brackets (D-13).

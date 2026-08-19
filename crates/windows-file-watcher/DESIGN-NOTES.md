@@ -34,7 +34,7 @@ threads of its own.
 | D-13 | `Suspended`/`Resumed` liveness brackets and `Established { mode }` are opt-in per subscription. |
 | D-14 | No terminal fault state — only "not yet re-established." The monitor retries autonomously and indefinitely; the client may cancel from any state. See [Fault model](#fault-model). |
 | D-15 | Recovery cannot self-fail: every error classifies into reopen-retry, rearm-retry, or downgrade-to-coarse. The only failure edges are retryable Windows syscalls. |
-| D-16 | Retry policy is **resident data**, never a reactive callback: a backoff value mutated only through serialized request-queue items and read by the single serialized fault handler. Race-free; no client code on the cadence path. |
+| D-16 | Retry policy is **resident data**, never a reactive callback: a backoff value mutated only through serialized request-queue items and read by the single serialized fault handler. Race-free; no client code on the cadence path. Because a directory has one coalesced watcher (D-6) but several subscriptions may set different policies, the watcher's *effective* policy is a deterministic **soonest-recovering** reduction across its subscriptions (see [Fault model](#fault-model)). |
 | D-17 | Two-tier watcher: Detailed (`ReadDirectoryChangesW` + `ThreadpoolIo`) preferred, Coarse (`FindFirstChangeNotification` + `ThreadpoolWait`) fallback. Mode is a volume property resolved at establish/re-establish. See [Two-tier watching](#two-tier-watching). |
 | D-18 | v1 delivers basic `FILE_NOTIFY_INFORMATION`. |
 | D-19 | Deferred seams, **reserved with no scheduled v1 work** (not gated on any blocker): `ReadDirectoryChangesExW` extended records; digest-based change *verification*; an optional per-volume capability cache. Revisit post-v1; no CHECKLIST item is queued for them, and M7.5 only reviews the public surface against this reservation. |
@@ -85,6 +85,17 @@ resident policy **data** — never a reactive per-fault callback and never a clo
 on the cadence path — so a slow or absent client can neither stall recovery nor
 create a race. The client can cancel from any intermediate state. (D-14, D-15,
 D-16)
+
+A directory has exactly one coalesced watcher (D-6), so it runs exactly one
+reopen/re-arm cadence even when several subscriptions with different retry
+policies share it. The watcher's effective policy is a per-field **soonest-
+recovering** reduction over those subscriptions: the minimum initial delay,
+minimum growth multiplier, minimum cap, minimum jitter, and the shortest
+per-error-kind override; a directory with no overriding subscription uses the
+monitor default. Because this is a reduction over the *set* of current
+subscriptions, it is independent of subscription order and of add/remove timing
+(it is simply re-derived whenever the membership changes), and it can never
+starve one subscription's recovery behind another's slower policy. (D-6, D-16)
 
 ### Two-tier watching
 

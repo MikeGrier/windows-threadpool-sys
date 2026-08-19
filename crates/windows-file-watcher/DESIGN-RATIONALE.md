@@ -50,6 +50,20 @@ serialized fault handler reads it as inert data. Nothing decides concurrently
 update's effect relative to a fault is fixed by their order in the queue, not by
 timing. (D-16)
 
+### Per-subscription policy under directory coalescing (D-6, D-16)
+
+Per-subscription retry overrides collide with one-watcher-per-directory (D-6):
+several subscriptions can share a directory's single cadence yet ask for
+different backoff. Leaving the winner unspecified would make recovery depend on
+subscription order or add/remove timing. We instead define one deterministic
+rule: the watcher recovers as fast as its *most eager* member wants, taking the
+minimum of each policy field (initial delay, multiplier, cap, jitter, per-error
+override) across the directory's subscriptions. This is a reduction over a set,
+so it is order- and timing-independent (re-derived on membership change), and it
+cannot starve one subscription behind another's slower policy. The alternative —
+moving overrides to a directory granularity — was rejected because the client's
+unit of control is the subscription, not a directory it never named.
+
 ### The sink is a concrete sender, not a client trait (D-11)
 
 Delivery could have been a client-implemented `NotificationSink` trait whose
