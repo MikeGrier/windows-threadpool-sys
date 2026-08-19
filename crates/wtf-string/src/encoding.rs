@@ -82,6 +82,9 @@ impl WtfEncoding for Wtf16 {
         f.write_char('"')?;
         for unit in core::char::decode_utf16(units.iter().copied()) {
             match unit {
+                // An apostrophe is literal inside a double-quoted (string-style)
+                // debug; `char::escape_debug` would escape it like a char literal.
+                Ok('\'') => f.write_char('\'')?,
                 Ok(c) => {
                     for esc in c.escape_debug() {
                         f.write_char(esc)?;

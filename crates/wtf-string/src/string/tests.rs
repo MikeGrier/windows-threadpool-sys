@@ -202,6 +202,9 @@ fn display_is_lossy() {
 fn debug_quotes_and_escapes() {
     assert_eq!(format!("{:?}", Wtf16String::from("ab")), "\"ab\"");
     assert_eq!(format!("{:?}", Wtf16String::from("a\nb")), "\"a\\nb\"");
+    // A double quote is escaped, but an apostrophe stays literal (string-style).
+    assert_eq!(format!("{:?}", Wtf16String::from("a\"b")), "\"a\\\"b\"");
+    assert_eq!(format!("{:?}", Wtf16String::from("don't")), "\"don't\"");
 }
 
 #[test]

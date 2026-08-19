@@ -145,11 +145,17 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   > **CROSS-COMPONENT PREREQUISITE:** requires component `crates/wtf-string` → M5 (Windows `OsStr`/`OsString`
   > interop) to land first. See [../wtf-string/CHECKLIST.md](../wtf-string/CHECKLIST.md).
 
+- [ ] **M8.2** — Integration test: after adoption, decode a real completion buffer and assert the relative
+  name's raw `&[u16]` units, its lossless `OsString`/`Path` conversion (including an unpaired surrogate), and
+  a direct wide-pointer (`as_ptr()`) hand-off to a Windows API, verifying the representation change preserves
+  the public lossless-conversion contract (D-8).
+
 ## M∞ — Horizon (ungated, post-v1)
 
-Parked, not pending: these items are gated on nothing and belong to no numbered milestone. They are the
-deferred seams of [DESIGN-NOTES.md](DESIGN-NOTES.md) → D-19, and each graduates to a numbered milestone
-post-v1 if and when it is chosen. None is an open obligation of any current milestone.
+Parked, not pending. These are the deferred seams recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) → D-19,
+which places them **explicitly outside the v1 scope** — so v1 is complete without them **by design**, and the
+"blocker" for each is that deliberate scope boundary, not an oversight. Each graduates to a numbered milestone
+only if a post-v1 line of work pursues it. None is an open obligation of any current milestone.
 
 - [ ] **M∞.1** — `ReadDirectoryChangesExW` extended records (`FILE_NOTIFY_EXTENDED_INFORMATION`): surface the
   richer per-record fields on OS versions that support it, behind capability detection, without disturbing

@@ -35,6 +35,10 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 - [ ] **M5.2** — Integration test (Windows): lossless `OsStr` -> `Wtf16Str` -> `OsStr` round-trip including
   unpaired surrogates; a real wide Win32 call fed directly from `as_ptr()` with no conversion.
 
+  > **➡ CROSS-COMPONENT HANDOFF:** completing M5 unblocks component `crates/windows-file-watcher` → M8 →
+  > M8.1 (migrate `RelativeName` to `Wtf16Str`/`Wtf16String`). See
+  > [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
+
 ## M6 — Documentation, examples, publication readiness
 
 - [ ] **M6.1** — The [README.md](README.md) and [lib.rs](src/lib.rs) top-level docs: the storage model, the
@@ -48,8 +52,11 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M∞ — Horizon (ungated, post-v1)
 
-Parked, not pending: designed-in seams with no numbered milestone, gated on nothing — unscheduled post-v1
-work that graduates to a numbered milestone when it is picked up. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+Parked, not pending. Each item is **explicitly out of the v1 scope** fixed by its cited design decision
+(D-3 defers the `Wtf8` arm; D-7 makes the C-string companion optional; D-10 makes the `windows`-crate
+`Param<PCWSTR>` interop optional; D-11 defers `no_std`), so v1 is complete without them **by design** — the
+"blocker" for each is that deliberate scope boundary, not an oversight. Each graduates to a numbered
+milestone only if a post-v1 line of work pursues it. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 - [ ] **M∞.1** — The `Wtf8` encoding arm (`WtfString<Wtf8>` / `WtfStr<Wtf8>`): implement the crate-owned
   `WtfEncoding` contract for `u8`/WTF-8 units — `Unit = u8`; storage is arbitrary WTF-8 (ill-formed-tolerant,
