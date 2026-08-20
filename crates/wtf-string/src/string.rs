@@ -400,6 +400,32 @@ impl Wtf16String {
         }
         self.units.push(Wtf16::NUL);
     }
+
+    /// Copy `len` content code units from a foreign `*const u16` into a new owned
+    /// string, appending the terminator.
+    ///
+    /// For callee-allocated Win32 output: the bytes are **copied**, so the caller
+    /// keeps ownership of (and remains responsible for freeing) the source buffer.
+    /// The copy is lossless — arbitrary WTF-16, including unpaired surrogates, is
+    /// preserved (D-4/D-9).
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that:
+    /// - `ptr` is valid for reads of `len` consecutive `u16` values and properly
+    ///   aligned, and
+    /// - that region stays initialized and unmutated for the duration of the call.
+    ///
+    /// No reference to `ptr` is retained past the call. `len` is a **count of
+    /// code units**, not bytes, and excludes any terminator the callee may have
+    /// written (pass the content length).
+    #[must_use]
+    pub unsafe fn from_wide_ptr(ptr: *const u16, len: usize) -> Self {
+        // SAFETY: the caller guarantees `ptr` is valid and aligned for `len`
+        // reads; the slice is used only to copy and is not retained.
+        let content = unsafe { std::slice::from_raw_parts(ptr, len) };
+        Self::from_units(content)
+    }
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 - [x] **M4.2** — Output constructors: `with_capacity`, `as_mut_ptr`, and `unsafe set_len_from_ffi(units)`
   (re-establishes the terminator) for caller-allocated buffer-fill APIs (D-9).
 
-- [ ] **M4.3** — `unsafe from_wide_ptr(ptr, len)` for callee-allocated buffers, with an explicit safety
+- [x] **M4.3** — `unsafe from_wide_ptr(ptr, len)` for callee-allocated buffers, with an explicit safety
   contract (ownership, count semantics, no reference retained) (D-9).
 
 - [ ] **M4.4** — Tests: mock buffer-fill (count-excludes-NUL and count-includes-NUL) rebuilds the invariant;
