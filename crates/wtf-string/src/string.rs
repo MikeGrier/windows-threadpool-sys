@@ -423,17 +423,24 @@ impl Wtf16String {
     /// # Safety
     ///
     /// The caller must guarantee that:
-    /// - `ptr` is valid for reads of `len` consecutive `u16` values and properly
-    ///   aligned, and
+    /// - when `len > 0`, `ptr` is non-null, properly aligned, and valid for reads
+    ///   of `len` consecutive `u16` values, and
     /// - that region stays initialized and unmutated for the duration of the call.
     ///
-    /// No reference to `ptr` is retained past the call. `len` is a **count of
-    /// code units**, not bytes, and excludes any terminator the callee may have
-    /// written (pass the content length).
+    /// When `len == 0` the pointer is not dereferenced, so it may be null or
+    /// dangling. No reference to `ptr` is retained past the call. `len` is a
+    /// **count of code units**, not bytes, and excludes any terminator the callee
+    /// may have written (pass the content length).
     #[must_use]
     pub unsafe fn from_wide_ptr(ptr: *const u16, len: usize) -> Self {
-        // SAFETY: the caller guarantees `ptr` is valid and aligned for `len`
-        // reads; the slice is used only to copy and is not retained.
+        if len == 0 {
+            // `slice::from_raw_parts` forbids a null (or dangling) pointer even at
+            // zero length, so an empty result must not touch `ptr` at all.
+            return Self::new();
+        }
+        // SAFETY: `len > 0`, and the caller guarantees `ptr` is non-null, valid,
+        // and aligned for `len` reads; the slice is used only to copy and is not
+        // retained.
         let content = unsafe { std::slice::from_raw_parts(ptr, len) };
         Self::from_units(content)
     }

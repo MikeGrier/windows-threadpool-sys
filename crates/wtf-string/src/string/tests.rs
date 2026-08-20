@@ -347,3 +347,13 @@ fn terminated_ptr_round_trips_through_from_wide_ptr() {
     assert_eq!(rebuilt, original);
     assert_eq!(rebuilt.as_units(), original.as_units());
 }
+
+#[test]
+fn from_wide_ptr_zero_len_ignores_pointer() {
+    // A zero length must not dereference the pointer, so even a null pointer is
+    // safe and yields an empty string.
+    // SAFETY: `len` is 0, so `from_wide_ptr` never reads through the pointer.
+    let owned = unsafe { Wtf16String::from_wide_ptr(std::ptr::null(), 0) };
+    assert!(owned.is_empty());
+    assert_eq!(owned.units, vec![NUL]);
+}
