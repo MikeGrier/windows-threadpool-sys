@@ -4,6 +4,9 @@ use super::{Wtf16, Wtf16Str, Wtf16String, WtfEncoding};
 // The encoding's named terminator, so assertions don't embed the raw 0 tag.
 const NUL: u16 = Wtf16::NUL;
 
+// Matrix / property coverage over a shared corpus lives in a sibling submodule.
+mod matrix;
+
 // The tests reach into the private `units` field (a child module may) to assert
 // the always-present terminator that the public API deliberately hides.
 
