@@ -93,11 +93,11 @@ jobs:
         run: cargo doc --workspace --no-deps --all-features --locked
 
   msrv:
-    name: MSRV check 1.97
+    name: MSRV check 1.98
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets --all-features --locked

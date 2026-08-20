@@ -55,7 +55,7 @@ GitHub CI validates: Windows Server 2025 (the `windows-latest` hosted runner) an
 the client. The crate does not pursue down-level support below that baseline. Every capability this crate uses
 -- the object-based thread pool, callback priorities, `SetThreadpoolTimerEx`, `SetThreadpoolWaitEx`,
 `CancelIoEx`, and `GetQueuedCompletionStatusEx` -- is available there, so their historical Vista / 7 / 8
-introduction points do not require version gating in the public API. The toolchain baseline is Rust 1.97 (the
+introduction points do not require version gating in the public API. The toolchain baseline is Rust 1.98 (the
 MSRV) on edition 2024.
 
 ## Shared invariants (both crates)

@@ -27,7 +27,7 @@ tests, and lints exclusively on Windows, and platform-specific code lives behind
 
 ## Build
 
-Requires Rust `1.97` or newer.
+Requires Rust `1.98` or newer.
 
 ```sh
 cargo fmt --all --check
