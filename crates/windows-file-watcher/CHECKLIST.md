@@ -143,7 +143,8 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   Windows APIs without re-encoding. Preserve the lossless `OsString`/`Path` and raw-`&[u16]` surface (D-8).
 
   > **CROSS-COMPONENT PREREQUISITE:** requires component `crates/wtf-string` -> M5 (Windows `OsStr`/`OsString`
-  > interop) to land first. See [../wtf-string/CHECKLIST.md](../wtf-string/CHECKLIST.md).
+  > interop), now completed and archived in
+  > [../wtf-string/COMPLETED-CHECKLIST.md](../wtf-string/COMPLETED-CHECKLIST.md).
 
 - [ ] **M8.2** -- Integration test: after adoption, decode a real completion buffer and assert the relative
   name's raw `&[u16]` units, its lossless `OsString`/`Path` conversion (including an unpaired surrogate), and

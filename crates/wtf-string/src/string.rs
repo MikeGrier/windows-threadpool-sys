@@ -426,10 +426,14 @@ impl Wtf16String {
     ///
     /// # Safety
     ///
-    /// The caller must guarantee that:
-    /// - when `len > 0`, `ptr` is non-null, properly aligned, and valid for reads
-    ///   of `len` consecutive `u16` values, and
-    /// - that region stays initialized and unmutated for the duration of the call.
+    /// This copies the range through `std::slice::from_raw_parts` and shares its
+    /// preconditions. When `len > 0` the caller must guarantee that:
+    /// - `ptr` is non-null and properly aligned for `u16`;
+    /// - `ptr` is valid for reads of `len` consecutive, initialized `u16` values,
+    ///   all contained within a **single allocated object**;
+    /// - the total size `len * size_of::<u16>()` is no larger than `isize::MAX`,
+    ///   and adding it to `ptr` does not wrap the address space; and
+    /// - that region stays unmutated for the duration of the call.
     ///
     /// When `len == 0` the pointer is not dereferenced, so it may be null or
     /// dangling. No reference to `ptr` is retained past the call. `len` is a
