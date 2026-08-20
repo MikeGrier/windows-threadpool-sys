@@ -343,8 +343,8 @@ impl Wtf16String {
     /// [`set_len_from_ffi`](Self::set_len_from_ffi).
     ///
     /// The reserved capacity also covers the always-present terminator, so a
-    /// later [`set_len_from_ffi`] of up to `units` content units re-establishes
-    /// the invariant without reallocating (D-9).
+    /// later [`set_len_from_ffi`](Self::set_len_from_ffi) of up to `units` content
+    /// units re-establishes the invariant without reallocating (D-9).
     #[must_use]
     pub fn with_capacity(units: usize) -> Self {
         // Reserve content + terminator up front, then seed the empty-string

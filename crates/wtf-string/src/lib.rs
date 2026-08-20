@@ -14,7 +14,7 @@
 //!
 //! # Shape
 //!
-//! The core is generic over a [code-unit encoding](WtfEncoding): `WtfString<E>`
+//! The core is generic over a [code-unit encoding][WtfEncoding]: `WtfString<E>`
 //! owns the units and `WtfStr<E>` is the borrowed slice. v1 ships only the
 //! `Wtf16` encoding, exposed as the aliases `Wtf16String` / `Wtf16Str`; the
 //! `Wtf8` arm — a `u8`/WTF-8 storage variant whose encode/decode, comparison, and
