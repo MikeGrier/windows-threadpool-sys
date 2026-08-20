@@ -21,8 +21,8 @@ concrete types (`U16String`, `U32String`, `Utf16String`, ...). But that
 difference is architectural, and its most defensible payoff (a `Wtf8` arm -- this
 crate's `u8`/WTF-8 storage variant, backed by a crate-owned `Vec<u8>` whose WTF-8
 storage matches `OsString`'s but is not built on it -- giving a uniform
-cross-width API) is exactly the part
-v1 defers.
+cross-width API) is built as its own later milestone
+([CHECKLIST.md](CHECKLIST.md) M6), not in the first `Wtf16`-only cut.
 
 So the build decision is **not** justified as a capability win. It is an
 **ownership** decision, consistent with the mono-repo philosophy of owning every
