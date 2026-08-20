@@ -1,4 +1,4 @@
-# Design session — wtf-string (2026-08-19)
+# Design session -- wtf-string (2026-08-19)
 
 Raw record of the session that produced the crate's initial decisions. Tier-1
 [DESIGN-NOTES.md](../DESIGN-NOTES.md) is canonical and wins on any conflict.
@@ -11,7 +11,7 @@ Raw record of the session that produced the crate's initial decisions. Tier-1
 between WTF-8 and (possibly ill-formed) UTF-16, plus allocation, on every wide
 API call. For Windows-centric code calling Windows APIs repeatedly, this is a
 poor trade. We want the same interface as `OsString` but with native, `u16`,
-conversion-free storage — ideally phrased as something specializable by storage
+conversion-free storage -- ideally phrased as something specializable by storage
 width, so that (in the limit) the `u8` form is `OsString` and the `u16` form is
 the new implementation, and consumers pick whichever suits their needs.
 
@@ -35,8 +35,8 @@ the new implementation, and consumers pick whichever suits their needs.
 - **What Windows takes.** `windows-sys` wide APIs want `*const u16`/`*mut u16`
   (`PCWSTR`/`PWSTR`), terminated or counted. The high-level `windows` crate wraps
   them behind `Param<PCWSTR>`; `HSTRING` is WinRT-only and merely *converts into*
-  `PCWSTR`. Win32 output has no owned string type — you fill a buffer or free a
-  callee pointer — so a native owned `u16` landing zone is a real gap. (-> D-9, D-10)
+  `PCWSTR`. Win32 output has no owned string type -- you fill a buffer or free a
+  callee pointer -- so a native owned `u16` landing zone is a real gap. (-> D-9, D-10)
 
 - **NUL termination.** Practice adopted: always allocate with a trailing NUL even
   when not requested, so returning a terminated string never re-allocates and
@@ -48,5 +48,5 @@ the new implementation, and consumers pick whichever suits their needs.
   `U16String`/`U16CString` already cover the capabilities; only the encoding
   generic is a true delta, and its payoff is deferred. So building is chosen for
   **ownership/evolvability** under the mono-repo philosophy, not a capability
-  gap — "at some point in the moderate future we will wish we could just make a
+  gap -- "at some point in the moderate future we will wish we could just make a
   change to it, and that will be a pain if we don't own the layer." (-> D-1, D-11, D-13)

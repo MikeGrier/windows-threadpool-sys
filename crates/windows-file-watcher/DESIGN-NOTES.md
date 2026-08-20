@@ -9,7 +9,7 @@ Current, canonical decisions for the crate. This is the authoritative record; th
 ## Intent
 
 A memory-safe watcher for changes to Windows paths, with full Windows fidelity
-for path names and — just as important — for the platform's notification
+for path names and -- just as important -- for the platform's notification
 *limitations*. It is deliberately Windows-only; platform independence is built at
 a higher layer. It builds on [windows-overlapped-io-sys](../windows-overlapped-io-sys/README.md)
 and [windows-threadpool-sys](../windows-threadpool-sys/README.md) and owns no
@@ -26,55 +26,55 @@ threads of its own.
 | D-5 | Subscribing returns an affine, move-only `#[must_use]` `Watch`: `Drop` enqueues cancellation, `cancel()` is the explicit form, and a `Copy` `WatchId` tags every notification. |
 | D-6 | Coalesce watchers **by directory**: one read per directory, the union of `FILE_NOTIFY_CHANGE_*` filters and the max subtree flag, de-multiplexed to subscriptions on decode. See [Coalescing](#coalescing-by-directory). |
 | D-7 | A subscription targets a *path*. A file is watched via its parent directory (non-recursive) filtered on the leaf; a directory is watched directly, optionally recursively. |
-| D-8 | Names are delivered raw and **relative to the directory opened for the read**: for a directory target that directory itself, and for a file target (D-7) its parent — so a file watch reports the leaf name, not a name relative to the file. `OsString`/`Path` (lossless WTF-8) is primary; a raw `&[u16]` escape hatch is available. |
+| D-8 | Names are delivered raw and **relative to the directory opened for the read**: for a directory target that directory itself, and for a file target (D-7) its parent -- so a file watch reports the leaf name, not a name relative to the file. `OsString`/`Path` (lossless WTF-8) is primary; a raw `&[u16]` escape hatch is available. |
 | D-9 | Raw `FILE_ACTION_*` kinds, `RenamedOldName`/`RenamedNewName` kept distinct; the crate never joins renames or joins across a buffer. |
 | D-10 | Notifications are delivered as batches (one decoded `ReadDirectoryChangesW` completion = one batch). |
-| D-11 | Delivery is a **crate-owned concrete queue sender** (`Send + Sync`, multi-producer), never a client-implemented trait: its `deliver` only enqueues onto a queue the crate owns, so no client code ever runs on a monitor/threadpool thread (D-2). The client holds the matching receiver and drains on its own thread(s); consumer cardinality is the client's business (MPSC is the floor). A full bounded queue drops the batch but keeps saturation observable via a latched, out-of-band `Desync { QueueFull }` per affected `WatchId` (bound ≥ 1; a zero bound is rejected). See [Delivery and saturation](#delivery-and-saturation). |
-| D-12 | `Desync { cause }` is the single "you missed changes — re-scan" primitive. Kernel overflow, a full client queue, coarse-mode signals, and post-outage gaps all collapse to it. See [The Desync primitive](#the-desync-primitive). |
+| D-11 | Delivery is a **crate-owned concrete queue sender** (`Send + Sync`, multi-producer), never a client-implemented trait: its `deliver` only enqueues onto a queue the crate owns, so no client code ever runs on a monitor/threadpool thread (D-2). The client holds the matching receiver and drains on its own thread(s); consumer cardinality is the client's business (MPSC is the floor). A full bounded queue drops the batch but keeps saturation observable via a latched, out-of-band `Desync { QueueFull }` per affected `WatchId` (bound >= 1; a zero bound is rejected). See [Delivery and saturation](#delivery-and-saturation). |
+| D-12 | `Desync { cause }` is the single "you missed changes -- re-scan" primitive. Kernel overflow, a full client queue, coarse-mode signals, and post-outage gaps all collapse to it. See [The Desync primitive](#the-desync-primitive). |
 | D-13 | `Suspended`/`Resumed` liveness brackets and `Established { mode }` are opt-in per subscription. |
-| D-14 | No terminal fault state — only "not yet re-established." The monitor retries autonomously and indefinitely; the client may cancel from any state. See [Fault model](#fault-model). |
+| D-14 | No terminal fault state -- only "not yet re-established." The monitor retries autonomously and indefinitely; the client may cancel from any state. See [Fault model](#fault-model). |
 | D-15 | Recovery cannot self-fail: every error classifies into reopen-retry, rearm-retry, or downgrade-to-coarse. The only failure edges are retryable Windows syscalls. |
 | D-16 | Retry policy is **resident data**, never a reactive callback: a backoff value mutated only through serialized request-queue items and read by the single serialized fault handler. Race-free; no client code on the cadence path. Because a directory has one coalesced watcher (D-6) but several subscriptions may set different policies, the watcher's *effective* policy is a deterministic **soonest-recovering** reduction across its subscriptions (see [Fault model](#fault-model)). |
 | D-17 | Two-tier watcher: Detailed (`ReadDirectoryChangesW` + `ThreadpoolIo`) preferred, Coarse (`FindFirstChangeNotification` + `ThreadpoolWait`) fallback. Mode is a volume property resolved at establish/re-establish. See [Two-tier watching](#two-tier-watching). |
 | D-18 | v1 delivers basic `FILE_NOTIFY_INFORMATION`. |
-| D-19 | **Deferred to [CHECKLIST.md](CHECKLIST.md) → M∞ (post-v1 horizon); not part of v1 scope.** Seams parked as horizon (M∞) checklist items — gated on nothing, scheduled for no numbered milestone, and pulled into a numbered milestone post-v1 when chosen: `ReadDirectoryChangesExW` extended records; digest-based change *verification*; an optional per-volume capability cache. |
+| D-19 | **Deferred to [CHECKLIST.md](CHECKLIST.md) -> M-inf (post-v1 horizon); not part of v1 scope.** Seams parked as horizon (M-inf) checklist items -- gated on nothing, scheduled for no numbered milestone, and pulled into a numbered milestone post-v1 when chosen: `ReadDirectoryChangesExW` extended records; digest-based change *verification*; an optional per-volume capability cache. |
 | D-20 | `Monitor::Drop` blocks on full rundown (cancel + drain every read/wait, then free), inheriting the `windows-threadpool-sys` teardown discipline. |
 
 ## Detail
 
 ### Queue mediation
 
-Every interaction with a client is a queued request (client → monitor) or a
-queued notification (monitor → client). The monitor's servicing is driven by a
+Every interaction with a client is a queued request (client -> monitor) or a
+queued notification (monitor -> client). The monitor's servicing is driven by a
 `ThreadpoolWork` that serializes all resident-state mutations, so there is a
 single logical authority and no client code executes on a monitor/threadpool
 thread. A `Session` binds a request-submission handle to a notification sink;
 every `Watch` created through a session delivers to that session's sink. The sink
 is a **crate-owned concrete queue sender**, not a client trait object: delivery
 is an enqueue the crate performs, and the client observes notifications only by
-draining the matching receiver on its own thread — so the "no client code on a
+draining the matching receiver on its own thread -- so the "no client code on a
 pool thread" guarantee holds by construction, not by asking the client to keep a
 callback well-behaved. (D-2, D-11)
 
 ### Delivery and saturation
 
 Delivery is a crate-owned bounded queue: the monitor enqueues decoded batches and
-the client drains the matching receiver. Enqueue never blocks — a slow client must
-not stall the cadence (D-2) — so a full queue drops the batch. The core contract is
+the client drains the matching receiver. Enqueue never blocks -- a slow client must
+not stall the cadence (D-2) -- so a full queue drops the batch. The core contract is
 that a client is *never silently* left out of sync, which a naive design breaks
 here: the `Desync { QueueFull }` that reports the drop cannot be pushed onto the
-very queue that is full (and reserving one data slot only defers the problem — a
+very queue that is full (and reserving one data slot only defers the problem -- a
 second overflow has nowhere to go).
 
 The signal is therefore kept **out of band**. The sender holds a latched overflow
-set — the `WatchId`s with a pending `QueueFull` — as control state separate from the
+set -- the `WatchId`s with a pending `QueueFull` -- as control state separate from the
 bounded data queue, so it never competes for data capacity. A failed enqueue drops
 the batch and adds each affected `WatchId` to that set; repeats coalesce, which
 loses nothing because `Desync` is idempotent (the response is always a re-scan).
 The receiver is guaranteed to observe a synthesized `Desync { QueueFull }` for each
 latched `WatchId`, surfaced ahead of the next successful batch and cleared once
-observed — so the dropped batch and its desync can never both vanish, at any queue
-depth ≥ 1. A zero-capacity bound is rejected at construction. (D-11, D-12)
+observed -- so the dropped batch and its desync can never both vanish, at any queue
+depth >= 1. A zero-capacity bound is rejected at construction. (D-11, D-12)
 
 ### Coalescing by directory
 
@@ -90,7 +90,7 @@ the parent directory filtered on the leaf name. (D-6, D-7)
 `ReadDirectoryChangesW` loses changes on buffer overflow (a zero-byte
 completion / `ERROR_NOTIFY_ENUM_DIR`); a bounded client queue can fill; the coarse
 fallback reports no detail at all; and any fault outage leaves a gap. All four are
-the same fact to a client — "there is a hole in your event set" — so all four are
+the same fact to a client -- "there is a hole in your event set" -- so all four are
 delivered as one cause-tagged `Desync { Overflow | QueueFull | Coarse |
 Reestablished }`. Honest reporting of this limitation is a core requirement, not
 an afterthought. (D-12)
@@ -101,8 +101,8 @@ On any I/O error the monitor enters a re-establish loop that never terminates of
 its own accord: there is no failure state, only "not yet re-established." Every
 error classifies into *reopen-and-retry*, *rearm-and-retry*, or
 *downgrade-to-coarse*; nothing throws or gives up. Retry timing comes from
-resident policy **data** — never a reactive per-fault callback and never a closure
-on the cadence path — so a slow or absent client can neither stall recovery nor
+resident policy **data** -- never a reactive per-fault callback and never a closure
+on the cadence path -- so a slow or absent client can neither stall recovery nor
 create a race. The client can cancel from any intermediate state. (D-14, D-15,
 D-16)
 
