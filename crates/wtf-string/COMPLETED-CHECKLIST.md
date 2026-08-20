@@ -43,3 +43,21 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
 
 - [x] **M3.4** -- Property tests: round-trips through `str`/`String`, ill-formed surrogates preserved in
   storage and replaced by lossy conversion, `> MAX_PATH` lengths, mixed BMP/astral content.
+
+## Moved 2026-08-19 -- M4 FFI surface
+
+### M4 -- FFI surface
+
+- [x] **M4.1** -- Counted access (`as_ptr` + `len`) and the terminated `LPCWSTR` pointer accessor, documented
+  as valid only when `has_interior_nul()` is false (D-7/D-10).
+
+- [x] **M4.2** -- Output constructors: `with_capacity` (overflow-guarded), `as_mut_ptr`, and
+  `unsafe set_len_from_ffi(content_units)` (explicit content-length convention that appends the terminator,
+  never inspecting the buffer) for caller-allocated buffer-fill APIs (D-9).
+
+- [x] **M4.3** -- `unsafe from_wide_ptr(ptr, len)` for callee-allocated buffers, with an explicit safety
+  contract (ownership, count semantics, no reference retained; `len == 0` never dereferences `ptr`) (D-9).
+
+- [x] **M4.4** -- Tests: mock buffer-fill (excludes-NUL, includes-NUL via content length, and a trailing
+  content-NUL preserved verbatim) rebuilds the invariant; `from_wide_ptr` copies losslessly and is safe at
+  `len == 0`; terminated pointer round-trips through a `from_wide_ptr`.
