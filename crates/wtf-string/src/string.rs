@@ -366,9 +366,17 @@ impl Wtf16String {
     /// **content** length to [`set_len_from_ffi`](Self::set_len_from_ffi), which
     /// publishes that length and re-establishes the terminator.
     ///
-    /// Until then the logical content is whatever it was before (an empty string
-    /// for a fresh `with_capacity`). The pointer is valid while `self` is borrowed
-    /// and not reallocated.
+    /// Writing through this pointer overwrites the buffer -- including element 0,
+    /// which is the sole terminator of a fresh `with_capacity` -- so it **breaks
+    /// the always-terminated invariant** until
+    /// [`set_len_from_ffi`](Self::set_len_from_ffi) restores it. Between the write
+    /// and that call the value must **not** be observed through any other method
+    /// ([`as_terminated_ptr`](Self::as_terminated_ptr), [`Deref`] content access,
+    /// `Clone`, `Debug`, `PartialEq`, ...): they could read a non-terminated or
+    /// partially written buffer. This holds on **failure paths too** -- if the
+    /// foreign call fails, restore the invariant with `set_len_from_ffi(0)` (the
+    /// empty string) or drop the value before any other use. The pointer is valid
+    /// while `self` is borrowed and not reallocated.
     #[must_use]
     pub fn as_mut_ptr(&mut self) -> *mut u16 {
         self.units.as_mut_ptr()
