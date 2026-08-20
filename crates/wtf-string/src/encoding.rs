@@ -7,8 +7,9 @@
 /// against `E: WtfEncoding`, while width-specific API (such as the `*const u16`
 /// FFI surface) lives in inherent impls on the concrete instantiations. v1
 /// implements only [`Wtf16`]; a `Wtf8` arm — `u8`/WTF-8 units with this crate's
-/// own encode/decode/comparison/formatting semantics, for which std `OsString` is
-/// the intended backing implementation — slots into the same seam later.
+/// own encode/decode/comparison/formatting semantics, backed by a crate-owned
+/// `Vec<u8>` (the same always-terminated model as `Wtf16`, matching `OsString`'s
+/// WTF-8 storage but not built on it) — slots into the same seam later.
 pub trait WtfEncoding {
     /// The code unit this encoding stores (`u16` for [`Wtf16`]).
     type Unit: Copy + Ord + core::hash::Hash + core::fmt::Debug;

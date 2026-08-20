@@ -19,8 +19,8 @@ The one thing it does **not** offer is a single encoding-generic
 `WtfString<Encoding>` with per-width inherent impls; it uses macro-duplicated
 concrete types (`U16String`, `U32String`, `Utf16String`, ...). But that
 difference is architectural, and its most defensible payoff (a `Wtf8` arm — this
-crate's `u8`/WTF-8 storage variant, for which std `OsString` is the intended
-backing implementation because its WTF-8 storage matches — giving a uniform
+crate's `u8`/WTF-8 storage variant, backed by a crate-owned `Vec<u8>` whose WTF-8
+storage matches `OsString`'s but is not built on it — giving a uniform
 cross-width API) is exactly the part
 v1 defers.
 

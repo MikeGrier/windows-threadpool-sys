@@ -62,8 +62,8 @@ milestone only if a post-v1 line of work pursues it. See [DESIGN-NOTES.md](DESIG
   `WtfEncoding` contract for `u8`/WTF-8 units — `Unit = u8`; storage is arbitrary WTF-8 (ill-formed-tolerant,
   matching `OsStr`); `encode_str` is the identity on a UTF-8 `str`'s bytes; exact decode is
   valid-UTF-8-or-`None`; lossy decode replaces with U+FFFD; comparison/hash are binary over bytes; `debug_fmt`
-  escapes ill-formed sequences losslessly. std `OsString` is the intended backing implementation, chosen
-  because its WTF-8 storage matches this contract. Gives a uniform API across storage widths (D-3).
+  escapes ill-formed sequences losslessly. Storage is a crate-owned `Vec<u8>` whose WTF-8 layout matches
+  `OsString`'s but is not built on it. Gives a uniform API across storage widths (D-3).
 
 - [ ] **M∞.2** — A checked no-interior-NUL C-string companion type (an enforced-guarantee analog of the
   terminated pointer) (D-7).
