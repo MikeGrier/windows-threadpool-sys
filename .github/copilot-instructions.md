@@ -367,8 +367,8 @@ at the repository root. This directory is git-ignored.
 - **Never** write scratch or debug files to the repository root or any source directory.
 
 ## General instructions for this repository
-- All code is Copyright Microsoft Corporation.
-- All source code should include a copyright statement. The statement should be brief, a single line comment as the first line of the file which reads something like: Copyright (c) Microsoft Corporation.
+- All code is Copyright Mike Grier.
+- All source code should include a copyright statement. The statement should be brief, a single line comment as the first line of the file which reads something like: Copyright (c) Mike Grier.
 - If the source file is also part of an open source library, there may be additional lines giving the details, but in general, open source content should not be checked in to this source repository except as part of a patching process to provide a patch over defective open source dependencies which have to be addressed for security or business continuity reasons.
 
 ## Interaction Guidelines
@@ -610,7 +610,7 @@ a single comment naming its immediate source and the **pre-split commit** (that 
 before you commit, so it is knowable while you author):
 
 ```rust
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Mike Grier.
 // Split from store.rs at 9ab3f21.
 ```
 
