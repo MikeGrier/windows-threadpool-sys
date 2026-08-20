@@ -100,7 +100,8 @@ impl<E: WtfEncoding> WtfString<E> {
     /// Create an owned string from content code units, appending the terminator.
     #[must_use]
     pub fn from_units(units: &[E::Unit]) -> Self {
-        let mut buf = Vec::with_capacity(units.len() + 1);
+        let capacity = units.len().checked_add(1).expect("capacity overflow");
+        let mut buf = Vec::with_capacity(capacity);
         buf.extend_from_slice(units);
         buf.push(E::NUL);
         WtfString { units: buf }
