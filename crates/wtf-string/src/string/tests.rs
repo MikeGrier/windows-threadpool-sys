@@ -1,5 +1,8 @@
 // Copyright (c) 2026 Mike Grier
-use super::{Wtf16Str, Wtf16String};
+use super::{Wtf16, Wtf16Str, Wtf16String, WtfEncoding};
+
+// The encoding's named terminator, so assertions don't embed the raw 0 tag.
+const NUL: u16 = Wtf16::NUL;
 
 // The tests reach into the private `units` field (a child module may) to assert
 // the always-present terminator that the public API deliberately hides.
@@ -7,7 +10,7 @@ use super::{Wtf16Str, Wtf16String};
 #[test]
 fn new_holds_only_the_terminator() {
     let s = Wtf16String::new();
-    assert_eq!(s.units, vec![0u16]);
+    assert_eq!(s.units, vec![NUL]);
     assert_eq!(s.len(), 0);
     assert!(s.is_empty());
     assert!(s.as_units().is_empty());
@@ -21,7 +24,7 @@ fn default_matches_new() {
 #[test]
 fn from_units_appends_the_terminator() {
     let s = Wtf16String::from_units(&[97, 98]);
-    assert_eq!(s.units, vec![97, 98, 0]);
+    assert_eq!(s.units, vec![97, 98, NUL]);
     assert_eq!(s.len(), 2);
     assert_eq!(s.as_units(), &[97, 98]);
 }
@@ -30,14 +33,14 @@ fn from_units_appends_the_terminator() {
 fn span_never_includes_the_terminator() {
     let s = Wtf16String::from_units(&[1, 2, 3]);
     assert_eq!(s.as_units().len(), s.units.len() - 1);
-    assert_eq!(*s.units.last().unwrap(), 0);
+    assert_eq!(*s.units.last().unwrap(), NUL);
     assert_eq!(s.as_units(), &[1, 2, 3]);
 }
 
 #[test]
 fn empty_from_units_is_just_the_terminator() {
     let s = Wtf16String::from_units(&[]);
-    assert_eq!(s.units, vec![0u16]);
+    assert_eq!(s.units, vec![NUL]);
     assert!(s.is_empty());
     assert!(s.as_units().is_empty());
 }
@@ -47,15 +50,15 @@ fn clone_preserves_the_invariant() {
     let s = Wtf16String::from_units(&[65, 66, 67]);
     let c = s.clone();
     assert_eq!(c.units, s.units);
-    assert_eq!(*c.units.last().unwrap(), 0);
+    assert_eq!(*c.units.last().unwrap(), NUL);
     assert_eq!(c.as_units(), s.as_units());
 }
 
 #[test]
 fn interior_nul_content_is_preserved_and_reported() {
-    let s = Wtf16String::from_units(&[97, 0, 98]);
-    assert_eq!(s.units, vec![97, 0, 98, 0]);
-    assert_eq!(s.as_units(), &[97, 0, 98]);
+    let s = Wtf16String::from_units(&[97, NUL, 98]);
+    assert_eq!(s.units, vec![97, NUL, 98, NUL]);
+    assert_eq!(s.as_units(), &[97, NUL, 98]);
     assert!(s.has_interior_nul());
 }
 
@@ -76,7 +79,7 @@ fn borrowed_wraps_a_slice_without_copying() {
 
 #[test]
 fn borrowed_reports_interior_nul() {
-    assert!(Wtf16Str::from_units(&[97, 0, 98]).has_interior_nul());
+    assert!(Wtf16Str::from_units(&[97, NUL, 98]).has_interior_nul());
     assert!(!Wtf16Str::from_units(&[97, 98]).has_interior_nul());
 }
 
@@ -96,7 +99,7 @@ fn ill_formed_surrogates_survive_in_storage() {
     let lone = [0xD800u16];
     let s = Wtf16String::from_units(&lone);
     assert_eq!(s.as_units(), &lone);
-    assert_eq!(s.units, vec![0xD800, 0]);
+    assert_eq!(s.units, vec![0xD800, NUL]);
 
     let pair = [0xD83Du16, 0xDE00]; // a well-formed astral pair, for contrast
     assert_eq!(Wtf16String::from_units(&pair).as_units(), &pair);
@@ -108,7 +111,7 @@ fn large_input_keeps_one_terminator() {
     let s = Wtf16String::from_units(&content);
     assert_eq!(s.units.len(), content.len() + 1);
     assert_eq!(s.len(), content.len());
-    assert_eq!(*s.units.last().unwrap(), 0);
+    assert_eq!(*s.units.last().unwrap(), NUL);
     assert_eq!(s.as_units(), content.as_slice());
 }
 
@@ -131,7 +134,7 @@ fn well_formed_samples() -> Vec<&'static str> {
 fn from_str_encodes_to_utf16_units() {
     let s = Wtf16String::from("abc");
     assert_eq!(s.as_units(), &[97, 98, 99]);
-    assert_eq!(*s.units.last().unwrap(), 0);
+    assert_eq!(*s.units.last().unwrap(), NUL);
 }
 
 #[test]

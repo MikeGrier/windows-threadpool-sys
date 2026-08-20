@@ -6,8 +6,8 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
 
 ### M1 — Crate scaffold and design record
 
-- [x] **M1.1** — Scaffold `crates/wtf-string`: portable `Cargo.toml` (no deps, `edition`/`rust-version`/
-  `license` from the workspace), `src/lib.rs` crate-doc skeleton, and add the crate to the workspace members.
+- [x] **M1.1** — Scaffold `crates/wtf-string`: portable [Cargo.toml](Cargo.toml) (no deps, `edition`/`rust-version`/
+  `license` from the workspace), [src/lib.rs](src/lib.rs) crate-doc skeleton, and add the crate to the workspace members.
 
 - [x] **M1.2** — Seed Tier-1 [DESIGN-NOTES.md](DESIGN-NOTES.md), Tier-2 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md),
   and the Tier-3 session (D-1…D-13); register the crate in the master and crate-local plans. CI covers it
@@ -26,7 +26,7 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
   are merged: the owned type exposes content access *through* `Deref`, so the type definitions and the
   std-parity plumbing cannot compile independently.) (D-4/D-6/D-7)
 
-- [x] **M2.3** — Tests (sibling `tests.rs`): the terminator invariant survives construction/clone; spans
+- [x] **M2.3** — Tests (sibling [tests.rs](src/string/tests.rs)): the terminator invariant survives construction/clone; spans
   never include the terminator; interior-NUL content is preserved and `has_interior_nul()` reports it;
   `Deref`/`ToOwned` round-trip; empty and large inputs.
 

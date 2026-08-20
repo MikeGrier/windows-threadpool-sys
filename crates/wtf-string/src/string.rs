@@ -112,8 +112,9 @@ impl<E: WtfEncoding> WtfString<E> {
         &self.units[..self.units.len() - 1]
     }
 
-    /// Build an owned string from already-encoded content units, appending the
-    /// terminator without re-copying the input.
+    /// Build an owned string from already-encoded content units by appending the
+    /// terminator. The encoded vector becomes the backing buffer; the final `push`
+    /// may reallocate if it had no spare capacity.
     fn from_encoded(mut units: Vec<E::Unit>) -> Self {
         units.push(E::NUL);
         WtfString { units }
