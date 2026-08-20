@@ -378,3 +378,142 @@ fn from_wide_ptr_zero_len_ignores_pointer() {
     assert!(owned.is_empty());
     assert_eq!(owned.units, vec![NUL]);
 }
+
+// --- conversion edge / negative cases (to String / str) ---
+
+#[test]
+fn lone_low_surrogate_is_ill_formed() {
+    // A lone low surrogate has no preceding high: invalid UTF-16, like a lone high.
+    let s = Wtf16Str::from_units(&[0xDC00]);
+    assert_eq!(s.to_string_checked(), None);
+    assert_eq!(s.to_string_lossy(), "\u{FFFD}");
+}
+
+#[test]
+fn reversed_surrogate_pair_is_ill_formed() {
+    // Low then high: each unit is unpaired, so both are ill-formed.
+    let s = Wtf16Str::from_units(&[0xDC00, 0xD800]);
+    assert_eq!(s.to_string_checked(), None);
+    assert_eq!(s.to_string_lossy(), "\u{FFFD}\u{FFFD}");
+}
+
+#[test]
+fn two_high_surrogates_are_ill_formed() {
+    // A high surrogate followed by another high surrogate leaves the first unpaired.
+    let s = Wtf16Str::from_units(&[0xD800, 0xD801]);
+    assert_eq!(s.to_string_checked(), None);
+    assert_eq!(s.to_string_lossy(), "\u{FFFD}\u{FFFD}");
+}
+
+#[test]
+fn high_surrogate_at_end_is_ill_formed_and_into_string_returns_original() {
+    // A valid unit then a truncated (unpaired) high surrogate at the buffer end.
+    let s = Wtf16String::from_units(&[97, 0xD800]);
+    assert_eq!(s.to_string_checked(), None);
+    assert_eq!(s.to_string_lossy(), "a\u{FFFD}");
+    match s.into_string() {
+        Ok(v) => panic!("ill-formed content must not decode, got {v:?}"),
+        Err(original) => assert_eq!(original.as_units(), &[97, 0xD800]),
+    }
+}
+
+#[test]
+fn high_surrogate_followed_by_bmp_is_ill_formed() {
+    // A high surrogate followed by a non-surrogate BMP unit: the high is unpaired.
+    let s = Wtf16Str::from_units(&[0xD800, 98]);
+    assert_eq!(s.to_string_checked(), None);
+    assert_eq!(s.to_string_lossy(), "\u{FFFD}b");
+}
+
+#[test]
+fn lossy_replaces_surrogate_in_the_middle() {
+    // Replacement happens in place, leaving the well-formed units on either side.
+    let s = Wtf16Str::from_units(&[97, 0xD800, 98]);
+    assert_eq!(s.to_string_checked(), None);
+    assert_eq!(s.to_string_lossy(), "a\u{FFFD}b");
+}
+
+#[test]
+fn interior_nul_is_valid_for_string_conversion() {
+    // U+0000 is a valid scalar (unlike a lone surrogate), so exact decode SUCCEEDS
+    // and preserves it: an interior NUL is content, not a decode failure.
+    let s = Wtf16String::from_units(&[97, NUL, 98]);
+    assert_eq!(s.to_string_checked().as_deref(), Some("a\u{0}b"));
+    assert_eq!(s.to_string_lossy(), "a\u{0}b");
+    assert_eq!(s.clone().into_string().unwrap(), "a\u{0}b");
+}
+
+#[test]
+fn str_with_interior_nul_round_trips() {
+    // A `str` may itself contain NUL; it encodes to an interior-NUL WtfString and
+    // decodes back losslessly.
+    let original = "a\u{0}b";
+    let s = Wtf16String::from(original);
+    assert_eq!(s.as_units(), &[97, NUL, 98]);
+    assert!(s.has_interior_nul());
+    assert_eq!(s.into_string().unwrap(), original);
+}
+
+#[test]
+fn debug_escapes_nul_and_control_characters() {
+    assert_eq!(format!("{:?}", Wtf16String::from("a\u{0}b")), "\"a\\0b\"");
+    assert_eq!(
+        format!("{:?}", Wtf16String::from("x\ty\rz")),
+        "\"x\\ty\\rz\""
+    );
+}
+
+#[test]
+fn debug_escapes_lone_low_surrogate_losslessly() {
+    // The low-surrogate counterpart of the high-surrogate escape: distinct and lossless.
+    assert_eq!(
+        format!("{:?}", Wtf16Str::from_units(&[0xDC00])),
+        "\"\\u{dc00}\""
+    );
+    assert_ne!(
+        format!("{:?}", Wtf16Str::from_units(&[0xDC00])),
+        format!("{:?}", Wtf16Str::from_units(&[0xD800]))
+    );
+}
+
+#[test]
+fn debug_keeps_printable_astral_literal() {
+    // A well-formed astral scalar is printable, so string-style Debug does not
+    // over-escape it to `\u{...}`.
+    assert_eq!(
+        format!("{:?}", Wtf16String::from("\u{1F600}")),
+        "\"\u{1F600}\""
+    );
+}
+
+#[test]
+fn eq_str_with_interior_nul() {
+    let s = Wtf16String::from_units(&[97, NUL, 98]);
+    assert_eq!(s, "a\u{0}b");
+    assert!(s != "ab"); // the NUL is content, so the shorter str is not equal
+}
+
+#[test]
+fn eq_str_astral_empty_and_length_mismatch() {
+    let astral = Wtf16String::from("\u{1F600}");
+    assert_eq!(astral, "\u{1F600}");
+    let empty = Wtf16String::new();
+    assert_eq!(empty, "");
+    let ab = Wtf16String::from("ab");
+    assert!(ab != "abc"); // prefix, shorter
+    let abc = Wtf16String::from("abc");
+    assert!(abc != "ab"); // prefix, longer
+    let upper = Wtf16String::from("A");
+    assert!(upper != "a"); // comparison is case-sensitive and exact
+}
+
+#[test]
+fn ill_formed_never_equals_any_str_even_matching_lossy() {
+    // A lone surrogate renders lossily as U+FFFD, but must not compare equal to a
+    // `str` that actually contains U+FFFD: equality is exact over units.
+    let ill = Wtf16Str::from_units(&[0xD800]);
+    assert!(*ill != "\u{FFFD}");
+    // ...whereas a genuine U+FFFD in content does compare equal.
+    let real = Wtf16String::from("\u{FFFD}");
+    assert_eq!(real, "\u{FFFD}");
+}
