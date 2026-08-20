@@ -136,6 +136,75 @@ impl<E: WtfEncoding> WtfString<E> {
             None => Err(self),
         }
     }
+
+    /// Append `s`'s code units after the current content, re-establishing the
+    /// terminator (the [`OsString::push`](std::ffi::OsString::push) analog).
+    ///
+    /// There is deliberately no `truncate`/`pop`/indexed edit: like `OsString`,
+    /// the content is opaque code units that may be ill-formed (D-4/D-15), so an
+    /// arbitrary byte/unit-offset edit could split a multi-unit sequence into
+    /// content with no way to detect the damage afterward (D-16).
+    pub fn push<S: AsRef<WtfStr<E>>>(&mut self, s: S) {
+        let new_units = s.as_ref().as_units();
+        self.units.reserve(new_units.len());
+        // The invariant guarantees the terminator is present to pop.
+        self.units.pop();
+        self.units.extend_from_slice(new_units);
+        self.units.push(E::NUL);
+    }
+
+    /// Encode `s` and append it, re-establishing the terminator: the
+    /// `str`-ergonomic sibling of [`push`](Self::push), for callers without an
+    /// existing [`WtfStr<E>`] to hand.
+    pub fn push_str(&mut self, s: &str) {
+        self.push(WtfStr::from_units(&E::encode_str(s)));
+    }
+
+    /// Truncate to empty, re-establishing the terminator (the
+    /// [`OsString::clear`](std::ffi::OsString::clear) analog).
+    pub fn clear(&mut self) {
+        self.units.clear();
+        self.units.push(E::NUL);
+    }
+
+    /// The number of content code units this string can hold without
+    /// reallocating (excluding the always-reserved terminator slot); the
+    /// [`OsString::capacity`](std::ffi::OsString::capacity) analog.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        // The terminator always occupies one slot of the buffer's capacity, so it
+        // is never counted as available content capacity (mirrors `len()`).
+        self.units.capacity() - 1
+    }
+
+    /// Reserve capacity for at least `additional` more content code units
+    /// without reallocating; the
+    /// [`OsString::reserve`](std::ffi::OsString::reserve) analog.
+    pub fn reserve(&mut self, additional: usize) {
+        self.units.reserve(additional);
+    }
+
+    /// Reserve capacity for exactly `additional` more content code units
+    /// (modulo allocator granularity); the
+    /// [`OsString::reserve_exact`](std::ffi::OsString::reserve_exact) analog.
+    pub fn reserve_exact(&mut self, additional: usize) {
+        self.units.reserve_exact(additional);
+    }
+
+    /// Shrink the backing buffer's capacity to fit its current content (plus the
+    /// terminator); the
+    /// [`OsString::shrink_to_fit`](std::ffi::OsString::shrink_to_fit) analog.
+    pub fn shrink_to_fit(&mut self) {
+        self.units.shrink_to_fit();
+    }
+
+    /// Shrink the backing buffer's capacity to hold at least `min_capacity`
+    /// content code units (plus the terminator), never growing it; the
+    /// [`OsString::shrink_to`](std::ffi::OsString::shrink_to) analog.
+    pub fn shrink_to(&mut self, min_capacity: usize) {
+        let min_capacity = min_capacity.checked_add(1).expect("capacity overflow");
+        self.units.shrink_to(min_capacity);
+    }
 }
 
 impl<E: WtfEncoding> Deref for WtfString<E> {

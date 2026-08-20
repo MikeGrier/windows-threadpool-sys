@@ -95,3 +95,17 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
   with `Wtf16` for the shared encoding-generic API. Cross-width parity asserts shared invariants (checked-decode
   failure, full U+FFFD replacement) rather than raw lossy-string equality, since `String::from_utf8_lossy` is
   byte-granular while `String::from_utf16_lossy` is unit-granular (D-15).
+
+## Moved 2026-08-20 -- M7 Safe mutation surface (OsString parity)
+
+### M7 -- Safe mutation surface (`OsString` parity)
+
+- [x] **M7.1** -- `WtfString<E>::push`/`push_str`, `clear`, and capacity management (`capacity`, `reserve`,
+  `reserve_exact`, `shrink_to_fit`, `shrink_to`), matching `OsString`'s actual (narrow) public surface --
+  `OsString` has no `truncate`/`pop`/indexed edit, since arbitrary truncation could split a multi-byte
+  WTF-8/surrogate sequence into ill-formed content. Each mutating op re-establishes the always-present
+  terminator (D-7/D-16).
+
+- [x] **M7.2** -- Tests: matrix/property coverage over both widths -- `push`/`push_str` growing content and
+  preserving any existing interior NUL, `clear` then re-`push` round-trips, capacity/reserve behaving as
+  documented, and the terminator invariant holding after every mutating op.

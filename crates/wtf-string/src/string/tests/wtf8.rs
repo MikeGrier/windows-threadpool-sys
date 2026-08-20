@@ -470,3 +470,104 @@ fn cross_width_parity_for_ill_formed_surrogates() {
         );
     }
 }
+
+#[test]
+fn push_appends_corpus_content_and_reestablishes_terminator() {
+    for (name, u) in corpus() {
+        let mut owned = Wtf8String::new();
+        owned.push(Wtf8Str::from_units(&u));
+        assert_eq!(owned.as_units(), u.as_slice(), "{name}");
+        assert_eq!(*owned.units.last().unwrap(), NUL, "{name} terminator");
+    }
+}
+
+#[test]
+fn push_concatenates_two_corpus_entries() {
+    let entries = corpus();
+    for (na, ua) in &entries {
+        for (nb, ub) in &entries {
+            let mut owned = Wtf8String::from_units(ua);
+            owned.push(Wtf8Str::from_units(ub));
+            let mut expected = ua.clone();
+            expected.extend_from_slice(ub);
+            assert_eq!(owned.as_units(), expected.as_slice(), "{na} + {nb}");
+            assert_eq!(*owned.units.last().unwrap(), NUL, "{na} + {nb} terminator");
+        }
+    }
+}
+
+#[test]
+fn push_preserves_interior_nul_contributed_by_either_side() {
+    // Neither side alone has an interior NUL at the join point; concatenation
+    // must not lose or misplace either side's own interior NUL.
+    let mut owned = Wtf8String::from_units(&[0x61, NUL, 0x62]); // "a\0b"
+    owned.push(Wtf8Str::from_units(&[0x63])); // + "c"
+    assert_eq!(owned.as_units(), [0x61, NUL, 0x62, 0x63]);
+    assert!(owned.has_interior_nul());
+}
+
+#[test]
+fn push_str_encodes_and_appends() {
+    for s in well_formed_strs() {
+        let mut owned = Wtf8String::from(s);
+        owned.push_str(s);
+        let mut expected = b(s);
+        expected.extend_from_slice(&b(s));
+        assert_eq!(owned.as_units(), expected.as_slice(), "{s:?}");
+    }
+}
+
+#[test]
+fn clear_empties_content_and_round_trips_through_push() {
+    for (name, u) in corpus() {
+        let mut owned = Wtf8String::from_units(&u);
+        owned.clear();
+        assert!(owned.is_empty(), "{name} cleared");
+        assert_eq!(owned.units, vec![NUL], "{name} terminator-only buffer");
+        owned.push(Wtf8Str::from_units(&u));
+        assert_eq!(
+            owned.as_units(),
+            u.as_slice(),
+            "{name} round trip after clear"
+        );
+    }
+}
+
+#[test]
+fn capacity_reserve_and_shrink_behave_as_documented() {
+    let mut owned = Wtf8String::new();
+    assert_eq!(
+        owned.capacity(),
+        0,
+        "a fresh string reserves no spare content capacity"
+    );
+
+    owned.reserve(64);
+    assert!(
+        owned.capacity() >= 64,
+        "reserve grows content capacity by at least the request"
+    );
+
+    owned.push_str("hello");
+    assert_eq!(owned.as_units(), b("hello").as_slice());
+    assert!(
+        owned.capacity() >= owned.len(),
+        "capacity never falls below content length"
+    );
+
+    owned.reserve_exact(10);
+    assert!(owned.capacity() >= owned.len() + 10);
+
+    owned.shrink_to_fit();
+    assert!(
+        owned.capacity() >= owned.len(),
+        "shrink_to_fit never drops below content length"
+    );
+
+    owned.reserve(100);
+    owned.shrink_to(5);
+    assert!(
+        owned.capacity() < 100,
+        "shrink_to must actually shrink when given a smaller bound"
+    );
+}

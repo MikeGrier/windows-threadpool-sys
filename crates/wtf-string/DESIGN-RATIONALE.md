@@ -128,3 +128,29 @@ site currently using `OsString::from_wide` / `OsStrExt::encode_wide` reads the
 same after switching to this type. The zero-copy direction that *does* exist --
 handing our `u16` slice straight to a wide (`*W`) Win32 call -- is served by
 `as_ptr` / `as_terminated_ptr`, not by pretending to be an `OsStr`.
+
+## Safe mutation surface (D-16)
+
+M6's review round flagged a real gap: the design explicitly frames `WtfString`
+as reclaiming the "growable" half `widestring` splits into `U16String`
+(growable, not terminated), yet the only way to add content after construction
+was the `unsafe` FFI buffer-fill protocol (D-9) -- there was no safe way for an
+ordinary caller to grow a string at all.
+
+The fix is not a general string-editing API. `std::ffi::OsString` -- the type
+this crate is shaped after -- is itself narrow: `push` (append another
+`AsRef<OsStr>`), `clear`, and capacity management (`reserve` /
+`reserve_exact` / `shrink_to_fit` / `shrink_to`). It has no `truncate`, `pop`,
+or indexed edit, because `OsStr`'s content is opaque code units whose
+encoding varies by platform (WTF-8 here, arbitrary bytes on Unix): an
+arbitrary byte-offset truncation could land mid-sequence and produce
+ill-formed content with no way to detect it after the fact. `WtfStr<E>`'s
+content is exactly as opaque -- ill-formed WTF-16/WTF-8 is a first-class,
+supported value (D-4/D-15) -- so the same restriction applies for the same
+reason, and matching `OsString`'s actual surface (rather than `String`'s
+richer one) is the correct scope, not an arbitrary cut-down.
+
+`push`/`push_str` and `clear` all re-establish the always-present terminator
+(D-7) as their last step, so the invariant that lets `as_terminated_ptr` stay
+allocation-free never lapses between mutating calls.
+

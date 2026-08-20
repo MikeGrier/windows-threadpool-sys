@@ -12,32 +12,32 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-## M7 -- `windows`-crate `Param<PCWSTR>` interop
+## M8 -- `windows`-crate `Param<PCWSTR>` interop
 
-- [ ] **M7.1** -- Optional, feature-gated `windows`-crate `Param<PCWSTR>` impl so the high-level `windows`
+- [ ] **M8.1** -- Optional, feature-gated `windows`-crate `Param<PCWSTR>` impl so the high-level `windows`
   crate accepts our type directly, without imposing a hard dependency when the feature is off (D-10).
 
-- [ ] **M7.2** -- Tests (Windows, feature-gated): a `Param<PCWSTR>`-bound call fed from our terminated pointer
+- [ ] **M8.2** -- Tests (Windows, feature-gated): a `Param<PCWSTR>`-bound call fed from our terminated pointer
   with no conversion.
 
-## M8 -- `no_std` / `alloc`-only support
+## M9 -- `no_std` / `alloc`-only support
 
-- [ ] **M8.1** -- `no_std` / `alloc`-only support: gate the `std`-only surface (the `OsStr`/`OsString` interop)
+- [ ] **M9.1** -- `no_std` / `alloc`-only support: gate the `std`-only surface (the `OsStr`/`OsString` interop)
   behind a default `std` feature, and build the portable core (storage, `str`/`String` conversions, FFI
   pointer surface) on `alloc` alone (D-11).
 
-- [ ] **M8.2** -- CI: an `alloc`-only (`--no-default-features`) build+test target so the portable core stays
+- [ ] **M9.2** -- CI: an `alloc`-only (`--no-default-features`) build+test target so the portable core stays
   verified without `std`.
 
-## M9 -- Documentation, examples, publication readiness
+## M10 -- Documentation, examples, publication readiness
 
-- [ ] **M9.1** -- The [README.md](README.md) and [lib.rs](src/lib.rs) top-level docs: the storage model, the
+- [ ] **M10.1** -- The [README.md](README.md) and [lib.rs](src/lib.rs) top-level docs: the storage model, the
   conversion-cost contract, the FFI surface, and both encoding widths.
 
-- [ ] **M9.2** -- Runnable example: a wide Win32 round-trip (input via `as_ptr`, output via a buffer-fill
+- [ ] **M10.2** -- Runnable example: a wide Win32 round-trip (input via `as_ptr`, output via a buffer-fill
   constructor) showing the zero-conversion path.
 
-- [ ] **M9.3** -- Publication readiness: crate metadata, changelog, and a final review pass over the public
+- [ ] **M10.3** -- Publication readiness: crate metadata, changelog, and a final review pass over the public
   surface; record the remaining deferred seam (below) as reserved.
 
 ## M-inf -- Horizon (ungated, post-v1)
