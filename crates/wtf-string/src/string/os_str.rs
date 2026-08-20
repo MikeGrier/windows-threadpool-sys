@@ -45,7 +45,7 @@ impl Wtf16Str {
 
     /// Iterate the content as wide code units, zero-copy: the
     /// [`OsStrExt::encode_wide`] analog over our own slice.
-    pub fn encode_wide(&self) -> std::iter::Copied<std::slice::Iter<'_, u16>> {
+    pub fn encode_wide(&self) -> impl Iterator<Item = u16> + '_ {
         self.as_units().iter().copied()
     }
 }
