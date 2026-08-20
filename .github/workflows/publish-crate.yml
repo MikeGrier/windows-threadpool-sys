@@ -4,8 +4,10 @@ name: publish-crate
 on:
   push:
     tags:
+      - 'windows-file-watcher-v*'
       - 'windows-overlapped-io-sys-v*'
       - 'windows-threadpool-sys-v*'
+      - 'wtf-string-v*'
 
 permissions:
   contents: read

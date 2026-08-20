@@ -18,9 +18,12 @@ cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 ```
 
-This is a Windows-only workspace: all behavior is exercised on Windows, and CI
-builds, tests, and lints exclusively on Windows. Keep platform-specific
-implementation details behind `cfg(windows)`.
+This is primarily a Windows-only workspace: every Windows crate's behavior is
+exercised on Windows, and CI builds, tests, and lints those crates exclusively
+on Windows. Keep platform-specific implementation details behind `cfg(windows)`.
+`wtf-string` is the exception: its portable core has no `cfg(windows)` gating,
+so CI additionally builds, tests, and lints it on Linux and macOS (the
+`portable` job) to keep that non-Windows support verified.
 
 ## Toolchain
 

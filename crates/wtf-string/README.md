@@ -8,8 +8,9 @@ WTF-8 ↔ UTF-16 re-encode and an allocation. `wtf-string` stores `[u16]` native
 happens once at the `str`/`OsStr` boundary and Windows calls are fed with no
 conversion and no per-call allocation.
 
-- **Encoding-generic core** — `WtfString<E>` / `WtfStr<E>`; v1 ships the `Wtf16`
-  arm as `Wtf16String` / `Wtf16Str`.
+- **Encoding-generic core** — `WtfString<E>` / `WtfStr<E>`; ships both the
+  `Wtf16` arm (`Wtf16String` / `Wtf16Str`) and the `Wtf8` arm (`Wtf8String` /
+  `Wtf8Str`), a `u8`/WTF-8 storage variant matching `OsString`'s WTF-8 layout.
 - **Always-terminated storage** — a hidden trailing NUL makes `LPCWSTR` return
   allocation-free, while content spans exclude only that terminator (interior
   NULs in content are still preserved).
