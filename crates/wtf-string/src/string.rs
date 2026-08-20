@@ -50,8 +50,10 @@ impl<E: WtfEncoding> WtfStr<E> {
 
     /// Whether the content contains a NUL (`E::NUL`) code unit.
     ///
-    /// A terminated `LPCWSTR` view of an owned string is a valid C string only
-    /// when this is `false`; counted access is always valid regardless.
+    /// For the `Wtf16` arm, a terminated `LPCWSTR` view of an owned string is a
+    /// valid C string only when this is `false` (see
+    /// [`Wtf16String::as_terminated_ptr`]); counted access is always valid
+    /// regardless of this encoding's storage width.
     #[must_use]
     pub fn has_interior_nul(&self) -> bool {
         self.units.contains(&E::NUL)
@@ -78,10 +80,12 @@ impl<E: WtfEncoding> WtfStr<E> {
 /// [`OsString`](std::ffi::OsString) / [`String`]).
 ///
 /// The backing buffer always carries a trailing `E::NUL` beyond the logical
-/// content, so a terminated pointer for wide (`*W`) Win32 APIs is available with
-/// no extra allocation, while content access (via [`Deref`] to [`WtfStr`])
-/// excludes the terminator. Content may itself contain interior NULs (parity with
-/// [`OsString`](std::ffi::OsString)); see [`WtfStr::has_interior_nul`].
+/// content, so content access (via [`Deref`] to [`WtfStr`]) excludes the
+/// terminator while a width-specific FFI surface can still reach it with no
+/// extra allocation -- for the `Wtf16` arm this is a terminated pointer for wide
+/// (`*W`) Win32 APIs (see [`Wtf16String::as_terminated_ptr`]). Content may itself
+/// contain interior NULs (parity with [`OsString`](std::ffi::OsString)); see
+/// [`WtfStr::has_interior_nul`].
 pub struct WtfString<E: WtfEncoding> {
     // Invariant: non-empty; `units[..units.len() - 1]` is the content and the
     // final element is the always-present `E::NUL` terminator.

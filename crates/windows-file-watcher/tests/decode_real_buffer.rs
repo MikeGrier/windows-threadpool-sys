@@ -16,7 +16,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_IO_PENDING, FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE, WAIT_OBJECT_0,
+    CloseHandle, ERROR_IO_PENDING, FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE, WAIT_FAILED,
+    WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY,
@@ -108,12 +109,14 @@ fn decodes_a_real_read_directory_changes_buffer() {
 
 /// Open `dir`, arm one overlapped `ReadDirectoryChangesW`, signal `armed` once
 /// the read is queued, then wait for it under a bounded timeout and decode the
-/// completion into `(kind, name)` pairs. The directory handle is closed exactly
-/// once before returning.
+/// completion into `(kind, name)` pairs. Closing the directory handle is
+/// `read_overlapped`'s responsibility (see its doc comment): it is closed
+/// exactly once on every path where the read is confirmed retired, and is
+/// deliberately leaked, alongside the other in-flight resources, on the one path
+/// where retirement could not be confirmed.
 fn watch_once(dir: &Path, armed: &mpsc::Sender<()>) -> Result<Vec<(ChangeKind, OsString)>, String> {
     let name = wide_z(dir);
-    // SAFETY: `name` is a valid NUL-terminated wide path; the returned handle is
-    // closed exactly once below before this function returns.
+    // SAFETY: `name` is a valid NUL-terminated wide path.
     let handle = unsafe {
         CreateFileW(
             name.as_ptr(),
@@ -132,17 +135,21 @@ fn watch_once(dir: &Path, armed: &mpsc::Sender<()>) -> Result<Vec<(ChangeKind, O
         ));
     }
 
-    let result = read_overlapped(handle, armed);
-
-    // SAFETY: `handle` came from `CreateFileW` and is closed exactly once.
-    unsafe { CloseHandle(handle) };
-    result
+    read_overlapped(handle, armed)
 }
 
 /// Arm a single overlapped read on `handle`, signal `armed` once it is queued in
 /// the kernel, and wait for it under a bounded timeout, cancelling and draining
 /// the read if it does not complete in time so the kernel is no longer
-/// referencing the buffer when this function returns.
+/// referencing the buffer when this function returns. `handle` is closed exactly
+/// once on every return path except the final one: if a cancelled read cannot be
+/// confirmed retired within the second bounded wait, the kernel may still
+/// reference `buffer`/`overlapped`/`handle`, so all three are deliberately
+/// leaked rather than freed/closed while still possibly live -- this mirrors the
+/// crate's own established teardown convention (see
+/// `windows-overlapped-io-sys/DESIGN-NOTES.md`: closing a handle only cancels
+/// its outstanding operations, reclamation must wait for the completion to be
+/// observed) applied to a caller with no completion port to later observe it.
 fn read_overlapped(
     handle: HANDLE,
     armed: &mpsc::Sender<()>,
@@ -154,10 +161,10 @@ fn read_overlapped(
     // SAFETY: default attributes; an unnamed event whose handle is closed once.
     let event = unsafe { CreateEventW(ptr::null(), TRUE, FALSE, ptr::null()) };
     if event.is_null() {
-        return Err(format!(
-            "CreateEventW failed: {}",
-            std::io::Error::last_os_error()
-        ));
+        let err = std::io::Error::last_os_error();
+        // SAFETY: `handle` came from `CreateFileW` and no read was ever armed on it.
+        unsafe { CloseHandle(handle) };
+        return Err(format!("CreateEventW failed: {err}"));
     }
 
     // A `Vec<u32>` guarantees the DWORD alignment `ReadDirectoryChangesW` requires.
@@ -195,6 +202,8 @@ fn read_overlapped(
         if err.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
             // SAFETY: `event` is valid and not associated with any in-flight read.
             unsafe { CloseHandle(event) };
+            // SAFETY: no read was armed on `handle`.
+            unsafe { CloseHandle(handle) };
             return Err(format!("ReadDirectoryChangesW failed to arm: {err}"));
         }
     }
@@ -204,6 +213,10 @@ fn read_overlapped(
 
     // SAFETY: `event` is a valid manual-reset event handle.
     let waited = unsafe { WaitForSingleObject(event, TIMEOUT_MS) };
+    // Captured immediately: `WAIT_FAILED`'s `GetLastError` would otherwise be
+    // overwritten by the `CancelIoEx` call below (which sets its own error, or
+    // leaves a stale one on success), losing the real diagnosis.
+    let wait_err = (waited == WAIT_FAILED).then(std::io::Error::last_os_error);
     let mut transferred: u32 = 0;
 
     if waited == WAIT_OBJECT_0 {
@@ -225,6 +238,8 @@ fn read_overlapped(
         };
         // SAFETY: the read is retired; the event is closed exactly once.
         unsafe { CloseHandle(event) };
+        // SAFETY: no I/O remains outstanding on `handle`.
+        unsafe { CloseHandle(handle) };
         return outcome;
     }
 
@@ -250,17 +265,24 @@ fn read_overlapped(
         unsafe { GetOverlappedResult(handle, &*overlapped, &mut transferred, FALSE) };
         // SAFETY: the read is retired; the event is closed exactly once.
         unsafe { CloseHandle(event) };
+        // SAFETY: no I/O remains outstanding on `handle`.
+        unsafe { CloseHandle(handle) };
+        let wait_note = match wait_err {
+            Some(e) => format!("WaitForSingleObject failed: {e}"),
+            None => format!("wait result {waited}"),
+        };
         return Err(format!(
             "the watch did not report a change within {TIMEOUT_MS} ms \
-             (wait result {waited}, cancelled = {cancelled})"
+             ({wait_note}, cancelled = {cancelled})"
         ));
     }
 
     // The read could not be confirmed retired within the bound. The kernel may
-    // still write into `buffer`/`overlapped`, so dropping them would be unsound.
-    // Leak the heap `buffer` and the boxed `overlapped`, and leave `event` open,
-    // rather than free live storage; this path is not expected to occur for a
-    // cancelled directory read.
+    // still reference `buffer`/`overlapped`/`handle`, so freeing or closing any
+    // of them would be unsound: leak the heap `buffer` and the boxed
+    // `overlapped`, leave `event` and `handle` open, rather than free or close
+    // live storage; this path is not expected to occur for a cancelled directory
+    // read.
     let cancel_note = match cancel_err {
         None => "CancelIoEx succeeded".to_owned(),
         Some(e) => format!("CancelIoEx failed: {e}"),
@@ -269,7 +291,7 @@ fn read_overlapped(
     std::mem::forget(overlapped);
     Err(format!(
         "overlapped read could not be retired within {TIMEOUT_MS} ms ({cancel_note}); \
-         leaked buffer/overlapped to stay sound"
+         leaked buffer/overlapped/handle to stay sound"
     ))
 }
 
