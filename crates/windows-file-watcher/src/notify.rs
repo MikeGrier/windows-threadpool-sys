@@ -96,9 +96,9 @@ impl std::fmt::Debug for RelativeName {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RawChange {
     /// The raw `FILE_ACTION_*` value.
-    pub action: u32,
+    action: u32,
     /// The reported name, relative to the watched directory.
-    pub name: RelativeName,
+    name: RelativeName,
 }
 
 /// Iterate the `FILE_NOTIFY_INFORMATION` chain in `buffer`.
