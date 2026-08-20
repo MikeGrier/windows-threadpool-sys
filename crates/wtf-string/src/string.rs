@@ -7,7 +7,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
-use crate::encoding::{Wtf16, WtfEncoding};
+use crate::encoding::{Wtf8, Wtf16, WtfEncoding};
 
 /// A borrowed string slice of code units in encoding `E` (the analog of
 /// [`OsStr`](std::ffi::OsStr) / [`str`]).
@@ -304,6 +304,12 @@ pub type Wtf16String = WtfString<Wtf16>;
 
 /// A [`WtfStr`] whose storage is WTF-16 (`u16` code units).
 pub type Wtf16Str = WtfStr<Wtf16>;
+
+/// A [`WtfString`] whose storage is WTF-8 (`u8` code units).
+pub type Wtf8String = WtfString<Wtf8>;
+
+/// A [`WtfStr`] whose storage is WTF-8 (`u8` code units).
+pub type Wtf8Str = WtfStr<Wtf8>;
 
 // FFI surface specific to WTF-16 storage: `*const u16` is the `windows-sys`
 // `PCWSTR`/`LPCWSTR` shape (D-10). These live on the concrete instantiations

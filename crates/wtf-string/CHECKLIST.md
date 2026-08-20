@@ -14,7 +14,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M6 -- The `Wtf8` encoding arm
 
-- [ ] **M6.1** -- The `Wtf8` encoding arm (`WtfString<Wtf8>` / `WtfStr<Wtf8>`): implement the crate-owned
+- [x] **M6.1** -- The `Wtf8` encoding arm (`WtfString<Wtf8>` / `WtfStr<Wtf8>`): implement the crate-owned
   `WtfEncoding` contract for `u8`/WTF-8 units -- `Unit = u8`; storage is arbitrary WTF-8 (ill-formed-tolerant,
   matching `OsStr`); `encode_str` is the identity on a UTF-8 `str`'s bytes; exact decode is
   valid-UTF-8-or-`None`; lossy decode replaces with U+FFFD; comparison/hash are binary over bytes; `debug_fmt`

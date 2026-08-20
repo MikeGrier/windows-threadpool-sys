@@ -15,12 +15,12 @@
 //! # Shape
 //!
 //! The core is generic over a [code-unit encoding][WtfEncoding]: `WtfString<E>`
-//! owns the units and `WtfStr<E>` is the borrowed slice. v1 ships only the
-//! `Wtf16` encoding, exposed as the aliases `Wtf16String` / `Wtf16Str`; the
-//! `Wtf8` arm — a `u8`/WTF-8 storage variant whose encode/decode, comparison, and
-//! formatting semantics this crate defines, backed by a crate-owned `Vec<u8>`
-//! (its WTF-8 storage matches `OsString`'s, but the arm is not built on
-//! `OsString`) — is a designed-in seam that is not yet implemented.
+//! owns the units and `WtfStr<E>` is the borrowed slice. Two encodings ship: the
+//! `Wtf16` width (aliases `Wtf16String` / `Wtf16Str`) and the `Wtf8` width
+//! (aliases `Wtf8String` / `Wtf8Str`), a `u8`/WTF-8 storage variant whose
+//! encode/decode, comparison, and formatting semantics this crate defines, backed
+//! by a crate-owned `Vec<u8>` (its WTF-8 storage matches `OsString`'s, but the arm
+//! is not built on `OsString`).
 //!
 //! The storage and `str`/`String` conversions are portable; the `OsStr` /
 //! `OsString` interop is Windows-only.
@@ -32,5 +32,5 @@
 mod encoding;
 mod string;
 
-pub use encoding::{Wtf16, WtfEncoding};
-pub use string::{Wtf16Str, Wtf16String, WtfStr, WtfString};
+pub use encoding::{Wtf8, Wtf16, WtfEncoding};
+pub use string::{Wtf8Str, Wtf8String, Wtf16Str, Wtf16String, WtfStr, WtfString};
