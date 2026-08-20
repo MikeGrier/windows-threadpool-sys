@@ -305,5 +305,39 @@ pub type Wtf16String = WtfString<Wtf16>;
 /// A [`WtfStr`] whose storage is WTF-16 (`u16` code units).
 pub type Wtf16Str = WtfStr<Wtf16>;
 
+// FFI surface specific to WTF-16 storage: `*const u16` is the `windows-sys`
+// `PCWSTR`/`LPCWSTR` shape (D-10). These live on the concrete instantiations
+// because a raw `u16` pointer only makes sense for the `Wtf16` width (D-2).
+
+impl Wtf16Str {
+    /// A pointer to the content code units, for counted FFI paired with
+    /// [`len`](WtfStr::len).
+    ///
+    /// The pointer is **not** guaranteed to be NUL-terminated (a borrowed slice
+    /// carries no terminator); use it only with the matching unit count. It is
+    /// valid while `self` is borrowed and unmodified. For a terminated
+    /// `LPCWSTR`, start from an owned [`Wtf16String`] and use
+    /// [`Wtf16String::as_terminated_ptr`].
+    #[must_use]
+    pub fn as_ptr(&self) -> *const u16 {
+        self.as_units().as_ptr()
+    }
+}
+
+impl Wtf16String {
+    /// A NUL-terminated `*const u16` (`LPCWSTR`/`PCWSTR`) over the whole buffer.
+    ///
+    /// The always-present terminator makes this allocation-free (D-7). It is a
+    /// valid C string only when [`has_interior_nul`](WtfStr::has_interior_nul) is
+    /// `false`; otherwise a reader stops at the first interior NUL. The pointer is
+    /// valid while `self` is borrowed and unmodified.
+    #[must_use]
+    pub fn as_terminated_ptr(&self) -> *const u16 {
+        // The buffer is `[content.., NUL]`, so its first element is the start of
+        // a terminated string.
+        self.units.as_ptr()
+    }
+}
+
 #[cfg(test)]
 mod tests;
