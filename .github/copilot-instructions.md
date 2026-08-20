@@ -29,6 +29,55 @@ yet," "not needed for this witness," or any variant of "we don't need it," **sto
 is exactly the anti-pattern this directive forbids. Convert it into either (a) implementing
 the work, or (b) an explicit blocker conversation with the user.
 
+## PLATFORM INTEGRITY — layers and platforms are isolation boundaries, never collapsed for convenience
+
+**This repository is built as layers and platforms on purpose. Do not omit, tune,
+merge, delete, or "optimize" a feature in a way that subverts the intent of that
+layering.** Treating a layer boundary as an inefficiency to be collapsed — folding two
+paths into one, dropping a lower baseline to serve a higher one, skipping a platform's
+feature because the currently-visible goal does not exercise it — is a **recurring,
+costly anti-pattern** that undoes deliberate design and delays the project. When you
+see what looks like a "layering inefficiency," **assume it is deliberate isolation and
+ask about intent before proposing to consolidate it.** An assistant's efficiency
+instinct is never a licence to redesign a plan the engineer built deliberately; help
+coax the plan out and execute it, do not subvert it.
+
+Three binding rules follow:
+
+1. **Duplicate-then-decide is standard procedure for speculative work.** Building a new
+   capability as a *separate, duplicated* path alongside the existing one — so the
+   speculative work proceeds *without interfering with or disrupting* the working path —
+   is correct and expected, **especially** for a feature whose dependency is not yet
+   certain. The duplication is **not** debt to be minimized; it is the mechanism that
+   keeps the working layer stable while the new one is proven. The **merge-or-delete**
+   decision is made **when the new path is proven**, never pre-empted mid-development,
+   and never traded away for a testing/efficiency shortcut that re-couples the paths.
+   Track the *when-done* merge-or-delete decision so it is not forgotten — a duplicated
+   path silently becoming permanent because nobody circled back is the real failure
+   mode, not the duplication.
+
+2. **Depend on specified primitives, never on incidental current behavior.** A consumer
+   must bind to a layer's *specified* contract — its primitives, its documented
+   semantics — never to how the layer happens to behave right now. Leaning on an
+   implementation's incidental behavior (e.g. relying on how a code generator currently
+   emits code plus a specific CPU's memory-ordering side effects, instead of using the
+   specified atomic / memory-ordering primitives) is a correctness trap that has already
+   cost days of preventable waste. This is the consumer-side twin of "Design Autonomy —
+   Behavior is owned, never inherited from dependencies" below: each layer owns its
+   behavior, and each consumer binds only to that owned specification.
+
+3. **Do not narrow the platform to serve the visible goal.** Every platform component
+   must remain a *level* platform — its lower baselines and less-exercised features are
+   first-class, not optional trimmings to cut because the current task does not need
+   them. This is the PRIME DIRECTIVE above viewed from the platform side: absence of a
+   visible consumer for a layer or feature is never a licence to omit, downgrade, or
+   collapse it.
+
+When a genuine constraint (a real cost, a real blocker) makes a layer duplication or a
+baseline truly unaffordable, that is a **decision for the engineer driving the work**,
+raised explicitly per the PRIME DIRECTIVE's blocker protocol — never a shortcut an
+assistant takes unilaterally in the name of efficiency.
+
 ## Line endings in tool parameters
 
 All text content passed to tpu tools (`content`, `replacement`, `data` in edit ops) is
@@ -80,7 +129,11 @@ edits (`tpu_replace_in_file` / `tpu_edit_file`), not only to PowerShell/shell.
   and lets the next contributor mistake it for their own change. If a fmt run
   touches files you did not expect, that is expected behavior — commit them, do
   not `git checkout` them away.
-- Never run `git pull` or `git merge` without `--no-edit`.
+- Never run `git pull` or `git merge` without `--no-edit`. **`--no-edit` is a
+  `merge`/`pull` flag only** — `git rebase` does **not** accept `--no-edit` (passing
+  it makes `git rebase` fail and print its usage). A plain, non-interactive
+  `git rebase <upstream>` opens no editor on its own, so it needs no such flag: run
+  it bare (never add `--no-edit`, and never use `-i`).
 - Never run interactive commands: `git rebase -i`, `git add -p`, etc.
 - Do not use `less`, `more`, or any other interactive pager.
 - Never use PowerShell multi-line string operators (`@"…"@`) in terminal commands.
@@ -238,24 +291,44 @@ the scratch-directory rule below, target `.scratch/` (e.g.
 `".scratch/test-run.ndjson"`). Read the summary first; if `exit_code` is
 non-zero or failure markers appear, open the file for the full transcript.
 
-### Hang and slow-test bisection (`bisect`)
+### Hang / slow-test bisection (`bisect`)
 
-`cargo_test` and `cargo_nextest_run` accept a `bisect` object that builds once,
-enumerates tests, and recursively subdivides timed-out or slow single-threaded
-groups to isolate culprit tests. Only `group_timeout_secs` is required:
+`cargo_test` and `cargo_nextest_run` accept an optional `bisect` object that
+switches the call into a bisection engine for **finding which test hangs or runs
+long**. It builds once, enumerates every test, then runs groups of tests under a
+short kill-deadline (always single-threaded). Any group that times out (hangs) or
+exceeds the slow threshold is recursively subdivided until the culprit test(s)
+are isolated. It works identically on both tools (it runs the compiled libtest
+binaries directly).
+
+Only `group_timeout_secs` is required:
 
 ```json
 { "bisect": { "group_timeout_secs": 10 } }
 ```
 
-Optional controls are `slow_threshold_secs` (less than the group timeout),
-`split_factor` (default `2`) or mutually exclusive `split_percent`,
-`min_group_size` (default `1`), mutually exclusive `initial_group_size` and
-`initial_groups`, `max_rounds` (default `32`), an RE2 `pattern`, and
-`include_ignored`. Results use `x-cargo-mcp-bisect-config`,
+Knobs (all optional except `group_timeout_secs`):
+
+- `group_timeout_secs` (REQUIRED) — per-group kill-deadline in seconds; a group
+  that exceeds it is treated as hung.
+- `slow_threshold_secs` — must be < `group_timeout_secs`; a group that finishes
+  but takes longer than this is `slow` and gets subdivided. Omit to detect hangs
+  only.
+- `split_factor` (default 2) — sub-groups per subdivision (binary search).
+- `split_percent` — alternative to `split_factor`: yields ceil(100/p) sub-groups
+  (mutually exclusive with `split_factor`).
+- `min_group_size` (default 1) — stop subdividing at this size and report the
+  members as culprits.
+- `initial_group_size` / `initial_groups` — shape the first-level groups
+  (mutually exclusive); default is one group of all tests.
+- `max_rounds` (default 32) — cap on subdivision depth.
+- `pattern` — RE2 regex; only matching `module::path::test_name` tests
+  participate. `include_ignored` — also bisect `#[ignore]` tests.
+
+The result is an NDJSON stream of `x-cargo-mcp-bisect-config`,
 `x-cargo-mcp-bisect-group`, `x-cargo-mcp-bisect-culprit`, and
-`x-cargo-mcp-bisect-summary` NDJSON records. Finding a culprit makes the call
-fail, and `output_path` retains the full transcript when supplied.
+`x-cargo-mcp-bisect-summary` records; `output_path` is honoured (full body to
+file, compact summary inline). The call is an error when any culprit is found.
 
 ### Reading cargo_test output
 
@@ -294,8 +367,8 @@ at the repository root. This directory is git-ignored.
 - **Never** write scratch or debug files to the repository root or any source directory.
 
 ## General instructions for this repository
-- All code is Copyright Mike Grier.
-- All source code should include a copyright statement. The statement should be brief, a single line comment as the first line of the file which reads something like: Copyright (c) Mike Grier.
+- All code is Copyright Microsoft Corporation.
+- All source code should include a copyright statement. The statement should be brief, a single line comment as the first line of the file which reads something like: Copyright (c) Microsoft Corporation.
 - If the source file is also part of an open source library, there may be additional lines giving the details, but in general, open source content should not be checked in to this source repository except as part of a patching process to provide a patch over defective open source dependencies which have to be addressed for security or business continuity reasons.
 
 ## Interaction Guidelines
@@ -334,6 +407,40 @@ When executing checklist items (CHECKLIST.md files):
   > **➡ CROSS-COMPONENT HANDOFF:** next work is in component `<component-path>` → `<milestone-id>` → `<work-item-id>` (`<short title>`). See [`<path-to-CHECKLIST.md>`](...).
   The goal is that a reader executing a checklist linearly never has to infer cross-component dependencies from surrounding prose — the boundary is always called out at the exact item where the handoff occurs.
 
+## 7-bit ASCII only in Copilot-maintained planning and design docs
+
+Every Copilot-maintained planning and design document **must contain only 7-bit
+clean ASCII** (every byte in `0x00`-`0x7F`; no code point above `U+007F`). This
+governs:
+
+- checklist files: `CHECKLIST.md`, `CHECKLIST-<feature>.md`,
+  `COMPLETED-CHECKLIST.md`;
+- plan indexes: `PLANS.md`, `COMPLETED-PLANS.md`;
+- design docs: `DESIGN-NOTES.md`, `DESIGN-NOTES-*.md`, `DESIGN-RATIONALE.md`,
+  `DESIGN-INSTRUCTIONS.md`, any other `DESIGN-*.md`, and every file under a
+  `design-sessions/` directory;
+- the test-tracking siblings `UNRESOLVED-TEST-FAILURES.md` /
+  `RESOLVED-TEST-FAILURES.md`.
+
+Why: non-ASCII punctuation in these files has repeatedly been round-tripped
+through the wrong code page by some tool and corrupted into multi-layer mojibake
+that is expensive to detect and repair. 7-bit ASCII round-trips cleanly through
+every editor, code page, and shell, so this class of damage cannot recur.
+
+Write ASCII spellings instead of the non-ASCII characters that tend to appear in
+prose (described by name + code point so this rule file stays ASCII too):
+
+- em dash (U+2014) / en dash (U+2013)  ->  `--`, or a single `-`
+- right arrow (U+2192)  ->  `->`  ;  left arrow (U+2190)  ->  `<-`
+- set membership (U+2208)  ->  the word `in`
+- multiplication sign (U+00D7)  ->  `x` or `*`
+- curly quotes (U+201C/U+201D/U+2018/U+2019)  ->  straight `"` / `'`
+- horizontal ellipsis (U+2026)  ->  `...`
+- non-breaking space (U+00A0)  ->  a normal space (U+0020)
+- any other code point above U+007F  ->  its ASCII equivalent or a short word.
+
+Apply this to the content you author or edit in these files going forward.
+
 ## Markdown cross-references must be clickable links
 
 Every time a project document (CHECKLIST.md, COMPLETED-CHECKLIST.md, PLANS.md,
@@ -371,6 +478,246 @@ Rules:
   edit; do not leave new non-linked cross-references behind.
 
 ## Coding conventions
+
+### Source module size — measured in bytes, split at fracture points
+
+Line counts are a poor proxy for module complexity, and an arbitrary line cap is a poor
+design criterion. Judge a source file instead by its **size in bytes on disk**, on a
+power-of-two scale. The scale applies to a **single source file**, not to a directory or a
+crate. Crossing a threshold does not mandate a split; it raises the *pressure* to find a
+fracture point, and that pressure compounds at every subsequent threshold.
+
+**The scale is a smoke alarm, not a blueprint.** It decides *whether to go looking*; it never
+decides *where to cut* or *how many parts to make* — that comes entirely from the fracture
+points the file already has. A file may sit two thresholds up and still be right to leave
+whole, and a file below every threshold may still be worth splitting when it obviously wants
+to be two things. Never reach for the byte count to justify a cut.
+
+| Size on disk | Name | Default posture |
+|---|---|---|
+| < 32 KiB | normal | No action. |
+| >= 32 KiB | **large** | Look for a fracture point the next time you materially edit the file. Split if a clean one exists; leaving it whole is fine if none does. |
+| >= 64 KiB | **extra large** (XL) | The default answer flips: **split**, unless you can name what makes the module indivisible. |
+| >= 128 KiB | **XXL** | Split, or record a decision in the nearest DESIGN-NOTES.md naming the specific property that makes this module irreducible. |
+| >= 256 KiB | **XXXL** | As XXL, and the file is a standing defect: queue the split as a CHECKLIST.md item rather than deferring it again. |
+
+The scale continues by powers of two — each doubling adds one "extra" (32 KiB * 2^n = n
+"extra"s) — and each step raises the bar for the justification that lets the file stay whole.
+
+Rules:
+
+- **Measure, do not estimate.** Use `tpu_stat_file` (`size`) or `tpu_count_file`; never infer
+  size from a line count or from how large the file "feels".
+- **Check at the moment you add.** Whenever you materially add to a source file, check whether
+  the addition pushes it across a threshold. That is the moment to decide — not a later audit
+  that nobody is scheduled to perform.
+- **Split at fracture points, never at byte budgets.** A fracture point is a subset of the
+  module with its own coherent responsibility and a narrow interface to the rest. If there is
+  no fracture point, do not cut. **Never** split a module by relocating its trailing N bytes
+  into a new file: a mechanical cut yields two modules that are each individually
+  incomprehensible, which is strictly worse than one large coherent module.
+- **A split is a refactor and lands on its own commit.** The module's public surface does not
+  change, behavior does not change, and no other work rides along. Every split must also carry
+  the provenance trail described below.
+- **A split must not subvert layering.** See PLATFORM INTEGRITY above: if the only available
+  fracture point would collapse or re-route a layer boundary, raise it with the engineer
+  instead of taking it.
+- **Some modules are legitimately irreducible** — a single exhaustive dispatch, a data table,
+  a state machine whose states only make sense together. Say exactly that in the DESIGN-NOTES
+  decision when such a module crosses XXL. **Generated code is exempt at every threshold.**
+- **Test modules split more readily, not less.** They sit on the same scale, and their fracture
+  points (by feature area, by scenario) are usually obvious — a large `tests.rs` should almost
+  always become a `tests/` directory of focused siblings. For an **integration** test there is
+  a layout trap: a test crate root resolves `mod x;` against the directory that *contains* it
+  (`tests/`), not against a directory named after itself, so `tests/<name>/<part>.rs` is
+  unreachable from `tests/<name>.rs` and parts placed in `tests/` would each be compiled as
+  their own test target. `git mv tests/<name>.rs tests/<name>/main.rs` first — cargo
+  auto-discovers that layout and the target keeps its name — then the parts resolve normally.
+- **Prefer facade-preserving splits.** Promote `src/foo.rs` into `src/foo.rs` plus
+  `src/foo/<part>.rs` (Rust 2018 style — no `mod.rs`), keeping `foo` as the facade that
+  re-exports the parts, so every existing `use` path keeps working. A glob re-export
+  (`pub use self::<part>::*;`) preserves both the paths and the public surface without naming
+  each item, and it also puts the parts' public types back in scope for the facade's own code.
+- **Watch the facade: if it is still the largest part, you split the periphery, not the module.**
+  Shared items accumulate in the parent, so a split can report success against the byte scale
+  while leaving the real mass exactly where it was. When the facade remains the biggest file in
+  its own family, say so plainly rather than counting the split as done: that residue *is* the
+  module. Either find the fracture inside it, or record what makes it irreducible.
+
+#### Before you cut: check the privacy graph
+
+Coherent responsibility is what makes a fracture point *worth* taking; **reachability** is what
+makes it *possible*. In Rust that is decided by item visibility, and the shape is asymmetric:
+
+- a child module **can** see its ancestors' private items;
+- a parent **cannot** see its children's private items;
+- siblings **cannot** see each other's private items.
+
+So before cutting, list every **private** item defined in the candidate subset, and every
+private item the subset references, then check the direction of each reference:
+
+- defined in the subset, referenced only inside it — moves cleanly;
+- defined in the parent, referenced by the subset — fine, no action;
+- defined in the subset, referenced by the parent or by another part — **the cut is not viable
+  as drawn**: that item belongs in the parent.
+
+The reference that is easiest to miss, and the most expensive, is a private *type* named in a
+parent-owned struct's field, because it drags its whole cluster back with it. In `bungo`'s
+store, `Store` holds a private `Genesis`, whose impl reads `GenesisConfig`'s private fields,
+which read `ShireId`'s — so all three types had to stay with `Store` even though the `init` /
+`open` paths moved out cleanly. The same applies to private *methods*: a `fn` on the shared
+type that two parts both call must live in the parent, not in whichever part happened to
+define it first.
+
+When a private item turns out to be shared, **move it to the parent — never widen it to
+`pub(super)` to make the cut work.** Widening is a visibility change, which a pure relocation
+forbids (see below); and "this item moved to the parent" is the honest signal that it is
+shared, where a widened item silently stays in a module that no longer owns it.
+
+Running this check with grep before cutting costs a minute. Discovering it from `E0624` /
+`E0425` afterwards costs a full reset-and-retry of the split, and it has already cost three of
+them on one file.
+
+### Splitting a module — the mandatory provenance trail
+
+Git has **no model of file identity**. It stores whole-tree snapshots and *infers* renames
+and copies at query time by content similarity; nothing about a split is recorded in the
+commit. A split is a **copy**, not a rename (the source file survives), so `git log --follow`
+and GitLens's file history silently dead-end at the split commit and every line in the
+extracted file appears to have been authored by whoever performed the split. To stop that,
+three layers of trail are **mandatory** on every split, and all three land in the split
+commit itself:
+
+1. **Pure relocation** — so git's copy-detection heuristics can recover the lines.
+2. **Commit trailers** — the only durable, machine-readable, non-heuristic record.
+3. **A provenance header** in each extracted file — the human-visible pointer.
+
+**1. Pure relocation.** The split commit moves bytes and does nothing else: no reflow, no
+rename of any item, no visibility change, no behavior change, no unrelated work. Preserve
+each moved block's **indentation level** so `cargo fmt` is a no-op on it (if `fmt` reflows
+moved code, the cut was not clean — reconsider the fracture point). Keep `use`/import fixups
+to the literal minimum needed to compile: **every line you touch is a line that loses its
+provenance**.
+
+**2. Commit trailers.** The split commit's message ends with a trailer block: one
+`Split-Source:` line naming the file the content came from, and one `Split-Into:` line per
+extracted file, all paths repository-relative. The block must be the **final paragraph**,
+preceded by a blank line, containing **only** `Key: value` lines — a stray prose line inside
+it makes git refuse to parse any of it.
+
+**3. Provenance header.** Each extracted file carries, immediately after the copyright line,
+a single comment naming its immediate source and the **pre-split commit** (that is `HEAD`
+before you commit, so it is knowable while you author):
+
+```rust
+// Copyright (c) Microsoft Corporation.
+// Split from store.rs at 9ab3f21.
+```
+
+The facade file needs no header — its `mod` declarations are the forward pointer. When a file
+that was itself split is split again, the header names only its immediate source; the chain
+is walked one hop at a time.
+
+#### Procedure — command-line git (PowerShell)
+
+1. Start from a clean tree; the split is its own commit.
+2. Capture the pre-split commit for the header:
+   `git --no-pager rev-parse --short HEAD`
+3. **Move the bytes by copy-then-delete, never by retyping.** `tpu_copy_file` the whole source
+   file onto each new part, then issue **one** `tpu_edit_file` per part that deletes everything
+   that part does not keep. All positions in a `tpu_edit_file` call reference the *original*
+   file and are applied without interfering, so a single call carries every `delete` range plus
+   the `insert` of the part's header. Then do the same to the source file itself, deleting the
+   complement of what the facade keeps. This is what makes byte-identical relocation practical:
+   re-emitting the text through the model reflows it, and blame then attributes the whole file
+   to the split.
+   - Include one adjacent blank line in each deleted range, or `rustfmt` collapses the doubled
+     blank afterwards and adds noise to the diff.
+   - When methods move out of an `impl` block, give each part its own `impl Type {` / `}`
+     wrapper — two new lines — so the moved methods keep their original indentation and
+     `cargo fmt` stays a no-op on them.
+   - Derive the ranges from doc-comment starts, not from the `fn` / `struct` line, so each
+     item's doc block travels with it.
+4. Add the provenance header to each extracted file; wire the facade's `mod` / re-exports.
+5. Run the Rust pre-commit gate (`cargo_fmt`, then `cargo_clippy --all-targets`) and the
+   in-scope tests. `cargo fmt` should produce no diff inside the moved blocks.
+6. Write the message to a scratch file (multi-line messages must never go through `-m`):
+
+   ```
+   Split store.rs: extract recovery and scrub
+
+   Pure relocation, no behavior change. store.rs had reached 71 KiB (XL);
+   recovery and scrub each carry their own responsibility behind a narrow
+   interface.
+
+   Split-Source: crates/bungo/src/store.rs
+   Split-Into: crates/bungo/src/store/recover.rs
+   Split-Into: crates/bungo/src/store/scrub.rs
+   ```
+
+   then `git add -A` the source, the new files, and the facade, and
+   `git commit -F .scratch/split-commit.txt`.
+7. **Verify the trailers parsed** — this must echo every extracted path; empty output means
+   the block is malformed:
+   `git --no-pager log -1 --format="%(trailers:key=Split-Into,valueonly)"`
+8. **Verify blame traces through the split** — count the extracted file's lines still
+   attributed to the split commit; expect only the provenance header and whatever you had to
+   edit to compile:
+
+   ```powershell
+   $split = git --no-pager rev-parse --short HEAD
+   git --no-pager blame -w -C1 -C1 -- crates/bungo/src/store/recover.rs |
+     Select-String "^$split" | Measure-Object | Select-Object -ExpandProperty Count
+   ```
+
+   **Both parts of `-C1 -C1` matter, and they mean different things.** *Repeating* `-C`
+   widens the search: a single `-C` only inspects files modified in the same commit, while
+   **twice** makes blame inspect the other files in *the commit that created this file*,
+   which is exactly the split case. The *numeric* argument is the detection threshold --
+   the minimum run of alphanumeric characters a moved block must contain before blame will
+   attribute it -- and it defaults to **40**, which is far too coarse for real source: code
+   is full of short lines (`}`, `);`, `.expect("...")`) and whole extracted modules silently
+   fail to trace at the default. Measured on the 16-way split of `crates/bilbo/src/tests.rs`:
+   at the default threshold only 6 of 16 files traced at all, while `-C1 -C1` recovered
+   **5,267 of 5,669 moved lines (93%)**.
+
+   Expect a small residue attributed to the split: the provenance header, anything you had
+   to edit to compile, and some short boilerplate lines that fall below matching confidence.
+   If instead *most* of the file is attributed to the split, the relocation was not pure --
+   fix it and `git commit --amend -F .scratch/split-commit.txt` (the commit has not been
+   pushed yet).
+
+#### Procedure — VS Code with GitLens
+
+Same three layers; only the mechanics differ.
+
+- **Authoring the message with trailers:** in the Source Control input box, `Enter` inserts a
+  newline and `Ctrl+Enter` commits — so type the subject, a blank line, the body, a blank
+  line, then the `Split-Source:` / `Split-Into:` lines. (The scratch-file + `git commit -F`
+  route above is equally acceptable and is required if you are driving git from the terminal.)
+- **Confirming the trailers:** open the GitLens **Commit Graph** or **Commit Details** view
+  and check the trailer lines appear verbatim at the end of the message body.
+- **Blame that traces through the split:** GitLens does **not** pass `-C` by default. The
+  workspace sets `gitlens.advanced.blame.customArguments` to `["-w", "-C1", "-C1"]` in
+  [.vscode/settings.json](../.vscode/settings.json); with that in place, *GitLens: Toggle File
+  Blame* on an extracted file attributes the moved lines to their original commits and authors
+  rather than to the split. If you see the split commit on every line, either the setting is
+  not active or the relocation was not pure. (See step 8 above for why the threshold must be
+  `-C1` and not a bare `-C`.)
+- **File history:** GitLens's file history follows renames only, so it will still stop at the
+  split — that is expected and is why the trailer exists. Read `Split-Source` off the split
+  commit and open the history of that path to continue.
+- Note that **GitHub's web blame does not apply `-C`** and will always show the split commit
+  as the origin. Local blame and GitLens (configured as above) are the tools of record.
+
+#### One-time repository setup
+
+```powershell
+git config --local diff.renames copies
+git config --local alias.blame-split "blame -w -C1 -C1"
+```
+
+The alias gives `git blame-split -- <file>` as shorthand for the verification in step 8.
 
 ### No manifest numeric constants in source code
 
