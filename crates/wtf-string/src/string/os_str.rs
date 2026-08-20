@@ -62,6 +62,12 @@ impl From<&OsString> for Wtf16String {
     }
 }
 
+impl From<OsString> for Wtf16String {
+    fn from(s: OsString) -> Self {
+        Self::from_os_str(&s)
+    }
+}
+
 impl From<&Wtf16Str> for OsString {
     fn from(s: &Wtf16Str) -> Self {
         s.to_os_string()

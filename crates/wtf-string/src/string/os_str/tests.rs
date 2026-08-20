@@ -47,6 +47,10 @@ fn from_wide_matches_from_units() {
 fn from_and_into_conversions_round_trip() {
     let os = OsString::from("data");
     let wtf = Wtf16String::from(os.as_os_str());
+    // Owned `OsString` -> `Wtf16String` (`os.into()`), symmetric with the owned
+    // reverse below.
+    let from_owned_os: Wtf16String = os.clone().into();
+    assert_eq!(from_owned_os.as_units(), wtf.as_units());
     let from_ref: OsString = (&wtf).into();
     assert_eq!(from_ref, os);
     let borrowed: &Wtf16Str = &wtf;
