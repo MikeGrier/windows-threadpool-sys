@@ -12,19 +12,6 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-## M5 -- Windows OsStr/OsString interop
-
-- [x] **M5.1** -- `cfg(windows)` lossless bridge: `from_os_str` / `to_os_string` (and `AsRef<OsStr>` where it
-  fits) via `encode_wide`/`from_wide`; `from_wide` / `encode_wide`-style helpers that borrow our slice with
-  zero copy (D-5/D-8).
-
-- [ ] **M5.2** -- Integration test (Windows): lossless `OsStr` -> `Wtf16Str` -> `OsStr` round-trip including
-  unpaired surrogates; a real wide Win32 call fed directly from `as_ptr()` with no conversion.
-
-  > **-> CROSS-COMPONENT HANDOFF:** completing M5 unblocks component `crates/windows-file-watcher` -> M8 ->
-  > M8.1 (migrate `RelativeName` to `Wtf16Str`/`Wtf16String`). See
-  > [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
-
 ## M6 -- Documentation, examples, publication readiness
 
 - [ ] **M6.1** -- The [README.md](README.md) and [lib.rs](src/lib.rs) top-level docs: the storage model, the

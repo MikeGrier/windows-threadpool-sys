@@ -61,3 +61,20 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
 - [x] **M4.4** -- Tests: mock buffer-fill (excludes-NUL, includes-NUL via content length, and a trailing
   content-NUL preserved verbatim) rebuilds the invariant; `from_wide_ptr` copies losslessly and is safe at
   `len == 0`; terminated pointer round-trips through a `from_wide_ptr`.
+
+## Moved 2026-08-20 -- M5 Windows OsStr/OsString interop
+
+### M5 -- Windows OsStr/OsString interop
+
+- [x] **M5.1** -- `cfg(windows)` lossless bridge: `from_os_str` / `to_os_string`, `from_wide` / `encode_wide`
+  vocabulary aliases, and `From`/`Into` conversions between `OsStr`/`OsString` and `Wtf16Str`/`Wtf16String`.
+  Conversion-based both ways (lossless, incl. unpaired surrogates); no borrowing `AsRef<OsStr>` because the
+  backing widths differ (D-5/D-8/D-14).
+
+- [x] **M5.2** -- Integration test (Windows): lossless `OsStr` -> `Wtf16String` -> `OsString` round-trips
+  including unpaired surrogates and interior NULs (a ~400-case bulk sweep), a real wide `lstrlenW` call fed
+  from `as_terminated_ptr()`, and a counted `as_ptr` hand-off matching `encode_wide` -- all with no
+  conversion.
+
+  Completing M5 unblocks `crates/windows-file-watcher` -> M8 -> M8.1 (migrate `RelativeName` to
+  `Wtf16Str`/`Wtf16String`); see [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
