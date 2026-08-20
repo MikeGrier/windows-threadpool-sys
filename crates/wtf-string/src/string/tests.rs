@@ -308,19 +308,38 @@ fn buffer_fill_count_excludes_nul_rebuilds_invariant() {
 
 #[test]
 fn buffer_fill_count_includes_nul_rebuilds_invariant() {
-    // A foreign API that writes its own terminator and counts it.
+    // A foreign API that writes its own terminator and counts it; the caller
+    // converts that to a content length by subtracting the terminator.
     let source = [97u16, 98, 99, NUL];
+    let content_len = source.len() - 1;
+    let mut buf = Wtf16String::with_capacity(content_len);
+    // SAFETY: write the `content_len` content units into the reserved buffer,
+    // then publish exactly that many; the count is within the requested capacity.
+    unsafe {
+        std::ptr::copy_nonoverlapping(source.as_ptr(), buf.as_mut_ptr(), content_len);
+        buf.set_len_from_ffi(content_len);
+    }
+    assert_eq!(buf.as_units(), &[97, 98, 99]);
+    assert_eq!(*buf.units.last().unwrap(), NUL);
+    // Exactly one terminator survives.
+    assert_eq!(buf.units.len(), 4);
+}
+
+#[test]
+fn buffer_fill_preserves_trailing_content_nul() {
+    // Content that legitimately ends in NUL must survive verbatim: the count is an
+    // explicit content length, so the final NUL is content, not the terminator.
+    let source = [97u16, NUL];
     let mut buf = Wtf16String::with_capacity(source.len());
-    // SAFETY: write `source.len()` units (content + the callee terminator), then
-    // publish that many; the trailing NUL is taken as the terminator, not content.
+    // SAFETY: write both content units, then publish both; within capacity.
     unsafe {
         std::ptr::copy_nonoverlapping(source.as_ptr(), buf.as_mut_ptr(), source.len());
         buf.set_len_from_ffi(source.len());
     }
-    assert_eq!(buf.as_units(), &[97, 98, 99]);
-    assert_eq!(*buf.units.last().unwrap(), NUL);
-    // Exactly one terminator survives, not the callee's plus ours.
-    assert_eq!(buf.units.len(), 4);
+    assert_eq!(buf.as_units(), &[97, NUL]);
+    assert!(buf.has_interior_nul());
+    // Two content units plus the appended terminator.
+    assert_eq!(buf.units, vec![97, NUL, NUL]);
 }
 
 #[test]

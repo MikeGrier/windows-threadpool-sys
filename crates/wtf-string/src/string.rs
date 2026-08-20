@@ -349,8 +349,10 @@ impl Wtf16String {
     pub fn with_capacity(units: usize) -> Self {
         // Reserve content + terminator up front, then seed the empty-string
         // invariant `[NUL]`; the spare capacity is where a foreign buffer-fill
-        // writes.
-        let mut buf = Vec::with_capacity(units + 1);
+        // writes. `checked_add` guards the `usize::MAX` edge that would otherwise
+        // wrap to a tiny allocation in release builds.
+        let capacity = units.checked_add(1).expect("capacity overflow");
+        let mut buf = Vec::with_capacity(capacity);
         buf.push(Wtf16::NUL);
         WtfString { units: buf }
     }
@@ -368,47 +370,37 @@ impl Wtf16String {
         self.units.as_mut_ptr()
     }
 
-    /// Publish `units` content code units written into the buffer from
-    /// [`as_mut_ptr`](Self::as_mut_ptr), re-establishing the terminator.
+    /// Publish `content_units` content code units written into the buffer from
+    /// [`as_mut_ptr`](Self::as_mut_ptr), then append the terminator.
     ///
-    /// If the written region already ends in `NUL` — a foreign API whose count
-    /// *includes* its terminator — that trailing NUL is taken as the terminator
-    /// rather than content; otherwise (count *excludes* the terminator) a
-    /// terminator is appended. Either convention rebuilds the always-terminated
-    /// invariant.
+    /// `content_units` counts **content only** and never includes a terminator.
+    /// The written units are taken verbatim -- they may themselves end in `NUL`,
+    /// since interior NULs are permitted (see
+    /// [`has_interior_nul`](WtfStr::has_interior_nul)) -- and exactly one
+    /// terminator is appended. A foreign API that reports a count *including* the
+    /// terminator it wrote must subtract one and pass the content length; this
+    /// method never inspects the buffer to guess the convention, so a genuine
+    /// trailing content `NUL` is never mistaken for the terminator.
     ///
     /// # Safety
     ///
     /// The caller must guarantee that:
-    /// - the first `units` code units at [`as_mut_ptr`](Self::as_mut_ptr) are
-    ///   initialized `u16` values, and
-    /// - the written **content** (that is, `units` minus a trailing `NUL` the
-    ///   callee may have written) does not exceed the count requested via
-    ///   [`with_capacity`](Self::with_capacity), so the re-established terminator
-    ///   fits without reallocation. Equivalently: if the written region does not
-    ///   end in `NUL`, `units` must be strictly less than the capacity; if it
-    ///   does, `units` may equal the capacity (that `NUL` becomes the terminator).
-    pub unsafe fn set_len_from_ffi(&mut self, units: usize) {
+    /// - the first `content_units` code units at [`as_mut_ptr`](Self::as_mut_ptr)
+    ///   are initialized `u16` values, and
+    /// - `content_units` does not exceed the count requested via
+    ///   [`with_capacity`](Self::with_capacity), so the appended terminator fits
+    ///   without reallocating a buffer whose pointer the caller may still hold.
+    pub unsafe fn set_len_from_ffi(&mut self, content_units: usize) {
+        // `content_units < capacity` guards both `set_len` soundness and the room
+        // to append the terminator without reallocating (which would strand a
+        // pointer handed out via `as_mut_ptr`).
         debug_assert!(
-            units <= self.units.capacity(),
-            "set_len_from_ffi count exceeds capacity"
+            content_units < self.units.capacity(),
+            "set_len_from_ffi content length leaves no room for the terminator"
         );
-        // SAFETY: the caller guarantees `units` initialized code units, within
-        // capacity, so this length names only initialized storage.
-        unsafe { self.units.set_len(units) };
-        // Drop a callee-supplied terminator so the content excludes it; then
-        // (re-)append exactly one, restoring `[content.., NUL]`.
-        if self.units.last() == Some(&Wtf16::NUL) {
-            self.units.pop();
-        }
-        // The appended terminator must fit without reallocating: the buffer was
-        // handed out via `as_mut_ptr`, so a reallocation here would strand a
-        // pointer the caller may still hold. Guaranteed when the content stayed
-        // within the `with_capacity` request (see the safety contract).
-        debug_assert!(
-            self.units.len() < self.units.capacity(),
-            "set_len_from_ffi has no room to append the terminator without reallocating"
-        );
+        // SAFETY: the caller guarantees `content_units` initialized code units,
+        // within capacity, so this length names only initialized storage.
+        unsafe { self.units.set_len(content_units) };
         self.units.push(Wtf16::NUL);
     }
 
