@@ -23,7 +23,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 - [x] **M4.3** — `unsafe from_wide_ptr(ptr, len)` for callee-allocated buffers, with an explicit safety
   contract (ownership, count semantics, no reference retained) (D-9).
 
-- [ ] **M4.4** — Tests: mock buffer-fill (count-excludes-NUL and count-includes-NUL) rebuilds the invariant;
+- [x] **M4.4** — Tests: mock buffer-fill (count-excludes-NUL and count-includes-NUL) rebuilds the invariant;
   `from_wide_ptr` copies losslessly; terminated pointer round-trips through a `from_wide_ptr`.
 
 ## M5 — Windows OsStr/OsString interop

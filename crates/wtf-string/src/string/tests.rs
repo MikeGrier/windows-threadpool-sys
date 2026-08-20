@@ -259,3 +259,91 @@ fn cross_type_comparison_with_str() {
     let ill = Wtf16String::from_units(&[0xD800]);
     assert!(ill != "x");
 }
+
+#[test]
+fn terminated_ptr_reads_a_nul_terminated_string() {
+    let owned = Wtf16String::from("abc");
+    let ptr = owned.as_terminated_ptr();
+    // Walk the pointer as a C string: content units then the terminator.
+    let mut read = Vec::new();
+    let mut i = 0isize;
+    loop {
+        // SAFETY: the buffer is `[content.., NUL]`, so reading forward from the
+        // start reaches the terminator within bounds.
+        let unit = unsafe { *ptr.offset(i) };
+        if unit == NUL {
+            break;
+        }
+        read.push(unit);
+        i += 1;
+    }
+    assert_eq!(read, vec![97, 98, 99]);
+}
+
+#[test]
+fn counted_ptr_and_len_cover_the_content() {
+    let owned = Wtf16String::from("hi ☃");
+    let expected = owned.as_units().to_vec();
+    let ptr = owned.as_ptr(); // via Deref to Wtf16Str
+    // SAFETY: `ptr` is valid for `len()` reads of the borrowed content.
+    let seen = unsafe { std::slice::from_raw_parts(ptr, owned.len()) };
+    assert_eq!(seen, expected.as_slice());
+}
+
+#[test]
+fn buffer_fill_count_excludes_nul_rebuilds_invariant() {
+    // A foreign API that reports the content length only (no terminator).
+    let source = [97u16, 98, 99];
+    let mut buf = Wtf16String::with_capacity(source.len());
+    // SAFETY: write `source.len()` units into the reserved buffer, then publish
+    // exactly that many; the count is within the requested capacity.
+    unsafe {
+        std::ptr::copy_nonoverlapping(source.as_ptr(), buf.as_mut_ptr(), source.len());
+        buf.set_len_from_ffi(source.len());
+    }
+    assert_eq!(buf.as_units(), &[97, 98, 99]);
+    assert_eq!(*buf.units.last().unwrap(), NUL);
+    assert_eq!(buf.units.len(), source.len() + 1);
+}
+
+#[test]
+fn buffer_fill_count_includes_nul_rebuilds_invariant() {
+    // A foreign API that writes its own terminator and counts it.
+    let source = [97u16, 98, 99, NUL];
+    let mut buf = Wtf16String::with_capacity(source.len());
+    // SAFETY: write `source.len()` units (content + the callee terminator), then
+    // publish that many; the trailing NUL is taken as the terminator, not content.
+    unsafe {
+        std::ptr::copy_nonoverlapping(source.as_ptr(), buf.as_mut_ptr(), source.len());
+        buf.set_len_from_ffi(source.len());
+    }
+    assert_eq!(buf.as_units(), &[97, 98, 99]);
+    assert_eq!(*buf.units.last().unwrap(), NUL);
+    // Exactly one terminator survives, not the callee's plus ours.
+    assert_eq!(buf.units.len(), 4);
+}
+
+#[test]
+fn from_wide_ptr_copies_losslessly_including_lone_surrogate() {
+    // Arbitrary WTF-16, including an unpaired surrogate, must survive the copy.
+    let source = [97u16, 0xD800, 98];
+    // SAFETY: `source` is valid for `source.len()` reads for the duration of the
+    // call, and no reference is retained afterward.
+    let owned = unsafe { Wtf16String::from_wide_ptr(source.as_ptr(), source.len()) };
+    assert_eq!(owned.as_units(), &source);
+    assert_eq!(*owned.units.last().unwrap(), NUL);
+    // The source is untouched and still owned by this test.
+    assert_eq!(source, [97, 0xD800, 98]);
+}
+
+#[test]
+fn terminated_ptr_round_trips_through_from_wide_ptr() {
+    let original = Wtf16String::from("aé日😀");
+    let content_len = original.len();
+    // Read the terminated pointer back through the callee-buffer constructor.
+    // SAFETY: `as_terminated_ptr` is valid for `content_len` reads (the content
+    // preceding the terminator), and no reference is retained.
+    let rebuilt = unsafe { Wtf16String::from_wide_ptr(original.as_terminated_ptr(), content_len) };
+    assert_eq!(rebuilt, original);
+    assert_eq!(rebuilt.as_units(), original.as_units());
+}
