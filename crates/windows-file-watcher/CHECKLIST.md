@@ -153,9 +153,10 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 ## M-inf -- Horizon (ungated, post-v1)
 
 Parked, not pending. These are the deferred seams recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-19,
-which places them **explicitly outside the v1 scope** -- so v1 is complete without them **by design**, and the
-"blocker" for each is that deliberate scope boundary, not an oversight. Each graduates to a numbered milestone
-only if a post-v1 line of work pursues it. None is an open obligation of any current milestone.
+an explicit design decision that places them outside the v1 scope. That recorded decision -- not the
+absence of a current consumer -- is why each is deferred, which is a legitimate deferral rationale (a
+resolved, recorded scope decision), not a scope-boundary excuse. Each graduates to a numbered milestone
+when a post-v1 line of work takes one up. None is an open obligation of any current milestone.
 
 - [ ] **M-inf.1** -- `ReadDirectoryChangesExW` extended records (`FILE_NOTIFY_EXTENDED_INFORMATION`): surface the
   richer per-record fields on OS versions that support it, behind capability detection, without disturbing

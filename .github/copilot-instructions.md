@@ -439,6 +439,12 @@ prose (described by name + code point so this rule file stays ASCII too):
 - non-breaking space (U+00A0)  ->  a normal space (U+0020)
 - any other code point above U+007F  ->  its ASCII equivalent or a short word.
 
+Some mandatory format tokens defined elsewhere in this file are shown with non-ASCII
+glyphs in their *description*; in the ASCII-bound files above, always write their ASCII
+spellings instead. In particular: the horizon-milestone bucket `M∞` is written **`M-inf`**,
+and the `➡` / `→` arrows in cross-component handoff callouts and completed-item stub
+links are written **`->`**.
+
 Apply this to the content you author or edit in these files going forward.
 
 ## Markdown cross-references must be clickable links
@@ -697,12 +703,13 @@ Same three layers; only the mechanics differ.
   route above is equally acceptable and is required if you are driving git from the terminal.)
 - **Confirming the trailers:** open the GitLens **Commit Graph** or **Commit Details** view
   and check the trailer lines appear verbatim at the end of the message body.
-- **Blame that traces through the split:** GitLens does **not** pass `-C` by default. The
-  workspace sets `gitlens.advanced.blame.customArguments` to `["-w", "-C1", "-C1"]` in
-  [.vscode/settings.json](../.vscode/settings.json); with that in place, *GitLens: Toggle File
-  Blame* on an extracted file attributes the moved lines to their original commits and authors
-  rather than to the split. If you see the split commit on every line, either the setting is
-  not active or the relocation was not pure. (See step 8 above for why the threshold must be
+- **Blame that traces through the split:** GitLens does **not** pass `-C` by default. Set
+  `gitlens.advanced.blame.customArguments` to `["-w", "-C1", "-C1"]` in your user-local
+  `.vscode/settings.json` (that path is git-ignored, so this is a per-clone setup step rather
+  than a tracked repo file); with that in place, *GitLens: Toggle File Blame* on an extracted
+  file attributes the moved lines to their original commits and authors rather than to the
+  split. If you see the split commit on every line, either the setting is not active or the
+  relocation was not pure. (See step 8 above for why the threshold must be
   `-C1` and not a bare `-C`.)
 - **File history:** GitLens's file history follows renames only, so it will still stop at the
   split — that is expected and is why the trailer exists. Read `Split-Source` off the split
@@ -975,7 +982,8 @@ distinct from real milestones (`M1`, `M2.3`, …):
   immediately after `M{n}`, and is an explicit **placeholder that graduates** to a real number once
   that later milestone is authored.
 - **`M∞`** — read "the horizon" — a single terminal bucket per checklist for genuinely **ungated**
-  "someday/maybe" work with no identified predecessor deliverable.
+  "someday/maybe" work with no identified predecessor deliverable. In the ASCII-bound checklist
+  files this token is written **`M-inf`** (see the 7-bit ASCII rule above).
 
 Items in `M{n}+` / `M∞` are **parked, not pending**: they are not open obligations of any current
 milestone, and the milestone that unblocks them **pulls them in (graduates them to a numbered ID)**

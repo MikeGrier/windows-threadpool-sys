@@ -38,11 +38,12 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M-inf -- Horizon (ungated, post-v1)
 
-Parked, not pending. Each item is **explicitly out of the v1 scope** fixed by its cited design decision
+Parked, not pending. Each item is placed outside the v1 scope by an explicit, recorded design decision
 (D-3 defers the `Wtf8` arm; D-7 makes the C-string companion optional; D-10 makes the `windows`-crate
-`Param<PCWSTR>` interop optional; D-11 defers `no_std`), so v1 is complete without them **by design** -- the
-"blocker" for each is that deliberate scope boundary, not an oversight. Each graduates to a numbered
-milestone only if a post-v1 line of work pursues it. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
+`Param<PCWSTR>` interop optional; D-11 defers `no_std`). That recorded decision -- not the absence of a
+current consumer -- is why each is deferred, which is a legitimate deferral rationale (a resolved,
+recorded scope decision), not a scope-boundary excuse. Each graduates to a numbered milestone when a
+post-v1 line of work takes up that decision. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 - [ ] **M-inf.1** -- The `Wtf8` encoding arm (`WtfString<Wtf8>` / `WtfStr<Wtf8>`): implement the crate-owned
   `WtfEncoding` contract for `u8`/WTF-8 units -- `Unit = u8`; storage is arbitrary WTF-8 (ill-formed-tolerant,
