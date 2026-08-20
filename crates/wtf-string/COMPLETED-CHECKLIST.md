@@ -78,3 +78,20 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
 
   Completing M5 unblocks `crates/windows-file-watcher` -> M8 -> M8.1 (migrate `RelativeName` to
   `Wtf16Str`/`Wtf16String`); see [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
+
+## Moved 2026-08-20 -- M6 The Wtf8 encoding arm
+
+### M6 -- The `Wtf8` encoding arm
+
+- [x] **M6.1** -- The `Wtf8` encoding arm (`WtfString<Wtf8>` / `WtfStr<Wtf8>`): implement the crate-owned
+  `WtfEncoding` contract for `u8`/WTF-8 units -- `Unit = u8`; storage is arbitrary WTF-8 (ill-formed-tolerant,
+  matching `OsStr`); `encode_str` is the identity on a UTF-8 `str`'s bytes; exact decode is
+  valid-UTF-8-or-`None`; lossy decode replaces with U+FFFD; comparison/hash are binary over bytes; `debug_fmt`
+  escapes ill-formed sequences losslessly. Storage is a crate-owned `Vec<u8>` whose WTF-8 layout matches
+  `OsString`'s but is not built on it, giving a uniform API across storage widths (D-3).
+
+- [x] **M6.2** -- Tests: extend the corpus/property matrix over the `Wtf8` arm (round-trips, ill-formed WTF-8
+  preserved in storage and lossily replaced, interior NUL, boundary scalars), and assert cross-width parity
+  with `Wtf16` for the shared encoding-generic API. Cross-width parity asserts shared invariants (checked-decode
+  failure, full U+FFFD replacement) rather than raw lossy-string equality, since `String::from_utf8_lossy` is
+  byte-granular while `String::from_utf16_lossy` is unit-granular (D-15).

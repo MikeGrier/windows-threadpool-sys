@@ -12,19 +12,6 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-## M6 -- The `Wtf8` encoding arm
-
-- [x] **M6.1** -- The `Wtf8` encoding arm (`WtfString<Wtf8>` / `WtfStr<Wtf8>`): implement the crate-owned
-  `WtfEncoding` contract for `u8`/WTF-8 units -- `Unit = u8`; storage is arbitrary WTF-8 (ill-formed-tolerant,
-  matching `OsStr`); `encode_str` is the identity on a UTF-8 `str`'s bytes; exact decode is
-  valid-UTF-8-or-`None`; lossy decode replaces with U+FFFD; comparison/hash are binary over bytes; `debug_fmt`
-  escapes ill-formed sequences losslessly. Storage is a crate-owned `Vec<u8>` whose WTF-8 layout matches
-  `OsString`'s but is not built on it, giving a uniform API across storage widths (D-3).
-
-- [x] **M6.2** -- Tests: extend the corpus/property matrix over the `Wtf8` arm (round-trips, ill-formed WTF-8
-  preserved in storage and lossily replaced, interior NUL, boundary scalars), and assert cross-width parity
-  with `Wtf16` for the shared encoding-generic API.
-
 ## M7 -- `windows`-crate `Param<PCWSTR>` interop
 
 - [ ] **M7.1** -- Optional, feature-gated `windows`-crate `Param<PCWSTR>` impl so the high-level `windows`
