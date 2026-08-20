@@ -404,7 +404,7 @@ When executing checklist items (CHECKLIST.md files):
 - **Tests must pass** before committing. Run the appropriate test command (per the language-specific instructions) after each item and fix failures before committing. Pre-existing failures unrelated to the current item do not block the commit, but must be recorded in `UNRESOLVED-TEST-FAILURES.md` (see language-specific instructions for the convention) before committing. When such a failure is later **resolved**, do not delete its entry — move it out of `UNRESOLVED-TEST-FAILURES.md` into a sibling `RESOLVED-TEST-FAILURES.md` (append-only) under a `## Resolved <YYYY-MM-DD HH:MM:SS ±hh:mm> — <description>` heading recording the date and time the resolution was finalized, in the same commit that removes it from the unresolved file.
 - **When the last item in a CHECKLIST file is completed**, update its PLANS.md entry to "completed" in the same commit.
 - **Cross-component handoff callouts.** When the next required action in a checklist sequence shifts to a different source-component (see "Source-Components" above) — i.e. the next dependency-ordered item cannot be worked in the current component because it lives in another component — the item whose completion triggers the shift must end with an explicit handoff callout naming the destination component, milestone, and work item ID. Use the reciprocal form on the destination side: the destination's first dependent item must carry a `CROSS-COMPONENT PREREQUISITE` callout naming the source component / item that must land first, and (if control returns) a `CROSS-COMPONENT HANDOFF` callout at the end pointing back. Recommended format (markdown blockquote so it stands out when scanning):
-  > **➡ CROSS-COMPONENT HANDOFF:** next work is in component `<component-path>` → `<milestone-id>` → `<work-item-id>` (`<short title>`). See [`<path-to-CHECKLIST.md>`](...).
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `<component-path>` -> `<milestone-id>` -> `<work-item-id>` (`<short title>`). See [`<path-to-CHECKLIST.md>`](...).
   The goal is that a reader executing a checklist linearly never has to infer cross-component dependencies from surrounding prose — the boundary is always called out at the exact item where the handoff occurs.
 
 ## 7-bit ASCII only in Copilot-maintained planning and design docs
@@ -439,11 +439,11 @@ prose (described by name + code point so this rule file stays ASCII too):
 - non-breaking space (U+00A0)  ->  a normal space (U+0020)
 - any other code point above U+007F  ->  its ASCII equivalent or a short word.
 
-Some mandatory format tokens defined elsewhere in this file are shown with non-ASCII
-glyphs in their *description*; in the ASCII-bound files above, always write their ASCII
-spellings instead. In particular: the horizon-milestone bucket `M∞` is written **`M-inf`**,
-and the `➡` / `→` arrows in cross-component handoff callouts and completed-item stub
-links are written **`->`**.
+Some mandatory format tokens are shown elsewhere in this file with non-ASCII glyphs in
+their *description*; in the ASCII-bound files above, always write their ASCII spellings
+instead. In particular: the horizon-milestone bucket (the letter `M` followed by the
+infinity sign, U+221E) is written **`M-inf`**, and any right-arrow glyph (U+27A1 or
+U+2192) that appears in a format token is written **`->`**.
 
 Apply this to the content you author or edit in these files going forward.
 
@@ -471,7 +471,7 @@ Rules:
   broken on creation.
 - **When a reference points at a specific decision ID or heading**, keep the ID
   as inline code *after* the link (e.g.
-  `[DESIGN-NOTES.md](../firebird/DESIGN-NOTES.md) → `D-GRAFT-1``). Linking to the
+  `[DESIGN-NOTES.md](../firebird/DESIGN-NOTES.md) -> `D-GRAFT-1``). Linking to the
   heading anchor (`...DESIGN-NOTES.md#d-graft-1`) is encouraged when the anchor
   slug is known to be correct, but linking to the file is always acceptable.
 - **This applies to references to non-markdown repository files too** (source
@@ -1026,7 +1026,7 @@ When a large item completes:
    design-session — in that case add a one-line pointer to it instead.
 2. **Replace** the item in place with a single-line stub of the form:
 
-   `- [x] **<ID>** — <one-sentence summary>. → [completed YYYY-MM-DD](COMPLETED-CHECKLIST.md#<id-slug>)`
+   `- [x] **<ID>** -- <one-sentence summary>. -> [completed YYYY-MM-DD](COMPLETED-CHECKLIST.md#<id-slug>)`
 
    where `<id-slug>` is the lowercased ID with periods removed (matching the heading's `<a id>`
    anchor). The stub's summary and the heading's summary are written to **match**. Preserve the
