@@ -10,7 +10,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/windows-file-watcher"
-description = "Memory-safe Windows path-change watching with full ReadDirectoryChangesW fidelity."
+description = "Memory-safe ReadDirectoryChangesW notification decoding for a Windows path-change watcher (in development)."
 keywords = ["windows", "filesystem", "notify", "watcher", "ffi"]
 categories = ["api-bindings", "os::windows-apis", "filesystem"]
 

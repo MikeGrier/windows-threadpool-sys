@@ -182,7 +182,7 @@ several share a sink (concurrent producers).
 | Concern | Primitive |
 |---|---|
 | Detailed read completion | `ThreadpoolIo` (balanced `StartThreadpoolIo`/cancel accounting is built in) |
-| Coarse change wait | `ThreadpoolWait` over an `assume_waitable` FFCN handle, rearmed per activation |
+| Coarse change wait | `ThreadpoolWait` over an `assume_waitable` FFCN handle, rearmed per activation -- **superseded, see the D-17 entry above: a custom-close waitable owner is required instead, since `assume_waitable` would close the handle with `CloseHandle` rather than `FindCloseChangeNotification`.** |
 | Retry backoff timer | `ThreadpoolTimer` |
 | Draining the request queue | `ThreadpoolWork` (serialized servicing of resident state) |
 | Bulk teardown | `CleanupGroup` / owned-object `Drop` rundown |
