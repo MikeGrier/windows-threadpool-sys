@@ -54,8 +54,9 @@ distinct nominal type per encoding) -- slots into the same seam later. (D-2, D-3
 ### Always-terminated storage
 
 The owned buffer always carries a trailing `0x0000` beyond the logical content,
-so returning a NUL-terminated `LPCWSTR` never allocates, while callers who want a
-NUL-free span get one (the span excludes the terminator). This deliberately
+so returning a NUL-terminated `LPCWSTR` never allocates, while callers who want the
+content span get one that excludes the trailing terminator (the content may itself
+hold interior NULs -- see the tension below). This deliberately
 combines two things `widestring` splits across `U16String` (growable, not
 terminated) and `U16CString` (terminated, not growable).
 
