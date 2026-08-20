@@ -242,12 +242,14 @@ fn read_u32(rec: &[u8], offset: usize) -> u32 {
 }
 
 /// Copy a UTF-16LE byte region into owned code units. The caller rejects an odd
-/// byte length as malformed before calling this, so `chunks_exact` never has a
+/// byte length as malformed before calling this, so `as_chunks` never has a
 /// remainder to drop.
 fn decode_utf16(bytes: &[u8]) -> RelativeName {
     let units: Box<[u16]> = bytes
-        .chunks_exact(UNIT_LEN)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<UNIT_LEN>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     RelativeName { units }
 }
