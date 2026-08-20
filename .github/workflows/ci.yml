@@ -80,6 +80,18 @@ jobs:
       - name: cargo clippy (default features)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  docs:
+    name: rustdoc (intra-doc links)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo doc (deny broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc --workspace --no-deps --all-features --locked
+
   msrv:
     name: MSRV check 1.97
     runs-on: windows-latest

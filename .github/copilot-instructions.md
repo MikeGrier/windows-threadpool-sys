@@ -905,6 +905,10 @@ as checklist items:
    hang. `--all-targets` (tests/examples/benches) is fine and expected; `--workspace`
    (all members) is not.
 2. **Test only the in-scope crate / source-component**, not the whole default workspace.
+   **Include documentation tests**, not just unit and integration tests. For Rust,
+   cargo-nextest does **not** run doc tests, so run them separately with `cargo_test`
+   (`doc: true`, i.e. `cargo test --doc`) for the in-scope crate in addition to the
+   nextest run; a milestone is not complete while any doc test fails or is unrun.
 3. **Sync with origin**: `git fetch`, then merge or rebase the current branch on top
    of the updated upstream tip (`--no-edit`), resolving any conflicts, then push.
    Pushing is permitted at milestone boundaries without further confirmation; outside
