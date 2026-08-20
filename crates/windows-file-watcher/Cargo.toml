@@ -50,10 +50,14 @@ windows-sys = {
 # Integration tests exercise the decoder against a buffer produced by a real
 # overlapped ReadDirectoryChangesW call, which needs binding surface the
 # published crate does not itself use. `Win32_System_Threading` supplies the
-# event + bounded wait the test uses so the worker can never block forever.
+# event + bounded wait the test uses so the worker can never block forever, and
+# `Win32_Security` supplies the `SECURITY_ATTRIBUTES` type named in the
+# `CreateEventW` / `CreateFileW` signatures -- declared here rather than relied on
+# transitively through `windows-threadpool-sys`.
 [dev-dependencies]
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
+	"Win32_Security",
 	"Win32_Storage_FileSystem",
 	"Win32_System_IO",
 	"Win32_System_Threading",
