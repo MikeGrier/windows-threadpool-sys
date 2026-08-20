@@ -295,6 +295,30 @@ fn name_overrunning_next_entry_offset_is_desync() {
     assert_eq!(desync(&buf), DesyncCause::Overflow);
 }
 
+#[test]
+fn zero_offset_with_trailing_record_is_desync() {
+    // A record that zeroes NextEntryOffset (claiming to be last) while a whole
+    // further record follows must desync: the tail is data the chain does not
+    // describe, and silently treating it as the final record would drop those
+    // trailing changes while falsely reporting success.
+    let mut buf = record(0, FILE_ACTION_ADDED, &w("a"));
+    buf.resize(aligned(1), 0); // pad the "last" record to its DWORD boundary
+    // A second, self-consistent record the zeroed link hides.
+    buf.extend(record(0, FILE_ACTION_ADDED, &w("b")));
+    assert_eq!(desync(&buf), DesyncCause::Overflow);
+}
+
+#[test]
+fn zero_offset_trailing_alignment_padding_decodes_cleanly() {
+    // The complement of the case above: up to RECORD_ALIGNMENT-1 padding bytes may
+    // follow the final record, and must not be mistaken for a hidden tail.
+    let mut buf = record(0, FILE_ACTION_ADDED, &w("a")); // 14 bytes
+    buf.resize(aligned(1), 0); // pad to 16 (two padding bytes)
+    let c = changes(&buf);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].name.as_wide(), w("a").as_slice());
+}
+
 // --- the internal raw walk ---
 
 #[test]

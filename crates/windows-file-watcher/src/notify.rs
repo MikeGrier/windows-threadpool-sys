@@ -179,6 +179,28 @@ impl Iterator for Records<'_> {
                 return None;
             }
         };
+
+        // A final record (`NextEntryOffset == 0`) must be the buffer's last bytes,
+        // apart from up to `RECORD_ALIGNMENT - 1` bytes of DWORD padding. A larger
+        // remainder is data the chain does not describe -- possibly further records
+        // whose link was zeroed -- so treat it as malformed rather than silently
+        // dropping the tail (which would understate the batch and lose changes).
+        if next_offset == 0 {
+            let padded_end = match name_end.checked_add(RECORD_ALIGNMENT - 1) {
+                Some(sum) => sum & !(RECORD_ALIGNMENT - 1),
+                None => {
+                    self.pos = None;
+                    self.malformed = true;
+                    return None;
+                }
+            };
+            if rec.len() > padded_end {
+                self.pos = None;
+                self.malformed = true;
+                return None;
+            }
+        }
+
         let name = decode_utf16(&rec[HEADER_LEN..name_end]);
 
         // Advance to the next record, or finish. A well-formed `NextEntryOffset`
