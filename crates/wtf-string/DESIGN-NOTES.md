@@ -33,6 +33,7 @@ Windows-specific.
 | D-11 | **Zero dependencies, std-only** in v1. `widestring` is prior art only. `no_std`/`alloc` support is a deferred seam. |
 | D-12 | First consumer: `windows-file-watcher`'s `RelativeName` migrates to `Wtf16Str`/`Wtf16String`, replacing its hand-rolled `Box<[u16]>`. Scheduled in that crate (see its [CHECKLIST.md](../windows-file-watcher/CHECKLIST.md)), gated on this crate's Windows `OsStr` interop (M5). |
 | D-13 | A native-`u16` `Path`/`PathBuf` analog is **out of scope** for this crate. It is the one genuine capability `widestring` lacks; if native-`u16` path manipulation is ever needed it is a separate crate, not this one. |
+| D-14 | **Windows `OsStr` interop is conversion-based, not borrowing.** `from_os_str` (encode once) and `to_os_string` (`from_wide`) are lossless both ways (D-8), plus `from_wide` / `encode_wide` vocabulary aliases over our slice. A borrowing **`AsRef<OsStr>` is deliberately not provided**: `OsStr` is WTF-8-backed on Windows while `WtfStr<Wtf16>` is `u16`-backed, so no zero-copy `&OsStr` view of `u16` storage can exist. See [OsStr interop is conversion-based (D-14)](DESIGN-RATIONALE.md#osstr-interop-is-conversion-based-d-14). |
 
 ## Detail
 

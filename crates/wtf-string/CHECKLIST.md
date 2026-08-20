@@ -14,7 +14,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M5 -- Windows OsStr/OsString interop
 
-- [ ] **M5.1** -- `cfg(windows)` lossless bridge: `from_os_str` / `to_os_string` (and `AsRef<OsStr>` where it
+- [x] **M5.1** -- `cfg(windows)` lossless bridge: `from_os_str` / `to_os_string` (and `AsRef<OsStr>` where it
   fits) via `encode_wide`/`from_wide`; `from_wide` / `encode_wide`-style helpers that borrow our slice with
   zero copy (D-5/D-8).
 

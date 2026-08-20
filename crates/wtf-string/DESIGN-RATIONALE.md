@@ -84,3 +84,23 @@ tolerant *and* always carries a terminator, and make the contract explicit: the
 terminated pointer is a valid C string only when `has_interior_nul()` is false;
 counted access (`as_ptr` + `len`) is always valid. A dedicated no-interior-NUL
 C-string companion can be added later if callers want the guarantee enforced.
+
+## OsStr interop is conversion-based (D-14)
+
+The obvious ergonomic wish is `AsRef<OsStr>`, so a `Wtf16Str` could be handed to
+any `AsRef<OsStr>`-bound API for free. It cannot exist. On Windows an `OsStr` is
+backed by WTF-8 bytes, while `WtfStr<Wtf16>` is backed by `u16` code units;
+`AsRef<OsStr>` must return a `&OsStr` borrowing the receiver's own storage, and
+there is no `&OsStr` that aliases a `[u16]`. Any bridge therefore has to allocate
+and re-encode, which is exactly what `AsRef` promises not to do.
+
+So the interop is spelled as explicit conversions instead: `from_os_str` collects
+`OsStrExt::encode_wide` once into owned WTF-16, and `to_os_string` rebuilds an
+`OsString` via `OsStringExt::from_wide`. Both are lossless in both directions --
+`OsStr` and `WtfStr<Wtf16>` are both WTF supersets, so unpaired surrogates survive
+a round trip (`from_os_str(x).to_os_string() == x`). `from_wide` / `encode_wide`
+are provided as vocabulary aliases (over `from_units` / the content slice) so a
+site currently using `OsString::from_wide` / `OsStrExt::encode_wide` reads the
+same after switching to this type. The zero-copy direction that *does* exist --
+handing our `u16` slice straight to a wide (`*W`) Win32 call -- is served by
+`as_ptr` / `as_terminated_ptr`, not by pretending to be an `OsStr`.

@@ -450,5 +450,9 @@ impl Wtf16String {
     }
 }
 
+// Windows `OsStr` / `OsString` interop is the only platform-gated surface (D-5).
+#[cfg(windows)]
+mod os_str;
+
 #[cfg(test)]
 mod tests;
