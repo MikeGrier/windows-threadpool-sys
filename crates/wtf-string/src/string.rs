@@ -357,14 +357,18 @@ impl Wtf16String {
         WtfString { units: buf }
     }
 
-    /// A mutable pointer to the start of the buffer, for a foreign buffer-fill
-    /// (the caller writes up to the [`with_capacity`](Self::with_capacity) count).
+    /// A mutable pointer to the start of the buffer, for a foreign buffer-fill.
     ///
-    /// After the fill, call [`set_len_from_ffi`](Self::set_len_from_ffi) to
-    /// publish the written length and re-establish the terminator. Until then the
-    /// logical content is whatever it was before (an empty string for a fresh
-    /// `with_capacity`). The pointer is valid while `self` is borrowed and not
-    /// reallocated.
+    /// [`with_capacity`](Self::with_capacity)`(n)` reserves `n + 1` units: room
+    /// for `n` content units plus the terminator slot. A foreign API may fill up
+    /// to `n` content units, and one more if it writes its own terminator into
+    /// the reserved slot (`n + 1` units total). Either way, pass only the
+    /// **content** length to [`set_len_from_ffi`](Self::set_len_from_ffi), which
+    /// publishes that length and re-establishes the terminator.
+    ///
+    /// Until then the logical content is whatever it was before (an empty string
+    /// for a fresh `with_capacity`). The pointer is valid while `self` is borrowed
+    /// and not reallocated.
     #[must_use]
     pub fn as_mut_ptr(&mut self) -> *mut u16 {
         self.units.as_mut_ptr()

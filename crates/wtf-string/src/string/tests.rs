@@ -308,15 +308,17 @@ fn buffer_fill_count_excludes_nul_rebuilds_invariant() {
 
 #[test]
 fn buffer_fill_count_includes_nul_rebuilds_invariant() {
-    // A foreign API that writes its own terminator and counts it; the caller
-    // converts that to a content length by subtracting the terminator.
+    // A foreign API that writes its own terminator into the reserved slot and
+    // counts it; the caller publishes only the content length.
     let source = [97u16, 98, 99, NUL];
     let content_len = source.len() - 1;
     let mut buf = Wtf16String::with_capacity(content_len);
-    // SAFETY: write the `content_len` content units into the reserved buffer,
-    // then publish exactly that many; the count is within the requested capacity.
+    // SAFETY: `with_capacity(content_len)` reserves `content_len + 1` units, so
+    // writing all of `source` (content + the callee terminator, exercising the
+    // reserved slot) stays in bounds; publishing `content_len` keeps only the
+    // content and re-appends the terminator.
     unsafe {
-        std::ptr::copy_nonoverlapping(source.as_ptr(), buf.as_mut_ptr(), content_len);
+        std::ptr::copy_nonoverlapping(source.as_ptr(), buf.as_mut_ptr(), source.len());
         buf.set_len_from_ffi(content_len);
     }
     assert_eq!(buf.as_units(), &[97, 98, 99]);
