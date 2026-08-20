@@ -337,6 +337,69 @@ impl Wtf16String {
         // a terminated string.
         self.units.as_ptr()
     }
+
+    /// An empty string with room for `units` content code units to be filled in
+    /// place via [`as_mut_ptr`](Self::as_mut_ptr) plus
+    /// [`set_len_from_ffi`](Self::set_len_from_ffi).
+    ///
+    /// The reserved capacity also covers the always-present terminator, so a
+    /// later [`set_len_from_ffi`] of up to `units` content units re-establishes
+    /// the invariant without reallocating (D-9).
+    #[must_use]
+    pub fn with_capacity(units: usize) -> Self {
+        // Reserve content + terminator up front, then seed the empty-string
+        // invariant `[NUL]`; the spare capacity is where a foreign buffer-fill
+        // writes.
+        let mut buf = Vec::with_capacity(units + 1);
+        buf.push(Wtf16::NUL);
+        WtfString { units: buf }
+    }
+
+    /// A mutable pointer to the start of the buffer, for a foreign buffer-fill
+    /// (the caller writes up to the [`with_capacity`](Self::with_capacity) count).
+    ///
+    /// After the fill, call [`set_len_from_ffi`](Self::set_len_from_ffi) to
+    /// publish the written length and re-establish the terminator. Until then the
+    /// logical content is whatever it was before (an empty string for a fresh
+    /// `with_capacity`). The pointer is valid while `self` is borrowed and not
+    /// reallocated.
+    #[must_use]
+    pub fn as_mut_ptr(&mut self) -> *mut u16 {
+        self.units.as_mut_ptr()
+    }
+
+    /// Publish `units` content code units written into the buffer from
+    /// [`as_mut_ptr`](Self::as_mut_ptr), re-establishing the terminator.
+    ///
+    /// If the written region already ends in `NUL` — a foreign API whose count
+    /// *includes* its terminator — that trailing NUL is taken as the terminator
+    /// rather than content; otherwise (count *excludes* the terminator) a
+    /// terminator is appended. Either convention rebuilds the always-terminated
+    /// invariant.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that:
+    /// - the first `units` code units at [`as_mut_ptr`](Self::as_mut_ptr) are
+    ///   initialized `u16` values, and
+    /// - `units` does not exceed the count requested via
+    ///   [`with_capacity`](Self::with_capacity) (so the re-established terminator
+    ///   fits without reallocation).
+    pub unsafe fn set_len_from_ffi(&mut self, units: usize) {
+        debug_assert!(
+            units <= self.units.capacity(),
+            "set_len_from_ffi count exceeds capacity"
+        );
+        // SAFETY: the caller guarantees `units` initialized code units, within
+        // capacity, so this length names only initialized storage.
+        unsafe { self.units.set_len(units) };
+        // Drop a callee-supplied terminator so the content excludes it; then
+        // (re-)append exactly one, restoring `[content.., NUL]`.
+        if self.units.last() == Some(&Wtf16::NUL) {
+            self.units.pop();
+        }
+        self.units.push(Wtf16::NUL);
+    }
 }
 
 #[cfg(test)]

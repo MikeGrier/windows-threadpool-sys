@@ -17,7 +17,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 - [x] **M4.1** — Counted access (`as_ptr` + `len`) and the terminated `LPCWSTR` pointer accessor, documented
   as valid only when `has_interior_nul()` is false (D-7/D-10).
 
-- [ ] **M4.2** — Output constructors: `with_capacity`, `as_mut_ptr`, and `unsafe set_len_from_ffi(units)`
+- [x] **M4.2** — Output constructors: `with_capacity`, `as_mut_ptr`, and `unsafe set_len_from_ffi(units)`
   (re-establishes the terminator) for caller-allocated buffer-fill APIs (D-9).
 
 - [ ] **M4.3** — `unsafe from_wide_ptr(ptr, len)` for callee-allocated buffers, with an explicit safety
