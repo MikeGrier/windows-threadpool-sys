@@ -49,6 +49,30 @@ that stays lossless in both directions is `Wtf16Str <-> OsStr` (WTF-16 <-> WTF-8
 both carry lone surrogates) -- that is exactly `encode_wide`/`from_wide`. Only the
 `String` projection is fallible/lossy, and that limitation is Rust's, not ours.
 
+## WTF-8 arm semantics (D-15)
+
+The `Wtf8` width (M6) is the `u8` sibling of the `Wtf16` semantics in D-4/D-8: it
+stores arbitrary, ill-formed-tolerant WTF-8 with no validation on construction,
+and it owns its encode/decode/compare/format behavior rather than inheriting it
+from `OsString` (D-3). `encode_str` is the identity on a UTF-8 `str`'s bytes
+(every `str` is already valid WTF-8); exact decode succeeds only for valid UTF-8
+(a WTF-8-encoded surrogate or arbitrary bytes yield `None`); ordering and hashing
+are binary over the stored bytes; and `Debug` escapes each ill-formed byte
+losslessly as `\xNN` so distinct byte inputs stay distinguishable.
+
+The one place the two widths visibly diverge is the **granularity of lossy
+decode**, and it is inherited from the std oracle each width delegates to. WTF-16
+lossy decode (`String::from_utf16_lossy`) is unit-granular: one ill-formed `u16`
+surrogate becomes one U+FFFD. WTF-8 lossy decode (`String::from_utf8_lossy`) is
+byte-granular per the Unicode "maximal subpart" rule: a lone surrogate encodes as
+three WTF-8 bytes and lossily becomes *three* U+FFFD, not one. This is not a bug
+to paper over -- it is the faithful behavior of each width's storage model, and we
+specify it as owned behavior (D-15). Consumers that need a canonical replacement
+count should compare at the `String`/scalar level after decoding, not by counting
+U+FFFD in a lossy view. Cross-width tests therefore assert shared invariants
+(checked-decode failure, *full* U+FFFD replacement) rather than raw lossy-string
+equality.
+
 ## What Windows APIs actually take (D-9, D-10)
 
 **Input.** `windows-sys` wide APIs take bare raw-pointer aliases

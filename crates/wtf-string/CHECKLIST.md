@@ -21,7 +21,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   escapes ill-formed sequences losslessly. Storage is a crate-owned `Vec<u8>` whose WTF-8 layout matches
   `OsString`'s but is not built on it, giving a uniform API across storage widths (D-3).
 
-- [ ] **M6.2** -- Tests: extend the corpus/property matrix over the `Wtf8` arm (round-trips, ill-formed WTF-8
+- [x] **M6.2** -- Tests: extend the corpus/property matrix over the `Wtf8` arm (round-trips, ill-formed WTF-8
   preserved in storage and lossily replaced, interior NUL, boundary scalars), and assert cross-width parity
   with `Wtf16` for the shared encoding-generic API.
 

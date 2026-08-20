@@ -7,6 +7,10 @@ const NUL: u16 = Wtf16::NUL;
 // Matrix / property coverage over a shared corpus lives in a sibling submodule.
 mod matrix;
 
+// The same matrix / property coverage over the `Wtf8` storage width, plus
+// cross-width parity assertions against `Wtf16`.
+mod wtf8;
+
 // The tests reach into the private `units` field (a child module may) to assert
 // the always-present terminator that the public API deliberately hides.
 
