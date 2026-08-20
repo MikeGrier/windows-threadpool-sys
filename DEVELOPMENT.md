@@ -22,6 +22,20 @@ This is a Windows-only workspace: all behavior is exercised on Windows, and CI
 builds, tests, and lints exclusively on Windows. Keep platform-specific
 implementation details behind `cfg(windows)`.
 
+## Toolchain
+
+[rust-toolchain.toml](rust-toolchain.toml) pins local development to the MSRV
+(1.97.0, with `clippy`/`rustfmt`), so a plain `cargo`/`rustc`/`rustup` invocation
+in this repo always matches the floor every crate's `rust-version` declares --
+no per-machine `rustup default` setup needed. CI is deliberately different: the
+`build-test`/`fmt`/`clippy`/`docs` jobs pin their toolchain action to `@stable`
+(floating forward with each new Rust release) specifically to catch new lints
+and forward-compatibility drift ahead of time, while the separate `msrv` job
+pins `@1.97.0` to guard the floor. A local MSRV-pinned toolchain can therefore
+miss a lint that only exists in a newer stable compiler and only shows up in
+CI; when that happens, fix the lint and move on -- it is not a sign the pin is
+wrong.
+
 ## Release process
 
 `release-please` owns version changes, tags, and changelog updates. Each crate
