@@ -20,7 +20,7 @@ threads of its own.
 | ID | Decision |
 |---|---|
 | D-1 | Windows-only watcher over `ReadDirectoryChangesW`, with a `FindFirstChangeNotification` coarse fallback. No cross-platform surface. |
-| D-2 | Queue-mediated architecture: a `Monitor` hands out `Session`s (each a request-submission handle **plus** a notification sink). No client code ever runs on a monitor/threadpool thread. See [Queue mediation](#queue-mediation). |
+| D-2 | Queue-mediated architecture: a `Monitor` hands out `Session`s (each a request-submission handle **plus** a notification sink). The crate never invokes client code on its cadence path, except the narrow doorbell of D-25. See [Queue mediation](#queue-mediation). |
 | D-3 | No owned threads; all work runs on `windows-threadpool-sys` (`ThreadpoolIo`/`Wait`/`Timer`/`Work`, `CleanupGroup`). |
 | D-4 | Detailed reads are issued through `windows-overlapped-io-sys`; its generation-stamped `OperationId` prevents a stale completion being misattributed across a re-arm. |
 | D-5 | Subscribing returns an affine, move-only `#[must_use]` `Watch`: `Drop` enqueues cancellation, `cancel()` is the explicit form, and a `Copy` `WatchId` tags every notification. |
@@ -29,7 +29,7 @@ threads of its own.
 | D-8 | Names are delivered raw and **relative to the directory opened for the read**: for a directory target that directory itself, and for a file target (D-7) its parent -- so a file watch reports the leaf name, not a name relative to the file. `OsString`/`Path` (lossless WTF-8) is primary; a raw `&[u16]` escape hatch is available. |
 | D-9 | Raw `FILE_ACTION_*` kinds, `RenamedOldName`/`RenamedNewName` kept distinct; the crate never joins renames or joins across a buffer. |
 | D-10 | Notifications are delivered as batches (one decoded `ReadDirectoryChangesW` completion = one batch). |
-| D-11 | Delivery is a **crate-owned concrete queue sender** (`Send + Sync`, multi-producer), never a client-implemented trait: its `deliver` only enqueues onto a queue the crate owns, so no client code ever runs on a monitor/threadpool thread (D-2). The client holds the matching receiver and drains on its own thread(s); consumer cardinality is the client's business (MPSC is the floor). A full bounded queue drops the batch but keeps saturation observable via a latched, out-of-band `Desync { QueueFull }` per affected `WatchId` (bound >= 1; a zero bound is rejected). See [Delivery and saturation](#delivery-and-saturation). |
+| D-11 | Delivery is a **crate-owned concrete queue sender** (`Send + Sync`, multi-producer), never a client-implemented trait: its `deliver` only enqueues onto a queue the crate owns, so no client *delivery* code runs on the cadence path (D-2). The client holds the matching receiver and drains on whatever thread it likes -- including one of its own thread-pool callbacks, woken by the D-25 doorbell; consumer cardinality is the client's business (MPSC is the floor). A full bounded queue drops the batch but keeps saturation observable via a latched, out-of-band `Desync { QueueFull }` per affected `WatchId` (bound >= 1; a zero bound is rejected). See [Delivery and saturation](#delivery-and-saturation). |
 | D-12 | `Desync { cause }` is the single "you missed changes -- re-scan" primitive. Kernel overflow, a full client queue, coarse-mode signals, and post-outage gaps all collapse to it. See [The Desync primitive](#the-desync-primitive). |
 | D-13 | `Suspended`/`Resumed` liveness brackets and `Established { mode }` are opt-in per subscription. |
 | D-14 | No terminal fault state -- only "not yet re-established." The monitor retries autonomously and indefinitely; the client may cancel from any state. See [Fault model](#fault-model). |
@@ -43,6 +43,7 @@ threads of its own.
 | D-22 | **Open failures split into retryable and permanent, and "permanent" means bad caller input, not a fault.** Opening a watched directory classifies into `NotFound`, `Unsupported`, `Retryable` (all retryable) and `NotADirectory`, `InvalidPath` (neither). This does not contradict D-14's "no terminal fault state": the permanent pair is not an environmental fault but the caller naming something that can never be a watched directory, so retrying would spin forever against input that will never become valid. An *unrecognised* error classifies as `Retryable`, so a watcher never silently stops watching because of an error code the crate has not seen. Two checks are ours rather than Win32's: a path with an interior NUL is rejected before the call, because Win32 would stop at the NUL and open a shorter path than the caller named; and a handle is verified to be a directory, because `FILE_LIST_DIRECTORY` and `FILE_READ_DATA` are the same bit, so a plain file opens successfully and would otherwise fail much later as a mis-classified read fault. |
 | D-23 | **Arming is gated by a lock held across the submission, not by a flag checked before it.** Teardown must be able to establish that no further read can be submitted. A boolean checked before submitting leaves a window: a completion callback passes the check, teardown then cancels every outstanding read and begins waiting for rundown, and only then does the callback submit -- leaving a fresh pending read that rundown waits on forever, since only a future directory change could complete it. This deadlocked the first implementation and is covered by a regression test that drops a watcher while changes are actively arriving. The gate is therefore a `Mutex<bool>` held for the whole submission, so teardown's own acquisition waits for any in-flight submission and, once it closes the gate, no new one can start. Note the `Weak`-upgrade suppression in the completion callback is *not* sufficient on its own: during `Drop` the strong count is still non-zero, so the upgrade still succeeds. |
 | D-24 | **The completion buffer is `u32`-backed and heap-indirected.** `ReadDirectoryChangesW` requires a DWORD-aligned buffer, which a `Box<[u8]>` does not provide, so it is allocated as `Box<[u32]>` and viewed as bytes. The `Box` indirection is separately required: the buffer travels as the operation's payload and the payload moves when the operation is boxed for submission, so an inline array would invalidate the address handed to the kernel. The address and length are read *before* `submit` consumes the operation, which is sound precisely because the bytes live in the `Box`'s allocation rather than in the payload itself. A reported fill length beyond the allocation is clamped rather than trusted, so a corrupt completion length cannot become an out-of-bounds read. |
+| D-25 | **The doorbell is the one sanctioned callback into client code, and it is deliberately tiny.** A queue the client can only drain with a blocking `recv()` forces a thread-pool-driven client to dedicate a thread, contradicting this crate's own premise. So the queue rings a doorbell when it becomes non-empty, and the doorbell is a client-implemented method rather than a crate-owned Win32 event: an event handle only composes with Win32 waits, whereas a method composes with anything -- an event, a semaphore, a completion-port post, an async `Waker::wake()`. This is a real exception to D-2, granted explicitly rather than smuggled in, and it is bounded by contract: `ring` must not block, must not panic, and must not re-enter the monitor (which would deadlock against the serialized request queue). Rings are **coalescing-friendly but never missed** -- spurious rings are permitted, a missed ring is not -- so the receiver must drain to empty and re-check rather than assume one ring means one item. The crate contains a panicking `ring` at the boundary rather than letting it unwind the cadence path, mirroring what `windows-threadpool-sys` does at its own FFI edge; that containment is insurance against a contract violation, not permission to violate it. A crate-provided event-backed implementation ships as the batteries-included default so a simple client never writes one. |
 
 ## Detail
 
@@ -51,14 +52,26 @@ threads of its own.
 Every interaction with a client is a queued request (client -> monitor) or a
 queued notification (monitor -> client). The monitor's servicing is driven by a
 `ThreadpoolWork` that serializes all resident-state mutations, so there is a
-single logical authority and no client code executes on a monitor/threadpool
-thread. A `Session` binds a request-submission handle to a notification sink;
-every `Watch` created through a session delivers to that session's sink. The sink
-is a **crate-owned concrete queue sender**, not a client trait object: delivery
-is an enqueue the crate performs, and the client observes notifications only by
-draining the matching receiver on its own thread -- so the "no client code on a
-pool thread" guarantee holds by construction, not by asking the client to keep a
-callback well-behaved. (D-2, D-11)
+single logical authority, and **the crate never transfers control into client
+code** on that path -- there is no sink trait, no callback registration, and no
+client-supplied closure, with the single bounded exception of the D-25 doorbell.
+A `Session` binds a request-submission handle to a notification sink; every
+`Watch` created through a session delivers to that session's sink. The sink is a
+**crate-owned concrete queue sender**, not a client trait object: delivery is an
+enqueue the crate performs, and the client observes notifications only by
+draining the matching receiver -- so the guarantee holds by construction, not by
+asking the client to keep a callback well-behaved. (D-2, D-11)
+
+**This is a statement about the call graph, not about threads.** An earlier
+phrasing claimed "no client code ever runs on a monitor/threadpool thread",
+which is false and was never something this crate could promise: the process
+thread pool is not ours, and a client that arms its own `ThreadpoolWait` on the
+doorbell and drains the queue from that callback is running client code on a
+pool thread -- legitimately, and by design. That is the client's pool object and
+the client's cadence; stalling it stalls only the client. What the crate
+guarantees is narrower and actually enforceable: nothing the client does --
+blocking, panicking, being slow, re-entering -- can stall or unwind *our* cadence
+path, because we never call into it.
 
 ### Delivery and saturation
 

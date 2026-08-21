@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-24** -- later
-decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, none from the session) are added there
-as milestones complete.
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-25** -- later
+decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-25 from correcting D-2's framing,
+none from the session) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
 end-of-milestone gate (default **and** `--all-features` build/test/clippy/doc clean, encoding check, sync
@@ -29,8 +29,9 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   into a batch (M1) and re-arm around processing to minimise the inherent loss window.
 
 - [ ] **M2.3** -- Deliver batches into a crate-owned queue endpoint (the interim, entirely in-crate delivery
-  target for this milestone; the session/receiver split lands in M3, D-11) so no client code runs on the pool
-  thread at any milestone; tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte completion.
+  target for this milestone; the session/receiver split lands in M3, D-11) so the crate never calls into
+  client code on its cadence path; tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte
+  completion.
 
 - [ ] **M2.4** -- Teardown: cancel the outstanding read, drain the pool I/O, and free the context via
   owned-object `Drop` (D-20), with re-arm suppression inherited from `ThreadpoolIo` rundown.
@@ -52,7 +53,17 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   bounded sender whose enqueue is non-blocking and infallible, paired with the client-side receiver the
   session hands back. On overflow it drops the batch and latches a per-`WatchId` `Desync { QueueFull }` as
   control state *outside* the bounded queue (coalesced, idempotent), guaranteed to reach the receiver before
-  the next batch (D-12); reject a zero bound at construction. No client code runs on a pool thread.
+  the next batch (D-12); reject a zero bound at construction. The crate never calls into client code on its
+  cadence path.
+
+- [ ] **M3.3.1** -- The doorbell (D-25): a `Doorbell` trait the queue rings when it becomes non-empty, so a
+  client can drain from its own `ThreadpoolWait` rather than dedicating a thread to a blocking `recv()`. A
+  method rather than a crate-owned event, so it composes with a semaphore, a completion-port post, or an
+  async `Waker` as readily as with an event. Document it as the one sanctioned exception to D-2, with its
+  contract (must not block, must not panic, must not re-enter the monitor) and its delivery guarantee
+  (spurious rings permitted, missed rings not -- so the receiver drains to empty and re-checks). Contain a
+  panicking `ring` at the boundary rather than let it unwind the cadence path. Ship a crate-provided
+  event-backed implementation as the default, exposing a borrowable handle for `ThreadpoolWait`.
 
 - [ ] **M3.4** -- Affine `Watch` (D-5): `#[must_use]`, `Drop` enqueues cancellation, explicit `cancel()`,
   and a `Copy` `WatchId`; subscribe/unsubscribe requests plumbed through the serialised request queue.

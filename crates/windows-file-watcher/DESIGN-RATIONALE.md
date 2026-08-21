@@ -31,8 +31,16 @@ its behaviours are deliberately **not** reproduced:
 
 The recurring pain the author has hit is client code running on the I/O
 provider's threads. So the design routes *all* client interaction through queues
-in both directions and lets no client code execute on a monitor/threadpool
-thread.
+in both directions, and the crate never transfers control into client code on its
+cadence path.
+
+An earlier phrasing of this said "no client code executes on a monitor/threadpool
+thread". That is false, and was never promisable: the process thread pool is not
+this crate's, and a client draining the queue from its own `ThreadpoolWait`
+callback -- the integration the D-25 doorbell exists to enable -- *is* client code
+on a pool thread. The enforceable property is about the call graph instead: we
+never call into the client, so nothing the client does can stall or unwind our
+cadence. See D-25 for the single, bounded exception.
 
 This forced the retry-control shape. An early proposal was a reactive per-fault
 hook the client answers. Two constraints killed it:
@@ -68,13 +76,19 @@ unit of control is the subscription, not a directory it never named.
 
 Delivery could have been a client-implemented `NotificationSink` trait whose
 `deliver` the monitor calls. It was rejected: a trait method invoked from an I/O
-completion *is* client code running on a pool thread -- the precise thing D-2
-exists to forbid -- and a `Send + Sync` bound cannot enforce the promised
-non-blocking, infallible, panic-free behavior. A client `deliver` that blocks,
-panics, or is slow would stall or unwind the cadence path. So the sink is instead
-a **crate-owned concrete queue sender**: `deliver` is a crate-internal enqueue,
-and the client only ever *receives*. The guarantee then holds structurally rather
-than by trusting a callback.
+completion puts arbitrary client code directly on the cadence path -- the precise
+thing D-2 exists to forbid -- and a `Send + Sync` bound cannot enforce the
+promised non-blocking, infallible, panic-free behavior. A client `deliver` that
+blocks, panics, or is slow would stall or unwind the cadence path. So the sink is
+instead a **crate-owned concrete queue sender**: `deliver` is a crate-internal
+enqueue, and the client only ever *receives*. The guarantee then holds
+structurally rather than by trusting a callback.
+
+The D-25 doorbell is the deliberate counter-example, and the contrast is the
+point: it is admitted precisely because it is *small enough to specify* -- ring a
+bell, touch nothing, return -- where a full `deliver` carrying a batch is not.
+The objection was never "a callback exists", it was "unbounded client work sits
+on the cadence path".
 
 ### MPSC vs MPMC for the sink (D-11)
 
