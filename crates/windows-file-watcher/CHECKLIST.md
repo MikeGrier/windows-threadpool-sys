@@ -43,51 +43,66 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   relative names; force a burst overflow and assert `Desync { Overflow }`; assert clean teardown with an
   operation outstanding.
 
-## M3 -- Monitor, session, request queue, watch handle
+## M3 -- Monitor, session, watch handle, and the two queues
+
+> **Restructured 2026-08-21** after the [fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md).
+> The original M3 had grown to nine items with `M3.3.x` sub-items wedged between peers, its queue item still
+> described the drop-on-full policy D-29 replaced, and completions were ordered before the `WatchId` they
+> correlate by. It is now eight flat items in dependency order. That is above the ~5 guideline and stays
+> that way deliberately: splitting it would renumber M4 through M8, and four cross-component references in
+> **append-only archives** (the root and threadpool completed-plans trackers, threadpool's
+> COMPLETED-CHECKLIST, and wtf-string's) point at `M6.1` and `M8`. Rewriting history in four archives to
+> tidy one milestone's size is the worse trade.
 
 - [ ] **M3.1** -- `Monitor`: owns the servicing path; the request queue is drained by a `ThreadpoolWork`
-  that serialises resident-state mutations (D-2); `Monitor::Drop` blocks on full rundown (D-20).
+  that serialises resident-state mutations (D-2); `Monitor::Drop` blocks on full rundown (D-20). Includes
+  the SQ doorbell (D-25): `ThreadpoolWork::submit()` is already the ring, but each call queues another drain
+  and they do not coalesce -- subscribing to 500 paths would queue 500 drains, 499 finding the queue already
+  emptied -- so ring only on the empty -> non-empty transition, computed under the queue lock.
 
 - [ ] **M3.2** -- `Session` obtained from the monitor: bundles a request-submission handle (MPSC producers)
   and the crate-owned notification sender (D-2/D-11); provide `monitor.session()` returning the session plus
   the client-side receiver, and a variant accepting a caller-supplied bound.
 
-- [ ] **M3.3** -- Finalise the notification queue (D-11): a crate-owned, `Send + Sync`, multi-producer
-  bounded sender whose enqueue is non-blocking and infallible, paired with the client-side receiver the
-  session hands back. On overflow it drops the batch and latches a per-`WatchId` `Desync { QueueFull }` as
-  control state *outside* the bounded queue (coalesced, idempotent), guaranteed to reach the receiver before
-  the next batch (D-12); reject a zero bound at construction. The crate never calls into client code on its
-  cadence path.
+- [ ] **M3.3** -- Bound the notification queue (D-11) and make **every `Desync` a latch** (D-28). M2.3
+  shipped `Desync` as an ordinary queued item, which D-28 supersedes: reporting that the queue filled cannot
+  itself require queue space, so a desync is per-`WatchId` control state outside the bound -- coalesced,
+  idempotent, and guaranteed to reach the receiver before the next batch (D-12). Reject a zero bound at
+  construction.
 
-- [ ] **M3.3.1** -- The CQ doorbell (D-25): `Receiver::doorbell()` returning a manual-reset event handle,
+- [ ] **M3.4** -- The CQ doorbell (D-25): `Receiver::doorbell()` returning a manual-reset event handle,
   created lazily so a `recv()`-only client allocates no kernel object, so a client can drain from its own
   `ThreadpoolWait` rather than dedicating a thread to a blocking `recv()`. Crate-owned, not a client trait --
   the receiver resets under the queue lock on observing empty and the sender sets after enqueue, making lost
   wakeups impossible by construction and leaving only harmless spurious ones. Record the rejected trait
   alternative in the module docs, since "why isn't this a trait?" is the obvious question.
 
-- [ ] **M3.3.2** -- The SQ doorbell edge-trigger (D-25): `ThreadpoolWork::submit()` is already the request
-  queue's ring, but each call queues another drain, and they do not coalesce -- subscribing to 500 paths
-  queues 500 drains, 499 of which find the queue already emptied. Ring only on the empty -> non-empty
-  transition, computed under the queue lock.
+- [ ] **M3.5** -- Affine `Watch` (D-5): `#[must_use]`, `Drop` enqueues cancellation, explicit `cancel()`,
+  and a `Copy` `WatchId`; subscribe/unsubscribe requests plumbed through the serialised request queue.
+  Registration also carries the D-27 retry mode -- **defaults** or **interactive** -- because the mode is a
+  property of the subscription and the registration call is the only place to state it; M5.3 consumes it but
+  cannot retrofit the API without a breaking change.
 
-- [ ] **M3.3.3** -- Request completions (D-30): every request yields a completion carried on the
-  notification queue, correlated by `WatchId`, so ordering against data is structural rather than temporal.
+- [ ] **M3.6** -- Request completions (D-30): every request yields a completion carried on the notification
+  queue, correlated by `WatchId`, so ordering against data is structural rather than temporal -- a
+  `Cancelled` in the stream means everything before it belongs to the live watch and nothing after it does.
   Includes the permanent subscribe failures of D-22 (`NotADirectory`, `InvalidPath`), which have no retry
   path and would otherwise leave a client holding a `Watch` that can never fire and never says so.
 
-- [ ] **M3.3.4** -- Queue-full backpressure (D-29): the monitor stops draining the request queue when the
+- [ ] **M3.7** -- Backpressure (D-29), both halves. **Control:** stop draining the request queue when the
   notification queue cannot accept a completion, so backpressure lands on the client's own `subscribe()`
-  call on the client's own thread. Never block at the enqueue -- the writer may hold a pool thread while the
-  client's drain needs one, which is a deadlock rather than backpressure.
+  call on the client's own thread. **Observation:** gate the watcher's re-arm on the notification queue
+  having room, so a completed read always has somewhere to put its batch -- this is what makes D-29's
+  "nothing is dropped" true rather than aspirational, and it is why the check belongs at *arm* time and not
+  at enqueue time. Never block at the enqueue: the writer may hold a pool thread while the client's drain
+  needs one, which is a deadlock rather than backpressure.
 
-- [ ] **M3.4** -- Affine `Watch` (D-5): `#[must_use]`, `Drop` enqueues cancellation, explicit `cancel()`,
-  and a `Copy` `WatchId`; subscribe/unsubscribe requests plumbed through the serialised request queue.
-
-- [ ] **M3.5** -- Integration: several subscriptions through one session delivering to one receiver; cancel via
-  `Drop` and via `cancel()`; assert no delivery after cancellation completes and in-order delivery within a
-  subscription; saturate the queue and assert the dropped batch surfaces as `Desync { QueueFull }` for each
-  affected `WatchId` and that delivery recovers once the receiver drains.
+- [ ] **M3.8** -- Integration: several subscriptions through one session delivering to one receiver; cancel
+  via `Drop` and via `cancel()`, asserting the `Cancelled` completion and that nothing for that watch
+  follows it in the stream; in-order delivery within a subscription; a permanent subscribe failure reported
+  as a completion rather than silence; saturate the queue and assert the watcher stops re-arming rather than
+  dropping, that the latched `Desync` reaches the receiver, and that both re-arming and request draining
+  resume once the receiver drains.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -184,7 +199,8 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 ## M7 -- Documentation, examples, stress
 
 - [ ] **M7.1** -- A crate README and the [lib.rs](src/lib.rs) top-level docs: the monitor/session/watch model, the
-  fidelity-and-limitation contract, and the `Desync` primitive.
+  two queues and their doorbells (D-25), the fidelity-and-limitation contract, the `Desync` primitive, and
+  the D-27 retry protocol including how to choose between defaults and interactive at registration.
 
 - [ ] **M7.2** -- Runnable examples: a minimal directory watch, a single-file watch, and a fault-recovery
   demonstration.
