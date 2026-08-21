@@ -6,15 +6,21 @@
 //! the kernel, not a model of it.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::{DirectoryWatcher, ReadBuffer};
 use crate::directory::DirectoryHandle;
-use crate::notify::{ChangeKind, DecodedBatch, DesyncCause};
+use crate::notify::{ChangeKind, DesyncCause};
+use crate::queue::{Notification, Receiver, WatchId, channel};
 
 /// Upper bound for waiting on a notification the kernel really should deliver.
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The subscription every test in this module watches under.
+fn test_watch() -> WatchId {
+    WatchId::from_raw(1)
+}
 
 /// A uniquely named temp directory, removed when the test passes.
 ///
@@ -47,53 +53,41 @@ impl TempDir {
     }
 }
 
-/// Collects delivered batches and lets a test block until enough have arrived.
-struct Collected {
-    batches: Mutex<Vec<DecodedBatch>>,
-    arrived: Condvar,
+/// Drains the queue in the background, so a test can assert on what has arrived
+/// without ever running test code on the crate's cadence path.
+///
+/// This mirrors what a real client does: the crate enqueues, the client receives
+/// on a thread of its own choosing.
+struct Drained {
+    seen: Arc<std::sync::Mutex<Vec<Notification>>>,
+    _pump: std::thread::JoinHandle<()>,
 }
 
-impl Collected {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            batches: Mutex::new(Vec::new()),
-            arrived: Condvar::new(),
-        })
+impl Drained {
+    fn start(receiver: Receiver) -> Self {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        // `recv` returns None once every sender is gone, so this thread exits on
+        // teardown rather than needing a stop flag.
+        let pump = std::thread::spawn(move || {
+            while let Some(item) = receiver.recv() {
+                sink.lock().expect("record").push(item);
+            }
+        });
+        Self { seen, _pump: pump }
     }
 
-    fn push(&self, batch: DecodedBatch) {
-        let mut batches = self.batches.lock().expect("record a batch");
-        batches.push(batch);
-        self.arrived.notify_all();
-    }
-
-    fn batches(&self) -> Vec<DecodedBatch> {
-        self.batches.lock().expect("read batches").clone()
-    }
-
-    /// Block until at least `count` batches have arrived, failing rather than
-    /// hanging if they never do.
-    fn wait_for(&self, count: usize) -> Vec<DecodedBatch> {
-        let batches = self.batches.lock().expect("await batches");
-        let (batches, timeout) = self
-            .arrived
-            .wait_timeout_while(batches, NOTIFY_TIMEOUT, |batches| batches.len() < count)
-            .expect("await batches");
-        assert!(
-            !timeout.timed_out(),
-            "timed out waiting for {count} batch(es); saw {}",
-            batches.len()
-        );
-        batches.clone()
+    fn notifications(&self) -> Vec<Notification> {
+        self.seen.lock().expect("read").clone()
     }
 
     /// Every change across every delivered batch, flattened.
     fn changes(&self) -> Vec<(ChangeKind, String)> {
-        self.batches()
+        self.notifications()
             .into_iter()
-            .filter_map(|batch| match batch {
-                DecodedBatch::Changes(changes) => Some(changes),
-                DecodedBatch::Desync(_) => None,
+            .filter_map(|item| match item {
+                Notification::Batch { changes, .. } => Some(changes),
+                Notification::Desync { .. } => None,
             })
             .flatten()
             .map(|change| {
@@ -106,24 +100,50 @@ impl Collected {
     }
 
     fn desyncs(&self) -> Vec<DesyncCause> {
-        self.batches()
+        self.notifications()
             .into_iter()
-            .filter_map(|batch| match batch {
-                DecodedBatch::Desync(cause) => Some(cause),
-                DecodedBatch::Changes(_) => None,
+            .filter_map(|item| match item {
+                Notification::Desync { cause, .. } => Some(cause),
+                Notification::Batch { .. } => None,
             })
             .collect()
     }
+
+    /// Block until `predicate` holds over the drained notifications, failing
+    /// rather than hanging if it never does.
+    fn wait_until<F>(&self, what: &str, predicate: F)
+    where
+        F: Fn(&Drained) -> bool,
+    {
+        let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+        while !predicate(self) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}; saw {:?}",
+                self.notifications()
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn wait_for_any(&self) {
+        self.wait_until("any notification", |d| !d.notifications().is_empty());
+    }
+
+    fn wait_for_name(&self, name: &str) {
+        self.wait_until(&format!("a change named {name}"), |d| {
+            d.changes().iter().any(|(_, seen)| seen == name)
+        });
+    }
 }
 
-/// Start a watcher over `dir`, collecting everything it delivers.
-fn watch(dir: &Path, subtree: bool) -> (DirectoryWatcher, Arc<Collected>) {
-    let collected = Collected::new();
-    let sink = Arc::clone(&collected);
+/// Start a watcher over `dir`, draining everything it enqueues.
+fn watch(dir: &Path, subtree: bool) -> (DirectoryWatcher, Drained) {
+    let (sender, receiver) = channel();
     let handle = DirectoryHandle::open(dir).expect("open the directory");
-    let watcher = DirectoryWatcher::start(handle, subtree, move |batch| sink.push(batch))
-        .expect("start the watcher");
-    (watcher, collected)
+    let watcher =
+        DirectoryWatcher::start(handle, subtree, test_watch(), sender).expect("start the watcher");
+    (watcher, Drained::start(receiver))
 }
 
 // --- the buffer ---
@@ -206,7 +226,7 @@ fn creating_a_file_reports_it_as_added() {
     let (watcher, collected) = watch(dir.path(), false);
 
     std::fs::write(dir.path().join("created.txt"), b"x").expect("create a file");
-    collected.wait_for(1);
+    collected.wait_for_name("created.txt");
 
     let changes = collected.changes();
     assert!(
@@ -214,6 +234,13 @@ fn creating_a_file_reports_it_as_added() {
             .iter()
             .any(|(kind, name)| *kind == ChangeKind::Added && name == "created.txt"),
         "expected an Added for created.txt, saw {changes:?}"
+    );
+    assert!(
+        collected
+            .notifications()
+            .iter()
+            .all(|item| item.watch() == test_watch()),
+        "every notification is tagged with the subscription it belongs to"
     );
     drop(watcher);
     dir.cleanup();
@@ -227,7 +254,7 @@ fn deleting_a_file_reports_it_as_removed() {
 
     let (watcher, collected) = watch(dir.path(), false);
     std::fs::remove_file(&target).expect("remove the file");
-    collected.wait_for(1);
+    collected.wait_for_name("doomed.txt");
 
     let changes = collected.changes();
     assert!(
@@ -249,27 +276,17 @@ fn renaming_a_file_reports_both_halves_distinctly() {
 
     let (watcher, collected) = watch(dir.path(), false);
     std::fs::rename(&before, dir.path().join("after.txt")).expect("rename");
-    collected.wait_for(1);
 
     // Both halves can straddle a completion boundary, so wait until both are in.
-    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
-    loop {
-        let changes = collected.changes();
-        let old = changes
+    collected.wait_until("both rename halves", |d| {
+        let changes = d.changes();
+        changes
             .iter()
-            .any(|(kind, name)| *kind == ChangeKind::RenamedOldName && name == "before.txt");
-        let new = changes
-            .iter()
-            .any(|(kind, name)| *kind == ChangeKind::RenamedNewName && name == "after.txt");
-        if old && new {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "expected both rename halves, saw {changes:?}"
-        );
-        std::thread::yield_now();
-    }
+            .any(|(kind, name)| *kind == ChangeKind::RenamedOldName && name == "before.txt")
+            && changes
+                .iter()
+                .any(|(kind, name)| *kind == ChangeKind::RenamedNewName && name == "after.txt")
+    });
 
     drop(watcher);
     dir.cleanup();
@@ -283,21 +300,9 @@ fn the_watcher_re_arms_and_reports_a_later_change() {
     let (watcher, collected) = watch(dir.path(), false);
 
     std::fs::write(dir.path().join("first.txt"), b"x").expect("first");
-    collected.wait_for(1);
+    collected.wait_for_name("first.txt");
     std::fs::write(dir.path().join("second.txt"), b"x").expect("second");
-
-    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
-    loop {
-        let changes = collected.changes();
-        if changes.iter().any(|(_, name)| name == "second.txt") {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the watcher did not re-arm; saw {changes:?}"
-        );
-        std::thread::yield_now();
-    }
+    collected.wait_for_name("second.txt");
 
     assert!(watcher.is_watching(), "still watching after re-arming");
     drop(watcher);
@@ -314,21 +319,7 @@ fn many_sequential_changes_are_all_reported() {
         std::fs::write(dir.path().join(format!("file-{index}.txt")), b"x").expect("create");
         // One at a time, so each has its own completion to be reported in and
         // the test exercises repeated re-arming rather than one batch.
-        let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
-        loop {
-            if collected
-                .changes()
-                .iter()
-                .any(|(_, name)| name == &format!("file-{index}.txt"))
-            {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "file-{index}.txt was never reported"
-            );
-            std::thread::yield_now();
-        }
+        collected.wait_for_name(&format!("file-{index}.txt"));
     }
 
     assert!(watcher.is_watching());
@@ -344,13 +335,13 @@ fn a_subtree_watch_reports_a_change_in_a_child_directory() {
 
     let (watcher, collected) = watch(dir.path(), true);
     std::fs::write(child.join("nested.txt"), b"x").expect("create nested");
-    collected.wait_for(1);
+    collected.wait_until("the nested file", |d| {
+        d.changes()
+            .iter()
+            .any(|(_, name)| name.contains("nested.txt"))
+    });
 
     let changes = collected.changes();
-    assert!(
-        changes.iter().any(|(_, name)| name.contains("nested.txt")),
-        "a subtree watch must see the nested file, saw {changes:?}"
-    );
     // The name is relative to the opened directory (D-8), so it includes the
     // child component rather than being the bare leaf.
     assert!(
@@ -374,23 +365,7 @@ fn a_non_subtree_watch_ignores_a_change_in_a_child_directory() {
     // Then a change that *is* in scope, so there is a definite point by which
     // the out-of-scope one would have arrived if it were going to.
     std::fs::write(dir.path().join("direct.txt"), b"x").expect("create direct");
-    collected.wait_for(1);
-
-    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
-    loop {
-        if collected
-            .changes()
-            .iter()
-            .any(|(_, name)| name == "direct.txt")
-        {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "direct.txt never arrived"
-        );
-        std::thread::yield_now();
-    }
+    collected.wait_for_name("direct.txt");
 
     let changes = collected.changes();
     assert!(
@@ -409,11 +384,11 @@ fn a_tiny_buffer_surfaces_the_kernel_overflow_as_a_desync() {
     // turns into Desync { Overflow } (D-12). A 4-byte buffer cannot hold even one
     // record, so any change overflows it.
     let dir = TempDir::new("overflow");
-    let collected = Collected::new();
-    let sink = Arc::clone(&collected);
+    let (sender, receiver) = channel();
     let handle = DirectoryHandle::open(dir.path()).expect("open");
-    let watcher = DirectoryWatcher::start_with(handle, false, 4, move |batch| sink.push(batch))
-        .expect("start");
+    let watcher =
+        DirectoryWatcher::start_with(handle, false, 4, test_watch(), sender).expect("start");
+    let collected = Drained::start(receiver);
 
     let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
     let mut index = 0;
@@ -463,7 +438,7 @@ fn dropping_while_changes_are_arriving_does_not_deadlock() {
         });
 
         // Drop while completions are actively being delivered and re-armed.
-        collected.wait_for(1);
+        collected.wait_for_any();
         drop(watcher);
 
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -478,16 +453,16 @@ fn a_dropped_watcher_stops_delivering() {
     let (watcher, collected) = watch(dir.path(), false);
 
     std::fs::write(dir.path().join("before-drop.txt"), b"x").expect("create");
-    collected.wait_for(1);
+    collected.wait_for_name("before-drop.txt");
     drop(watcher);
 
-    // Rundown has completed, so no further callback can run and the batch count
-    // is settled; anything created now must never be delivered.
-    let settled = collected.batches().len();
+    // Rundown has completed, so no further callback can run and the count is
+    // settled; anything created now must never be delivered.
+    let settled = collected.notifications().len();
     std::fs::write(dir.path().join("after-drop.txt"), b"x").expect("create");
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(
-        collected.batches().len(),
+        collected.notifications().len(),
         settled,
         "a dropped watcher must deliver nothing further"
     );

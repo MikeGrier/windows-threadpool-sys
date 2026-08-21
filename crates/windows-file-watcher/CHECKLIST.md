@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-25** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-26** -- later
 decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-25 from correcting D-2's framing,
-none from the session) are added there as milestones complete.
+D-26 from M2.3, none from the session) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
 end-of-milestone gate (default **and** `--all-features` build/test/clippy/doc clean, encoding check, sync
@@ -28,7 +28,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   `ThreadpoolIo` (the overlapped seam with the generation-stamped identity, D-3/D-4); decode the completion
   into a batch (M1) and re-arm around processing to minimise the inherent loss window.
 
-- [ ] **M2.3** -- Deliver batches into a crate-owned queue endpoint (the interim, entirely in-crate delivery
+- [x] **M2.3** -- Deliver batches into a crate-owned queue endpoint (the interim, entirely in-crate delivery
   target for this milestone; the session/receiver split lands in M3, D-11) so the crate never calls into
   client code on its cadence path; tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte
   completion.

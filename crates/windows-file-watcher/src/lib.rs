@@ -27,6 +27,9 @@ mod directory;
 mod notify;
 
 #[cfg(windows)]
+mod queue;
+
+#[cfg(windows)]
 mod watcher;
 
 #[cfg(windows)]

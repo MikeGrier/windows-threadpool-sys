@@ -66,6 +66,15 @@ pub struct RelativeName {
 }
 
 impl RelativeName {
+    /// Build a name from raw UTF-16 units.
+    ///
+    /// Crate-internal: the kernel is the only source of real names in
+    /// production, but the queue and monitor construct them in tests.
+    pub(crate) fn from_units(units: Vec<u16>) -> Self {
+        Self {
+            units: units.into_boxed_slice(),
+        }
+    }
     /// The raw UTF-16 code units, exactly as the kernel reported them.
     #[must_use]
     pub fn as_wide(&self) -> &[u16] {
@@ -251,13 +260,13 @@ fn read_u32(rec: &[u8], offset: usize) -> u32 {
 /// byte length as malformed before calling this, so `as_chunks` never has a
 /// remainder to drop.
 fn decode_utf16(bytes: &[u8]) -> RelativeName {
-    let units: Box<[u16]> = bytes
+    let units: Vec<u16> = bytes
         .as_chunks::<UNIT_LEN>()
         .0
         .iter()
         .map(|pair| u16::from_le_bytes(*pair))
         .collect();
-    RelativeName { units }
+    RelativeName::from_units(units)
 }
 
 /// The kind of change a `FILE_ACTION_*` code names.

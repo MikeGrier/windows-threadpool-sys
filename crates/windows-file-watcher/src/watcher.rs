@@ -47,6 +47,7 @@ use windows_threadpool_sys::io::{IoCompletion, ThreadpoolIo};
 
 use crate::directory::DirectoryHandle;
 use crate::notify::{DecodedBatch, DesyncCause, decode_batch};
+use crate::queue::{Notification, Sender, WatchId};
 
 /// The completion-buffer size used unless a caller chooses otherwise.
 ///
@@ -116,12 +117,12 @@ impl ReadBuffer {
     }
 }
 
-/// What a watcher does with each decoded batch.
+/// Where a watcher puts what it decodes.
 ///
-/// M2.3 replaces this with the crate-owned queue endpoint; keeping it a plain
-/// closure here means M2.2 can be exercised end to end without pre-empting that
-/// item's delivery design.
-type BatchSink = Box<dyn Fn(DecodedBatch) + Send + Sync + 'static>;
+/// A crate-owned queue sender, never a client callback: enqueueing is something
+/// this crate does to storage it owns, so no client behaviour can reach the
+/// cadence path (D-2/D-11).
+type BatchSink = Sender;
 
 /// How a watcher stopped, if it did.
 ///
@@ -141,6 +142,8 @@ struct WatcherInner {
     subtree: bool,
     buffer_bytes: usize,
     sink: BatchSink,
+    /// The subscription every notification from this watcher is tagged with.
+    watch: WatchId,
     /// Whether arming is still permitted, held under a lock rather than an
     /// atomic *deliberately*. Teardown must be able to establish that no further
     /// read can be submitted, and a flag checked before a submission leaves a
@@ -253,10 +256,30 @@ impl WatcherInner {
 
         let transferred = completion.bytes_transferred();
         let batch = decode_batch(operation.payload().filled(transferred));
-        (self.sink)(batch);
+        self.publish(batch);
     }
 
-    /// Record the failure that stopped this watcher, and tell the sink the
+    /// Tag a decoded batch with this watcher's subscription and enqueue it.
+    ///
+    /// An empty change list is dropped rather than enqueued: the kernel can
+    /// complete a read carrying no records, and forwarding that would make a
+    /// client's "I was woken, so something changed" reasoning false.
+    fn publish(&self, batch: DecodedBatch) {
+        let notification = match batch {
+            DecodedBatch::Changes(changes) if changes.is_empty() => return,
+            DecodedBatch::Changes(changes) => Notification::Batch {
+                watch: self.watch,
+                changes,
+            },
+            DecodedBatch::Desync(cause) => Notification::Desync {
+                watch: self.watch,
+                cause,
+            },
+        };
+        self.sink.send(notification);
+    }
+
+    /// Record the failure that stopped this watcher, and tell the client the
     /// change stream has a hole in it.
     fn record_stop(&self, error: io::Error) {
         let mut stopped = self
@@ -265,10 +288,11 @@ impl WatcherInner {
             .unwrap_or_else(|poison| poison.into_inner());
         if stopped.is_none() {
             *stopped = Some(ArmFailure { error });
+            drop(stopped);
             // Dropping out of the watch loop means changes from here on are
             // unobserved, which is precisely a desync (D-12). M5 replaces this
             // with re-establishment.
-            (self.sink)(DecodedBatch::Desync(DesyncCause::Overflow));
+            self.publish(DecodedBatch::Desync(DesyncCause::Overflow));
         }
     }
 }
@@ -287,15 +311,19 @@ pub(crate) struct DirectoryWatcher {
 impl DirectoryWatcher {
     /// Open `directory` and arm the first read.
     ///
+    /// Everything decoded is tagged with `watch` and enqueued on `sink`.
+    ///
     /// # Errors
     ///
     /// Returns the error from binding the handle to the pool or from the first
     /// `ReadDirectoryChangesW`.
-    pub(crate) fn start<F>(directory: DirectoryHandle, subtree: bool, sink: F) -> io::Result<Self>
-    where
-        F: Fn(DecodedBatch) + Send + Sync + 'static,
-    {
-        Self::start_with(directory, subtree, DEFAULT_BUFFER_BYTES, sink)
+    pub(crate) fn start(
+        directory: DirectoryHandle,
+        subtree: bool,
+        watch: WatchId,
+        sink: Sender,
+    ) -> io::Result<Self> {
+        Self::start_with(directory, subtree, DEFAULT_BUFFER_BYTES, watch, sink)
     }
 
     /// As [`start`](Self::start), with an explicit completion-buffer size.
@@ -305,21 +333,20 @@ impl DirectoryWatcher {
     /// # Errors
     ///
     /// As [`start`](Self::start).
-    pub(crate) fn start_with<F>(
+    pub(crate) fn start_with(
         directory: DirectoryHandle,
         subtree: bool,
         buffer_bytes: usize,
-        sink: F,
-    ) -> io::Result<Self>
-    where
-        F: Fn(DecodedBatch) + Send + Sync + 'static,
-    {
+        watch: WatchId,
+        sink: Sender,
+    ) -> io::Result<Self> {
         let inner = Arc::new(WatcherInner {
             io: OnceLock::new(),
             filter: ALL_NOTIFY_FILTERS,
             subtree,
             buffer_bytes,
-            sink: Box::new(sink),
+            sink,
+            watch,
             may_arm: Mutex::new(true),
             stopped: Mutex::new(None),
         });
