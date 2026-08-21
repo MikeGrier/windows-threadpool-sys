@@ -15,26 +15,51 @@ fn b(s: &str) -> Vec<u8> {
     s.as_bytes().to_vec()
 }
 
+/// The WTF-8 binary encoding parameters used by [`wtf8_of`]. Changing any value
+/// changes the encoding this helper produces, so it would no longer agree with
+/// the `Wtf8` arm under test.
+mod enc {
+    /// Exclusive upper bounds of the 1-, 2-, and 3-byte encoding ranges.
+    pub const ONE_BYTE_MAX: u32 = 0x80;
+    pub const TWO_BYTE_MAX: u32 = 0x800;
+    pub const THREE_BYTE_MAX: u32 = 0x1_0000;
+
+    /// Lead-byte tags marking a 2-, 3-, or 4-byte sequence.
+    pub const LEAD_2: u8 = 0xC0;
+    pub const LEAD_3: u8 = 0xE0;
+    pub const LEAD_4: u8 = 0xF0;
+
+    /// Continuation bytes are `CONT_TAG` over the low `CONT_BITS` payload bits.
+    pub const CONT_TAG: u8 = 0x80;
+    pub const CONT_MASK: u32 = 0x3F;
+    pub const CONT_BITS: u32 = 6;
+}
+
 /// WTF-8 encoding of a code point, including the surrogate range `D800..=DFFF`
 /// that `char` cannot represent. Surrogates occupy three bytes like any other
 /// `U+0800..=U+FFFF` scalar; the result is valid WTF-8 but invalid UTF-8.
 fn wtf8_of(cp: u32) -> Vec<u8> {
-    if cp < 0x80 {
+    use enc::*;
+
+    // The trailing payload byte carrying bits `[shift, shift + CONT_BITS)`.
+    let cont = |shift: u32| CONT_TAG | ((cp >> shift) & CONT_MASK) as u8;
+
+    if cp < ONE_BYTE_MAX {
         vec![cp as u8]
-    } else if cp < 0x800 {
-        vec![0xC0 | (cp >> 6) as u8, 0x80 | (cp & 0x3F) as u8]
-    } else if cp < 0x1_0000 {
+    } else if cp < TWO_BYTE_MAX {
+        vec![LEAD_2 | (cp >> CONT_BITS) as u8, cont(0)]
+    } else if cp < THREE_BYTE_MAX {
         vec![
-            0xE0 | (cp >> 12) as u8,
-            0x80 | ((cp >> 6) & 0x3F) as u8,
-            0x80 | (cp & 0x3F) as u8,
+            LEAD_3 | (cp >> (2 * CONT_BITS)) as u8,
+            cont(CONT_BITS),
+            cont(0),
         ]
     } else {
         vec![
-            0xF0 | (cp >> 18) as u8,
-            0x80 | ((cp >> 12) & 0x3F) as u8,
-            0x80 | ((cp >> 6) & 0x3F) as u8,
-            0x80 | (cp & 0x3F) as u8,
+            LEAD_4 | (cp >> (3 * CONT_BITS)) as u8,
+            cont(2 * CONT_BITS),
+            cont(CONT_BITS),
+            cont(0),
         ]
     }
 }

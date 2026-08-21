@@ -63,25 +63,38 @@ jobs:
               *) continue ;;
             esac
             dep_version="$(printf '%s' "$dep_req" | sed -E 's/^\^//')"
-            echo "waiting for ${dep_name} ${dep_version} on crates.io"
+            # Probe the *sparse index*, not the REST API: a version can appear in
+            # api/v1 before the index has propagated, and `cargo publish --locked`
+            # resolves dependencies through the index -- so an API-only check can
+            # pass and the publish still fail to resolve. Index paths are
+            # `1/`, `2/`, `3/<c1>/`, or `<c1c2>/<c3c4>/` by name length.
+            name_len=${#dep_name}
+            if [ "$name_len" -le 2 ]; then
+              prefix="$name_len"
+            elif [ "$name_len" -eq 3 ]; then
+              prefix="3/$(printf '%s' "$dep_name" | cut -c1)"
+            else
+              prefix="$(printf '%s' "$dep_name" | cut -c1-2)/$(printf '%s' "$dep_name" | cut -c3-4)"
+            fi
+            index_url="https://index.crates.io/${prefix}/${dep_name}"
+            echo "waiting for ${dep_name} ${dep_version} in the crates.io index (${index_url})"
             ok=0
             max_attempts=60
             for attempt in $(seq 1 "$max_attempts"); do
               # --connect-timeout/--max-time bound a stalled connection so a hung
               # request can never prevent the loop from reaching max_attempts.
-              # On failure curl exits non-zero; its -w output is unreliable then
-              # (it emits "000" for a connect failure but may emit nothing for
-              # others), so the status is set explicitly in the failure branch
-              # rather than appended to whatever curl printed.
-              if ! status="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 20 "https://crates.io/api/v1/crates/${dep_name}/${dep_version}")"; then
-                status=000
-              fi
-              if [ "$status" = "200" ]; then
-                echo "${dep_name} ${dep_version} is available"
+              # --fail makes an HTTP error (e.g. 404 before the crate exists in
+              # the index) a non-zero curl exit, so jq only ever parses a real
+              # body. The index returns newline-delimited JSON, one object per
+              # version; `jq -e` exits non-zero when no line matches.
+              if body="$(curl -s --fail --connect-timeout 10 --max-time 20 "$index_url")" \
+                && printf '%s' "$body" | jq -e --arg v "$dep_version" \
+                     'select(.vers == $v)' >/dev/null 2>&1; then
+                echo "${dep_name} ${dep_version} is in the index"
                 ok=1
                 break
               fi
-              echo "attempt ${attempt}/${max_attempts}: not yet available (HTTP ${status}), retrying in 20s"
+              echo "attempt ${attempt}/${max_attempts}: not yet in the index, retrying in 20s"
               sleep 20
             done
             if [ "$ok" != "1" ]; then

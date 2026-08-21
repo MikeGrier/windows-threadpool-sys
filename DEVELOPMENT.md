@@ -59,13 +59,18 @@ is versioned and released independently; a `<crate>-v<version>` tag (for example
 `windows-overlapped-io-sys-v0.1.0`) triggers the crates.io publish workflow after
 verifying that the tag matches that crate's package version.
 
-`windows-threadpool-sys` depends on `windows-overlapped-io-sys` by version as well as
-by path, so `cargo publish`'s build verification resolves that dependency from
-crates.io rather than the workspace checkout. Because the two crates' tags can be
-pushed in either order, the publish workflow blocks the `windows-threadpool-sys`
-job until its required `windows-overlapped-io-sys` version is live on crates.io,
-so the overlapped-I/O crate always finishes publishing first regardless of tag
-timing.
+Some crates depend on workspace siblings by version as well as by path, so
+`cargo publish`'s build verification resolves those dependencies from crates.io
+rather than the workspace checkout: `windows-threadpool-sys` depends on
+`windows-overlapped-io-sys`, and `windows-file-watcher` depends on **both** of
+those. Because `release-please` opens a separate pull request per crate, sibling
+tags can be pushed in any order, so
+[.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml)
+blocks each publish until *every* workspace-sibling dependency the crate
+declares is live on crates.io at the required version. The effective publish
+order is therefore always dependency-first regardless of tag timing, and the
+check is a no-op for a crate with no workspace-sibling dependencies
+(`windows-overlapped-io-sys`, `wtf-string`).
 
 Publishing requires these repository secrets:
 

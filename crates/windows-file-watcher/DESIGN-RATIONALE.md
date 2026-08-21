@@ -142,3 +142,34 @@ Rust is affine by nature -- a value can be dropped, and true linearity cannot be
 enforced -- so an RAII `Watch` whose `Drop` enqueues cancellation is the idiomatic,
 "easily managed" fit. A `Copy` `WatchId` correlation token lets a client route or
 aggregate notifications without holding the lifecycle object.
+
+## The decoder accepts only an exactly-described buffer (D-21)
+
+The decoder's job at a completion is to account for *every* byte the kernel says
+it returned. The failure mode this rule guards against is the quiet one: bytes
+that the record chain does not describe get discarded, the batch is returned as
+`Changes`, and the client is told everything is fine while changes have gone
+missing. That is strictly worse than a `Desync`, whose only cost is a re-scan
+(D-12).
+
+The precise rule follows from the wire format rather than from a tolerance we
+picked. `FILE_NOTIFY_INFORMATION` has a 12-byte fixed header, and `FileNameLength`
+counts *bytes* of a UTF-16 name -- which the decoder separately rejects unless it
+is a whole number of 2-byte code units. A record's content therefore always ends
+at `12 + even`, an **even** offset. Records are DWORD-aligned, so the padding that
+carries an even offset up to the next 4-byte boundary is exactly **0 or 2 bytes,
+never 1 or 3**. A final record (`NextEntryOffset == 0`) may thus legitimately end
+the buffer at exactly one of two lengths, and any other remainder -- a 1- or
+3-byte tail, or a whole further record whose link was zeroed -- is undescribed
+data and is reported as a desync.
+
+The original check bounded the tail (`rec.len() > padded_end`) instead of
+enumerating the two legal lengths. That is the intuitive spelling of "allow the
+padding," but because it accepts everything *up to* the aligned end, it also
+accepted a 1-byte tail at the alignments where padding is 2 -- silently dropping
+a truncated completion. The lesson generalizes: when a format permits an exact
+set of lengths, assert membership in that set, not a bound around it. Both the
+padding case and the misaligned-tail case are pinned by tests
+(`zero_offset_trailing_alignment_padding_decodes_cleanly`,
+`zero_offset_misaligned_trailing_tail_is_desync`,
+`zero_offset_with_trailing_record_is_desync`).
