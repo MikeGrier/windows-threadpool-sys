@@ -133,6 +133,28 @@ pub(crate) struct ArmFailure {
     pub(crate) error: io::Error,
 }
 
+/// Whether the watcher may still submit a read, and if not, why.
+///
+/// A bare boolean would be enough for teardown alone, but "not re-arming" is a
+/// state three different decisions reach for different reasons -- teardown here,
+/// a latched fault (D-28), and queue backpressure (D-29) -- and only the first is
+/// permanent. Naming the reason now means the later two add a variant rather than
+/// discovering that a `bool` cannot say which of them stopped the watcher, and it
+/// keeps `stop_reason` from having to guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArmGate {
+    /// Reads may be submitted.
+    Open,
+    /// Torn down. Permanent: a watcher never re-opens.
+    TornDown,
+}
+
+impl ArmGate {
+    fn is_open(self) -> bool {
+        matches!(self, ArmGate::Open)
+    }
+}
+
 /// The shared state a completion callback reaches.
 struct WatcherInner {
     /// Set once, immediately after construction. The callback needs the object
@@ -153,7 +175,7 @@ struct WatcherInner {
     /// it. Holding this lock across the submission means teardown's own
     /// acquisition waits for any in-flight submission to finish, after which no
     /// new one can start.
-    may_arm: Mutex<bool>,
+    gate: Mutex<ArmGate>,
     /// The failure that stopped re-arming, if any.
     stopped: Mutex<Option<ArmFailure>>,
 }
@@ -165,11 +187,11 @@ impl WatcherInner {
     /// long as the operation the kernel owns.
     fn arm(self: &Arc<Self>) -> Result<(), io::Error> {
         // Held for the whole submission; see the field's documentation.
-        let may_arm = self
-            .may_arm
+        let gate = self
+            .gate
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if !*may_arm {
+        if !gate.is_open() {
             return Ok(());
         }
 
@@ -347,7 +369,7 @@ impl DirectoryWatcher {
             buffer_bytes,
             sink,
             watch,
-            may_arm: Mutex::new(true),
+            gate: Mutex::new(ArmGate::Open),
             stopped: Mutex::new(None),
         });
 
@@ -411,6 +433,50 @@ impl DirectoryWatcher {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .is_none()
+            && self.gate() == ArmGate::Open
+    }
+
+    /// The current arm gate.
+    pub(crate) fn gate(&self) -> ArmGate {
+        *self
+            .inner
+            .gate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Stop watching: refuse further reads, cancel the outstanding one, and wait
+    /// for every completion callback to finish (D-20).
+    ///
+    /// Idempotent, so a caller may stop explicitly and still let `Drop` run.
+    /// After it returns, no callback for this watcher is executing or can start,
+    /// and nothing further is delivered.
+    ///
+    /// Must not be called from inside this watcher's own completion callback: it
+    /// waits for that callback to finish, so it would wait on itself. Nothing in
+    /// this crate does, because the only caller is teardown on an owning thread.
+    pub(crate) fn stop(&self) {
+        // Close the gate *before* cancelling. The other order leaves a window in
+        // which a completion callback already running submits a fresh read after
+        // the cancellation, and rundown then waits forever for a completion only
+        // a future directory change could produce (D-23).
+        {
+            let mut gate = self
+                .inner
+                .gate
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *gate = ArmGate::TornDown;
+        }
+
+        // With the gate closed, nothing new can be submitted, so cancelling
+        // retires everything outstanding and rundown converges. Both calls are
+        // safe to repeat: `cancel_all` reports `ERROR_NOT_FOUND` when nothing is
+        // outstanding, and `run_down` returns immediately on an empty registry.
+        if let Some(io) = self.inner.io.get() {
+            let _ = io.cancel_all();
+            io.run_down();
+        }
     }
 }
 
@@ -424,25 +490,15 @@ impl std::fmt::Debug for DirectoryWatcher {
 
 impl Drop for DirectoryWatcher {
     fn drop(&mut self) {
-        // Close the door on re-arming *before* cancelling. Doing it the other way
-        // round would let a completion callback that is already running submit a
-        // fresh read after the cancellation, and rundown would then wait forever
-        // for a completion that only a future directory change could produce.
-        {
-            let mut may_arm = self
-                .inner
-                .may_arm
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            *may_arm = false;
-        }
+        // Teardown is the same operation whether it was asked for or implied, so
+        // there is one implementation and `Drop` is only the implicit trigger.
+        // It is idempotent, so an explicit `stop()` beforehand costs nothing.
+        self.stop();
 
-        // Now nothing new can be submitted, so cancelling retires everything
-        // that is outstanding and rundown converges. M2.4 formalises this.
-        if let Some(io) = self.inner.io.get() {
-            let _ = io.cancel_all();
-            io.run_down();
-        }
+        // The queue sender lives in `inner`, which drops after this: with every
+        // callback finished and no strong reference left, the sender is released
+        // and the client's receiver observes the disconnect rather than blocking
+        // forever on a queue nothing can fill again.
     }
 }
 

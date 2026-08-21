@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{DirectoryWatcher, ReadBuffer};
+use super::{ArmGate, DirectoryWatcher, ReadBuffer};
 use crate::directory::DirectoryHandle;
 use crate::notify::{ChangeKind, DesyncCause};
 use crate::queue::{Notification, Receiver, WatchId, channel};
@@ -473,6 +473,173 @@ fn a_dropped_watcher_stops_delivering() {
             .any(|(_, name)| name == "after-drop.txt"),
         "a change after teardown must never be reported"
     );
+
+    dir.cleanup();
+}
+
+// --- teardown (M2.4) ---
+
+#[test]
+fn stop_is_idempotent_and_drop_after_it_is_safe() {
+    // Teardown is one operation with two triggers, so an explicit stop followed
+    // by the implicit one must not double-cancel or double-drain.
+    let dir = TempDir::new("stop-idempotent");
+    let (watcher, _collected) = watch(dir.path(), false);
+
+    watcher.stop();
+    watcher.stop();
+    watcher.stop();
+    assert_eq!(watcher.gate(), ArmGate::TornDown);
+    assert!(!watcher.is_watching());
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn stop_closes_the_gate_permanently() {
+    // A watcher never re-opens: teardown is the one permanent reason for the
+    // not-re-arming state, unlike the fault and backpressure reasons to come.
+    let dir = TempDir::new("gate-permanent");
+    let (watcher, collected) = watch(dir.path(), false);
+    assert_eq!(watcher.gate(), ArmGate::Open);
+    assert!(watcher.is_watching());
+
+    watcher.stop();
+    assert_eq!(watcher.gate(), ArmGate::TornDown);
+
+    // A change after teardown must not re-open anything or produce a delivery.
+    std::fs::write(dir.path().join("after-stop.txt"), b"x").expect("create");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !collected
+            .changes()
+            .iter()
+            .any(|(_, name)| name == "after-stop.txt"),
+        "a stopped watcher must not report anything further"
+    );
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn teardown_releases_the_sender_so_the_receiver_disconnects() {
+    // A client's drain loop terminates on `recv() -> None`. If teardown left the
+    // sender alive the loop would block forever on a queue nothing can fill,
+    // which is a hang rather than a shutdown.
+    let dir = TempDir::new("teardown-disconnect");
+    let (sender, receiver) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let watcher =
+        DirectoryWatcher::start(handle, false, test_watch(), sender).expect("start the watcher");
+
+    assert!(!receiver.is_disconnected(), "live while the watcher exists");
+    drop(watcher);
+
+    assert!(
+        receiver.is_disconnected(),
+        "dropping the watcher must release the queue sender"
+    );
+    assert!(
+        receiver.recv().is_none(),
+        "a drain loop must terminate rather than block"
+    );
+
+    dir.cleanup();
+}
+
+#[test]
+fn teardown_with_a_read_outstanding_completes_promptly() {
+    // Nothing is changing in the directory, so the outstanding read can only be
+    // retired by the cancellation. If teardown waited on the read instead of
+    // cancelling it, this would hang rather than fail.
+    let dir = TempDir::new("teardown-outstanding");
+    let (watcher, _collected) = watch(dir.path(), false);
+
+    let started = std::time::Instant::now();
+    drop(watcher);
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "teardown took {elapsed:?}; the outstanding read was not cancelled"
+    );
+    dir.cleanup();
+}
+
+#[test]
+fn teardown_is_prompt_even_with_a_subtree_watch_over_a_populated_tree() {
+    // A recursive watch over a deep tree has more for the kernel to unwind, so
+    // it is the case most likely to expose a teardown that waits rather than
+    // cancels.
+    let dir = TempDir::new("teardown-deep");
+    let mut nested = dir.path().to_path_buf();
+    for level in 0..12 {
+        nested = nested.join(format!("level-{level}"));
+    }
+    std::fs::create_dir_all(&nested).expect("create deep tree");
+    for index in 0..32 {
+        std::fs::write(nested.join(format!("f-{index}.txt")), b"x").expect("write");
+    }
+
+    let (watcher, _collected) = watch(dir.path(), true);
+    let started = std::time::Instant::now();
+    drop(watcher);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "recursive teardown did not converge promptly"
+    );
+    dir.cleanup();
+}
+
+#[test]
+fn many_watchers_tear_down_concurrently_without_wedging() {
+    // Each watcher runs its own cancel-and-drain against a shared pool, so this
+    // is where a teardown that blocked a pool thread would starve the others.
+    let dir = TempDir::new("teardown-concurrent");
+    let mut watchers = Vec::new();
+    let mut drains = Vec::new();
+    for _ in 0..16 {
+        let (watcher, collected) = watch(dir.path(), false);
+        watchers.push(watcher);
+        drains.push(collected);
+    }
+
+    // Churn so completions are in flight while the teardowns run.
+    for index in 0..8 {
+        std::fs::write(dir.path().join(format!("churn-{index}.txt")), b"x").expect("write");
+    }
+
+    let started = std::time::Instant::now();
+    let handles: Vec<_> = watchers
+        .into_iter()
+        .map(|watcher| std::thread::spawn(move || drop(watcher)))
+        .collect();
+    for handle in handles {
+        handle.join().expect("teardown thread");
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "concurrent teardown wedged"
+    );
+
+    dir.cleanup();
+}
+
+#[test]
+fn teardown_from_a_thread_other_than_the_creator_is_safe() {
+    // `DirectoryWatcher` is owned, and its teardown blocks; moving it to another
+    // thread to be dropped is the shape a monitor will use when it releases a
+    // watcher from its servicing path rather than from the caller's.
+    let dir = TempDir::new("teardown-moved");
+    let (watcher, collected) = watch(dir.path(), false);
+    std::fs::write(dir.path().join("before-move.txt"), b"x").expect("write");
+    collected.wait_for_name("before-move.txt");
+
+    std::thread::spawn(move || drop(watcher))
+        .join()
+        .expect("teardown thread");
 
     dir.cleanup();
 }

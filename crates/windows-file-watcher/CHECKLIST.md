@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-33** -- later
-decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, D-32 from M8.1, and
-D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-34** -- later
+decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, D-34 from M2.4, D-32
+from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -34,7 +34,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   client code on its cadence path; tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte
   completion.
 
-- [ ] **M2.4** -- Teardown: cancel the outstanding read, drain the pool I/O, and free the context via
+- [x] **M2.4** -- Teardown: cancel the outstanding read, drain the pool I/O, and free the context via
   owned-object `Drop` (D-20), with re-arm suppression inherited from `ThreadpoolIo` rundown. The arm gate of
   D-23 already provides the suppression; formalise it, and note that the same not-re-arming state is what
   D-29 reuses for backpressure and D-28 for faults.
