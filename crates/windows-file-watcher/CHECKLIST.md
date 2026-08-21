@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-35** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-37** -- later
 decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, D-34 from M2.4, D-35
-from M2.5, D-32 from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+from M2.5, D-36/D-37 from M3.1, D-32 from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -13,8 +13,8 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M3.1.** M1 and M2 are archived; nothing else is in progress. Note that a
-> *satisfied cross-component prerequisite does not make its item startable* -- M17 in
+> **NEXT ACTIONABLE ITEM: M3.2.** M1 and M2 are archived and M3.1 is complete; nothing else is in progress.
+> Note that a *satisfied cross-component prerequisite does not make its item startable* -- M17 in
 > `windows-threadpool-sys` cleared the external dependency for M6.1, but M6.1 remains gated behind M3
 > through M5 by ordinary intra-component dependency order, because a coarse watcher has no subscriptions to
 > notify (M3/M4) and no fault machine to re-establish through (M5) until those land. Work the milestones in
@@ -31,11 +31,13 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 > COMPLETED-CHECKLIST, and wtf-string's) point at `M6.1` and `M8`. Rewriting history in four archives to
 > tidy one milestone's size is the worse trade.
 
-- [ ] **M3.1** -- `Monitor`: owns the servicing path; the request queue is drained by a `ThreadpoolWork`
+- [x] **M3.1** -- `Monitor`: owns the servicing path; the request queue is drained by a `ThreadpoolWork`
   that serialises resident-state mutations (D-2); `Monitor::Drop` blocks on full rundown (D-20). Includes
   the SQ doorbell (D-25): `ThreadpoolWork::submit()` is already the ring, but each call queues another drain
   and they do not coalesce -- subscribing to 500 paths would queue 500 drains, 499 finding the queue already
-  emptied -- so ring only on the empty -> non-empty transition, computed under the queue lock.
+  emptied -- so ring only when no drain is already outstanding, computed under the queue lock. **Corrected
+  during execution** ([D-36](DESIGN-NOTES.md)): this item originally said to ring on the *empty -> non-empty*
+  transition, which coalesces but does not serialise, and serialising is the part D-2 needs.
 
 - [ ] **M3.2** -- `Session` obtained from the monitor: bundles a request-submission handle (MPSC producers)
   and the crate-owned notification sender (D-2/D-11); provide `monitor.session()` returning the session plus

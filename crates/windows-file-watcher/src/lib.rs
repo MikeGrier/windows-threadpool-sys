@@ -24,10 +24,16 @@
 mod directory;
 
 #[cfg(windows)]
+mod monitor;
+
+#[cfg(windows)]
 mod notify;
 
 #[cfg(windows)]
 mod queue;
+
+#[cfg(windows)]
+mod servicing;
 
 #[cfg(windows)]
 mod watcher;
@@ -52,6 +58,8 @@ pub use notify::{Change, ChangeKind, DecodedBatch, DesyncCause, RelativeName, de
 #[doc(hidden)]
 pub mod unstable {
     pub use crate::directory::{DirectoryHandle, OpenError, OpenFailure};
+    pub use crate::monitor::{Monitor, Request};
     pub use crate::queue::{Notification, Receiver, Sender, WatchId, channel};
+    pub use crate::servicing::Rejected;
     pub use crate::watcher::{ArmGate, DEFAULT_BUFFER_BYTES, DirectoryWatcher};
 }
