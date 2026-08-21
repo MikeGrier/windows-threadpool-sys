@@ -35,11 +35,14 @@
 // Remove this when M3.5 lands.
 #![allow(dead_code)]
 
+use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
-use crate::monitor::Request;
-use crate::queue::Sender;
-use crate::servicing::{Rejected, Servicer};
+use crate::monitor::{Core, Request};
+use crate::queue::{Sender, WatchId};
+use crate::servicing::Rejected;
+use crate::watch::{Watch, WatchOptions};
 
 /// A client's connection to a monitor.
 ///
@@ -51,13 +54,29 @@ use crate::servicing::{Rejected, Servicer};
 /// receiver, so several client threads can share one stream without coordinating.
 #[derive(Clone)]
 pub struct Session {
-    servicer: Arc<Servicer<Request>>,
+    core: Arc<Core>,
     sink: Sender,
 }
 
 impl Session {
-    pub(crate) fn new(servicer: Arc<Servicer<Request>>, sink: Sender) -> Self {
-        Self { servicer, sink }
+    pub(crate) fn new(core: Arc<Core>, sink: Sender) -> Self {
+        Self { core, sink }
+    }
+
+    /// Watch `path`, delivering to this session's receiver.
+    ///
+    /// Registration is asynchronous: this returns as soon as the request is
+    /// queued, and the watch begins on the monitor's own servicing path. The
+    /// returned handle owns the subscription's lifetime -- dropping it cancels --
+    /// so it must be kept for as long as the client wants notifications.
+    ///
+    /// # Errors
+    ///
+    /// Fails only if the monitor has shut down. A path that cannot be watched is
+    /// not reported here, because whether it can be is not known until the
+    /// monitor tries; M3.6 reports that as a completion (D-30).
+    pub fn subscribe(&self, path: impl AsRef<Path>, options: WatchOptions) -> io::Result<Watch> {
+        crate::watch::subscribe(self, path.as_ref(), options)
     }
 
     /// Submit a request to the monitor.
@@ -69,13 +88,18 @@ impl Session {
     ///
     /// Returns the request unserviced if the monitor has shut down.
     pub fn submit(&self, request: Request) -> Result<(), Rejected<Request>> {
-        self.servicer.submit(request)
+        self.core.submit(request)
     }
 
     /// Whether the monitor behind this session is still accepting requests.
     #[must_use]
     pub fn is_open(&self) -> bool {
-        self.servicer.is_open()
+        self.core.is_open()
+    }
+
+    /// Mint the next subscription identifier.
+    pub(crate) fn next_watch(&self) -> WatchId {
+        self.core.next_watch()
     }
 
     /// The sender every watch created through this session delivers to.

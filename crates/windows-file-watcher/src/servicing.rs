@@ -190,6 +190,17 @@ impl<T: Send + 'static> Servicer<T> {
         !lock(&self.shared.queue).closed
     }
 
+    /// Block until every request submitted so far has been serviced.
+    ///
+    /// A drain services the queue to empty before it returns, so waiting for the
+    /// outstanding drains is the same as waiting for the outstanding requests.
+    ///
+    /// Must not be called from inside a handler, which would be waiting on
+    /// itself.
+    pub(crate) fn quiesce(&self) {
+        self.work.wait();
+    }
+
     /// How many requests are waiting to be serviced.
     pub(crate) fn pending(&self) -> usize {
         lock(&self.shared.queue).items.len()

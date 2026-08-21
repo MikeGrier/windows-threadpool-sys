@@ -2,61 +2,32 @@
 //! Unit tests for the monitor.
 //!
 //! The servicing path's own guarantees are tested in `src/servicing/tests.rs`;
-//! what is here is the monitor's ownership of watchers and the blocking teardown
+//! what is here is the monitor's ownership of watchers -- now reached the way a
+//! client reaches it, through a session's subscribe -- and the blocking teardown
 //! of D-20.
 
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::Monitor;
-use crate::directory::DirectoryHandle;
-use crate::queue::{Receiver, WatchId, channel};
-use crate::watcher::DirectoryWatcher;
+use crate::queue::Receiver;
+use crate::session::Session;
+use crate::testing::TempDir;
+use crate::watch::{Watch, WatchOptions};
 
 /// What teardown is allowed to take. Cancellation retires an outstanding read at
 /// once, so this only fires if teardown waited for a change instead.
 const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 
-/// A uniquely named temp directory, removed when the test passes.
-///
-/// Cleanup is deliberately not RAII: a failure leaves the tree for post-mortem
-/// inspection.
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(label: &str) -> Self {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "windows-file-watcher-monitor-{label}-{}-{nonce}",
-            std::process::id()
-        ));
-        std::fs::create_dir(&path).expect("create temp dir");
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn cleanup(self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
-/// A watcher over `dir` with a read already armed, plus the receiver its sender
-/// feeds. The receiver disconnects when the watcher is torn down, which is how a
-/// test observes that teardown actually released it.
-fn armed_watcher(dir: &Path, watch: u64) -> (DirectoryWatcher, Receiver) {
-    let handle = DirectoryHandle::open(dir).expect("open the watched directory");
-    let (sender, receiver) = channel();
-    let watcher = DirectoryWatcher::start(handle, false, WatchId::from_raw(watch), sender)
-        .expect("arm the first read");
-    (watcher, receiver)
+/// A monitor watching `dir` through one session, with registration already
+/// serviced.
+fn watching(dir: &std::path::Path) -> (Monitor, Session, Receiver, Watch) {
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(dir, WatchOptions::new())
+        .expect("register the subscription");
+    monitor.quiesce();
+    (monitor, session, receiver, watch)
 }
 
 #[test]
@@ -92,59 +63,64 @@ fn dropping_an_idle_monitor_is_prompt() {
 }
 
 #[test]
-fn an_adopted_watcher_is_counted() {
-    let dir = TempDir::new("adopt");
-    let monitor = Monitor::new().expect("create the monitor");
-    let (watcher, _receiver) = armed_watcher(dir.path(), 1);
+fn a_subscription_becomes_a_watcher() {
+    let dir = TempDir::new("monitor-subscribe");
+    let (monitor, _session, _receiver, watch) = watching(dir.path());
 
-    monitor.adopt(watcher);
     assert_eq!(monitor.watcher_count(), 1);
+    assert!(monitor.is_watching(watch.id()));
 
+    drop(watch);
     drop(monitor);
     dir.cleanup();
 }
 
 #[test]
-fn shutdown_releases_every_adopted_watcher() {
-    let dir = TempDir::new("release");
+fn several_subscriptions_become_several_watchers() {
+    let dir = TempDir::new("monitor-several");
     let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session();
 
-    let mut receivers = Vec::new();
-    for watch in 0..4 {
-        let (watcher, receiver) = armed_watcher(dir.path(), watch);
-        monitor.adopt(watcher);
-        receivers.push(receiver);
-    }
-    assert_eq!(monitor.watcher_count(), 4);
+    let watches: Vec<_> = (0..8)
+        .map(|_| {
+            session
+                .subscribe(dir.path(), WatchOptions::new())
+                .expect("register")
+        })
+        .collect();
+    monitor.quiesce();
+    assert_eq!(monitor.watcher_count(), 8);
 
-    monitor.shut_down();
-    assert_eq!(monitor.watcher_count(), 0);
+    // Each identifier is distinct, which is what lets a client demultiplex one
+    // receiver back into its subscriptions.
+    let mut ids: Vec<u64> = watches.iter().map(|watch| watch.id().get()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 8);
 
-    // A watcher owns its queue sender, so a disconnected receiver is proof the
-    // monitor really released it rather than merely forgetting the table entry.
-    for receiver in &receivers {
-        assert!(
-            receiver.is_disconnected(),
-            "teardown must release the watcher, not just drop the reference to it"
-        );
-    }
-
+    drop(watches);
+    drop(monitor);
     dir.cleanup();
 }
 
 #[test]
-fn teardown_with_reads_outstanding_converges_promptly() {
-    let dir = TempDir::new("outstanding");
+fn teardown_with_watchers_outstanding_converges_promptly() {
+    let dir = TempDir::new("monitor-outstanding");
     let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session();
 
-    for watch in 0..8 {
-        let (watcher, _receiver) = armed_watcher(dir.path(), watch);
-        monitor.adopt(watcher);
-    }
+    let _watches: Vec<_> = (0..8)
+        .map(|_| {
+            session
+                .subscribe(dir.path(), WatchOptions::new())
+                .expect("register")
+        })
+        .collect();
+    monitor.quiesce();
 
     // Nothing will change this directory again, so only cancellation can retire
-    // the eight outstanding reads. A teardown that waited would sit here until the
-    // budget expired.
+    // the eight outstanding reads. A teardown that waited would sit here until
+    // the budget expired.
     let started = Instant::now();
     monitor.shut_down();
     let elapsed = started.elapsed();
@@ -152,17 +128,37 @@ fn teardown_with_reads_outstanding_converges_promptly() {
         elapsed < TEARDOWN_BUDGET,
         "teardown took {elapsed:?}, which means it waited rather than cancelled"
     );
+    assert_eq!(monitor.watcher_count(), 0);
+
+    dir.cleanup();
+}
+
+#[test]
+fn teardown_releases_every_watcher_so_the_receiver_disconnects() {
+    let dir = TempDir::new("monitor-release");
+    let (monitor, session, receiver, watch) = watching(dir.path());
+
+    // Every holder of a sender must go: the session, the watch that clones it,
+    // and the watcher the monitor owns.
+    drop(watch);
+    drop(session);
+    monitor.shut_down();
+
+    assert!(
+        receiver.is_disconnected(),
+        "teardown must release the watcher's sender, not just forget the table entry"
+    );
 
     dir.cleanup();
 }
 
 #[test]
 fn dropping_a_monitor_tears_down_its_watchers() {
-    let dir = TempDir::new("drop");
-    let monitor = Monitor::new().expect("create the monitor");
-    let (watcher, receiver) = armed_watcher(dir.path(), 1);
-    monitor.adopt(watcher);
+    let dir = TempDir::new("monitor-drop");
+    let (monitor, session, receiver, watch) = watching(dir.path());
 
+    drop(watch);
+    drop(session);
     drop(monitor);
 
     assert!(
@@ -175,10 +171,10 @@ fn dropping_a_monitor_tears_down_its_watchers() {
 
 #[test]
 fn teardown_from_a_thread_other_than_the_creator_is_safe() {
-    let dir = TempDir::new("thread");
-    let monitor = Monitor::new().expect("create the monitor");
-    let (watcher, receiver) = armed_watcher(dir.path(), 1);
-    monitor.adopt(watcher);
+    let dir = TempDir::new("monitor-thread");
+    let (monitor, session, receiver, watch) = watching(dir.path());
+    drop(watch);
+    drop(session);
 
     std::thread::spawn(move || drop(monitor))
         .join()
@@ -190,16 +186,16 @@ fn teardown_from_a_thread_other_than_the_creator_is_safe() {
 
 #[test]
 fn many_monitors_tear_down_concurrently_without_wedging() {
-    let dir = TempDir::new("concurrent");
+    let dir = TempDir::new("monitor-concurrent");
     let root = dir.path().to_path_buf();
 
     let workers: Vec<_> = (0..8)
-        .map(|index| {
+        .map(|_| {
             let root = root.clone();
             std::thread::spawn(move || {
-                let monitor = Monitor::new().expect("create the monitor");
-                let (watcher, receiver) = armed_watcher(&root, index);
-                monitor.adopt(watcher);
+                let (monitor, session, receiver, watch) = watching(&root);
+                drop(watch);
+                drop(session);
                 drop(monitor);
                 assert!(receiver.is_disconnected());
             })
@@ -220,15 +216,14 @@ fn many_monitors_tear_down_concurrently_without_wedging() {
 
 #[test]
 fn debug_reports_the_monitors_state() {
-    let dir = TempDir::new("debug");
-    let monitor = Monitor::new().expect("create the monitor");
-    let (watcher, _receiver) = armed_watcher(dir.path(), 1);
-    monitor.adopt(watcher);
+    let dir = TempDir::new("monitor-debug");
+    let (monitor, _session, _receiver, watch) = watching(dir.path());
 
     let rendered = format!("{monitor:?}");
     assert!(rendered.contains("running: true"), "{rendered}");
     assert!(rendered.contains("watchers: 1"), "{rendered}");
 
+    drop(watch);
     drop(monitor);
     dir.cleanup();
 }

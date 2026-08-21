@@ -5,7 +5,7 @@
 //! directory, because what is under test is the arm/complete/re-arm loop against
 //! the kernel, not a model of it.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,6 +13,7 @@ use super::{ArmGate, DirectoryWatcher, ReadBuffer};
 use crate::directory::DirectoryHandle;
 use crate::notify::{ChangeKind, DesyncCause};
 use crate::queue::{Notification, Receiver, WatchId, channel};
+use crate::testing::TempDir;
 
 /// Upper bound for waiting on a notification the kernel really should deliver.
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -20,37 +21,6 @@ const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
 /// The subscription every test in this module watches under.
 fn test_watch() -> WatchId {
     WatchId::from_raw(1)
-}
-
-/// A uniquely named temp directory, removed when the test passes.
-///
-/// Cleanup is deliberately not RAII: an assertion failure leaves the directory
-/// behind for post-mortem inspection.
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(label: &str) -> Self {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "windows-file-watcher-watch-{label}-{}-{nonce}",
-            std::process::id()
-        ));
-        std::fs::create_dir(&path).expect("create temp dir");
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn cleanup(self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
 }
 
 /// Drains the queue in the background, so a test can assert on what has arrived

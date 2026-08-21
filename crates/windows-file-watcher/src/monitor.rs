@@ -23,26 +23,70 @@
 // crate's tests reach the surface. Remove this when M3.5 lands.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::queue::{DEFAULT_BOUND, Receiver, channel_with_bound};
+use crate::directory::DirectoryHandle;
+use crate::queue::{DEFAULT_BOUND, Receiver, Sender, WatchId, channel_with_bound};
 use crate::servicing::{Rejected, Servicer};
 use crate::session::Session;
+use crate::watch::{RetryMode, WatchOptions};
 use crate::watcher::DirectoryWatcher;
 
 /// A message on the monitor's request queue.
 ///
-/// Deliberately uninhabited: M3.1 builds the servicing path, and the requests
-/// that travel it are defined by M3.5, which adds subscribe and cancel along with
-/// the affine `Watch` handle that issues them. An empty enum states that honestly
-/// -- the queue is typed, the handler is exhaustive, and adding a variant is a
-/// pure extension -- rather than carrying a placeholder variant that would have to
-/// be removed later. What the path *guarantees* is exercised on its own terms in
-/// [`crate::servicing`], which is generic over the request type for exactly this
-/// reason.
-pub enum Request {}
+/// Every variant is serviced by the single drain, so the resident state they
+/// mutate needs no further synchronisation of its own (D-2).
+pub enum Request {
+    /// Begin watching a path on behalf of one subscription.
+    Subscribe {
+        /// The identifier every notification from this subscription carries.
+        watch: WatchId,
+        /// The directory to watch. M4 resolves a file target to its parent.
+        path: PathBuf,
+        /// What the client stated at registration.
+        options: WatchOptions,
+        /// The session sink this subscription delivers to (D-11).
+        sink: Sender,
+    },
+    /// Stop watching, and release the watcher.
+    Cancel {
+        /// The subscription to end.
+        watch: WatchId,
+    },
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Request::Subscribe {
+                watch,
+                path,
+                options,
+                ..
+            } => f
+                .debug_struct("Subscribe")
+                .field("watch", watch)
+                .field("path", path)
+                .field("options", options)
+                .finish_non_exhaustive(),
+            Request::Cancel { watch } => f.debug_struct("Cancel").field("watch", watch).finish(),
+        }
+    }
+}
+
+/// One live subscription's resident state.
+struct Subscribed {
+    watcher: DirectoryWatcher,
+    /// Kept because [`RetryMode`] is chosen at registration and consumed later,
+    /// by M5.3's fault protocol; the registration call is the only place it can
+    /// be stated (D-27).
+    options: WatchOptions,
+}
 
 /// The state only the servicing path may mutate.
 ///
@@ -53,19 +97,51 @@ pub enum Request {}
 /// when teardown races a drain.
 #[derive(Default)]
 struct Resident {
-    /// Every live watcher. A flat list for now; M4 keys it by directory when
-    /// coalescing (D-6) gives it something to key on.
-    watchers: Vec<DirectoryWatcher>,
+    /// Every live subscription, keyed by the identifier that tags its
+    /// notifications. M4 re-keys this by *directory* when coalescing (D-6) gives
+    /// it something to key on, and routes a directory's records to the
+    /// subscriptions that match.
+    watchers: HashMap<WatchId, Subscribed>,
+}
+
+/// What a [`Session`] holds of its monitor.
+///
+/// Shared so a client can submit from its own threads, and so every session
+/// issues identifiers from one sequence -- a `WatchId` tags notifications and
+/// keys resident state, so two sessions must never mint the same one.
+///
+/// Deliberately does **not** contain the resident state: the handler captures
+/// that directly, and a handler reaching back through the object that owns its
+/// servicer would be a cycle.
+pub(crate) struct Core {
+    servicer: Servicer<Request>,
+    next_watch: AtomicU64,
+}
+
+impl Core {
+    /// Enqueue a request.
+    pub(crate) fn submit(&self, request: Request) -> Result<(), Rejected<Request>> {
+        self.servicer.submit(request)
+    }
+
+    /// Whether the monitor is still accepting requests.
+    pub(crate) fn is_open(&self) -> bool {
+        self.servicer.is_open()
+    }
+
+    /// Mint the next subscription identifier.
+    pub(crate) fn next_watch(&self) -> WatchId {
+        WatchId::from_raw(self.next_watch.fetch_add(1, Ordering::Relaxed))
+    }
 }
 
 /// Owns the servicing path and every watcher created through it.
 pub struct Monitor {
-    /// Shared with every [`Session`], which is what lets a client submit from its
-    /// own threads. A session holding this alive past `Monitor::Drop` keeps only
-    /// the allocation: teardown closes the path, so a surviving session reports
-    /// itself shut and refuses requests rather than reaching a monitor that is
-    /// no longer there.
-    servicer: Arc<Servicer<Request>>,
+    /// Shared with every [`Session`]. A session holding this alive past
+    /// `Monitor::Drop` keeps only the allocation: teardown closes the path, so a
+    /// surviving session reports itself shut and refuses requests rather than
+    /// reaching a monitor that is no longer there.
+    core: Arc<Core>,
     resident: Arc<Mutex<Resident>>,
 }
 
@@ -78,14 +154,20 @@ impl Monitor {
     pub fn new() -> io::Result<Self> {
         let resident = Arc::new(Mutex::new(Resident::default()));
 
-        // The handler is built before the monitor exists, so when M3.5 gives it
-        // work to do it will capture `Arc::clone(&resident)` directly rather than
-        // reaching back through the monitor. That keeps "only the drain mutates
-        // resident state" visible in the types, and avoids the cycle a handler
-        // holding the monitor would create.
-        let servicer = Arc::new(Servicer::new(|request: Request| match request {})?);
+        // The handler captures the resident state directly rather than reaching
+        // back through the monitor, which keeps "only the drain mutates resident
+        // state" visible in the types and avoids the cycle a handler holding its
+        // own servicer would create.
+        let state = Arc::clone(&resident);
+        let servicer = Servicer::new(move |request: Request| service(&state, request))?;
 
-        Ok(Self { servicer, resident })
+        Ok(Self {
+            core: Arc::new(Core {
+                servicer,
+                next_watch: AtomicU64::new(1),
+            }),
+            resident,
+        })
     }
 
     /// Open a session, returning it with the receiver its notifications arrive on.
@@ -108,7 +190,7 @@ impl Monitor {
     #[must_use]
     pub fn session_with_bound(&self, bound: NonZeroUsize) -> (Session, Receiver) {
         let (sender, receiver) = channel_with_bound(bound);
-        (Session::new(Arc::clone(&self.servicer), sender), receiver)
+        (Session::new(Arc::clone(&self.core), sender), receiver)
     }
 
     /// Enqueue a request for the servicing path.
@@ -117,25 +199,49 @@ impl Monitor {
     ///
     /// Returns the request unserviced if the monitor has shut down.
     pub fn submit(&self, request: Request) -> Result<(), Rejected<Request>> {
-        self.servicer.submit(request)
+        self.core.submit(request)
     }
 
-    /// Take ownership of a watcher.
+    /// Block until every request submitted so far has been serviced.
     ///
-    /// Called from the serialised handler, which is the only writer of resident
-    /// state in the steady state; teardown is the only other reader.
-    pub(crate) fn adopt(&self, watcher: DirectoryWatcher) {
-        lock(&self.resident).watchers.push(watcher);
+    /// Lets a caller observe resident state at a defined point rather than
+    /// polling it: registration is asynchronous by design (D-2), so without this
+    /// "no watcher was created" is indistinguishable from "not yet".
+    ///
+    /// Must not be called from inside the servicing path, which would be waiting
+    /// on itself.
+    pub fn quiesce(&self) {
+        self.core.servicer.quiesce();
     }
 
-    /// How many watchers the monitor currently owns.
+    /// How many subscriptions the monitor currently watches.
+    #[must_use]
     pub fn watcher_count(&self) -> usize {
         lock(&self.resident).watchers.len()
     }
 
+    /// The retry mode a subscription registered with, if it is still live.
+    ///
+    /// The mode is stated at registration and consumed by M5.3's fault protocol;
+    /// this is what makes it observable in the meantime.
+    #[must_use]
+    pub fn retry_mode(&self, watch: WatchId) -> Option<RetryMode> {
+        lock(&self.resident)
+            .watchers
+            .get(&watch)
+            .map(|subscribed| subscribed.options.retry)
+    }
+
+    /// Whether a subscription is currently being watched.
+    #[must_use]
+    pub fn is_watching(&self, watch: WatchId) -> bool {
+        lock(&self.resident).watchers.contains_key(&watch)
+    }
+
     /// Whether the monitor is still accepting requests.
+    #[must_use]
     pub fn is_running(&self) -> bool {
-        self.servicer.is_open()
+        self.core.is_open()
     }
 
     /// Stop servicing and tear down every watcher, blocking until it is done.
@@ -147,17 +253,53 @@ impl Monitor {
         // Order matters: closing the servicing path first means nothing can adopt
         // a watcher after the table below has been walked. The other order leaves
         // an armed read owned by nobody (D-23/D-34).
-        self.servicer.shut_down();
+        self.core.servicer.shut_down();
 
-        // Each `stop` cancels that watcher's outstanding read and waits for its
+        // Each watcher's drop cancels its outstanding read and waits for its
         // callbacks, so this is where the blocking teardown of D-20 actually
         // happens. Taken out of the table first, so the lock is not held across
         // the waits -- a completion callback that is still finishing has no reason
         // to be blocked on it, and holding it would invite exactly the
         // wait-on-yourself deadlock `stop` documents.
         let watchers = std::mem::take(&mut lock(&self.resident).watchers);
-        for watcher in &watchers {
-            watcher.stop();
+        drop(watchers);
+    }
+}
+
+/// Apply one request to the resident state.
+///
+/// Runs on the servicing path, one call at a time, so nothing here needs to
+/// consider a concurrent mutation (D-2).
+fn service(resident: &Mutex<Resident>, request: Request) {
+    match request {
+        Request::Subscribe {
+            watch,
+            path,
+            options,
+            sink,
+        } => {
+            // A failed open leaves no watcher, and for now says nothing. M3.6 is
+            // where this becomes a completion (D-30): a permanent failure such as
+            // D-22's `NotADirectory` otherwise leaves a client holding a `Watch`
+            // that can never fire and never says why.
+            let Ok(directory) = DirectoryHandle::open(&path) else {
+                return;
+            };
+            let Ok(watcher) = DirectoryWatcher::start(directory, options.subtree, watch, sink)
+            else {
+                return;
+            };
+            lock(resident)
+                .watchers
+                .insert(watch, Subscribed { watcher, options });
+        }
+        Request::Cancel { watch } => {
+            // Removed under the lock, dropped outside it: dropping tears the
+            // watcher down, which blocks on its callbacks, and holding the
+            // resident lock across that wait would serialise teardown against
+            // every other reader for no reason.
+            let removed = lock(resident).watchers.remove(&watch);
+            drop(removed);
         }
     }
 }

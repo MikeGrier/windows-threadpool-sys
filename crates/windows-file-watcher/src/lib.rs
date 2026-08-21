@@ -38,6 +38,12 @@ mod servicing;
 #[cfg(windows)]
 mod session;
 
+#[cfg(all(windows, test))]
+mod testing;
+
+#[cfg(windows)]
+mod watch;
+
 #[cfg(windows)]
 mod watcher;
 
@@ -68,5 +74,6 @@ pub mod unstable {
     };
     pub use crate::servicing::Rejected;
     pub use crate::session::Session;
+    pub use crate::watch::{RetryMode, Watch, WatchOptions};
     pub use crate::watcher::{ArmGate, DEFAULT_BUFFER_BYTES, DirectoryWatcher};
 }
