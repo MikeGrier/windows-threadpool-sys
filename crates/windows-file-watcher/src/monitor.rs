@@ -24,9 +24,10 @@
 #![allow(dead_code)]
 
 use std::io;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-use crate::queue::{Receiver, channel};
+use crate::queue::{DEFAULT_BOUND, Receiver, channel_with_bound};
 use crate::servicing::{Rejected, Servicer};
 use crate::session::Session;
 use crate::watcher::DirectoryWatcher;
@@ -92,9 +93,21 @@ impl Monitor {
     /// Every watch created through the returned session delivers here (D-11), so
     /// a client chooses its routing once rather than per subscription: one session
     /// per consumer, and each consumer drains only what it asked for.
+    ///
+    /// The notification queue is bounded at [`DEFAULT_BOUND`]; use
+    /// [`Monitor::session_with_bound`] to choose.
     #[must_use]
     pub fn session(&self) -> (Session, Receiver) {
-        let (sender, receiver) = channel();
+        self.session_with_bound(DEFAULT_BOUND)
+    }
+
+    /// As [`Monitor::session`], with an explicit notification-queue bound.
+    ///
+    /// The bound counts notifications, not changes: one decoded completion is one
+    /// batch (D-10), which may carry hundreds of records.
+    #[must_use]
+    pub fn session_with_bound(&self, bound: NonZeroUsize) -> (Session, Receiver) {
+        let (sender, receiver) = channel_with_bound(bound);
         (Session::new(Arc::clone(&self.servicer), sender), receiver)
     }
 

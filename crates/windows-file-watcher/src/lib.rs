@@ -62,7 +62,10 @@ pub use notify::{Change, ChangeKind, DecodedBatch, DesyncCause, RelativeName, de
 pub mod unstable {
     pub use crate::directory::{DirectoryHandle, OpenError, OpenFailure};
     pub use crate::monitor::{Monitor, Request};
-    pub use crate::queue::{Notification, Receiver, Sender, WatchId, channel};
+    pub use crate::queue::{
+        DEFAULT_BOUND, Delivery, Notification, Receiver, Reservation, Sender, WatchId, channel,
+        channel_with_bound,
+    };
     pub use crate::servicing::Rejected;
     pub use crate::session::Session;
     pub use crate::watcher::{ArmGate, DEFAULT_BUFFER_BYTES, DirectoryWatcher};

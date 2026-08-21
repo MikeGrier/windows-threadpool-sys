@@ -298,7 +298,10 @@ impl WatcherInner {
                 cause,
             },
         };
-        self.sink.send(notification);
+        // Observation reserves nothing, so this may be latched rather than
+        // queued (D-33). M3.7 responds by not re-arming while the queue is full,
+        // which turns the loss into a grace period instead of a drop.
+        let _ = self.sink.send(notification);
     }
 
     /// Record the failure that stopped this watcher, and tell the client the

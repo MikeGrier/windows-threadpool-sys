@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use crate::monitor::Monitor;
 use crate::notify::DesyncCause;
-use crate::queue::{Notification, WatchId};
+use crate::queue::{Delivery, Notification, WatchId};
+use crate::session::Session;
 
 /// Upper bound for waiting on a notification that has already been enqueued.
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
@@ -26,12 +27,20 @@ fn marker(watch: u64) -> Notification {
     }
 }
 
+/// Send a marker through a session, asserting the queue had room.
+fn deliver(session: &Session, watch: u64) {
+    assert_eq!(
+        session.sink().send(marker(watch)),
+        Delivery::Queued,
+        "the session queue was expected to have room"
+    );
+}
+
 #[test]
 fn a_session_delivers_to_its_own_receiver() {
     let monitor = Monitor::new().expect("create the monitor");
     let (session, receiver) = monitor.session();
-
-    session.sink().send(marker(1));
+    deliver(&session, 1);
 
     let received = receiver
         .recv_timeout(RECV_TIMEOUT)
@@ -45,7 +54,7 @@ fn notifications_arrive_in_submission_order() {
     let (session, receiver) = monitor.session();
 
     for watch in 0..64 {
-        session.sink().send(marker(watch));
+        deliver(&session, watch);
     }
 
     let seen: Vec<u64> = (0..64)
@@ -69,9 +78,8 @@ fn two_sessions_have_independent_streams() {
     let monitor = Monitor::new().expect("create the monitor");
     let (first, first_receiver) = monitor.session();
     let (second, second_receiver) = monitor.session();
-
-    first.sink().send(marker(1));
-    second.sink().send(marker(2));
+    deliver(&first, 1);
+    deliver(&second, 2);
 
     // The binding is per session, not per monitor: a client that opened two
     // streams must not have to filter one out of the other.
@@ -98,8 +106,7 @@ fn a_clone_delivers_to_the_same_receiver() {
     let monitor = Monitor::new().expect("create the monitor");
     let (session, receiver) = monitor.session();
     let clone = session.clone();
-
-    clone.sink().send(marker(7));
+    deliver(&clone, 7);
 
     assert_eq!(
         receiver
@@ -121,7 +128,7 @@ fn many_producers_deliver_to_one_receiver() {
             let session = session.clone();
             std::thread::spawn(move || {
                 for index in 0..100 {
-                    session.sink().send(marker(producer * 100 + index));
+                    deliver(&session, producer * 100 + index);
                 }
             })
         })
@@ -208,7 +215,7 @@ fn a_session_outliving_its_monitor_still_delivers_what_it_holds() {
     // The notification queue is not the monitor's; it belongs to the session and
     // its receiver, so shutting the monitor down must not sever a stream the
     // client is still draining.
-    session.sink().send(marker(3));
+    deliver(&session, 3);
     assert_eq!(
         receiver
             .recv_timeout(RECV_TIMEOUT)
@@ -228,7 +235,7 @@ fn sessions_can_be_opened_from_several_threads() {
             .map(|index| {
                 scope.spawn(move || {
                     let (session, receiver) = monitor.session();
-                    session.sink().send(marker(index));
+                    deliver(&session, index);
                     assert_eq!(
                         receiver
                             .recv_timeout(RECV_TIMEOUT)
