@@ -93,7 +93,7 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, FALSE, TRUE};
@@ -228,6 +228,18 @@ struct Shared {
     doorbell: OnceLock<OwnedHandle>,
 }
 
+/// A crate-owned producer that stopped because the queue was full, and must be
+/// prodded when there is room again.
+///
+/// This is **not** the client callback D-2 forbids and D-25 rejected: every
+/// implementor is this crate's own code, and the contract is one line -- return
+/// promptly, touch nothing of the queue's. Observation is the only tier that
+/// needs it, because it is the only one that reserves nothing (D-33).
+pub(crate) trait Resume: Send + Sync {
+    /// There may be room now. Called with no lock of the queue's held.
+    fn resume(&self);
+}
+
 struct State {
     queue: VecDeque<Notification>,
     /// The bound. Never zero, which is what makes the delivery guarantee
@@ -248,6 +260,11 @@ struct State {
     /// Set when every sender is gone, so a blocked receiver can stop waiting
     /// rather than hang forever on a queue nothing can fill.
     senders: usize,
+    /// Producers to prod when a saturated queue frees a slot.
+    ///
+    /// Weak, so a producer that has gone away is simply forgotten rather than
+    /// kept alive by the queue it fed.
+    resumers: Vec<Weak<dyn Resume>>,
 }
 
 impl State {
@@ -375,6 +392,25 @@ impl Sender {
         })
     }
 
+    /// Whether a best-effort notification would be accepted right now.
+    ///
+    /// The observation tier checks this *before* arming a read rather than
+    /// discovering it at the enqueue, which is what turns saturation into a
+    /// grace period in the kernel's own change buffer instead of a loss (D-29).
+    pub fn has_room(&self) -> bool {
+        lock(&self.shared.items).free() > 0
+    }
+
+    /// Ask to be prodded when a saturated queue frees a slot.
+    ///
+    /// Registering is idempotent in effect: a spurious prod costs a producer only
+    /// a re-check.
+    pub(crate) fn register_resume(&self, who: &Arc<impl Resume + 'static>) {
+        lock(&self.shared.items)
+            .resumers
+            .push(Arc::downgrade(who) as Weak<dyn Resume>);
+    }
+
     /// The queue's bound.
     pub fn capacity(&self) -> usize {
         lock(&self.shared.items).capacity
@@ -460,9 +496,14 @@ impl Receiver {
     /// Take the next notification if one is already available.
     #[must_use]
     pub fn try_recv(&self) -> Option<Notification> {
-        let mut state = lock(&self.shared.items);
-        let item = take(&mut state);
-        refresh_doorbell(&self.shared, &state);
+        let (item, resumers) = {
+            let mut state = lock(&self.shared.items);
+            let taken = take(&mut state);
+            refresh_doorbell(&self.shared, &state);
+            let resumers = freed_resumers(&mut state, taken.is_some());
+            (taken, resumers)
+        };
+        prod(resumers);
         item
     }
 
@@ -477,6 +518,9 @@ impl Receiver {
         loop {
             if let Some(item) = take(&mut state) {
                 refresh_doorbell(&self.shared, &state);
+                let resumers = freed_resumers(&mut state, true);
+                drop(state);
+                prod(resumers);
                 return Some(item);
             }
             if state.senders == 0 {
@@ -501,6 +545,9 @@ impl Receiver {
         loop {
             if let Some(item) = take(&mut state) {
                 refresh_doorbell(&self.shared, &state);
+                let resumers = freed_resumers(&mut state, true);
+                drop(state);
+                prod(resumers);
                 return Some(item);
             }
             if state.senders == 0 {
@@ -658,6 +705,7 @@ pub fn channel_with_bound(bound: NonZeroUsize) -> (Sender, Receiver) {
             reserved: 0,
             latched: VecDeque::new(),
             senders: 1,
+            resumers: Vec::new(),
         }),
         arrived: Condvar::new(),
         doorbell: OnceLock::new(),
@@ -668,6 +716,38 @@ pub fn channel_with_bound(bound: NonZeroUsize) -> (Sender, Receiver) {
         },
         Receiver { shared },
     )
+}
+
+/// The producers to prod, if taking an item has just made room.
+///
+/// Returns them rather than calling them, because a producer's `resume` must not
+/// run under the queue lock: the obvious implementation re-arms a read, and a
+/// failed arm reports itself by *sending*, which would take this very lock.
+///
+/// Dead producers are pruned here, which is the only place the list is walked.
+fn freed_resumers(state: &mut State, took_one: bool) -> Vec<Arc<dyn Resume>> {
+    // Only on the transition into having room: prodding on every take would put
+    // a wake behind every single notification a client drains.
+    if !took_one || state.resumers.is_empty() || state.free() != 1 {
+        return Vec::new();
+    }
+    let mut live = Vec::with_capacity(state.resumers.len());
+    let mut awake = Vec::new();
+    for weak in state.resumers.drain(..) {
+        if let Some(producer) = weak.upgrade() {
+            live.push(Arc::downgrade(&producer));
+            awake.push(producer);
+        }
+    }
+    state.resumers = live;
+    awake
+}
+
+/// Tell each producer there may be room now.
+fn prod(resumers: Vec<Arc<dyn Resume>>) {
+    for producer in resumers {
+        producer.resume();
+    }
 }
 
 /// Lock, recovering the guard if a previous holder panicked.

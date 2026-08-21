@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-46** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-48** -- later
 decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, D-34 from M2.4, D-35
-from M2.5, D-36/D-37 from M3.1, D-38 from M3.2, D-39/D-40 from M3.3, D-41/D-42 from M3.4, D-43/D-44 from M3.5, D-45/D-46 from M3.6, D-32 from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+from M2.5, D-36/D-37 from M3.1, D-38 from M3.2, D-39/D-40 from M3.3, D-41/D-42 from M3.4, D-43/D-44 from M3.5, D-45/D-46 from M3.6, D-47/D-48 from M3.7, D-32 from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -13,7 +13,7 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M3.7.** M1 and M2 are archived and M3.1...M3.6 are complete; nothing else is in
+> **NEXT ACTIONABLE ITEM: M3.8.** M1 and M2 are archived and M3.1...M3.7 are complete; nothing else is in
 > progress. Note that a *satisfied cross-component prerequisite does not make its item startable* -- M17 in
 > `windows-threadpool-sys` cleared the external dependency for M6.1, but M6.1 remains gated behind M3
 > through M5 by ordinary intra-component dependency order, because a coarse watcher has no subscriptions to
@@ -76,7 +76,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   subscribe failures of D-22 (`NotADirectory`, `InvalidPath`), which have no retry path and would otherwise
   leave a client holding a `Watch` that can never fire and never says so.
 
-- [ ] **M3.7** -- Backpressure (D-29). **Control needs no throttle**: [D-33](DESIGN-NOTES.md)'s reservation
+- [x] **M3.7** -- Backpressure (D-29). **Control needs no throttle**: [D-33](DESIGN-NOTES.md)'s reservation
   means a completion always fits, so request draining can never be blocked by a full ring and backpressure
   instead lands on the client's own `subscribe()` call at reservation time, on the client's own thread.
   **Observation** is unreserved, so throttle it at the arm: do not re-arm the read while the queue is full,

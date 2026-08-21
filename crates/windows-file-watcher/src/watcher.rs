@@ -44,10 +44,11 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_NOTIFY_CHANGE_SIZE, ReadDirectoryChangesW,
 };
 use windows_threadpool_sys::io::{IoCompletion, ThreadpoolIo};
+use windows_threadpool_sys::work::ThreadpoolWork;
 
 use crate::directory::DirectoryHandle;
 use crate::notify::{DecodedBatch, DesyncCause, decode_batch};
-use crate::queue::{Notification, Sender, WatchId};
+use crate::queue::{Notification, Resume, Sender, WatchId};
 
 /// The completion-buffer size used unless a caller chooses otherwise.
 ///
@@ -145,14 +146,12 @@ pub(crate) struct ArmFailure {
 pub enum ArmGate {
     /// Reads may be submitted.
     Open,
+    /// The client's queue is full, so re-arming would produce a batch with
+    /// nowhere to go. Transient: the loss becomes a grace period in the kernel's
+    /// own change buffer, and the watch resumes when the client drains (D-29).
+    Backpressured,
     /// Torn down. Permanent: a watcher never re-opens.
     TornDown,
-}
-
-impl ArmGate {
-    fn is_open(self) -> bool {
-        matches!(self, ArmGate::Open)
-    }
 }
 
 /// The shared state a completion callback reaches.
@@ -160,6 +159,9 @@ struct WatcherInner {
     /// Set once, immediately after construction. The callback needs the object
     /// that owns it, which cannot be supplied at construction time.
     io: OnceLock<ThreadpoolIo>,
+    /// Set once, as for `io`. Queues the re-arm that ends a backpressure pause
+    /// onto this crate's own pool, so it never runs on a client's thread.
+    resume_work: OnceLock<ThreadpoolWork>,
     filter: u32,
     subtree: bool,
     buffer_bytes: usize,
@@ -187,13 +189,53 @@ impl WatcherInner {
     /// long as the operation the kernel owns.
     fn arm(self: &Arc<Self>) -> Result<(), io::Error> {
         // Held for the whole submission; see the field's documentation.
-        let gate = self
+        let mut gate = self
             .gate
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if !gate.is_open() {
+        if *gate == ArmGate::TornDown {
             return Ok(());
         }
+        self.arm_locked(&mut gate)
+    }
+
+    /// Re-arm if backpressure was the only thing stopping this watcher.
+    ///
+    /// Only from [`ArmGate::Backpressured`], never from [`ArmGate::Open`]: an
+    /// open gate means a read is already outstanding, and a second one against
+    /// the same handle would be a duplicate the design never issues.
+    fn resume_arm(self: &Arc<Self>) {
+        let mut gate = self
+            .gate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if *gate != ArmGate::Backpressured {
+            return;
+        }
+        if let Err(error) = self.arm_locked(&mut gate) {
+            drop(gate);
+            self.record_stop(error);
+        }
+    }
+
+    /// Submit a read, or record why not. The gate lock is held throughout (D-23).
+    fn arm_locked(self: &Arc<Self>, gate: &mut ArmGate) -> Result<(), io::Error> {
+        // Checked here rather than at the enqueue: refusing to arm leaves the
+        // changes in the kernel's own buffer, which is a grace period rather than
+        // a loss, where discovering a full queue after the read has completed is
+        // a batch with nowhere to go (D-29).
+        if !self.sink.has_room() {
+            *gate = ArmGate::Backpressured;
+            // Re-checked *under this lock* because a drain may have freed a slot
+            // since the check above. Without it the wake could be missed: a
+            // resume that ran before the gate was set would find it open and do
+            // nothing, and the watcher would stay parked with room available and
+            // nothing left to prod it.
+            if !self.sink.has_room() {
+                return Ok(());
+            }
+        }
+        *gate = ArmGate::Open;
 
         let Some(io) = self.io.get() else {
             // Unreachable in practice: `io` is set before the first arm and the
@@ -325,6 +367,22 @@ impl WatcherInner {
 /// `ERROR_OPERATION_ABORTED`, the completion status a cancelled read reports.
 const OPERATION_ABORTED: i32 = windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED as i32;
 
+impl Resume for WatcherInner {
+    /// Queue the re-arm rather than performing it here.
+    ///
+    /// This runs on whichever thread drained the client's queue, which may be the
+    /// client's own. Arming takes the gate lock and issues a read, and teardown
+    /// waits on that same lock -- so doing it here would put our critical section
+    /// on a thread we do not control. Submitting work is a single non-blocking
+    /// call that touches nothing of ours, and the re-arm then happens on this
+    /// crate's own pool.
+    fn resume(&self) {
+        if let Some(work) = self.resume_work.get() {
+            work.submit();
+        }
+    }
+}
+
 /// A detailed watcher over one directory.
 ///
 /// Owns the directory handle (through the thread pool's I/O object) and keeps a
@@ -367,6 +425,7 @@ impl DirectoryWatcher {
     ) -> io::Result<Self> {
         let inner = Arc::new(WatcherInner {
             io: OnceLock::new(),
+            resume_work: OnceLock::new(),
             filter: ALL_NOTIFY_FILTERS,
             subtree,
             buffer_bytes,
@@ -410,6 +469,28 @@ impl DirectoryWatcher {
             .set(io)
             .unwrap_or_else(|_| unreachable!("the I/O object is set exactly once, here"));
 
+        // As with the completion callback, a `Weak` rather than a strong
+        // reference: the work object lives in `inner`, so a strong one would be a
+        // cycle, and a failed upgrade during teardown is exactly the suppression
+        // that lets rundown converge.
+        let resuming = Arc::downgrade(&inner);
+        let resume_work = ThreadpoolWork::new(
+            move || {
+                if let Some(inner) = resuming.upgrade() {
+                    inner.resume_arm();
+                }
+            },
+            None,
+        )?;
+        inner
+            .resume_work
+            .set(resume_work)
+            .unwrap_or_else(|_| unreachable!("the resume work is set exactly once, here"));
+
+        // Registered before the first arm, so a watcher that is backpressured
+        // from the outset is still prodded when the client drains.
+        inner.sink.register_resume(&inner);
+
         inner.arm()?;
         Ok(Self { inner })
     }
@@ -430,13 +511,18 @@ impl DirectoryWatcher {
     }
 
     /// Whether the watcher is still re-arming.
+    ///
+    /// A backpressured watcher counts: it is paused, not stopped, and resumes on
+    /// its own when the client drains (D-29). D-31 is why the distinction is
+    /// observable at all -- a paused watcher is otherwise indistinguishable from
+    /// a quiet directory.
     pub fn is_watching(&self) -> bool {
         self.inner
             .stopped
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .is_none()
-            && self.gate() == ArmGate::Open
+            && self.gate() != ArmGate::TornDown
     }
 
     /// The current arm gate.

@@ -5,6 +5,7 @@
 //! directory, because what is under test is the arm/complete/re-arm loop against
 //! the kernel, not a model of it.
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use std::time::Duration;
 use super::{ArmGate, DirectoryWatcher, ReadBuffer};
 use crate::directory::DirectoryHandle;
 use crate::notify::{ChangeKind, DesyncCause};
-use crate::queue::{Notification, Receiver, WatchId, channel};
+use crate::queue::{Notification, Receiver, WatchId, channel, channel_with_bound};
 use crate::testing::TempDir;
 
 /// Upper bound for waiting on a notification the kernel really should deliver.
@@ -611,5 +612,204 @@ fn teardown_from_a_thread_other_than_the_creator_is_safe() {
         .join()
         .expect("teardown thread");
 
+    dir.cleanup();
+}
+
+// --- backpressure (D-29) ---
+
+/// A watcher over `dir` feeding a queue of exactly `bound` notifications, with no
+/// one draining it.
+fn watch_bounded(dir: &Path, bound: usize) -> (DirectoryWatcher, Receiver) {
+    let handle = DirectoryHandle::open(dir).expect("open the watched directory");
+    let (sender, receiver) =
+        channel_with_bound(NonZeroUsize::new(bound).expect("a non-zero bound"));
+    let watcher =
+        DirectoryWatcher::start(handle, false, test_watch(), sender).expect("arm the first read");
+    (watcher, receiver)
+}
+
+/// Block until `predicate` holds, failing rather than hanging.
+fn wait_for<F: Fn() -> bool>(what: &str, predicate: F) {
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    while !predicate() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Make changes until `predicate` holds, failing rather than hanging.
+fn churn_until<F: Fn() -> bool>(dir: &Path, what: &str, predicate: F) {
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    let mut index = 0_usize;
+    while !predicate() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what} after {index} changes"
+        );
+        std::fs::write(dir.join(format!("churn-{index}.txt")), b"x").expect("create");
+        index += 1;
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_full_queue_stops_the_re_arm_rather_than_dropping() {
+    let dir = TempDir::new("backpressure-stop");
+    let (watcher, receiver) = watch_bounded(dir.path(), 1);
+
+    churn_until(dir.path(), "the watcher to pause", || {
+        watcher.gate() == ArmGate::Backpressured
+    });
+
+    assert_eq!(watcher.gate(), ArmGate::Backpressured);
+    assert!(
+        watcher.is_watching(),
+        "a paused watcher is not a stopped one: {:?}",
+        watcher.stop_reason()
+    );
+    assert!(receiver.len() <= 1, "the bound still holds");
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn draining_resumes_a_paused_watcher() {
+    let dir = TempDir::new("backpressure-resume");
+    let (watcher, receiver) = watch_bounded(dir.path(), 1);
+
+    churn_until(dir.path(), "the watcher to pause", || {
+        watcher.gate() == ArmGate::Backpressured
+    });
+
+    // Nothing else will prod it: the resume has to come from the client draining.
+    while receiver.try_recv().is_some() {}
+    wait_for("the watcher to resume", || watcher.gate() == ArmGate::Open);
+
+    // And it is really watching again, not merely reporting that it is.
+    std::fs::write(dir.path().join("after.txt"), b"after").expect("create");
+    wait_for("a change after the pause", || {
+        !receiver.is_empty() || receiver.latched() > 0
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn a_pause_is_a_grace_period_rather_than_a_loss() {
+    // The property that makes refusing to re-arm better than dropping at the
+    // enqueue: with no read outstanding the kernel keeps accumulating, so a
+    // client that drains in time loses nothing at all (D-29).
+    let dir = TempDir::new("backpressure-grace");
+    let (watcher, receiver) = watch_bounded(dir.path(), 4);
+
+    churn_until(dir.path(), "the watcher to pause", || {
+        watcher.gate() == ArmGate::Backpressured
+    });
+
+    // Made while no read is armed, so this exists only in the kernel's buffer.
+    std::fs::write(dir.path().join("during-the-pause.txt"), b"x").expect("create");
+
+    let mut seen: Vec<String> = Vec::new();
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the change made during the pause never arrived; saw {seen:?}"
+        );
+        while let Some(item) = receiver.try_recv() {
+            if let Notification::Batch { changes, .. } = item {
+                seen.extend(
+                    changes
+                        .iter()
+                        .map(|c| c.name.to_os_string().to_string_lossy().into_owned()),
+                );
+            }
+        }
+        if seen.iter().any(|name| name == "during-the-pause.txt") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn teardown_while_paused_is_prompt() {
+    // A paused watcher has no read outstanding, so teardown must not wait for a
+    // completion that is never coming.
+    let dir = TempDir::new("backpressure-teardown");
+    let (watcher, _receiver) = watch_bounded(dir.path(), 1);
+
+    churn_until(dir.path(), "the watcher to pause", || {
+        watcher.gate() == ArmGate::Backpressured
+    });
+
+    let started = std::time::Instant::now();
+    watcher.stop();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "teardown of a paused watcher took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(watcher.gate(), ArmGate::TornDown);
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn a_torn_down_watcher_is_not_resumed_by_a_drain() {
+    // The gate's reasons are not interchangeable: teardown is permanent, and a
+    // drain that prods every registered producer must not re-open it.
+    let dir = TempDir::new("backpressure-torn");
+    let (watcher, receiver) = watch_bounded(dir.path(), 1);
+
+    churn_until(dir.path(), "the watcher to pause", || {
+        watcher.gate() == ArmGate::Backpressured
+    });
+    watcher.stop();
+
+    while receiver.try_recv().is_some() {}
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        watcher.gate(),
+        ArmGate::TornDown,
+        "a drain must not resurrect a torn-down watcher"
+    );
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn pausing_and_resuming_repeatedly_does_not_wedge() {
+    // The lost-wakeup hazard the gate's re-check exists for: a resume that runs
+    // between the room check and the gate being set would otherwise leave the
+    // watcher parked with room available and nothing left to prod it. Cycling
+    // many times makes that window likely to be hit.
+    let dir = TempDir::new("backpressure-cycle");
+    let (watcher, receiver) = watch_bounded(dir.path(), 2);
+
+    for round in 0..20 {
+        churn_until(dir.path(), "the watcher to pause", || {
+            watcher.gate() == ArmGate::Backpressured
+        });
+        while receiver.try_recv().is_some() {}
+        wait_for("the watcher to resume", || watcher.gate() == ArmGate::Open);
+        assert!(
+            watcher.is_watching(),
+            "round {round}: {:?}",
+            watcher.stop_reason()
+        );
+    }
+
+    drop(watcher);
     dir.cleanup();
 }
