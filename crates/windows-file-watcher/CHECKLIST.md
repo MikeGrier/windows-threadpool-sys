@@ -100,10 +100,12 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   waitable owner (D-17) -- a std `OwnedHandle` would be closed with `CloseHandle` by the pool on teardown,
   which is the wrong routine for a change-notification handle.
 
-  > **CROSS-COMPONENT PREREQUISITE:** requires component `crates/windows-threadpool-sys` -> M17
-  > (custom-close owner for non-`CloseHandle` wait targets, across both the direct and `CleanupGroup`
-  > teardown paths) to land first. See
-  > [../windows-threadpool-sys/CHECKLIST.md](../windows-threadpool-sys/CHECKLIST.md).
+  > **CROSS-COMPONENT PREREQUISITE -- SATISFIED 2026-08-21:** required component
+  > `crates/windows-threadpool-sys` -> M17 (custom-close owner for non-`CloseHandle` wait targets, across
+  > both the direct and `CleanupGroup` teardown paths), which has landed. See
+  > [../windows-threadpool-sys/COMPLETED-CHECKLIST.md](../windows-threadpool-sys/COMPLETED-CHECKLIST.md).
+  > The seam to use is `WaitableHandle::assume_waitable_with(raw, FindCloseChangeNotification)`, which works
+  > with both `ThreadpoolWait::new` and `CleanupGroup::create_wait`.
 
 - [ ] **M6.2** -- Coarse watcher: `ThreadpoolWait` per activation -> emit `Desync { Coarse }` to the
   directory's subscriptions -> `FindNextChangeNotification` re-arm, under the same fault/backoff discipline
