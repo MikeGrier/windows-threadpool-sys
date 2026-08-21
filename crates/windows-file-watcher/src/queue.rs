@@ -47,6 +47,37 @@
 //! A receiver that reaches an empty queue synthesises any remainder directly, so
 //! a latched desync is delivered even if nothing further is ever sent.
 //!
+//! # The doorbell
+//!
+//! A queue drainable only by a blocking [`Receiver::recv`] would force a client
+//! that already owns a thread pool to dedicate a thread to it -- contradicting
+//! this crate's premise that nobody should have to own threads. So the receiver
+//! hands out a manual-reset event ([`Receiver::doorbell`]) that a client can wait
+//! on however it likes, including from its own `ThreadpoolWait`.
+//!
+//! It is created **lazily**, so a client that only ever calls `recv` allocates no
+//! kernel object at all.
+//!
+//! *Why not a `Doorbell` trait the client implements?* Because that would be a
+//! client callback on this crate's cadence path, which is the one thing D-2
+//! forbids, and it would have made `Monitor`, `Session`, and `Sender` all generic
+//! over it. The composition argument for a trait does not survive contact with
+//! the platform either: on Windows a HANDLE **is** the universal waitable
+//! currency -- `WaitForSingleObject`, `WaitForMultipleObjects`,
+//! `MsgWaitForMultipleObjects`, `ThreadpoolWait` and alertable waits all take one
+//! -- so an event is the native composition point rather than a lowest common
+//! denominator. The single case it does not reach, an async `Waker`, is a short
+//! bridge the client writes on its own pool, which is where that code belongs.
+//! Owning the doorbell also makes the reset discipline an internal invariant
+//! rather than a client obligation (D-25).
+//!
+//! That invariant is one line: **the event is signalled exactly when the receiver
+//! has something to observe**, which is a queued notification, an owed loss
+//! report, or the end of the stream. It is re-established under the queue lock at
+//! the end of every mutation -- the same lock a receiver holds while deciding
+//! there is nothing to take -- so a wakeup cannot be lost in the gap between
+//! those two decisions, because there is no gap.
+//!
 //! This is the interim, entirely in-crate endpoint for M2. The session/receiver
 //! split, the bounded overflow policy with its latched `Desync { QueueFull }`,
 //! and the doorbell all land in M3.
@@ -58,9 +89,17 @@
 #![allow(dead_code)]
 
 use std::collections::VecDeque;
+use std::io;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Condvar, Mutex};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::ptr;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, FALSE, TRUE};
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, GetCurrentProcess, ResetEvent, SetEvent,
+};
 
 use crate::notify::{Change, DesyncCause};
 
@@ -137,6 +176,11 @@ impl Notification {
 struct Shared {
     items: Mutex<State>,
     arrived: Condvar,
+    /// The client-facing wake, created on first request and never replaced.
+    ///
+    /// Outside the lock so a borrow of it can outlive the guard, but only ever
+    /// signalled or reset *under* the lock -- see [`refresh_doorbell`].
+    doorbell: OnceLock<OwnedHandle>,
 }
 
 struct State {
@@ -165,6 +209,14 @@ impl State {
     /// Slots available to the best-effort path: neither occupied nor reserved.
     fn free(&self) -> usize {
         self.capacity - self.queue.len() - self.reserved
+    }
+
+    /// Whether a receiver has anything to observe.
+    ///
+    /// Disconnection counts: a client waiting on the doorbell must learn that the
+    /// stream has ended, or it would wait for a notification nothing can send.
+    fn pending(&self) -> bool {
+        !self.queue.is_empty() || !self.latched.is_empty() || self.senders == 0
     }
 
     /// Move latched losses back into the queue, as many as there is room for.
@@ -236,13 +288,15 @@ impl Sender {
             // Before the new item, so a loss is reported at the point it happened
             // rather than after changes that preceded it.
             state.flush_latched();
-            if state.free() > 0 {
+            let delivery = if state.free() > 0 {
                 state.queue.push_back(notification);
                 Delivery::Queued
             } else {
                 state.latch(watch);
                 Delivery::Latched
-            }
+            };
+            refresh_doorbell(&self.shared, &state);
+            delivery
         };
         self.shared.arrived.notify_all();
         delivery
@@ -305,6 +359,7 @@ impl Reservation {
             state.flush_latched();
             state.reserved -= 1;
             state.queue.push_back(notification);
+            refresh_doorbell(&self.sender.shared, &state);
         }
         self.used = true;
         self.sender.shared.arrived.notify_all();
@@ -330,6 +385,12 @@ impl Drop for Sender {
         let mut state = lock(&self.shared.items);
         state.senders -= 1;
         let last = state.senders == 0;
+        if last {
+            // The end of the stream is something to observe, so the doorbell
+            // reports it too -- otherwise a client waiting on it would wait for a
+            // notification nothing can send.
+            refresh_doorbell(&self.shared, &state);
+        }
         drop(state);
         if last {
             // Wake anyone blocked in `recv`, so a queue that can never be filled
@@ -354,7 +415,10 @@ impl Receiver {
     /// Take the next notification if one is already available.
     #[must_use]
     pub fn try_recv(&self) -> Option<Notification> {
-        take(&mut lock(&self.shared.items))
+        let mut state = lock(&self.shared.items);
+        let item = take(&mut state);
+        refresh_doorbell(&self.shared, &state);
+        item
     }
 
     /// Block until a notification is available, or every sender is gone.
@@ -367,6 +431,7 @@ impl Receiver {
         let mut state = lock(&self.shared.items);
         loop {
             if let Some(item) = take(&mut state) {
+                refresh_doorbell(&self.shared, &state);
                 return Some(item);
             }
             if state.senders == 0 {
@@ -390,6 +455,7 @@ impl Receiver {
         let mut state = lock(&self.shared.items);
         loop {
             if let Some(item) = take(&mut state) {
+                refresh_doorbell(&self.shared, &state);
                 return Some(item);
             }
             if state.senders == 0 {
@@ -403,6 +469,65 @@ impl Receiver {
                 .unwrap_or_else(|poison| poison.into_inner());
             state = next;
         }
+    }
+
+    /// A manual-reset event that is signalled whenever this receiver has
+    /// something to take.
+    ///
+    /// This is what lets a client integrate with its own thread pool instead of
+    /// dedicating a thread to a blocking [`Receiver::recv`]: wait on the handle,
+    /// then drain with [`Receiver::try_recv`] until it yields `None`.
+    ///
+    /// The event is created on the first call, so a client that never asks for it
+    /// pays for no kernel object. It stays signalled while anything is
+    /// outstanding, including once the stream has ended -- so a waiter learns
+    /// about disconnection rather than waiting for a notification that can never
+    /// arrive.
+    ///
+    /// The borrow is deliberate: the event belongs to this queue and must not be
+    /// closed by a caller. Use [`Receiver::doorbell_owned`] where ownership is
+    /// required, such as arming a `ThreadpoolWait`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` on the first call.
+    pub fn doorbell(&self) -> io::Result<BorrowedHandle<'_>> {
+        self.ensure_doorbell()?;
+        Ok(self
+            .shared
+            .doorbell
+            .get()
+            .expect("the doorbell was just created")
+            .as_handle())
+    }
+
+    /// A duplicate of [`Receiver::doorbell`] that the caller owns.
+    ///
+    /// The duplicate refers to the same event, so signalling reaches both; the
+    /// caller closes its own copy whenever it likes. This is the form a
+    /// `ThreadpoolWait` needs, since arming one takes ownership of its target.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` or `DuplicateHandle`.
+    pub fn doorbell_owned(&self) -> io::Result<OwnedHandle> {
+        duplicate(self.doorbell()?)
+    }
+
+    /// Create the doorbell if it does not exist yet.
+    fn ensure_doorbell(&self) -> io::Result<()> {
+        if self.shared.doorbell.get().is_some() {
+            return Ok(());
+        }
+        // Created under the queue lock so its initial state cannot disagree with
+        // the queue it reports on: a client that asks for a doorbell after
+        // notifications have already arrived must find it signalled.
+        let state = lock(&self.shared.items);
+        if self.shared.doorbell.get().is_none() {
+            let event = create_event(state.pending())?;
+            let _ = self.shared.doorbell.set(event);
+        }
+        Ok(())
     }
 
     /// Whether every sender has been dropped, so nothing further can arrive.
@@ -490,6 +615,7 @@ pub fn channel_with_bound(bound: NonZeroUsize) -> (Sender, Receiver) {
             senders: 1,
         }),
         arrived: Condvar::new(),
+        doorbell: OnceLock::new(),
     });
     (
         Sender {
@@ -507,6 +633,71 @@ pub fn channel_with_bound(bound: NonZeroUsize) -> (Sender, Receiver) {
 /// protect anything.
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+/// Bring the doorbell into agreement with the state.
+///
+/// Every mutation ends here, under the same lock a receiver holds while deciding
+/// there is nothing to take -- which is what makes a lost wakeup impossible
+/// rather than merely unlikely: there is no window between the two decisions for
+/// one to fall into.
+fn refresh_doorbell(shared: &Shared, state: &State) {
+    let Some(doorbell) = shared.doorbell.get() else {
+        // Never asked for, so there is nothing to keep in agreement.
+        return;
+    };
+    let raw = doorbell.as_raw_handle();
+    // SAFETY: `raw` is a live manual-reset event owned by this queue for as long
+    // as the queue exists, and neither call has any other precondition.
+    unsafe {
+        if state.pending() {
+            SetEvent(raw);
+        } else {
+            ResetEvent(raw);
+        }
+    }
+}
+
+/// Create a manual-reset event in the given initial state.
+fn create_event(signalled: bool) -> io::Result<OwnedHandle> {
+    // SAFETY: creates an unnamed event with default security attributes; both
+    // pointer arguments are null by design.
+    let raw = unsafe {
+        CreateEventW(
+            ptr::null(),
+            TRUE,
+            if signalled { TRUE } else { FALSE },
+            ptr::null(),
+        )
+    };
+    if raw.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the call returned a fresh, exclusively owned event handle.
+    Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
+}
+
+/// Duplicate a handle into this process, so the caller owns its own copy.
+fn duplicate(handle: BorrowedHandle<'_>) -> io::Result<OwnedHandle> {
+    let mut duplicated = ptr::null_mut();
+    // SAFETY: duplicates a live handle within this process with the same access;
+    // `duplicated` is a valid out-pointer for the call's duration.
+    let ok = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            handle.as_raw_handle(),
+            GetCurrentProcess(),
+            &raw mut duplicated,
+            0,
+            FALSE,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the call succeeded, so `duplicated` is a fresh owned handle.
+    Ok(unsafe { OwnedHandle::from_raw_handle(duplicated) })
 }
 
 #[cfg(test)]

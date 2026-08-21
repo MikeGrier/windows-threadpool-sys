@@ -7,8 +7,13 @@
 //! ordering within a subscription is preserved.
 
 use std::num::NonZeroUsize;
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
 use std::sync::Arc;
 use std::time::Duration;
+
+use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
+use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 
 use super::{Delivery, Notification, WatchId, channel};
 use crate::notify::{Change, ChangeKind, DesyncCause, RelativeName};
@@ -758,4 +763,270 @@ fn a_blocked_receiver_is_woken_by_a_latched_loss() {
         }
     ));
     handle.join().expect("sender thread");
+}
+
+// --- the doorbell (D-25) ---
+
+/// Whether a handle is currently signalled, without blocking.
+fn is_signalled(handle: BorrowedHandle<'_>) -> bool {
+    // SAFETY: a live event handle; a zero timeout polls rather than waits.
+    unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) == WAIT_OBJECT_0 }
+}
+
+/// Wait for a handle to become signalled, failing rather than hanging.
+fn await_signal(handle: BorrowedHandle<'_>) -> bool {
+    // SAFETY: as above, with a bounded timeout.
+    unsafe { WaitForSingleObject(handle.as_raw_handle(), 30_000) == WAIT_OBJECT_0 }
+}
+
+#[test]
+fn a_receiver_that_never_asks_allocates_no_doorbell() {
+    // The laziness D-25 asks for: a `recv`-only client should not pay for a
+    // kernel object it never waits on.
+    let (sender, receiver) = channel();
+    deliver(&sender, batch(WatchId::from_raw(1), &["a.txt"]));
+    let _ = receiver.recv().expect("a notification");
+    assert!(
+        receiver.shared.doorbell.get().is_none(),
+        "the event must not exist until it is asked for"
+    );
+}
+
+#[test]
+fn the_doorbell_is_created_to_match_the_queue_it_reports_on() {
+    // Asked for after notifications have already arrived, it must come up
+    // signalled -- otherwise the first wait would miss what is already there.
+    let (sender, receiver) = channel();
+    deliver(&sender, batch(WatchId::from_raw(1), &["a.txt"]));
+
+    let doorbell = receiver.doorbell().expect("create the doorbell");
+    assert!(is_signalled(doorbell));
+}
+
+#[test]
+fn an_idle_queue_has_an_unsignalled_doorbell() {
+    let (_sender, receiver) = channel();
+    let doorbell = receiver.doorbell().expect("create the doorbell");
+    assert!(!is_signalled(doorbell));
+}
+
+#[test]
+fn sending_signals_the_doorbell_and_draining_resets_it() {
+    let (sender, receiver) = channel();
+    let doorbell = receiver.doorbell().expect("create the doorbell");
+    assert!(!is_signalled(doorbell));
+
+    deliver(&sender, batch(WatchId::from_raw(1), &["a.txt"]));
+    assert!(is_signalled(doorbell));
+
+    let _ = receiver.try_recv().expect("a notification");
+    assert!(
+        !is_signalled(doorbell),
+        "an emptied queue must stop claiming there is something to take"
+    );
+}
+
+#[test]
+fn a_partial_drain_leaves_the_doorbell_signalled() {
+    // Manual-reset, so a client that drains one item and stops must still be
+    // told the rest is there.
+    let (sender, receiver) = channel();
+    let doorbell = receiver.doorbell().expect("create the doorbell");
+    deliver(&sender, batch(WatchId::from_raw(1), &["a.txt"]));
+    deliver(&sender, batch(WatchId::from_raw(1), &["b.txt"]));
+
+    let _ = receiver.try_recv().expect("the first");
+    assert!(is_signalled(doorbell));
+    let _ = receiver.try_recv().expect("the second");
+    assert!(!is_signalled(doorbell));
+}
+
+#[test]
+fn an_owed_loss_signals_the_doorbell_even_with_an_empty_queue() {
+    // A latched desync is not in the queue, but it is still something to take --
+    // so the doorbell must report it, or a waiting client would never learn its
+    // change stream has a hole in it.
+    let (sender, receiver) = bounded(1);
+    let watch = WatchId::from_raw(1);
+    let doorbell = receiver.doorbell().expect("create the doorbell");
+
+    deliver(&sender, batch(watch, &["a.txt"]));
+    assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
+    let _ = receiver.try_recv().expect("the queued one");
+
+    assert!(receiver.is_empty());
+    assert!(
+        is_signalled(doorbell),
+        "the queue is empty but a loss is still owed"
+    );
+    let _ = receiver.try_recv().expect("the latched one");
+    assert!(!is_signalled(doorbell));
+}
+
+#[test]
+fn disconnection_signals_the_doorbell() {
+    // Otherwise a client waiting on the handle would wait forever for a
+    // notification nothing can send.
+    let (sender, receiver) = channel();
+    let doorbell = receiver.doorbell().expect("create the doorbell");
+    assert!(!is_signalled(doorbell));
+
+    drop(sender);
+    assert!(is_signalled(doorbell));
+    assert!(receiver.recv().is_none());
+    assert!(
+        is_signalled(doorbell),
+        "the end of the stream is permanent, so it stays signalled"
+    );
+}
+
+#[test]
+fn the_doorbell_is_created_once_and_reused() {
+    let (_sender, receiver) = channel();
+    let first = receiver.doorbell().expect("create").as_raw_handle();
+    let second = receiver.doorbell().expect("reuse").as_raw_handle();
+    assert_eq!(first, second, "the doorbell is created once, not per call");
+}
+
+#[test]
+fn an_owned_doorbell_refers_to_the_same_event() {
+    let (sender, receiver) = channel();
+    let owned = receiver.doorbell_owned().expect("duplicate the doorbell");
+    assert_ne!(
+        owned.as_raw_handle(),
+        receiver.doorbell().expect("borrow").as_raw_handle(),
+        "a duplicate is a distinct handle"
+    );
+
+    deliver(&sender, batch(WatchId::from_raw(1), &["a.txt"]));
+    assert!(
+        is_signalled(owned.as_handle()),
+        "but it refers to the same event, so signalling reaches both"
+    );
+
+    // Closing the caller's copy leaves the queue's own intact.
+    drop(owned);
+    assert!(is_signalled(receiver.doorbell().expect("still there")));
+}
+
+#[test]
+fn a_waiting_client_is_woken_by_a_send() {
+    let (sender, receiver) = channel();
+    let doorbell = receiver.doorbell_owned().expect("the doorbell");
+
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        deliver(&sender, batch(WatchId::from_raw(1), &["late.txt"]));
+    });
+
+    assert!(
+        await_signal(doorbell.as_handle()),
+        "the doorbell must ring for a notification that arrives while waiting"
+    );
+    assert_eq!(names(&receiver.try_recv().expect("it")), vec!["late.txt"]);
+    handle.join().expect("sender thread");
+}
+
+#[test]
+fn no_wakeup_is_lost_under_a_concurrent_burst() {
+    // The property the invariant exists for. The consumer waits, drains to
+    // empty, and waits again -- exactly the loop a `ThreadpoolWait` client runs
+    // -- while a producer sends throughout. A single missed edge wedges it, and
+    // the bounded wait turns that into a failure rather than a hang.
+    const TOTAL: usize = 2_000;
+    let (sender, receiver) = bounded(16);
+    let doorbell = receiver.doorbell_owned().expect("the doorbell");
+
+    let producer = std::thread::spawn(move || {
+        for index in 0..TOTAL {
+            // Best-effort, so a full queue latches; either way the consumer must
+            // be woken for it.
+            let _ = sender.send(batch(WatchId::from_raw(1), &[&format!("f-{index}")]));
+        }
+        drop(sender);
+    });
+
+    let mut seen = 0_usize;
+    loop {
+        assert!(
+            await_signal(doorbell.as_handle()),
+            "the doorbell stopped ringing after {seen} notifications"
+        );
+        while receiver.try_recv().is_some() {
+            seen += 1;
+        }
+        if receiver.is_disconnected() && receiver.is_empty() && receiver.latched() == 0 {
+            break;
+        }
+    }
+
+    producer.join().expect("producer");
+    assert!(seen > 0, "nothing was delivered at all");
+}
+
+#[test]
+fn a_client_can_drain_from_its_own_threadpool_wait() {
+    // The integration the doorbell exists to enable (D-25): no dedicated thread,
+    // no crate-supplied callback -- the client arms its own pool object on a
+    // handle we hand out, and drains on its own cadence.
+    let (sender, receiver) = channel();
+    let doorbell = receiver.doorbell_owned().expect("the doorbell");
+
+    let receiver = Arc::new(receiver);
+    let drained = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    // An atomic rather than an mpsc sender: the callback must be `Fn + Send +
+    // Sync`, and `mpsc::Sender` is not `Sync`.
+    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let consumer = Arc::clone(&receiver);
+    let sink = Arc::clone(&drained);
+    let signal = Arc::clone(&finished);
+
+    // SAFETY: an event is a supported wait target, and this is our own duplicate
+    // of the doorbell, transferred exclusively into the wait object.
+    let waitable = unsafe { WaitableHandle::assume_waitable(doorbell) };
+    let wait = ThreadpoolWait::new(
+        waitable,
+        move |activation| {
+            while let Some(item) = consumer.try_recv() {
+                let mut names = names(&item);
+                if !names.is_empty() {
+                    sink.lock().expect("record").push(names.remove(0));
+                }
+            }
+            if consumer.is_disconnected() {
+                signal.store(true, std::sync::atomic::Ordering::SeqCst);
+            } else {
+                // Manual-reset plus drain-to-empty means re-arming cannot miss an
+                // edge: anything sent since the drain has already re-signalled.
+                activation.rearm(None);
+            }
+        },
+        None,
+    )
+    .expect("create the wait");
+    wait.arm(None);
+
+    for index in 0..64 {
+        deliver(
+            &sender,
+            batch(WatchId::from_raw(1), &[&format!("f-{index}")]),
+        );
+    }
+    drop(sender);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !finished.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the client's own pool callback never drained the queue"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    wait.stop_and_drain();
+
+    let seen = drained.lock().expect("read").clone();
+    assert_eq!(seen.len(), 64, "every notification reached the client");
+    let expected: Vec<String> = (0..64).map(|index| format!("f-{index}")).collect();
+    assert_eq!(seen, expected);
 }

@@ -71,6 +71,11 @@ windows-sys = {
 		"Win32_Security",
 		"Win32_Storage_FileSystem",
 		"Win32_System_IO",
+		# The notification queue's doorbell is a manual-reset event
+		# (CreateEventW / SetEvent / ResetEvent), handed to a client so it can
+		# wait for notifications on its own thread pool rather than dedicating a
+		# thread to a blocking recv.
+		"Win32_System_Threading",
 	],
 }
 
