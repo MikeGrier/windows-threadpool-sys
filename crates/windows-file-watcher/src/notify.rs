@@ -143,7 +143,7 @@ impl Iterator for Records<'_> {
     fn next(&mut self) -> Option<RawChange> {
         let pos = self.pos?;
         let Some(rec) = self.buffer.get(pos..) else {
-            // A followed `NextEntryOffset` pointed past the buffer end.
+            // The preceding record's `NextEntryOffset` pointed past the buffer end.
             self.pos = None;
             self.malformed = true;
             return None;

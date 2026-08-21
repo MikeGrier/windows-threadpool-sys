@@ -76,8 +76,9 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
   from `as_terminated_ptr()`, and a counted `as_ptr` hand-off matching `encode_wide` -- all with no
   conversion.
 
-  Completing M5 unblocks `crates/windows-file-watcher` -> M8 -> M8.1 (migrate `RelativeName` to
-  `Wtf16Str`/`Wtf16String`); see [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
+  > **-> CROSS-COMPONENT HANDOFF:** next work is in component `crates/windows-file-watcher` -> `M8` ->
+  > `M8.1` (`Migrate RelativeName to Wtf16Str/Wtf16String`). See
+  > [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
 
 ## Moved 2026-08-20 -- M6 The Wtf8 encoding arm
 

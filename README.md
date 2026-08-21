@@ -21,9 +21,11 @@ in [`CHECKLIST.md`](CHECKLIST.md).
 
 ## Platform support
 
-Windows only. The public API and all implementation target Windows, CI builds,
-tests, and lints exclusively on Windows, and platform-specific code lives behind
-`cfg(windows)`.
+Primarily Windows only: the public API and implementation of this crate target
+Windows, CI builds/tests/lints it exclusively on Windows, and platform-specific
+code lives behind `cfg(windows)`. The workspace's `wtf-string` crate is the
+exception -- its portable core has no `cfg(windows)` gating, so CI additionally
+builds, tests, and lints it on Linux and macOS.
 
 ## Build
 
