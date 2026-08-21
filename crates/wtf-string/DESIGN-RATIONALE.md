@@ -154,3 +154,56 @@ richer one) is the correct scope, not an arbitrary cut-down.
 (D-7) as their last step, so the invariant that lets `as_terminated_ptr` stay
 allocation-free never lapses between mutating calls.
 
+## The PCWSTR parameter seam (D-17)
+
+The crate's whole value proposition is that a wide Win32 call costs no
+conversion and no allocation (D-9/D-10). Raw `windows-sys` signatures take
+`*const u16`, so `as_terminated_ptr` already satisfies them. The high-level
+`windows` crate does not: it spells the same parameter as
+`impl Param<PCWSTR>`, and a bound is not something a caller can satisfy by
+having the right pointer. Without an impl, a `windows` user has to convert --
+typically through `HSTRING` or a fresh `Vec<u16>` -- which is exactly the cost
+this crate exists to remove. So the seam is implemented (M8), and gated behind
+an off-by-default feature so the zero-dependency default build (D-11) is
+untouched.
+
+Two constraints came out of building it. Both are accepted rather than worked
+around, because neither has a fix that is ours to make.
+
+**It is pinned to one `windows-core` version.** `PCWSTR` is a concrete type
+from a specific `windows-core` release, so `impl Param<PCWSTR> for
+&Wtf16String` only applies to callers who resolve to that same
+semver-compatible version. A caller on a different major line gets a
+*different* `PCWSTR` and the impl silently does not apply to them. This is
+inherent to implementing a foreign trait for a foreign type -- there is no way
+to be version-agnostic -- and it means bumping the `windows-core` dependency is
+a breaking change for feature users, not a routine update. That is why the
+dependency is an exact-ish pin and why the feature is named after the crate it
+binds to, leaving room for parallel `windows-core-0_xx` features later if
+supporting two lines at once ever becomes necessary.
+
+**It binds to `#[doc(hidden)]` machinery.** `Param`'s only method is
+`#[doc(hidden)] unsafe fn param`, its `ParamValue` return type and the
+`Type`/`TypeKind` bounds are all `#[doc(hidden)]`, and windows-rs documents the
+trait as "There is no need to implement this trait." That guidance is aimed at
+users of generated bindings, for whom the blanket impls suffice; for an outside
+string type there is no blanket impl and no other way to satisfy the bound. So
+this is the one place the crate knowingly binds to another layer's *unspecified*
+surface, which the workspace's platform rules otherwise forbid. The exposure is
+contained deliberately: it lives in one feature-gated module, the impl body is
+a single pointer wrap that mirrors `&HSTRING`'s own impl verbatim, and its
+observable behaviour -- that the callee receives our exact terminated pointer --
+is pinned by tests including a real `lstrlenW` call. An upstream change to the
+hidden machinery breaks the build loudly at the impl, not silently at a call
+site.
+
+**`&Wtf16Str` deliberately gets no impl.** A borrowed slice carries no
+terminator (D-7), so there is no valid `PCWSTR` to hand over; providing one
+would mean handing a callee a pointer it would read past the end of. Borrowed
+content reaches Win32 through the counted `as_ptr` + `len` pair instead. The
+same reasoning caps what the owned impl can promise: the conversion is
+infallible, so a value with an interior NUL is seen truncated by the callee.
+That is not a new hazard -- it is precisely the C-string caveat of the pointer
+being wrapped, and `&HSTRING`'s impl behaves identically -- but it is pinned by
+a test so the behaviour cannot drift unnoticed.
+

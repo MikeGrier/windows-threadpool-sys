@@ -538,5 +538,11 @@ impl Wtf16String {
 #[cfg(windows)]
 mod os_str;
 
+// `windows`-crate `Param<PCWSTR>` interop, off unless the feature is on (D-10).
+// Gated on the feature alone, not on `cfg(windows)`: it builds on the portable
+// terminated-pointer surface, so it compiles wherever `windows-core` does.
+#[cfg(feature = "windows-core")]
+mod param;
+
 #[cfg(test)]
 mod tests;

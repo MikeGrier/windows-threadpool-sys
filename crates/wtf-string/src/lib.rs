@@ -25,6 +25,19 @@
 //! The storage and `str`/`String` conversions are portable; the `OsStr` /
 //! `OsString` interop is Windows-only.
 //!
+//! # Features
+//!
+//! - **`windows-core`** (off by default) -- implements the high-level `windows`
+//!   crate's `Param<PCWSTR>` for `&Wtf16String`, so a `windows` API taking
+//!   `impl Param<PCWSTR>` accepts our type directly, handing over the
+//!   already-terminated pointer with no conversion, allocation or copy. Raw
+//!   `windows-sys` signatures need no feature: they take `*const u16`, which
+//!   [`Wtf16String::as_terminated_ptr`] already provides. The impl is written
+//!   against one `windows-core` version, so a caller must resolve to that same
+//!   semver-compatible version for it to apply.
+//!
+//! With no features enabled the crate has **zero dependencies**.
+//!
 //! See the crate's design records for the full set of decisions.
 
 #![warn(missing_docs)]

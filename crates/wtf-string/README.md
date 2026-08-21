@@ -16,6 +16,10 @@ conversion and no per-call allocation.
   NULs in content are still preserved).
 - **Portable core** — storage and `str`/`String` conversions work everywhere;
   only the `OsStr`/`OsString` interop is Windows-only.
+- **Optional `windows` interop** — the off-by-default `windows-core` feature
+  implements `Param<PCWSTR>` for `&Wtf16String`, so high-level `windows` APIs
+  accept it directly with no conversion. With no features on, the crate has zero
+  dependencies.
 
 Status: in development. See [CHECKLIST.md](CHECKLIST.md) and
 [DESIGN-NOTES.md](DESIGN-NOTES.md).

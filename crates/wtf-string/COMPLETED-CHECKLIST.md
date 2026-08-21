@@ -110,3 +110,20 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
 - [x] **M7.2** -- Tests: matrix/property coverage over both widths -- `push`/`push_str` growing content and
   preserving any existing interior NUL, `clear` then re-`push` round-trips, capacity/reserve behaving as
   documented, and the terminator invariant holding after every mutating op.
+
+## Moved 2026-08-20 -- M8 windows-crate Param<PCWSTR> interop
+
+### M8 -- `windows`-crate `Param<PCWSTR>` interop
+
+- [x] **M8.1** -- Optional, feature-gated `windows`-crate `Param<PCWSTR>` impl so the high-level `windows`
+  crate accepts our type directly, without imposing a hard dependency when the feature is off (D-10).
+  Implemented as `impl Param<PCWSTR> for &Wtf16String` behind the off-by-default `windows-core` feature,
+  handing over `as_terminated_ptr()` unchanged. No impl for `&Wtf16Str` (no terminator on a borrowed slice,
+  D-7). The default build remains zero-dependency (D-11). Constraints recorded as D-17: the seam is pinned to
+  one `windows-core` version, and it binds to that crate's `#[doc(hidden)]` `Param` machinery because
+  implementing the trait is the only way to satisfy the bound.
+
+- [x] **M8.2** -- Tests (Windows, feature-gated): a `Param<PCWSTR>`-bound call fed from our terminated pointer
+  with no conversion. Asserts the bound is satisfied (it would not compile otherwise), that the callee receives
+  the string's own terminated pointer, that the pointer walks back as a C string, that a real `lstrlenW` call
+  agrees with our length, and that an interior NUL truncates exactly as the wrapped pointer's contract says.
