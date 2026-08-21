@@ -197,3 +197,57 @@ fail, which D-22 had already contradicted three commits earlier. Subscribing to 
 regular file, or to a path containing an interior NUL, is permanent -- so
 fire-and-forget subscribe means the client never learns the watch will never
 fire. All requests get completions.
+
+---
+
+## Addendum: the reservation discipline (D-33)
+
+Recorded after the main session, correcting an over-generalisation in D-28.
+
+The engineer supplied the formulation the whole backpressure discussion had been
+circling: **control-type messages submitted on the SQ must have pre-allocated
+their CQ messages**, so reliable delivery of the completion is guaranteed by
+construction.
+
+This is stronger than what had been recorded. D-29 originally had the monitor
+*check* whether the notification queue could accept a completion before draining
+a request. Reservation removes the check entirely: the slot is already the
+sender's, so delivery cannot fail, and backpressure lands on the client's own
+thread at submit time rather than being discovered later somewhere it cannot be
+handled. It is the discipline `io_uring` follows when sizing its completion ring
+against its submission ring.
+
+The engineer was then explicit about the boundary: **file change notifications
+were deliberately *not* given guaranteed delivery.** That is what makes the two
+tiers principled rather than ad hoc. Reliability is a property of *reserved
+capacity*, not of message type -- one line, *reserved is guaranteed, unreserved
+is best-effort*, rather than a per-message-type table. And it is justified by
+what the two carry: a lost batch is re-derivable by re-scanning, which is exactly
+what `Desync` says, whereas a lost completion is a liveness bug.
+
+### What this corrected
+
+D-28 as first written made **every** `Desync` a latch. That silently contradicted
+D-12 and D-26, which promise that a client seeing a `Desync` knows exactly which
+changes preceded it -- an out-of-band latch destroys precisely that ordering. The
+mistake was generalising from the one case that genuinely cannot use a slot
+(`QueueFull`, where saying "the queue is full" cannot itself require a slot) to
+every case.
+
+Under D-33 the tiers separate cleanly:
+
+- **Faults** are control, so they take a standing reservation at registration --
+  one slot suffices, since D-28's own observation holds that a watcher cannot be
+  faulted twice concurrently. They are ordinary queued items, in order.
+- **Desyncs** are observation, so they ride the queue in order like any other
+  notification, and the latch is the **fallback** used only when the observation
+  tier cannot enqueue. At that point ordering is already compromised by the loss
+  the latch is reporting, so nothing survives to be given up.
+
+### The residual drop path
+
+Because observation holds no reservation, a batch can still arrive to a full ring
+even with the arm-time throttle: a control reservation may have taken the room
+since the read was armed. That batch is dropped and the loss reported by the
+latch. It is the one path where a notification is discarded, and it is now a
+named consequence of the tiering rather than an unexamined default.

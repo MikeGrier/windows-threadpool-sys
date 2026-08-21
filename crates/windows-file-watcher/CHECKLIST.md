@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-32** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-33** -- later
 decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, D-32 from M8.1, and
-D-25/D-27...D-31 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -64,11 +64,12 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   and the crate-owned notification sender (D-2/D-11); provide `monitor.session()` returning the session plus
   the client-side receiver, and a variant accepting a caller-supplied bound.
 
-- [ ] **M3.3** -- Bound the notification queue (D-11) and make **every `Desync` a latch** (D-28). M2.3
-  shipped `Desync` as an ordinary queued item, which D-28 supersedes: reporting that the queue filled cannot
-  itself require queue space, so a desync is per-`WatchId` control state outside the bound -- coalesced,
-  idempotent, and guaranteed to reach the receiver before the next batch (D-12). Reject a zero bound at
-  construction.
+- [ ] **M3.3** -- Bound the notification queue (D-11) and add the **reservation discipline** ([D-33](DESIGN-NOTES.md)):
+  capacity for a control message is reserved before its producer proceeds, so a completion or fault report
+  can never fail to be delivered, while change notifications reserve nothing and stay best-effort. Desyncs
+  ride the queue in order like any other notification (D-12/D-26); the per-`WatchId` coalescing latch is the
+  **fallback for when the observation tier cannot enqueue**, which is also the only way to report `QueueFull`
+  at all, since saying the queue is full cannot itself require a slot. Reject a zero bound at construction.
 
 - [ ] **M3.4** -- The CQ doorbell (D-25): `Receiver::doorbell()` returning a manual-reset event handle,
   created lazily so a `recv()`-only client allocates no kernel object, so a client can drain from its own
@@ -84,18 +85,21 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   cannot retrofit the API without a breaking change.
 
 - [ ] **M3.6** -- Request completions (D-30): every request yields a completion carried on the notification
-  queue, correlated by `WatchId`, so ordering against data is structural rather than temporal -- a
-  `Cancelled` in the stream means everything before it belongs to the live watch and nothing after it does.
-  Includes the permanent subscribe failures of D-22 (`NotADirectory`, `InvalidPath`), which have no retry
-  path and would otherwise leave a client holding a `Watch` that can never fire and never says so.
+  queue, correlated by `WatchId`, whose slot was **reserved at submit** ([D-33](DESIGN-NOTES.md)) so delivery
+  cannot fail. Ordering against data is then structural rather than temporal -- a `Cancelled` in the stream
+  means everything before it belongs to the live watch and nothing after it does. Includes the permanent
+  subscribe failures of D-22 (`NotADirectory`, `InvalidPath`), which have no retry path and would otherwise
+  leave a client holding a `Watch` that can never fire and never says so.
 
-- [ ] **M3.7** -- Backpressure (D-29), both halves. **Control:** stop draining the request queue when the
-  notification queue cannot accept a completion, so backpressure lands on the client's own `subscribe()`
-  call on the client's own thread. **Observation:** gate the watcher's re-arm on the notification queue
-  having room, so a completed read always has somewhere to put its batch -- this is what makes D-29's
-  "nothing is dropped" true rather than aspirational, and it is why the check belongs at *arm* time and not
-  at enqueue time. Never block at the enqueue: the writer may hold a pool thread while the client's drain
-  needs one, which is a deadlock rather than backpressure.
+- [ ] **M3.7** -- Backpressure (D-29). **Control needs no throttle**: [D-33](DESIGN-NOTES.md)'s reservation
+  means a completion always fits, so request draining can never be blocked by a full ring and backpressure
+  instead lands on the client's own `subscribe()` call at reservation time, on the client's own thread.
+  **Observation** is unreserved, so throttle it at the arm: do not re-arm the read while the queue is full,
+  propagating backpressure into the kernel's change buffer as a grace period. Because observation holds no
+  reservation, a batch can still arrive to a full ring when a control reservation took the room since the
+  read was armed -- that batch is dropped and the loss reported by D-28's latch, the one path where a
+  notification is discarded. Never block at the enqueue: the writer may hold a pool thread while the
+  client's drain needs one, which is a deadlock rather than backpressure.
 
 - [ ] **M3.8** -- Integration: several subscriptions through one session delivering to one receiver; cancel
   via `Drop` and via `cancel()`, asserting the `Cancelled` completion and that nothing for that watch
