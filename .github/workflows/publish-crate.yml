@@ -4,8 +4,10 @@ name: publish-crate
 on:
   push:
     tags:
+      - 'windows-file-watcher-v*'
       - 'windows-overlapped-io-sys-v*'
       - 'windows-threadpool-sys-v*'
+      - 'wtf-string-v*'
 
 permissions:
   contents: read
@@ -17,6 +19,15 @@ jobs:
   publish:
     name: cargo publish
     runs-on: windows-latest
+    # Publish under the floating stable toolchain this job installs, not the
+    # repo's rust-toolchain.toml MSRV pin. rustup resolves a directory override
+    # ahead of `rustup default`, so without this every `cargo` call below --
+    # `cargo metadata` for the tag/dependency checks and the `cargo publish`
+    # verification build -- would silently run the pinned MSRV instead, making
+    # the `@stable` setup step below misleading. The MSRV floor is guarded by
+    # ci.yml's dedicated `msrv` job, not here.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -37,35 +48,69 @@ jobs:
             exit 1
           fi
           echo "CRATE_NAME=${crate}" >> "$GITHUB_ENV"
-      # windows-threadpool-sys depends on windows-overlapped-io-sys by version as well
-      # as by path, so `cargo publish`'s build verification resolves that dependency
-      # from crates.io, not the workspace checkout. If both crates are released
-      # together, their tags can land in either order, so this step blocks the
-      # threadpool-sys publish until its required overlapped-io-sys version is live on
-      # crates.io, making the effective publish order independent of tag-push timing.
-      - name: Wait for windows-overlapped-io-sys dependency on crates.io
-        if: env.CRATE_NAME == 'windows-threadpool-sys'
+      # Some crates depend on sibling workspace crates by version as well as by
+      # path, so `cargo publish`'s build verification resolves those dependencies
+      # from crates.io, not the workspace checkout. Release-please opens separate
+      # pull requests per crate (`separate-pull-requests: true` in
+      # release-please-config.json), so sibling tags can land in any order; this
+      # step blocks a dependent crate's publish until *every* workspace-sibling
+      # dependency it declares is live on crates.io at the required version,
+      # making the effective publish order independent of tag-push timing. It is a
+      # no-op (the `deps` list is empty) for a crate with no workspace-sibling
+      # dependencies.
+      - name: Wait for workspace-sibling dependencies on crates.io
         shell: bash
         run: |
+          workspace_crates="windows-file-watcher windows-overlapped-io-sys windows-threadpool-sys wtf-string"
           metadata="$(cargo metadata --no-deps --format-version 1)"
-          dep_version="$(printf '%s' "$metadata" | jq -r '.packages[] | select(.name == "windows-threadpool-sys") | .dependencies[] | select(.name == "windows-overlapped-io-sys") | .req' | sed -E 's/^\^//')"
-          if [ -z "$dep_version" ] || [ "$dep_version" = "null" ]; then
-            echo "::error::could not determine required windows-overlapped-io-sys version" >&2
-            exit 1
-          fi
-          echo "waiting for windows-overlapped-io-sys ${dep_version} on crates.io"
-          max_attempts=60
-          for attempt in $(seq 1 "$max_attempts"); do
-            status="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/windows-overlapped-io-sys/${dep_version}")"
-            if [ "$status" = "200" ]; then
-              echo "windows-overlapped-io-sys ${dep_version} is available"
-              exit 0
+          deps="$(printf '%s' "$metadata" | jq -r --arg n "$CRATE_NAME" \
+            '.packages[] | select(.name == $n) | .dependencies[] | "\(.name) \(.req)"')"
+          while IFS=' ' read -r dep_name dep_req; do
+            [ -z "$dep_name" ] && continue
+            case " $workspace_crates " in
+              *" $dep_name "*) ;;
+              *) continue ;;
+            esac
+            dep_version="$(printf '%s' "$dep_req" | sed -E 's/^\^//')"
+            # Probe the *sparse index*, not the REST API: a version can appear in
+            # api/v1 before the index has propagated, and `cargo publish --locked`
+            # resolves dependencies through the index -- so an API-only check can
+            # pass and the publish still fail to resolve. Index paths are
+            # `1/`, `2/`, `3/<c1>/`, or `<c1c2>/<c3c4>/` by name length.
+            name_len=${#dep_name}
+            if [ "$name_len" -le 2 ]; then
+              prefix="$name_len"
+            elif [ "$name_len" -eq 3 ]; then
+              prefix="3/$(printf '%s' "$dep_name" | cut -c1)"
+            else
+              prefix="$(printf '%s' "$dep_name" | cut -c1-2)/$(printf '%s' "$dep_name" | cut -c3-4)"
             fi
-            echo "attempt ${attempt}/${max_attempts}: not yet available (HTTP ${status}), retrying in 20s"
-            sleep 20
-          done
-          echo "::error::timed out waiting for windows-overlapped-io-sys ${dep_version} to publish; re-run this workflow once it is available" >&2
-          exit 1
+            index_url="https://index.crates.io/${prefix}/${dep_name}"
+            echo "waiting for ${dep_name} ${dep_version} in the crates.io index (${index_url})"
+            ok=0
+            max_attempts=60
+            for attempt in $(seq 1 "$max_attempts"); do
+              # --connect-timeout/--max-time bound a stalled connection so a hung
+              # request can never prevent the loop from reaching max_attempts.
+              # --fail makes an HTTP error (e.g. 404 before the crate exists in
+              # the index) a non-zero curl exit, so jq only ever parses a real
+              # body. The index returns newline-delimited JSON, one object per
+              # version; `jq -e` exits non-zero when no line matches.
+              if body="$(curl -s --fail --connect-timeout 10 --max-time 20 "$index_url")" \
+                && printf '%s' "$body" | jq -e --arg v "$dep_version" \
+                     'select(.vers == $v)' >/dev/null 2>&1; then
+                echo "${dep_name} ${dep_version} is in the index"
+                ok=1
+                break
+              fi
+              echo "attempt ${attempt}/${max_attempts}: not yet in the index, retrying in 20s"
+              sleep 20
+            done
+            if [ "$ok" != "1" ]; then
+              echo "::error::timed out waiting for ${dep_name} ${dep_version} to publish; re-run this workflow once it is available" >&2
+              exit 1
+            fi
+          done <<< "$deps"
       - name: cargo publish
         shell: bash
         env:

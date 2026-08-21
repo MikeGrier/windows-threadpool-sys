@@ -37,7 +37,7 @@
 use core::ffi::c_void;
 use std::io;
 use std::marker::PhantomData;
-use std::os::windows::io::{AsHandle, BorrowedHandle, OwnedHandle};
+use std::os::windows::io::BorrowedHandle;
 use std::ptr;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
@@ -55,7 +55,7 @@ use crate::timer::{
     PeriodicTick, ThreadpoolPeriodicTimer, ThreadpoolTimer, TimerFiring, absolute_filetime,
     arm_raw, disarm_raw, millis_u32, relative_filetime,
 };
-use crate::wait::{ThreadpoolWait, WaitActivation, WaitableHandle};
+use crate::wait::{ThreadpoolWait, WaitActivation, WaitTarget, WaitableHandle};
 use crate::work::ThreadpoolWork;
 
 /// A heap allocation the group frees once its members have been released.
@@ -315,22 +315,25 @@ impl CleanupGroup {
     {
         let mut member_env = self.member_environment(env);
         let wait = ThreadpoolWait::new(handle, callback, Some(&mut member_env))?;
-        let (raw, context, handle) = wait.into_parts();
+        let (raw, context, target) = wait.into_parts();
         self.adopt(OwnedResource {
             ptr: context,
             prepare_shutdown: ThreadpoolWait::prepare_shutdown,
             free: ThreadpoolWait::drop_context,
         });
-        // The handle outlives the member for the same reason the context does.
-        let handle = Box::into_raw(Box::new(handle));
+        // The target outlives the member for the same reason the context does.
+        // Freeing the box runs `WaitTarget`'s drop, which closes the handle with
+        // whichever routine it was built with -- `CloseHandle` for the default
+        // path, the caller's for a custom-close target.
+        let target = Box::into_raw(Box::new(target));
         self.adopt(OwnedResource {
-            ptr: handle.cast(),
+            ptr: target.cast(),
             prepare_shutdown: prepare_shutdown_noop,
-            free: free_boxed::<OwnedHandle>,
+            free: free_boxed::<WaitTarget>,
         });
         Ok(WaitMember {
             handle: raw,
-            watched: handle,
+            watched: target,
             _group: PhantomData,
         })
     }
@@ -592,7 +595,7 @@ impl PeriodicTimerMember<'_> {
 #[derive(Debug)]
 pub struct WaitMember<'group> {
     handle: PTP_WAIT,
-    watched: *mut OwnedHandle,
+    watched: *mut WaitTarget,
     _group: PhantomData<&'group CleanupGroup>,
 }
 
@@ -605,8 +608,8 @@ impl WaitMember<'_> {
     /// Borrow the watched handle, for signalling or inspecting it.
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
-        // SAFETY: the handle is owned by the group, which outlives this member.
-        unsafe { (*self.watched).as_handle() }
+        // SAFETY: the target is owned by the group, which outlives this member.
+        unsafe { (*self.watched).borrow() }
     }
 
     /// Arm the wait, so the next signal or timeout runs the callback once.

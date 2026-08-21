@@ -179,3 +179,54 @@ implementation, and it is still named. Recorded in [DESIGN-NOTES.md](../../DESIG
 The comment said `set_pool` takes an owned `ThreadpoolPool`; it takes `&ThreadpoolPool` and records the borrow
 as `CallbackEnviron<'pool>`. The fourth instance of this same false claim about `set_pool`, and the first found
 in test commentary rather than in documentation or the pull request description.
+## Moved 2026-08-21 -- M17 custom-close owner for non-`CloseHandle` wait targets
+
+- [x] **M17.1** -- Let `ThreadpoolWait` own a wait target whose close routine is **not** `CloseHandle`. Today
+  `WaitableHandle` wraps a std `OwnedHandle`, so `ThreadpoolWait` always closes its handle with `CloseHandle`
+  on teardown (see [src/wait.rs](src/wait.rs) `Drop`). Add a seam -- e.g. `WaitableHandle::assume_waitable_with(raw,
+  closer)` or a small `WaitClose` owner -- so the caller supplies the close function (for a
+  `FindFirstChangeNotification` handle, `FindCloseChangeNotification`), and `ThreadpoolWait` drains the wait
+  **before** invoking it exactly once. Keep the existing `OwnedHandle` path as the default. Unit-test that the
+  custom closer runs exactly once and only after the wait is drained (direct `ThreadpoolWait::drop`).
+
+- [x] **M17.2** -- Propagate the custom closer through the `CleanupGroup` path. `CleanupGroup::create_wait`
+  moves the owner out via `ThreadpoolWait::into_parts` and adopts it as a boxed `OwnedHandle` freed with
+  `CloseHandle` (see [src/cleanup_group.rs](src/cleanup_group.rs)), so a coarse handle in a group would be
+  closed with the wrong routine. Carry the closer through `into_parts` / `WaitMember` / the adopted resource
+  so the group release invokes it (after the group drains the wait) rather than `CloseHandle`, preserving the
+  existing `OwnedHandle` default. Unit-test the group-release teardown path.
+
+- [x] **M17.3** -- Integration: exercise **both** teardown paths -- direct `ThreadpoolWait::drop` and
+  `CleanupGroup` release (with and without `cancel_pending`) -- and assert the custom closer runs exactly once,
+  and only after the wait is drained, for each.
+
+The three items landed as one commit. They are not independently completable: M17.1 changes the type
+`ThreadpoolWait` owns, which is the same type `into_parts` hands to `CleanupGroup`, so the crate does not
+compile with M17.1 in and M17.2 out. The checklist split them because they are separate *concerns* -- the
+individually-owned path and the group path -- and that split is what M17.3's per-path integration coverage
+is written against.
+
+What was built: the handle a wait watches became a `WaitTarget`, either `Owned(OwnedHandle)` (the default,
+unchanged for events) or `Custom`, holding the raw handle beside a caller-supplied
+`unsafe extern "system" fn(HANDLE) -> BOOL`. `WaitableHandle::assume_waitable_with` is the narrow `unsafe`
+constructor for one. Because the close is a *destructor* on a value both teardown paths already own, neither
+path needed new ordering code: `ThreadpoolWait::drop` already drains before its fields drop, and
+`CleanupGroup::release_members` already runs `CloseThreadpoolCleanupGroupMembers` before freeing adopted
+resources -- the group change is the single substitution of a boxed `WaitTarget` for a boxed `OwnedHandle`.
+
+`Drop` sits on an inner `CustomClose` struct rather than on `WaitTarget` itself, so the enum stays
+destructurable by an ordinary `match`. That is what let `WaitableHandle::into_handle` become
+`Result<OwnedHandle, Self>` with no `ptr::read` and no `unreachable!`: it returns `Ok` for the default path
+and hands the wrapper back as `Err` for a custom target, rather than emitting an `OwnedHandle` that would
+later close the handle with the wrong routine. That is a breaking change to a published signature.
+
+Coverage: five unit tests in [src/wait/tests.rs](src/wait/tests.rs), five in
+[src/cleanup_group/tests.rs](src/cleanup_group/tests.rs), and four integration tests at 256 live waits per
+scenario in [tests/wait_custom_close.rs](tests/wait_custom_close.rs), covering direct drop, group release,
+group drop, group release with `cancel_pending`, a repeated release, and a group holding custom and default
+members together. The ordering tests assert that teardown actually blocked, so they cannot pass vacuously
+when a callback happens to finish first. Recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
+
+> **-> CROSS-COMPONENT HANDOFF:** M17 is complete, which unblocks component `crates/windows-file-watcher`
+> -> M6 -> M6.1 (the coarse `FindFirstChangeNotification` watcher). See
+> [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).

@@ -863,3 +863,168 @@ fn is_signalled_agrees_with_the_result() {
     let recorded = flags.lock().expect("read").clone();
     assert_eq!(recorded[0], (false, WaitResult::TimedOut));
 }
+
+// --- custom-close wait targets (M17) ---
+
+/// Create a real event and hand it over with a caller-supplied close routine,
+/// standing in for a `FindFirstChangeNotification` handle (which must be closed
+/// with `FindCloseChangeNotification`, not `CloseHandle`).
+///
+/// SAFETY: the returned handle is a fresh event -- a supported wait target --
+/// and ownership transfers into the wrapper, which is what `close` will close.
+unsafe fn custom_event(close: crate::wait::WaitCloseFn) -> WaitableHandle {
+    // SAFETY: an unnamed, manual-reset, initially-unsignalled event with default
+    // security attributes; all pointer arguments are null by design.
+    let raw = unsafe {
+        windows_sys::Win32::System::Threading::CreateEventW(
+            std::ptr::null(),
+            1, // manual reset
+            0, // initially unsignalled
+            std::ptr::null(),
+        )
+    };
+    assert!(!raw.is_null(), "CreateEventW failed");
+    // SAFETY: forwarded from this function's own contract.
+    unsafe { WaitableHandle::assume_waitable_with(raw, close) }
+}
+
+#[test]
+fn a_custom_closer_runs_exactly_once_on_drop() {
+    // Each test owns its statics, so the counts stay correct even under
+    // `cargo test`, which runs tests as threads in one process.
+    static CLOSES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn close(handle: windows_sys::Win32::Foundation::HANDLE) -> i32 {
+        CLOSES.fetch_add(1, Ordering::SeqCst);
+        // Really close it, so the test leaks nothing.
+        // SAFETY: the wrapper owned this event and the pool has stopped
+        // watching it by the time a close routine runs.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
+    }
+
+    // SAFETY: a fresh event is a supported wait target, exclusively owned here.
+    let handle = unsafe { custom_event(close) };
+    let wait = ThreadpoolWait::new(handle, |_| {}, None).expect("create wait");
+    assert_eq!(CLOSES.load(Ordering::SeqCst), 0, "not closed while alive");
+
+    drop(wait);
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        1,
+        "the custom closer must run exactly once"
+    );
+}
+
+#[test]
+fn a_custom_closer_runs_only_after_the_wait_is_drained() {
+    static CLOSES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn close(handle: windows_sys::Win32::Foundation::HANDLE) -> i32 {
+        CLOSES.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: as above.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
+    }
+
+    let started = Activations::new();
+    let entered = Arc::clone(&started);
+    // What the callback saw just before returning. If the handle had been closed
+    // while a callback was still executing, this would be non-zero.
+    let seen_at_exit = Arc::new(AtomicUsize::new(usize::MAX));
+    let recorder = Arc::clone(&seen_at_exit);
+
+    // SAFETY: a fresh event is a supported wait target, exclusively owned here.
+    let handle = unsafe { custom_event(close) };
+    let wait = ThreadpoolWait::new(
+        handle,
+        move |activation| {
+            entered.record(activation.result());
+            // Stay inside the callback long enough that the drop below is
+            // genuinely draining rather than finding the callback already done.
+            std::thread::sleep(Duration::from_millis(100));
+            recorder.store(CLOSES.load(Ordering::SeqCst), Ordering::SeqCst);
+        },
+        None,
+    )
+    .expect("create wait");
+
+    wait.arm(None);
+    signal(wait.handle());
+    // Only return once the callback is actually running.
+    started.wait_for(1);
+
+    // Drop drains first, then closes.
+    let entered_drop = std::time::Instant::now();
+    drop(wait);
+    let blocked_for = entered_drop.elapsed();
+
+    // Without this the test could pass vacuously: if the callback had already
+    // finished before the drop, "closed after the callback" would be true for
+    // free. Drop is entered microseconds after the callback starts its 100ms
+    // dwell, so a drop that really drains cannot return promptly.
+    assert!(
+        blocked_for >= Duration::from_millis(50),
+        "drop returned in {blocked_for:?}, so it did not drain a running callback"
+    );
+    assert_eq!(
+        seen_at_exit.load(Ordering::SeqCst),
+        0,
+        "the handle was closed while a callback was still executing"
+    );
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        1,
+        "the custom closer must run exactly once, after the drain"
+    );
+}
+
+#[test]
+fn the_default_path_still_closes_with_close_handle() {
+    // The `OwnedHandle` default must be untouched by the custom-close seam: a
+    // plain event wait still tears down cleanly and its handle is closed by
+    // `OwnedHandle`, which this exercises end to end.
+    let wait = ThreadpoolWait::new(event(true), |_| {}, None).expect("create wait");
+    wait.arm(None);
+    signal(wait.handle());
+    wait.wait();
+    drop(wait);
+}
+
+#[test]
+fn into_handle_returns_the_handle_for_the_default_path() {
+    let handle = event(true);
+    assert!(
+        handle.into_handle().is_ok(),
+        "an OwnedHandle-backed target must hand its handle back"
+    );
+}
+
+#[test]
+fn into_handle_declines_a_custom_close_target() {
+    static CLOSES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn close(handle: windows_sys::Win32::Foundation::HANDLE) -> i32 {
+        CLOSES.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: as above.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
+    }
+
+    // SAFETY: a fresh event is a supported wait target, exclusively owned here.
+    let handle = unsafe { custom_event(close) };
+    // An `OwnedHandle` would close this with `CloseHandle`, which is the wrong
+    // destructor, so the wrapper must refuse and hand itself back instead.
+    let returned = handle
+        .into_handle()
+        .expect_err("a custom-close target has no correct OwnedHandle to give");
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        0,
+        "declining must not close the handle"
+    );
+
+    drop(returned);
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        1,
+        "the returned wrapper still owns the handle and closes it once"
+    );
+}

@@ -29,6 +29,7 @@ use windows_sys::Win32::System::Threading::{
     CloseThreadpoolWait, CreateEventW, CreateThreadpoolWait, PTP_CALLBACK_INSTANCE, PTP_WAIT,
     SetThreadpoolWait, WaitForThreadpoolWaitCallbacks,
 };
+use windows_sys::core::BOOL;
 
 use crate::callback_env::CallbackEnviron;
 
@@ -58,6 +59,90 @@ fn relative_filetime(timeout: Duration) -> FILETIME {
     }
 }
 
+/// A Win32 routine that closes a wait target.
+///
+/// This is the shape Win32 close routines already have, so one can be passed
+/// directly with no shim: `CloseHandle` and `FindCloseChangeNotification` both
+/// match it. The return value is ignored -- there is nothing a destructor could
+/// usefully do with a close failure.
+pub type WaitCloseFn = unsafe extern "system" fn(HANDLE) -> BOOL;
+
+/// Owns a handle that is closed with a routine other than `CloseHandle`.
+///
+/// The `Drop` lives here rather than on [`WaitTarget`] so that the enum itself
+/// has no destructor and can be taken apart by an ordinary `match`.
+pub(crate) struct CustomClose {
+    raw: HANDLE,
+    close: WaitCloseFn,
+}
+
+impl Drop for CustomClose {
+    fn drop(&mut self) {
+        // SAFETY: the handle was vouched for by `assume_waitable_with` and is
+        // still open -- every owner drains the wait before dropping this, so the
+        // pool is no longer watching it. This runs exactly once, because `Drop`
+        // does.
+        unsafe { (self.close)(self.raw) };
+    }
+}
+
+/// Owns a wait target and closes it with the routine that target requires.
+///
+/// Most handles are closed with `CloseHandle`, which is what a std
+/// [`OwnedHandle`] does, so that stays the default. Some are not: a
+/// `FindFirstChangeNotification` handle must be closed with
+/// `FindCloseChangeNotification`, and closing it the usual way is wrong. The
+/// second variant carries the caller's routine so those targets can be owned by
+/// the pool on the same terms as any other.
+pub(crate) enum WaitTarget {
+    /// The default: closed by [`OwnedHandle`]'s own drop, with `CloseHandle`.
+    Owned(OwnedHandle),
+    /// Closed with the caller-supplied routine.
+    Custom(CustomClose),
+}
+
+// SAFETY: a handle is an opaque OS-owned value, not a pointer into this
+// process, and both variants only ever read it or hand it to a thread-safe Win32
+// call. This restores what the plain `OwnedHandle` field had automatically.
+unsafe impl Send for WaitTarget {}
+unsafe impl Sync for WaitTarget {}
+
+impl WaitTarget {
+    /// The raw handle, for arming the wait and for the callback context.
+    pub(crate) fn raw(&self) -> HANDLE {
+        match self {
+            WaitTarget::Owned(handle) => handle.as_raw_handle(),
+            WaitTarget::Custom(custom) => custom.raw,
+        }
+    }
+
+    /// Borrow the handle, for signalling or inspecting it.
+    pub(crate) fn borrow(&self) -> BorrowedHandle<'_> {
+        match self {
+            WaitTarget::Owned(handle) => handle.as_handle(),
+            // SAFETY: the handle stays open for as long as `self` owns it, and
+            // the returned borrow cannot outlive that.
+            WaitTarget::Custom(custom) => unsafe { BorrowedHandle::borrow_raw(custom.raw) },
+        }
+    }
+}
+
+impl std::fmt::Debug for WaitTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The close routine is a code pointer with no useful rendering.
+        f.debug_struct("WaitTarget")
+            .field("raw", &self.raw())
+            .field(
+                "close",
+                &match self {
+                    WaitTarget::Owned(_) => "CloseHandle",
+                    WaitTarget::Custom(_) => "custom",
+                },
+            )
+            .finish()
+    }
+}
+
 /// A handle the thread pool is able to wait on.
 ///
 /// The pool does not support every waitable object: a mutex handle in
@@ -66,13 +151,15 @@ fn relative_filetime(timeout: Duration) -> FILETIME {
 /// into the type system, so a safe caller cannot reach the undefined case.
 ///
 /// Construct one safely with [`WaitableHandle::event`], or vouch for a handle
-/// obtained elsewhere with the narrow [`WaitableHandle::assume_waitable`] seam.
+/// obtained elsewhere with the narrow [`WaitableHandle::assume_waitable`] seam --
+/// or [`WaitableHandle::assume_waitable_with`] when the handle needs a close
+/// routine other than `CloseHandle`.
 /// This mirrors `UnassociatedEndpoint` in `windows-overlapped-io-sys`, which
 /// pairs a safe `open` with an `assume_overlapped` escape hatch for the same
 /// reason.
 #[derive(Debug)]
 pub struct WaitableHandle {
-    handle: OwnedHandle,
+    target: WaitTarget,
 }
 
 impl WaitableHandle {
@@ -102,7 +189,7 @@ impl WaitableHandle {
         }
         // SAFETY: the call returned a fresh, exclusively owned event handle.
         Ok(Self {
-            handle: unsafe { OwnedHandle::from_raw_handle(raw) },
+            target: WaitTarget::Owned(unsafe { OwnedHandle::from_raw_handle(raw) }),
         })
     }
 
@@ -123,19 +210,71 @@ impl WaitableHandle {
     ///   else closes the handle while a wait on it is pending.
     #[must_use]
     pub unsafe fn assume_waitable(handle: OwnedHandle) -> Self {
-        Self { handle }
+        Self {
+            target: WaitTarget::Owned(handle),
+        }
+    }
+
+    /// Wrap a handle that must be closed with a routine other than
+    /// `CloseHandle`.
+    ///
+    /// Some waitable objects have their own destructor: a
+    /// `FindFirstChangeNotification` handle is closed with
+    /// `FindCloseChangeNotification`, and handing it to
+    /// [`assume_waitable`](Self::assume_waitable) --
+    /// which takes a std [`OwnedHandle`] and therefore closes it with
+    /// `CloseHandle` -- would be wrong. `close` is invoked exactly once, and
+    /// only after the wait has been drained, whether the object is torn down by
+    /// [`ThreadpoolWait`]'s own drop or by a
+    /// [`CleanupGroup`](crate::cleanup_group::CleanupGroup) release.
+    ///
+    /// `close` has the shape Win32 close routines already have, so it can be
+    /// passed directly with no wrapper.
+    ///
+    /// # Safety
+    ///
+    /// The caller guarantees that:
+    ///
+    /// - the handle is a waitable object the thread pool supports, and in
+    ///   particular is **not a mutex**, which the SDK does not support and which
+    ///   yields undefined behaviour rather than an error;
+    /// - ownership transfers exclusively into the returned value, so nothing
+    ///   else closes the handle while a wait on it is pending; and
+    /// - `close` is the correct destructor for this handle and is safe to call
+    ///   once on it after the pool has stopped watching it.
+    #[must_use]
+    pub unsafe fn assume_waitable_with(handle: HANDLE, close: WaitCloseFn) -> Self {
+        Self {
+            target: WaitTarget::Custom(CustomClose { raw: handle, close }),
+        }
     }
 
     /// Borrow the underlying handle, for signalling or inspecting it.
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
-        self.handle.as_handle()
+        self.target.borrow()
     }
 
     /// Consume the wrapper and recover the owned handle.
-    #[must_use]
-    pub fn into_handle(self) -> OwnedHandle {
-        self.handle
+    ///
+    /// # Errors
+    ///
+    /// Returns the wrapper back unchanged when it carries a custom close
+    /// routine (see [`assume_waitable_with`](Self::assume_waitable_with)): an
+    /// [`OwnedHandle`] closes what it holds with `CloseHandle`, which is
+    /// precisely the wrong destructor for such a target, so there is no correct
+    /// value to hand back. The handle is neither closed nor leaked -- ownership
+    /// simply stays where it was.
+    pub fn into_handle(self) -> Result<OwnedHandle, Self> {
+        match self.target {
+            WaitTarget::Owned(handle) => Ok(handle),
+            target @ WaitTarget::Custom(_) => Err(Self { target }),
+        }
+    }
+
+    /// Consume the wrapper and recover the owner, whichever kind it is.
+    pub(crate) fn into_target(self) -> WaitTarget {
+        self.target
     }
 }
 
@@ -361,13 +500,13 @@ pub(crate) unsafe fn disarm_raw(wait: PTP_WAIT) {
     unsafe { SetThreadpoolWait(wait, ptr::null_mut(), ptr::null()) };
 }
 
-/// Arm a raw wait object against a borrowed handle.
+/// Arm a raw wait object against a borrowed target.
 ///
-/// SAFETY: `wait` must be a live `PTP_WAIT` and `handle` must stay open until
+/// SAFETY: `wait` must be a live `PTP_WAIT` and `target` must stay open until
 /// the wait is disarmed or the object released.
-pub(crate) unsafe fn arm_member(wait: PTP_WAIT, handle: &OwnedHandle, timeout: Option<Duration>) {
+pub(crate) unsafe fn arm_member(wait: PTP_WAIT, target: &WaitTarget, timeout: Option<Duration>) {
     // SAFETY: forwarded from this function's own contract.
-    unsafe { arm_raw(wait, handle.as_raw_handle(), timeout) };
+    unsafe { arm_raw(wait, target.raw(), timeout) };
 }
 
 /// Arm or disarm a wait object.
@@ -485,12 +624,12 @@ unsafe extern "system" fn wait_trampoline(
 /// ```
 pub struct ThreadpoolWait {
     wait: PTP_WAIT,
-    handle: OwnedHandle,
+    target: WaitTarget,
     // Kept alive as a raw pointer until Drop has disarmed and drained.
     context: *mut WaitContext,
 }
 
-// SAFETY: PTP_WAIT is a cross-thread pool object, OwnedHandle is Send + Sync,
+// SAFETY: PTP_WAIT is a cross-thread pool object, WaitTarget is Send + Sync,
 // and the context is Send + Sync; the pointer is only read until Drop frees it
 // after all callbacks have finished.
 unsafe impl Send for ThreadpoolWait {}
@@ -525,10 +664,10 @@ impl ThreadpoolWait {
     where
         F: Fn(&WaitActivation<'_>) + Send + Sync + 'static,
     {
-        let handle = handle.into_handle();
+        let target = handle.into_target();
         let context = Box::into_raw(Box::new(WaitContext {
             wait: AtomicIsize::new(0),
-            handle: handle.as_raw_handle(),
+            handle: target.raw(),
             suppress_rearm: Mutex::new(0),
             callback: Box::new(callback),
         }));
@@ -554,7 +693,7 @@ impl ThreadpoolWait {
 
         Ok(Self {
             wait,
-            handle,
+            target,
             context,
         })
     }
@@ -562,7 +701,7 @@ impl ThreadpoolWait {
     /// Borrow the watched handle, for signalling or inspecting it.
     #[must_use]
     pub fn handle(&self) -> BorrowedHandle<'_> {
-        self.handle.as_handle()
+        self.target.borrow()
     }
 
     /// Arm the wait, so the next signal or timeout runs the callback once.
@@ -574,7 +713,7 @@ impl ThreadpoolWait {
     pub fn arm(&self, timeout: Option<Duration>) {
         // SAFETY: `wait` is valid for the lifetime of self, and the handle is
         // owned by self so it is still open.
-        unsafe { arm_raw(self.wait, self.handle.as_raw_handle(), timeout) };
+        unsafe { arm_raw(self.wait, self.target.raw(), timeout) };
     }
 
     /// Stop watching.
@@ -650,18 +789,18 @@ impl ThreadpoolWait {
     }
 
     /// Give up ownership, returning the raw object, its callback context, and
-    /// the watched handle.
+    /// the watched target.
     ///
     /// Used only by [`crate::cleanup_group::CleanupGroup`], which takes over all
-    /// three. The handle must go with them: the pool may still be watching it
+    /// three. The target must go with them: the pool may still be watching it
     /// until the group releases the member, so it cannot be closed when the
     /// borrowing member goes out of scope.
-    pub(crate) fn into_parts(self) -> (PTP_WAIT, *mut core::ffi::c_void, OwnedHandle) {
+    pub(crate) fn into_parts(self) -> (PTP_WAIT, *mut core::ffi::c_void, WaitTarget) {
         let this = std::mem::ManuallyDrop::new(self);
-        // SAFETY: `this` is never dropped, so moving the handle out cannot be
+        // SAFETY: `this` is never dropped, so moving the target out cannot be
         // observed by a later drop of the original value.
-        let handle = unsafe { ptr::read(&this.handle) };
-        (this.wait, this.context.cast(), handle)
+        let target = unsafe { ptr::read(&this.target) };
+        (this.wait, this.context.cast(), target)
     }
 
     /// Free a context returned by [`ThreadpoolWait::into_parts`].
@@ -716,8 +855,10 @@ impl Drop for ThreadpoolWait {
         self.cancel_pending();
 
         // SAFETY: no callback can be queued or executing, so the object can be
-        // closed and the context freed exactly once. `handle` is dropped after
-        // this, when its field is dropped, so it outlives the wait object.
+        // closed and the context freed exactly once. `target` is dropped after
+        // this, when its field is dropped, so the handle outlives the wait
+        // object and its close routine -- `CloseHandle` or a custom one -- runs
+        // only once the pool has stopped watching it.
         unsafe {
             CloseThreadpoolWait(self.wait);
             drop(Box::from_raw(self.context));

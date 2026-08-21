@@ -328,7 +328,7 @@ Behavioral matrix every backend must be exercised against:
 	GitHub CI, namely Windows Server 2025 (`windows-latest`) and Windows 11. `CancelIoEx` and
 	`GetQueuedCompletionStatusEx` are available there without down-level gating; per-handle notification-mode
 	support (`SetFileCompletionNotificationModes`) still varies by device and is treated as a runtime capability,
-	not a compile-time guarantee. The Rust baseline is 1.97 (the MSRV) on edition 2024.
+	not a compile-time guarantee. The Rust baseline is 1.98 (the MSRV) on edition 2024.
 
 ## Submission seam
 

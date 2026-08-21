@@ -2,15 +2,17 @@
 
 [workspace]
 members = [
+	"crates/windows-file-watcher",
 	"crates/windows-overlapped-io-sys",
 	"crates/windows-threadpool-sys",
+	"crates/wtf-string",
 ]
 resolver = "2"
 
 [workspace.package]
 authors = ["Mike Grier"]
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.98"
 license = "MIT"
 repository = "https://github.com/MikeGrier/windows-threadpool-sys"
 homepage = "https://github.com/MikeGrier/windows-threadpool-sys"

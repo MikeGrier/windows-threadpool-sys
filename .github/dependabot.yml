@@ -11,7 +11,7 @@ updates:
       - github-actions
     ignore:
       # dtolnay/rust-toolchain's tags are Rust toolchain versions, not action
-      # releases; we pin them deliberately (@stable, and @1.97.0 for the MSRV
+      # releases; we pin them deliberately (@stable, and @1.98.0 for the MSRV
       # job), so Dependabot's "version" bumps for it are always spurious.
       - dependency-name: "dtolnay/rust-toolchain"
 

@@ -16,11 +16,13 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-# These crates are Windows-only (every item is behind `cfg(windows)`), so CI
-# builds, tests, and lints exclusively on Windows. Both the `--all-features`
+# Most crates are Windows-only (every item is behind `cfg(windows)`), so their
+# build, test, and lint run exclusively on Windows. Both the `--all-features`
 # union and the minimal default (no-feature) configuration are exercised: the
 # default set is a supported, published configuration, and a feature-union-only
 # build can hide a missing `cfg` or an item that depends on an opt-in feature.
+# `wtf-string` is portable, so it is additionally built, tested, and linted on
+# Linux and macOS (the `portable` job) to keep its non-Windows support verified.
 jobs:
   encoding:
     name: encoding sanity check
@@ -34,6 +36,12 @@ jobs:
   build-test:
     name: build + test
     runs-on: windows-latest
+    # The repo's rust-toolchain.toml pins the MSRV for local dev; without this
+    # override rustup's directory-scoped toolchain file would win over whatever
+    # dtolnay/rust-toolchain@stable just installed, silently running the MSRV
+    # here too and defeating this job's forward-compatibility coverage.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -56,6 +64,10 @@ jobs:
   fmt:
     name: rustfmt
     runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -67,6 +79,10 @@ jobs:
   clippy:
     name: clippy
     runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -78,12 +94,88 @@ jobs:
       - name: cargo clippy (default features)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  docs:
+    name: rustdoc (intra-doc links)
+    runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo doc (deny broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc --workspace --no-deps --all-features --locked
+
   msrv:
-    name: MSRV check 1.97
+    name: MSRV check 1.98
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets --all-features --locked
+
+  alloc-only:
+    name: wtf-string (alloc-only, no_std)
+    runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: thumbv7em-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      # A bare-metal target ships no `std` at all, so this is what actually
+      # proves the portable core is `no_std`: `--no-default-features` on a host
+      # target would still link fine if a `std` dependency crept back in. The
+      # converse is verified too -- building this target *with* the `std` feature
+      # fails at `extern crate std`, so the gate is not vacuous.
+      - name: cargo build (bare-metal no_std target)
+        run: cargo build -p wtf-string --no-default-features --target thumbv7em-none-eabi --locked
+      - name: cargo clippy (bare-metal no_std target)
+        run: cargo clippy -p wtf-string --no-default-features --target thumbv7em-none-eabi --locked -- -D warnings
+      # The tests are std-only (they use `HashMap`, `DefaultHasher`, ...), so the
+      # alloc-only configuration is exercised on the host, where a test harness
+      # exists. This covers the portable core's behaviour; the target build above
+      # covers its `no_std`-ness.
+      - name: cargo test (alloc-only, host)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p wtf-string --no-default-features --locked --no-fail-fast
+
+  portable:
+    name: wtf-string (non-Windows)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # See build-test's comment in the Windows jobs above: forces the floating
+    # stable toolchain over the repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build (wtf-string)
+        run: cargo build -p wtf-string --all-targets --locked
+      - name: cargo test (wtf-string)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p wtf-string --locked --no-fail-fast
+      - name: cargo clippy (wtf-string)
+        run: cargo clippy -p wtf-string --all-targets --locked -- -D warnings

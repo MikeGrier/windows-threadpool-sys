@@ -5,6 +5,5 @@ Design decisions for this crate are in the workspace-root
 [windows-overlapped-io-sys](../windows-overlapped-io-sys/CHECKLIST.md). Completed milestones are archived in
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-All planned milestones are complete; there are no pending work items.
-
-This file reopens when new work (a new object type, a new capability, or hardening) is planned.
+No pending work. This file reopens when new work -- a new object type, a new capability, or hardening -- is
+planned, and a row for it is added to [PLANS.md](PLANS.md).

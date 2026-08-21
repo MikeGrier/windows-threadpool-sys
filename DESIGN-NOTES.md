@@ -55,7 +55,7 @@ GitHub CI validates: Windows Server 2025 (the `windows-latest` hosted runner) an
 the client. The crate does not pursue down-level support below that baseline. Every capability this crate uses
 -- the object-based thread pool, callback priorities, `SetThreadpoolTimerEx`, `SetThreadpoolWaitEx`,
 `CancelIoEx`, and `GetQueuedCompletionStatusEx` -- is available there, so their historical Vista / 7 / 8
-introduction points do not require version gating in the public API. The toolchain baseline is Rust 1.97 (the
+introduction points do not require version gating in the public API. The toolchain baseline is Rust 1.98 (the
 MSRV) on edition 2024.
 
 ## Shared invariants (both crates)
@@ -313,6 +313,69 @@ caller takes on the obligation explicitly.
 The cleanup group's `create_wait` takes the same type. It is a second safe path to the identical hazard, and
 changing only the individually-owned constructor would have left it unsound -- the reason the constraint lives
 in a type rather than in each function's documentation.
+
+## A wait target owns its close routine, because not every waitable handle closes with `CloseHandle`
+
+`WaitableHandle` originally wrapped a std `OwnedHandle`, which encodes one specific destructor:
+`CloseHandle`. That is right for an event, and wrong for a whole class of waitable handles that Win32
+hands out with a bespoke release function. The motivating case is
+`FindFirstChangeNotification`, whose result is waitable but must be released with
+`FindCloseChangeNotification`; `CloseHandle` on one is not a leak we can shrug at but a documented
+misuse.
+
+So the handle a wait watches is now a `WaitTarget`: either the default `Owned(OwnedHandle)` path, or
+`Custom`, which carries the raw handle alongside the caller-supplied
+`unsafe extern "system" fn(HANDLE) -> BOOL` that releases it. `WaitableHandle::assume_waitable_with`
+is the narrow `unsafe` seam that builds one, next to the existing `assume_waitable`, and for the same
+reason: the caller is asserting both that the handle is a supported wait target and that the routine
+they passed is the correct release for it.
+
+Three properties fall out of putting the destructor in the target rather than in the wait object.
+
+**The close cannot be reordered before the drain.** Both teardown paths already drain first -- an
+individually-owned `ThreadpoolWait::drop` cancels and waits for callbacks before its fields drop, and
+`CleanupGroup::release_members` runs `CloseThreadpoolCleanupGroupMembers` before it frees adopted
+resources. Because the close is a *destructor* on a value those paths already own, it inherits that
+ordering instead of restating it. Nothing had to be added to either path to keep the handle alive
+until the pool stopped watching it.
+
+**Both paths get it for free.** The group adopts the target as a boxed `WaitTarget` freed by
+`free_boxed::<WaitTarget>`, not as a boxed `OwnedHandle` freed with `CloseHandle`. That is one
+substitution at the adoption site, and it is what stops the group being a second path to the wrong
+destructor -- the same argument that put wait provenance in a type above.
+
+**`Drop` lives on an inner struct, not on the enum.** `WaitTarget` deliberately has no `Drop` impl of
+its own; the custom arm's field is a small `CustomClose` that carries the destructor. An enum with a
+destructor cannot be destructured by an ordinary `match`, which would have forced `into_handle` to
+resort to `ptr::read` and an `unreachable!`. Pushing the destructor one level down keeps the enum
+freely movable while the handle is still released exactly once.
+
+### `into_handle` now declines rather than lying
+
+Handing an `OwnedHandle` back out of a custom-close target would hand out the wrong destructor: the
+receiver would eventually close a `FindFirstChangeNotification` handle with `CloseHandle`. There is
+no correct `OwnedHandle` to give, so `WaitableHandle::into_handle` returns
+`Result<OwnedHandle, Self>` -- `Ok` for the default path, and for a custom target `Err(self)`, giving
+the wrapper back intact so the caller still owns a handle that closes correctly.
+
+This is a breaking change to a published signature, taken rather than the alternatives of panicking
+(a safe function that aborts on a legal input) or closing with the wrong routine (silent misuse). The
+crate's own internal caller wanted the whole target rather than a bare handle anyway, and now uses
+`into_target`.
+
+### Testing it needs per-test statics, not one global counter
+
+A close routine is a bare `extern "system"` function pointer, so it cannot capture: everything it
+records has to live in a `static`. The tests therefore declare their observation state *inside* each
+test function rather than at module scope. Under `cargo nextest` that would not matter -- each test
+gets its own process -- but CI also runs `cargo test`, which runs tests as threads in one process,
+where a shared counter would be corrupted by any other test closing a handle concurrently.
+
+The integration tests also check the drain ordering *per handle* rather than globally. With hundreds
+of waits tearing down together, "some handle is closed" says nothing while a callback runs; the bug
+is a callback finding *its own* handle already closed, so each callback captures its raw handle value
+and looks for that. Each ordering test additionally asserts that teardown actually blocked, which is
+what stops it passing vacuously when a callback happens to finish before teardown begins.
 
 ## Re-arming is gated against teardown, under the same lock that arms
 

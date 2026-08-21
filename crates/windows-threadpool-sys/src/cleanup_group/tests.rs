@@ -756,3 +756,246 @@ fn releasing_a_group_while_a_wait_callback_rearms_leaves_it_quiescent() {
         "the wait re-armed past the group's release",
     );
 }
+
+// --- custom-close wait targets in a group (M17) ---
+
+/// Create a real event and hand it over with a caller-supplied close routine.
+///
+/// Mirrors the helper in the wait unit tests: a fresh event stands in for a
+/// handle like `FindFirstChangeNotification`'s, which must be closed with
+/// something other than `CloseHandle`.
+///
+/// SAFETY: the returned handle is a fresh event -- a supported wait target --
+/// and ownership transfers into the wrapper, which is what `close` will close.
+unsafe fn custom_event(close: crate::wait::WaitCloseFn) -> WaitableHandle {
+    // SAFETY: an unnamed, manual-reset, initially-unsignalled event with default
+    // security attributes; all pointer arguments are null by design.
+    let raw = unsafe {
+        windows_sys::Win32::System::Threading::CreateEventW(
+            std::ptr::null(),
+            1, // manual reset
+            0, // initially unsignalled
+            std::ptr::null(),
+        )
+    };
+    assert!(!raw.is_null(), "CreateEventW failed");
+    // SAFETY: forwarded from this function's own contract.
+    unsafe { WaitableHandle::assume_waitable_with(raw, close) }
+}
+
+#[test]
+fn group_release_runs_a_custom_closer_exactly_once() {
+    // Each test owns its statics, so the counts stay correct even under
+    // `cargo test`, which runs tests as threads in one process.
+    static CLOSES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn close(handle: windows_sys::Win32::Foundation::HANDLE) -> i32 {
+        CLOSES.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: the group owned this event and has released its members, so
+        // the pool is no longer watching it.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
+    }
+
+    let mut group = CleanupGroup::new().expect("create group");
+
+    // SAFETY: a fresh event is a supported wait target, exclusively owned here.
+    let handle = unsafe { custom_event(close) };
+    let member = group
+        .create_wait(handle, |_| {}, None)
+        .expect("create wait");
+    member.arm(None);
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        0,
+        "not closed while a member"
+    );
+
+    group.close_members(false);
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        1,
+        "releasing the group must run the custom closer exactly once"
+    );
+
+    // Dropping the group must not close it a second time.
+    drop(group);
+    assert_eq!(CLOSES.load(Ordering::SeqCst), 1, "closed exactly once");
+}
+
+#[test]
+fn group_drop_runs_a_custom_closer_exactly_once() {
+    static CLOSES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn close(handle: windows_sys::Win32::Foundation::HANDLE) -> i32 {
+        CLOSES.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: as above.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
+    }
+
+    {
+        let group = CleanupGroup::new().expect("create group");
+        // SAFETY: a fresh event is a supported wait target, exclusively owned here.
+        let handle = unsafe { custom_event(close) };
+        let member = group
+            .create_wait(handle, |_| {}, None)
+            .expect("create wait");
+        member.arm(None);
+        assert_eq!(
+            CLOSES.load(Ordering::SeqCst),
+            0,
+            "not closed while a member"
+        );
+    }
+
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        1,
+        "dropping the group must run the custom closer exactly once"
+    );
+}
+
+#[test]
+fn group_release_runs_a_custom_closer_only_after_draining() {
+    static CLOSES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn close(handle: windows_sys::Win32::Foundation::HANDLE) -> i32 {
+        CLOSES.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: as above.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
+    }
+
+    let mut group = CleanupGroup::new().expect("create group");
+
+    let started = Ran::new();
+    let entered = Arc::clone(&started);
+    // What the callback saw just before returning. Non-zero would mean the
+    // handle was closed while a callback was still executing.
+    let seen_at_exit = Arc::new(AtomicUsize::new(usize::MAX));
+    let recorder = Arc::clone(&seen_at_exit);
+
+    // SAFETY: a fresh event is a supported wait target, exclusively owned here.
+    let handle = unsafe { custom_event(close) };
+    let member = group
+        .create_wait(
+            handle,
+            move |_| {
+                entered.record();
+                // Stay inside the callback so the release below is genuinely
+                // draining rather than finding the callback already finished.
+                std::thread::sleep(Duration::from_millis(100));
+                recorder.store(CLOSES.load(Ordering::SeqCst), Ordering::SeqCst);
+            },
+            None,
+        )
+        .expect("create wait");
+
+    member.arm(None);
+    // SAFETY: the member owns a live event and is still armed.
+    let ok = unsafe { SetEvent(member.handle().as_raw_handle()) };
+    assert_ne!(ok, 0, "SetEvent failed");
+    // Only return once the callback is actually running.
+    started.wait_for(1);
+
+    let entered_release = Instant::now();
+    group.close_members(false);
+    let blocked_for = entered_release.elapsed();
+
+    // Without this the test could pass vacuously: if the callback had already
+    // finished before the release, "closed after the callback" would be true
+    // for free. The release is entered microseconds after the callback starts
+    // its 100ms dwell, so one that really drains cannot return promptly.
+    assert!(
+        blocked_for >= Duration::from_millis(50),
+        "close_members returned in {blocked_for:?}, so it did not drain a running callback"
+    );
+    assert_eq!(
+        seen_at_exit.load(Ordering::SeqCst),
+        0,
+        "the handle was closed while a callback was still executing"
+    );
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        1,
+        "the custom closer must run exactly once, after the drain"
+    );
+}
+
+#[test]
+fn cancelling_pending_still_runs_a_custom_closer_exactly_once() {
+    static CLOSES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn close(handle: windows_sys::Win32::Foundation::HANDLE) -> i32 {
+        CLOSES.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: as above.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
+    }
+
+    let mut group = CleanupGroup::new().expect("create group");
+
+    // SAFETY: a fresh event is a supported wait target, exclusively owned here.
+    let handle = unsafe { custom_event(close) };
+    let member = group
+        .create_wait(handle, |_| {}, None)
+        .expect("create wait");
+    member.arm(None);
+    // Signal it, then cancel: whether the callback runs or is dropped, the
+    // handle must still be closed once, by the caller's routine.
+    // SAFETY: the member owns a live event and is still armed.
+    let ok = unsafe { SetEvent(member.handle().as_raw_handle()) };
+    assert_ne!(ok, 0, "SetEvent failed");
+
+    group.close_members(true);
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        1,
+        "cancelling pending callbacks must still close the handle exactly once"
+    );
+}
+
+#[test]
+fn a_group_releases_default_and_custom_close_members_together() {
+    // The custom-close seam must not disturb the default path when both kinds
+    // of member are released by the same call.
+    static CLOSES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn close(handle: windows_sys::Win32::Foundation::HANDLE) -> i32 {
+        CLOSES.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: as above.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) }
+    }
+
+    let mut group = CleanupGroup::new().expect("create group");
+
+    let ran = Ran::new();
+    let recorder = Arc::clone(&ran);
+
+    // SAFETY: a fresh event is a supported wait target, exclusively owned here.
+    let custom = unsafe { custom_event(close) };
+    let custom_member = group
+        .create_wait(custom, |_| {}, None)
+        .expect("custom wait");
+    custom_member.arm(None);
+
+    let owned = WaitableHandle::event(true, false).expect("create an event");
+    let owned_member = group
+        .create_wait(owned, move |_| recorder.record(), None)
+        .expect("owned wait");
+    owned_member.arm(None);
+    // SAFETY: the member owns a live event and is still armed.
+    let ok = unsafe { SetEvent(owned_member.handle().as_raw_handle()) };
+    assert_ne!(ok, 0, "SetEvent failed");
+    ran.wait_for(1);
+
+    group.close_members(false);
+
+    assert_eq!(
+        CLOSES.load(Ordering::SeqCst),
+        1,
+        "the custom-close member is closed exactly once"
+    );
+    assert_eq!(
+        group.owned_resources(),
+        0,
+        "both members' resources are released"
+    );
+}
