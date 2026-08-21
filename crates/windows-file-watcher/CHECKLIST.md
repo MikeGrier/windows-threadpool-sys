@@ -1,14 +1,21 @@
 # Checklist: windows-file-watcher
 
-Memory-safe Windows path-change watcher. Design and decisions (D-1...D-20) are recorded in
-[design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md);
-Tier-1 decisions are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md), extended as later milestones complete.
+Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
+[design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-21** -- later
+decisions (D-21 came out of M1 review, not the session) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
 end-of-milestone gate (default **and** `--all-features` build/test/clippy/doc clean, encoding check, sync
 with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+
+> **NEXT ACTIONABLE ITEM: M2.1.** M1 is archived; nothing else is in progress. Note that a *satisfied
+> cross-component prerequisite does not make its item startable* -- M17 in `windows-threadpool-sys` cleared
+> the external dependency for M6.1, but M6.1 remains gated behind M2 through M5 by ordinary intra-component
+> dependency order, because a coarse watcher has no subscriptions to notify (M3/M4) and no fault machine to
+> re-establish through (M5) until those land. Work the milestones in order.
 
 ## M2 -- Detailed single-directory watcher
 
@@ -97,15 +104,20 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 - [ ] **M6.1** -- Coarse handle: `FindFirstChangeNotification`, owned and closed with
   `FindCloseChangeNotification` (not `CloseHandle`), reaching `ThreadpoolWait` through the custom-close
-  waitable owner (D-17) -- a std `OwnedHandle` would be closed with `CloseHandle` by the pool on teardown,
-  which is the wrong routine for a change-notification handle.
+  waitable owner -- a std `OwnedHandle` would be closed with `CloseHandle` by the pool on teardown,
+  which is the wrong routine for a change-notification handle. The two-tier arrangement this serves is D-17;
+  the ownership mechanism itself is a `windows-threadpool-sys` decision, recorded in the workspace-root
+  [DESIGN-NOTES.md](../../DESIGN-NOTES.md) under "A wait target owns its close routine".
 
-  > **CROSS-COMPONENT PREREQUISITE -- SATISFIED 2026-08-21:** required component
-  > `crates/windows-threadpool-sys` -> M17 (custom-close owner for non-`CloseHandle` wait targets, across
-  > both the direct and `CleanupGroup` teardown paths), which has landed. See
+  > **CROSS-COMPONENT PREREQUISITE -- SATISFIED 2026-08-21:** component `crates/windows-threadpool-sys` ->
+  > M17 (custom-close owner for non-`CloseHandle` wait targets, across both the direct and `CleanupGroup`
+  > teardown paths) has landed. See
   > [../windows-threadpool-sys/COMPLETED-CHECKLIST.md](../windows-threadpool-sys/COMPLETED-CHECKLIST.md).
   > The seam to use is `WaitableHandle::assume_waitable_with(raw, FindCloseChangeNotification)`, which works
   > with both `ThreadpoolWait::new` and `CleanupGroup::create_wait`.
+  >
+  > **This clears only the external dependency.** M6.1 is still gated by M2 through M5 in the ordinary
+  > dependency order of this crate and is not startable ahead of them.
 
 - [ ] **M6.2** -- Coarse watcher: `ThreadpoolWait` per activation -> emit `Desync { Coarse }` to the
   directory's subscriptions -> `FindNextChangeNotification` re-arm, under the same fault/backoff discipline
@@ -140,13 +152,15 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M8 -- Adopt wtf-string for relative names
 
-- [ ] **M8.1** -- Migrate `RelativeName` from its hand-rolled `Box<[u16]>` to [wtf-string](../wtf-string/README.md)'s
-  `Wtf16Str` / `Wtf16String`, so decoded names carry the native-`u16`, conversion-free representation and feed
-  Windows APIs without re-encoding. Preserve the lossless `OsString`/`Path` and raw-`&[u16]` surface (D-8).
+- [ ] **M8.1** -- Add the [wtf-string](../wtf-string/README.md) dependency (published; pin the current
+  release) and migrate `RelativeName` from its hand-rolled `Box<[u16]>` to `Wtf16Str` / `Wtf16String`, so
+  decoded names carry the native-`u16`, conversion-free representation and feed Windows APIs without
+  re-encoding. Preserve the lossless `OsString`/`Path` and raw-`&[u16]` surface (D-8).
 
-  > **CROSS-COMPONENT PREREQUISITE:** requires component `crates/wtf-string` -> M5 (Windows `OsStr`/`OsString`
-  > interop), now completed and archived in
-  > [../wtf-string/COMPLETED-CHECKLIST.md](../wtf-string/COMPLETED-CHECKLIST.md).
+  > **CROSS-COMPONENT PREREQUISITE -- SATISFIED:** component `crates/wtf-string` -> M5 (Windows
+  > `OsStr`/`OsString` interop) is complete, as is the crate's whole v1 plan (M1 through M10), archived in
+  > [../wtf-string/COMPLETED-CHECKLIST.md](../wtf-string/COMPLETED-CHECKLIST.md). As with M6.1 above, this
+  > clears only the external dependency; M8.1 still follows M2 through M7 in order.
 
 - [ ] **M8.2** -- Integration test: after adoption, decode a real completion buffer and assert the relative
   name's raw `&[u16]` units, its lossless `OsString`/`Path` conversion (including an unpaired surrogate), and

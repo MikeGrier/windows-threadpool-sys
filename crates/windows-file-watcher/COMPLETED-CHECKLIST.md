@@ -29,3 +29,12 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
   names, and malformed buffers: truncated/overrunning/odd-length and unaligned or out-of-range
   `NextEntryOffset`, all surfacing as `Desync`). Integration: decode a buffer produced by a real overlapped
   `ReadDirectoryChangesW` on a temp-directory mutation.
+
+**Later addition -- D-21.** Review after this group was archived found the decoder accepted a trailing
+remainder it should not have: it bounded the tail rather than requiring an exact length. Because a name is a
+whole number of UTF-16 units, a record always ends on an even offset, so its DWORD alignment padding is
+exactly 0 or 2 bytes -- never 1 or 3. Anything else is undescribed data and is now reported as a desync
+rather than silently dropped, which would understate the batch. Fixed in M1.3/M1.5 above (a failing
+regression test was written first) and recorded as `D-21` in [DESIGN-NOTES.md](DESIGN-NOTES.md); the
+rationale is in [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Noted here so the archive reflects that this
+milestone's decoder gained a binding decision after it closed.

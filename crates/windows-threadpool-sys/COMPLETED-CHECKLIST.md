@@ -227,6 +227,8 @@ group drop, group release with `cancel_pending`, a repeated release, and a group
 members together. The ordering tests assert that teardown actually blocked, so they cannot pass vacuously
 when a callback happens to finish first. Recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
 
-> **-> CROSS-COMPONENT HANDOFF:** M17 is complete, which unblocks component `crates/windows-file-watcher`
-> -> M6 -> M6.1 (the coarse `FindFirstChangeNotification` watcher). See
-> [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
+> **-> CROSS-COMPONENT HANDOFF:** M17 is complete, which clears the *external* prerequisite for component
+> `crates/windows-file-watcher` -> M6 -> M6.1 (the coarse `FindFirstChangeNotification` watcher). See
+> [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md). It does **not** make M6.1
+> startable: that item remains gated behind M2 through M5 of its own crate, whose next actionable item is
+> M2.1. Corrected 2026-08-21 -- the original wording said "unblocks", which was read as "is now next".
