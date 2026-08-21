@@ -37,6 +37,14 @@ windows-overlapped-io-sys = { version = "1.0.0", path = "../windows-overlapped-i
 # own.
 windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys" }
 
+# Relative names decoded from `ReadDirectoryChangesW` are native `u16`, and are
+# handed back to Windows APIs as `u16`. Storing them as `Wtf16String` keeps them
+# in that representation end to end, so neither direction pays the WTF-8
+# re-encode an `OsString` would impose. Default features are kept: the `std`
+# feature is what supplies the lossless `OsStr` interop the public surface
+# promises (D-8).
+wtf-string = { version = "0.2.0", path = "../wtf-string" }
+
 windows-sys = {
 	version = "0.61.2",
 	default-features = false,

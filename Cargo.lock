@@ -57,6 +57,7 @@ dependencies = [
  "windows-overlapped-io-sys",
  "windows-sys",
  "windows-threadpool-sys",
+ "wtf-string",
 ]
 
 [[package]]

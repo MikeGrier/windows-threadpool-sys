@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-31** -- later
-decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, and D-25/D-27...D-31
-from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-32** -- later
+decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, D-32 from M8.1, and
+D-25/D-27...D-31 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -200,20 +200,22 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## M8 -- Adopt wtf-string for relative names
 
-- [ ] **M8.1** -- Add the [wtf-string](../wtf-string/README.md) dependency (published; pin the current
+- [x] **M8.1** -- Add the [wtf-string](../wtf-string/README.md) dependency (published; pin the current
   release) and migrate `RelativeName` from its hand-rolled `Box<[u16]>` to `Wtf16Str` / `Wtf16String`, so
   decoded names carry the native-`u16`, conversion-free representation and feed Windows APIs without
   re-encoding. Preserve the lossless `OsString`/`Path` and raw-`&[u16]` surface (D-8).
 
-  > **CROSS-COMPONENT PREREQUISITE -- SATISFIED:** component `crates/wtf-string` -> M5 (Windows
-  > `OsStr`/`OsString` interop) is complete, as is the crate's whole v1 plan (M1 through M10), archived in
-  > [../wtf-string/COMPLETED-CHECKLIST.md](../wtf-string/COMPLETED-CHECKLIST.md). As with M6.1 above, this
-  > clears only the external dependency; M8.1 still follows M2 through M7 in order.
+  > **PULLED FORWARD out of dependency order, deliberately.** M8.1 is a *representation* change to a type
+  > every later milestone touches, so each milestone left ahead of it would be more code to migrate later.
+  > Done after M2.3 rather than after M7; the rest of M8 stays here. Nothing in M8.1 depended on M3 through
+  > M7 -- it only ever needed the wtf-string crate, which had already shipped.
 
 - [ ] **M8.2** -- Integration test: after adoption, decode a real completion buffer and assert the relative
   name's raw `&[u16]` units, its lossless `OsString`/`Path` conversion (including an unpaired surrogate), and
   a direct wide-pointer (`as_ptr()`) hand-off to a Windows API, verifying the representation change preserves
-  the public lossless-conversion contract (D-8).
+  the public lossless-conversion contract (D-8). The unit tests added with M8.1 already cover the terminated
+  pointer against `lstrlenW` on a synthetic buffer; this item is the same assertions against a buffer a real
+  `ReadDirectoryChangesW` produced.
 
 ## M-inf -- Horizon (ungated, post-v1)
 

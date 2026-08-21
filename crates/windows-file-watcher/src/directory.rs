@@ -25,9 +25,10 @@
 // M2.2 rather than letting it mask genuinely dead code later.
 #![allow(dead_code)]
 
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
+
+use wtf_string::Wtf16String;
 
 use windows_sys::Win32::Foundation::{
     ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_INVALID_FUNCTION, ERROR_INVALID_NAME,
@@ -38,9 +39,6 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING,
 };
-
-/// The terminator every Win32 wide-string argument requires.
-const NUL: u16 = 0;
 
 /// What a failed open means for the retry policy.
 ///
@@ -163,16 +161,17 @@ fn classify(error: &std::io::Error) -> OpenFailure {
 ///
 /// An interior NUL is rejected rather than passed on: Win32 would stop at it and
 /// silently open a *different, shorter* path than the caller named, which is a
-/// correctness hole rather than a mere inconvenience.
-fn wide_path(path: &Path) -> Result<Vec<u16>, OpenError> {
-    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    if wide.contains(&NUL) {
+/// correctness hole rather than a mere inconvenience. `Wtf16String` keeps content
+/// and terminator distinct and reports the condition itself, so this is the
+/// crate's own documented predicate rather than a hand-rolled scan.
+fn wide_path(path: &Path) -> Result<Wtf16String, OpenError> {
+    let wide = Wtf16String::from_os_str(path.as_os_str());
+    if wide.has_interior_nul() {
         return Err(OpenError::synthetic(
             OpenFailure::InvalidPath,
             ERROR_INVALID_NAME,
         ));
     }
-    wide.push(NUL);
     Ok(wide)
 }
 
@@ -193,12 +192,13 @@ impl DirectoryHandle {
     /// class means for the retry policy.
     pub(crate) fn open(path: &Path) -> Result<Self, OpenError> {
         let wide = wide_path(path)?;
-        // SAFETY: `wide` is NUL-terminated and outlives the call; the security
-        // attributes and template handle are null by design, and the remaining
-        // arguments are constants.
+        // SAFETY: `wide`'s terminated pointer is NUL-terminated and outlives the
+        // call, and the interior-NUL case was rejected above so the callee sees
+        // the whole path; the security attributes and template handle are null by
+        // design, and the remaining arguments are constants.
         let raw = unsafe {
             CreateFileW(
-                wide.as_ptr(),
+                wide.as_terminated_ptr(),
                 FILE_LIST_DIRECTORY,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 std::ptr::null(),
