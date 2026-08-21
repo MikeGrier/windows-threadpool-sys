@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-file-watcher"
-version = "0.1.0" # x-release-please-version
+version = "1.0.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true

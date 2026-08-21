@@ -1,5 +1,5 @@
 {
-    "crates/windows-file-watcher": "0.1.0",
+    "crates/windows-file-watcher": "1.0.0",
     "crates/windows-overlapped-io-sys": "1.0.0",
     "crates/windows-threadpool-sys": "1.0.0",
     "crates/wtf-string": "0.1.0"
