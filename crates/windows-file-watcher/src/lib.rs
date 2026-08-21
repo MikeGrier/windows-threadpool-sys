@@ -36,6 +36,9 @@ mod queue;
 mod servicing;
 
 #[cfg(windows)]
+mod session;
+
+#[cfg(windows)]
 mod watcher;
 
 #[cfg(windows)]
@@ -61,5 +64,6 @@ pub mod unstable {
     pub use crate::monitor::{Monitor, Request};
     pub use crate::queue::{Notification, Receiver, Sender, WatchId, channel};
     pub use crate::servicing::Rejected;
+    pub use crate::session::Session;
     pub use crate::watcher::{ArmGate, DEFAULT_BUFFER_BYTES, DirectoryWatcher};
 }

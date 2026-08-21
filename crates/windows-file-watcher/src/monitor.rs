@@ -26,7 +26,9 @@
 use std::io;
 use std::sync::{Arc, Mutex};
 
+use crate::queue::{Receiver, channel};
 use crate::servicing::{Rejected, Servicer};
+use crate::session::Session;
 use crate::watcher::DirectoryWatcher;
 
 /// A message on the monitor's request queue.
@@ -57,7 +59,12 @@ struct Resident {
 
 /// Owns the servicing path and every watcher created through it.
 pub struct Monitor {
-    servicer: Servicer<Request>,
+    /// Shared with every [`Session`], which is what lets a client submit from its
+    /// own threads. A session holding this alive past `Monitor::Drop` keeps only
+    /// the allocation: teardown closes the path, so a surviving session reports
+    /// itself shut and refuses requests rather than reaching a monitor that is
+    /// no longer there.
+    servicer: Arc<Servicer<Request>>,
     resident: Arc<Mutex<Resident>>,
 }
 
@@ -73,10 +80,22 @@ impl Monitor {
         // The handler is built before the monitor exists, so when M3.5 gives it
         // work to do it will capture `Arc::clone(&resident)` directly rather than
         // reaching back through the monitor. That keeps "only the drain mutates
-        // resident state" visible in the types.
-        let servicer = Servicer::new(|request: Request| match request {})?;
+        // resident state" visible in the types, and avoids the cycle a handler
+        // holding the monitor would create.
+        let servicer = Arc::new(Servicer::new(|request: Request| match request {})?);
 
         Ok(Self { servicer, resident })
+    }
+
+    /// Open a session, returning it with the receiver its notifications arrive on.
+    ///
+    /// Every watch created through the returned session delivers here (D-11), so
+    /// a client chooses its routing once rather than per subscription: one session
+    /// per consumer, and each consumer drains only what it asked for.
+    #[must_use]
+    pub fn session(&self) -> (Session, Receiver) {
+        let (sender, receiver) = channel();
+        (Session::new(Arc::clone(&self.servicer), sender), receiver)
     }
 
     /// Enqueue a request for the servicing path.
