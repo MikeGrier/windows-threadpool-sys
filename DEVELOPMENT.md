@@ -46,11 +46,12 @@ directory's toolchain override ([rust-toolchain.toml](rust-toolchain.toml))
 ones `dtolnay/rust-toolchain@stable` sets up to run next -- would otherwise
 silently use the pinned MSRV instead of the floating stable release it just
 installed. The `build-test`/`fmt`/`clippy`/`docs`/`portable` jobs in
-[.github/workflows/ci.yml](.github/workflows/ci.yml) counter this with a
-job-level `env: RUSTUP_TOOLCHAIN: stable`, which sits above the directory
-override in `rustup`'s resolution order and forces those jobs onto the actual
-floating toolchain. The `msrv` job intentionally has no such override, since it
-is meant to run the pinned version.
+[.github/workflows/ci.yml](.github/workflows/ci.yml), and the `publish` job in
+[.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml),
+counter this with a job-level `env: RUSTUP_TOOLCHAIN: stable`, which sits above
+the directory override in `rustup`'s resolution order and forces those jobs onto
+the actual floating toolchain. The `msrv` job intentionally has no such
+override, since it is meant to run the pinned version.
 
 ## Release process
 

@@ -19,6 +19,15 @@ jobs:
   publish:
     name: cargo publish
     runs-on: windows-latest
+    # Publish under the floating stable toolchain this job installs, not the
+    # repo's rust-toolchain.toml MSRV pin. rustup resolves a directory override
+    # ahead of `rustup default`, so without this every `cargo` call below --
+    # `cargo metadata` for the tag/dependency checks and the `cargo publish`
+    # verification build -- would silently run the pinned MSRV instead, making
+    # the `@stable` setup step below misleading. The MSRV floor is guarded by
+    # ci.yml's dedicated `msrv` job, not here.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
