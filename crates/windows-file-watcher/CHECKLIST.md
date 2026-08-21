@@ -2,9 +2,10 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-26** -- later
-decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-25 from correcting D-2's framing,
-D-26 from M2.3, none from the session) are added there as milestones complete.
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-31** -- later
+decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, and D-25/D-27...D-31
+from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
 end-of-milestone gate (default **and** `--all-features` build/test/clippy/doc clean, encoding check, sync
@@ -34,7 +35,9 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   completion.
 
 - [ ] **M2.4** -- Teardown: cancel the outstanding read, drain the pool I/O, and free the context via
-  owned-object `Drop` (D-20), with re-arm suppression inherited from `ThreadpoolIo` rundown.
+  owned-object `Drop` (D-20), with re-arm suppression inherited from `ThreadpoolIo` rundown. The arm gate of
+  D-23 already provides the suppression; formalise it, and note that the same not-re-arming state is what
+  D-29 reuses for backpressure and D-28 for faults.
 
 - [ ] **M2.5** -- Integration: create/modify/delete/rename in a temp directory and assert raw actions and
   relative names; force a burst overflow and assert `Desync { Overflow }`; assert clean teardown with an
@@ -56,14 +59,27 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   the next batch (D-12); reject a zero bound at construction. The crate never calls into client code on its
   cadence path.
 
-- [ ] **M3.3.1** -- The doorbell (D-25): a `Doorbell` trait the queue rings when it becomes non-empty, so a
-  client can drain from its own `ThreadpoolWait` rather than dedicating a thread to a blocking `recv()`. A
-  method rather than a crate-owned event, so it composes with a semaphore, a completion-port post, or an
-  async `Waker` as readily as with an event. Document it as the one sanctioned exception to D-2, with its
-  contract (must not block, must not panic, must not re-enter the monitor) and its delivery guarantee
-  (spurious rings permitted, missed rings not -- so the receiver drains to empty and re-checks). Contain a
-  panicking `ring` at the boundary rather than let it unwind the cadence path. Ship a crate-provided
-  event-backed implementation as the default, exposing a borrowable handle for `ThreadpoolWait`.
+- [ ] **M3.3.1** -- The CQ doorbell (D-25): `Receiver::doorbell()` returning a manual-reset event handle,
+  created lazily so a `recv()`-only client allocates no kernel object, so a client can drain from its own
+  `ThreadpoolWait` rather than dedicating a thread to a blocking `recv()`. Crate-owned, not a client trait --
+  the receiver resets under the queue lock on observing empty and the sender sets after enqueue, making lost
+  wakeups impossible by construction and leaving only harmless spurious ones. Record the rejected trait
+  alternative in the module docs, since "why isn't this a trait?" is the obvious question.
+
+- [ ] **M3.3.2** -- The SQ doorbell edge-trigger (D-25): `ThreadpoolWork::submit()` is already the request
+  queue's ring, but each call queues another drain, and they do not coalesce -- subscribing to 500 paths
+  queues 500 drains, 499 of which find the queue already emptied. Ring only on the empty -> non-empty
+  transition, computed under the queue lock.
+
+- [ ] **M3.3.3** -- Request completions (D-30): every request yields a completion carried on the
+  notification queue, correlated by `WatchId`, so ordering against data is structural rather than temporal.
+  Includes the permanent subscribe failures of D-22 (`NotADirectory`, `InvalidPath`), which have no retry
+  path and would otherwise leave a client holding a `Watch` that can never fire and never says so.
+
+- [ ] **M3.3.4** -- Queue-full backpressure (D-29): the monitor stops draining the request queue when the
+  notification queue cannot accept a completion, so backpressure lands on the client's own `subscribe()`
+  call on the client's own thread. Never block at the enqueue -- the writer may hold a pool thread while the
+  client's drain needs one, which is a deadlock rather than backpressure.
 
 - [ ] **M3.4** -- Affine `Watch` (D-5): `#[must_use]`, `Drop` enqueues cancellation, explicit `cancel()`,
   and a `Copy` `WatchId`; subscribe/unsubscribe requests plumbed through the serialised request queue.
@@ -90,27 +106,47 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 - [ ] **M4.5** -- Integration: several file-watches plus a recursive directory watch within one tree; assert
   each subscription receives exactly its matching events and nothing else.
 
-## M5 -- Fault model and resident retry policy
+## M5 -- Fault model and the retry protocol
 
 - [ ] **M5.1** -- Establish/re-establish state machine (D-14/D-15): `Opening -> ArmingDetailed ->
   WatchingDetailed` plus `Cancelling/Closed`; classify every error into reopen-retry, rearm-retry, or (M6)
   downgrade; no terminal state.
 
-- [ ] **M5.2** -- Resident retry-policy data (D-16): a backoff value (initial/multiplier/cap/jitter and
-  per-error-kind overrides), a monitor default overridable per subscription and reduced to a coalesced
-  directory watcher's effective policy by the deterministic soonest-recovering rule (min of each field
-  across the directory's subscriptions, D-6), mutated only through serialised request-queue items and
-  scheduled with `ThreadpoolTimer` -- no reactive callback, race-free.
+- [ ] **M5.2** -- The fault latch (D-28): a fault is watcher state, not a queued item -- one error code plus
+  one bit, allocated with the watcher. A fault report is control data generated on the cadence, so it can
+  neither be dropped (the watch would silently never recover) nor block (deadlock); latching costs no queue
+  slot and cannot fail. A watcher cannot be faulted twice concurrently, because a faulted watcher is not
+  running. Generalise the same treatment to every `Desync`, extending what D-11 already does for
+  `QueueFull`: reporting that the queue filled must not itself require queue space.
 
-- [ ] **M5.3** -- Recovery notifications: `Desync { Reestablished }` for the post-outage gap, and the opt-in
+- [ ] **M5.3** -- The retry protocol (D-27, superseding D-16): each subscription selects **defaults** or
+  **interactive** at registration. On fault the watcher latches and schedules *nothing*; interactive
+  subscriptions receive a control message carrying the `WatchId`, the failing operation (open vs arm), and
+  the error code, and answer with the next delay. Because a directory is one coalesced watcher over several
+  subscriptions (D-6), ask every subscription and take the **earliest** answer, counting a decliner at its
+  default rather than cancelling it, then clamp to the floor. Values from `Azure/m`'s shipped code:
+  **500 ms default, 50 ms floor**, with separate open-failure and arm-failure defaults. Scheduling only
+  after the answer is what removes D-16's race -- there is no timer to race because none was armed.
+
+- [ ] **M5.4** -- Recovery notifications: `Desync { Reestablished }` for the post-outage gap, and the opt-in
   `Suspended` / `Resumed` brackets (D-13).
 
-- [ ] **M5.4** -- Cancellation from any intermediate state -- establishing, backing off, or faulted (D-14) --
-  quiescing timers and any outstanding operation without racing a re-arm.
+- [ ] **M5.5** -- Cancellation from any intermediate state -- establishing, backing off, latched-faulted, or
+  awaiting a retry answer (D-14) -- quiescing timers and any outstanding operation without racing a re-arm.
 
-- [ ] **M5.5** -- Integration: delete then recreate the watched directory; assert the `Suspended` ... `Resumed`
-  bracket with `Desync { Reestablished }` and that watching resumes; assert cancellation while faulted; verify
-  recovery never wedges.
+- [ ] **M5.6** -- Observable stall and diagnostics (D-31): a watcher parked not-re-arming (faulted per D-28,
+  or backpressured per D-29) is indistinguishable from "nothing is changing" unless reported, so expose the
+  state and emit a diagnostic. Settle the transport first: a library emitting output is a dependency
+  decision (`eprintln!` is unfilterable and wrong for a library; the `log` facade is near-zero cost when no
+  logger is installed but is a public dependency), and per the repository's architectural pre-step rule the
+  first emission site must introduce an output abstraction rather than a call. It must **not** be a
+  client-supplied sink, which would be a callback on our path (D-2).
+
+- [ ] **M5.7** -- Integration: delete then recreate the watched directory; assert the `Suspended` ...
+  `Resumed` bracket with `Desync { Reestablished }` and that watching resumes; assert an interactive
+  subscription is asked and its answer honoured, that the earliest of several answers wins, that a decliner
+  is counted at its default, and that the floor clamps a zero answer; assert cancellation while faulted and
+  while awaiting an answer; verify recovery never wedges.
 
 ## M6 -- Coarse fallback
 

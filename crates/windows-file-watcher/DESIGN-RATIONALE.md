@@ -42,8 +42,12 @@ on a pool thread. The enforceable property is about the call graph instead: we
 never call into the client, so nothing the client does can stall or unwind our
 cadence. See D-25 for the single, bounded exception.
 
-This forced the retry-control shape. An early proposal was a reactive per-fault
-hook the client answers. Two constraints killed it:
+This originally forced the retry-control shape into **resident policy data** with
+no per-fault exchange at all (D-16). That was overturned on 2026-08-21 by D-27,
+and the overturn is worth recording carefully, because D-16's reasoning was half
+right.
+
+Its two objections were:
 
 1. **"The hook is in the queue."** A synchronous callback would run on the pool
    thread -- the exact thing we're avoiding.
@@ -51,12 +55,70 @@ hook the client answers. Two constraints killed it:
    while the monitor's retry timer is already scheduled is, by construction, a
    race.
 
-The only shape satisfying both is **resident policy data**: the client sets/updates
-a backoff value through ordinary serialized request-queue items, and the single
-serialized fault handler reads it as inert data. Nothing decides concurrently
-(no race), and no client code runs on the cadence (no stall, no panic). A policy
-update's effect relative to a fault is fixed by their order in the queue, not by
-timing. (D-16)
+Objection 1 was written against a **synchronous callback** and never applied to a
+*queued* exchange, where the client receives a fault notification and responds
+through the ordinary request queue with no callback anywhere. The D-2 correction
+above weakened it further.
+
+Objection 2 is the load-bearing one, and it dissolves on inspection: the race
+exists only if a timer is **already scheduled** when the answer arrives. It is
+not. On fault the watcher latches and schedules *nothing*, so there is no timer
+to race. The race was an artifact of wanting to keep retrying while asking; drop
+that, and the objection goes with it.
+
+What survives from D-16 is its reduction rule -- one coalesced watcher over
+several subscriptions needs a deterministic winner -- and that carries into D-27
+unchanged, now applied to answers rather than to resident values.
+
+There is a real cost, stated plainly: interactive mode makes recovery depend on
+the client answering, which D-14's "retries autonomously and indefinitely" does
+not. That is why the mode is **per subscription and opt-in**: a client that says
+nothing keeps the autonomous behaviour, so D-14 remains true by default rather
+than being quietly weakened everywhere.
+
+## Two rings would not have fixed it (D-29)
+
+When the queue-fills problem arose, a two-ring split -- control and observation
+-- was proposed, on the grounds that one ring with two different contracts is
+confusing. It was rejected for a decisive reason: **two rings gives you two rings
+that can both fill.** Ring count is a taxonomy question and the problem is
+unchanged by it.
+
+The actual constraint is that neither obvious response is available. *Blocking*
+at a full ring is a deadlock rather than backpressure, because the writer is an
+I/O completion holding a pool thread and the client's drain may itself be a pool
+callback -- the very doorbell integration D-25 exists to enable -- so the cadence
+can block pool threads waiting for a drain that needs one. *Dropping* is fine for
+observation, whose loss `Desync` makes recoverable, and unavailable for control,
+whose loss is a liveness bug because the client waits forever for something that
+already happened.
+
+So each producer is throttled somewhere other than at the enqueue, which is what
+D-29 records. The observation half is the interesting one: refusing to re-arm the
+read pushes backpressure into the *kernel's* change buffer, which turns what had
+been an immediate loss into a grace period, and makes the loss that does
+eventually occur an honest kernel overflow rather than a drop we chose.
+
+## The doorbell should not have been a trait (D-25)
+
+The first proposal was a client-implemented `Doorbell` trait, justified by
+composition: an event handle reaches only Win32 waits, a method reaches a
+semaphore, a completion-port post, or an async `Waker`.
+
+That justification does not survive contact with the platform. On Windows the
+HANDLE **is** the universal waitable currency, so an event is the native
+composition point rather than a lowest common denominator. And the single case it
+does not reach -- an async `Waker` -- is a short bridge the client writes on *its
+own* pool. Abstracting that bridge into a trait would have moved the client's
+wake onto our cadence path, importing precisely the problem D-2 exists to
+prevent: the trait would have solved a composition problem by creating a
+correctness one.
+
+Owning the doorbell removed the D-2 exception outright, removed the generic
+parameter that would have infected `Monitor`, `Session`, and `Sender`, removed
+the must-not-block/must-not-panic contract, and moved the reset discipline from a
+client obligation to an internal invariant -- so lost wakeups became impossible
+by construction rather than by documentation.
 
 ### Per-subscription policy under directory coalescing (D-6, D-16)
 
