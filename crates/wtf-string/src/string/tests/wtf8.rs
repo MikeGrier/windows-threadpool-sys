@@ -5,6 +5,12 @@
 // (`str::from_utf8` / `String::from_utf8_lossy`) is the oracle wherever the
 // documented contract delegates to it. Cross-width parity tests pin the shared,
 // encoding-generic `str`-level semantics to the `Wtf16` arm.
+use std::borrow::ToOwned;
+use std::format;
+use std::string::{String, ToString};
+use std::vec;
+use std::vec::Vec;
+
 use crate::{Wtf8, Wtf8Str, Wtf8String, Wtf16String, WtfEncoding};
 
 // The encoding's named terminator (mirrors the sibling `tests` module).

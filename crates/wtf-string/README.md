@@ -15,10 +15,12 @@ conversion and no per-call allocation.
   allocation-free, while content spans exclude only that terminator (interior
   NULs in content are still preserved).
 - **Portable core** — storage and `str`/`String` conversions work everywhere;
-  only the `OsStr`/`OsString` interop is Windows-only.
+  only the `OsStr`/`OsString` interop is Windows-only. The crate is `no_std` at
+  its root: turn off the default `std` feature and the whole core, including the
+  FFI pointer surface, still builds on `alloc` alone.
 - **Optional `windows` interop** — the off-by-default `windows-core` feature
   implements `Param<PCWSTR>` for `&Wtf16String`, so high-level `windows` APIs
-  accept it directly with no conversion. With no features on, the crate has zero
+  accept it directly with no conversion. Without it, the crate has zero
   dependencies.
 
 Status: in development. See [CHECKLIST.md](CHECKLIST.md) and

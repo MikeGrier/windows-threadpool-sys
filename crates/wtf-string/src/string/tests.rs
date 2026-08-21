@@ -1,4 +1,13 @@
 // Copyright (c) 2026 Mike Grier
+// The crate is `no_std`; tests are std-only, so name the alloc types and macros
+// the `core` prelude does not provide. (Imported explicitly rather than via a
+// prelude glob, which would shadow `core`'s `panic!` and warn.)
+use std::borrow::ToOwned;
+use std::format;
+use std::string::String;
+use std::vec;
+use std::vec::Vec;
+
 use super::{Wtf16, Wtf16Str, Wtf16String, WtfEncoding};
 
 // The encoding's named terminator, so assertions don't embed the raw 0 tag.

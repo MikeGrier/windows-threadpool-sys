@@ -2,7 +2,9 @@
 //! Windows integration: lossless `OsStr` <-> WTF-16 round-trips (including
 //! unpaired surrogates and interior NULs) and a real wide (`*W`) Win32 call fed
 //! straight from our pointer with no conversion.
-#![cfg(windows)]
+// The interop under test is gated on `std` as well as Windows (D-11), so this
+// whole target compiles away in an `alloc`-only build.
+#![cfg(all(windows, feature = "std"))]
 
 use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};

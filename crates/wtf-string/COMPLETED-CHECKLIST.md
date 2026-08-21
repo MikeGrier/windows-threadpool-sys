@@ -127,3 +127,22 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
   with no conversion. Asserts the bound is satisfied (it would not compile otherwise), that the callee receives
   the string's own terminated pointer, that the pointer walks back as a C string, that a real `lstrlenW` call
   agrees with our length, and that an interior NUL truncates exactly as the wrapped pointer's contract says.
+
+## Moved 2026-08-21 -- M9 no_std / alloc-only support
+
+### M9 -- `no_std` / `alloc`-only support
+
+- [x] **M9.1** -- `no_std` / `alloc`-only support: gate the `std`-only surface (the `OsStr`/`OsString` interop)
+  behind a default `std` feature, and build the portable core (storage, `str`/`String` conversions, FFI
+  pointer surface) on `alloc` alone (D-11). The crate root is unconditionally `#![no_std]` + `extern crate
+  alloc`, so the core cannot silently reacquire a `std` dependency; `std` is additionally linked under
+  `cfg(test)` (tests are std-only) and `cfg(doc)` (so `std::ffi::OsStr` intra-doc links resolve in an
+  alloc-only doc build). The `std` feature forwards to `windows-core`'s own `std` when that optional
+  dependency is enabled. Recorded as D-18.
+
+- [x] **M9.2** -- CI: an `alloc`-only (`--no-default-features`) build+test target so the portable core stays
+  verified without `std`. The new `alloc-only` job builds and lints the crate for the bare-metal
+  `thumbv7em-none-eabi` target -- which ships no `std` at all, so success is real proof of `no_std`-ness,
+  unlike `--no-default-features` on a host -- and runs the alloc-only test configuration on the host, where a
+  harness exists. Verified the gate is not vacuous: the same target build *fails* at `extern crate std`
+  (E0463) when the `std` feature is on.

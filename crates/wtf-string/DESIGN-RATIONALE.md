@@ -207,3 +207,41 @@ That is not a new hazard -- it is precisely the C-string caveat of the pointer
 being wrapped, and `&HSTRING`'s impl behaves identically -- but it is pinned by
 a test so the behaviour cannot drift unnoticed.
 
+## The no_std baseline (D-18)
+
+D-5 already committed to a portable core: storage and the `str` conversions use
+only `core`/`alloc` facilities (`str::encode_utf16`, `char::decode_utf16`,
+`String::from_utf16[_lossy]`, `str::utf8_chunks`), and only the `OsStr` interop
+is platform-gated. M9 makes that claim structural rather than incidental. The
+crate root is unconditionally `#![no_std]` with `extern crate alloc`, so the
+portable core cannot quietly acquire a `std` dependency: it would stop
+compiling.
+
+The `std` feature is therefore **additive and narrow**. It adds exactly one
+thing -- the Windows `OsStr`/`OsString` interop -- because `OsStr` lives in
+`std` and, unlike `String`/`Vec`, has no `alloc`-only equivalent to fall back
+on. Everything else the crate offers, including the mutation surface (D-16) and
+the whole FFI pointer surface (D-9), is available `alloc`-only. The feature is
+on by default so the ordinary Windows user sees no change; turning it off is
+what an embedded or `alloc`-only consumer does.
+
+Two linkage details are worth recording because they are easy to get wrong.
+`std` is also linked under `cfg(test)`, since the tests are std-only (they use
+`HashMap`, `DefaultHasher`, `OsString`); the library itself never is. And it is
+linked under `cfg(doc)`, because the docs link to `std::ffi::OsStr` and
+`std::ffi::OsString` throughout to explain what this crate is an analog *of* --
+without that, an `alloc`-only documentation build would fail the workspace's
+deny-broken-intra-doc-links rule.
+
+**How `no_std`-ness is proven matters more than the claim.** Running
+`--no-default-features` on a normal host target is weak evidence: `std` still
+exists there, so a dependency that crept back in could still link and the build
+would pass. CI therefore builds the crate for a **bare-metal target**
+(`thumbv7em-none-eabi`), which ships no `std` at all, so success is a real
+proof. The converse was checked too: building that same target *with* the `std`
+feature fails at `extern crate std` (E0463), which confirms the gate is
+load-bearing rather than vacuous. Because the tests need a harness and are
+std-only, the alloc-only *behaviour* is exercised by a host test run of the same
+feature configuration; the target build covers `no_std`-ness, the host run
+covers correctness.
+

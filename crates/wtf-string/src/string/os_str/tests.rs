@@ -1,4 +1,6 @@
 // Copyright (c) 2026 Mike Grier
+use std::vec::Vec;
+
 use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 

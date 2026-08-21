@@ -120,6 +120,39 @@ jobs:
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets --all-features --locked
 
+  alloc-only:
+    name: wtf-string (alloc-only, no_std)
+    runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: thumbv7em-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      # A bare-metal target ships no `std` at all, so this is what actually
+      # proves the portable core is `no_std`: `--no-default-features` on a host
+      # target would still link fine if a `std` dependency crept back in. The
+      # converse is verified too -- building this target *with* the `std` feature
+      # fails at `extern crate std`, so the gate is not vacuous.
+      - name: cargo build (bare-metal no_std target)
+        run: cargo build -p wtf-string --no-default-features --target thumbv7em-none-eabi --locked
+      - name: cargo clippy (bare-metal no_std target)
+        run: cargo clippy -p wtf-string --no-default-features --target thumbv7em-none-eabi --locked -- -D warnings
+      # The tests are std-only (they use `HashMap`, `DefaultHasher`, ...), so the
+      # alloc-only configuration is exercised on the host, where a test harness
+      # exists. This covers the portable core's behaviour; the target build above
+      # covers its `no_std`-ness.
+      - name: cargo test (alloc-only, host)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p wtf-string --no-default-features --locked --no-fail-fast
+
   portable:
     name: wtf-string (non-Windows)
     strategy:

@@ -3,6 +3,12 @@
 // (well-formed, ill-formed, and boundary values) with property tests that assert
 // each behavior across the whole corpus. `std` (`String::from_utf16[_lossy]`) is
 // the oracle wherever the documented contract (D-8) delegates to it.
+use std::borrow::ToOwned;
+use std::format;
+use std::string::{String, ToString};
+use std::vec;
+use std::vec::Vec;
+
 use crate::{Wtf16, Wtf16Str, Wtf16String, WtfEncoding};
 
 // The encoding's named terminator (mirrors the sibling `tests` module).

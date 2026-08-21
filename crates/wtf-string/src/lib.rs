@@ -27,6 +27,11 @@
 //!
 //! # Features
 //!
+//! - **`std`** (on by default) -- adds the Windows `OsStr` / `OsString` interop.
+//!   `OsStr` lives in `std` and has no `alloc`-only equivalent, so it is the one
+//!   part of the crate that needs it. With this feature off the crate is
+//!   `no_std` + `alloc`: storage, `str` / `String` conversions, the mutation
+//!   surface and the whole FFI pointer surface all still work.
 //! - **`windows-core`** (off by default) -- implements the high-level `windows`
 //!   crate's `Param<PCWSTR>` for `&Wtf16String`, so a `windows` API taking
 //!   `impl Param<PCWSTR>` accepts our type directly, handing over the
@@ -36,11 +41,22 @@
 //!   against one `windows-core` version, so a caller must resolve to that same
 //!   semver-compatible version for it to apply.
 //!
-//! With no features enabled the crate has **zero dependencies**.
+//! The crate is `#![no_std]` at its root and pulls in `alloc`. Unless the
+//! `windows-core` feature is on, it has **zero dependencies**.
 //!
 //! See the crate's design records for the full set of decisions.
 
+#![no_std]
 #![warn(missing_docs)]
+
+extern crate alloc;
+
+// `std` is linked when the `std` feature is on (the `OsStr` interop needs it),
+// under `cfg(test)` (the harness and tests use `HashMap`, `DefaultHasher`, ...),
+// and under `cfg(doc)` so intra-doc links to `std` items resolve even in an
+// `alloc`-only documentation build. The portable core itself never uses it.
+#[cfg(any(feature = "std", test, doc))]
+extern crate std;
 
 mod encoding;
 mod string;

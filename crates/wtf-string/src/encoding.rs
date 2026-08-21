@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Mike Grier
 //! The [`WtfEncoding`] storage seam and its [`Wtf16`] and [`Wtf8`] encodings.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 /// A code-unit encoding for a [`WtfString`](crate::WtfString) / [`WtfStr`](crate::WtfStr).
 ///
 /// This trait is the storage-width seam: the API common to every width is written

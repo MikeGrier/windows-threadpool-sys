@@ -1,4 +1,6 @@
 // Copyright (c) 2026 Mike Grier
+use std::vec::Vec;
+
 use windows_core::{PCWSTR, Param, ParamValue};
 
 use crate::Wtf16String;

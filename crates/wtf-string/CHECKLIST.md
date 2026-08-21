@@ -1,7 +1,7 @@
 # Checklist: wtf-string
 
 `OsString`-shaped strings with native `u16` (WTF-16) storage. Design and decisions
-(D-1...D-17) are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) (Tier 1),
+(D-1...D-18) are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) (Tier 1),
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) (Tier 2), and
 [design-sessions/DESIGN-SESSION-2026-08-19-wtf-string.md](design-sessions/DESIGN-SESSION-2026-08-19-wtf-string.md)
 (Tier 3).
@@ -11,15 +11,6 @@ end-of-milestone gate (default build/test/clippy/doc clean, encoding check, sync
 with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
-
-## M9 -- `no_std` / `alloc`-only support
-
-- [ ] **M9.1** -- `no_std` / `alloc`-only support: gate the `std`-only surface (the `OsStr`/`OsString` interop)
-  behind a default `std` feature, and build the portable core (storage, `str`/`String` conversions, FFI
-  pointer surface) on `alloc` alone (D-11).
-
-- [ ] **M9.2** -- CI: an `alloc`-only (`--no-default-features`) build+test target so the portable core stays
-  verified without `std`.
 
 ## M10 -- Documentation, examples, publication readiness
 

@@ -19,7 +19,15 @@ categories = ["encoding", "os::windows-apis", "text-processing"]
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["std"]
+
+# `std` adds the Windows `OsStr`/`OsString` interop, which has no `alloc`-only
+# equivalent (`OsStr` lives in `std`). Turning it off builds the portable core --
+# storage, `str`/`String` conversions, the mutation surface, and the FFI pointer
+# surface -- on `alloc` alone (D-11). The `windows-core?/std` forward only
+# applies when that optional dependency is also enabled.
+std = ["windows-core?/std"]
+
 # Interop with the high-level `windows` crate: adds `Param<PCWSTR>` for
 # `&Wtf16String`, so a `windows` API taking `impl Param<PCWSTR>` accepts our
 # type directly with no conversion (D-10). Off by default, so the crate keeps
@@ -32,7 +40,9 @@ default = []
 windows-core = ["dep:windows-core"]
 
 [dependencies]
-windows-core = { version = "0.62.2", optional = true }
+# `default-features = false` keeps this usable from an `alloc`-only build; our
+# own `std` feature forwards to its `std` when both are on.
+windows-core = { version = "0.62.2", optional = true, default-features = false }
 
 # The storage and str/String conversions are portable; only the OsStr/OsString
 # interop is Windows-only. Build docs on a Windows target so that surface is

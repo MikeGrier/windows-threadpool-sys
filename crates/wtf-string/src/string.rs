@@ -1,11 +1,15 @@
 // Copyright (c) 2026 Mike Grier
 //! The owned [`WtfString`] and borrowed [`WtfStr`] string types.
 
-use std::borrow::Borrow;
-use std::cmp::Ordering;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
-use std::ops::Deref;
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::borrow::Borrow;
+use core::cmp::Ordering;
+use core::fmt::{self, Debug, Display, Formatter};
+use core::hash::{Hash, Hasher};
+use core::ops::Deref;
 
 use crate::encoding::{Wtf8, Wtf16, WtfEncoding};
 
@@ -506,7 +510,7 @@ impl Wtf16String {
     ///
     /// # Safety
     ///
-    /// This copies the range through `std::slice::from_raw_parts` and shares its
+    /// This copies the range through `core::slice::from_raw_parts` and shares its
     /// preconditions. When `len > 0` the caller must guarantee that:
     /// - `ptr` is non-null and properly aligned for `u16`;
     /// - `ptr` is valid for reads of `len` consecutive, initialized `u16` values,
@@ -529,13 +533,14 @@ impl Wtf16String {
         // SAFETY: `len > 0`, and the caller guarantees `ptr` is non-null, valid,
         // and aligned for `len` reads; the slice is used only to copy and is not
         // retained.
-        let content = unsafe { std::slice::from_raw_parts(ptr, len) };
+        let content = unsafe { core::slice::from_raw_parts(ptr, len) };
         Self::from_units(content)
     }
 }
 
 // Windows `OsStr` / `OsString` interop is the only platform-gated surface (D-5).
-#[cfg(windows)]
+// It also needs `std`: `OsStr`/`OsString` have no `alloc`-only equivalent (D-11).
+#[cfg(all(windows, feature = "std"))]
 mod os_str;
 
 // `windows`-crate `Param<PCWSTR>` interop, off unless the feature is on (D-10).
