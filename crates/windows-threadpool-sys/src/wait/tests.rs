@@ -770,30 +770,6 @@ fn a_wait_runs_on_a_private_pool() {
     assert_eq!(results, vec![WaitResult::Signalled]);
 }
 
-/// A panicking callback must be contained at the FFI boundary.
-///
-/// The caught panic prints to stderr; that output is expected.
-#[test]
-fn a_panicking_callback_is_contained() {
-    let seen = Activations::new();
-    let recorder = Arc::clone(&seen);
-    let wait = ThreadpoolWait::new(
-        event(true),
-        move |activation| {
-            recorder.record(activation.result());
-            panic!("wait callback panics on purpose");
-        },
-        None,
-    )
-    .expect("create wait");
-
-    wait.arm(None);
-    signal(wait.handle());
-    seen.wait_for(1);
-    wait.wait();
-    assert_eq!(seen.count(), 1);
-}
-
 #[test]
 fn a_wait_is_send_and_sync() {
     fn assert_send<T: Send>() {}

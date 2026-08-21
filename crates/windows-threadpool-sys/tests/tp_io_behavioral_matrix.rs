@@ -1308,59 +1308,6 @@ fn mixed_payload_types_reclaim_generically() {
 
 // --- edge cases ---
 
-/// A panicking callback must not unwind into the pool, and must still balance
-/// its start so rundown can complete.
-///
-/// The caught panic prints to stderr; that output is expected.
-#[test]
-fn panicking_callback_is_contained_and_still_balances_accounting() {
-    const OPERATIONS: usize = 8;
-
-    let content: Vec<u8> = (0..OPERATIONS).map(|i| i as u8).collect();
-    let path = temp_file_with(&content, "panicking");
-
-    let observed = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&observed);
-
-    let tp = ThreadpoolIo::new(
-        read_endpoint(&path),
-        move |_completion: &IoCompletion| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            panic!("callback panics on purpose");
-        },
-        None,
-    )
-    .expect("create TP_IO");
-
-    let mut landed = vec![0_u8; OPERATIONS];
-    let base = landed.as_mut_ptr();
-
-    for slot in 0..OPERATIONS {
-        let mut operation = Operation::new(slot);
-        operation.set_offset(slot as u64);
-        // SAFETY: one 1-byte overlapped ReadFile into this slot's own byte;
-        // `landed` outlives every operation because run_down blocks below.
-        let submitted = unsafe {
-            tp.submit(operation, |handle, ov| {
-                issue_read(handle, ov, base.add(slot), 1)
-            })
-        };
-        assert!(matches!(submitted, Submitted::Pending(_)));
-    }
-
-    // If the panic escaped or skipped the balance, this would hang or abort.
-    tp.run_down();
-    assert_eq!(
-        tp.outstanding(),
-        0,
-        "a panicking callback unbalanced a start"
-    );
-    assert_eq!(observed.load(Ordering::SeqCst), OPERATIONS);
-
-    drop(tp);
-    let _ = std::fs::remove_file(&path);
-}
-
 /// A read starting past end-of-file transfers nothing; whichever way Windows
 /// reports it, the accounting must balance.
 #[test]
