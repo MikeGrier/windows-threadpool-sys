@@ -13,35 +13,12 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M2.1.** M1 is archived; nothing else is in progress. Note that a *satisfied
-> cross-component prerequisite does not make its item startable* -- M17 in `windows-threadpool-sys` cleared
-> the external dependency for M6.1, but M6.1 remains gated behind M2 through M5 by ordinary intra-component
-> dependency order, because a coarse watcher has no subscriptions to notify (M3/M4) and no fault machine to
-> re-establish through (M5) until those land. Work the milestones in order.
-
-## M2 -- Detailed single-directory watcher
-
-- [x] **M2.1** -- Owned directory handle: `CreateFileW(FILE_LIST_DIRECTORY, FILE_SHARE_READ|WRITE|DELETE,
-  OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED)`; classify open errors (retryable vs
-  not-found vs unsupported).
-
-- [x] **M2.2** -- Arm and complete: issue `ReadDirectoryChangesW` through `windows-threadpool-sys`
-  `ThreadpoolIo` (the overlapped seam with the generation-stamped identity, D-3/D-4); decode the completion
-  into a batch (M1) and re-arm around processing to minimise the inherent loss window.
-
-- [x] **M2.3** -- Deliver batches into a crate-owned queue endpoint (the interim, entirely in-crate delivery
-  target for this milestone; the session/receiver split lands in M3, D-11) so the crate never calls into
-  client code on its cadence path; tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte
-  completion.
-
-- [x] **M2.4** -- Teardown: cancel the outstanding read, drain the pool I/O, and free the context via
-  owned-object `Drop` (D-20), with re-arm suppression inherited from `ThreadpoolIo` rundown. The arm gate of
-  D-23 already provides the suppression; formalise it, and note that the same not-re-arming state is what
-  D-29 reuses for backpressure and D-28 for faults.
-
-- [x] **M2.5** -- Integration: create/modify/delete/rename in a temp directory and assert raw actions and
-  relative names; force a burst overflow and assert `Desync { Overflow }`; assert clean teardown with an
-  operation outstanding.
+> **NEXT ACTIONABLE ITEM: M3.1.** M1 and M2 are archived; nothing else is in progress. Note that a
+> *satisfied cross-component prerequisite does not make its item startable* -- M17 in
+> `windows-threadpool-sys` cleared the external dependency for M6.1, but M6.1 remains gated behind M3
+> through M5 by ordinary intra-component dependency order, because a coarse watcher has no subscriptions to
+> notify (M3/M4) and no fault machine to re-establish through (M5) until those land. Work the milestones in
+> order.
 
 ## M3 -- Monitor, session, watch handle, and the two queues
 
