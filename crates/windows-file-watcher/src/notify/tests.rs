@@ -319,6 +319,23 @@ fn zero_offset_trailing_alignment_padding_decodes_cleanly() {
     assert_eq!(c[0].name.as_wide(), w("a").as_slice());
 }
 
+#[test]
+fn zero_offset_misaligned_trailing_tail_is_desync() {
+    // A name is a whole number of UTF-16 units, so a record always ends on an even
+    // offset and its DWORD padding is exactly 0 or 2 bytes -- never 1 or 3. A tail
+    // of any other length is undescribed data (a truncated or corrupt completion),
+    // not padding, and must desync rather than be silently discarded.
+    for extra in [1usize, 3] {
+        let mut buf = record(0, FILE_ACTION_ADDED, &w("a")); // 14 bytes
+        buf.resize(buf.len() + extra, 0);
+        assert_eq!(
+            desync(&buf),
+            DesyncCause::Overflow,
+            "a {extra}-byte tail is not valid DWORD padding"
+        );
+    }
+}
+
 // --- the internal raw walk ---
 
 #[test]

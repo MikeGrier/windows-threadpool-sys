@@ -67,12 +67,15 @@ jobs:
             ok=0
             max_attempts=60
             for attempt in $(seq 1 "$max_attempts"); do
-              # --connect-timeout/--max-time bound a stalled connection so a
-              # hung request can never prevent the loop from reaching
-              # max_attempts; a curl failure (non-zero exit, e.g. a timeout)
-              # falls through to "000" rather than aborting the script (set -e
-              # is not in effect here, but the `||` keeps this explicit).
-              status="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 20 "https://crates.io/api/v1/crates/${dep_name}/${dep_version}" || echo 000)"
+              # --connect-timeout/--max-time bound a stalled connection so a hung
+              # request can never prevent the loop from reaching max_attempts.
+              # On failure curl exits non-zero; its -w output is unreliable then
+              # (it emits "000" for a connect failure but may emit nothing for
+              # others), so the status is set explicitly in the failure branch
+              # rather than appended to whatever curl printed.
+              if ! status="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 20 "https://crates.io/api/v1/crates/${dep_name}/${dep_version}")"; then
+                status=000
+              fi
               if [ "$status" = "200" ]; then
                 echo "${dep_name} ${dep_version} is available"
                 ok=1

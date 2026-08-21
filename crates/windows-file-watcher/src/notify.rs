@@ -32,6 +32,10 @@ const UNIT_LEN: usize = 2;
 /// `NextEntryOffset` is a multiple of this, and records begin on this boundary.
 const RECORD_ALIGNMENT: usize = 4;
 
+/// The `NextEntryOffset` value marking the final record of a chain. This is the
+/// kernel's wire-format sentinel; changing it is a breaking change to the parser.
+const FINAL_RECORD_OFFSET: usize = 0;
+
 /// Byte offsets of the fixed `FILE_NOTIFY_INFORMATION` fields within a record.
 ///
 /// These describe the kernel's wire layout; changing any value is a breaking
@@ -166,7 +170,7 @@ impl Iterator for Records<'_> {
         // within that span; a name that is odd, overruns the buffer, or reaches
         // past `NextEntryOffset` into the following record is malformed, and we
         // stop rather than read a partial code unit or another record's bytes.
-        let record_span = if next_offset == 0 {
+        let record_span = if next_offset == FINAL_RECORD_OFFSET {
             rec.len()
         } else {
             next_offset.min(rec.len())
@@ -181,11 +185,13 @@ impl Iterator for Records<'_> {
         };
 
         // A final record (`NextEntryOffset == 0`) must be the buffer's last bytes,
-        // apart from up to `RECORD_ALIGNMENT - 1` bytes of DWORD padding. A larger
-        // remainder is data the chain does not describe -- possibly further records
-        // whose link was zeroed -- so treat it as malformed rather than silently
+        // apart from the DWORD padding that aligns it. A name is a whole number of
+        // UTF-16 units, so `name_end` is always even and its padding is exactly 0
+        // or 2 bytes -- never 1 or 3. Any other remainder is data the chain does
+        // not describe -- possibly further records whose link was zeroed, or a
+        // truncated completion -- so treat it as malformed rather than silently
         // dropping the tail (which would understate the batch and lose changes).
-        if next_offset == 0 {
+        if next_offset == FINAL_RECORD_OFFSET {
             let padded_end = match name_end.checked_add(RECORD_ALIGNMENT - 1) {
                 Some(sum) => sum & !(RECORD_ALIGNMENT - 1),
                 None => {
@@ -194,7 +200,7 @@ impl Iterator for Records<'_> {
                     return None;
                 }
             };
-            if rec.len() > padded_end {
+            if rec.len() != name_end && rec.len() != padded_end {
                 self.pos = None;
                 self.malformed = true;
                 return None;
@@ -211,7 +217,7 @@ impl Iterator for Records<'_> {
         // offset that is unaligned or would overflow the position is a corrupt
         // link: the current record is still yielded, but the chain is marked
         // malformed and iteration stops.
-        self.pos = if next_offset == 0 {
+        self.pos = if next_offset == FINAL_RECORD_OFFSET {
             None
         } else if next_offset.is_multiple_of(RECORD_ALIGNMENT) && next_offset >= name_end {
             match pos.checked_add(next_offset) {
