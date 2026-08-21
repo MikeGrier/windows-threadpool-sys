@@ -31,7 +31,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::directory::DirectoryHandle;
-use crate::queue::{DEFAULT_BOUND, Receiver, Sender, WatchId, channel_with_bound};
+use crate::queue::{
+    DEFAULT_BOUND, Notification, Outcome, Receiver, Reservation, Sender, WatchId,
+    channel_with_bound,
+};
 use crate::servicing::{Rejected, Servicer};
 use crate::session::Session;
 use crate::watch::{RetryMode, WatchOptions};
@@ -52,11 +55,19 @@ pub enum Request {
         options: WatchOptions,
         /// The session sink this subscription delivers to (D-11).
         sink: Sender,
+        /// The slot this request's completion will occupy, taken before the
+        /// request was submitted so delivering it cannot fail (D-33).
+        completion: Reservation,
     },
     /// Stop watching, and release the watcher.
     Cancel {
         /// The subscription to end.
         watch: WatchId,
+        /// As for `Subscribe`, but reserved at *registration* rather than at
+        /// cancellation: `Drop` has no way to report a refused reservation, so
+        /// the room for a cancellation completion is held for the whole life of
+        /// the subscription.
+        completion: Reservation,
     },
 }
 
@@ -74,14 +85,23 @@ impl std::fmt::Debug for Request {
                 .field("path", path)
                 .field("options", options)
                 .finish_non_exhaustive(),
-            Request::Cancel { watch } => f.debug_struct("Cancel").field("watch", watch).finish(),
+            Request::Cancel { watch, .. } => f
+                .debug_struct("Cancel")
+                .field("watch", watch)
+                .finish_non_exhaustive(),
         }
     }
 }
 
 /// One live subscription's resident state.
 struct Subscribed {
-    watcher: DirectoryWatcher,
+    /// The watcher, once one could be started.
+    ///
+    /// `None` while the target cannot be opened for a *retryable* reason (D-22):
+    /// the subscription is registered and will be established when the target
+    /// becomes openable, which M5.1's state machine is what actually drives.
+    /// Until then it exists so the registration is not silently forgotten.
+    watcher: Option<DirectoryWatcher>,
     /// Kept because [`RetryMode`] is chosen at registration and consumed later,
     /// by M5.3's fault protocol; the registration call is the only place it can
     /// be stated (D-27).
@@ -214,7 +234,7 @@ impl Monitor {
         self.core.servicer.quiesce();
     }
 
-    /// How many subscriptions the monitor currently watches.
+    /// How many subscriptions the monitor currently holds.
     #[must_use]
     pub fn watcher_count(&self) -> usize {
         lock(&self.resident).watchers.len()
@@ -232,10 +252,22 @@ impl Monitor {
             .map(|subscribed| subscribed.options.retry)
     }
 
-    /// Whether a subscription is currently being watched.
+    /// Whether a subscription is registered, established or not.
+    #[must_use]
+    pub fn is_registered(&self, watch: WatchId) -> bool {
+        lock(&self.resident).watchers.contains_key(&watch)
+    }
+
+    /// Whether a subscription currently has a live watcher.
+    ///
+    /// Distinct from [`Monitor::is_registered`]: a subscription whose target
+    /// cannot be opened yet is registered but not watching (D-14).
     #[must_use]
     pub fn is_watching(&self, watch: WatchId) -> bool {
-        lock(&self.resident).watchers.contains_key(&watch)
+        lock(&self.resident)
+            .watchers
+            .get(&watch)
+            .is_some_and(|subscribed| subscribed.watcher.is_some())
     }
 
     /// Whether the monitor is still accepting requests.
@@ -277,29 +309,87 @@ fn service(resident: &Mutex<Resident>, request: Request) {
             path,
             options,
             sink,
+            completion,
         } => {
-            // A failed open leaves no watcher, and for now says nothing. M3.6 is
-            // where this becomes a completion (D-30): a permanent failure such as
-            // D-22's `NotADirectory` otherwise leaves a client holding a `Watch`
-            // that can never fire and never says why.
-            let Ok(directory) = DirectoryHandle::open(&path) else {
-                return;
-            };
-            let Ok(watcher) = DirectoryWatcher::start(directory, options.subtree, watch, sink)
-            else {
-                return;
-            };
-            lock(resident)
-                .watchers
-                .insert(watch, Subscribed { watcher, options });
+            let outcome = subscribe(resident, watch, &path, options, sink);
+            completion.send(Notification::Completion { watch, outcome });
         }
-        Request::Cancel { watch } => {
+        Request::Cancel { watch, completion } => {
             // Removed under the lock, dropped outside it: dropping tears the
             // watcher down, which blocks on its callbacks, and holding the
             // resident lock across that wait would serialise teardown against
             // every other reader for no reason.
             let removed = lock(resident).watchers.remove(&watch);
             drop(removed);
+
+            // Sent only once the watcher is fully stopped, which is what makes
+            // the ordering guarantee structural: nothing from this subscription
+            // can be enqueued after this point, so a client seeing `Cancelled`
+            // knows everything before it belongs to the live watch and nothing
+            // after it does (D-30).
+            completion.send(Notification::Completion {
+                watch,
+                outcome: Outcome::Cancelled,
+            });
+        }
+    }
+}
+
+/// Register one subscription, reporting what became of it.
+fn subscribe(
+    resident: &Mutex<Resident>,
+    watch: WatchId,
+    path: &std::path::Path,
+    options: WatchOptions,
+    sink: Sender,
+) -> Outcome {
+    let directory = match DirectoryHandle::open(path) {
+        Ok(directory) => directory,
+        Err(error) if error.failure().is_retryable() => {
+            // Registered but not yet established. D-14 has no terminal fault
+            // state, so this is a state to recover from rather than a failure to
+            // report; M5.1 is what drives the recovery.
+            lock(resident).watchers.insert(
+                watch,
+                Subscribed {
+                    watcher: None,
+                    options,
+                },
+            );
+            return Outcome::Establishing;
+        }
+        Err(error) => {
+            // Permanent (D-22): the caller named something that can never be a
+            // watched directory, so nothing is registered and the client is told
+            // rather than left holding a `Watch` that can never fire.
+            return Outcome::Failed {
+                failure: error.failure(),
+            };
+        }
+    };
+
+    match DirectoryWatcher::start(directory, options.subtree, watch, sink) {
+        Ok(watcher) => {
+            lock(resident).watchers.insert(
+                watch,
+                Subscribed {
+                    watcher: Some(watcher),
+                    options,
+                },
+            );
+            Outcome::Subscribed
+        }
+        Err(_) => {
+            // Arming failed against a directory that opened, which D-15 classifies
+            // as rearm-and-retry rather than fatal.
+            lock(resident).watchers.insert(
+                watch,
+                Subscribed {
+                    watcher: None,
+                    options,
+                },
+            );
+            Outcome::Establishing
         }
     }
 }

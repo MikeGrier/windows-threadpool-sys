@@ -101,6 +101,7 @@ use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, ResetEvent, SetEvent,
 };
 
+use crate::directory::OpenFailure;
 use crate::notify::{Change, DesyncCause};
 
 /// The bound used when a caller does not choose one.
@@ -139,6 +140,38 @@ impl WatchId {
     }
 }
 
+/// How a request turned out.
+///
+/// Registration is asynchronous (D-2), so the outcome cannot be the return value
+/// of the call that made the request; it arrives here instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Outcome {
+    /// The subscription is registered and the monitor is watching for it.
+    Subscribed,
+    /// The subscription is registered, but the target could not be opened yet.
+    ///
+    /// Retryable in D-22's sense -- a path that does not exist yet, a network
+    /// share that is briefly unreachable -- so the monitor keeps the
+    /// subscription and will establish it when it can. This is not a failure and
+    /// carries no terminal meaning (D-14).
+    Establishing,
+    /// The target can never be watched, so nothing was registered.
+    ///
+    /// Only D-22's permanent pair reaches here, and both mean the caller named
+    /// something that is not a watchable directory rather than that anything went
+    /// wrong in the environment. Retrying would spin forever against input that
+    /// will never become valid.
+    Failed {
+        /// Which permanent failure it was.
+        failure: OpenFailure,
+    },
+    /// The subscription has ended and its watcher is released.
+    ///
+    /// Its position in the stream is the guarantee: everything before it belongs
+    /// to the live watch, and nothing after it does (D-30).
+    Cancelled,
+}
+
 /// One item a client receives, always tagged with the subscription it belongs to.
 ///
 /// Changes and desyncs ride the same queue so their order relative to one another
@@ -160,6 +193,16 @@ pub enum Notification {
         /// How the gap arose. Advisory: the response is a re-scan either way.
         cause: DesyncCause,
     },
+    /// A request the client made has been serviced (D-30).
+    ///
+    /// Carried on this queue rather than a side channel so that its ordering
+    /// against data is **structural** rather than temporal.
+    Completion {
+        /// The subscription the request concerned.
+        watch: WatchId,
+        /// What happened.
+        outcome: Outcome,
+    },
 }
 
 impl Notification {
@@ -167,7 +210,9 @@ impl Notification {
     #[must_use]
     pub fn watch(&self) -> WatchId {
         match self {
-            Notification::Batch { watch, .. } | Notification::Desync { watch, .. } => *watch,
+            Notification::Batch { watch, .. }
+            | Notification::Desync { watch, .. }
+            | Notification::Completion { watch, .. } => *watch,
         }
     }
 }

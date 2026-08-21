@@ -38,7 +38,7 @@ use std::io;
 use std::path::Path;
 
 use crate::monitor::Request;
-use crate::queue::WatchId;
+use crate::queue::{Reservation, WatchId};
 use crate::session::Session;
 
 /// How the monitor should recover a subscription from a fault (D-27).
@@ -107,17 +107,24 @@ impl WatchOptions {
 pub struct Watch {
     id: WatchId,
     session: Session,
-    /// Set once a cancellation has been enqueued, so `Drop` after an explicit
-    /// `cancel` does not enqueue a second one.
-    cancelled: bool,
+    /// The queue slot the cancellation completion will occupy, reserved at
+    /// registration.
+    ///
+    /// Held for the whole life of the subscription because `Drop` is a
+    /// cancellation path with nowhere to report a refused reservation: taking
+    /// the room up front is what makes "dropping cancels" reliable rather than
+    /// best-effort (D-33). Taken when the cancellation is enqueued, so `None`
+    /// also records that this watch has already been cancelled and `Drop` must
+    /// not enqueue a second one.
+    cancellation: Option<Reservation>,
 }
 
 impl Watch {
-    pub(crate) fn new(id: WatchId, session: Session) -> Self {
+    pub(crate) fn new(id: WatchId, session: Session, cancellation: Reservation) -> Self {
         Self {
             id,
             session,
-            cancelled: false,
+            cancellation: Some(cancellation),
         }
     }
 
@@ -134,20 +141,24 @@ impl Watch {
     ///
     /// The same operation `Drop` performs, said explicitly. It returns once the
     /// cancellation is *enqueued*, not once it has taken effect, so a
-    /// notification already in the client's queue still arrives.
+    /// notification already in the client's queue still arrives. The
+    /// `Cancelled` completion marks where the watch actually ended (D-30).
     pub fn cancel(mut self) {
         self.enqueue_cancel();
     }
 
     /// Enqueue the cancellation exactly once.
     fn enqueue_cancel(&mut self) {
-        if self.cancelled {
+        let Some(completion) = self.cancellation.take() else {
             return;
-        }
-        self.cancelled = true;
+        };
         // A shut-down monitor has already torn every watcher down, so there is
-        // nothing left for this request to do and its rejection is not an error.
-        let _ = self.session.submit(Request::Cancel { watch: self.id });
+        // nothing left for this request to do; the rejection is not an error, and
+        // dropping the rejected request releases the reserved slot.
+        let _ = self.session.submit(Request::Cancel {
+            watch: self.id,
+            completion,
+        });
     }
 }
 
@@ -167,6 +178,13 @@ pub(crate) fn subscribe(
     path: &Path,
     options: WatchOptions,
 ) -> io::Result<Watch> {
+    // Both slots are taken before the request is submitted, which is what makes
+    // the two completions undroppable (D-33). Reserving the cancellation slot
+    // here rather than at cancellation time is what lets `Drop` cancel reliably:
+    // it has nowhere to report a refusal.
+    let completion = session.sink().reserve().ok_or_else(saturated)?;
+    let cancellation = session.sink().reserve().ok_or_else(saturated)?;
+
     let id = session.next_watch();
     let request = Request::Subscribe {
         watch: id,
@@ -176,6 +194,7 @@ pub(crate) fn subscribe(
         // every notification from this subscription to the receiver the client
         // got alongside the session (D-11).
         sink: session.sink().clone(),
+        completion,
     };
     session.submit(request).map_err(|_| {
         io::Error::new(
@@ -183,7 +202,19 @@ pub(crate) fn subscribe(
             "the monitor has shut down, so no new subscription can be registered",
         )
     })?;
-    Ok(Watch::new(id, session.clone()))
+    Ok(Watch::new(id, session.clone(), cancellation))
+}
+
+/// The notification queue has no room to promise this subscription's completions.
+///
+/// This is where backpressure is meant to land: on the client's own thread, at
+/// the call that asked for the work, rather than at a delivery with no safe way
+/// to fail (D-29/D-33).
+fn saturated() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "the notification queue is full, so a subscription's completions cannot be guaranteed",
+    )
 }
 
 #[cfg(test)]

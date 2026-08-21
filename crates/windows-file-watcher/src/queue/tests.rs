@@ -52,7 +52,7 @@ fn names(notification: &Notification) -> Vec<String> {
             .iter()
             .map(|c| c.name.to_os_string().to_string_lossy().into_owned())
             .collect(),
-        Notification::Desync { .. } => Vec::new(),
+        Notification::Desync { .. } | Notification::Completion { .. } => Vec::new(),
     }
 }
 

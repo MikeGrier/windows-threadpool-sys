@@ -69,8 +69,8 @@ pub mod unstable {
     pub use crate::directory::{DirectoryHandle, OpenError, OpenFailure};
     pub use crate::monitor::{Monitor, Request};
     pub use crate::queue::{
-        DEFAULT_BOUND, Delivery, Notification, Receiver, Reservation, Sender, WatchId, channel,
-        channel_with_bound,
+        DEFAULT_BOUND, Delivery, Notification, Outcome, Receiver, Reservation, Sender, WatchId,
+        channel, channel_with_bound,
     };
     pub use crate::servicing::Rejected;
     pub use crate::session::Session;

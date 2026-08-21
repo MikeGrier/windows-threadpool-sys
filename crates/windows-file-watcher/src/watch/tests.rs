@@ -5,12 +5,14 @@
 //! and both ways of ending one end it -- plus the binding between a subscription
 //! and the receiver its notifications reach.
 
+use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
 use super::{RetryMode, WatchOptions};
+use crate::directory::OpenFailure;
 use crate::monitor::Monitor;
 use crate::notify::ChangeKind;
-use crate::queue::{Notification, Receiver, WatchId};
+use crate::queue::{Notification, Outcome, Receiver, WatchId};
 use crate::testing::TempDir;
 
 /// Upper bound for waiting on a change the kernel really should report.
@@ -275,27 +277,6 @@ fn the_retry_mode_stated_at_registration_is_recorded() {
 }
 
 #[test]
-fn subscribing_to_a_path_that_cannot_be_watched_starts_no_watcher() {
-    // It also says nothing, which is the gap M3.6 closes: a permanent failure
-    // (D-22) currently leaves a client holding a `Watch` that can never fire.
-    let dir = TempDir::new("watch-missing");
-    let monitor = Monitor::new().expect("create the monitor");
-    let (session, _receiver) = monitor.session();
-
-    let watch = session
-        .subscribe(dir.path().join("no-such-directory"), WatchOptions::new())
-        .expect("the request is accepted; whether it can be watched is not known yet");
-    monitor.quiesce();
-
-    assert!(!monitor.is_watching(watch.id()));
-    assert_eq!(monitor.watcher_count(), 0);
-
-    drop(watch);
-    drop(monitor);
-    dir.cleanup();
-}
-
-#[test]
 fn subscribing_after_shutdown_fails() {
     let dir = TempDir::new("watch-closed");
     let monitor = Monitor::new().expect("create the monitor");
@@ -329,5 +310,314 @@ fn a_watch_outliving_its_monitor_drops_without_wedging() {
     drop(watch);
     assert!(started.elapsed() < Duration::from_secs(5));
 
+    dir.cleanup();
+}
+
+// --- request completions (D-30) ---
+
+/// Drain until a completion for `watch` arrives, returning its outcome.
+fn await_completion(receiver: &Receiver, watch: WatchId) -> Outcome {
+    let deadline = Instant::now() + NOTIFY_TIMEOUT;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_default();
+        assert!(
+            !remaining.is_zero(),
+            "timed out waiting for a completion for {watch:?}"
+        );
+        let Some(item) = receiver.recv_timeout(remaining) else {
+            continue;
+        };
+        if let Notification::Completion {
+            watch: reported,
+            outcome,
+        } = item
+            && reported == watch
+        {
+            return outcome;
+        }
+    }
+}
+
+#[test]
+fn a_successful_subscribe_reports_itself() {
+    let dir = TempDir::new("completion-ok");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+
+    let watch = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+
+    assert_eq!(await_completion(&receiver, watch.id()), Outcome::Subscribed);
+
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn a_permanently_unwatchable_target_is_reported_rather_than_silent() {
+    // The case D-30 exists for: a client would otherwise hold a `Watch` that can
+    // never fire and never says why.
+    let dir = TempDir::new("completion-file");
+    let file = dir.path().join("a-file-not-a-directory.txt");
+    std::fs::write(&file, b"x").expect("create the file");
+
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(&file, WatchOptions::new())
+        .expect("register");
+
+    assert_eq!(
+        await_completion(&receiver, watch.id()),
+        Outcome::Failed {
+            failure: OpenFailure::NotADirectory
+        }
+    );
+    monitor.quiesce();
+    assert!(
+        !monitor.is_registered(watch.id()),
+        "a permanent failure registers nothing"
+    );
+
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn an_interior_nul_is_reported_as_a_permanent_failure() {
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe("c:\\some\0path", WatchOptions::new())
+        .expect("register");
+
+    assert_eq!(
+        await_completion(&receiver, watch.id()),
+        Outcome::Failed {
+            failure: OpenFailure::InvalidPath
+        }
+    );
+
+    drop(watch);
+    drop(monitor);
+}
+
+#[test]
+fn a_target_that_does_not_exist_yet_is_establishing_rather_than_failed() {
+    // D-14 has no terminal fault state, so a path that may appear later is a
+    // state to recover from, not a failure to report. The subscription stays
+    // registered; M5.1 is what drives the recovery.
+    let dir = TempDir::new("completion-missing");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(dir.path().join("not-yet"), WatchOptions::new())
+        .expect("register");
+
+    assert_eq!(
+        await_completion(&receiver, watch.id()),
+        Outcome::Establishing
+    );
+    monitor.quiesce();
+    assert!(monitor.is_registered(watch.id()), "still a subscription");
+    assert!(!monitor.is_watching(watch.id()), "but not yet established");
+
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn cancelling_reports_itself() {
+    let dir = TempDir::new("completion-cancel");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+
+    let watch = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    let id = watch.id();
+    assert_eq!(await_completion(&receiver, id), Outcome::Subscribed);
+
+    watch.cancel();
+    assert_eq!(await_completion(&receiver, id), Outcome::Cancelled);
+
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn dropping_a_watch_reports_the_cancellation_too() {
+    // `Drop` has nowhere to report a refused reservation, which is why the
+    // cancellation's slot is taken at registration; this asserts the completion
+    // that guarantee exists to make possible.
+    let dir = TempDir::new("completion-drop");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+
+    let watch = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    let id = watch.id();
+    assert_eq!(await_completion(&receiver, id), Outcome::Subscribed);
+
+    drop(watch);
+    assert_eq!(await_completion(&receiver, id), Outcome::Cancelled);
+
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn nothing_follows_a_cancellation_in_the_stream() {
+    // The structural ordering D-30 buys: because the completion is enqueued only
+    // once the watcher is fully stopped, a client can treat `Cancelled` as a
+    // boundary rather than having to reason about timing.
+    let dir = TempDir::new("completion-order");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+
+    let watch = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    let id = watch.id();
+    assert_eq!(await_completion(&receiver, id), Outcome::Subscribed);
+
+    // Generate real traffic right up to the cancellation, so the boundary is
+    // being asserted against a stream that is actually moving.
+    for index in 0..200 {
+        std::fs::write(dir.path().join(format!("f-{index}.txt")), b"x").expect("create");
+    }
+    watch.cancel();
+
+    let mut seen_cancelled = false;
+    let deadline = Instant::now() + NOTIFY_TIMEOUT;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_default();
+        assert!(!remaining.is_zero(), "timed out draining the stream");
+        let Some(item) = receiver.recv_timeout(remaining) else {
+            if seen_cancelled {
+                break;
+            }
+            continue;
+        };
+        match item {
+            Notification::Completion {
+                watch: reported,
+                outcome: Outcome::Cancelled,
+            } if reported == id => seen_cancelled = true,
+            other => assert!(
+                !seen_cancelled || other.watch() != id,
+                "nothing for a cancelled watch may follow its cancellation, saw {other:?}"
+            ),
+        }
+        if seen_cancelled && receiver.is_empty() {
+            break;
+        }
+    }
+    assert!(seen_cancelled, "the cancellation must be reported");
+
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn a_completion_is_delivered_even_when_the_queue_is_saturated() {
+    // The point of reserving at submit (D-33): change traffic cannot crowd out a
+    // completion, however far behind the client is.
+    let dir = TempDir::new("completion-full");
+    let monitor = Monitor::new().expect("create the monitor");
+    // Four slots: two are this subscription's reservations, leaving almost
+    // nothing for observation.
+    let (session, receiver) = monitor.session_with_bound(NonZeroUsize::new(4).expect("non-zero"));
+
+    let watch = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    let id = watch.id();
+    monitor.quiesce();
+
+    // Saturate with real change traffic and never drain.
+    for index in 0..500 {
+        std::fs::write(dir.path().join(format!("f-{index}.txt")), b"x").expect("create");
+    }
+    std::thread::sleep(Duration::from_millis(100));
+
+    watch.cancel();
+
+    // Both completions must survive, however much change traffic was dropped or
+    // latched around them: neither ever competed for the room they were promised.
+    let mut outcomes = Vec::new();
+    loop {
+        let outcome = await_completion(&receiver, id);
+        outcomes.push(outcome);
+        if outcome == Outcome::Cancelled {
+            break;
+        }
+    }
+    assert!(
+        outcomes.contains(&Outcome::Subscribed),
+        "the registration completion was lost to saturation, saw {outcomes:?}"
+    );
+
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn registration_is_refused_when_no_completion_can_be_promised() {
+    // Backpressure lands here, on the client's own thread at the call that asked
+    // for the work, rather than at a delivery with no safe way to fail.
+    let dir = TempDir::new("completion-backpressure");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session_with_bound(NonZeroUsize::new(2).expect("non-zero"));
+
+    // The first subscription takes both slots: one for its completion, one
+    // standing for its cancellation.
+    let first = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+
+    let error = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect_err("there is no room to promise a second subscription's completions");
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+
+    drop(first);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn every_subscription_gets_exactly_one_completion_of_each_kind() {
+    let dir = TempDir::new("completion-count");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+
+    let watches: Vec<_> = (0..16)
+        .map(|_| {
+            session
+                .subscribe(dir.path(), WatchOptions::new())
+                .expect("register")
+        })
+        .collect();
+    let ids: Vec<WatchId> = watches.iter().map(super::Watch::id).collect();
+    for id in &ids {
+        assert_eq!(await_completion(&receiver, *id), Outcome::Subscribed);
+    }
+
+    drop(watches);
+    for id in &ids {
+        assert_eq!(await_completion(&receiver, *id), Outcome::Cancelled);
+    }
+
+    drop(monitor);
     dir.cleanup();
 }

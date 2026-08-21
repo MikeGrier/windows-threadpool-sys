@@ -118,7 +118,7 @@ impl Collected {
             .into_iter()
             .filter_map(|item| match item {
                 Notification::Batch { changes, .. } => Some(changes),
-                Notification::Desync { .. } => None,
+                Notification::Desync { .. } | Notification::Completion { .. } => None,
             })
             .flatten()
             .map(|change| {
@@ -135,7 +135,7 @@ impl Collected {
             .into_iter()
             .filter_map(|item| match item {
                 Notification::Desync { cause, .. } => Some(cause),
-                Notification::Batch { .. } => None,
+                Notification::Batch { .. } | Notification::Completion { .. } => None,
             })
             .collect()
     }
