@@ -394,9 +394,8 @@ fn fill(sender: &super::Sender, watch: WatchId, count: usize) {
 
 #[test]
 fn the_default_bound_is_reported() {
-    let (sender, receiver) = channel();
+    let (_sender, receiver) = channel();
     assert_eq!(receiver.capacity(), super::DEFAULT_BOUND.get());
-    assert_eq!(sender.capacity(), super::DEFAULT_BOUND.get());
 }
 
 #[test]

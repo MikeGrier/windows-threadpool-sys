@@ -27,11 +27,6 @@
 //! inline in the payload -- the `Box` indirection is what keeps the address the
 //! kernel was given valid.
 
-// The watcher is driven by this crate's own tests and, from M3, by the monitor;
-// it is reachable publicly only under `unstable-internals`, so under default
-// features parts of it read as dead. Remove this when M3 gives it a real caller.
-#![allow(dead_code)]
-
 use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -125,15 +120,6 @@ impl ReadBuffer {
 /// cadence path (D-2/D-11).
 type BatchSink = Sender;
 
-/// How a watcher stopped, if it did.
-///
-/// A watcher that cannot re-arm has no way to keep reporting changes. Recording
-/// why lets M5's fault machine classify it; for now it is observable state.
-#[derive(Debug)]
-pub(crate) struct ArmFailure {
-    pub(crate) error: io::Error,
-}
-
 /// Whether the watcher may still submit a read, and if not, why.
 ///
 /// A bare boolean would be enough for teardown alone, but "not re-arming" is a
@@ -179,7 +165,7 @@ struct WatcherInner {
     /// new one can start.
     gate: Mutex<ArmGate>,
     /// The failure that stopped re-arming, if any.
-    stopped: Mutex<Option<ArmFailure>>,
+    stopped: Mutex<Option<io::Error>>,
 }
 
 impl WatcherInner {
@@ -354,7 +340,7 @@ impl WatcherInner {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         if stopped.is_none() {
-            *stopped = Some(ArmFailure { error });
+            *stopped = Some(error);
             drop(stopped);
             // Dropping out of the watch loop means changes from here on are
             // unobserved, which is precisely a desync (D-12). M5 replaces this
@@ -502,8 +488,8 @@ impl DirectoryWatcher {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .as_ref()
-            .map(|failure| {
-                failure.error.raw_os_error().map_or_else(
+            .map(|error| {
+                error.raw_os_error().map_or_else(
                     || io::Error::other("watcher stopped"),
                     io::Error::from_raw_os_error,
                 )

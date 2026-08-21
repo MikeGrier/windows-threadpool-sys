@@ -10,27 +10,12 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/windows-file-watcher"
-description = "Memory-safe ReadDirectoryChangesW notification decoding for a Windows path-change watcher (in development)."
+description = "Memory-safe, queue-mediated Windows path-change watching over ReadDirectoryChangesW (in development)."
 keywords = ["windows", "filesystem", "notify", "watcher", "ffi"]
 categories = ["api-bindings", "os::windows-apis", "filesystem"]
 
 [lib]
 path = "src/lib.rs"
-
-[features]
-# Exposes the interim M2 internals (the directory watcher and its crate-owned
-# queue) as a `#[doc(hidden)]` module so this crate's own integration tests can
-# drive the arm/complete/re-arm loop end to end. Not semver-covered, and deleted
-# together with the module when M3's `Monitor`/`Session`/`Watch` surface lands.
-unstable-internals = []
-
-# The M2 loop's overflow and teardown behaviour is only observable at a scale the
-# unit tests should not carry, and the loop is not reachable from the crate's
-# public surface, which deliberately ships only the decoder until M3.
-[[test]]
-name = "watcher_loop"
-path = "tests/watcher_loop.rs"
-required-features = ["unstable-internals"]
 
 # The crate is Windows-only, so docs.rs must build it on a Windows target or it
 # would resolve to an empty crate and document nothing.

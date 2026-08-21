@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-48** -- later
-decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, D-34 from M2.4, D-35
-from M2.5, D-36/D-37 from M3.1, D-38 from M3.2, D-39/D-40 from M3.3, D-41/D-42 from M3.4, D-43/D-44 from M3.5, D-45/D-46 from M3.6, D-47/D-48 from M3.7, D-32 from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-49** -- later
+decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-32 from M8.1, and
+D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -13,88 +13,11 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M3.8.** M1 and M2 are archived and M3.1...M3.7 are complete; nothing else is in
-> progress. Note that a *satisfied cross-component prerequisite does not make its item startable* -- M17 in
-> `windows-threadpool-sys` cleared the external dependency for M6.1, but M6.1 remains gated behind M3
-> through M5 by ordinary intra-component dependency order, because a coarse watcher has no subscriptions to
-> notify (M3/M4) and no fault machine to re-establish through (M5) until those land. Work the milestones in
-> order.
-
-## M3 -- Monitor, session, watch handle, and the two queues
-
-> **Restructured 2026-08-21** after the [fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md).
-> The original M3 had grown to nine items with `M3.3.x` sub-items wedged between peers, its queue item still
-> described the drop-on-full policy D-29 replaced, and completions were ordered before the `WatchId` they
-> correlate by. It is now eight flat items in dependency order. That is above the ~5 guideline and stays
-> that way deliberately: splitting it would renumber M4 through M8, and four cross-component references in
-> **append-only archives** (the root and threadpool completed-plans trackers, threadpool's
-> COMPLETED-CHECKLIST, and wtf-string's) point at `M6.1` and `M8`. Rewriting history in four archives to
-> tidy one milestone's size is the worse trade.
-
-- [x] **M3.1** -- `Monitor`: owns the servicing path; the request queue is drained by a `ThreadpoolWork`
-  that serialises resident-state mutations (D-2); `Monitor::Drop` blocks on full rundown (D-20). Includes
-  the SQ doorbell (D-25): `ThreadpoolWork::submit()` is already the ring, but each call queues another drain
-  and they do not coalesce -- subscribing to 500 paths would queue 500 drains, 499 finding the queue already
-  emptied -- so ring only when no drain is already outstanding, computed under the queue lock. **Corrected
-  during execution** ([D-36](DESIGN-NOTES.md)): this item originally said to ring on the *empty -> non-empty*
-  transition, which coalesces but does not serialise, and serialising is the part D-2 needs.
-
-- [x] **M3.2** -- `Session` obtained from the monitor: bundles a request-submission handle (MPSC producers)
-  and the crate-owned notification sender (D-2/D-11); provide `monitor.session()` returning the session plus
-  the client-side receiver. **Re-planned during execution:** this item also carried "and a variant accepting
-  a caller-supplied bound", which has been moved to M3.3. A bound is meaningless until *full* has a defined
-  behaviour, and that behaviour is M3.3's reservation discipline; shipping the parameter first would have
-  been an API that silently does not do what it says. M3.3 already owned the zero-bound rejection, so the
-  constructor and its validation now land together.
-
-- [x] **M3.3** -- Bound the notification queue (D-11) and add the **reservation discipline** ([D-33](DESIGN-NOTES.md)):
-  capacity for a control message is reserved before its producer proceeds, so a completion or fault report
-  can never fail to be delivered, while change notifications reserve nothing and stay best-effort. Desyncs
-  ride the queue in order like any other notification (D-12/D-26); the per-`WatchId` coalescing latch is the
-  **fallback for when the observation tier cannot enqueue**, which is also the only way to report `QueueFull`
-  at all, since saying the queue is full cannot itself require a slot. Reject a zero bound at construction,
-  and add `monitor.session_with_bound(...)` alongside the unbounded `monitor.session()` (moved here from
-  M3.2, which could not give the bound a meaning).
-
-- [x] **M3.4** -- The CQ doorbell (D-25): `Receiver::doorbell()` returning a manual-reset event handle,
-  created lazily so a `recv()`-only client allocates no kernel object, so a client can drain from its own
-  `ThreadpoolWait` rather than dedicating a thread to a blocking `recv()`. Crate-owned, not a client trait --
-  the receiver resets under the queue lock on observing empty and the sender sets after enqueue, making lost
-  wakeups impossible by construction and leaving only harmless spurious ones. Record the rejected trait
-  alternative in the module docs, since "why isn't this a trait?" is the obvious question.
-
-- [x] **M3.5** -- Affine `Watch` (D-5): `#[must_use]`, `Drop` enqueues cancellation, explicit `cancel()`,
-  and a `Copy` `WatchId`; subscribe/unsubscribe requests plumbed through the serialised request queue.
-  Registration also carries the D-27 retry mode -- **defaults** or **interactive** -- because the mode is a
-  property of the subscription and the registration call is the only place to state it; M5.3 consumes it but
-  cannot retrofit the API without a breaking change.
-
-- [x] **M3.6** -- Request completions (D-30): every request yields a completion carried on the notification
-  queue, correlated by `WatchId`, whose slot was **reserved at submit** ([D-33](DESIGN-NOTES.md)) so delivery
-  cannot fail. Ordering against data is then structural rather than temporal -- a `Cancelled` in the stream
-  means everything before it belongs to the live watch and nothing after it does. Includes the permanent
-  subscribe failures of D-22 (`NotADirectory`, `InvalidPath`), which have no retry path and would otherwise
-  leave a client holding a `Watch` that can never fire and never says so.
-
-- [x] **M3.7** -- Backpressure (D-29). **Control needs no throttle**: [D-33](DESIGN-NOTES.md)'s reservation
-  means a completion always fits, so request draining can never be blocked by a full ring and backpressure
-  instead lands on the client's own `subscribe()` call at reservation time, on the client's own thread.
-  **Observation** is unreserved, so throttle it at the arm: do not re-arm the read while the queue is full,
-  propagating backpressure into the kernel's change buffer as a grace period. Because observation holds no
-  reservation, a batch can still arrive to a full ring when a control reservation took the room since the
-  read was armed -- that batch is dropped and the loss reported by D-28's latch, the one path where a
-  notification is discarded. Never block at the enqueue: the writer may hold a pool thread while the
-  client's drain needs one, which is a deadlock rather than backpressure.
-
-- [ ] **M3.8** -- Integration: several subscriptions through one session delivering to one receiver; cancel
-  via `Drop` and via `cancel()`, asserting the `Cancelled` completion and that nothing for that watch
-  follows it in the stream; in-order delivery within a subscription; a permanent subscribe failure reported
-  as a completion rather than silence; saturate the queue and assert the watcher stops re-arming rather than
-  dropping, that the latched `Desync` reaches the receiver, and that both re-arming and request draining
-  resume once the receiver drains. Also retires the interim test-only surface of [D-35](DESIGN-NOTES.md):
-  rewrite `tests/watcher_loop.rs` against the real public surface, then delete the `unstable-internals`
-  feature and the `unstable` module, and with them the three `#![allow(dead_code)]` suppressions they stand
-  in for (`directory`, `queue`, `watcher`).
+> **NEXT ACTIONABLE ITEM: M4.1.** M1, M2 and M3 are archived; nothing else is in progress. Note that a
+> *satisfied cross-component prerequisite does not make its item startable* -- M17 in
+> `windows-threadpool-sys` cleared the external dependency for M6.1, but M6.1 remains gated behind M4 and
+> M5 by ordinary intra-component dependency order, because a coarse watcher has no per-directory routing
+> (M4) and no fault machine to re-establish through (M5) until those land. Work the milestones in order.
 
 ## M4 -- Coalescing by directory and file targets
 

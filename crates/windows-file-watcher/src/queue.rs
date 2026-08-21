@@ -78,15 +78,9 @@
 //! there is nothing to take -- so a wakeup cannot be lost in the gap between
 //! those two decisions, because there is no gap.
 //!
-//! This is the interim, entirely in-crate endpoint for M2. The session/receiver
-//! split, the bounded overflow policy with its latched `Desync { QueueFull }`,
-//! and the doorbell all land in M3.
-
-// The queue reaches a client through `Session`, but its reservation half has no
-// production producer until M3.6 issues request completions and M5 issues fault
-// reports, so part of this surface reads as dead under default features. Remove
-// this when those land.
-#![allow(dead_code)]
+//! This is the crate-owned notification queue. A client holds the [`Receiver`]
+//! and drains it; nothing in this module is reachable from client code except
+//! through that.
 
 use std::collections::VecDeque;
 use std::io;
@@ -410,11 +404,6 @@ impl Sender {
             .resumers
             .push(Arc::downgrade(who) as Weak<dyn Resume>);
     }
-
-    /// The queue's bound.
-    pub fn capacity(&self) -> usize {
-        lock(&self.shared.items).capacity
-    }
 }
 
 /// A claimed slot in the notification queue.
@@ -686,7 +675,11 @@ impl std::fmt::Debug for Receiver {
 }
 
 /// Create a connected sender/receiver pair with the default bound.
-pub fn channel() -> (Sender, Receiver) {
+///
+/// A client reaches a queue through [`Monitor::session`](crate::monitor::Monitor::session),
+/// which chooses the bound; this exists for tests that need a queue without one.
+#[cfg(test)]
+pub(crate) fn channel() -> (Sender, Receiver) {
     channel_with_bound(DEFAULT_BOUND)
 }
 

@@ -20,12 +20,7 @@
 //! Failures are classified rather than surfaced raw, because the retry policy is
 //! driven by the *class* of failure, not the code. See [`OpenFailure`].
 
-// Reachable publicly only under `unstable-internals`, so under default features
-// the accessors used by the tests and by M3's monitor read as dead. Remove this
-// with that feature, in M3, rather than letting it mask genuinely dead code.
-#![allow(dead_code)]
-
-use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 
 use wtf_string::Wtf16String;
@@ -116,11 +111,6 @@ impl OpenError {
     /// How this failure should be treated by the retry policy.
     pub fn failure(&self) -> OpenFailure {
         self.failure
-    }
-
-    /// The underlying OS error.
-    pub fn source(&self) -> &std::io::Error {
-        &self.source
     }
 }
 
@@ -244,11 +234,6 @@ impl DirectoryHandle {
             ));
         }
         Ok(())
-    }
-
-    /// Borrow the handle.
-    pub(crate) fn as_handle(&self) -> BorrowedHandle<'_> {
-        self.handle.as_handle()
     }
 
     /// Consume the wrapper and surrender the handle.

@@ -81,13 +81,8 @@ impl Session {
 
     /// Submit a request to the monitor.
     ///
-    /// Returns as soon as the request is queued; it is serviced on the monitor's
-    /// own path, never on the calling thread.
-    ///
-    /// # Errors
-    ///
-    /// Returns the request unserviced if the monitor has shut down.
-    pub fn submit(&self, request: Request) -> Result<(), Rejected<Request>> {
+    /// Crate-internal; see [`Request`] for why.
+    pub(crate) fn submit(&self, request: Request) -> Result<(), Rejected<Request>> {
         self.core.submit(request)
     }
 

@@ -74,3 +74,50 @@ operation) and D-35 (how the loop is tested, and why its overflow is forced rath
 `pub(crate)` loop. Its removal is queued as part of **M3.8** in [CHECKLIST.md](CHECKLIST.md), together with
 the three `#![allow(dead_code)]` suppressions it stands in for. It is noted here so the archive does not
 read as if M2 closed with nothing outstanding.
+
+## Moved 2026-08-21 -- M3: monitor, session, watch handle, and the two queues
+
+The queue-mediated model, end to end: a `Monitor` servicing requests on one serialised path, `Session`s
+binding a submission handle to a notification destination, an affine `Watch`, a bounded notification queue
+with the reservation discipline, and a doorbell on each direction. M3.8 also retired the `unstable-internals`
+scaffolding of D-35, so the crate now ships its real public surface.
+
+Added decisions D-36/D-37 (the SQ doorbell's edge is "a drain is outstanding", and `Request` was uninhabited
+until it had variants), D-38 (a session is a handle on the monitor, not a co-owner), D-39/D-40 (the latch is
+drained into the queue at the next enqueue; the bound is a `NonZeroUsize`), D-41/D-42 (the doorbell is one
+predicate re-established under the queue lock, handed out borrowed and owned), D-43/D-44 (identifiers are
+per-monitor and registration options are non-exhaustive; registration's failure is not the caller's return
+value), D-45/D-46 (a subscription reserves two slots because `Drop` cannot report a refusal; a retryable open
+is `Establishing`), and D-47/D-48 (resuming needs a re-check under the gate lock, and happens on this crate's
+own pool).
+
+Two items were corrected during execution rather than after: M3.1's doorbell condition (which coalesced but
+did not serialise) and M3.2's bound parameter (which had no meaning until M3.3 defined one, and moved there).
+
+- [x] **M3.1** -- `Monitor`: owns the servicing path; the request queue is drained by a `ThreadpoolWork`
+  that serialises resident-state mutations (D-2); `Monitor::Drop` blocks on full rundown (D-20). Includes
+  the SQ doorbell (D-25), ringing only when no drain is already outstanding.
+
+- [x] **M3.2** -- `Session` obtained from the monitor: bundles a request-submission handle (MPSC producers)
+  and the crate-owned notification sender (D-2/D-11); `monitor.session()` returns the session plus the
+  client-side receiver.
+
+- [x] **M3.3** -- Bound the notification queue (D-11) and add the reservation discipline (D-33): control
+  reserves its capacity before proceeding, observation reserves nothing and stays best-effort, and the
+  per-`WatchId` coalescing latch reports a loss that could not be enqueued.
+
+- [x] **M3.4** -- The CQ doorbell (D-25): a lazily created manual-reset event, so a client can drain from
+  its own `ThreadpoolWait` rather than dedicating a thread to a blocking `recv()`.
+
+- [x] **M3.5** -- Affine `Watch` (D-5): `#[must_use]`, `Drop` enqueues cancellation, explicit `cancel()`,
+  and a `Copy` `WatchId`; subscribe/cancel plumbed through the serialised request queue, with the D-27
+  retry mode stated at registration.
+
+- [x] **M3.6** -- Request completions (D-30), reserved at submit (D-33), including the permanent subscribe
+  failures of D-22.
+
+- [x] **M3.7** -- Backpressure (D-29): control needs no throttle, and observation is throttled at the arm
+  so saturation becomes a grace period in the kernel's change buffer rather than a loss.
+
+- [x] **M3.8** -- Integration through the public surface, and retirement of the `unstable-internals`
+  feature, the `unstable` module, and the three `#![allow(dead_code)]` suppressions it stood in for.

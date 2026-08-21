@@ -629,7 +629,7 @@ fn watch_bounded(dir: &Path, bound: usize) -> (DirectoryWatcher, Receiver) {
 }
 
 /// Block until `predicate` holds, failing rather than hanging.
-fn wait_for<F: Fn() -> bool>(what: &str, predicate: F) {
+fn wait_for<F: FnMut() -> bool>(what: &str, mut predicate: F) {
     let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
     while !predicate() {
         assert!(
@@ -809,6 +809,67 @@ fn pausing_and_resuming_repeatedly_does_not_wedge() {
             watcher.stop_reason()
         );
     }
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn an_overflowed_read_is_reported_as_a_desync_and_the_watch_continues() {
+    // Moved here from the integration suite when M3.8 retired the test-only
+    // surface: forcing an overflow needs the completion buffer undersized below a
+    // single record, and buffer size is deliberately not a client's business.
+    //
+    // Overflow is otherwise a race a test cannot win reliably -- the kernel only
+    // discards when records pile up in the window between a completion and the
+    // re-arm, and nothing outside this crate can widen that window. Driving a
+    // burst against a roomy buffer does overflow, but was measured between 1.5
+    // and 15 seconds for the same assertion.
+    const UNDERSIZED_BUFFER_BYTES: usize = 16;
+
+    let dir = TempDir::new("watcher-overflow");
+    let handle = DirectoryHandle::open(dir.path()).expect("open the watched directory");
+    let (sender, receiver) = channel();
+    let watcher =
+        DirectoryWatcher::start_with(handle, false, UNDERSIZED_BUFFER_BYTES, test_watch(), sender)
+            .expect("arm the first read");
+
+    let overflows = |receiver: &Receiver| {
+        let mut count = 0;
+        while let Some(item) = receiver.try_recv() {
+            if matches!(
+                item,
+                Notification::Desync {
+                    cause: DesyncCause::Overflow,
+                    ..
+                }
+            ) {
+                count += 1;
+            }
+        }
+        count
+    };
+
+    let mut seen = 0;
+    std::fs::write(dir.path().join("first.txt"), b"first").expect("the first change");
+    wait_for("the overflow", || {
+        seen += overflows(&receiver);
+        seen >= 1
+    });
+
+    // A second one can only arrive if the completion path re-armed after the
+    // first: an overflow is a report, not a stop.
+    std::fs::write(dir.path().join("second.txt"), b"second").expect("the second change");
+    wait_for("a second overflow, which requires a re-arm", || {
+        seen += overflows(&receiver);
+        seen >= 2
+    });
+
+    assert!(
+        watcher.is_watching(),
+        "an overflow must not stop the watcher: {:?}",
+        watcher.stop_reason()
+    );
 
     drop(watcher);
     dir.cleanup();

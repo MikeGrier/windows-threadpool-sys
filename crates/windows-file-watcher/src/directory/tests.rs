@@ -109,9 +109,6 @@ fn the_handle_is_usable_and_reports_itself() {
         format!("{handle:?}").contains("DirectoryHandle"),
         "Debug names the type"
     );
-    // Borrowing must not consume or invalidate the owned handle.
-    let _borrowed = handle.as_handle();
-    assert!(!handle.as_raw().is_null());
     dir.cleanup();
 }
 
@@ -240,8 +237,13 @@ fn a_failure_preserves_the_underlying_os_error() {
     let dir = TempDir::new("preserve-os-error");
     let missing = dir.path().join("nope");
     let error = DirectoryHandle::open(&missing).expect_err("must fail");
+    // Through the `Error::source` chain, which is the surface a caller actually
+    // has: the classification is ours, the code underneath is the platform's.
+    let underlying = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .expect("the original error is kept as the source");
     assert!(
-        error.source().raw_os_error().is_some(),
+        underlying.raw_os_error().is_some(),
         "the original OS error code is kept for diagnostics"
     );
     assert!(

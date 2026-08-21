@@ -2,21 +2,56 @@
 //! Memory-safe Windows path-change watching with full `ReadDirectoryChangesW`
 //! fidelity and a `FindFirstChangeNotification` coarse fallback.
 //!
-//! **In development: this crate currently ships only the notification decoder**
-//! ([`decode_batch`] and the [`Change`] / [`ChangeKind`] / [`DecodedBatch`] /
-//! [`DesyncCause`] / [`RelativeName`] types it yields). The queue-mediated
-//! `Monitor` / `Session` / `Watch` model and the coarse fallback described below
-//! are the planned surface, built out across later milestones; they are not yet
-//! available.
-//!
 //! This crate is Windows-only: every item is gated behind `cfg(windows)`, so it
 //! resolves to an empty crate on other targets. Platform-independent watching is
 //! meant to be built at a higher layer -- this crate is about excellent Windows
 //! behaviour (path-name and notification-limitation fidelity) with memory safety.
 //!
-//! The planned public surface is a queue-mediated `Monitor` / `Session` / `Watch`
-//! model, built out across milestones; its design decisions, rationale, and
-//! schedule are recorded in the crate's source repository.
+//! # The model
+//!
+//! A [`Monitor`] owns the watching. It hands out [`Session`]s, each of which
+//! bundles a way to make requests with the destination every subscription made
+//! through it delivers to; [`Monitor::session`] returns one together with the
+//! [`Receiver`] its notifications arrive on. [`Session::subscribe`] registers a
+//! path and returns an affine [`Watch`] that cancels when dropped.
+//!
+//! ```no_run
+//! use windows_file_watcher::{Monitor, Notification, WatchOptions};
+//!
+//! let monitor = Monitor::new()?;
+//! let (session, receiver) = monitor.session();
+//! let watch = session.subscribe(r"C:\some\directory", WatchOptions::new())?;
+//!
+//! while let Some(notification) = receiver.recv() {
+//!     match notification {
+//!         Notification::Batch { changes, .. } => println!("{} change(s)", changes.len()),
+//!         Notification::Desync { cause, .. } => println!("re-scan: {cause:?}"),
+//!         Notification::Completion { outcome, .. } => println!("request: {outcome:?}"),
+//!     }
+//! }
+//! # drop(watch);
+//! # Ok::<(), std::io::Error>(())
+//! ```
+//!
+//! # Everything is queued, in both directions
+//!
+//! The crate never calls into client code. A request is something the client
+//! enqueues; a notification is something the crate enqueues and the client
+//! collects. So nothing a client does -- blocking, panicking, being slow -- can
+//! stall or unwind the crate's own cadence, and that holds by construction rather
+//! than by asking a callback to behave.
+//!
+//! Which thread a client drains on is entirely its own business. A client that
+//! does not want to dedicate one to [`Receiver::recv`] can take
+//! [`Receiver::doorbell`] and wait on it from its own thread pool.
+//!
+//! # Losses are reported, never silent
+//!
+//! `ReadDirectoryChangesW` can lose changes -- its buffer overflows under a burst
+//! -- and so can a client that stops draining. Both, and every other hole, are
+//! reported as one cause-tagged [`Notification::Desync`] meaning *re-scan*.
+//! Honest reporting of that limitation is a core requirement of this crate rather
+//! than an afterthought.
 
 #![warn(missing_docs)]
 
@@ -48,32 +83,14 @@ mod watch;
 mod watcher;
 
 #[cfg(windows)]
+pub use directory::OpenFailure;
+#[cfg(windows)]
+pub use monitor::Monitor;
+#[cfg(windows)]
 pub use notify::{Change, ChangeKind, DecodedBatch, DesyncCause, RelativeName, decode_batch};
-
-/// The interim, in-development internals, exposed only under the
-/// `unstable-internals` feature.
-///
-/// **Not part of the public API and not covered by semver.** Every item here is
-/// scheduled to be replaced by the `Monitor` / `Session` / `Watch` surface in
-/// M3, and the whole module -- and its feature -- is deleted when that lands.
-///
-/// It exists so the crate's own integration tests can drive the arm / complete /
-/// re-arm loop end to end against a real directory. That loop is the substance
-/// of M2, its overflow and teardown behaviour is only observable at a scale the
-/// unit tests should not carry, and an integration test cannot reach a
-/// `pub(crate)` item. Widening the real public surface to make it testable would
-/// publish a shape that is already known to be wrong.
-#[cfg(all(windows, feature = "unstable-internals"))]
-#[doc(hidden)]
-pub mod unstable {
-    pub use crate::directory::{DirectoryHandle, OpenError, OpenFailure};
-    pub use crate::monitor::{Monitor, Request};
-    pub use crate::queue::{
-        DEFAULT_BOUND, Delivery, Notification, Outcome, Receiver, Reservation, Sender, WatchId,
-        channel, channel_with_bound,
-    };
-    pub use crate::servicing::Rejected;
-    pub use crate::session::Session;
-    pub use crate::watch::{RetryMode, Watch, WatchOptions};
-    pub use crate::watcher::{ArmGate, DEFAULT_BUFFER_BYTES, DirectoryWatcher};
-}
+#[cfg(windows)]
+pub use queue::{DEFAULT_BOUND, Notification, Outcome, Receiver, WatchId};
+#[cfg(windows)]
+pub use session::Session;
+#[cfg(windows)]
+pub use watch::{RetryMode, Watch, WatchOptions};

@@ -44,7 +44,12 @@ use crate::watcher::DirectoryWatcher;
 ///
 /// Every variant is serviced by the single drain, so the resident state they
 /// mutate needs no further synchronisation of its own (D-2).
-pub enum Request {
+///
+/// Crate-internal: a client reaches this through [`Session::subscribe`] and
+/// [`Watch::cancel`](crate::watch::Watch::cancel), which is what guarantees the
+/// completion slot a request carries was reserved before it was submitted
+/// (D-33). A publicly constructible request could not make that promise.
+pub(crate) enum Request {
     /// Begin watching a path on behalf of one subscription.
     Subscribe {
         /// The identifier every notification from this subscription carries.
@@ -214,11 +219,7 @@ impl Monitor {
     }
 
     /// Enqueue a request for the servicing path.
-    ///
-    /// # Errors
-    ///
-    /// Returns the request unserviced if the monitor has shut down.
-    pub fn submit(&self, request: Request) -> Result<(), Rejected<Request>> {
+    pub(crate) fn submit(&self, request: Request) -> Result<(), Rejected<Request>> {
         self.core.submit(request)
     }
 
@@ -268,6 +269,21 @@ impl Monitor {
             .watchers
             .get(&watch)
             .is_some_and(|subscribed| subscribed.watcher.is_some())
+    }
+
+    /// Why a subscription's watcher stopped, if it has.
+    ///
+    /// A watcher that cannot re-arm reports nothing further, which is otherwise
+    /// indistinguishable from a directory where nothing is happening -- so the
+    /// state has to be observable (D-31). M5 replaces this with re-establishment,
+    /// after which a stop is a transient rather than a resting state.
+    #[must_use]
+    pub fn stop_reason(&self, watch: WatchId) -> Option<io::Error> {
+        lock(&self.resident)
+            .watchers
+            .get(&watch)
+            .and_then(|subscribed| subscribed.watcher.as_ref())
+            .and_then(DirectoryWatcher::stop_reason)
     }
 
     /// Whether the monitor is still accepting requests.
