@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-22** -- later
-decisions (D-21 from M1 review, D-22 from M2.1, neither from the session) are added there as milestones
-complete.
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-24** -- later
+decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, none from the session) are added there
+as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
 end-of-milestone gate (default **and** `--all-features` build/test/clippy/doc clean, encoding check, sync
@@ -24,7 +24,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED)`; classify open errors (retryable vs
   not-found vs unsupported).
 
-- [ ] **M2.2** -- Arm and complete: issue `ReadDirectoryChangesW` through `windows-threadpool-sys`
+- [x] **M2.2** -- Arm and complete: issue `ReadDirectoryChangesW` through `windows-threadpool-sys`
   `ThreadpoolIo` (the overlapped seam with the generation-stamped identity, D-3/D-4); decode the completion
   into a batch (M1) and re-arm around processing to minimise the inherent loss window.
 

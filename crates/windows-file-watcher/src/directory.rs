@@ -251,6 +251,14 @@ impl DirectoryHandle {
         self.handle.as_handle()
     }
 
+    /// Consume the wrapper and surrender the handle.
+    ///
+    /// Used to hand the directory to the thread pool's I/O object, which takes
+    /// ownership of the endpoint it binds.
+    pub(crate) fn into_handle(self) -> OwnedHandle {
+        self.handle
+    }
+
     /// The raw handle, for the Win32 calls that take one.
     pub(crate) fn as_raw(&self) -> HANDLE {
         self.handle.as_raw_handle()

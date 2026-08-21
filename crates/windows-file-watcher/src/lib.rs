@@ -27,4 +27,7 @@ mod directory;
 mod notify;
 
 #[cfg(windows)]
+mod watcher;
+
+#[cfg(windows)]
 pub use notify::{Change, ChangeKind, DecodedBatch, DesyncCause, RelativeName, decode_batch};
