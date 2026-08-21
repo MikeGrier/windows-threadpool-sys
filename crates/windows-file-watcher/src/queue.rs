@@ -19,7 +19,9 @@
 //! and the doorbell all land in M3.
 
 // The queue is in-crate for M2 by design; M3.2 hands the receiver to a client
-// through `Session` and exports these types. Remove this then.
+// through `Session` and exports these types for real. Until then they are
+// reachable publicly only under `unstable-internals`, so under default features
+// the receiving half reads as dead. Remove this then.
 #![allow(dead_code)]
 
 use std::collections::VecDeque;
@@ -42,7 +44,7 @@ impl WatchId {
     /// M3.4 replaces this with monitor-issued identifiers; it exists so M2 can
     /// tag records before the monitor exists.
     #[must_use]
-    pub(crate) fn from_raw(value: u64) -> Self {
+    pub fn from_raw(value: u64) -> Self {
         Self(value)
     }
 
@@ -103,7 +105,7 @@ struct State {
 ///
 /// Cloneable and `Send + Sync` because several watchers -- whose completions run
 /// on different pool threads -- feed one client queue (D-11).
-pub(crate) struct Sender {
+pub struct Sender {
     shared: Arc<Shared>,
 }
 
@@ -124,7 +126,7 @@ impl Sender {
     /// Runs on the cadence path, so it must not block and must not fail. It is
     /// unbounded for M2; M3.3 adds the bound and the drop-with-latched-desync
     /// policy that replaces unbounded growth.
-    pub(crate) fn send(&self, notification: Notification) {
+    pub fn send(&self, notification: Notification) {
         let mut state = lock(&self.shared.items);
         state.queue.push_back(notification);
         drop(state);
@@ -240,7 +242,7 @@ impl std::fmt::Debug for Receiver {
 }
 
 /// Create a connected sender/receiver pair.
-pub(crate) fn channel() -> (Sender, Receiver) {
+pub fn channel() -> (Sender, Receiver) {
     let shared = Arc::new(Shared {
         items: Mutex::new(State {
             queue: VecDeque::new(),

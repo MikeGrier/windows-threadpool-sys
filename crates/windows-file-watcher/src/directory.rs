@@ -20,9 +20,9 @@
 //! Failures are classified rather than surfaced raw, because the retry policy is
 //! driven by the *class* of failure, not the code. See [`OpenFailure`].
 
-// Everything here is consumed by the M2.2 watcher, the next checklist item;
-// until that lands only the unit tests construct any of it. Remove this with
-// M2.2 rather than letting it mask genuinely dead code later.
+// Reachable publicly only under `unstable-internals`, so under default features
+// the accessors used by the tests and by M3's monitor read as dead. Remove this
+// with that feature, in M3, rather than letting it mask genuinely dead code.
 #![allow(dead_code)]
 
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
@@ -54,7 +54,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 /// are reported to the caller instead of entering the retry loop. Every failure
 /// that *is* environmental stays retryable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum OpenFailure {
+pub enum OpenFailure {
     /// Nothing exists at the path. Retryable: a watch may legitimately be set on
     /// a path that does not exist yet, or whose directory was just deleted, and
     /// the monitor waits for it to appear.
@@ -81,7 +81,7 @@ impl OpenFailure {
     ///
     /// False only for the two caller-input failures; every environmental failure
     /// is retryable, including unrecognised ones.
-    pub(crate) fn is_retryable(self) -> bool {
+    pub fn is_retryable(self) -> bool {
         match self {
             OpenFailure::NotFound | OpenFailure::Unsupported | OpenFailure::Retryable => true,
             OpenFailure::NotADirectory | OpenFailure::InvalidPath => false,
@@ -92,7 +92,7 @@ impl OpenFailure {
 /// A failed open: the classification that drives policy, plus the underlying OS
 /// error, kept so a diagnostic never loses the original code.
 #[derive(Debug)]
-pub(crate) struct OpenError {
+pub struct OpenError {
     failure: OpenFailure,
     source: std::io::Error,
 }
@@ -114,12 +114,12 @@ impl OpenError {
     }
 
     /// How this failure should be treated by the retry policy.
-    pub(crate) fn failure(&self) -> OpenFailure {
+    pub fn failure(&self) -> OpenFailure {
         self.failure
     }
 
     /// The underlying OS error.
-    pub(crate) fn source(&self) -> &std::io::Error {
+    pub fn source(&self) -> &std::io::Error {
         &self.source
     }
 }
@@ -179,7 +179,7 @@ fn wide_path(path: &Path) -> Result<Wtf16String, OpenError> {
 ///
 /// Closing is the `OwnedHandle`'s job, so a `DirectoryHandle` cannot outlive its
 /// handle or leak it.
-pub(crate) struct DirectoryHandle {
+pub struct DirectoryHandle {
     handle: OwnedHandle,
 }
 
@@ -190,7 +190,7 @@ impl DirectoryHandle {
     ///
     /// Returns a classified [`OpenError`]; see [`OpenFailure`] for what each
     /// class means for the retry policy.
-    pub(crate) fn open(path: &Path) -> Result<Self, OpenError> {
+    pub fn open(path: &Path) -> Result<Self, OpenError> {
         let wide = wide_path(path)?;
         // SAFETY: `wide`'s terminated pointer is NUL-terminated and outlives the
         // call, and the interior-NUL case was rejected above so the callee sees

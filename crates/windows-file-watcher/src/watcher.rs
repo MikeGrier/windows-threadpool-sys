@@ -27,9 +27,9 @@
 //! inline in the payload -- the `Box` indirection is what keeps the address the
 //! kernel was given valid.
 
-// The watcher is reached from the crate's public surface only once the M2.3
-// delivery endpoint and the M3 monitor exist; until then only the unit tests
-// construct it. Remove this once M2.3 wires it up.
+// The watcher is driven by this crate's own tests and, from M3, by the monitor;
+// it is reachable publicly only under `unstable-internals`, so under default
+// features parts of it read as dead. Remove this when M3 gives it a real caller.
 #![allow(dead_code)]
 
 use std::io;
@@ -55,7 +55,7 @@ use crate::queue::{Notification, Sender, WatchId};
 /// directory record queue, small enough to be unremarkable per watched
 /// directory. Overflow remains possible under a burst and is reported rather
 /// than hidden (D-12).
-pub(crate) const DEFAULT_BUFFER_BYTES: usize = 64 * 1024;
+pub const DEFAULT_BUFFER_BYTES: usize = 64 * 1024;
 
 /// The bytes in one `u32`, the unit the completion buffer is allocated in so it
 /// satisfies `ReadDirectoryChangesW`'s DWORD alignment requirement.
@@ -142,7 +142,7 @@ pub(crate) struct ArmFailure {
 /// discovering that a `bool` cannot say which of them stopped the watcher, and it
 /// keeps `stop_reason` from having to guess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ArmGate {
+pub enum ArmGate {
     /// Reads may be submitted.
     Open,
     /// Torn down. Permanent: a watcher never re-opens.
@@ -326,7 +326,7 @@ const OPERATION_ABORTED: i32 = windows_sys::Win32::Foundation::ERROR_OPERATION_A
 ///
 /// Owns the directory handle (through the thread pool's I/O object) and keeps a
 /// read outstanding, re-arming after each completion.
-pub(crate) struct DirectoryWatcher {
+pub struct DirectoryWatcher {
     inner: Arc<WatcherInner>,
 }
 
@@ -339,7 +339,7 @@ impl DirectoryWatcher {
     ///
     /// Returns the error from binding the handle to the pool or from the first
     /// `ReadDirectoryChangesW`.
-    pub(crate) fn start(
+    pub fn start(
         directory: DirectoryHandle,
         subtree: bool,
         watch: WatchId,
@@ -355,7 +355,7 @@ impl DirectoryWatcher {
     /// # Errors
     ///
     /// As [`start`](Self::start).
-    pub(crate) fn start_with(
+    pub fn start_with(
         directory: DirectoryHandle,
         subtree: bool,
         buffer_bytes: usize,
@@ -412,7 +412,7 @@ impl DirectoryWatcher {
     }
 
     /// The failure that stopped this watcher re-arming, if any.
-    pub(crate) fn stop_reason(&self) -> Option<io::Error> {
+    pub fn stop_reason(&self) -> Option<io::Error> {
         self.inner
             .stopped
             .lock()
@@ -427,7 +427,7 @@ impl DirectoryWatcher {
     }
 
     /// Whether the watcher is still re-arming.
-    pub(crate) fn is_watching(&self) -> bool {
+    pub fn is_watching(&self) -> bool {
         self.inner
             .stopped
             .lock()
@@ -437,7 +437,7 @@ impl DirectoryWatcher {
     }
 
     /// The current arm gate.
-    pub(crate) fn gate(&self) -> ArmGate {
+    pub fn gate(&self) -> ArmGate {
         *self
             .inner
             .gate
@@ -455,7 +455,7 @@ impl DirectoryWatcher {
     /// Must not be called from inside this watcher's own completion callback: it
     /// waits for that callback to finish, so it would wait on itself. Nothing in
     /// this crate does, because the only caller is teardown on an owning thread.
-    pub(crate) fn stop(&self) {
+    pub fn stop(&self) {
         // Close the gate *before* cancelling. The other order leaves a window in
         // which a completion callback already running submits a fresh read after
         // the cancellation, and rundown then waits forever for a completion only

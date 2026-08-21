@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-34** -- later
-decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, D-34 from M2.4, D-32
-from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-35** -- later
+decisions (D-21 from M1 review, D-22 from M2.1, D-23/D-24 from M2.2, D-26 from M2.3, D-34 from M2.4, D-35
+from M2.5, D-32 from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -39,7 +39,7 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   D-23 already provides the suppression; formalise it, and note that the same not-re-arming state is what
   D-29 reuses for backpressure and D-28 for faults.
 
-- [ ] **M2.5** -- Integration: create/modify/delete/rename in a temp directory and assert raw actions and
+- [x] **M2.5** -- Integration: create/modify/delete/rename in a temp directory and assert raw actions and
   relative names; force a burst overflow and assert `Desync { Overflow }`; assert clean teardown with an
   operation outstanding.
 
@@ -106,7 +106,10 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
   follows it in the stream; in-order delivery within a subscription; a permanent subscribe failure reported
   as a completion rather than silence; saturate the queue and assert the watcher stops re-arming rather than
   dropping, that the latched `Desync` reaches the receiver, and that both re-arming and request draining
-  resume once the receiver drains.
+  resume once the receiver drains. Also retires the interim test-only surface of [D-35](DESIGN-NOTES.md):
+  rewrite `tests/watcher_loop.rs` against the real public surface, then delete the `unstable-internals`
+  feature and the `unstable` module, and with them the three `#![allow(dead_code)]` suppressions they stand
+  in for (`directory`, `queue`, `watcher`).
 
 ## M4 -- Coalescing by directory and file targets
 
