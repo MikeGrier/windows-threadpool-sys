@@ -1,7 +1,7 @@
 # Checklist: wtf-string
 
 `OsString`-shaped strings with native `u16` (WTF-16) storage. Design and decisions
-(D-1...D-15) are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) (Tier 1),
+(D-1...D-16) are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) (Tier 1),
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) (Tier 2), and
 [design-sessions/DESIGN-SESSION-2026-08-19-wtf-string.md](design-sessions/DESIGN-SESSION-2026-08-19-wtf-string.md)
 (Tier 3).

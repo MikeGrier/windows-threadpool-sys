@@ -39,6 +39,18 @@ miss a lint that only exists in a newer stable compiler and only shows up in
 CI; when that happens, fix the lint and move on -- it is not a sign the pin is
 wrong.
 
+**The `@stable` action alone is not enough in CI.** `rustup` resolves a
+directory's toolchain override (`rust-toolchain.toml`) *before* consulting
+`rustup default`, so once this file exists, every plain `cargo`/`rustc`
+invocation from inside the checked-out repo -- including the ones
+`dtolnay/rust-toolchain@stable` sets up to run next -- would otherwise silently
+use the pinned MSRV instead of the floating stable release it just installed.
+The `build-test`/`fmt`/`clippy`/`docs`/`portable` jobs in `ci.yml` counter this
+with a job-level `env: RUSTUP_TOOLCHAIN: stable`, which sits above the
+directory override in `rustup`'s resolution order and forces those jobs onto
+the actual floating toolchain. The `msrv` job intentionally has no such
+override, since it is meant to run the pinned version.
+
 ## Release process
 
 `release-please` owns version changes, tags, and changelog updates. Each crate

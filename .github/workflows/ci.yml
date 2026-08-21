@@ -36,6 +36,12 @@ jobs:
   build-test:
     name: build + test
     runs-on: windows-latest
+    # The repo's rust-toolchain.toml pins the MSRV for local dev; without this
+    # override rustup's directory-scoped toolchain file would win over whatever
+    # dtolnay/rust-toolchain@stable just installed, silently running the MSRV
+    # here too and defeating this job's forward-compatibility coverage.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -58,6 +64,10 @@ jobs:
   fmt:
     name: rustfmt
     runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -69,6 +79,10 @@ jobs:
   clippy:
     name: clippy
     runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -83,6 +97,10 @@ jobs:
   docs:
     name: rustdoc (intra-doc links)
     runs-on: windows-latest
+    # See build-test's comment: forces the floating stable toolchain over the
+    # repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -109,6 +127,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # See build-test's comment in the Windows jobs above: forces the floating
+    # stable toolchain over the repo's rust-toolchain.toml pin.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

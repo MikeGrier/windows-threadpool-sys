@@ -565,9 +565,14 @@ fn capacity_reserve_and_shrink_behave_as_documented() {
     );
 
     owned.reserve(100);
+    let reserved_capacity = owned.capacity();
     owned.shrink_to(5);
     assert!(
-        owned.capacity() < 100,
-        "shrink_to must actually shrink when given a smaller bound"
+        owned.capacity() <= reserved_capacity,
+        "shrink_to must never grow capacity (allocator-dependent whether it shrinks)"
+    );
+    assert!(
+        owned.capacity() >= owned.len().max(5),
+        "shrink_to keeps at least max(len, min_capacity)"
     );
 }
