@@ -21,6 +21,9 @@
 #![warn(missing_docs)]
 
 #[cfg(windows)]
+mod directory;
+
+#[cfg(windows)]
 mod notify;
 
 #[cfg(windows)]

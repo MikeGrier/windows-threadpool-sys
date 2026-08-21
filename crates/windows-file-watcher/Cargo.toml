@@ -40,8 +40,12 @@ windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys"
 windows-sys = {
 	version = "0.61.2",
 	default-features = false,
+	# Win32_Security is needed only for the SECURITY_ATTRIBUTES parameter named in
+	# the CreateFileW signature used to open a watched directory; the crate always
+	# passes a null pointer for it.
 	features = [
 		"Win32_Foundation",
+		"Win32_Security",
 		"Win32_Storage_FileSystem",
 		"Win32_System_IO",
 	],
