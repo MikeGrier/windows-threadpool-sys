@@ -283,6 +283,35 @@ fn matrix_hashmap_lookup_by_borrowed_slice() {
 
 #[test]
 fn matrix_ordering_is_lexicographic_over_content_units() {
+    // This reads like `x == sort(x.clone())` -- a tautology -- but is not. The
+    // two sides are sorted by *different* comparators, and each step below is
+    // checkable against the lines that follow:
+    //
+    //  1. `owned.sort()` is the only use of `Wtf16String`'s `Ord` in this test.
+    //     That impl is the subject under test; it alone chooses `got`'s order.
+    //  2. `got` is built by `map` over the already-sorted `owned`. `map`
+    //     preserves order, so `got` is exactly the order (1) chose.
+    //  3. `expected` starts as a clone of `got`: same elements, same multiset.
+    //  4. `expected.sort()` sorts by `Vec<u16>`'s `Ord` -- std's lexicographic
+    //     order over the units. That is a different comparator from (1), and is
+    //     the oracle. `sort` permutes only, so the multiset is still (3)'s.
+    //  5. A sequence is equal to the ascending arrangement of its own multiset
+    //     if and only if it was already in ascending order.
+    //
+    // Substituting (5) into (2) and (4): the assertion holds exactly when the
+    // order chosen by `Wtf16String::Ord` is std's lexicographic unit order,
+    // which is the contract named in the test. The clone is what pins both
+    // sides to one multiset, leaving the order as the single free variable --
+    // it is load-bearing, not redundant.
+    //
+    // Rebuilding `expected` from `corpus()` instead would *weaken* this: it
+    // would additionally depend on `from_units`/`as_units` round-tripping
+    // faithfully, mixing a storage property (covered by
+    // `matrix_storage_invariant_holds`) into an ordering test.
+    //
+    // Non-vacuity: `corpus()` yields many distinct entries, and with two or more
+    // distinct elements a reversed or otherwise wrong `Ord` produces a different
+    // permutation at (2) and fails at (5).
     let mut owned: Vec<Wtf16String> = corpus()
         .into_iter()
         .map(|(_, u)| Wtf16String::from_units(&u))
