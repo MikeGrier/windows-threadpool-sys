@@ -146,3 +146,27 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
   unlike `--no-default-features` on a host -- and runs the alloc-only test configuration on the host, where a
   harness exists. Verified the gate is not vacuous: the same target build *fails* at `extern crate std`
   (E0463) when the `std` feature is on.
+
+## Moved 2026-08-21 -- M10 documentation, examples, publication readiness
+
+### M10 -- Documentation, examples, publication readiness
+
+- [x] **M10.1** -- The [README.md](README.md) and [lib.rs](src/lib.rs) top-level docs: the storage model, the
+  conversion-cost contract, the FFI surface, and both encoding widths. Both now carry a conversion-cost table
+  (naming which operations are free and which are boundary crossings, and how that mirrors `OsString`), an
+  FFI-surface walkthrough split by input convention (counted vs terminated) and output shape (buffer-fill vs
+  callee-allocated), the interior-NUL contract, and a runnable example.
+
+- [x] **M10.2** -- Runnable example: a wide Win32 round-trip (input via `as_ptr`, output via a buffer-fill
+  constructor) showing the zero-conversion path. [examples/win32_round_trip.rs](examples/win32_round_trip.rs)
+  exercises terminated input and buffer-fill output against `GetFullPathNameW`, plus counted input against
+  `CompareStringOrdinal` (which takes explicit lengths, so it also demonstrates the counted pair working on a
+  borrowed slice that carries no terminator). Entry points are declared inline to keep the crate
+  dependency-free; verified by running it.
+
+- [x] **M10.3** -- Publication readiness: crate metadata, changelog, and a final review pass over the public
+  surface; record the remaining deferred seam (below) as reserved. Verified with `cargo publish --dry-run`
+  (packages and verifies cleanly). Seeded [CHANGELOG.md](CHANGELOG.md) with the same `# Changelog` header
+  release-please prepends to in the already-released crates. The reserved seam -- a checked no-interior-NUL
+  C-string companion (D-7, M-inf.1) -- is now recorded in the crate docs so users know the surface may grow
+  there.

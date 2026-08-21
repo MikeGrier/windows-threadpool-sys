@@ -23,7 +23,65 @@ conversion and no per-call allocation.
   accept it directly with no conversion. Without it, the crate has zero
   dependencies.
 
-Status: in development. See [CHECKLIST.md](CHECKLIST.md) and
-[DESIGN-NOTES.md](DESIGN-NOTES.md).
+```rust
+use wtf_string::Wtf16String;
+
+// Encode once, at the boundary.
+let s = Wtf16String::from("C:\\Windows");
+
+// From here on the units are the storage: no re-encode, no allocation.
+assert_eq!(s.len(), 10);
+assert_eq!(s.to_string_lossy(), "C:\\Windows");
+```
+
+## Conversion costs
+
+The point of the crate is that the middle rows are free; everything that costs
+anything is a boundary crossing you asked for.
+
+| Operation | Cost |
+|---|---|
+| `Wtf16String::from(&str)` / `from(String)` | encode + allocate, once |
+| `Wtf16String::from_os_str` (Windows) | encode + allocate, once |
+| `as_ptr()` + `len()`, for a counted `*W` call | **free** |
+| `as_terminated_ptr()`, for an `LPCWSTR` call | **free** |
+| `encode_wide()` (Windows), the `OsStrExt` analog | **free** (borrows our slice) |
+| `as_units()` / `len()` / comparison / hashing | **free** |
+| `to_string_checked()` / `to_string_lossy()` | decode + allocate |
+| `to_os_string()` (Windows) | re-encode + allocate |
+
+`OsString` is the mirror image: its first rows are free and the wide-call rows
+re-encode. Which type is right depends on whether your code spends its time in
+`str` or in Win32.
+
+## FFI surface
+
+Both directions of a Win32 call are covered without leaving `u16`:
+
+- **Input** — `as_ptr()` + `len()` for counted parameters, or
+  `as_terminated_ptr()` for `LPCWSTR`/`PCWSTR`. The terminator is always present
+  in the owned buffer, so the terminated form never allocates.
+- **Output** — `with_capacity()` / `as_mut_ptr()` / `set_len_from_ffi()` for
+  caller-allocated buffer-fill APIs, or `from_wide_ptr()` to copy out of a
+  callee-allocated buffer.
+
+[`examples/win32_round_trip.rs`](examples/win32_round_trip.rs) exercises all
+three against real kernel32 entry points:
+
+```sh
+cargo run --example win32_round_trip
+```
+
+## Interior NULs
+
+Content may contain NUL, matching `OsString`. The trailing terminator is
+storage, not content: it is excluded from `len()`, `as_units()`, comparison and
+hashing. Because a C string ends at the first NUL, a callee reading
+`as_terminated_ptr()` sees a value with an interior NUL truncated — counted
+access is always exact, and `has_interior_nul()` reports the condition. A
+checked no-interior-NUL companion type is a reserved seam for a future release.
+
+Status: the v1 surface is complete and publication-ready; not yet released. See
+[CHECKLIST.md](CHECKLIST.md) and [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 Copyright (c) Mike Grier. Licensed under MIT.

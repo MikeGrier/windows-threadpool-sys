@@ -1,9 +1,13 @@
 # Plans: wtf-string
 
-Active planned work for the crate. When the whole checklist completes, its entry and its completed
-milestones are archived to sibling completed-plans and completed-checklist trackers created in this
-directory at that time.
+Active planned work for the crate. Completed checklists are archived in
+[COMPLETED-PLANS.md](COMPLETED-PLANS.md), and their milestones in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+
+All ten planned milestones (M1 scaffold+design -> M10 docs/publication) are complete, so there is no
+active plan. [CHECKLIST.md](CHECKLIST.md) remains for its parked `M-inf` horizon bucket: work placed
+outside v1 by a recorded design decision, holding nothing pending. A row returns to the table below
+when a post-v1 line of work graduates a horizon item into a numbered milestone.
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | `OsString`-shaped strings with native `u16` (WTF-16), conversion-free storage for Windows FFI: an encoding-generic core (`WtfString<E>` / `WtfStr<E>`) shipping the `Wtf16` arm, always-terminated storage, portable `str`/`String` conversions, Windows-only lossless `OsStr` interop, plus a `Wtf8` arm, a safe `OsString`-parity mutation surface, `Param<PCWSTR>` interop, and `no_std` support. Ten milestones (M1 scaffold+design -> M10 docs/publication). | [DESIGN-NOTES.md](DESIGN-NOTES.md) |

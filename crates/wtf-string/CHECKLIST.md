@@ -12,17 +12,6 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-## M10 -- Documentation, examples, publication readiness
-
-- [ ] **M10.1** -- The [README.md](README.md) and [lib.rs](src/lib.rs) top-level docs: the storage model, the
-  conversion-cost contract, the FFI surface, and both encoding widths.
-
-- [ ] **M10.2** -- Runnable example: a wide Win32 round-trip (input via `as_ptr`, output via a buffer-fill
-  constructor) showing the zero-conversion path.
-
-- [ ] **M10.3** -- Publication readiness: crate metadata, changelog, and a final review pass over the public
-  surface; record the remaining deferred seam (below) as reserved.
-
 ## M-inf -- Horizon (ungated, post-v1)
 
 Parked, not pending. The remaining item is placed outside the v1 scope by an explicit, recorded design
