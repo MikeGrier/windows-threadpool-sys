@@ -67,8 +67,8 @@ pub enum OpenFailure {
     /// path -- see the note on the enum.
     NotADirectory,
     /// The volume or filesystem cannot support `ReadDirectoryChangesW` at all.
-    /// This is the downgrade-to-coarse edge (D-17); the coarse fallback is built
-    /// in M6 and until then this is simply reported.
+    /// This is the downgrade-to-coarse edge (D-17), handled by the coarse
+    /// fallback rather than reaching here in practice.
     Unsupported,
     /// Anything else: sharing violations, exhausted handles, a network path that
     /// is momentarily unreachable. Retryable with backoff. This is the default
@@ -78,17 +78,25 @@ pub enum OpenFailure {
     /// The path cannot be handed to Win32 at all, because it contains an interior
     /// NUL. Permanent -- see the note on the enum.
     InvalidPath,
+    /// The open itself succeeded (or was retryable), but the monitor could not
+    /// set up what a retryable subscription needs to keep going -- its retry
+    /// timer failed to be created, vanishingly rare thread-pool resource
+    /// exhaustion. Permanent for this attempt: nothing was registered, so
+    /// nothing would ever fire to retry it.
+    RetryUnavailable,
 }
 
 impl OpenFailure {
     /// Whether retrying the open could ever succeed.
     ///
-    /// False only for the two caller-input failures; every environmental failure
-    /// is retryable, including unrecognised ones.
+    /// False only for the caller-input failures and the setup failure; every
+    /// environmental failure is retryable, including unrecognised ones.
     pub fn is_retryable(self) -> bool {
         match self {
             OpenFailure::NotFound | OpenFailure::Unsupported | OpenFailure::Retryable => true,
-            OpenFailure::NotADirectory | OpenFailure::InvalidPath => false,
+            OpenFailure::NotADirectory
+            | OpenFailure::InvalidPath
+            | OpenFailure::RetryUnavailable => false,
         }
     }
 }

@@ -155,6 +155,14 @@ enum Subscription {
         /// The standing fault-question reservation (D-27/D-28), present iff
         /// this subscription can ever need one.
         fault_slot: Option<StandingSlot>,
+        /// A reservation for the permanent `Failed` completion a later retry
+        /// may discover (D-22), carved out when this subscription first became
+        /// `Pending` if the queue had room. Present or not, it rides through
+        /// every re-park this subscription goes through until it either
+        /// establishes (dropped, releasing the slot) or is spent on that
+        /// completion -- a terminal outcome must not be lost to best-effort
+        /// backpressure the way an ordinary batch can be.
+        terminal: Option<Reservation>,
         /// Whether an interactive question is currently outstanding for this
         /// subscription's open fault. While `true`, the retry timer is not
         /// armed -- it waits for `Request::Answer` instead (D-27).
@@ -602,6 +610,10 @@ fn park_pending(
     fault_slot: Option<StandingSlot>,
 ) -> io::Result<()> {
     let retry_timer = make_retry_timer(core_ref, watch)?;
+    // Best-effort: if the queue has no room to spare right now, this
+    // subscription's eventual permanent failure (rare) falls back to the
+    // ordinary best-effort path rather than blocking registration on it.
+    let terminal = sink.reserve();
     let awaiting_answer = options.retry == RetryMode::Interactive && fault_slot.is_some();
     let mut state = lock(resident);
     state.subscriptions.insert(
@@ -612,6 +624,7 @@ fn park_pending(
             sink,
             retry_timer,
             fault_slot,
+            terminal,
             awaiting_answer,
         },
     );
@@ -654,13 +667,6 @@ fn park_pending(
 #[allow(clippy::too_many_arguments)]
 /// Routes a freshly opened handle to its watcher, coalescing with an existing
 /// one for the same directory (D-6) or starting a new [`DirectoryWatcher`].
-///
-/// Returns whether the subscription is now fully routed to a live watcher
-/// (`true`) or fell back to `Pending` because starting a *new* watcher failed
-/// immediately after its directory opened (`false`, D-15's rearm-and-retry
-/// case) -- the caller needs this to report the correct [`Outcome`]: reaching
-/// this function at all means the open succeeded, but that is not the same as
-/// the subscription being live.
 fn route_established(
     resident: &Mutex<Resident>,
     core_ref: &Arc<OnceLock<Weak<Core>>>,
@@ -672,7 +678,7 @@ fn route_established(
     options: WatchOptions,
     sink: Sender,
     fault_slot: Option<StandingSlot>,
-) -> bool {
+) -> Routed {
     let id = handle.identity();
     let route = Route {
         watch,
@@ -701,7 +707,7 @@ fn route_established(
         if options.report_liveness {
             let _ = sink.send(Notification::Established { watch, mode });
         }
-        return true;
+        return Routed::Live;
     }
 
     match DirectoryWatcher::start(handle, opened_path, route) {
@@ -719,31 +725,44 @@ fn route_established(
             if options.report_liveness {
                 let _ = sink.send(Notification::Established { watch, mode });
             }
-            true
+            Routed::Live
         }
-        Err(_) => {
+        Err((_error, route)) => {
             // Arming failed against a directory that just opened -- D-15's
-            // rearm-and-retry classification, not fatal. The route (and any
-            // fault_slot it carried) was already consumed by the failed start
-            // attempt, so this fallback park has no standing slot to reuse; it
-            // retries at the default delay regardless of `options.retry` until
-            // a future attempt succeeds. This is a rare edge (an open that just
-            // succeeded, immediately followed by an arm failure) and is a
-            // recorded, deliberate simplification rather than engineering a
-            // slot hand-back for it.
+            // rearm-and-retry classification, not fatal. `start` hands the
+            // route back on failure, so its standing fault-question
+            // reservation (if any) is reused here rather than silently
+            // downgrading an `Interactive` subscription to default retries.
             drop(state);
-            let _ = park_pending(
+            match park_pending(
                 resident,
                 core_ref,
                 watch,
                 original_path,
                 options,
                 sink,
-                None,
-            );
-            false
+                route.fault_slot,
+            ) {
+                Ok(()) => Routed::Parked,
+                Err(_) => Routed::ParkFailed,
+            }
         }
     }
+}
+
+/// What became of routing a freshly opened handle into a watcher (see
+/// [`route_established`]).
+enum Routed {
+    /// Coalesced onto an existing watcher, or a new one started and armed: a
+    /// live watcher now backs this subscription.
+    Live,
+    /// Starting a *new* watcher failed immediately after its directory opened
+    /// (D-15's rearm-and-retry case); the subscription was re-parked instead.
+    Parked,
+    /// Even the fallback park could not be set up (its retry timer failed to
+    /// be created -- vanishingly rare resource exhaustion); nothing was
+    /// registered for this subscription.
+    ParkFailed,
 }
 
 /// Re-attempt establishing a still-`Pending` subscription (M5.1), after its
@@ -759,8 +778,9 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
                 sink,
                 retry_timer,
                 fault_slot,
+                terminal,
                 ..
-            }) => Some((path, options, sink, retry_timer, fault_slot)),
+            }) => Some((path, options, sink, retry_timer, fault_slot, terminal)),
             Some(other) => {
                 state.subscriptions.insert(watch, other);
                 None
@@ -768,7 +788,7 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
             None => None,
         }
     };
-    let Some((path, options, sink, retry_timer, fault_slot)) = taken else {
+    let Some((path, options, sink, retry_timer, fault_slot, terminal)) = taken else {
         return;
     };
 
@@ -784,6 +804,7 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
                     sink,
                     retry_timer,
                     fault_slot,
+                    terminal,
                     awaiting_answer,
                 },
             );
@@ -807,17 +828,20 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
         }
         Opened::Failed(failure) => {
             // Permanent, discovered only on a later retry rather than at
-            // registration: this is genuinely rare (the target existed
-            // retryably, then became permanently unwatchable), and unlike the
-            // very first Completion this report is best-effort rather than
-            // reservation-backed -- the registration reservation was already
-            // spent on `Outcome::Establishing`. `retry_timer` and `fault_slot`
-            // are dropped here along with the subscription, which is already
-            // removed from `resident`.
-            let _ = sink.send(Notification::Completion {
-                watch,
-                outcome: Outcome::Failed { failure },
-            });
+            // registration: genuinely rare (the target existed retryably, then
+            // became permanently unwatchable), but still a terminal outcome the
+            // client must not silently lose to backpressure -- delivered
+            // through `terminal`'s reservation when park_pending managed to
+            // carve one out, falling back to best-effort only if it could not.
+            // `retry_timer` and `fault_slot` are dropped here along with the
+            // subscription, which is already removed from `resident`.
+            let outcome = Outcome::Failed { failure };
+            match terminal {
+                Some(reservation) => reservation.send(Notification::Completion { watch, outcome }),
+                None => {
+                    let _ = sink.send(Notification::Completion { watch, outcome });
+                }
+            }
         }
         Opened::Handle {
             handle,
@@ -825,9 +849,12 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
             opened_path,
         } => {
             // Background retry path: no synchronous caller is waiting on an
-            // `Outcome` here, so whether this fully routed or fell back to
-            // `Pending` again is not this call site's concern.
-            let _ = route_established(
+            // `Outcome` here, but a `ParkFailed` fallback is still a terminal
+            // outcome the client was never told about otherwise, so report it
+            // (best-effort -- `terminal` was already consumed or never taken
+            // for this attempt).
+            let outcome_sink = sink.clone();
+            match route_established(
                 resident,
                 core_ref,
                 watch,
@@ -838,7 +865,17 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
                 options,
                 sink,
                 fault_slot,
-            );
+            ) {
+                Routed::Live | Routed::Parked => {}
+                Routed::ParkFailed => {
+                    let _ = outcome_sink.send(Notification::Completion {
+                        watch,
+                        outcome: Outcome::Failed {
+                            failure: OpenFailure::RetryUnavailable,
+                        },
+                    });
+                }
+            }
         }
     }
 }
@@ -855,8 +892,12 @@ fn subscribe(
 ) -> Outcome {
     match open_target(&path, options.subtree) {
         Opened::Pending => {
-            let _ = park_pending(resident, core_ref, watch, path, options, sink, fault_slot);
-            Outcome::Establishing
+            match park_pending(resident, core_ref, watch, path, options, sink, fault_slot) {
+                Ok(()) => Outcome::Establishing,
+                Err(_) => Outcome::Failed {
+                    failure: OpenFailure::RetryUnavailable,
+                },
+            }
         }
         Opened::Failed(failure) => Outcome::Failed { failure },
         Opened::Handle {
@@ -864,7 +905,13 @@ fn subscribe(
             scope,
             opened_path,
         } => {
-            let routed = route_established(
+            // A failed start immediately after opening falls back to
+            // `Pending` (D-15's rearm-and-retry case) rather than routing to
+            // a live watcher, so the client must be told it is still
+            // establishing, not that it is already subscribed; a `ParkFailed`
+            // fallback means neither happened, so the client is told this
+            // registration simply failed.
+            match route_established(
                 resident,
                 core_ref,
                 watch,
@@ -875,15 +922,12 @@ fn subscribe(
                 options,
                 sink,
                 fault_slot,
-            );
-            // A failed start immediately after opening falls back to
-            // `Pending` (D-15's rearm-and-retry case) rather than routing to
-            // a live watcher, so the client must be told it is still
-            // establishing, not that it is already subscribed.
-            if routed {
-                Outcome::Subscribed
-            } else {
-                Outcome::Establishing
+            ) {
+                Routed::Live => Outcome::Subscribed,
+                Routed::Parked => Outcome::Establishing,
+                Routed::ParkFailed => Outcome::Failed {
+                    failure: OpenFailure::RetryUnavailable,
+                },
             }
         }
     }

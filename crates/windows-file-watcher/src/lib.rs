@@ -72,9 +72,10 @@
 //!   500ms delay.
 //! - [`RetryMode::Interactive`] asks: a [`Notification::RetryQuestion`] names
 //!   the failing operation, and [`Session::answer`] supplies the next delay
-//!   (clamped to a 50ms floor). Several subscriptions sharing a coalesced
-//!   directory watcher take the earliest answer, counting one that never
-//!   answers at the default.
+//!   (clamped to a 50ms floor); an explicit `answer(watch, None)` declines,
+//!   which is what counts at the default -- never answering at all leaves the
+//!   question outstanding indefinitely. Several subscriptions sharing a
+//!   coalesced directory watcher take the earliest answer.
 //!
 //! Opting a subscription into [`WatchOptions::report_liveness`] additionally
 //! delivers `Suspended`/`Resumed` brackets around an outage and an

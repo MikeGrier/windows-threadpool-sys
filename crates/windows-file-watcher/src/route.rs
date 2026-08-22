@@ -108,5 +108,16 @@ impl Route {
     }
 }
 
+impl std::fmt::Debug for Route {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Route")
+            .field("watch", &self.watch)
+            .field("scope", &self.scope)
+            .field("retry", &self.retry)
+            .field("report_liveness", &self.report_liveness)
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -721,6 +721,93 @@ fn reservations_can_be_taken_from_several_threads() {
     assert_eq!(receiver.len(), 64, "every reserved send was delivered");
 }
 
+// --- the standing slot (D-27/D-28) ---
+
+#[test]
+fn a_standing_slot_can_send_repeatedly_without_ever_failing() {
+    let (sender, receiver) = bounded(2);
+    let slot = sender.reserve_standing().expect("a slot");
+    let watch = WatchId::from_raw(1);
+    for _ in 0..5 {
+        slot.send(Notification::RetryQuestion {
+            watch,
+            operation: crate::retry::FaultOperation::Open,
+        });
+        assert!(receiver.try_recv().is_some(), "each send is delivered");
+    }
+}
+
+#[test]
+fn a_standing_send_does_not_overflow_capacity_while_the_queue_is_otherwise_full() {
+    // The exact scenario a double-counted reservation would corrupt: capacity 2,
+    // one unit permanently carved out for the standing slot and one best-effort
+    // item already queued, leaves no free capacity. The standing send must still
+    // succeed without `free()` underflowing (it would have, before the queued
+    // entry started standing in for the reservation instead of sitting on top of
+    // it).
+    let (sender, receiver) = bounded(2);
+    let slot = sender.reserve_standing().expect("a slot");
+    let watch = WatchId::from_raw(1);
+    deliver(&sender, batch(watch, &["a.txt"]));
+    assert_eq!(
+        sender.send(batch(watch, &["b.txt"])),
+        Delivery::Latched,
+        "the queue has no free capacity left"
+    );
+
+    slot.send(Notification::RetryQuestion {
+        watch,
+        operation: crate::retry::FaultOperation::Open,
+    });
+
+    assert_eq!(receiver.len(), 2, "the standing send still landed");
+}
+
+#[test]
+fn dropping_a_standing_slot_while_its_message_is_still_queued_releases_capacity_once() {
+    // If the slot released its reservation on drop *and* the queued entry
+    // released it again once drained, the queue's accounting would go negative
+    // (or wrap, in a release build). Exactly one of the two must release it.
+    let (sender, receiver) = bounded(1);
+    let slot = sender.reserve_standing().expect("a slot");
+    let watch = WatchId::from_raw(1);
+    slot.send(Notification::RetryQuestion {
+        watch,
+        operation: crate::retry::FaultOperation::Open,
+    });
+
+    // Dropped while its last-sent message is still sitting in the queue,
+    // undrained.
+    drop(slot);
+
+    assert!(
+        receiver.try_recv().is_some(),
+        "the queued message still arrives"
+    );
+    // The slot's own reservation was already spent on the message just drained,
+    // so nothing further can ever be sent through it, and this capacity is
+    // gone for good.
+    assert!(
+        sender.reserve().is_none(),
+        "the standing slot's capacity is not returned to the pool"
+    );
+}
+
+#[test]
+fn dropping_an_unused_standing_slot_returns_its_capacity() {
+    let (sender, _receiver) = bounded(1);
+    let slot = sender.reserve_standing().expect("a slot");
+    assert!(
+        sender.reserve().is_none(),
+        "the standing slot's carve-out is the only capacity"
+    );
+    drop(slot);
+    assert!(
+        sender.reserve().is_some(),
+        "an unused standing slot returns its capacity on drop"
+    );
+}
+
 #[test]
 fn a_bound_of_one_still_reports_its_own_saturation() {
     // The smallest legal queue is the sharpest test of the guarantee: with a

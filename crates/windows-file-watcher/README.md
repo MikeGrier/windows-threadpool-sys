@@ -77,9 +77,11 @@ timed:
   a fixed 500ms delay per attempt.
 - **`RetryMode::Interactive`**: on fault, the monitor asks -- a
   `Notification::RetryQuestion` names the failing operation, and
-  [`Session::answer`] supplies the next delay (clamped to a 50ms floor). A
-  directory shared by several subscriptions takes the earliest answer, counting
-  a subscription that never answers at the default.
+  [`Session::answer`] supplies the next delay (clamped to a 50ms floor); an
+  explicit `answer(watch, None)` declines, which is what counts at the
+  default -- never answering at all leaves the question outstanding
+  indefinitely. A directory shared by several subscriptions takes the
+  earliest answer.
 
 A subscription that opts into `WatchOptions::report_liveness` additionally
 receives `Suspended`/`Resumed` brackets around an outage and an

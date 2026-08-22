@@ -19,8 +19,9 @@
 //! Cancellation is *enqueued*, not performed inline: it is a request like any
 //! other, serviced on the monitor's own path (D-2). So `cancel` and `drop` return
 //! before the watch has actually stopped, and a notification already in the queue
-//! still reaches the client. M3.6 adds the completion that tells a client exactly
-//! where the cancellation fell in its stream.
+//! still reaches the client. A [`crate::queue::Notification::Completion`] with
+//! [`crate::queue::Outcome::Cancelled`] then tells the client exactly where the
+//! cancellation fell in its stream (D-30).
 //!
 //! # The retry mode is stated at registration
 //!

@@ -647,7 +647,12 @@ impl WatcherInner {
     /// (D-23). Not held under the gate lock: both `run_down` and
     /// `stop_and_drain` can block.
     fn teardown_endpoint(&self) {
-        match lock(&self.endpoint).take() {
+        // Taken and dropped *before* the match: a `match lock(...).take() {
+        // ... }` scrutinee is a temporary whose lifetime extends across the
+        // whole match, keeping the mutex held while `run_down`/`stop_and_drain`
+        // block below -- exactly what the comment above says must not happen.
+        let endpoint = lock(&self.endpoint).take();
+        match endpoint {
             Some(Endpoint::Detailed(old)) => {
                 let _ = old.cancel_all();
                 old.run_down();
@@ -843,12 +848,15 @@ impl DirectoryWatcher {
     /// # Errors
     ///
     /// Returns the error from establishing or arming whichever tier the
-    /// directory settles on (D-17).
+    /// directory settles on (D-17), together with `route` handed back so a
+    /// caller whose open just succeeded does not also lose the route's
+    /// standing fault-question reservation (D-27/D-28) to a same-moment arm
+    /// failure.
     pub(crate) fn start(
         directory: DirectoryHandle,
         path: PathBuf,
         route: Route,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, (io::Error, Route)> {
         Self::start_with(directory, path, DEFAULT_BUFFER_BYTES, route)
     }
 
@@ -864,7 +872,7 @@ impl DirectoryWatcher {
         path: PathBuf,
         buffer_bytes: usize,
         route: Route,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, (io::Error, Route)> {
         Self::start_inner(directory, path, buffer_bytes, route, false)
     }
 
@@ -880,7 +888,7 @@ impl DirectoryWatcher {
         directory: DirectoryHandle,
         path: PathBuf,
         route: Route,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, (io::Error, Route)> {
         Self::start_inner(directory, path, DEFAULT_BUFFER_BYTES, route, true)
     }
 
@@ -888,13 +896,17 @@ impl DirectoryWatcher {
     /// machinery, then establish the first read or wait through
     /// [`WatcherInner::reopen`] -- the same tier-choosing path used for every
     /// later widen, re-establish, or downgrade.
+    ///
+    /// On any failure, `route` is reclaimed from `inner.routes` (it is still
+    /// the map's only entry) and returned alongside the error rather than
+    /// dropped with the rest of `inner` -- see [`start`](Self::start)'s docs.
     fn start_inner(
         directory: DirectoryHandle,
         path: PathBuf,
         buffer_bytes: usize,
         route: Route,
         force_coarse: bool,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, (io::Error, Route)> {
         let watch = route.watch;
         let initial_sink = route.sink.clone();
         let mut routes = HashMap::new();
@@ -914,19 +926,31 @@ impl DirectoryWatcher {
             force_coarse: AtomicBool::new(force_coarse),
         });
 
+        // Pulls this constructor's one route back out of `inner.routes` so a
+        // caller can recover it (and the standing reservation it may carry)
+        // instead of losing it to `inner`'s drop.
+        let reclaim_route = |inner: &Arc<WatcherInner>| -> Route {
+            lock(&inner.routes)
+                .remove(&watch)
+                .expect("the route inserted above is still the map's only entry")
+        };
+
         // As with the completion callback below, a `Weak` rather than a strong
         // reference: the work object lives in `inner`, so a strong one would be
         // a cycle, and a failed upgrade during teardown is exactly the
         // suppression that lets rundown converge.
         let resuming = Arc::downgrade(&inner);
-        let resume_work = ThreadpoolWork::new(
+        let resume_work = match ThreadpoolWork::new(
             move || {
                 if let Some(inner) = resuming.upgrade() {
                     inner.resume_arm();
                 }
             },
             None,
-        )?;
+        ) {
+            Ok(work) => work,
+            Err(error) => return Err((error, reclaim_route(&inner))),
+        };
         inner
             .resume_work
             .set(resume_work)
@@ -937,14 +961,17 @@ impl DirectoryWatcher {
         // and re-armed (never recreated) across however many faults this
         // watcher lives through (M5.1).
         let retrying = Arc::downgrade(&inner);
-        let retry_timer = ThreadpoolTimer::new(
+        let retry_timer = match ThreadpoolTimer::new(
             move |_firing| {
                 if let Some(inner) = retrying.upgrade() {
                     inner.retry_reestablish();
                 }
             },
             None,
-        )?;
+        ) {
+            Ok(timer) => timer,
+            Err(error) => return Err((error, reclaim_route(&inner))),
+        };
         inner
             .retry_timer
             .set(retry_timer)
@@ -954,7 +981,9 @@ impl DirectoryWatcher {
         // from the outset is still prodded when the client drains.
         initial_sink.register_resume(&inner);
 
-        inner.reopen(directory)?;
+        if let Err(error) = inner.reopen(directory) {
+            return Err((error, reclaim_route(&inner)));
+        }
         Ok(Self { inner })
     }
 

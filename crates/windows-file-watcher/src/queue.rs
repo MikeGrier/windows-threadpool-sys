@@ -213,9 +213,9 @@ pub enum Notification {
         watch: WatchId,
     },
     /// Which tier is actually watching this subscription's target, reported
-    /// once at first establishment and again after every re-establishment. Only
-    /// [`WatchMode::Detailed`] exists until M6 adds the coarse fallback
-    /// (D-17). Opt-in (D-13).
+    /// once at first establishment and again after every re-establishment:
+    /// [`WatchMode::Detailed`] or the [`WatchMode::Coarse`] fallback (D-17).
+    /// Opt-in (D-13).
     Established {
         /// The subscription affected.
         watch: WatchId,
@@ -224,9 +224,10 @@ pub enum Notification {
     },
     /// The monitor is asking this **interactive** subscription (D-27) how long
     /// to wait before the next attempt. Answer through
-    /// [`crate::session::Session::answer`]; declining (never answering, or a
-    /// dropped `Watch`) is counted at the operation's default delay. This is the
-    /// one message a fault protocol cannot afford to lose, so it rides a
+    /// [`crate::session::Session::answer`]; an explicit `answer(watch, None)`
+    /// declines, which is counted at the operation's default delay -- never
+    /// answering at all leaves the question outstanding indefinitely. This is
+    /// the one message a fault protocol cannot afford to lose, so it rides a
     /// standing reservation (`Sender::reserve_standing`) taken once at
     /// registration rather than the best-effort path -- sound because a watcher
     /// cannot fault twice concurrently (D-28), so at most one question per
@@ -278,8 +279,42 @@ pub(crate) trait Resume: Send + Sync {
     fn resume(&self);
 }
 
+/// One queued notification, optionally carrying the obligation to hand a
+/// [`StandingSlot`]'s permanent reservation back to `reserved` once the entry
+/// is gone.
+///
+/// A `StandingSlot` send transfers its one carved-out unit of `reserved`
+/// capacity into the queue for as long as the message sits there (so `free()`
+/// is never double-charged for it, once as `reserved` and again as an
+/// occupied queue slot). [`StandingHold`]'s own `Drop` is what hands that unit
+/// back, whenever and however this entry is finally discarded -- taken
+/// normally or dropped some other way -- which is also what lets
+/// [`StandingSlot::drop`] tell whether it still owns that unit itself (no hold
+/// outstanding) or has already transferred it to a queued entry that has not
+/// been drained yet.
+struct Entry {
+    notification: Notification,
+    _standing_hold: Option<StandingHold>,
+}
+
+impl Entry {
+    fn plain(notification: Notification) -> Self {
+        Self {
+            notification,
+            _standing_hold: None,
+        }
+    }
+
+    fn standing(notification: Notification, hold: StandingHold) -> Self {
+        Self {
+            notification,
+            _standing_hold: Some(hold),
+        }
+    }
+}
+
 struct State {
-    queue: VecDeque<Notification>,
+    queue: VecDeque<Entry>,
     /// The bound. Never zero, which is what makes the delivery guarantee
     /// non-vacuous: a queue with no room could never carry the desync that
     /// reports its own saturation.
@@ -328,10 +363,10 @@ impl State {
             let Some(watch) = self.latched.pop_front() else {
                 break;
             };
-            self.queue.push_back(Notification::Desync {
+            self.queue.push_back(Entry::plain(Notification::Desync {
                 watch,
                 cause: DesyncCause::QueueFull,
-            });
+            }));
         }
     }
 
@@ -389,7 +424,7 @@ impl Sender {
             // rather than after changes that preceded it.
             state.flush_latched();
             let delivery = if state.free() > 0 {
-                state.queue.push_back(notification);
+                state.queue.push_back(Entry::plain(notification));
                 Delivery::Queued
             } else {
                 state.latch(watch);
@@ -453,6 +488,7 @@ impl Sender {
         }
         Some(StandingSlot {
             sender: self.clone(),
+            in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -498,7 +534,7 @@ impl Reservation {
             // only take genuinely free slots and never this one.
             state.flush_latched();
             state.reserved -= 1;
-            state.queue.push_back(notification);
+            state.queue.push_back(Entry::plain(notification));
             refresh_doorbell(&self.sender.shared, &state);
         }
         self.used = true;
@@ -509,7 +545,16 @@ impl Reservation {
 impl Drop for Reservation {
     fn drop(&mut self) {
         if !self.used {
-            lock(&self.sender.shared.items).reserved -= 1;
+            let resumers = {
+                let mut state = lock(&self.sender.shared.items);
+                state.reserved -= 1;
+                // A dropped-unused reservation frees capacity exactly like a
+                // drained item does, so a producer paused in `Backpressured`
+                // (D-29) must be prodded the same way, or it can stay paused
+                // forever waiting on a receive that was never going to come.
+                freed_resumers(&mut state, true)
+            };
+            prod(resumers);
         }
     }
 }
@@ -523,6 +568,14 @@ impl Drop for Reservation {
 /// point `Drop` returns the slot to the pool.
 pub(crate) struct StandingSlot {
     sender: Sender,
+    /// Whether the last-sent message is still queued, undrained -- meaning the
+    /// unit of `reserved` capacity this slot carved out has been transferred
+    /// into that entry's [`StandingHold`] and is no longer this slot's to
+    /// release. Shared with that hold so whichever side is dropped first
+    /// -- the slot (subscription ending while a question is still queued) or
+    /// the hold (the entry finally drained) -- performs exactly the release
+    /// that is still outstanding, never both.
+    in_flight: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl StandingSlot {
@@ -532,7 +585,19 @@ impl StandingSlot {
         {
             let mut state = lock(&self.sender.shared.items);
             state.flush_latched();
-            state.queue.push_back(notification);
+            // The permanent reservation transfers into the queued entry
+            // (`Entry::standing`) for as long as it sits there, rather than
+            // staying counted in `reserved` on top of the entry's own
+            // `queue.len()` slot -- the entry's `StandingHold` hands it back
+            // once drained, wherever that happens to be by then.
+            state.reserved -= 1;
+            self.in_flight
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            let hold = StandingHold {
+                shared: Arc::clone(&self.sender.shared),
+                in_flight: Arc::clone(&self.in_flight),
+            };
+            state.queue.push_back(Entry::standing(notification, hold));
             refresh_doorbell(&self.sender.shared, &state);
         }
         self.sender.shared.arrived.notify_all();
@@ -541,13 +606,56 @@ impl StandingSlot {
 
 impl Drop for StandingSlot {
     fn drop(&mut self) {
-        lock(&self.sender.shared.items).reserved -= 1;
+        // If the last-sent message is still queued, its own `StandingHold`
+        // (embedded in that entry) owns releasing this reservation once it is
+        // eventually drained; releasing it here too would double-release the
+        // same unit of capacity. No concurrent `send` can race this check: a
+        // `StandingSlot` is uniquely held, so nothing else can still be
+        // calling `send` while this runs.
+        if self.in_flight.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        // As for `Reservation`'s drop: releasing this permanent slot frees
+        // capacity without any item being drained, so a paused producer must
+        // still be prodded on the same zero-to-one transition.
+        let resumers = {
+            let mut state = lock(&self.sender.shared.items);
+            state.reserved -= 1;
+            freed_resumers(&mut state, true)
+        };
+        prod(resumers);
     }
 }
 
 impl std::fmt::Debug for StandingSlot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StandingSlot").finish_non_exhaustive()
+    }
+}
+
+/// The reservation-release obligation a [`StandingSlot::send`] transfers into
+/// its queued entry.
+///
+/// Restoring `reserved` on `Drop` -- rather than only in [`take`] -- means the
+/// release happens exactly once no matter how the entry is finally discarded
+/// (normal drain, or the queue itself going away), and it is what lets
+/// [`StandingSlot::drop`] safely skip releasing a unit it has already handed
+/// off.
+struct StandingHold {
+    shared: Arc<Shared>,
+    in_flight: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for StandingHold {
+    fn drop(&mut self) {
+        self.in_flight
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let resumers = {
+            let mut state = lock(&self.shared.items);
+            state.reserved += 1;
+            freed_resumers(&mut state, true)
+        };
+        prod(resumers);
     }
 }
 
@@ -592,15 +700,19 @@ impl Receiver {
     /// Take the next notification if one is already available.
     #[must_use]
     pub fn try_recv(&self) -> Option<Notification> {
-        let (item, resumers) = {
+        let (entry, resumers) = {
             let mut state = lock(&self.shared.items);
             let taken = take(&mut state);
             refresh_doorbell(&self.shared, &state);
             let resumers = freed_resumers(&mut state, taken.is_some());
             (taken, resumers)
         };
+        // `entry` (and any `StandingHold` it carries) is dropped here, after
+        // the queue lock above has already been released -- a hold's own
+        // `Drop` re-locks the same mutex to restore its reservation, which
+        // would deadlock if it ran while that lock was still held.
         prod(resumers);
-        item
+        entry.map(|entry| entry.notification)
     }
 
     /// Block until a notification is available, or every sender is gone.
@@ -612,12 +724,14 @@ impl Receiver {
     pub fn recv(&self) -> Option<Notification> {
         let mut state = lock(&self.shared.items);
         loop {
-            if let Some(item) = take(&mut state) {
+            if let Some(entry) = take(&mut state) {
                 refresh_doorbell(&self.shared, &state);
                 let resumers = freed_resumers(&mut state, true);
                 drop(state);
                 prod(resumers);
-                return Some(item);
+                // As in `try_recv`: `entry` is dropped only after the lock
+                // above is released.
+                return Some(entry.notification);
             }
             if state.senders == 0 {
                 return None;
@@ -639,12 +753,14 @@ impl Receiver {
         let deadline = Instant::now() + timeout;
         let mut state = lock(&self.shared.items);
         loop {
-            if let Some(item) = take(&mut state) {
+            if let Some(entry) = take(&mut state) {
                 refresh_doorbell(&self.shared, &state);
                 let resumers = freed_resumers(&mut state, true);
                 drop(state);
                 prod(resumers);
-                return Some(item);
+                // As in `try_recv`: `entry` is dropped only after the lock
+                // above is released.
+                return Some(entry.notification);
             }
             if state.senders == 0 {
                 return None;
@@ -759,13 +875,27 @@ impl Receiver {
 /// everything still queued: the queue was full at the time, so surfacing the
 /// desync early would claim the hole is older than it is and break the ordering
 /// D-12 promises.
-fn take(state: &mut State) -> Option<Notification> {
-    if let Some(item) = state.queue.pop_front() {
-        return Some(item);
+/// Take the next item: a queued entry, or -- once the queue is drained -- a
+/// synthesised report of a loss that never fitted.
+///
+/// The queue comes first because the latch records a loss that happened *after*
+/// everything still queued: the queue was full at the time, so surfacing the
+/// desync early would claim the hole is older than it is and break the ordering
+/// D-12 promises.
+///
+/// Returns the whole [`Entry`], not just its notification, so a caller can
+/// defer dropping any [`StandingHold`] it carries until after the queue lock
+/// `state` borrows from is released -- the hold's own `Drop` re-locks that
+/// same mutex.
+fn take(state: &mut State) -> Option<Entry> {
+    if let Some(entry) = state.queue.pop_front() {
+        return Some(entry);
     }
-    state.latched.pop_front().map(|watch| Notification::Desync {
-        watch,
-        cause: DesyncCause::QueueFull,
+    state.latched.pop_front().map(|watch| {
+        Entry::plain(Notification::Desync {
+            watch,
+            cause: DesyncCause::QueueFull,
+        })
     })
 }
 
