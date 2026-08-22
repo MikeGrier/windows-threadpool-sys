@@ -358,29 +358,27 @@ fn a_successful_subscribe_reports_itself() {
 }
 
 #[test]
-fn a_permanently_unwatchable_target_is_reported_rather_than_silent() {
-    // The case D-30 exists for: a client would otherwise hold a `Watch` that can
-    // never fire and never says why.
+fn a_path_through_a_file_is_reported_as_establishing_not_failed() {
+    // A path that treats a *file* as if it were a directory with contents (an
+    // intermediate component that is not itself a directory) does not exist as
+    // far as `CreateFileW` is concerned -- Windows reports `ERROR_PATH_NOT_FOUND`
+    // for the whole path rather than naming the file in the middle, so this
+    // classifies as retryable (D-22) exactly like any other not-yet-existing
+    // path, not as a permanent `NotADirectory`.
     let dir = TempDir::new("completion-file");
     let file = dir.path().join("a-file-not-a-directory.txt");
     std::fs::write(&file, b"x").expect("create the file");
+    let impossible = file.join("nested");
 
     let monitor = Monitor::new().expect("create the monitor");
     let (session, receiver) = monitor.session();
     let watch = session
-        .subscribe(&file, WatchOptions::new())
+        .subscribe(&impossible, WatchOptions::new())
         .expect("register");
 
     assert_eq!(
         await_completion(&receiver, watch.id()),
-        Outcome::Failed {
-            failure: OpenFailure::NotADirectory
-        }
-    );
-    monitor.quiesce();
-    assert!(
-        !monitor.is_registered(watch.id()),
-        "a permanent failure registers nothing"
+        Outcome::Establishing
     );
 
     drop(watch);
@@ -618,6 +616,86 @@ fn every_subscription_gets_exactly_one_completion_of_each_kind() {
         assert_eq!(await_completion(&receiver, *id), Outcome::Cancelled);
     }
 
+    drop(monitor);
+    dir.cleanup();
+}
+
+// --- file targets (D-7) ---
+
+#[test]
+fn subscribing_to_a_file_watches_its_parent_directory() {
+    let dir = TempDir::new("file-target");
+    let file = dir.path().join("target.txt");
+    std::fs::write(&file, b"x").expect("create the file");
+
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(&file, WatchOptions::new())
+        .expect("register");
+
+    assert_eq!(await_completion(&receiver, watch.id()), Outcome::Subscribed);
+    assert!(monitor.is_watching(watch.id()));
+
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn a_file_target_reports_changes_to_that_file_and_nothing_else() {
+    let dir = TempDir::new("file-target-filter");
+    let target = dir.path().join("target.txt");
+    // The target must exist at subscribe time: resolving a not-yet-existing path
+    // to a file target versus a directory target is left to M5's re-establish
+    // loop (see the module docs), not attempted here.
+    std::fs::write(&target, b"x").expect("create the target");
+
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(&target, WatchOptions::new())
+        .expect("register");
+    monitor.quiesce();
+
+    std::fs::write(dir.path().join("other.txt"), b"y").expect("create an unrelated sibling");
+    std::fs::remove_file(&target).expect("remove the target");
+    std::fs::write(&target, b"recreated").expect("recreate the target");
+
+    assert_eq!(await_change(&receiver, "target.txt"), watch.id());
+
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn a_file_target_and_a_directory_target_on_the_same_directory_coalesce() {
+    let dir = TempDir::new("file-target-coalesce");
+    let target = dir.path().join("target.txt");
+    std::fs::write(&target, b"x").expect("create the target");
+
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let file_watch = session
+        .subscribe(&target, WatchOptions::new())
+        .expect("register the file target");
+    let dir_watch = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register the directory target");
+    monitor.quiesce();
+
+    assert_eq!(
+        monitor.directory_count(),
+        1,
+        "one directory, one coalesced watcher, regardless of target kind"
+    );
+
+    std::fs::write(dir.path().join("fresh.txt"), b"x").expect("create a new file");
+    let seen_by = await_change(&receiver, "fresh.txt");
+    assert!(seen_by == file_watch.id() || seen_by == dir_watch.id());
+
+    drop((file_watch, dir_watch));
     drop(monitor);
     dir.cleanup();
 }

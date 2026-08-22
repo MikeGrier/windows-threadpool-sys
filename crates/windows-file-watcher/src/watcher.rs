@@ -27,9 +27,10 @@
 //! inline in the payload -- the `Box` indirection is what keeps the address the
 //! kernel was given valid.
 
+use std::collections::HashMap;
 use std::io;
 use std::os::windows::io::AsRawHandle;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use windows_overlapped_io_sys::{Issued, Operation, Submitted, UnassociatedEndpoint};
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
@@ -44,6 +45,7 @@ use windows_threadpool_sys::work::ThreadpoolWork;
 use crate::directory::DirectoryHandle;
 use crate::notify::{DecodedBatch, DesyncCause, decode_batch};
 use crate::queue::{Notification, Resume, Sender, WatchId};
+use crate::route::{Route, RouteScope};
 
 /// The completion-buffer size used unless a caller chooses otherwise.
 ///
@@ -113,13 +115,6 @@ impl ReadBuffer {
     }
 }
 
-/// Where a watcher puts what it decodes.
-///
-/// A crate-owned queue sender, never a client callback: enqueueing is something
-/// this crate does to storage it owns, so no client behaviour can reach the
-/// cadence path (D-2/D-11).
-type BatchSink = Sender;
-
 /// Whether the watcher may still submit a read, and if not, why.
 ///
 /// A bare boolean would be enough for teardown alone, but "not re-arming" is a
@@ -136,24 +131,38 @@ pub enum ArmGate {
     /// nowhere to go. Transient: the loss becomes a grace period in the kernel's
     /// own change buffer, and the watch resumes when the client drains (D-29).
     Backpressured,
+    /// Transiently closed while the directory is being reopened to widen its
+    /// reach to recursive (M4.4/D-6). Self-resolving: it becomes `Open` once the
+    /// new endpoint is armed, or `TornDown` if teardown wins the race.
+    Reopening,
     /// Torn down. Permanent: a watcher never re-opens.
     TornDown,
 }
 
 /// The shared state a completion callback reaches.
 struct WatcherInner {
-    /// Set once, immediately after construction. The callback needs the object
-    /// that owns it, which cannot be supplied at construction time.
-    io: OnceLock<ThreadpoolIo>,
-    /// Set once, as for `io`. Queues the re-arm that ends a backpressure pause
-    /// onto this crate's own pool, so it never runs on a client's thread.
+    /// The endpoint currently in use. Replaced, not merely set once: widening a
+    /// watcher's reach to recursive (M4.4) reopens the directory rather than
+    /// cancelling and resubmitting on the same handle, because the latter was
+    /// measured to leave the filesystem's recursive attachment unchanged --
+    /// direct children kept being reported, nested ones never were. See
+    /// [`WatcherInner::reopen`].
+    io: Mutex<Option<ThreadpoolIo>>,
+    /// Set once, as for `io` before it started being replaced. Queues the re-arm
+    /// that ends a backpressure pause onto this crate's own pool, so it never
+    /// runs on a client's thread.
     resume_work: OnceLock<ThreadpoolWork>,
+    /// Every `FILE_NOTIFY_CHANGE_*` class this watcher asks for. Constant rather
+    /// than a per-subscription union: no subscription can select a filter yet
+    /// (`WatchOptions` has no such field), so the union over any set of
+    /// subscriptions is trivially this same constant.
     filter: u32,
-    subtree: bool,
     buffer_bytes: usize,
-    sink: BatchSink,
-    /// The subscription every notification from this watcher is tagged with.
-    watch: WatchId,
+    /// Every subscription this directory currently serves, keyed by the
+    /// identifier that tags its notifications (D-6). Read at every arm to decide
+    /// the kernel's own `bWatchSubtree` reach, and at every completion to
+    /// de-multiplex the decoded batch (D-6/D-7).
+    routes: Mutex<HashMap<WatchId, Route>>,
     /// Whether arming is still permitted, held under a lock rather than an
     /// atomic *deliberately*. Teardown must be able to establish that no further
     /// read can be submitted, and a flag checked before a submission leaves a
@@ -209,21 +218,25 @@ impl WatcherInner {
         // Checked here rather than at the enqueue: refusing to arm leaves the
         // changes in the kernel's own buffer, which is a grace period rather than
         // a loss, where discovering a full queue after the read has completed is
-        // a batch with nowhere to go (D-29).
-        if !self.sink.has_room() {
+        // a batch with nowhere to go (D-29). Paused only when *every* route is
+        // full: a route with room still benefits from the grace period, and one
+        // with none falls back to its own latch (D-29's fallback) -- arming
+        // would not have helped it either way.
+        if !self.any_route_has_room() {
             *gate = ArmGate::Backpressured;
             // Re-checked *under this lock* because a drain may have freed a slot
             // since the check above. Without it the wake could be missed: a
             // resume that ran before the gate was set would find it open and do
             // nothing, and the watcher would stay parked with room available and
             // nothing left to prod it.
-            if !self.sink.has_room() {
+            if !self.any_route_has_room() {
                 return Ok(());
             }
         }
         *gate = ArmGate::Open;
 
-        let Some(io) = self.io.get() else {
+        let io_guard = lock(&self.io);
+        let Some(io) = io_guard.as_ref() else {
             // Unreachable in practice: `io` is set before the first arm and the
             // callback cannot run before a submission exists.
             return Err(io::Error::other("the watcher's I/O object is not yet set"));
@@ -237,7 +250,16 @@ impl WatcherInner {
         let buffer_ptr = operation.payload_mut().as_mut_ptr();
         let buffer_len = operation.payload().byte_len();
         let filter = self.filter;
-        let subtree = i32::from(self.subtree);
+        // Read fresh at every arm: a route joining or leaving between arms
+        // changes what the *next* read needs (D-6). Downstream routing narrows
+        // each route back to what it actually asked for regardless of what the
+        // kernel was told to reach.
+        let subtree = i32::from({
+            let routes = lock(&self.routes);
+            routes
+                .values()
+                .any(|route| route.scope.needs_kernel_subtree())
+        });
 
         // SAFETY: issues exactly one overlapped `ReadDirectoryChangesW` against
         // the supplied `OVERLAPPED`, writing only into the operation's own
@@ -289,7 +311,10 @@ impl WatcherInner {
 
         if let Some(error) = completion.error() {
             // A cancelled read is teardown, not a fault: stay silent and do not
-            // re-arm, or rundown would never converge.
+            // re-arm, or rundown would never converge. Widening to recursive
+            // reach (M4.4) no longer cancels the live read to do it -- it
+            // reopens the directory instead (see `reopen`), so every abort seen
+            // here is teardown's.
             if error.raw_os_error() == Some(OPERATION_ABORTED) {
                 return;
             }
@@ -314,31 +339,133 @@ impl WatcherInner {
     /// An empty change list is dropped rather than enqueued: the kernel can
     /// complete a read carrying no records, and forwarding that would make a
     /// client's "I was woken, so something changed" reasoning false.
+    ///
+    /// De-multiplexes across every current route (D-6): a batch is filtered to
+    /// each route's own scope, and a route whose filtered subset is empty gets
+    /// nothing, for the same reason an empty completion gets nothing. A desync
+    /// is never filtered -- it means "you may have missed something in this
+    /// directory", which is equally true for every subscription within it.
     fn publish(&self, batch: DecodedBatch) {
-        let notification = match batch {
-            DecodedBatch::Changes(changes) if changes.is_empty() => return,
-            DecodedBatch::Changes(changes) => Notification::Batch {
-                watch: self.watch,
-                changes,
+        let routes = lock(&self.routes);
+        match batch {
+            DecodedBatch::Changes(changes) if changes.is_empty() => {}
+            DecodedBatch::Changes(changes) => {
+                for route in routes.values() {
+                    let matched = route.select(&changes);
+                    if matched.is_empty() {
+                        continue;
+                    }
+                    // Observation reserves nothing, so this may be latched rather
+                    // than queued (D-33); M3.7 responds by not re-arming while
+                    // every route is full, turning the loss into a grace period.
+                    let _ = route.sink.send(Notification::Batch {
+                        watch: route.watch,
+                        changes: matched,
+                    });
+                }
+            }
+            DecodedBatch::Desync(cause) => {
+                for route in routes.values() {
+                    let _ = route.sink.send(Notification::Desync {
+                        watch: route.watch,
+                        cause,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Whether at least one current route's sink has room for a best-effort
+    /// send.
+    fn any_route_has_room(&self) -> bool {
+        lock(&self.routes)
+            .values()
+            .any(|route| route.sink.has_room())
+    }
+
+    /// Cancel the outstanding read solely to pick up a newly widened reach.
+    ///
+    /// Reopens the directory rather than cancelling and resubmitting on the
+    /// same handle. That was tried first and measured not to work: a live
+    /// `ReadDirectoryChangesW` handle's recursive attachment does not appear to
+    /// take effect (or take effect reliably) from a later call that merely
+    /// changes `bWatchSubtree` on the same handle -- a direct child kept being
+    /// reported after the widen, but nothing nested inside it ever was. A fresh
+    /// `CreateFileW` does not have this problem.
+    ///
+    /// A no-op when there is nothing live to widen: [`ArmGate::TornDown`] has
+    /// nothing left to reopen, and this is only ever called while the gate is
+    /// [`ArmGate::Open`] (see [`DirectoryWatcher::add_route`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from binding the reopened handle to the pool or from
+    /// arming its first read.
+    fn reopen(self: &Arc<Self>, handle: DirectoryHandle) -> io::Result<()> {
+        {
+            let mut gate = lock(&self.gate);
+            if *gate == ArmGate::TornDown {
+                return Ok(());
+            }
+            // Transient and self-resolving: cleared to `Open` below once the new
+            // endpoint is armed, or left as `TornDown` if teardown wins the race
+            // with this reopen.
+            *gate = ArmGate::Reopening;
+        }
+
+        // Tear down the old endpoint fully -- cancelled, then no operation
+        // outstanding and no callback executing -- before anything touches the
+        // new one, the same ordering `stop()` relies on (D-23). Not held across
+        // this: `run_down` can block, and the gate lock is not this crate's to
+        // hold across a wait.
+        if let Some(old) = lock(&self.io).take() {
+            let _ = old.cancel_all();
+            old.run_down();
+        }
+
+        // The callback closure has the same shape as `DirectoryWatcher::start`'s:
+        // a `Weak` (never a strong reference, for the same cycle-avoidance
+        // reason), claiming and discarding a completion once the owner is gone,
+        // otherwise dispatching to `on_completion`.
+        let weak = Arc::downgrade(self);
+        // SAFETY: `handle` was opened the same way every `DirectoryHandle` is
+        // (see its module), which is the association this endpoint requires, and
+        // ownership transfers here exclusively.
+        let endpoint = unsafe { UnassociatedEndpoint::assume_overlapped(handle.into_handle()) };
+        let new_io = ThreadpoolIo::new(
+            endpoint,
+            move |completion: &IoCompletion| {
+                let Some(inner) = weak.upgrade() else {
+                    // SAFETY: this object only ever carries
+                    // `Operation<ReadBuffer>`, claimed exactly once here.
+                    drop(unsafe { completion.claim::<ReadBuffer>() });
+                    return;
+                };
+                inner.on_completion(completion);
             },
-            DecodedBatch::Desync(cause) => Notification::Desync {
-                watch: self.watch,
-                cause,
-            },
-        };
-        // Observation reserves nothing, so this may be latched rather than
-        // queued (D-33). M3.7 responds by not re-arming while the queue is full,
-        // which turns the loss into a grace period instead of a drop.
-        let _ = self.sink.send(notification);
+            None,
+        )?;
+        *lock(&self.io) = Some(new_io);
+
+        {
+            let mut gate = lock(&self.gate);
+            if *gate == ArmGate::TornDown {
+                // Torn down while this was in flight: the fresh endpoint was
+                // just installed with nothing outstanding on it, so `stop()`'s
+                // own cancel/run_down (already run once, above, against the old
+                // one) has nothing further to do here; leave it be rather than
+                // arming a read teardown never asked for.
+                return Ok(());
+            }
+            *gate = ArmGate::Open;
+        }
+        self.arm()
     }
 
     /// Record the failure that stopped this watcher, and tell the client the
     /// change stream has a hole in it.
     fn record_stop(&self, error: io::Error) {
-        let mut stopped = self
-            .stopped
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let mut stopped = lock(&self.stopped);
         if stopped.is_none() {
             *stopped = Some(error);
             drop(stopped);
@@ -378,21 +505,19 @@ pub struct DirectoryWatcher {
 }
 
 impl DirectoryWatcher {
-    /// Open `directory` and arm the first read.
-    ///
-    /// Everything decoded is tagged with `watch` and enqueued on `sink`.
+    /// Open `directory` and arm the first read, with one initial route.
     ///
     /// # Errors
     ///
     /// Returns the error from binding the handle to the pool or from the first
     /// `ReadDirectoryChangesW`.
-    pub fn start(
+    pub(crate) fn start(
         directory: DirectoryHandle,
-        subtree: bool,
         watch: WatchId,
+        scope: RouteScope,
         sink: Sender,
     ) -> io::Result<Self> {
-        Self::start_with(directory, subtree, DEFAULT_BUFFER_BYTES, watch, sink)
+        Self::start_with(directory, DEFAULT_BUFFER_BYTES, watch, scope, sink)
     }
 
     /// As [`start`](Self::start), with an explicit completion-buffer size.
@@ -402,21 +527,23 @@ impl DirectoryWatcher {
     /// # Errors
     ///
     /// As [`start`](Self::start).
-    pub fn start_with(
+    pub(crate) fn start_with(
         directory: DirectoryHandle,
-        subtree: bool,
         buffer_bytes: usize,
         watch: WatchId,
+        scope: RouteScope,
         sink: Sender,
     ) -> io::Result<Self> {
+        let mut routes = HashMap::new();
+        let initial_sink = sink.clone();
+        routes.insert(watch, Route { watch, scope, sink });
+
         let inner = Arc::new(WatcherInner {
-            io: OnceLock::new(),
+            io: Mutex::new(None),
             resume_work: OnceLock::new(),
             filter: ALL_NOTIFY_FILTERS,
-            subtree,
             buffer_bytes,
-            sink,
-            watch,
+            routes: Mutex::new(routes),
             gate: Mutex::new(ArmGate::Open),
             stopped: Mutex::new(None),
         });
@@ -452,8 +579,9 @@ impl DirectoryWatcher {
 
         inner
             .io
-            .set(io)
-            .unwrap_or_else(|_| unreachable!("the I/O object is set exactly once, here"));
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .replace(io);
 
         // As with the completion callback, a `Weak` rather than a strong
         // reference: the work object lives in `inner`, so a strong one would be a
@@ -475,25 +603,84 @@ impl DirectoryWatcher {
 
         // Registered before the first arm, so a watcher that is backpressured
         // from the outset is still prodded when the client drains.
-        inner.sink.register_resume(&inner);
+        initial_sink.register_resume(&inner);
 
         inner.arm()?;
         Ok(Self { inner })
     }
 
+    /// Add a subscription to this directory (D-6), reopening to widen the
+    /// kernel's own reach if this is the first route that needs recursion.
+    ///
+    /// `fresh_handle` is a handle already opened onto this same directory --
+    /// the caller had to open one anyway to discover the directory's identity
+    /// and find this watcher to coalesce onto (D-6) -- reused here rather than
+    /// opening a second one, and simply dropped if it turns out not to be
+    /// needed.
+    ///
+    /// The other direction -- a recursive route leaving -- never needs the
+    /// mirror-image contraction: an over-broad read is filtered back down to
+    /// what each remaining route asked for by [`Route::select`], so it costs
+    /// nothing but a few extra bytes to decode, where a read that is too
+    /// *narrow* would silently under-report.
+    ///
+    /// A reopen failure stops the whole watcher (D-15's rearm-and-retry
+    /// classification), reported to every route it currently serves rather than
+    /// only the one that triggered it, since they now share one endpoint.
+    pub(crate) fn add_route(
+        &self,
+        watch: WatchId,
+        scope: RouteScope,
+        sink: Sender,
+        fresh_handle: DirectoryHandle,
+    ) {
+        let widen = scope.needs_kernel_subtree();
+        let already_recursive = {
+            let mut routes = lock(&self.inner.routes);
+            let already = routes
+                .values()
+                .any(|route| route.scope.needs_kernel_subtree());
+            routes.insert(
+                watch,
+                Route {
+                    watch,
+                    scope,
+                    sink: sink.clone(),
+                },
+            );
+            already
+        };
+        // Registered even when this route does not widen anything: it may still
+        // need the resume prod later, on its own account, if its sink saturates
+        // while this watcher is paused for some other route.
+        sink.register_resume(&self.inner);
+        if widen
+            && !already_recursive
+            && let Err(error) = self.inner.reopen(fresh_handle)
+        {
+            self.inner.record_stop(error);
+        }
+    }
+
+    /// Remove a subscription, returning how many routes remain.
+    ///
+    /// The caller tears this watcher down entirely once this reaches zero;
+    /// removing the route itself never requires re-arming (see
+    /// [`DirectoryWatcher::add_route`]).
+    pub(crate) fn remove_route(&self, watch: WatchId) -> usize {
+        let mut routes = lock(&self.inner.routes);
+        routes.remove(&watch);
+        routes.len()
+    }
+
     /// The failure that stopped this watcher re-arming, if any.
     pub fn stop_reason(&self) -> Option<io::Error> {
-        self.inner
-            .stopped
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .as_ref()
-            .map(|error| {
-                error.raw_os_error().map_or_else(
-                    || io::Error::other("watcher stopped"),
-                    io::Error::from_raw_os_error,
-                )
-            })
+        lock(&self.inner.stopped).as_ref().map(|error| {
+            error.raw_os_error().map_or_else(
+                || io::Error::other("watcher stopped"),
+                io::Error::from_raw_os_error,
+            )
+        })
     }
 
     /// Whether the watcher is still re-arming.
@@ -503,21 +690,12 @@ impl DirectoryWatcher {
     /// observable at all -- a paused watcher is otherwise indistinguishable from
     /// a quiet directory.
     pub fn is_watching(&self) -> bool {
-        self.inner
-            .stopped
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .is_none()
-            && self.gate() != ArmGate::TornDown
+        lock(&self.inner.stopped).is_none() && self.gate() != ArmGate::TornDown
     }
 
     /// The current arm gate.
     pub fn gate(&self) -> ArmGate {
-        *self
-            .inner
-            .gate
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        *lock(&self.inner.gate)
     }
 
     /// Stop watching: refuse further reads, cancel the outstanding one, and wait
@@ -536,11 +714,7 @@ impl DirectoryWatcher {
         // the cancellation, and rundown then waits forever for a completion only
         // a future directory change could produce (D-23).
         {
-            let mut gate = self
-                .inner
-                .gate
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
+            let mut gate = lock(&self.inner.gate);
             *gate = ArmGate::TornDown;
         }
 
@@ -548,7 +722,7 @@ impl DirectoryWatcher {
         // retires everything outstanding and rundown converges. Both calls are
         // safe to repeat: `cancel_all` reports `ERROR_NOT_FOUND` when nothing is
         // outstanding, and `run_down` returns immediately on an empty registry.
-        if let Some(io) = self.inner.io.get() {
+        if let Some(io) = lock(&self.inner.io).as_ref() {
             let _ = io.cancel_all();
             io.run_down();
         }
@@ -575,6 +749,11 @@ impl Drop for DirectoryWatcher {
         // and the client's receiver observes the disconnect rather than blocking
         // forever on a queue nothing can fill again.
     }
+}
+
+/// Lock, recovering the guard if a previous holder panicked.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 #[cfg(test)]

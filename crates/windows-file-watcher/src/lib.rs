@@ -68,6 +68,9 @@ mod notify;
 mod queue;
 
 #[cfg(windows)]
+mod route;
+
+#[cfg(windows)]
 mod servicing;
 
 #[cfg(windows)]

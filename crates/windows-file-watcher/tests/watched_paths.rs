@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use windows_file_watcher::{
-    ChangeKind, DesyncCause, Monitor, Notification, OpenFailure, Outcome, Receiver, Session, Watch,
-    WatchId, WatchOptions,
+    ChangeKind, DesyncCause, Monitor, Notification, Outcome, Receiver, Session, Watch, WatchId,
+    WatchOptions,
 };
 
 /// Upper bound for waiting on something the kernel really should deliver. Long
@@ -522,7 +522,8 @@ fn dropping_a_watch_ends_it_the_same_way() {
 }
 
 #[test]
-fn a_permanently_unwatchable_target_is_reported_rather_than_silent() {
+fn a_file_target_is_subscribed_rather_than_reported_unwatchable() {
+    // D-7: a file is watched via its parent, not rejected as "not a directory".
     let dir = TempDir::new("permanent");
     let file = dir.path().join("a-file-not-a-directory.txt");
     std::fs::write(&file, b"x").expect("create the file");
@@ -538,9 +539,7 @@ fn a_permanently_unwatchable_target_is_reported_rather_than_silent() {
     });
     assert_eq!(
         drained.outcomes(id),
-        vec![Outcome::Failed {
-            failure: OpenFailure::NotADirectory
-        }],
+        vec![Outcome::Subscribed],
         "a client must never be left holding a watch that can never fire"
     );
 
@@ -727,4 +726,149 @@ fn wait_for_handle(handle: &std::os::windows::io::BorrowedHandle<'_>, timeout: D
     let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
     // SAFETY: a live handle borrowed from the receiver, and a bounded timeout.
     unsafe { WaitForSingleObject(handle.as_raw_handle(), millis) == 0 }
+}
+
+// --- M4: coalescing by directory and file targets ---
+
+#[test]
+fn file_watches_and_a_recursive_directory_watch_in_one_tree_see_exactly_their_own_events() {
+    // Several file-watches plus a recursive directory watch within one tree:
+    // each subscription must receive exactly its matching events and nothing
+    // else (M4.5).
+    let dir = TempDir::new("m4-tree");
+    let alpha = dir.path().join("alpha.txt");
+    let beta = dir.path().join("beta.txt");
+    std::fs::write(&alpha, b"a").expect("create alpha");
+    std::fs::write(&beta, b"b").expect("create beta");
+
+    let (monitor, session, receiver, mut drained) = client();
+
+    // Two file targets, sharing the directory with a recursive directory watch.
+    let alpha_watch = subscribe_ok(
+        &session,
+        &receiver,
+        &mut drained,
+        &alpha,
+        WatchOptions::new(),
+    );
+    let beta_watch = subscribe_ok(
+        &session,
+        &receiver,
+        &mut drained,
+        &beta,
+        WatchOptions::new(),
+    );
+    let tree_watch = subscribe_ok(
+        &session,
+        &receiver,
+        &mut drained,
+        dir.path(),
+        WatchOptions::new().subtree(true),
+    );
+
+    let nested = dir.path().join("nested");
+    std::fs::create_dir(&nested).expect("create the nested directory");
+    let gamma = nested.join("gamma.txt");
+    std::fs::write(&gamma, b"c").expect("create gamma");
+
+    std::fs::write(&alpha, b"modified alpha").expect("modify alpha");
+    std::fs::write(&beta, b"modified beta").expect("modify beta");
+
+    drained.drain_until(&receiver, "every subscription's own events", |seen| {
+        seen.has(alpha_watch.id(), ChangeKind::Modified, "alpha.txt")
+            && seen.has(beta_watch.id(), ChangeKind::Modified, "beta.txt")
+            && seen.has(tree_watch.id(), ChangeKind::Added, "nested\\gamma.txt")
+    });
+
+    // Exactly its own: the file watches must never see the other's events, or
+    // the tree's, and the tree watch's Added/Modified for alpha/beta must be
+    // tagged with its own id, never the file watches'.
+    let alpha_changes = drained.changes(alpha_watch.id());
+    assert!(
+        alpha_changes.iter().all(|(_, name)| name == "alpha.txt"),
+        "the alpha file-watch saw something other than alpha.txt: {alpha_changes:?}"
+    );
+    let beta_changes = drained.changes(beta_watch.id());
+    assert!(
+        beta_changes.iter().all(|(_, name)| name == "beta.txt"),
+        "the beta file-watch saw something other than beta.txt: {beta_changes:?}"
+    );
+
+    let tree_changes = drained.changes(tree_watch.id());
+    assert!(
+        tree_changes
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "alpha.txt"),
+        "the recursive tree watch must also see top-level changes, saw {tree_changes:?}"
+    );
+    assert!(
+        tree_changes
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "beta.txt")
+    );
+    assert!(
+        tree_changes
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Added && name == "nested\\gamma.txt")
+    );
+
+    drop((alpha_watch, beta_watch, tree_watch));
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn cancelling_one_coalesced_subscription_does_not_disturb_its_siblings() {
+    let dir = TempDir::new("m4-cancel-shared");
+    let (monitor, session, receiver, mut drained) = client();
+
+    let a = subscribe_ok(
+        &session,
+        &receiver,
+        &mut drained,
+        dir.path(),
+        WatchOptions::new(),
+    );
+    let b = subscribe_ok(
+        &session,
+        &receiver,
+        &mut drained,
+        dir.path(),
+        WatchOptions::new(),
+    );
+
+    let a_id = a.id();
+    a.cancel();
+    drained.drain_until(&receiver, "a's cancellation", |seen| {
+        seen.position_of(a_id, Outcome::Cancelled).is_some()
+    });
+
+    // b's watcher must have survived a's teardown: the directory coalescing
+    // (D-6) means one still-live subscriber keeps the watcher alive.
+    std::fs::write(dir.path().join("after.txt"), b"x").expect("create");
+    drained.drain_until(&receiver, "b's change after a's cancellation", |seen| {
+        seen.has(b.id(), ChangeKind::Added, "after.txt")
+    });
+
+    drop(b);
+    drop(monitor);
+    dir.cleanup();
+}
+
+/// Subscribe and wait for the registration outcome to arrive, asserting it
+/// succeeded.
+fn subscribe_ok(
+    session: &Session,
+    receiver: &Receiver,
+    drained: &mut Drained,
+    path: &Path,
+    options: WatchOptions,
+) -> Watch {
+    let watch = session.subscribe(path, options).expect("register");
+    let id = watch.id();
+    drained.drain_until(receiver, "the registration", |seen| {
+        !seen.outcomes(id).is_empty()
+    });
+    assert_eq!(drained.outcomes(id), vec![Outcome::Subscribed]);
+    watch
 }

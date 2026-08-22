@@ -18,9 +18,9 @@
 //! delegates to it, so a monitor that goes out of scope blocks until every read is
 //! cancelled and every callback has finished (D-20).
 
-// The monitor's request path has no variants to carry until M3.5 defines them,
-// and its resident table is populated by the same item; until then only this
-// crate's tests reach the surface. Remove this when M3.5 lands.
+// M3.5's request path has landed; the request-shape comment below is stale and
+// removed. `Monitor::directory_count` is test-only until M4.5's integration
+// tests need to assert coalescing directly.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -30,11 +30,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::directory::DirectoryHandle;
+use wtf_string::Wtf16String;
+
+use crate::directory::{DirectoryHandle, DirectoryId, OpenFailure};
 use crate::queue::{
     DEFAULT_BOUND, Notification, Outcome, Receiver, Reservation, Sender, WatchId,
     channel_with_bound,
 };
+use crate::route::RouteScope;
 use crate::servicing::{Rejected, Servicer};
 use crate::session::Session;
 use crate::watch::{RetryMode, WatchOptions};
@@ -99,18 +102,35 @@ impl std::fmt::Debug for Request {
 }
 
 /// One live subscription's resident state.
-struct Subscribed {
-    /// The watcher, once one could be started.
-    ///
-    /// `None` while the target cannot be opened for a *retryable* reason (D-22):
-    /// the subscription is registered and will be established when the target
-    /// becomes openable, which M5.1's state machine is what actually drives.
-    /// Until then it exists so the registration is not silently forgotten.
-    watcher: Option<DirectoryWatcher>,
-    /// Kept because [`RetryMode`] is chosen at registration and consumed later,
-    /// by M5.3's fault protocol; the registration call is the only place it can
-    /// be stated (D-27).
-    options: WatchOptions,
+enum Subscription {
+    /// Registered, but nothing could be opened yet for a *retryable* reason
+    /// (D-22). Retained so a future re-establish attempt (M5.1) has what it
+    /// needs; for now this is simply parked (D-14), with no automatic retry.
+    Pending {
+        /// The path as the client named it; M5.1 re-attempts resolution from
+        /// here, since which of `path` and its parent is opened (D-7) can
+        /// change once something actually exists there.
+        path: PathBuf,
+        options: WatchOptions,
+    },
+    /// Routed into a coalesced directory watcher (D-6).
+    Routed {
+        directory: DirectoryId,
+        /// Kept because [`RetryMode`] is chosen at registration and consumed
+        /// later, by M5.3's fault protocol; the registration call is the only
+        /// place it can be stated (D-27).
+        options: WatchOptions,
+    },
+}
+
+impl Subscription {
+    fn options(&self) -> WatchOptions {
+        match self {
+            Subscription::Pending { options, .. } | Subscription::Routed { options, .. } => {
+                *options
+            }
+        }
+    }
 }
 
 /// The state only the servicing path may mutate.
@@ -122,11 +142,12 @@ struct Subscribed {
 /// when teardown races a drain.
 #[derive(Default)]
 struct Resident {
-    /// Every live subscription, keyed by the identifier that tags its
-    /// notifications. M4 re-keys this by *directory* when coalescing (D-6) gives
-    /// it something to key on, and routes a directory's records to the
-    /// subscriptions that match.
-    watchers: HashMap<WatchId, Subscribed>,
+    /// Every subscription, keyed by the identifier that tags its notifications.
+    subscriptions: HashMap<WatchId, Subscription>,
+    /// Every live coalesced watcher, keyed by directory identity (D-6): a
+    /// directory is watched once regardless of how many subscriptions target
+    /// entries within it.
+    directories: HashMap<DirectoryId, DirectoryWatcher>,
 }
 
 /// What a [`Session`] holds of its monitor.
@@ -238,7 +259,7 @@ impl Monitor {
     /// How many subscriptions the monitor currently holds.
     #[must_use]
     pub fn watcher_count(&self) -> usize {
-        lock(&self.resident).watchers.len()
+        lock(&self.resident).subscriptions.len()
     }
 
     /// The retry mode a subscription registered with, if it is still live.
@@ -248,15 +269,15 @@ impl Monitor {
     #[must_use]
     pub fn retry_mode(&self, watch: WatchId) -> Option<RetryMode> {
         lock(&self.resident)
-            .watchers
+            .subscriptions
             .get(&watch)
-            .map(|subscribed| subscribed.options.retry)
+            .map(|subscription| subscription.options().retry)
     }
 
     /// Whether a subscription is registered, established or not.
     #[must_use]
     pub fn is_registered(&self, watch: WatchId) -> bool {
-        lock(&self.resident).watchers.contains_key(&watch)
+        lock(&self.resident).subscriptions.contains_key(&watch)
     }
 
     /// Whether a subscription currently has a live watcher.
@@ -265,10 +286,10 @@ impl Monitor {
     /// cannot be opened yet is registered but not watching (D-14).
     #[must_use]
     pub fn is_watching(&self, watch: WatchId) -> bool {
-        lock(&self.resident)
-            .watchers
-            .get(&watch)
-            .is_some_and(|subscribed| subscribed.watcher.is_some())
+        matches!(
+            lock(&self.resident).subscriptions.get(&watch),
+            Some(Subscription::Routed { .. })
+        )
     }
 
     /// Why a subscription's watcher stopped, if it has.
@@ -279,10 +300,14 @@ impl Monitor {
     /// after which a stop is a transient rather than a resting state.
     #[must_use]
     pub fn stop_reason(&self, watch: WatchId) -> Option<io::Error> {
-        lock(&self.resident)
-            .watchers
-            .get(&watch)
-            .and_then(|subscribed| subscribed.watcher.as_ref())
+        let resident = lock(&self.resident);
+        let Some(Subscription::Routed { directory, .. }) = resident.subscriptions.get(&watch)
+        else {
+            return None;
+        };
+        resident
+            .directories
+            .get(directory)
             .and_then(DirectoryWatcher::stop_reason)
     }
 
@@ -309,8 +334,19 @@ impl Monitor {
         // the waits -- a completion callback that is still finishing has no reason
         // to be blocked on it, and holding it would invite exactly the
         // wait-on-yourself deadlock `stop` documents.
-        let watchers = std::mem::take(&mut lock(&self.resident).watchers);
-        drop(watchers);
+        let mut resident = lock(&self.resident);
+        let directories = std::mem::take(&mut resident.directories);
+        resident.subscriptions.clear();
+        drop(resident);
+        drop(directories);
+    }
+
+    /// How many distinct coalesced watchers are live, as opposed to how many
+    /// subscriptions there are (D-6). Test-only: a client has no reason to
+    /// distinguish the two, since coalescing is an implementation detail.
+    #[cfg(test)]
+    pub(crate) fn directory_count(&self) -> usize {
+        lock(&self.resident).directories.len()
     }
 }
 
@@ -327,7 +363,7 @@ fn service(resident: &Mutex<Resident>, request: Request) {
             sink,
             completion,
         } => {
-            let outcome = subscribe(resident, watch, &path, options, sink);
+            let outcome = subscribe(resident, watch, path, options, sink);
             completion.send(Notification::Completion { watch, outcome });
         }
         Request::Cancel { watch, completion } => {
@@ -335,8 +371,20 @@ fn service(resident: &Mutex<Resident>, request: Request) {
             // watcher down, which blocks on its callbacks, and holding the
             // resident lock across that wait would serialise teardown against
             // every other reader for no reason.
-            let removed = lock(resident).watchers.remove(&watch);
-            drop(removed);
+            let torn_down = {
+                let mut state = lock(resident);
+                let mut torn_down = None;
+                if let Some(Subscription::Routed { directory, .. }) =
+                    state.subscriptions.remove(&watch)
+                    && let std::collections::hash_map::Entry::Occupied(entry) =
+                        state.directories.entry(directory)
+                    && entry.get().remove_route(watch) == 0
+                {
+                    torn_down = Some(entry.remove());
+                }
+                torn_down
+            };
+            drop(torn_down);
 
             // Sent only once the watcher is fully stopped, which is what makes
             // the ordering guarantee structural: nothing from this subscription
@@ -351,60 +399,117 @@ fn service(resident: &Mutex<Resident>, request: Request) {
     }
 }
 
+/// What opening a subscription's target found, and how it should route within
+/// whatever was opened (D-7).
+enum Opened {
+    /// A live handle, plus how this subscription should route within it.
+    Handle {
+        handle: DirectoryHandle,
+        scope: RouteScope,
+    },
+    /// Retryable (D-22): nothing to watch yet.
+    Pending,
+    /// Permanent (D-22): nothing can ever be watched here.
+    Failed(OpenFailure),
+}
+
+/// Try to open a subscription's target, resolving a file target to its parent
+/// (D-7).
+///
+/// A subscription names a *path*; whether that path is a directory or a file is
+/// not known in advance, only once the open is attempted. `NotADirectory` --
+/// something exists at `path`, but it is not a directory -- is exactly the
+/// signal that flips this from a directory subscription to a file one, since it
+/// is D-22's classification for precisely that condition.
+fn open_target(path: &std::path::Path, subtree: bool) -> Opened {
+    match DirectoryHandle::open(path) {
+        Ok(handle) => Opened::Handle {
+            handle,
+            scope: RouteScope::Directory { subtree },
+        },
+        Err(error) if error.failure() == OpenFailure::NotADirectory => open_file_target(path),
+        Err(error) if error.failure().is_retryable() => Opened::Pending,
+        Err(error) => Opened::Failed(error.failure()),
+    }
+}
+
+/// Open a file target's parent directory, filtered to the file's own leaf name.
+///
+/// Never recursive: a file is always a direct child of the directory that is
+/// actually opened (D-7).
+fn open_file_target(path: &std::path::Path) -> Opened {
+    let (Some(parent), Some(leaf)) = (path.parent(), path.file_name()) else {
+        // A path with no parent (a bare volume root) or no final component
+        // cannot be a file target; report the failure that led here.
+        return Opened::Failed(OpenFailure::NotADirectory);
+    };
+    match DirectoryHandle::open(parent) {
+        Ok(handle) => Opened::Handle {
+            handle,
+            scope: RouteScope::File {
+                leaf: Wtf16String::from_os_str(leaf),
+            },
+        },
+        Err(error) if error.failure().is_retryable() => Opened::Pending,
+        Err(error) => Opened::Failed(error.failure()),
+    }
+}
+
 /// Register one subscription, reporting what became of it.
 fn subscribe(
     resident: &Mutex<Resident>,
     watch: WatchId,
-    path: &std::path::Path,
+    path: PathBuf,
     options: WatchOptions,
     sink: Sender,
 ) -> Outcome {
-    let directory = match DirectoryHandle::open(path) {
-        Ok(directory) => directory,
-        Err(error) if error.failure().is_retryable() => {
-            // Registered but not yet established. D-14 has no terminal fault
-            // state, so this is a state to recover from rather than a failure to
-            // report; M5.1 is what drives the recovery.
-            lock(resident).watchers.insert(
-                watch,
-                Subscribed {
-                    watcher: None,
-                    options,
-                },
-            );
+    let (handle, scope) = match open_target(&path, options.subtree) {
+        Opened::Pending => {
+            lock(resident)
+                .subscriptions
+                .insert(watch, Subscription::Pending { path, options });
             return Outcome::Establishing;
         }
-        Err(error) => {
-            // Permanent (D-22): the caller named something that can never be a
-            // watched directory, so nothing is registered and the client is told
-            // rather than left holding a `Watch` that can never fire.
-            return Outcome::Failed {
-                failure: error.failure(),
-            };
-        }
+        Opened::Failed(failure) => return Outcome::Failed { failure },
+        Opened::Handle { handle, scope } => (handle, scope),
     };
 
-    match DirectoryWatcher::start(directory, options.subtree, watch, sink) {
+    let id = handle.identity();
+    let mut state = lock(resident);
+    if let Some(watcher) = state.directories.get(&id) {
+        // Coalesce (D-6): this directory already has a watcher. `handle` is
+        // handed to it too, in case this route needs to widen the reach to
+        // recursive (M4.4) -- reopening is what that takes, and this handle is
+        // exactly what a reopen needs, so nothing further is opened for it.
+        watcher.add_route(watch, scope, sink, handle);
+        state.subscriptions.insert(
+            watch,
+            Subscription::Routed {
+                directory: id,
+                options,
+            },
+        );
+        return Outcome::Subscribed;
+    }
+
+    match DirectoryWatcher::start(handle, watch, scope, sink) {
         Ok(watcher) => {
-            lock(resident).watchers.insert(
+            state.directories.insert(id, watcher);
+            state.subscriptions.insert(
                 watch,
-                Subscribed {
-                    watcher: Some(watcher),
+                Subscription::Routed {
+                    directory: id,
                     options,
                 },
             );
             Outcome::Subscribed
         }
         Err(_) => {
-            // Arming failed against a directory that opened, which D-15 classifies
-            // as rearm-and-retry rather than fatal.
-            lock(resident).watchers.insert(
-                watch,
-                Subscribed {
-                    watcher: None,
-                    options,
-                },
-            );
+            // Arming failed against a directory that opened, which D-15
+            // classifies as rearm-and-retry rather than fatal.
+            state
+                .subscriptions
+                .insert(watch, Subscription::Pending { path, options });
             Outcome::Establishing
         }
     }

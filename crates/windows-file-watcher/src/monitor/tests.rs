@@ -227,3 +227,157 @@ fn debug_reports_the_monitors_state() {
     drop(monitor);
     dir.cleanup();
 }
+
+// --- coalescing by directory (D-6) ---
+
+#[test]
+fn two_subscriptions_on_the_same_directory_share_one_watcher() {
+    let dir = TempDir::new("coalesce-same");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session();
+
+    let a = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    let b = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    monitor.quiesce();
+
+    assert_eq!(monitor.watcher_count(), 2, "two subscriptions");
+    assert_eq!(
+        monitor.directory_count(),
+        1,
+        "one directory, one coalesced watcher"
+    );
+
+    drop((a, b));
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn subscriptions_on_different_directories_get_different_watchers() {
+    let first = TempDir::new("coalesce-a");
+    let second = TempDir::new("coalesce-b");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session();
+
+    let a = session
+        .subscribe(first.path(), WatchOptions::new())
+        .expect("register");
+    let b = session
+        .subscribe(second.path(), WatchOptions::new())
+        .expect("register");
+    monitor.quiesce();
+
+    assert_eq!(monitor.directory_count(), 2);
+
+    drop((a, b));
+    drop(monitor);
+    first.cleanup();
+    second.cleanup();
+}
+
+#[test]
+fn the_same_directory_reached_through_a_different_spelling_still_coalesces() {
+    // Coalescing is by identity (D-6), not by string comparison: a trailing
+    // separator names the same directory.
+    let dir = TempDir::new("coalesce-spelling");
+    let mut with_separator = dir.path().to_path_buf();
+    with_separator.push(""); // appends the trailing separator
+
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session();
+    let a = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    let b = session
+        .subscribe(&with_separator, WatchOptions::new())
+        .expect("register");
+    monitor.quiesce();
+
+    assert_eq!(monitor.directory_count(), 1);
+
+    drop((a, b));
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn cancelling_one_of_two_coalesced_subscriptions_keeps_the_watcher_alive() {
+    let dir = TempDir::new("coalesce-cancel-one");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session();
+
+    let a = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    let b = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    monitor.quiesce();
+
+    a.cancel();
+    monitor.quiesce();
+
+    assert_eq!(monitor.watcher_count(), 1, "only b remains");
+    assert_eq!(
+        monitor.directory_count(),
+        1,
+        "the watcher survives while a subscriber remains"
+    );
+    assert!(monitor.is_watching(b.id()));
+
+    drop(b);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn cancelling_the_last_coalesced_subscription_tears_down_the_watcher() {
+    let dir = TempDir::new("coalesce-cancel-last");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session();
+
+    let a = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    let b = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register");
+    monitor.quiesce();
+
+    a.cancel();
+    b.cancel();
+    monitor.quiesce();
+
+    assert_eq!(monitor.watcher_count(), 0);
+    assert_eq!(monitor.directory_count(), 0, "the watcher is torn down");
+
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn many_subscriptions_on_one_directory_all_coalesce() {
+    let dir = TempDir::new("coalesce-many");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session();
+
+    let watches: Vec<Watch> = (0..16)
+        .map(|_| {
+            session
+                .subscribe(dir.path(), WatchOptions::new())
+                .expect("register")
+        })
+        .collect();
+    monitor.quiesce();
+
+    assert_eq!(monitor.watcher_count(), 16);
+    assert_eq!(monitor.directory_count(), 1);
+
+    drop(watches);
+    drop(monitor);
+    dir.cleanup();
+}

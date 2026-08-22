@@ -19,6 +19,15 @@
 //!
 //! Failures are classified rather than surfaced raw, because the retry policy is
 //! driven by the *class* of failure, not the code. See [`OpenFailure`].
+//!
+//! # Directory identity is by file, not by path string
+//!
+//! Two subscriptions can name the same directory through different path strings
+//! -- a trailing separator, a different case, a symlink hop -- and coalescing
+//! (D-6) has to recognise that as *one* directory, not compare spellings. So a
+//! [`DirectoryId`] is computed from the open handle itself
+//! (`GetFileInformationByHandle`'s volume serial number plus file index), which
+//! is stable for as long as the file exists regardless of how it was reached.
 
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
@@ -165,12 +174,56 @@ fn wide_path(path: &Path) -> Result<Wtf16String, OpenError> {
     Ok(wide)
 }
 
+/// A directory's stable identity, independent of the path string used to open
+/// it.
+///
+/// Two opens of the same directory -- through different spellings, a symlink, or
+/// a trailing separator -- yield the same id, which is what makes coalescing by
+/// directory (D-6) correct rather than an accident of string comparison.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DirectoryId {
+    volume_serial: u32,
+    file_index: u64,
+}
+
+/// Read a directory's identity from a live handle, rejecting one that turns out
+/// not to be a directory.
+///
+/// `FILE_LIST_DIRECTORY` and `FILE_READ_DATA` are the same bit, so a plain file
+/// opens perfectly happily with this crate's `CreateFileW` arguments. Without
+/// this check the mistake would not surface until `ReadDirectoryChangesW` failed
+/// later, where it would be misread as a transient I/O fault and retried
+/// forever.
+fn identify(handle: HANDLE) -> Result<DirectoryId, OpenError> {
+    // SAFETY: an all-integer POD struct, so an all-zero value is valid; it is
+    // fully written by the call below before it is read.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `handle` is live for the duration of this call, and `info` is a
+    // valid writable destination of the required type.
+    let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
+    if ok == 0 {
+        let source = std::io::Error::last_os_error();
+        return Err(OpenError::new(classify(&source), source));
+    }
+    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        return Err(OpenError::synthetic(
+            OpenFailure::NotADirectory,
+            ERROR_DIRECTORY,
+        ));
+    }
+    Ok(DirectoryId {
+        volume_serial: info.dwVolumeSerialNumber,
+        file_index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    })
+}
+
 /// A directory opened for change notification, owned for the life of the watch.
 ///
 /// Closing is the `OwnedHandle`'s job, so a `DirectoryHandle` cannot outlive its
 /// handle or leak it.
 pub struct DirectoryHandle {
     handle: OwnedHandle,
+    identity: DirectoryId,
 }
 
 impl DirectoryHandle {
@@ -203,37 +256,16 @@ impl DirectoryHandle {
         }
         // SAFETY: `CreateFileW` returned a live handle that this call exclusively
         // owns, so transferring it to an `OwnedHandle` is sound.
-        let opened = Self {
-            handle: unsafe { OwnedHandle::from_raw_handle(raw) },
-        };
-        opened.ensure_directory()?;
-        Ok(opened)
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        // Computed on the owned handle, so an early return here closes it rather
+        // than leaking.
+        let identity = identify(handle.as_raw_handle())?;
+        Ok(Self { handle, identity })
     }
 
-    /// Reject a handle that is not actually a directory.
-    ///
-    /// `FILE_LIST_DIRECTORY` and `FILE_READ_DATA` are the same bit, so a plain
-    /// file opens perfectly happily with the arguments above. Without this check
-    /// the mistake would not surface until `ReadDirectoryChangesW` failed later,
-    /// where it would be misread as a transient I/O fault and retried forever.
-    fn ensure_directory(&self) -> Result<(), OpenError> {
-        // SAFETY: an all-integer POD struct, so an all-zero value is valid; it is
-        // fully written by the call below before it is read.
-        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-        // SAFETY: the handle is live and owned here, and `info` is a valid
-        // writable destination of the required type.
-        let ok = unsafe { GetFileInformationByHandle(self.as_raw(), &mut info) };
-        if ok == 0 {
-            let source = std::io::Error::last_os_error();
-            return Err(OpenError::new(classify(&source), source));
-        }
-        if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
-            return Err(OpenError::synthetic(
-                OpenFailure::NotADirectory,
-                ERROR_DIRECTORY,
-            ));
-        }
-        Ok(())
+    /// This directory's stable identity (D-6).
+    pub(crate) fn identity(&self) -> DirectoryId {
+        self.identity
     }
 
     /// Consume the wrapper and surrender the handle.

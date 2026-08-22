@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-49** -- later
-decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-32 from M8.1, and
-D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-52** -- later
+decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-50...D-52 from M4,
+D-32 from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -13,34 +13,22 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M4.1.** M1, M2 and M3 are archived; nothing else is in progress. Note that a
+> **NEXT ACTIONABLE ITEM: M5.1.** M1 through M4 are archived; nothing else is in progress. Note that a
 > *satisfied cross-component prerequisite does not make its item startable* -- M17 in
-> `windows-threadpool-sys` cleared the external dependency for M6.1, but M6.1 remains gated behind M4 and
-> M5 by ordinary intra-component dependency order, because a coarse watcher has no per-directory routing
-> (M4) and no fault machine to re-establish through (M5) until those land. Work the milestones in order.
+> `windows-threadpool-sys` cleared the external dependency for M6.1, but M6.1 remains gated behind M5 by
+> ordinary intra-component dependency order, because there is no fault machine to re-establish through until
+> M5 lands. Work the milestones in order.
 
 ## M4 -- Coalescing by directory and file targets
 
-- [ ] **M4.1** -- Coalesce watchers by directory (D-6): union the `FILE_NOTIFY_CHANGE_*` filters and take the
-  maximum subtree flag across a directory's subscriptions; issue one read per directory.
-
-- [ ] **M4.2** -- De-multiplex on decode: route each record to the subset of subscriptions whose target and
-  filter match (per-subscription filtering, D-6).
-
-- [ ] **M4.3** -- File (path) targets (D-7): watch the parent directory non-recursively and filter the leaf
-  name; directory targets optionally recursive.
-
-- [ ] **M4.4** -- Add/remove a subscription to/from an existing coalesced directory watcher without
-  disturbing the others' cadence (re-issue with the updated union only when it actually changes).
-
-- [ ] **M4.5** -- Integration: several file-watches plus a recursive directory watch within one tree; assert
-  each subscription receives exactly its matching events and nothing else.
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----m4-coalescing-by-directory-and-file-targets).
 
 ## M5 -- Fault model and the retry protocol
 
 - [ ] **M5.1** -- Establish/re-establish state machine (D-14/D-15): `Opening -> ArmingDetailed ->
   WatchingDetailed` plus `Cancelling/Closed`; classify every error into reopen-retry, rearm-retry, or (M6)
   downgrade; no terminal state.
+
 
 - [ ] **M5.2** -- The fault latch (D-28): a fault is watcher state, not a queued item -- one error code plus
   one bit, allocated with the watcher. A fault report is control data generated on the cadence, so it can

@@ -13,7 +13,8 @@ use std::time::Duration;
 use super::{ArmGate, DirectoryWatcher, ReadBuffer};
 use crate::directory::DirectoryHandle;
 use crate::notify::{ChangeKind, DesyncCause};
-use crate::queue::{Notification, Receiver, WatchId, channel, channel_with_bound};
+use crate::queue::{Notification, Receiver, Sender, WatchId, channel, channel_with_bound};
+use crate::route::RouteScope;
 use crate::testing::TempDir;
 
 /// Upper bound for waiting on a notification the kernel really should deliver.
@@ -112,8 +113,13 @@ impl Drained {
 fn watch(dir: &Path, subtree: bool) -> (DirectoryWatcher, Drained) {
     let (sender, receiver) = channel();
     let handle = DirectoryHandle::open(dir).expect("open the directory");
-    let watcher =
-        DirectoryWatcher::start(handle, subtree, test_watch(), sender).expect("start the watcher");
+    let watcher = DirectoryWatcher::start(
+        handle,
+        test_watch(),
+        RouteScope::Directory { subtree },
+        sender,
+    )
+    .expect("start the watcher");
     (watcher, Drained::start(receiver))
 }
 
@@ -357,8 +363,14 @@ fn a_tiny_buffer_surfaces_the_kernel_overflow_as_a_desync() {
     let dir = TempDir::new("overflow");
     let (sender, receiver) = channel();
     let handle = DirectoryHandle::open(dir.path()).expect("open");
-    let watcher =
-        DirectoryWatcher::start_with(handle, false, 4, test_watch(), sender).expect("start");
+    let watcher = DirectoryWatcher::start_with(
+        handle,
+        4,
+        test_watch(),
+        RouteScope::Directory { subtree: false },
+        sender,
+    )
+    .expect("start");
     let collected = Drained::start(receiver);
 
     let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
@@ -502,8 +514,13 @@ fn teardown_releases_the_sender_so_the_receiver_disconnects() {
     let dir = TempDir::new("teardown-disconnect");
     let (sender, receiver) = channel();
     let handle = DirectoryHandle::open(dir.path()).expect("open");
-    let watcher =
-        DirectoryWatcher::start(handle, false, test_watch(), sender).expect("start the watcher");
+    let watcher = DirectoryWatcher::start(
+        handle,
+        test_watch(),
+        RouteScope::Directory { subtree: false },
+        sender,
+    )
+    .expect("start the watcher");
 
     assert!(!receiver.is_disconnected(), "live while the watcher exists");
     drop(watcher);
@@ -623,8 +640,13 @@ fn watch_bounded(dir: &Path, bound: usize) -> (DirectoryWatcher, Receiver) {
     let handle = DirectoryHandle::open(dir).expect("open the watched directory");
     let (sender, receiver) =
         channel_with_bound(NonZeroUsize::new(bound).expect("a non-zero bound"));
-    let watcher =
-        DirectoryWatcher::start(handle, false, test_watch(), sender).expect("arm the first read");
+    let watcher = DirectoryWatcher::start(
+        handle,
+        test_watch(),
+        RouteScope::Directory { subtree: false },
+        sender,
+    )
+    .expect("arm the first read");
     (watcher, receiver)
 }
 
@@ -830,9 +852,14 @@ fn an_overflowed_read_is_reported_as_a_desync_and_the_watch_continues() {
     let dir = TempDir::new("watcher-overflow");
     let handle = DirectoryHandle::open(dir.path()).expect("open the watched directory");
     let (sender, receiver) = channel();
-    let watcher =
-        DirectoryWatcher::start_with(handle, false, UNDERSIZED_BUFFER_BYTES, test_watch(), sender)
-            .expect("arm the first read");
+    let watcher = DirectoryWatcher::start_with(
+        handle,
+        UNDERSIZED_BUFFER_BYTES,
+        test_watch(),
+        RouteScope::Directory { subtree: false },
+        sender,
+    )
+    .expect("arm the first read");
 
     let overflows = |receiver: &Receiver| {
         let mut count = 0;
@@ -871,6 +898,112 @@ fn an_overflowed_read_is_reported_as_a_desync_and_the_watch_continues() {
         watcher.stop_reason()
     );
 
+    drop(watcher);
+    dir.cleanup();
+}
+
+// --- adding and removing routes without disturbing the others (D-6/M4.4) ---
+
+/// Start a watcher over `dir` with one route, returning the sender too so a
+/// test can add a second route delivering to the same drained receiver.
+fn watch_with_sink(dir: &Path, subtree: bool) -> (DirectoryWatcher, Sender, Drained) {
+    let (sender, receiver) = channel();
+    let handle = DirectoryHandle::open(dir).expect("open the directory");
+    let watcher = DirectoryWatcher::start(
+        handle,
+        test_watch(),
+        RouteScope::Directory { subtree },
+        sender.clone(),
+    )
+    .expect("start the watcher");
+    (watcher, sender, Drained::start(receiver))
+}
+
+#[test]
+fn adding_a_shallow_route_to_a_shallow_watcher_needs_no_rearm() {
+    let dir = TempDir::new("route-add-shallow");
+    let (watcher, sink, collected) = watch_with_sink(dir.path(), false);
+
+    watcher.add_route(
+        WatchId::from_raw(2),
+        RouteScope::Directory { subtree: false },
+        sink,
+        DirectoryHandle::open(dir.path()).expect("open a second handle"),
+    );
+
+    std::fs::write(dir.path().join("a.txt"), b"x").expect("create");
+    collected.wait_for_name("a.txt");
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn a_recursive_route_added_to_a_shallow_watcher_widens_its_reach() {
+    // The case D-6/M4.4 exists for: a second subscription asks for recursion the
+    // first one never needed, and the *first* subscription's own read has to
+    // start reaching nested changes too, since there is only one kernel read per
+    // directory. Widening reopens the directory (see `WatcherInner::reopen`):
+    // cancelling and resubmitting on the same handle was tried first and
+    // measured not to work -- the kernel kept reporting only direct children.
+    let dir = TempDir::new("route-widen");
+    let (watcher, sink, collected) = watch_with_sink(dir.path(), false);
+
+    let nested = dir.path().join("nested");
+    std::fs::create_dir(&nested).expect("create the nested directory");
+    std::fs::write(nested.join("deep.txt"), b"x").expect("create a nested file");
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        !collected
+            .changes()
+            .iter()
+            .any(|(_, name)| name.contains("deep.txt")),
+        "a shallow watcher must not have reported the nested file yet"
+    );
+
+    watcher.add_route(
+        WatchId::from_raw(2),
+        RouteScope::Directory { subtree: true },
+        sink,
+        DirectoryHandle::open(dir.path()).expect("open a second handle"),
+    );
+
+    std::fs::write(nested.join("deep2.txt"), b"y").expect("create a second nested file");
+    collected.wait_for_name("nested\\deep2.txt");
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn removing_the_only_recursive_route_leaves_the_watcher_functional() {
+    // Contraction is never forced (see `DirectoryWatcher::add_route`'s docs): the
+    // remaining shallow route just gets an over-broad read filtered back down,
+    // which costs nothing but a few decoded bytes.
+    let dir = TempDir::new("route-remove-recursive");
+    let (watcher, sink, collected) = watch_with_sink(dir.path(), true);
+
+    watcher.add_route(
+        WatchId::from_raw(2),
+        RouteScope::Directory { subtree: false },
+        sink,
+        DirectoryHandle::open(dir.path()).expect("open a second handle"),
+    );
+    assert_eq!(watcher.remove_route(test_watch()), 1, "one route remains");
+
+    std::fs::write(dir.path().join("a.txt"), b"x").expect("create");
+    collected.wait_for_name("a.txt");
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn removing_every_route_is_observed_by_the_caller() {
+    let dir = TempDir::new("route-remove-all");
+    let (watcher, collected) = watch(dir.path(), false);
+    assert_eq!(watcher.remove_route(test_watch()), 0);
+    drop(collected);
     drop(watcher);
     dir.cleanup();
 }

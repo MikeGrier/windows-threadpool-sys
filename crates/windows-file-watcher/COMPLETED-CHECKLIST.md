@@ -121,3 +121,32 @@ did not serialise) and M3.2's bound parameter (which had no meaning until M3.3 d
 
 - [x] **M3.8** -- Integration through the public surface, and retirement of the `unstable-internals`
   feature, the `unstable` module, and the three `#![allow(dead_code)]` suppressions it stood in for.
+
+
+## Moved 2026-08-21 -- M4: coalescing by directory and file targets
+
+- [x] **M4.1** -- Coalesce watchers by directory (D-6): union the `FILE_NOTIFY_CHANGE_*` filters and take the
+  maximum subtree flag across a directory's subscriptions; issue one read per directory. Directory identity
+  is by file (volume serial + file index, D-50), not path string, so different spellings of the same
+  directory still coalesce.
+
+- [x] **M4.2** -- De-multiplex on decode: route each record to the subset of subscriptions whose target and
+  filter match (per-subscription filtering, D-6). Implemented as `Route::select` filtering each decoded batch
+  per route; every coalesced watcher publishes once per completion but sends a distinct per-route
+  notification.
+
+- [x] **M4.3** -- File (path) targets (D-7): watch the parent directory non-recursively and filter the leaf
+  name; directory targets optionally recursive. A path traversing through a file (e.g. `file/nested`)
+  surfaces as `NotFound`/retryable on Windows (`ERROR_PATH_NOT_FOUND`), not a permanent `NotADirectory`
+  failure -- a distinction discovered empirically and recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+- [x] **M4.4** -- Add/remove a subscription to/from an existing coalesced directory watcher without
+  disturbing the others' cadence. **Corrected during execution (D-52):** the item's original wording assumed
+  a cancel-and-resubmit re-issue on the same handle; measurement showed the kernel does not honor a widened
+  `bWatchSubtree` on a resubmitted read on the same handle -- only direct children kept being reported.
+  Widening instead reopens the directory (fresh handle, fresh `ThreadpoolIo`), a real scope increase raised to
+  and approved by the engineer per the PRIME DIRECTIVE before implementing.
+
+- [x] **M4.5** -- Integration: several file-watches plus a recursive directory watch within one tree; assert
+  each subscription receives exactly its matching events and nothing else.
+  ([tests/watched_paths.rs](tests/watched_paths.rs))
