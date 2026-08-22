@@ -46,7 +46,7 @@ are in [DESIGN-NOTES.md](DESIGN-NOTES.md).
   is always `Pending` -- the shape M12.3 used for sockets. As there, assert the synchronous arm is actually
   taken by at least one submission, so the test cannot pass vacuously if the mode stops being applied.
 
-- [ ] **M13.3** -- Add a CI job that builds, lints, and tests each operation family on its own
+- [x] **M13.3** -- Add a CI job that builds, lints, and tests each operation family on its own
   (`--no-default-features --features <family>`) for every family, plus the bare `--no-default-features` core.
 
   **Gap:** [ci.yml](../../.github/workflows/ci.yml) only ever runs `--all-features` and default (empty)
