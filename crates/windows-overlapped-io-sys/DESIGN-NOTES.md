@@ -179,11 +179,32 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	drop a result already delivered. `Started::Completed` reduces the operation to exactly the payload the
 	token's `claim` would have yielded, so both arms report the same shape, and `expect_pending` serves the
 	common case of a caller that never enables the mode.
-- **Sockets are excluded from the setter, and that is why `classify_socket` may answer `Pending`
-	unconditionally.** There is no unassociated socket type to hang the provenance attribute on, and Win32
-	restricts skip-on-success on a socket to LSPs returning IFS handles, making it a per-socket capability probe
-	rather than a flag to set blind. No socket reached through this crate can therefore be in skip mode. If a
-	socket-side setter is ever added, `classify_socket` must change with it.
+- **Sockets declare their modes on the *associated* socket, unlike handles.** Superseded M10's exclusion of
+	sockets (M12.2). The handle side sets modes before association because there the mode is part of an
+	endpoint's provenance; a socket has no unassociated stage to hang that on, and inventing an
+	`UnassociatedSocket` purely for symmetry would be churn for its own sake. Setting after association is
+	still sound: the flag is inert until I/O time, so `AssociatedSocket::set_notification_modes` takes
+	`&mut self` while `recv`/`send` keep taking `&self` -- a caller declares once and then submits freely.
+	The asymmetry is real and deliberate, not an inconsistency to be tidied away.
+- **The socket setter probes the provider rather than trusting the caller.** Win32 restricts socket
+	skip-on-success to Layered Service Providers that return IFS handles, and a socket wrongly put in that
+	mode reports `Pending` for an operation whose packet was suppressed -- rediscovering, on the socket side,
+	exactly the rundown wedge M10.5 fixed for handles. Trusting the caller would re-open a bug already paid
+	for once. The probe reads *this* socket's own `WSAPROTOCOL_INFOW` via
+	`getsockopt(SOL_SOCKET, SO_PROTOCOL_INFOW)` and requires `XP1_IFS_HANDLES` in `dwServiceFlags1`, which is
+	narrower and more accurate than the `WSAEnumProtocols` sweep the flag's own documentation suggests: it
+	asks about the provider that actually created this socket, not about every LSP installed on the machine.
+	Refusal is `io::ErrorKind::Unsupported`, deliberately not a Win32 error, because nothing failed -- the
+	question was asked and answered. Only `skip_completion_port_on_success` is probed; `FILE_SKIP_SET_EVENT_ON_HANDLE`
+	carries no such restriction.
+- **The IFS decision is a separate function from the `getsockopt` that feeds it**, purely for testability.
+	Every base Winsock provider on a stock Windows returns IFS handles, so the refusal arm is otherwise
+	unreachable without installing an LSP -- `require_ifs_handles(flags)` takes the word and returns the
+	answer, so both arms are covered by ordinary unit tests.
+- **`classify_socket` became mode-aware in the same change that made the mode reachable**, exactly as
+	`fs::classify_issued` and `device::classify_issued` did in M10.5. This was not a separable follow-up: a
+	setter without it would ship the wedge, and the count it needs comes from `WSARecv`/`WSASend`'s
+	`lpNumberOfBytesTransferred`, which the adapters had previously been passing as null.
 - **`FILE_SKIP_SET_EVENT_ON_HANDLE` is unsafe to combine with the blocking backend**, which waits on precisely
 	the handle event that flag suppresses. Recorded on the flag's own documentation rather than prevented,
 	because the two are independently useful and the endpoint does not know its future backend.
@@ -224,6 +245,14 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 - **`scatter_gather_len` was removed with M11.** Both scatter paths now validate a `PageBuffers` that
 	already exists, so there is no caller-supplied page count left to overflow-check; `PageBuffers::new` is
 	where a degenerate count is rejected, at the caller's own call site.
+- **`&'static mut [u8]` implements *both* traits, and is the one reference type that does (M12.1).** The
+	split above is about aliasing, not about references: `Arc<[u8]>` and `&'static [u8]` are excluded from
+	`IoBufMut` because they are *shared*, so handing the kernel a writable pointer would alias bytes another
+	holder is reading. A `&'static mut` is exclusive by construction -- no other live reference to those bytes
+	can exist -- so it is a legitimate read destination, and excluding it would have been the arbitrary half
+	of the split rather than a safety measure. It is the natural handoff for a leaked or statically-allocated
+	pool, and satisfies the stable-address promise trivially: the referent is `'static` and never moves, so
+	moving the reference does not move the bytes.
 
 ## Cancellation and rundown
 
@@ -398,7 +427,13 @@ Behavioral matrix every backend must be exercised against:
 	families the checklist enumerates:
 	- `fs` → `Win32_Storage_FileSystem` — file read / write, scatter / gather, and
 		`SetFileCompletionNotificationModes` (`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`).
-	- `socket` → `Win32_Networking_WinSock` — overlapped socket operations.
+	- `socket` → `Win32_Networking_WinSock` **and `Win32_Storage_FileSystem`** — overlapped socket operations,
+		plus `SetFileCompletionNotificationModes` for `AssociatedSocket::set_notification_modes` (M12.2). The
+		second of those is not a stray dependency: the notification-mode call lives in the file-system module
+		even though its `FileHandle` parameter accepts a socket, because a socket handle *is* a kernel handle.
+		This is the rule below applied, not an exception to it -- a family turns on what that family needs, and
+		the socket family genuinely needs this. It does **not** make the `socket` feature imply the `fs`
+		feature; the two select different sets of this crate's own adapters.
 	- `device` → `Win32_System_Ioctl` — device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
 		itself is already in the always-on core (`Win32_System_IO`); the feature only adds the control-code
 		constants a device family needs.

@@ -52,7 +52,7 @@ turned out to be a design fork the engineer has now settled.
   paired against a default socket that is always `Pending` -- the same shape as
   `tests/skip_on_success_adapters.rs` uses for files and devices.
 
-- [ ] **M12.4** -- Record in [DESIGN-NOTES.md](DESIGN-NOTES.md): why the socket setter probes rather than
+- [x] **M12.4** -- Record in [DESIGN-NOTES.md](DESIGN-NOTES.md): why the socket setter probes rather than
   trusting, and what it probes; why it sits on the associated socket where the handle side sits on the
   unassociated endpoint; the `socket` feature's widening; and that `&'static mut [u8]` is the one shared-
   looking type that *is* a legal read destination, because it is exclusive.
