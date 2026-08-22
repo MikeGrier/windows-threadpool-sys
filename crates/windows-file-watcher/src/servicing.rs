@@ -37,11 +37,6 @@
 //! are discarded rather than serviced, because every watcher they could act on is
 //! being torn down in the same breath.
 
-// The servicing path is exercised by this crate's own tests and, from M3.5, by
-// requests submitted through a `Session`; until then some of its surface has no
-// production caller. Remove this when M3.5 gives it one.
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -208,7 +203,9 @@ impl<T: Send + 'static> Servicer<T> {
         self.work.wait();
     }
 
-    /// How many requests are waiting to be serviced.
+    /// How many requests are waiting to be serviced. Test-only: production code
+    /// has no reason to inspect the queue depth directly.
+    #[cfg(test)]
     pub(crate) fn pending(&self) -> usize {
         lock(&self.shared.queue).items.len()
     }
@@ -216,12 +213,14 @@ impl<T: Send + 'static> Servicer<T> {
     /// How many times the doorbell has been rung.
     ///
     /// The measure of coalescing: this is the number of drains queued, which
-    /// should stay far below the number of requests submitted.
+    /// should stay far below the number of requests submitted. Test-only.
+    #[cfg(test)]
     pub(crate) fn rings(&self) -> u64 {
         lock(&self.shared.queue).rings
     }
 
-    /// How many requests shutdown discarded unserviced.
+    /// How many requests shutdown discarded unserviced. Test-only.
+    #[cfg(test)]
     pub(crate) fn discarded(&self) -> u64 {
         lock(&self.shared.queue).discarded
     }
