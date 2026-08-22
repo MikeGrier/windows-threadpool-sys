@@ -18,7 +18,7 @@ fn iocp_socket_recv_and_send_round_trip() {
 
     // Receive: submit, have the peer send, then dequeue and claim.
     let recv_token = endpoint
-        .recv(64)
+        .recv(vec![0_u8; 64])
         .expect("submit recv")
         .expect_pending("this socket is not in skip-on-success mode");
     server.write_all(b"ping").expect("peer write");
@@ -62,9 +62,10 @@ fn blocking_socket_recv_and_send_round_trip() {
 
     // The peer sends first, so the blocking receive has data and cannot deadlock.
     server.write_all(b"ping").expect("peer write");
-    let (buffer, received) = blocking.recv(64).expect("recv");
+    let mut buffer = vec![0_u8; 64];
+    let received = blocking.recv(&mut buffer).expect("recv");
     assert_eq!(received, 4);
-    assert_eq!(buffer, b"ping");
+    assert_eq!(&buffer[..received], b"ping");
 
     let sent = blocking.send(b"pong").expect("send");
     assert_eq!(sent, 4);
@@ -116,27 +117,8 @@ fn connected_pair() -> (OwnedSocket, TcpStream) {
     (OwnedSocket::from(client), server)
 }
 
-/// The length is checked before the buffer is allocated, so an unrepresentable
-/// request costs nothing -- which is also what makes this test affordable: it
-/// never allocates the 4GiB it asks for.
-#[cfg(target_pointer_width = "64")]
-#[test]
-fn blocking_recv_rejects_an_oversized_length() {
-    let (client, _server) = connected_pair();
-    let client = BlockingSocket::new(client);
-
-    let error = client
-        .recv(u32::MAX as usize + 1)
-        .expect_err("an unrepresentable length must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(
-        error.raw_os_error().is_none(),
-        "the request should be rejected before reaching Winsock: {error}"
-    );
-}
-
-/// The same limit on the submitting path, which validates before building the
-/// operation rather than inside its submission closure.
+/// The submitting path validates before building the operation rather than
+/// inside its submission closure.
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn submitted_recv_rejects_an_oversized_length() {
@@ -145,7 +127,7 @@ fn submitted_recv_rejects_an_oversized_length() {
     let socket = port.associate_socket(client, 0).expect("associate socket");
 
     let error = socket
-        .recv(u32::MAX as usize + 1)
+        .recv(crate::buf::OversizedBuffer)
         .expect_err("an unrepresentable length must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(

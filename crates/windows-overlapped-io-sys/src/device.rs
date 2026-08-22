@@ -24,8 +24,8 @@ use windows_sys::Win32::System::IO::DeviceIoControl;
 
 use crate::operation::{payload_ptr_from_overlapped, sync_bytes_ptr_from_overlapped};
 use crate::{
-    AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Started,
-    Submitted,
+    AssociatedEndpoint, BlockingEndpoint, Completion, IoBuf, IoBufMut, Issued, Operation,
+    OperationId, Started, Submitted,
 };
 
 impl BlockingEndpoint {
@@ -33,8 +33,10 @@ impl BlockingEndpoint {
     /// until it completes.
     ///
     /// `input` is the input buffer (empty for control codes that take none) and
-    /// `output_len` sizes the output buffer. Returns the output truncated to the
-    /// bytes returned and that count.
+    /// `output` is the buffer the device writes into; the return value is how
+    /// many bytes it wrote. Takes plain slices and allocates nothing: this call
+    /// does not return until the operation is over, so an ordinary borrow
+    /// provably covers the whole time the driver is using them.
     ///
     /// # Errors
     ///
@@ -58,21 +60,19 @@ impl BlockingEndpoint {
         &mut self,
         code: u32,
         input: &[u8],
-        output_len: usize,
-    ) -> io::Result<(Vec<u8>, usize)> {
-        // Checked before allocating, so an unusable request costs nothing.
+        output: &mut [u8],
+    ) -> io::Result<usize> {
         let in_len = checked_len(input.len(), "input")?;
-        let out_len = checked_len(output_len, "output")?;
+        let out_len = checked_len(output.len(), "output")?;
 
-        let mut output = vec![0_u8; output_len];
-        let in_ptr = in_ptr(input);
-        let out_ptr = out_ptr(&mut output);
+        let in_ptr = in_ptr(input.as_ptr(), in_len);
+        let out_ptr = out_ptr(output.as_mut_ptr(), out_len);
 
         let mut operation = Operation::new(());
         // SAFETY: issues exactly one DeviceIoControl reading `input` and writing
         // `output`, both valid for the whole blocking call; no other operation is
         // outstanding.
-        let returned = unsafe {
+        unsafe {
             self.run(&mut operation, |handle, overlapped| {
                 let ok = DeviceIoControl(
                     handle.as_raw_handle(),
@@ -86,28 +86,29 @@ impl BlockingEndpoint {
                 );
                 classify(ok)
             })
-        }?;
-
-        output.truncate(returned);
-        Ok((output, returned))
+        }
     }
 }
 
 /// The input buffer pointer, `NULL` for an empty buffer.
-fn in_ptr(input: &[u8]) -> *const c_void {
-    if input.is_empty() {
+///
+/// A control code that takes no input must be given `NULL` rather than a
+/// dangling-but-nonnull pointer, which is what an empty buffer's `stable_ptr`
+/// legitimately is.
+fn in_ptr(ptr: *const u8, len: u32) -> *const c_void {
+    if len == 0 {
         std::ptr::null()
     } else {
-        input.as_ptr().cast()
+        ptr.cast()
     }
 }
 
 /// The output buffer pointer, `NULL` for an empty buffer.
-fn out_ptr(output: &mut [u8]) -> *mut c_void {
-    if output.is_empty() {
+fn out_ptr(ptr: *mut u8, len: u32) -> *mut c_void {
+    if len == 0 {
         std::ptr::null_mut()
     } else {
-        output.as_mut_ptr().cast()
+        ptr.cast()
     }
 }
 
@@ -143,9 +144,9 @@ fn checked_len(len: usize, which: &str) -> io::Result<u32> {
 
 /// The pinned payload for an in-flight device-control operation: the input and
 /// output buffers, both of which must outlive the async call.
-struct DeviceIoPayload {
-    input: Vec<u8>,
-    output: Vec<u8>,
+struct DeviceIoPayload<I, O> {
+    input: I,
+    output: O,
 }
 
 impl AssociatedEndpoint<'_> {
@@ -159,7 +160,10 @@ impl AssociatedEndpoint<'_> {
     /// in hand.
     ///
     /// `input` is the input buffer (empty for control codes that take none) and
-    /// `output_len` sizes the output buffer.
+    /// `output` is the buffer the device writes its result into. Both are owned
+    /// buffers of the caller's choosing, handed over for the operation's life
+    /// and returned when it completes: nothing is copied and nothing is
+    /// allocated here.
     ///
     /// # Errors
     ///
@@ -182,31 +186,28 @@ impl AssociatedEndpoint<'_> {
     /// self-contained code (an `FSCTL` query, say) needs nothing more than owned
     /// buffers.
     #[track_caller]
-    pub unsafe fn ioctl(
+    pub unsafe fn ioctl<I: IoBuf, O: IoBufMut>(
         &self,
         code: u32,
-        input: Vec<u8>,
-        output_len: usize,
-    ) -> io::Result<Started<DeviceIoControlIo, Vec<u8>>> {
-        // Checked before allocating, so an unusable request costs nothing. The
-        // lengths are captured here rather than measured inside the submission
-        // closure, which runs at the FFI boundary and cannot report an error.
-        let in_len = checked_len(input.len(), "input")?;
-        let out_len = checked_len(output_len, "output")?;
+        input: I,
+        output: O,
+    ) -> io::Result<Started<DeviceIoControlIo<I, O>, O>> {
+        // The lengths are captured here rather than measured inside the
+        // submission closure, which runs at the FFI boundary and cannot report
+        // an error.
+        let in_len = checked_len(input.bytes_len(), "input")?;
+        let out_len = checked_len(output.bytes_len(), "output")?;
         let skip = self.notification_modes().skip_completion_port_on_success;
 
-        let operation = Operation::new(DeviceIoPayload {
-            input,
-            output: vec![0_u8; output_len],
-        });
+        let operation = Operation::new(DeviceIoPayload { input, output });
         // SAFETY: issues exactly one DeviceIoControl reading the payload's input
         // and writing its output, both reached through the pinned OVERLAPPED;
         // they and the byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
-                let payload = payload_ptr_from_overlapped::<DeviceIoPayload>(overlapped);
-                let in_ptr = in_ptr(&(*payload).input);
-                let out_ptr = out_ptr(&mut (*payload).output);
+                let payload = payload_ptr_from_overlapped::<DeviceIoPayload<I, O>>(overlapped);
+                let in_ptr = in_ptr((*payload).input.stable_ptr(), in_len);
+                let out_ptr = out_ptr((*payload).output.stable_mut_ptr(), out_len);
                 let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = DeviceIoControl(
                     handle.as_raw_handle(),
@@ -274,11 +275,14 @@ unsafe fn classify_issued(
 }
 
 /// Turn a device submission outcome into the adapter's two-state outcome.
-fn finish_device(
-    submitted: Submitted<DeviceIoPayload>,
-) -> io::Result<Started<DeviceIoControlIo, Vec<u8>>> {
+fn finish_device<I: IoBuf, O: IoBufMut>(
+    submitted: Submitted<DeviceIoPayload<I, O>>,
+) -> io::Result<Started<DeviceIoControlIo<I, O>, O>> {
     match submitted {
-        Submitted::Pending(id) => Ok(Started::Pending(DeviceIoControlIo { id })),
+        Submitted::Pending(id) => Ok(Started::Pending(DeviceIoControlIo {
+            id,
+            buffers: std::marker::PhantomData,
+        })),
         Submitted::Completed {
             operation,
             bytes_transferred,
@@ -293,15 +297,20 @@ fn finish_device(
 /// A pending device-control operation submitted through
 /// [`AssociatedEndpoint::ioctl`].
 ///
-/// The token carries the operation's identity and its payload type, so
-/// [`DeviceIoControlIo::claim`] recovers the output buffer and byte count safely
-/// once the matching completion is dequeued.
+/// The token carries the operation's identity and remembers both buffer types it
+/// was submitted with, so [`DeviceIoControlIo::claim`] hands back the caller's
+/// own output buffer -- the same value, not a copy -- once the matching
+/// completion is dequeued. The input type is carried too, because it is part of
+/// the payload type the claim must name.
 #[derive(Debug)]
-pub struct DeviceIoControlIo {
+pub struct DeviceIoControlIo<I, O> {
     id: OperationId,
+    /// The buffers live in the pinned operation, not here; this only keeps the
+    /// token's type tied to them so `claim` cannot be handed the wrong payload.
+    buffers: std::marker::PhantomData<fn() -> (I, O)>,
 }
 
-impl DeviceIoControlIo {
+impl<I: IoBuf, O: IoBufMut> DeviceIoControlIo<I, O> {
     /// The identity of the in-flight operation, for cancellation or matching.
     #[must_use]
     pub fn id(&self) -> OperationId {
@@ -310,20 +319,24 @@ impl DeviceIoControlIo {
 
     /// Claim this operation's result from `completion`.
     ///
-    /// On a match returns `Ok((output, result))`: `output` is the output buffer
-    /// (valid up to the byte count) and `result` is the byte count or the
-    /// operation's error. Returns `Err(self)` when `completion` belongs to a
-    /// different operation.
-    pub fn claim(self, completion: &Completion) -> Result<(Vec<u8>, io::Result<usize>), Self> {
+    /// On a match returns `Ok((output, result))`: `output` is the buffer the
+    /// caller handed over (valid up to the byte count) and `result` is the byte
+    /// count or the operation's error. Returns `Err(self)` when `completion`
+    /// belongs to a different operation.
+    ///
+    /// The input buffer is dropped here: the driver is done reading it, and
+    /// returning both would make the common case pay for the rare one.
+    pub fn claim(self, completion: &Completion) -> Result<(O, io::Result<usize>), Self> {
         if completion.id() != Some(self.id) {
             return Err(self);
         }
         // SAFETY: the full identity -- address *and* generation -- matches, which
         // an address alone would not: a recycled address can belong to a later
         // operation of a different payload type. The match therefore proves this
-        // completion is the
-        // Operation<DeviceIoPayload> this token submitted; claim it exactly once.
-        let operation = unsafe { completion.claim::<DeviceIoPayload>() };
+        // completion is the Operation<DeviceIoPayload<I, O>> this token
+        // submitted, and the token's own type parameters name that payload;
+        // claim it exactly once.
+        let operation = unsafe { completion.claim::<DeviceIoPayload<I, O>>() };
         let output = operation.into_payload().output;
         let result = match completion.error() {
             Some(error) => Err(io::Error::from_raw_os_error(

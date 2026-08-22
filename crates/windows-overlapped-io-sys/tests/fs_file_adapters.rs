@@ -28,7 +28,8 @@ fn blocking_backend_round_trips_a_file() {
     let written = endpoint.write(data, 0).expect("write");
     assert_eq!(written, data.len());
 
-    let (buffer, read) = endpoint.read(data.len(), 0).expect("read");
+    let mut buffer = vec![0_u8; data.len()];
+    let read = endpoint.read(&mut buffer, 0).expect("read");
     assert_eq!(read, data.len());
     assert_eq!(buffer, data);
 

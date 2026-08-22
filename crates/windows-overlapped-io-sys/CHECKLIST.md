@@ -42,15 +42,15 @@ a performance-minded caller's back.
   buffer back. Allocating a `Vec` becomes the caller's visible `vec![0; n]` rather than something the
   adapter does for them.
 
-- [ ] **M11.3** -- Make the socket adapters generic the same way: `recv<B: IoBufMut>`, `send<B: IoBuf>`,
+- [x] **M11.3** -- Make the socket adapters generic the same way: `recv<B: IoBufMut>`, `send<B: IoBuf>`,
   `SocketPayload<B>`, `SocketIo<B>`. The `WSABUF` is built from the buffer's stable pointer and length
   rather than from a `Vec`'s.
 
-- [ ] **M11.4** -- Make `device::ioctl` generic over both of its buffers (`I: IoBuf` for input, `O:
+- [x] **M11.4** -- Make `device::ioctl` generic over both of its buffers (`I: IoBuf` for input, `O:
   IoBufMut` for output), replacing the `output_len` parameter that currently makes the adapter allocate.
   `DeviceIoControlIo<O>` returns the caller's output buffer. The blocking form follows.
 
-- [ ] **M11.5** -- Sweep for remaining forced copies now that the traits exist, and fix or record each:
+- [x] **M11.5** -- Sweep for remaining forced copies now that the traits exist, and fix or record each:
   the blocking adapters (which take slices legitimately, since they block for the whole operation), the
   scatter/gather path (already owns `PageBuffers`; confirm no conversion sneaks in), and any `to_vec` /
   `clone` left in the adapters or their tests.

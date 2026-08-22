@@ -22,7 +22,9 @@ use windows_sys::Win32::Networking::WinSock::{
 use windows_sys::Win32::System::IO::{CancelIoEx, CreateIoCompletionPort, OVERLAPPED};
 
 use crate::operation::payload_ptr_from_overlapped;
-use crate::{Completion, CompletionPort, Issued, Operation, OperationId, Started, Submitted};
+use crate::{
+    Completion, CompletionPort, IoBuf, IoBufMut, Issued, Operation, OperationId, Started, Submitted,
+};
 
 impl CompletionPort {
     /// Associate an overlapped socket with this port under `key`.
@@ -95,7 +97,11 @@ impl<'port> AssociatedSocket<'port> {
         self.socket.as_raw_socket() as usize
     }
 
-    /// Submit an overlapped receive of up to `len` bytes.
+    /// Submit an overlapped receive into `buffer`.
+    ///
+    /// The buffer is any owned [`IoBufMut`] -- handed over for the operation's
+    /// life and returned when it completes, with nothing copied and nothing
+    /// allocated here.
     ///
     /// Returns [`Started::Pending`] with a [`SocketIo`] token that recovers the
     /// buffer and byte count from the operation's completion, or -- only on a
@@ -105,19 +111,19 @@ impl<'port> AssociatedSocket<'port> {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`,
-    /// which `WSABUF`'s byte count cannot express, or any immediate failure from
-    /// issuing the receive.
+    /// Returns [`io::ErrorKind::InvalidInput`] if the buffer is longer than
+    /// `u32::MAX`, which `WSABUF`'s byte count cannot express, or any immediate
+    /// failure from issuing the receive.
     #[track_caller]
-    pub fn recv(&self, len: usize) -> io::Result<Started<SocketIo, Vec<u8>>> {
+    pub fn recv<B: IoBufMut>(&self, buffer: B) -> io::Result<Started<SocketIo<B>, B>> {
         let socket = self.raw_socket();
-        let operation = Operation::new(recv_payload(len)?);
+        let operation = Operation::new(recv_payload(buffer)?);
         // SAFETY: issues exactly one WSARecv into the payload's buffer via its
         // WSABUF and flags word, both reached through the pinned OVERLAPPED; they
         // live until the completion is claimed.
         let submitted = unsafe {
             self.port.submit_with(operation, |overlapped| {
-                let payload = payload_ptr_from_overlapped::<SocketPayload>(overlapped);
+                let payload = payload_ptr_from_overlapped::<SocketPayload<B>>(overlapped);
                 let ret = WSARecv(
                     socket,
                     std::ptr::addr_of!((*payload).wsabuf),
@@ -133,7 +139,11 @@ impl<'port> AssociatedSocket<'port> {
         finish_socket(submitted)
     }
 
-    /// Submit an overlapped send of `data`.
+    /// Submit an overlapped send of `buffer`.
+    ///
+    /// The buffer is any owned [`IoBuf`] -- including a shared `Arc<[u8]>` or a
+    /// `&'static [u8]` -- handed over for the operation's life and returned when
+    /// it completes. Nothing is copied.
     ///
     /// Returns [`Started::Pending`] with a [`SocketIo`] token, or
     /// [`Started::Completed`] with the buffer already in hand when the socket is
@@ -142,19 +152,19 @@ impl<'port> AssociatedSocket<'port> {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `data` is longer than
+    /// Returns [`io::ErrorKind::InvalidInput`] if the buffer is longer than
     /// `u32::MAX`, which `WSABUF`'s byte count cannot express, or any immediate
     /// failure from issuing the send.
     #[track_caller]
-    pub fn send(&self, data: Vec<u8>) -> io::Result<Started<SocketIo, Vec<u8>>> {
+    pub fn send<B: IoBuf>(&self, buffer: B) -> io::Result<Started<SocketIo<B>, B>> {
         let socket = self.raw_socket();
-        let operation = Operation::new(send_payload(data)?);
+        let operation = Operation::new(send_payload(buffer)?);
         // SAFETY: issues exactly one WSASend from the payload's buffer via its
         // WSABUF, reached through the pinned OVERLAPPED; it lives until the
         // completion is claimed.
         let submitted = unsafe {
             self.port.submit_with(operation, |overlapped| {
-                let payload = payload_ptr_from_overlapped::<SocketPayload>(overlapped);
+                let payload = payload_ptr_from_overlapped::<SocketPayload<B>>(overlapped);
                 let ret = WSASend(
                     socket,
                     std::ptr::addr_of!((*payload).wsabuf),
@@ -214,24 +224,23 @@ impl<'port> AssociatedSocket<'port> {
 
 /// The pinned payload for an in-flight socket operation: the buffer, the
 /// `WSABUF` pointing into it, and the receive `flags` word.
-struct SocketPayload {
-    buffer: Vec<u8>,
+struct SocketPayload<B> {
+    buffer: B,
     wsabuf: WSABUF,
     flags: u32,
 }
 
 // SAFETY: `wsabuf.buf` points into `buffer`, which this payload owns; moving the
-// payload moves the whole self-referential unit, and it exposes no aliasing
-// access, so it is `Send` like the `Vec<u8>` it wraps.
-unsafe impl Send for SocketPayload {}
+// payload moves the whole self-referential unit -- sound because `IoBuf` promises
+// the buffer's address does not move with it -- and it exposes no aliasing
+// access, so it is `Send` whenever the buffer is.
+unsafe impl<B: Send> Send for SocketPayload<B> {}
 
-fn recv_payload(len: usize) -> io::Result<SocketPayload> {
-    // Checked before allocating, so an unusable request costs nothing.
-    let wsalen = checked_len(len, "receive buffer")?;
-    let mut buffer = vec![0_u8; len];
+fn recv_payload<B: IoBufMut>(mut buffer: B) -> io::Result<SocketPayload<B>> {
+    let wsalen = checked_len(buffer.bytes_len(), "receive buffer")?;
     let wsabuf = WSABUF {
         len: wsalen,
-        buf: buffer.as_mut_ptr(),
+        buf: buffer.stable_mut_ptr(),
     };
     Ok(SocketPayload {
         buffer,
@@ -240,13 +249,16 @@ fn recv_payload(len: usize) -> io::Result<SocketPayload> {
     })
 }
 
-fn send_payload(mut data: Vec<u8>) -> io::Result<SocketPayload> {
+fn send_payload<B: IoBuf>(buffer: B) -> io::Result<SocketPayload<B>> {
     let wsabuf = WSABUF {
-        len: checked_len(data.len(), "send buffer")?,
-        buf: data.as_mut_ptr(),
+        len: checked_len(buffer.bytes_len(), "send buffer")?,
+        // `WSABUF` is one type for both directions, so its `buf` is `*mut` even
+        // for a send. `WSASend` only reads through it, which is what makes this
+        // sound for a shared buffer whose pointer carries no write provenance.
+        buf: buffer.stable_ptr().cast_mut(),
     };
     Ok(SocketPayload {
-        buffer: data,
+        buffer,
         wsabuf,
         flags: 0,
     })
@@ -282,9 +294,14 @@ fn classify_socket(ret: i32) -> io::Result<Issued> {
 }
 
 /// Turn a socket submission outcome into the adapter's two-state outcome.
-fn finish_socket(submitted: Submitted<SocketPayload>) -> io::Result<Started<SocketIo, Vec<u8>>> {
+fn finish_socket<B: IoBuf>(
+    submitted: Submitted<SocketPayload<B>>,
+) -> io::Result<Started<SocketIo<B>, B>> {
     match submitted {
-        Submitted::Pending(id) => Ok(Started::Pending(SocketIo { id })),
+        Submitted::Pending(id) => Ok(Started::Pending(SocketIo {
+            id,
+            buffer: std::marker::PhantomData,
+        })),
         Submitted::Completed {
             operation,
             bytes_transferred,
@@ -313,15 +330,18 @@ fn checked_len(len: usize, which: &str) -> io::Result<u32> {
 /// A pending socket operation submitted through [`AssociatedSocket::recv`] or
 /// [`AssociatedSocket::send`].
 ///
-/// The token carries the operation's identity and its `Vec<u8>` payload type, so
-/// [`SocketIo::claim`] recovers the buffer and byte count safely once the
-/// matching completion is dequeued.
+/// The token carries the operation's identity and remembers the buffer type it
+/// was submitted with, so [`SocketIo::claim`] hands back the caller's own buffer
+/// -- the same value, not a copy -- once the matching completion is dequeued.
 #[derive(Debug)]
-pub struct SocketIo {
+pub struct SocketIo<B> {
     id: OperationId,
+    /// The buffer itself is in the pinned operation, not here; this only keeps
+    /// the token's type tied to it so `claim` cannot be handed the wrong one.
+    buffer: std::marker::PhantomData<fn() -> B>,
 }
 
-impl SocketIo {
+impl<B: IoBuf> SocketIo<B> {
     /// The identity of the in-flight operation, for cancellation or matching.
     #[must_use]
     pub fn id(&self) -> OperationId {
@@ -330,20 +350,20 @@ impl SocketIo {
 
     /// Claim this operation's result from `completion`.
     ///
-    /// On a match returns `Ok((buffer, result))`: `buffer` is the payload -- the
-    /// bytes received (valid up to the byte count), or the data sent -- and
-    /// `result` is the byte count or the operation's error. Returns `Err(self)`
-    /// when `completion` belongs to a different operation.
-    pub fn claim(self, completion: &Completion) -> Result<(Vec<u8>, io::Result<usize>), Self> {
+    /// On a match returns `Ok((buffer, result))`: `buffer` is the one the caller
+    /// handed over -- the bytes received (valid up to the byte count), or the
+    /// data sent -- and `result` is the byte count or the operation's error.
+    /// Returns `Err(self)` when `completion` belongs to a different operation.
+    pub fn claim(self, completion: &Completion) -> Result<(B, io::Result<usize>), Self> {
         if completion.id() != Some(self.id) {
             return Err(self);
         }
         // SAFETY: the full identity -- address *and* generation -- matches, which
         // an address alone would not: a recycled address can belong to a later
         // operation of a different payload type. The match therefore proves this
-        // completion is the
-        // Operation<SocketPayload> this token submitted; claim it exactly once.
-        let operation = unsafe { completion.claim::<SocketPayload>() };
+        // completion is the Operation<SocketPayload<B>> this token submitted, and
+        // the token's own type parameter names that B; claim it exactly once.
+        let operation = unsafe { completion.claim::<SocketPayload<B>>() };
         let buffer = operation.into_payload().buffer;
         let result = match completion.error() {
             Some(error) => Err(io::Error::from_raw_os_error(
@@ -385,26 +405,27 @@ impl BlockingSocket {
         self.socket.as_raw_socket() as usize
     }
 
-    /// Receive up to `len` bytes, blocking until the receive completes.
+    /// Receive into `buffer`, blocking until the receive completes, and return
+    /// the number of bytes received.
     ///
-    /// Returns the buffer truncated to the bytes received and that count.
+    /// Takes a plain `&mut [u8]` and allocates nothing, matching
+    /// [`BlockingSocket::send`]: this call does not return until the operation
+    /// is over, so an ordinary borrow provably covers it.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`,
-    /// which `WSABUF`'s byte count cannot express, or any error from issuing or
-    /// completing the receive.
-    pub fn recv(&self, len: usize) -> io::Result<(Vec<u8>, usize)> {
-        // Checked before allocating, so an unusable request costs nothing.
-        let wsalen = checked_len(len, "receive buffer")?;
-        let mut buffer = vec![0_u8; len];
+    /// Returns [`io::ErrorKind::InvalidInput`] if `buffer` is longer than
+    /// `u32::MAX`, which `WSABUF`'s byte count cannot express, or any error from
+    /// issuing or completing the receive.
+    pub fn recv(&self, buffer: &mut [u8]) -> io::Result<usize> {
+        let wsalen = checked_len(buffer.len(), "receive buffer")?;
         let wsabuf = WSABUF {
             len: wsalen,
             buf: buffer.as_mut_ptr(),
         };
         // SAFETY: issues exactly one WSARecv into `buffer` via `wsabuf`, both of
         // which stay valid for the whole blocking call.
-        let received = unsafe {
+        unsafe {
             self.run(|socket, overlapped| {
                 let mut flags = 0_u32;
                 WSARecv(
@@ -417,9 +438,7 @@ impl BlockingSocket {
                     None,
                 )
             })
-        }?;
-        buffer.truncate(received);
-        Ok((buffer, received))
+        }
     }
 
     /// Send `data`, blocking until the send completes, and return the bytes sent.

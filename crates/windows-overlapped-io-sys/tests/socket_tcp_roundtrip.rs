@@ -36,7 +36,7 @@ fn recv_exact(endpoint: &AssociatedSocket<'_>, port: &CompletionPort, total: usi
     let mut out = Vec::with_capacity(total);
     while out.len() < total {
         let token = endpoint
-            .recv(total - out.len())
+            .recv(vec![0_u8; total - out.len()])
             .expect("submit recv")
             .expect_pending("this socket is not in skip-on-success mode");
         let completion = port.get(5_000).expect("get").expect("recv completion");
@@ -95,7 +95,8 @@ fn blocking_send_all(socket: &BlockingSocket, data: &[u8]) {
 fn blocking_recv_exact(socket: &BlockingSocket, total: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(total);
     while out.len() < total {
-        let (buffer, n) = socket.recv(total - out.len()).expect("blocking recv");
+        let mut buffer = vec![0_u8; total - out.len()];
+        let n = socket.recv(&mut buffer).expect("blocking recv");
         assert!(n > 0, "peer closed before sending all bytes");
         out.extend_from_slice(&buffer);
     }

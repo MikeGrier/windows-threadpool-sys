@@ -27,18 +27,20 @@ use crate::{
 };
 
 impl BlockingEndpoint {
-    /// Read up to `len` bytes starting at `offset`, blocking until the read
-    /// completes.
+    /// Read into `buffer` starting at `offset`, blocking until the read
+    /// completes, and return the number of bytes read.
     ///
-    /// Returns the buffer truncated to the bytes actually read, together with
-    /// that count. The whole operation finishes within this call, so no
-    /// `OVERLAPPED` or `unsafe` reaches the caller.
+    /// Takes a plain `&mut [u8]` rather than an owned buffer, and allocates
+    /// nothing: this call does not return until the operation is over, so an
+    /// ordinary borrow provably covers the whole time the kernel is writing.
+    /// That is the difference from [`AssociatedEndpoint::read`], which must take
+    /// ownership because its operation outlives the call.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`,
-    /// which the read's byte count cannot express, or any error from issuing or
-    /// completing the read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `buffer` is longer than
+    /// `u32::MAX`, which the read's byte count cannot express, or any error from
+    /// issuing or completing the read.
     ///
     /// # Examples
     ///
@@ -48,8 +50,9 @@ impl BlockingEndpoint {
     /// use windows_overlapped_io_sys::BlockingEndpoint;
     ///
     /// fn read_twice(endpoint: &mut BlockingEndpoint) -> std::io::Result<()> {
-    ///     let (_first, _) = endpoint.read(64, 0)?;
-    ///     let (_second, _) = endpoint.read(64, 64)?;
+    ///     let mut buffer = [0_u8; 64];
+    ///     let _first = endpoint.read(&mut buffer, 0)?;
+    ///     let _second = endpoint.read(&mut buffer, 64)?;
     ///     Ok(())
     /// }
     /// ```
@@ -65,21 +68,19 @@ impl BlockingEndpoint {
     /// fn read_from_two_threads(endpoint: BlockingEndpoint) {
     ///     let shared = Arc::new(endpoint);
     ///     let other = Arc::clone(&shared);
-    ///     std::thread::spawn(move || other.read(64, 0));
-    ///     let _ = shared.read(64, 64);
+    ///     std::thread::spawn(move || other.read(&mut [0_u8; 64], 0));
+    ///     let _ = shared.read(&mut [0_u8; 64], 64);
     /// }
     /// ```
-    pub fn read(&mut self, len: usize, offset: u64) -> io::Result<(Vec<u8>, usize)> {
-        // Checked before allocating, so an unusable request costs nothing.
-        let buf_len = checked_len(len, "read buffer")?;
-        let mut buffer = vec![0_u8; len];
+    pub fn read(&mut self, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+        let buf_len = checked_len(buffer.len(), "read buffer")?;
         let buf_ptr = buffer.as_mut_ptr();
 
         let mut operation = Operation::new(());
         operation.set_offset(offset);
         // SAFETY: issues exactly one overlapped ReadFile into `buffer`, which
         // outlives this blocking call; no other operation is outstanding.
-        let read = unsafe {
+        unsafe {
             self.run(&mut operation, |handle, overlapped| {
                 let ok = ReadFile(
                     handle.as_raw_handle(),
@@ -90,10 +91,7 @@ impl BlockingEndpoint {
                 );
                 classify(ok)
             })
-        }?;
-
-        buffer.truncate(read);
-        Ok((buffer, read))
+        }
     }
 
     /// Write `data` starting at `offset`, blocking until the write completes, and
@@ -141,34 +139,6 @@ fn classify(ok: i32) -> io::Result<()> {
     } else {
         Err(error)
     }
-}
-
-/// The byte total for `pages` pages, or an error if it cannot be expressed.
-///
-/// A zero page count is rejected as well: the scatter adapters call
-/// [`PageBuffers::new`] with `pages`, which panics on zero, so validating here
-/// keeps those safe, fallible APIs returning `InvalidInput` instead of panicking
-/// on an invalid request.
-///
-/// The multiplication is checked rather than saturating. Saturating defeats the
-/// validation on 32-bit Windows, where `usize::MAX` *is* `u32::MAX`: an
-/// overflowing page count would saturate to a value [`checked_len`] accepts, and
-/// `PageBuffers::new` would then panic on its own checked multiplication instead
-/// of the adapter returning the documented `InvalidInput`.
-fn scatter_gather_len(pages: usize) -> io::Result<u32> {
-    if pages == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a scatter/gather request must name at least one page",
-        ));
-    }
-    let bytes = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{pages} pages of {PAGE_SIZE} bytes overflows a byte count"),
-        )
-    })?;
-    checked_len(bytes, "scatter/gather buffer set")
 }
 
 /// Convert a buffer length to the `u32` byte count the Win32 calls take.
@@ -566,23 +536,20 @@ unsafe impl crate::IoBufMut for PageBuffers {
 }
 
 impl BlockingEndpoint {
-    /// Scatter-read `pages` pages starting at `offset` into a fresh page-aligned
-    /// buffer, blocking until the read completes.
+    /// Scatter-read into `buffers` starting at `offset`, blocking until the read
+    /// completes, and return the number of bytes read.
     ///
-    /// Returns the buffer and the number of bytes read. The endpoint must be
-    /// opened with [`FILE_FLAG_NO_BUFFERING`]; otherwise the native call fails.
+    /// Takes the caller's pages by `&mut` and allocates nothing, matching
+    /// [`BlockingEndpoint::write_gather`]; the endpoint must be opened with
+    /// [`FILE_FLAG_NO_BUFFERING`], or the native call fails.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or the pages
-    /// total more than `u32::MAX` bytes, or any error from issuing or completing
-    /// the scatter-read.
-    pub fn read_scatter(&mut self, pages: usize, offset: u64) -> io::Result<(PageBuffers, usize)> {
-        // Checked before allocating, so an unusable request costs nothing. This
-        // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
-        // page count into an ordinary error.
-        let total = scatter_gather_len(pages)?;
-        let buffers = PageBuffers::new(pages);
+    /// Returns [`io::ErrorKind::InvalidInput`] if the pages total more than
+    /// `u32::MAX` bytes, or any error from issuing or completing the
+    /// scatter-read.
+    pub fn read_scatter(&mut self, buffers: &mut PageBuffers, offset: u64) -> io::Result<usize> {
+        let total = checked_len(buffers.len(), "scatter/gather buffer set")?;
         let segments = buffers.segment_array();
         let seg_ptr = segments.as_ptr();
 
@@ -591,7 +558,7 @@ impl BlockingEndpoint {
         // SAFETY: issues exactly one ReadFileScatter into `buffers` via
         // `segments`; both outlive this blocking call and no other operation is
         // outstanding.
-        let read = unsafe {
+        unsafe {
             self.run(&mut operation, |handle, overlapped| {
                 let ok = ReadFileScatter(
                     handle.as_raw_handle(),
@@ -602,9 +569,7 @@ impl BlockingEndpoint {
                 );
                 classify(ok)
             })
-        }?;
-
-        Ok((buffers, read))
+        }
     }
 
     /// Gather-write `buffers` starting at `offset`, blocking until the write
@@ -658,31 +623,29 @@ struct ScatterPayload {
 unsafe impl Send for ScatterPayload {}
 
 impl AssociatedEndpoint<'_> {
-    /// Submit an overlapped scatter-read of `pages` pages starting at `offset`
-    /// into a fresh page-aligned buffer.
+    /// Submit an overlapped scatter-read into `buffers`, starting at `offset`.
+    ///
+    /// Takes the caller's pages rather than allocating fresh ones, so a pooled
+    /// or reused [`PageBuffers`] costs nothing to submit. The endpoint must be
+    /// opened with [`FILE_FLAG_NO_BUFFERING`].
     ///
     /// Returns [`Started::Pending`] with a [`ScatterGatherIo`] token, or
     /// [`Started::Completed`] with the [`PageBuffers`] already in hand when the
     /// endpoint is in skip-on-success mode and the read completed synchronously.
-    /// The endpoint must be opened with [`FILE_FLAG_NO_BUFFERING`].
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or the pages
-    /// total more than `u32::MAX` bytes, or any immediate failure from issuing
-    /// the scatter-read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if the pages total more than
+    /// `u32::MAX` bytes, or any immediate failure from issuing the
+    /// scatter-read.
     #[track_caller]
     pub fn read_scatter(
         &self,
-        pages: usize,
+        buffers: PageBuffers,
         offset: u64,
     ) -> io::Result<Started<ScatterGatherIo, PageBuffers>> {
-        // Checked before allocating, so an unusable request costs nothing. This
-        // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
-        // page count into an ordinary error.
-        let total = scatter_gather_len(pages)?;
+        let total = checked_len(buffers.len(), "scatter/gather buffer set")?;
         let skip = self.notification_modes().skip_completion_port_on_success;
-        let buffers = PageBuffers::new(pages);
         let segments = buffers.segment_array();
         let mut operation = Operation::new(ScatterPayload { buffers, segments });
         operation.set_offset(offset);

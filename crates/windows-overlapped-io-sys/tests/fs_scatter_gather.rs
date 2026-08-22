@@ -42,7 +42,8 @@ fn blocking_backend_scatter_gather_round_trips() {
     let written = endpoint.write_gather(&src, 0).expect("write_gather");
     assert_eq!(written, src.len());
 
-    let (dst, read) = endpoint.read_scatter(PAGES, 0).expect("read_scatter");
+    let mut dst = PageBuffers::new(PAGES);
+    let read = endpoint.read_scatter(&mut dst, 0).expect("read_scatter");
     assert_eq!(read, src.len());
     assert_eq!(dst.as_bytes(), src.as_bytes());
 
@@ -79,7 +80,7 @@ fn iocp_backend_scatter_gather_round_trips() {
 
     // Scatter-read the same pages back.
     let read_token = endpoint
-        .read_scatter(PAGES, 0)
+        .read_scatter(PageBuffers::new(PAGES), 0)
         .expect("submit read_scatter")
         .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("read completion");

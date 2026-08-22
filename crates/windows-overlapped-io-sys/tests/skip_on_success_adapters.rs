@@ -199,9 +199,14 @@ mod device {
 
         // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- its input is empty
         // and it writes only the owned output buffer, embedding no pointers.
-        let started =
-            unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, Vec::new(), COMPRESSION_STATE_LEN) }
-                .expect("submit ioctl");
+        let started = unsafe {
+            endpoint.ioctl(
+                FSCTL_GET_COMPRESSION,
+                Vec::new(),
+                vec![0_u8; COMPRESSION_STATE_LEN],
+            )
+        }
+        .expect("submit ioctl");
 
         match started {
             Started::Completed {
