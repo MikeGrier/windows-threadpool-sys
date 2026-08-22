@@ -18,11 +18,38 @@ categories = ["api-bindings", "os::windows-apis", "filesystem"]
 [lib]
 path = "src/lib.rs"
 
+# `run-scenario` (M9.5): a CLI that replays a persisted JSON scenario file
+# through the same model/harness the stress test suite uses. Gated behind the
+# `scenario-tool` feature (see `[features]`/optional deps below) so an ordinary
+# consumer of this crate never pays for `serde`/`serde_json` -- `[[bin]]`
+# targets, unlike `tests`/`examples`, are built by plain `cargo build` and so
+# cannot draw on `[dev-dependencies]` the way the test suite does.
+[[bin]]
+name = "run-scenario"
+path = "src/bin/run_scenario.rs"
+required-features = ["scenario-tool"]
+
+# The scenario_stress suite (M9) is built on `src/scenario.rs`, so it needs
+# the same feature the binary above does; without it, plain `cargo test`
+# skips this target entirely rather than failing to find `serde`.
+[[test]]
+name = "scenario_stress"
+path = "tests/scenario_stress.rs"
+required-features = ["scenario-tool"]
+
 # The crate is Windows-only, so docs.rs must build it on a Windows target or it
 # would resolve to an empty crate and document nothing.
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
+
+[features]
+# Enables `src/scenario.rs` (the data-driven stress model/harness, shared by
+# the `run-scenario` binary and the `scenario_stress` integration test) and its
+# JSON (de)serialization. Off by default: see `src/scenario.rs`'s module docs
+# for why the JSON schema this enables is deliberately **not** part of this
+# crate's semver contract.
+scenario-tool = ["dep:serde", "dep:serde_json"]
 
 [dependencies]
 # The owned overlapped-I/O foundation. Directory reads are issued through its
@@ -51,6 +78,13 @@ wtf-string = { version = "0.2.0", path = "../wtf-string" }
 # does not commit a client to any particular logger -- nothing is emitted
 # unless one is installed.
 log = { version = "0.4.22", default-features = false }
+
+# Both optional, enabled only by the `scenario-tool` feature (D-72): the
+# `run-scenario` binary's JSON scenario format is a testing/ops input, not
+# part of this crate's watching behavior, so an ordinary consumer never links
+# either of these.
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
 
 windows-sys = {
 	version = "0.61.2",

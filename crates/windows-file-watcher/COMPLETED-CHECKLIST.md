@@ -279,3 +279,75 @@ did not serialise) and M3.2's bound parameter (which had no meaning until M3.3 d
   `OsString`/`Path` conversions round-trip losslessly, and a direct wide-pointer (`as_wtf16().as_terminated_ptr()`)
   hand-off to a real Win32 API (`lstrlenW`) succeeds with no WTF-8 re-encode in between -- the same
   assertions M8.1's unit tests already made against a synthetic buffer, now against a real one.
+
+## Moved 2026-08-21 -- M9: data-driven scenario stress
+
+A load/stress suite whose scenarios are *data*, not one hardcoded test function per behavior: a scenario
+is a value (an ordered list of filesystem operations plus timing parameters) that a single shared harness
+executes and checks against the same generic invariants (no wedge, no panic, every desync is reported
+rather than silently swallowed -- D-12). New scenarios are added by describing them, not by writing new
+test bodies. Parameters (entity counts, wait-duration ranges, PRNG seed) are overridable so the same suite
+can be run wider without code changes. Re-planned after M9.3: a scenario's *filesystem* actions (M9.1) are
+only one dimension: a real client also opens and closes sessions and adds/removes watches while a
+directory is live, and that lifecycle churn is a first-class part of the basic tier, not deferred to M9+
+(M9+ is specifically the *concurrency* axis -- multiple threads, spoilers, nesting, queue overwhelm -- not
+the single-threaded lifecycle churn M9.4/M9.5 add). This milestone covers only the single-modifier basics
+the user asked to start with; concurrent modifiers, held-open "spoiler" handles, nested operations, and
+queue overwhelm are explicitly deferred to M9+ once M9 is solid.
+
+- [x] **M9.1** -- Data-driven scenario model: an `Operation` enum (create file, delete path, rename,
+  make directory, wait) and a `Scenario { label, operations: Vec<Operation> }` (or builder) that a
+  harness can execute mechanically -- no scenario-specific logic outside the data. Wait durations and any
+  choice points are drawn from a small seeded deterministic PRNG (no external `rand` dependency needed;
+  this crate has none today), defaulting to a fixed seed for reproducibility (per the repo's no-random-
+  sampling-without-approval rule) with an env-var override to explore other seeds. Record the seeding
+  decision in [DESIGN-NOTES.md](DESIGN-NOTES.md) with a new D-number.
+
+- [x] **M9.2** -- Shared harness: given a `Scenario`, create a temp directory, subscribe a watch, apply
+  every `Operation` in order (honoring `Wait`), and assert only the scenario-independent invariants: the
+  watch never wedges (a liveness/notification deadline is always met while operations are still being
+  applied), no panic, and every `Notification::Desync` is a reported loss rather than silence (D-12). The
+  harness takes the scenario and its parameters (counts, timing ranges, seed) as arguments -- it has no
+  hardcoded scenario knowledge. **Scaled for hundreds of thousands of operations per run (D-67):** the
+  harness reports bounded per-kind tallies (`HarnessOutcome`), never a growing `Vec<Notification>`, and
+  drains the queue non-blockingly after every operation so a long run never backs up the crate's own
+  bounded queue between checks; `Operation::Repeat` keeps a large scenario's data small regardless of how
+  many times it actually runs.
+
+- [x] **M9.3** -- Basic scenario library, expressed as data through M9.1/M9.2: (a) a few files with a
+  burst of changes, scaled up with `Operation::Repeat` to the hundreds-of-thousands-of-operations range a
+  real stress run is expected to exercise; (b) delete-wait-reintroduce with irregular (PRNG-drawn) wait
+  durations; (c) plain renames; (d) a directory created with the name a file used to occupy, and vice versa
+  (cross-type name reuse); (e) a fast two-entity swap race: renaming file `x` -> `y` while concurrently
+  (within the same operation batch, minimal or zero inter-op wait) renaming directory `z` -> `x`, to probe
+  whether the two renames are ever misattributed to each other. **Found and fixed during this item (D-68):**
+  applying real syscalls at hundreds-of-thousands scale is itself slow enough (~1,800 ops/sec measured) to
+  trip the harness's fixed 120s timeout on throughput alone; `HarnessParams::for_operation_count` scales
+  the budget from the scenario's own operation count so only a genuine stall still fails the assertion.
+
+- [x] **M9.4** -- Session/watch lifecycle operations: extend the data model with operations that open and
+  close *sessions* and subscribe and cancel *watches* mid-scenario (`Monitor::session` mints an independent
+  channel per call -- D-2 -- so this is not a variation on M9.1's fixed single watch, it is a second kind of
+  entity the harness must track by name and drain independently). Generalize the M9.2 harness from one
+  fixed session/watch/receiver to a name-keyed table (`Fleet`, D-69) so a scenario can reference "the
+  watch/session named X" from a later operation. Same generic invariants apply: no wedge, no panic, every
+  desync counted; a session or watch that is already closed when an operation targets it is a
+  scenario-authoring bug (assert), not a fault the harness tolerates -- unlike the M9+.2 "spoiler" case,
+  which is deliberately about a live handle blocking an operation. **Delivered with both a delayed and a
+  back-to-back timing posture (D-70):** session/watch churn spaced out with PRNG-drawn waits between every
+  transition, and the same generator invoked with a near-zero wait bound for tight, continuous churn --
+  because a fault or race is often a timing-window problem that only reproduces when transitions are
+  spaced out enough to land mid-flight, not just under maximum throughput.
+
+- [x] **M9.5** -- Persist the scenario model as JSON, as a real `run-scenario` CLI living in the crate
+  itself (re-planned twice: first to add JSON persistence, then -- once the user chose a `[[bin]]` over a
+  separate internal workspace crate -- to make `serde`/`serde_json` optional dependencies behind a
+  default-off `scenario-tool` feature, D-72, since a `[[bin]]` target cannot draw on `[dev-dependencies]`
+  the way `tests`/`examples` can). Delivered: `#[derive(Serialize, Deserialize)]` on `Operation`/`Scenario`
+  (moved to `pub mod scenario` in `src/`, D-72) with `Duration` fields round-tripping through JSON as
+  milliseconds; checked-in JSON fixture files under `tests/scenarios/` for the whole M9.3/M9.4 scenario
+  library; a generic `every_persisted_json_fixture_runs_through_the_harness` test that walks every fixture
+  and runs it through the harness; and `src/bin/run_scenario.rs`, a CLI taking a scenario JSON path as its
+  one argument and printing the resulting `HarnessOutcome`. **The JSON schema is explicitly not part of
+  this crate's semver contract (D-71)** -- by the engineer's own direction, since it is a testing/ops tool
+  input, not a documented data format. Integration test for the milestone.

@@ -112,6 +112,14 @@ mod servicing;
 #[cfg(windows)]
 mod session;
 
+// M9.5: the data-driven scenario stress model/harness, shared by the
+// `run-scenario` binary and the `scenario_stress` integration test. `pub`
+// because a `[[bin]]` target can only reach it through the library's public
+// surface (D-72) -- see the module's own docs for why its JSON schema is
+// nonetheless not part of this crate's semver contract.
+#[cfg(all(windows, feature = "scenario-tool"))]
+pub mod scenario;
+
 #[cfg(all(windows, test))]
 mod testing;
 

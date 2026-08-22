@@ -1,0 +1,625 @@
+// Copyright (c) 2026 Mike Grier
+//! Data-driven scenario stress model and harness (M9), shared by the
+//! `run-scenario` binary and the `scenario_stress` integration test.
+//!
+//! A scenario is *data* -- a [`Scenario`] value naming an ordered
+//! [`Operation`] sequence -- not a hardcoded test function. [`run_scenario`]
+//! executes any scenario and checks it against the same generic invariants
+//! (no wedge, no panic, every desync counted -- D-12); a new scenario is
+//! added by describing one, not by writing new test-body logic. See
+//! `CHECKLIST.md` M9 in the crate's repository for the full milestone
+//! history.
+//!
+//! # The JSON schema is not part of this crate's semver contract
+//!
+//! [`Operation`] and [`Scenario`] derive [`serde::Serialize`]/
+//! [`serde::Deserialize`] (M9.5) so a scenario can be persisted as JSON and
+//! handed to the `run-scenario` binary as a file path. That JSON schema is a
+//! **testing/ops tool input**, not a documented data format this crate
+//! promises to keep reading forever: its shape may change, gain fields, or
+//! rename fields in any release, including a patch release, without that
+//! being treated as a breaking change. Only this module's own Rust API
+//! surface (types, function signatures) is covered by the crate's normal
+//! semver guarantees, exactly as for any other `pub` item.
+//!
+//! Stress runs are expected to describe **hundreds of thousands of
+//! operations**. Two consequences follow throughout this module:
+//! [`Operation::Repeat`] lets a scenario stay a small value instead of
+//! materializing every repetition, and [`run_scenario`] tracks only bounded
+//! tallies ([`HarnessOutcome`]) rather than collecting every observed
+//! notification.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+
+use crate::{Monitor, Notification, Receiver, Session, Watch, WatchOptions};
+
+/// A tiny deterministic PRNG (splitmix64's step function), used only to draw
+/// wait durations and other scenario choice points. Reproducible by default
+/// (D-66): a fixed seed unless overridden, never unseeded/unrepeatable
+/// randomness.
+pub struct Rng(u64);
+
+impl Rng {
+    /// Creates a generator seeded from `seed`.
+    pub fn new(seed: u64) -> Self {
+        // splitmix64 rejects a zero state silently degrading to zero output;
+        // folding in the golden-ratio constant keeps `seed == 0` well-behaved.
+        Self(seed ^ 0x9E37_79B9_7F4A_7C15)
+    }
+
+    /// The next pseudo-random `u64` in the sequence.
+    pub fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A uniform integer in `[low, high]` inclusive.
+    pub fn range(&mut self, low: u64, high: u64) -> u64 {
+        assert!(low <= high, "empty range: {low}..={high}");
+        let span = high - low + 1;
+        low + self.next_u64() % span
+    }
+
+    /// A uniform [`Duration`] in `[low, high]` inclusive, at microsecond
+    /// resolution.
+    pub fn duration_range(&mut self, low: Duration, high: Duration) -> Duration {
+        let lo = low.as_micros() as u64;
+        let hi = high.as_micros() as u64;
+        Duration::from_micros(self.range(lo, hi))
+    }
+}
+
+/// The default seed, kept fixed so every default run of this suite is
+/// identical run to run (D-66, and the repo's no-random-sampling-without-
+/// approval rule). Override with `WINDOWS_FILE_WATCHER_STRESS_SEED` (parsed
+/// as `u64`) to explore a different sequence on demand.
+pub const DEFAULT_SEED: u64 = 0x5EED_F17E_1234_5678;
+
+/// Reads the PRNG seed from `WINDOWS_FILE_WATCHER_STRESS_SEED`, falling back
+/// to [`DEFAULT_SEED`].
+pub fn seed() -> u64 {
+    std::env::var("WINDOWS_FILE_WATCHER_STRESS_SEED")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_SEED)
+}
+
+/// Reads a `u64` scenario-scale parameter from an environment variable,
+/// falling back to `default` -- the mechanism a scenario library stays
+/// parameterizable (entity counts, round counts) without a code change.
+pub fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+/// A [`Duration`] as JSON milliseconds, so [`Operation`]'s `Wait`/`WaitRandom`
+/// fields round-trip through the persisted schema (which has no native
+/// duration type) as plain numbers.
+mod millis {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::time::Duration;
+
+    pub(super) fn serialize<S: Serializer>(
+        duration: &Duration,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        (duration.as_millis() as u64).serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Duration, D::Error> {
+        Ok(Duration::from_millis(u64::deserialize(deserializer)?))
+    }
+}
+
+/// One data-driven filesystem or session/watch-lifecycle action a
+/// [`Scenario`] asks the harness to perform. Paths are relative to the
+/// scenario's temp root.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Operation {
+    /// Create (or overwrite) a file at `path` with a few bytes of content.
+    CreateFile {
+        /// The file's path, relative to the scenario root.
+        path: PathBuf,
+    },
+    /// Create a directory at `path`.
+    CreateDir {
+        /// The directory's path, relative to the scenario root.
+        path: PathBuf,
+    },
+    /// Remove a file at `path`.
+    RemoveFile {
+        /// The file's path, relative to the scenario root.
+        path: PathBuf,
+    },
+    /// Remove a directory, and its contents, at `path`.
+    RemoveDir {
+        /// The directory's path, relative to the scenario root.
+        path: PathBuf,
+    },
+    /// Rename `from` to `to` (whichever exists: file or directory).
+    Rename {
+        /// The current path, relative to the scenario root.
+        from: PathBuf,
+        /// The destination path, relative to the scenario root.
+        to: PathBuf,
+    },
+    /// Sleep for a fixed duration before the next operation.
+    Wait {
+        /// How long to sleep, at millisecond resolution in JSON.
+        #[serde(with = "millis")]
+        duration: Duration,
+    },
+    /// Sleep for an irregular, PRNG-drawn duration in `[low, high]` before
+    /// the next operation -- resolved by the harness's own seeded [`Rng`] at
+    /// execution time, not precomputed, so the same scenario value can be
+    /// replayed at any seed.
+    WaitRandom {
+        /// The inclusive lower bound, at millisecond resolution in JSON.
+        #[serde(with = "millis")]
+        low: Duration,
+        /// The inclusive upper bound, at millisecond resolution in JSON.
+        #[serde(with = "millis")]
+        high: Duration,
+    },
+    /// Execute `pattern` in order, `count` times. A scenario describing
+    /// hundreds of thousands of operations stays a handful of bytes by
+    /// nesting this rather than unrolling every repetition into the `Vec`.
+    Repeat {
+        /// How many times to run `pattern`.
+        count: u64,
+        /// The operations to repeat, in order.
+        pattern: Vec<Operation>,
+    },
+    /// Open a new session, named for later operations to reference (M9.4).
+    /// `Monitor::session` mints an independent channel per call (D-2), so
+    /// every open session has its own receiver the harness must drain.
+    /// Opening a name that is already open is a scenario-authoring bug.
+    OpenSession {
+        /// The name this session is known by for the rest of the scenario.
+        name: String,
+    },
+    /// Close a previously opened session: every watch still registered
+    /// through it is cancelled first (in arbitrary order), then the session
+    /// itself is dropped. Closing a name that is not open is a
+    /// scenario-authoring bug.
+    CloseSession {
+        /// The session's name, as given to a prior `OpenSession`.
+        name: String,
+    },
+    /// Subscribe a watch through an already-open, named session, at `path`
+    /// (relative to the scenario root), naming the watch for later
+    /// reference. Re-using a watch name that already exists is a
+    /// scenario-authoring bug.
+    Subscribe {
+        /// The owning session's name, as given to a prior `OpenSession`.
+        session: String,
+        /// The name this watch is known by for the rest of the scenario.
+        watch: String,
+        /// The watched path, relative to the scenario root.
+        path: PathBuf,
+        /// Whether the watch covers the subtree below `path`.
+        subtree: bool,
+    },
+    /// Cancel (drop) a previously subscribed watch by name. Cancelling a
+    /// name that does not exist is a scenario-authoring bug.
+    CancelWatch {
+        /// The watch's name, as given to a prior `Subscribe`.
+        watch: String,
+    },
+}
+
+/// A named, ordered sequence of [`Operation`]s. The harness executes a
+/// scenario mechanically against only the generic invariants it knows about;
+/// a scenario carries no assertions of its own.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Scenario {
+    /// A short, human-readable name; used only for temp-directory naming and
+    /// diagnostics, never interpreted.
+    pub label: String,
+    /// The operations to perform, in order.
+    pub operations: Vec<Operation>,
+}
+
+impl Scenario {
+    /// Creates an empty scenario named `label`.
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            operations: Vec::new(),
+        }
+    }
+
+    /// Appends one operation, returning `self` for chaining.
+    #[must_use]
+    pub fn then(mut self, operation: Operation) -> Self {
+        self.operations.push(operation);
+        self
+    }
+
+    /// Appends `pattern` `count` times as a single [`Operation::Repeat`],
+    /// without ever materializing the expansion.
+    #[must_use]
+    pub fn then_repeated(mut self, count: u64, pattern: Vec<Operation>) -> Self {
+        self.operations.push(Operation::Repeat { count, pattern });
+        self
+    }
+
+    /// The number of concrete actions this scenario describes, counting
+    /// through every [`Operation::Repeat`] -- for diagnostics and tests, not
+    /// evaluated on the hot path.
+    pub fn operation_count(&self) -> u64 {
+        fn count(operations: &[Operation]) -> u64 {
+            operations
+                .iter()
+                .map(|operation| match operation {
+                    Operation::Repeat { count: n, pattern } => n * count(pattern),
+                    _ => 1,
+                })
+                .sum()
+        }
+        count(&self.operations)
+    }
+}
+
+/// A minimal self-cleaning temp directory.
+pub struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    /// Creates a fresh, empty temp directory, its name incorporating `label`.
+    pub fn new(label: &str) -> Self {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "windows-file-watcher-scenario-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).expect("create temp dir");
+        Self { path }
+    }
+
+    /// The directory's path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Removes the directory and everything in it.
+    pub fn cleanup(self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Parameters the harness itself needs, independent of any scenario's
+/// content.
+pub struct HarnessParams {
+    /// Overall wall-clock budget for applying every operation and draining
+    /// whatever the watch reports afterward. Exceeding it means the scenario
+    /// wedged, not that it merely ran long -- callers describing hundreds of
+    /// thousands of operations should raise this accordingly.
+    pub timeout: Duration,
+    /// How long the queue must stay silent after the last operation before
+    /// the harness considers the scenario settled.
+    pub quiet_period: Duration,
+}
+
+impl Default for HarnessParams {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(120),
+            quiet_period: Duration::from_millis(300),
+        }
+    }
+}
+
+impl HarnessParams {
+    /// A timeout scaled for `operation_count` concrete actions, for a
+    /// scenario large enough that the default 120s budget is a budget for
+    /// *applying the operations themselves* (each a real syscall), not
+    /// evidence of a watcher wedge (D-68). 500 ops/sec is a deliberately
+    /// conservative floor -- well under the ~1,800 ops/sec `std::fs::write`
+    /// churn measured on development hardware -- plus a fixed 60s allowance
+    /// for the watch to settle afterward.
+    pub fn for_operation_count(operation_count: u64) -> Self {
+        Self {
+            timeout: Duration::from_secs(operation_count / 500 + 60).max(Self::default().timeout),
+            ..Self::default()
+        }
+    }
+}
+
+/// The name reserved for the one session/watch every scenario gets for free
+/// (matching M9.1-M9.3's original "a watch on the scenario root" behavior).
+/// `Operation::OpenSession`/`Subscribe` reject reusing it, so a scenario
+/// cannot silently shadow the implicit watch.
+pub const INITIAL_SESSION: &str = "__initial_session__";
+/// See [`INITIAL_SESSION`].
+pub const INITIAL_WATCH: &str = "__initial_watch__";
+
+/// The live sessions and watches a scenario has opened so far, keyed by the
+/// name the scenario gave them (M9.4). `Monitor::session` mints an
+/// independent channel per call (D-2), so tracking "the current watch" as a
+/// single value (M9.1-M9.3's model) stops working once a scenario can open a
+/// second session -- this is a name-keyed table instead (D-69), and every
+/// session's receiver is drained on every pass, not just one.
+pub struct Fleet<'m> {
+    monitor: &'m Monitor,
+    sessions: HashMap<String, (Session, Receiver)>,
+    watches: HashMap<String, (String, Watch)>,
+}
+
+impl<'m> Fleet<'m> {
+    /// Creates an empty fleet against `monitor`.
+    pub fn new(monitor: &'m Monitor) -> Self {
+        Self {
+            monitor,
+            sessions: HashMap::new(),
+            watches: HashMap::new(),
+        }
+    }
+
+    /// Opens a new session named `name`. Panics if `name` is already open.
+    pub fn open_session(&mut self, name: &str) {
+        assert!(
+            !self.sessions.contains_key(name),
+            "scenario bug: session '{name}' is already open"
+        );
+        let (session, receiver) = self.monitor.session();
+        self.sessions.insert(name.to_string(), (session, receiver));
+    }
+
+    /// Cancels every watch still registered through `name`, then drops the
+    /// session itself. Panics if `name` is not open.
+    pub fn close_session(&mut self, name: &str) {
+        let orphaned: Vec<String> = self
+            .watches
+            .iter()
+            .filter(|(_, (owner, _))| owner == name)
+            .map(|(watch_name, _)| watch_name.clone())
+            .collect();
+        for watch_name in orphaned {
+            self.watches.remove(&watch_name); // Drop cancels (D-5).
+        }
+        self.sessions
+            .remove(name)
+            .unwrap_or_else(|| panic!("scenario bug: session '{name}' is not open"));
+    }
+
+    /// Subscribes a watch named `watch_name` through the already-open session
+    /// `session_name`, at `path`. Panics if `session_name` is not open or
+    /// `watch_name` already exists.
+    pub fn subscribe(&mut self, session_name: &str, watch_name: &str, path: &Path, subtree: bool) {
+        assert!(
+            !self.watches.contains_key(watch_name),
+            "scenario bug: watch '{watch_name}' already exists"
+        );
+        let (session, _) = self
+            .sessions
+            .get(session_name)
+            .unwrap_or_else(|| panic!("scenario bug: session '{session_name}' is not open"));
+        let watch = session
+            .subscribe(path, WatchOptions::new().subtree(subtree))
+            .expect("subscribe");
+        self.watches
+            .insert(watch_name.to_string(), (session_name.to_string(), watch));
+    }
+
+    /// Cancels (drops) the watch named `watch_name`. Panics if it does not
+    /// exist.
+    pub fn cancel_watch(&mut self, watch_name: &str) {
+        let removed = self
+            .watches
+            .remove(watch_name)
+            .unwrap_or_else(|| panic!("scenario bug: watch '{watch_name}' does not exist"));
+        drop(removed); // Drop cancels (D-5).
+    }
+
+    /// Drain whatever is already queued on every open session's receiver,
+    /// without blocking, so a long operation loop never lets the crate's
+    /// bounded queue back up (D-11) between the non-blocking checks a
+    /// scenario with hundreds of thousands of operations relies on.
+    pub fn drain_available(&self, outcome: &mut HarnessOutcome) {
+        for (_, receiver) in self.sessions.values() {
+            while let Some(notification) = receiver.try_recv() {
+                outcome.record(&notification);
+            }
+        }
+    }
+}
+
+/// Bounded tallies from one [`run_scenario`] call. Deliberately **not** a
+/// `Vec<Notification>`: a run describing hundreds of thousands of operations
+/// can produce a comparable number of notifications, and this harness's own
+/// generic invariants (D-12: a desync is a reported loss, never silence) only
+/// need counts, not the full history.
+#[derive(Debug, Default)]
+pub struct HarnessOutcome {
+    /// How many [`Notification::Batch`]es arrived.
+    pub batches: u64,
+    /// The total number of changes across every batch.
+    pub changes: u64,
+    /// How many [`Notification::Desync`]s arrived.
+    pub desyncs: u64,
+    /// How many [`Notification::Suspended`]s arrived.
+    pub suspensions: u64,
+    /// How many [`Notification::Resumed`]s arrived.
+    pub resumptions: u64,
+    /// How many [`Notification::Established`]s arrived.
+    pub establishments: u64,
+    /// How many [`Notification::Completion`]s arrived.
+    pub completions: u64,
+    /// How many [`Notification::RetryQuestion`]s arrived.
+    pub retry_questions: u64,
+}
+
+impl HarnessOutcome {
+    /// Folds one notification into the tallies.
+    pub fn record(&mut self, notification: &Notification) {
+        match notification {
+            Notification::Batch { changes, .. } => {
+                self.batches += 1;
+                self.changes += changes.len() as u64;
+            }
+            Notification::Desync { .. } => self.desyncs += 1,
+            Notification::Suspended { .. } => self.suspensions += 1,
+            Notification::Resumed { .. } => self.resumptions += 1,
+            Notification::Established { .. } => self.establishments += 1,
+            Notification::Completion { .. } => self.completions += 1,
+            Notification::RetryQuestion { .. } => self.retry_questions += 1,
+        }
+    }
+
+    /// A single number that changes whenever any tally does -- used only to
+    /// detect "did anything arrive during this poll", not as a meaningful
+    /// count on its own.
+    pub fn total(&self) -> u64 {
+        self.batches
+            + self.changes
+            + self.desyncs
+            + self.suspensions
+            + self.resumptions
+            + self.establishments
+            + self.completions
+            + self.retry_questions
+    }
+}
+
+/// Applies one [`Operation`] (recursively expanding [`Operation::Repeat`])
+/// against `root`/`fleet`, drawing any `WaitRandom` duration from `rng`.
+/// Individual filesystem calls are best-effort: `Remove*`/`Rename` are
+/// allowed to fail (a scenario may target a path that a prior step already
+/// removed, and the M9+ "spoiler" work will make failure routine), while
+/// `Create*` failures abort the run -- a scenario that cannot even establish
+/// its own inputs is a broken scenario, not interesting fault behavior.
+/// Session/watch lifecycle operations (M9.4) instead assert on misuse (an
+/// unknown or already-open/closed name): that is a scenario-authoring bug,
+/// never a fault the harness tolerates.
+pub fn apply_operation(root: &Path, fleet: &mut Fleet<'_>, operation: &Operation, rng: &mut Rng) {
+    match operation {
+        Operation::CreateFile { path } => {
+            let target = root.join(path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).expect("create parent directory");
+            }
+            std::fs::write(&target, b"x").expect("create file");
+        }
+        Operation::CreateDir { path } => {
+            std::fs::create_dir_all(root.join(path)).expect("create directory");
+        }
+        Operation::RemoveFile { path } => {
+            let _ = std::fs::remove_file(root.join(path));
+        }
+        Operation::RemoveDir { path } => {
+            let _ = std::fs::remove_dir_all(root.join(path));
+        }
+        Operation::Rename { from, to } => {
+            let _ = std::fs::rename(root.join(from), root.join(to));
+        }
+        Operation::Wait { duration } => std::thread::sleep(*duration),
+        Operation::WaitRandom { low, high } => {
+            std::thread::sleep(rng.duration_range(*low, *high));
+        }
+        Operation::Repeat { count, pattern } => {
+            for _ in 0..*count {
+                for step in pattern {
+                    apply_operation(root, fleet, step, rng);
+                }
+            }
+        }
+        Operation::OpenSession { name } => fleet.open_session(name),
+        Operation::CloseSession { name } => fleet.close_session(name),
+        Operation::Subscribe {
+            session,
+            watch,
+            path,
+            subtree,
+        } => fleet.subscribe(session, watch, &root.join(path), *subtree),
+        Operation::CancelWatch { watch } => fleet.cancel_watch(watch),
+    }
+}
+
+/// Executes `scenario` against a real temp directory and a live
+/// [`Monitor`], checking only the invariants this harness itself knows
+/// about: the run completes within `params.timeout` (a wedge, not a slow
+/// pass, is the only failure this generic layer can detect), applying
+/// operations never panics, and every notification -- across every session
+/// the scenario opens (M9.4) -- is tallied so a desync is always a
+/// *counted*, reported loss rather than silence (D-12). A scenario carries
+/// no assertions of its own; the caller inspects the returned
+/// [`HarnessOutcome`] for anything scenario-specific. The temp directory is
+/// removed before this returns; use [`run_scenario_keep_dir`] when a
+/// scenario-specific check also needs the real end-state on disk.
+pub fn run_scenario(scenario: &Scenario, seed: u64, params: &HarnessParams) -> HarnessOutcome {
+    let (outcome, dir) = run_scenario_keep_dir(scenario, seed, params);
+    dir.cleanup();
+    outcome
+}
+
+/// Same as [`run_scenario`], but returns the [`TempDir`] instead of cleaning
+/// it up, for a scenario-specific check that needs to inspect the real
+/// filesystem end state -- e.g. confirming two racing renames both actually
+/// landed, independent of what the notification stream reported.
+pub fn run_scenario_keep_dir(
+    scenario: &Scenario,
+    seed: u64,
+    params: &HarnessParams,
+) -> (HarnessOutcome, TempDir) {
+    let dir = TempDir::new(&scenario.label);
+    let monitor = Monitor::new().expect("create the monitor");
+    let mut fleet = Fleet::new(&monitor);
+    fleet.open_session(INITIAL_SESSION);
+    fleet.subscribe(INITIAL_SESSION, INITIAL_WATCH, dir.path(), true);
+
+    let deadline = Instant::now() + params.timeout;
+    let mut rng = Rng::new(seed);
+    let mut outcome = HarnessOutcome::default();
+
+    for operation in &scenario.operations {
+        apply_operation(dir.path(), &mut fleet, operation, &mut rng);
+        fleet.drain_available(&mut outcome);
+        assert!(
+            Instant::now() < deadline,
+            "scenario '{}' wedged applying its operations",
+            scenario.label
+        );
+    }
+
+    // Keep draining every open session until none of them yield anything for
+    // a full `quiet_period`, so anything still in flight when the last
+    // operation returned is still counted -- bounded by the same overall
+    // deadline, so a genuine wedge here still fails rather than hanging the
+    // run.
+    let poll_interval = Duration::from_millis(10).min(params.quiet_period);
+    let mut last_activity = Instant::now();
+    while last_activity.elapsed() < params.quiet_period {
+        let before = outcome.total();
+        fleet.drain_available(&mut outcome);
+        if outcome.total() != before {
+            last_activity = Instant::now();
+        } else {
+            std::thread::sleep(poll_interval);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "scenario '{}' wedged draining its notifications",
+            scenario.label
+        );
+    }
+
+    drop(fleet);
+    drop(monitor);
+    (outcome, dir)
+}

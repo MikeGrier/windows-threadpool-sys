@@ -101,3 +101,12 @@ It does not verify a reported change by re-reading content, does not cache
 per-volume capability across process restarts, and does not surface the
 extended `ReadDirectoryChangesExW` record format. These are recorded,
 deliberate v1 scope decisions (see `DESIGN-NOTES.md`), not oversights.
+
+## Stress-testing tool
+
+`src/bin/run_scenario.rs` replays a persisted JSON scenario file through the
+same data-driven stress model the test suite uses; see
+[`src/bin/README.md`](src/bin/README.md) for usage and examples. It is
+gated behind the `scenario-tool` feature (`serde`/`serde_json` are optional
+dependencies), so it never affects an ordinary build of this crate.
+
