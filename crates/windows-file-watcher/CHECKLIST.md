@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-67** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-68** -- later
 decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-50...D-52 from M4,
-D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66/D-67 from M9.1/M9.2, and D-25/D-27...D-31
+D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66...D-68 from M9.1...M9.3, and D-25/D-27...D-31
 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
@@ -14,8 +14,8 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M9.3** -- build the basic scenario library. M1 through M8 are archived; M9.1
-> and M9.2 are done, and M9+ / M-inf hold only parked, ungated follow-on work.
+> **NEXT ACTIONABLE ITEM: M9.4** -- wire the M9.3 scenarios into an opt-in integration test. M1 through
+> M8 are archived; M9.1 through M9.3 are done, and M9+ / M-inf hold only parked, ungated follow-on work.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -67,13 +67,16 @@ overwhelm are explicitly deferred to M9+ below once M9 is solid.
   bounded queue between checks; `Operation::Repeat` keeps a large scenario's data small regardless of how
   many times it actually runs.
 
-- [ ] **M9.3** -- Basic scenario library, expressed as data through M9.1/M9.2: (a) a few files with a
+- [x] **M9.3** -- Basic scenario library, expressed as data through M9.1/M9.2: (a) a few files with a
   burst of changes, scaled up with `Operation::Repeat` to the hundreds-of-thousands-of-operations range a
   real stress run is expected to exercise; (b) delete-wait-reintroduce with irregular (PRNG-drawn) wait
   durations; (c) plain renames; (d) a directory created with the name a file used to occupy, and vice versa
   (cross-type name reuse); (e) a fast two-entity swap race: renaming file `x` -> `y` while concurrently
   (within the same operation batch, minimal or zero inter-op wait) renaming directory `z` -> `x`, to probe
-  whether the two renames are ever misattributed to each other.
+  whether the two renames are ever misattributed to each other. **Found and fixed during this item (D-68):**
+  applying real syscalls at hundreds-of-thousands scale is itself slow enough (~1,800 ops/sec measured) to
+  trip the harness's fixed 120s timeout on throughput alone; `HarnessParams::for_operation_count` scales
+  the budget from the scenario's own operation count so only a genuine stall still fails the assertion.
 
 - [ ] **M9.4** -- Wire the M9.3 scenarios into an opt-in integration test (gated the same way as
   [tests/stress.rs](tests/stress.rs), consistent naming e.g. `WINDOWS_FILE_WATCHER_STRESS`) that iterates

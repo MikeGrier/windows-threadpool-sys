@@ -199,6 +199,22 @@ impl Default for HarnessParams {
     }
 }
 
+impl HarnessParams {
+    /// A timeout scaled for `operation_count` concrete filesystem actions,
+    /// for a scenario large enough that the default 120s budget is a budget
+    /// for *applying the operations themselves* (each a real syscall), not
+    /// evidence of a watcher wedge. 500 ops/sec is a deliberately
+    /// conservative floor -- well under the ~1,800 ops/sec `std::fs::write`
+    /// churn measured on development hardware -- plus a fixed 60s allowance
+    /// for the watch to settle afterward.
+    fn for_operation_count(operation_count: u64) -> Self {
+        Self {
+            timeout: Duration::from_secs(operation_count / 500 + 60).max(Self::default().timeout),
+            ..Self::default()
+        }
+    }
+}
+
 /// Bounded tallies from one [`run_scenario`] call. Deliberately **not** a
 /// `Vec<Notification>`: a run describing hundreds of thousands of operations
 /// can produce a comparable number of notifications, and this harness's own
@@ -292,8 +308,24 @@ fn apply_operation(root: &Path, operation: &Operation, rng: &mut Rng) {
 /// operations never panics, and every notification is tallied so a desync is
 /// always a *counted*, reported loss rather than silence (D-12). A scenario
 /// carries no assertions of its own; the caller inspects the returned
-/// [`HarnessOutcome`] for anything scenario-specific.
+/// [`HarnessOutcome`] for anything scenario-specific. The temp directory is
+/// removed before this returns; use [`run_scenario_keep_dir`] when a
+/// scenario-specific check also needs the real end-state on disk.
 fn run_scenario(scenario: &Scenario, seed: u64, params: &HarnessParams) -> HarnessOutcome {
+    let (outcome, dir) = run_scenario_keep_dir(scenario, seed, params);
+    dir.cleanup();
+    outcome
+}
+
+/// Same as [`run_scenario`], but returns the [`TempDir`] instead of cleaning
+/// it up, for a scenario-specific check that needs to inspect the real
+/// filesystem end state -- e.g. confirming two racing renames both actually
+/// landed, independent of what the notification stream reported.
+fn run_scenario_keep_dir(
+    scenario: &Scenario,
+    seed: u64,
+    params: &HarnessParams,
+) -> (HarnessOutcome, TempDir) {
     let dir = TempDir::new(scenario.label);
     let monitor = Monitor::new().expect("create the monitor");
     let (session, receiver) = monitor.session();
@@ -330,8 +362,7 @@ fn run_scenario(scenario: &Scenario, seed: u64, params: &HarnessParams) -> Harne
 
     drop(watch);
     drop(monitor);
-    dir.cleanup();
-    outcome
+    (outcome, dir)
 }
 
 #[test]
@@ -427,4 +458,199 @@ fn a_small_scenario_runs_through_the_harness_and_is_fully_accounted_for() {
 /// rather than running on every plain `cargo test`.
 fn stress_enabled() -> bool {
     std::env::var_os("WINDOWS_FILE_WATCHER_STRESS").is_some()
+}
+
+/// Reads a `u64` scenario-scale parameter from an environment variable,
+/// falling back to `default` -- the mechanism every M9.3 scenario below uses
+/// to stay parameterizable (entity counts, round counts) without a code
+/// change.
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+// ---------------------------------------------------------------------------
+// M9.3: the basic scenario library. Each function below returns a `Scenario`
+// -- a value -- built from the M9.1 model; none of them contains
+// scenario-specific test logic. The `#[test]` that follows each one only
+// runs it through the M9.2 harness and checks whatever that particular
+// scenario needs beyond the harness's own generic invariants.
+// ---------------------------------------------------------------------------
+
+/// (a) A handful of files, hit with a burst of changes -- scaled with
+/// [`Operation::Repeat`] so the same small scenario value can describe
+/// anywhere from a smoke-test handful up to the hundreds of thousands of
+/// operations a real stress run is expected to exercise, purely by raising
+/// `WINDOWS_FILE_WATCHER_SCENARIO_CHURN_FILES` / `_TOUCHES`.
+fn churn_scenario(files: u64, touches_per_file: u64) -> Scenario {
+    let mut scenario = Scenario::new("churn");
+    for index in 0..files {
+        let path = PathBuf::from(format!("churn-{index}.txt"));
+        scenario = scenario.then_repeated(
+            touches_per_file,
+            vec![Operation::CreateFile { path: path.clone() }],
+        );
+    }
+    scenario
+}
+
+/// (b) Delete, wait an irregular amount of time, and reintroduce the same
+/// file, `rounds` times -- the wait between delete and recreate (and again
+/// before the next round) is PRNG-drawn from `[low, high]`, not fixed, so a
+/// harness run at a different seed exercises different timing without any
+/// code change.
+fn delete_wait_reintroduce_scenario(rounds: u64, low: Duration, high: Duration) -> Scenario {
+    let path = PathBuf::from("marker.txt");
+    Scenario::new("delete-wait-reintroduce")
+        .then(Operation::CreateFile { path: path.clone() })
+        .then_repeated(
+            rounds,
+            vec![
+                Operation::RemoveFile { path: path.clone() },
+                Operation::WaitRandom { low, high },
+                Operation::CreateFile { path: path.clone() },
+                Operation::WaitRandom { low, high },
+            ],
+        )
+}
+
+/// (c) Plain renames: create `count` files, then rename every one of them.
+fn rename_scenario(count: u64) -> Scenario {
+    let mut scenario = Scenario::new("rename");
+    for index in 0..count {
+        scenario = scenario.then(Operation::CreateFile {
+            path: PathBuf::from(format!("before-{index}.txt")),
+        });
+    }
+    for index in 0..count {
+        scenario = scenario.then(Operation::Rename {
+            from: PathBuf::from(format!("before-{index}.txt")),
+            to: PathBuf::from(format!("after-{index}.txt")),
+        });
+    }
+    scenario
+}
+
+/// (d) Cross-type name reuse: a file named `thing` is removed and a
+/// *directory* takes the same name, then that directory is removed and a
+/// *file* takes the name back -- probing whether the watcher confuses a
+/// path's identity with the path string alone.
+fn cross_type_name_reuse_scenario() -> Scenario {
+    let path = PathBuf::from("thing");
+    Scenario::new("cross-type-name-reuse")
+        .then(Operation::CreateFile { path: path.clone() })
+        .then(Operation::RemoveFile { path: path.clone() })
+        .then(Operation::CreateDir { path: path.clone() })
+        .then(Operation::RemoveDir { path: path.clone() })
+        .then(Operation::CreateFile { path })
+}
+
+/// (e) A fast two-entity swap: file `x` is renamed to `y` immediately
+/// followed (no `Wait` between them) by directory `z` being renamed to `x`,
+/// so the watcher's decode path sees `x` vacated and reoccupied back to
+/// back. Real *concurrent* (multi-thread) racing is M9+.1; this scenario
+/// probes the single-threaded back-to-back case that M9 covers today.
+fn fast_two_entity_swap_scenario() -> Scenario {
+    Scenario::new("fast-two-entity-swap")
+        .then(Operation::CreateFile {
+            path: PathBuf::from("x"),
+        })
+        .then(Operation::CreateDir {
+            path: PathBuf::from("z"),
+        })
+        .then(Operation::Rename {
+            from: PathBuf::from("x"),
+            to: PathBuf::from("y"),
+        })
+        .then(Operation::Rename {
+            from: PathBuf::from("z"),
+            to: PathBuf::from("x"),
+        })
+}
+
+#[test]
+fn a_burst_of_churn_across_a_few_files_is_observed() {
+    if !stress_enabled() {
+        return;
+    }
+    let files = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_CHURN_FILES", 5);
+    let touches = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_CHURN_TOUCHES", 50_000);
+    let scenario = churn_scenario(files, touches);
+    let params = HarnessParams::for_operation_count(scenario.operation_count());
+    let outcome = run_scenario(&scenario, seed(), &params);
+    assert!(
+        outcome.batches > 0,
+        "expected at least one batch from {} operations",
+        scenario.operation_count()
+    );
+}
+
+#[test]
+fn delete_wait_reintroduce_survives_irregular_timing() {
+    if !stress_enabled() {
+        return;
+    }
+    let rounds = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_REINTRODUCE_ROUNDS", 25);
+    let scenario = delete_wait_reintroduce_scenario(
+        rounds,
+        Duration::from_millis(1),
+        Duration::from_millis(40),
+    );
+    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+    assert!(
+        outcome.batches > 0,
+        "expected at least one batch from {rounds} delete/reintroduce rounds"
+    );
+}
+
+#[test]
+fn plain_renames_are_observed() {
+    if !stress_enabled() {
+        return;
+    }
+    let count = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_RENAME_COUNT", 500);
+    let scenario = rename_scenario(count);
+    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+    assert!(
+        outcome.batches > 0,
+        "expected at least one batch from {count} renames"
+    );
+}
+
+#[test]
+fn a_directory_can_reuse_a_removed_files_name_and_back() {
+    if !stress_enabled() {
+        return;
+    }
+    let scenario = cross_type_name_reuse_scenario();
+    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+    assert!(
+        outcome.batches > 0,
+        "expected at least one batch from the cross-type name-reuse sequence"
+    );
+}
+
+#[test]
+fn a_fast_two_entity_swap_leaves_the_filesystem_in_the_expected_end_state() {
+    if !stress_enabled() {
+        return;
+    }
+    let scenario = fast_two_entity_swap_scenario();
+    let (outcome, dir) = run_scenario_keep_dir(&scenario, seed(), &HarnessParams::default());
+
+    // Whatever the watcher reported, the OS itself must have applied both
+    // renames without the second clobbering the first: the real end state is
+    // what actually answers "did the swap confuse anything" independent of
+    // the notification stream.
+    assert!(dir.path().join("y").is_file(), "x -> y did not land");
+    assert!(dir.path().join("x").is_dir(), "z -> x did not land");
+    assert!(!dir.path().join("z").exists(), "z should no longer exist");
+    assert!(
+        outcome.batches > 0,
+        "expected at least one batch from the swap"
+    );
+
+    dir.cleanup();
 }
