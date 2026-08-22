@@ -560,18 +560,56 @@ impl<'port> AssociatedEndpoint<'port> {
 ///
 /// `issue` returns this to tell the backend whether a completion packet will be
 /// delivered, so the port's outstanding-operation accounting stays correct.
+///
+/// This asks **"will a completion packet arrive?"**, *not* "did the native call
+/// finish synchronously?". Those come apart precisely because Windows queues a
+/// packet for a synchronously-successful overlapped request too -- see
+/// [`Issued::Pending`], which is where that distinction is spelled out.
 #[derive(Debug, Clone, Copy)]
 pub enum Issued {
     /// A completion packet will be delivered to the port; the operation's
     /// storage stays with the kernel until [`Completion::claim`] recovers it.
-    /// This covers both native success that queues a packet and
-    /// `ERROR_IO_PENDING`.
+    ///
+    /// This covers **both** of the native call's success shapes, and it is the
+    /// right answer for both for the same reason -- a packet is coming either
+    /// way:
+    ///
+    /// - `ERROR_IO_PENDING`: the request has not finished; its packet is queued
+    ///   when it does.
+    /// - **Native success returned immediately** (`TRUE`, or `0` from Winsock):
+    ///   the request has *already* finished, and its packet is *already*
+    ///   queued.
+    ///
+    /// The second is the counter-intuitive one, so it is worth stating why it
+    /// holds. For a handle opened for asynchronous I/O and associated with a
+    /// completion port, the I/O Manager queues a completion packet for every
+    /// request it completes, including one that succeeds immediately without
+    /// returning `ERROR_IO_PENDING`. The single documented exception is
+    /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`, and that flag's own definition
+    /// is what establishes the general rule: it says the I/O Manager "does not
+    /// queue a completion entry to the port, *when it would ordinarily do so*"
+    /// for a request that "returns success immediately without returning
+    /// ERROR_PENDING". Ordinarily -- that is, without the flag -- it does.
+    ///
+    /// So an immediate `TRUE` tells a caller that the *I/O* is done. It says
+    /// nothing about whether the *packet* is still coming, which is the only
+    /// thing this enum is about.
     Pending,
     /// The operation finished synchronously and no completion packet will
     /// arrive -- the outcome a handle in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`
     /// mode reports on synchronous success. `bytes_transferred` is the count the
     /// native call reported; the operation's storage is reclaimed inline and
     /// returned through [`Submitted::Completed`].
+    ///
+    /// Reporting this when a packet *will* in fact arrive is a memory-safety
+    /// bug, not a bookkeeping one: `submit_with` treats it as license to drop
+    /// the operation from the port's outstanding set and reclaim its boxed
+    /// storage inline. The packet that was nevertheless queued then arrives
+    /// carrying a dangling `OVERLAPPED`, and claiming it frees that box a
+    /// second time -- while [`CompletionPort::run_down`] has already been told
+    /// there is nothing left to wait for. This is why every adapter that does
+    /// not enable skip-on-success mode reports [`Issued::Pending`] on immediate
+    /// native success.
     Completed {
         /// The number of bytes the synchronous call transferred.
         bytes_transferred: u32,

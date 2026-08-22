@@ -250,7 +250,21 @@ fn send_payload(mut data: Vec<u8>) -> io::Result<SocketPayload> {
 }
 
 /// Map a Winsock call's return value into the submission contract, expecting a
-/// completion packet on success because the adapter never enables a skip mode.
+/// completion packet on success because this adapter is only used on sockets
+/// that are not in a skip-on-success mode.
+///
+/// An immediate `0` (Winsock success) is [`Issued::Pending`], not `Completed`:
+/// [`Issued`] records whether a completion packet will arrive, not whether the
+/// call finished synchronously, and an IOCP-bound overlapped socket gets a
+/// packet for a synchronously-successful request too unless it is in
+/// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode. See [`Issued::Pending`] for why,
+/// and for what answering `Completed` would break.
+///
+/// The core seam supports skip-on-success ([`Issued::Completed`] exists for it);
+/// what these buffer-owning adapters cannot express is an *already-complete*
+/// result, since they hand back a claim-later token. Note that for sockets the
+/// flag is additionally only compatible with LSPs that return IFS handles, so
+/// enabling it is a per-socket capability question rather than a blanket win.
 fn classify_socket(ret: i32) -> io::Result<Issued> {
     if ret == 0 {
         return Ok(Issued::Pending);

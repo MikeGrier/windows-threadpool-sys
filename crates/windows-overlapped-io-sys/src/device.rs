@@ -219,8 +219,45 @@ impl AssociatedEndpoint<'_> {
 }
 
 /// Map a native `BOOL` into the IOCP submission contract, expecting a completion
-/// packet on success because the adapter never enables skip-on-success mode.
+/// packet on success because this adapter is only used on endpoints that are not
+/// in skip-on-success mode.
+///
+/// # Why an immediate `TRUE` is `Pending` and not `Completed`
+///
+/// [`Issued`] does not record whether `DeviceIoControl` finished synchronously.
+/// It records whether a **completion packet will arrive on the port**, and for
+/// an overlapped handle bound to an IOCP those are different facts: the I/O
+/// Manager queues a packet for every request it completes, *including* one that
+/// succeeds immediately without returning `ERROR_IO_PENDING`. The one documented
+/// exception is `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`. See [`Issued::Pending`]
+/// for the full statement of that rule.
+///
+/// So `ok != 0` means the *I/O* is already done -- and its packet is already
+/// queued, waiting to be claimed. That is exactly `Pending`: the kernel still
+/// holds the operation's storage, and [`Completion::claim`] is still what
+/// recovers the output buffer and byte count. Answering `Completed` here would
+/// tell the port to reclaim that storage inline while a packet carrying the
+/// same `OVERLAPPED` was still in flight -- a use-after-free on claim, and a
+/// rundown that returns while an operation is still outstanding.
+///
+/// # Skip-on-success is supported by the core, just not by this adapter
+///
+/// This is a limitation of the *buffer-owning adapter*, not of the crate. The
+/// submission seam handles skip-on-success fully -- that is what
+/// [`Issued::Completed`] and [`Submitted::Completed`] are for, and both backends
+/// implement the inline-reclaim path for it. What [`AssociatedEndpoint::ioctl`]
+/// cannot express is the *result*: it hands back a [`DeviceIoControlIo`] token
+/// whose entire contract is "claim me from a completion later", and there is no
+/// room in that shape for "already done, here is your output buffer". So
+/// [`finish_device`] reports a synchronous completion as an error rather than
+/// silently losing the result. Widening the adapters to return an
+/// already-complete result is a deliberate, still-unbuilt piece of work, not a
+/// judgement that the flag is unwanted.
 fn classify_issued(ok: i32) -> io::Result<Issued> {
+    // Both success shapes are `Pending` for the same reason: a packet is coming
+    // either way. `TRUE` means it is queued already; `ERROR_IO_PENDING` means it
+    // is queued once the request finishes. The port cannot distinguish them from
+    // the packet alone, and has no need to.
     if ok != 0 {
         return Ok(Issued::Pending);
     }
