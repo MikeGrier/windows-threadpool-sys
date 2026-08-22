@@ -179,9 +179,16 @@ impl<T: Send + 'static> Servicer<T> {
             queue.items.clear();
         }
 
-        // With the queue closed and emptied, a drain that has already been queued
-        // has nothing left to do, so cancelling the ones that have not started
-        // costs nothing and returns sooner than letting each run to discover it.
+        // This is what actually delivers the "wait for the drain" guarantee
+        // documented above, not merely an optimisation: `cancel_pending` maps to
+        // `WaitForThreadpoolWorkCallbacks(handle, TRUE)`, which *always* blocks
+        // until any currently-executing invocation of this `Servicer`'s single
+        // `ThreadpoolWork` returns, and only additionally (`TRUE`) cancels one
+        // that has not started yet rather than letting it run to discover the
+        // queue empty. So by the time this call returns, no drain of this
+        // servicer is executing or can start -- which is exactly why
+        // `Monitor::shut_down` can safely walk the watcher table immediately
+        // afterward (D-23/D-34): nothing can still be adopting one.
         self.work.cancel_pending();
     }
 

@@ -30,11 +30,6 @@
 //! monitor and its watchers running -- would make teardown depend on the client
 //! having dropped everything in the right order.
 
-// A session's request half has nothing to carry until M3.5 defines the request
-// variants (D-37), so parts of this surface have no production caller yet.
-// Remove this when M3.5 lands.
-#![allow(dead_code)]
-
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
