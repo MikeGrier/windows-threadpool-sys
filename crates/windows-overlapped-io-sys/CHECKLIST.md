@@ -57,7 +57,7 @@ are in [DESIGN-NOTES.md](DESIGN-NOTES.md).
   **Target:** the check is mechanical and additive -- adding a family to the matrix is a one-line change --
   so the guarantee survives the next family without anyone having to remember it.
 
-- [ ] **M13.4** -- Record in [DESIGN-NOTES.md](DESIGN-NOTES.md): that the notification-mode mechanism is core
+- [x] **M13.4** -- Record in [DESIGN-NOTES.md](DESIGN-NOTES.md): that the notification-mode mechanism is core
   rather than per-family, and why (the endpoint owns the capability, the submission seam depends on it, and
   `assume_overlapped`'s contract requires it); and supersede M12.2's note explaining the `socket` feature's
   widening, which M13.1 makes obsolete.

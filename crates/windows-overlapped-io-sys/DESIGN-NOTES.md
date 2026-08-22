@@ -111,8 +111,10 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 - `SetFileCompletionNotificationModes` (`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`,
 	`FILE_SKIP_SET_EVENT_ON_HANDLE`) changes whether a completion packet arrives on synchronous success. It is
 	modeled as an opt-in endpoint provenance attribute, because it directly alters the "a packet will or will not
-	arrive" invariant that reclamation depends on. It lives behind a feature gate because it pulls in
-	`Win32_Storage_FileSystem`.
+	arrive" invariant that reclamation depends on. It is core rather than behind an operation-family feature gate
+	(M13.1): the endpoint owns this capability and does not know which family -- `fs`, `socket`, or `device` --
+	will end up using it, so no family gate can be the right one. `Win32_Storage_FileSystem` moved into the
+	always-on `windows-sys` dependency features accordingly.
 
 ## Operation storage and identity
 
@@ -162,6 +164,16 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	skip-mode endpoint hang rundown before M10.5. The mode is accumulated rather than replaced, because Win32
 	cannot clear one once set; `assume_overlapped` therefore requires a caller who set a mode on the raw handle
 	to re-declare it, so the endpoint's record agrees with the handle's reality.
+- **The setter is core, not gated on an operation family (M13.1).** It shipped gated on `fs` alongside M10,
+	which left every other part of the mechanism above ungated and only the setter itself family-restricted --
+	so a `device`-only consumer had a mode permanently `false` and no way to change it, even though
+	`device::classify_issued` already branched on it. Worse, `assume_overlapped`'s own safety contract requires
+	a caller to be able to re-declare a mode regardless of family; a `device`-only build could not discharge an
+	obligation the core type itself imposes. The fix removed the gate rather than widening it to
+	`any(fs, device)`, because the endpoint does not know its family and widening would only defer the same
+	defect to the next family. `Win32_Storage_FileSystem` is accordingly in the crate's always-on `windows-sys`
+	dependency features (see `windows-sys` feature layout below), and `fs`/`socket` no longer list it -- it is
+	no longer theirs to add.
 - **The mode is set before association, deliberately.** The flag is inert until the handle reaches a port, so
 	establishing it first means there is never a window in which an operation could be issued against a handle
 	whose notification behaviour is still undecided.
@@ -422,24 +434,34 @@ Behavioral matrix every backend must be exercised against:
 - The published default feature set is empty (`default = []`): the safe endpoint creator
 	([`UnassociatedEndpoint::open`](src/endpoint.rs)) opens overlapped handles through `std::fs::OpenOptions`
 	(`custom_flags(FILE_FLAG_OVERLAPPED | …)`), so the core completion machinery needs no operation-family
-	`windows-sys` bindings at all.
-- Operation-family bindings are gated behind three additive Cargo features so the core stays minimal, one per the
-	families the checklist enumerates:
-	- `fs` → `Win32_Storage_FileSystem` — file read / write, scatter / gather, and
-		`SetFileCompletionNotificationModes` (`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`).
-	- `socket` → `Win32_Networking_WinSock` **and `Win32_Storage_FileSystem`** — overlapped socket operations,
-		plus `SetFileCompletionNotificationModes` for `AssociatedSocket::set_notification_modes` (M12.2). The
-		second of those is not a stray dependency: the notification-mode call lives in the file-system module
-		even though its `FileHandle` parameter accepts a socket, because a socket handle *is* a kernel handle.
-		This is the rule below applied, not an exception to it -- a family turns on what that family needs, and
-		the socket family genuinely needs this. It does **not** make the `socket` feature imply the `fs`
-		feature; the two select different sets of this crate's own adapters.
+	`windows-sys` bindings for that -- but the core dependency features are `Win32_Foundation`,
+	`Win32_System_IO`, **and `Win32_Storage_FileSystem`** (not two), because
+	`UnassociatedEndpoint::set_notification_modes` (`SetFileCompletionNotificationModes`) is core, not
+	operation-family gated (M13.1; see "Endpoint ownership and provenance" above). A default build therefore
+	compiles one more `windows-sys` binding than the minimal completion machinery strictly reads, in exchange
+	for `assume_overlapped`'s safety contract being dischargeable in every configuration, including no family at
+	all.
+- Operation-family bindings beyond that are gated behind three additive Cargo features so the core stays
+	minimal, one per the families the checklist enumerates:
+	- `fs` → `Win32_Storage_FileSystem` for file read / write and scatter / gather. (That binding is already
+		core per the point above; the feature adds no `windows-sys` feature of its own, only gating this crate's
+		own `src/fs.rs` module.)
+	- `socket` → `Win32_Networking_WinSock` — overlapped socket operations, including
+		`AssociatedSocket::set_notification_modes` (M12.2), which needs no further `windows-sys` feature beyond
+		the core `Win32_Storage_FileSystem` either, for the same reason `fs` does not.
 	- `device` → `Win32_System_Ioctl` — device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
 		itself is already in the always-on core (`Win32_System_IO`); the feature only adds the control-code
 		constants a device family needs.
-	Enabling a family turns on only the `windows-sys` features that family needs and never changes the completion
-	machinery. Tests that issue real overlapped I/O pull the same bindings in through dev-dependencies, so the
-	families are not required to exercise a backend.
+	Enabling a family turns on only the `windows-sys` features that family needs beyond the core and never
+	changes the completion machinery. Tests that issue real overlapped I/O pull the same bindings in through
+	dev-dependencies, so the families are not required to exercise a backend.
+- **CI builds, lints, and tests each family in isolation, plus the bare core with no family (M13.3).**
+	`--all-features` and default were the only two configurations CI ever exercised, and `--all-features` hides
+	a missing family-specific `cfg` gate by construction -- it is exactly what let M13.1's defect (the
+	notification-mode setter unreachable without `fs`) go unbuilt until reported by hand. The `feature-matrix`
+	job in `ci.yml` runs `cargo check` / `clippy` / `test` for `""`, `fs`, `socket`, and `device` each alone;
+	adding a family to the matrix is a one-line change, so the guarantee is not something the next family has to
+	remember to ask for.
 - Minimum supported Windows version is the shared workspace baseline: the current public releases validated by
 	GitHub CI, namely Windows Server 2025 (`windows-latest`) and Windows 11. `CancelIoEx` and
 	`GetQueuedCompletionStatusEx` are available there without down-level gating; per-handle notification-mode
