@@ -24,6 +24,16 @@ adapters are fully safe; the `device` adapter owns its buffers but its `ioctl` i
 | `socket` | socket send/receive, on the blocking and IOCP backends | yes |
 | `device` | `DeviceIoControl`, on the blocking and IOCP backends | no — buffer-owning `unsafe` raw-code seam |
 
+Adapters never copy or allocate a caller's buffer. On the IOCP backend they take
+an owned buffer -- `Vec<u8>`, `Box<[u8]>`, `Arc<[u8]>`, `&'static [u8]`,
+`PageBuffers`, or a caller's own pooled or alignment-constrained type
+implementing `IoBuf`/`IoBufMut` -- and hand that same value back on completion.
+Ownership is what a slice cannot express here: the kernel touches the memory
+after the submitting call returns, so the buffer is transferred for the
+operation's life and returned when it ends. The blocking backend takes plain
+slices instead, because it does not return until the operation is over, so an
+ordinary borrow covers it.
+
 On the IOCP backend an adapter submission returns `Started`, not a bare token:
 `Started::Pending(token)` when a completion will arrive and the result is claimed
 from it, or `Started::Completed { payload, bytes_transferred }` when the

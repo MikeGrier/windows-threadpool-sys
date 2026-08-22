@@ -102,6 +102,7 @@ fn bytes_len_is_the_length_not_the_capacity() {
     assert!(buffer.capacity() >= 4096);
 }
 
+#[cfg(feature = "fs")]
 #[test]
 fn page_buffers_are_readable_and_writable() {
     use crate::PageBuffers;
@@ -117,6 +118,7 @@ fn page_buffers_are_readable_and_writable() {
     );
 }
 
+#[cfg(feature = "fs")]
 #[test]
 fn page_buffers_addresses_survive_moving_the_value() {
     use crate::PageBuffers;

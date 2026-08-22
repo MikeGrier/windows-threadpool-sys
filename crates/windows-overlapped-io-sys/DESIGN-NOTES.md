@@ -188,6 +188,43 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	the handle event that flag suppresses. Recorded on the flag's own documentation rather than prevented,
 	because the two are independently useful and the endpoint does not know its future backend.
 
+## Caller-supplied owned buffers (M11)
+
+- **Completion-based I/O forces owned buffers, not slices.** The kernel touches the caller's memory
+	*after* the submitting call returns, so a `&[u8]` cannot describe an async operation: its borrow would
+	have to span the whole operation, and nothing in the API can make it. The submission tokens have no
+	`Drop` that cancels, and even one would be defeated by `mem::forget`, so a caller could always end the
+	borrow with the kernel still reading. A cancel-on-drop that *blocked* would be sound and would also
+	defeat the point of submitting asynchronously. The buffer is therefore handed over -- a protracted
+	borrow made out of ownership rather than a lifetime -- and returned on completion through `claim` or
+	`Started::Completed`.
+- **The blocking adapters may still take slices, and do.** `BlockingEndpoint::read`/`write`/
+	`read_scatter`/`write_gather`, `BlockingSocket::recv`/`send`, and the blocking `ioctl` all take plain
+	borrows and allocate nothing, because they do not return until the operation is over: an ordinary
+	borrow provably covers it. This is strictly cheaper than owning, so the two backends differ on purpose
+	rather than for want of a shared shape.
+- **`IoBuf`/`IoBufMut` are `unsafe` because the contract is a stable address.** A type whose accessor
+	returns a fresh address on each call, or that reallocates while an operation is in flight, is what makes
+	the kernel write into freed memory long after submission returned. That is unprovable by the compiler,
+	so implementing the traits is an assertion. `Send + 'static` come along because the leaked operation
+	storage is reclaimed on another thread through a thunk carrying no lifetime.
+- **The traits are split so a shared buffer can be a source but never a destination.** An `Arc<[u8]>` is a
+	fine thing to send *from* and can never be read *into*, since handing the kernel a writable pointer to
+	bytes other clones are reading would alias; `&'static [u8]` is read-only for the same reason. One
+	combined trait would have forced either excluding shared buffers from writes or admitting them as read
+	targets.
+- **Read buffers are fully initialized rather than init-tracked.** No `MaybeUninit`, no `set_init`-style
+	obligation. A caller-supplied pooled buffer is initialized once and reused for the life of the pool, so
+	the cost is per-pool rather than per-operation, and the API carries nothing for a caller to forget. The
+	trade is that a fresh one-shot read buffer is zeroed before use.
+- **No adapter allocates on the caller's behalf.** `read` takes the buffer to fill rather than a length,
+	and `ioctl` takes an output buffer rather than an output length, so an allocation is always visible at
+	the call site. A naive caller writing `vec![0; n]` there pays for it knowingly; a caller reusing a pool
+	pays nothing. Hiding it would put a cost on the exact path the crate exists to keep cheap.
+- **`scatter_gather_len` was removed with M11.** Both scatter paths now validate a `PageBuffers` that
+	already exists, so there is no caller-supplied page count left to overflow-check; `PageBuffers::new` is
+	where a degenerate count is rejected, at the caller's own call site.
+
 ## Cancellation and rundown
 
 - Targeted cancellation uses `CancelIoEx(handle, &overlapped)`; whole-endpoint cancellation uses
