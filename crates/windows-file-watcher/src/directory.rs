@@ -102,13 +102,13 @@ pub struct OpenError {
 }
 
 impl OpenError {
-    fn new(failure: OpenFailure, source: std::io::Error) -> Self {
+    pub(crate) fn new(failure: OpenFailure, source: std::io::Error) -> Self {
         Self { failure, source }
     }
 
     /// Build an error for a condition detected before or independently of the
     /// syscall, giving it the OS error code that describes it.
-    fn synthetic(failure: OpenFailure, code: u32) -> Self {
+    pub(crate) fn synthetic(failure: OpenFailure, code: u32) -> Self {
         Self::new(
             failure,
             std::io::Error::from_raw_os_error(
@@ -139,8 +139,11 @@ impl std::error::Error for OpenError {
 ///
 /// Anything unrecognised is [`OpenFailure::Retryable`] by design: a watcher that
 /// gives up on an error it does not know is a watcher that silently stops
-/// watching.
-fn classify(error: &std::io::Error) -> OpenFailure {
+/// watching. Also reused to classify an *arm* failure's unsupported-class edge
+/// (D-17, M6.3): `ERROR_INVALID_FUNCTION`/`ERROR_NOT_SUPPORTED` mean the same
+/// thing -- "this filesystem does not support the detailed API" -- whether they
+/// arise from opening the directory or from arming a read on it.
+pub(crate) fn classify(error: &std::io::Error) -> OpenFailure {
     let Some(code) = error.raw_os_error() else {
         return OpenFailure::Retryable;
     };
@@ -162,8 +165,10 @@ fn classify(error: &std::io::Error) -> OpenFailure {
 /// silently open a *different, shorter* path than the caller named, which is a
 /// correctness hole rather than a mere inconvenience. `Wtf16String` keeps content
 /// and terminator distinct and reports the condition itself, so this is the
-/// crate's own documented predicate rather than a hand-rolled scan.
-fn wide_path(path: &Path) -> Result<Wtf16String, OpenError> {
+/// crate's own documented predicate rather than a hand-rolled scan. Reused by
+/// the coarse handle (M6.1), which needs the identical NUL-terminated encoding
+/// for `FindFirstChangeNotificationW`.
+pub(crate) fn wide_path(path: &Path) -> Result<Wtf16String, OpenError> {
     let wide = Wtf16String::from_os_str(path.as_os_str());
     if wide.has_interior_nul() {
         return Err(OpenError::synthetic(

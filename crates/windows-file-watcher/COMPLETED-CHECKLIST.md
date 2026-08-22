@@ -193,3 +193,38 @@ did not serialise) and M3.2's bound parameter (which had no meaning until M3.3 d
   and that recreating it lets the reopen loop re-establish, reporting `Suspended` -> `Resumed` /
   `Established` / `Desync { Reestablished }`, with real subsequent changes reported again afterward.
   ([tests/watched_paths.rs](tests/watched_paths.rs))
+
+
+## Moved 2026-08-21 -- M6: coarse fallback
+
+- [x] **M6.1** -- Coarse handle: `FindFirstChangeNotificationW`/`FindNextChangeNotification`/
+  `FindCloseChangeNotification`, owned and closed with the custom-close routine (not `CloseHandle`),
+  reaching `ThreadpoolWait` through `WaitableHandle::assume_waitable_with`. ([src/coarse.rs](src/coarse.rs))
+
+- [x] **M6.2** -- Coarse watcher: `ThreadpoolWait` per activation -> `FindNextChangeNotification` (before
+  re-arming, since the handle stays signalled until that is called) -> emit `Desync { Coarse }`, under the
+  same backpressure/fault discipline as detailed reads (D-15/D-17/D-29): a directory's single
+  `WatcherInner` now dispatches its arm/teardown/backpressure logic on whichever tier (`Endpoint::Detailed`
+  or `Endpoint::Coarse`) is currently installed, rather than duplicating that machinery for a second type.
+
+- [x] **M6.3** -- Downgrade edge in `reopen` (D-17): detailed is attempted first; only a failure that
+  `directory::classify` reports as `OpenFailure::Unsupported` falls back to opening coarse over the same
+  path, and every other failure propagates as an ordinary rearm-and-retry fault (D-15). Mode is re-resolved
+  on every `reopen` call, so this also covers a re-establish attempt after a fault, and the very first
+  establishment (the constructor now calls `reopen`, not a hand-built detailed-only path, unifying all three
+  cases behind one mechanism).
+
+- [x] **M6.4** -- `Established { mode }` (D-13, opt-in) now reports whichever tier actually settled
+  (`WatcherInner::mode`), not a hardcoded `Detailed`, and fires on every successful establishment including
+  the very first (a fix to an M5-era gap: the notification's own contract was "reported once at first
+  establishment and again after every re-establishment", but the M5 code only sent it on a later success).
+  The test seam is `DirectoryWatcher::start_forcing_coarse` (`#[cfg(test)]`), which skips the detailed
+  attempt unconditionally via a `force_coarse: AtomicBool` field.
+
+- [x] **M6.5** -- Integration: force coarse via the seam, assert a real file change surfaces as
+  `Desync { Coarse }`, assert a recovered fault in forced-coarse mode reports `Established { Coarse }`
+  alongside `Resumed`/`Desync { Reestablished }`, and assert coarse teardown converges promptly.
+  **Corrected during execution:** the seam (`start_forcing_coarse`) is `pub(crate)`, so this lives in
+  [src/watcher/tests.rs](src/watcher/tests.rs) (a crate-internal unit test with real-OS behaviour) rather
+  than the external `tests/` integration crate, which can only reach `pub` items -- matching M3.8's
+  retirement of the `unstable-internals` feature-gated-public-seam pattern rather than reintroducing it.

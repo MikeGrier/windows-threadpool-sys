@@ -31,6 +31,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -39,13 +40,15 @@ use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_NOTIFY_CHANGE_ATTRIBUTES, FILE_NOTIFY_CHANGE_CREATION, FILE_NOTIFY_CHANGE_DIR_NAME,
     FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SECURITY,
-    FILE_NOTIFY_CHANGE_SIZE, ReadDirectoryChangesW,
+    FILE_NOTIFY_CHANGE_SIZE, FindNextChangeNotification, ReadDirectoryChangesW,
 };
 use windows_threadpool_sys::io::{IoCompletion, ThreadpoolIo};
 use windows_threadpool_sys::timer::ThreadpoolTimer;
+use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 use windows_threadpool_sys::work::ThreadpoolWork;
 
-use crate::directory::DirectoryHandle;
+use crate::coarse::CoarseHandle;
+use crate::directory::{DirectoryHandle, OpenFailure, classify};
 use crate::notify::{DecodedBatch, DesyncCause, decode_batch};
 use crate::queue::{Notification, Resume, WatchId};
 use crate::retry::{FaultOperation, WatchMode, clamp};
@@ -168,11 +171,22 @@ struct FaultState {
     earliest: Duration,
 }
 
+/// Which tier is servicing a directory's watch (D-17): the preferred detailed
+/// path, or the coarse floor a detailed arm downgrades to (M6.3).
+enum Endpoint {
+    /// `ReadDirectoryChangesW` on a `ThreadpoolIo`.
+    Detailed(ThreadpoolIo),
+    /// `FindFirstChangeNotification` on a `ThreadpoolWait` (M6.1/M6.2).
+    Coarse(ThreadpoolWait),
+}
+
 /// The shared state a completion callback reaches.
 struct WatcherInner {
     /// The path this directory was opened from, kept so re-establishment
     /// (M5.1) knows what to reopen -- a live handle cannot be recovered once
-    /// its directory is gone, but the path can still be retried.
+    /// its directory is gone, but the path can still be retried. Also what a
+    /// downgrade to coarse (M6.3) opens its own handle from, since a coarse
+    /// watch is a wholly separate handle from the detailed one.
     path: PathBuf,
     /// The endpoint currently in use. Replaced, not merely set once: widening a
     /// watcher's reach to recursive (M4.4) reopens the directory rather than
@@ -180,11 +194,12 @@ struct WatcherInner {
     /// measured to leave the filesystem's recursive attachment unchanged --
     /// direct children kept being reported, nested ones never were. See
     /// [`WatcherInner::reopen`]. Re-establishment (M5.1) reuses the same
-    /// mechanism after a fresh open.
-    io: Mutex<Option<ThreadpoolIo>>,
-    /// Set once, as for `io` before it started being replaced. Queues the re-arm
-    /// that ends a backpressure pause onto this crate's own pool, so it never
-    /// runs on a client's thread.
+    /// mechanism after a fresh open, and so does a tier downgrade (M6.3): both
+    /// are "tear down whatever is here, install something new".
+    endpoint: Mutex<Option<Endpoint>>,
+    /// Set once, as for `endpoint` before it started being replaced. Queues the
+    /// re-arm that ends a backpressure pause onto this crate's own pool, so it
+    /// never runs on a client's thread.
     resume_work: OnceLock<ThreadpoolWork>,
     /// Set once at construction. Fires the next re-establish attempt after a
     /// fault's resolved delay (D-27); re-armed with a fresh due time, never
@@ -193,7 +208,9 @@ struct WatcherInner {
     /// Every `FILE_NOTIFY_CHANGE_*` class this watcher asks for. Constant rather
     /// than a per-subscription union: no subscription can select a filter yet
     /// (`WatchOptions` has no such field), so the union over any set of
-    /// subscriptions is trivially this same constant.
+    /// subscriptions is trivially this same constant. Shared by both tiers: the
+    /// wire type (`FILE_NOTIFY_CHANGE`, a `u32`) is identical between
+    /// `ReadDirectoryChangesW` and `FindFirstChangeNotificationW`.
     filter: u32,
     buffer_bytes: usize,
     /// Every subscription this directory currently serves, keyed by the
@@ -219,6 +236,12 @@ struct WatcherInner {
     /// (D-22's `NotADirectory`/`InvalidPath`) -- every other failure retries
     /// indefinitely through `fault` instead (D-14).
     stopped: Mutex<Option<io::Error>>,
+    /// M6.4's test seam: when set, `reopen` skips the detailed attempt entirely
+    /// and establishes coarse from the start, regardless of what the
+    /// underlying volume actually supports. Always present rather than
+    /// `#[cfg(test)]`-gated (one bool costs nothing and never leaves the
+    /// crate), but never set outside a test.
+    force_coarse: AtomicBool,
 }
 
 impl WatcherInner {
@@ -253,11 +276,15 @@ impl WatcherInner {
         }
         if let Err(error) = self.arm_locked(&mut gate) {
             drop(gate);
-            self.record_stop(error);
+            // An arm failure is always retry-class (D-15), never terminal.
+            self.enter_fault(error, FaultOperation::Arm);
         }
     }
 
-    /// Submit a read, or record why not. The gate lock is held throughout (D-23).
+    /// Submit a read (or arm the coarse wait), or record why not. The gate
+    /// lock is held throughout (D-23). Dispatches on which tier is currently
+    /// installed (D-17); backpressure (D-29) applies uniformly to both, since
+    /// a client's queue does not care which tier filled it.
     fn arm_locked(self: &Arc<Self>, gate: &mut ArmGate) -> Result<(), io::Error> {
         // Checked here rather than at the enqueue: refusing to arm leaves the
         // changes in the kernel's own buffer, which is a grace period rather than
@@ -279,13 +306,23 @@ impl WatcherInner {
         }
         *gate = ArmGate::Open;
 
-        let io_guard = lock(&self.io);
-        let Some(io) = io_guard.as_ref() else {
-            // Unreachable in practice: `io` is set before the first arm and the
-            // callback cannot run before a submission exists.
-            return Err(io::Error::other("the watcher's I/O object is not yet set"));
-        };
+        let endpoint_guard = lock(&self.endpoint);
+        match endpoint_guard.as_ref() {
+            Some(Endpoint::Detailed(io)) => self.arm_detailed_read(io),
+            Some(Endpoint::Coarse(wait)) => {
+                wait.arm(None);
+                Ok(())
+            }
+            None => {
+                // Unreachable in practice: an endpoint is installed before the
+                // first arm and no callback can run before one exists.
+                Err(io::Error::other("the watcher's endpoint is not yet set"))
+            }
+        }
+    }
 
+    /// Submit one overlapped `ReadDirectoryChangesW` against `io`.
+    fn arm_detailed_read(&self, io: &ThreadpoolIo) -> Result<(), io::Error> {
         let mut operation = Operation::new(ReadBuffer::new(self.buffer_bytes));
         // Read the buffer's address and length *before* submitting, because
         // `submit` consumes the operation. Both stay valid: the bytes live in the
@@ -381,6 +418,28 @@ impl WatcherInner {
         let transferred = completion.bytes_transferred();
         let batch = decode_batch(operation.payload().filled(transferred));
         self.publish(batch);
+    }
+
+    /// Handle one coarse activation: re-arm, then publish (M6.2).
+    ///
+    /// The handle stays signalled until `FindNextChangeNotification` is called,
+    /// so that has to happen *before* re-arming the wait -- otherwise the pool
+    /// would see the handle still signalled and could queue the next activation
+    /// immediately, overlapping this one. A coarse activation carries no detail
+    /// at all (unlike a detailed completion, which at least has a buffer to
+    /// decode), so the whole report is `Desync { Coarse }` (D-17).
+    fn on_activation(self: &Arc<Self>, activation: &WaitActivation<'_>) {
+        // SAFETY: the endpoint owns this handle for as long as it is installed,
+        // and this runs only from within the wait's own callback while it
+        // still is.
+        unsafe {
+            FindNextChangeNotification(activation.handle().as_raw_handle());
+        }
+        if let Err(error) = self.arm() {
+            self.enter_fault(error, FaultOperation::Arm);
+            return;
+        }
+        self.publish(DecodedBatch::Desync(DesyncCause::Coarse));
     }
 
     /// Tag a decoded batch with this watcher's subscription and enqueue it.
@@ -546,6 +605,7 @@ impl WatcherInner {
     fn resolve_fault_success(&self) {
         *lock(&self.fault) = None;
         log::info!("windows-file-watcher: recovery succeeded, re-established");
+        let mode = self.mode();
         {
             let routes = lock(&self.routes);
             for route in routes.values() {
@@ -555,7 +615,7 @@ impl WatcherInner {
                         .send(Notification::Resumed { watch: route.watch });
                     let _ = route.sink.send(Notification::Established {
                         watch: route.watch,
-                        mode: WatchMode::Detailed,
+                        mode,
                     });
                 }
             }
@@ -563,59 +623,49 @@ impl WatcherInner {
         self.publish(DecodedBatch::Desync(DesyncCause::Reestablished));
     }
 
-    /// Cancel the outstanding read solely to pick up a newly widened reach.
-    ///
-    /// Reopens the directory rather than cancelling and resubmitting on the
-    /// same handle. That was tried first and measured not to work: a live
-    /// `ReadDirectoryChangesW` handle's recursive attachment does not appear to
-    /// take effect (or take effect reliably) from a later call that merely
-    /// changes `bWatchSubtree` on the same handle -- a direct child kept being
-    /// reported after the widen, but nothing nested inside it ever was. A fresh
-    /// `CreateFileW` does not have this problem.
-    ///
-    /// A no-op when there is nothing live to widen: [`ArmGate::TornDown`] has
-    /// nothing left to reopen. Called both from [`ArmGate::Open`] (widening for
-    /// a new route, see [`DirectoryWatcher::add_route`]) and from
-    /// [`ArmGate::Faulted`] (a re-establish attempt, see
-    /// [`WatcherInner::retry_reestablish`]); either way it takes over the gate
-    /// unconditionally except for `TornDown`.
+    /// Which tier is currently servicing this directory (D-13/D-17). Detailed
+    /// until an endpoint is installed, matching a not-yet-armed watcher's
+    /// eventual default.
+    fn mode(&self) -> WatchMode {
+        match lock(&self.endpoint).as_ref() {
+            Some(Endpoint::Coarse(_)) => WatchMode::Coarse,
+            _ => WatchMode::Detailed,
+        }
+    }
+
+    /// Tear down whichever endpoint is currently installed, fully -- cancelled
+    /// or disarmed, then no operation outstanding and no callback executing --
+    /// before anything touches a new one, the same ordering `stop()` relies on
+    /// (D-23). Not held under the gate lock: both `run_down` and
+    /// `stop_and_drain` can block.
+    fn teardown_endpoint(&self) {
+        match lock(&self.endpoint).take() {
+            Some(Endpoint::Detailed(old)) => {
+                let _ = old.cancel_all();
+                old.run_down();
+            }
+            Some(Endpoint::Coarse(old)) => old.stop_and_drain(),
+            None => {}
+        }
+    }
+
+    /// Build a detailed endpoint over `handle` and install it. Does not arm it
+    /// -- call [`WatcherInner::arm`] afterward, which is what actually reveals
+    /// an unsupported-class failure (D-17/M6.3): `CreateThreadpoolIo` succeeding
+    /// says nothing about whether `ReadDirectoryChangesW` itself is supported.
     ///
     /// # Errors
     ///
-    /// Returns the error from binding the reopened handle to the pool or from
-    /// arming its first read.
-    fn reopen(self: &Arc<Self>, handle: DirectoryHandle) -> io::Result<()> {
-        {
-            let mut gate = lock(&self.gate);
-            if *gate == ArmGate::TornDown {
-                return Ok(());
-            }
-            // Transient and self-resolving: cleared to `Open` below once the new
-            // endpoint is armed, or left as `TornDown` if teardown wins the race
-            // with this reopen.
-            *gate = ArmGate::Reopening;
-        }
-
-        // Tear down the old endpoint fully -- cancelled, then no operation
-        // outstanding and no callback executing -- before anything touches the
-        // new one, the same ordering `stop()` relies on (D-23). Not held across
-        // this: `run_down` can block, and the gate lock is not this crate's to
-        // hold across a wait.
-        if let Some(old) = lock(&self.io).take() {
-            let _ = old.cancel_all();
-            old.run_down();
-        }
-
-        // The callback closure has the same shape as `DirectoryWatcher::start`'s:
-        // a `Weak` (never a strong reference, for the same cycle-avoidance
-        // reason), claiming and discarding a completion once the owner is gone,
-        // otherwise dispatching to `on_completion`.
+    /// Returns the error from binding the handle to the pool.
+    fn establish_detailed(self: &Arc<Self>, handle: DirectoryHandle) -> io::Result<()> {
+        // The callback holds a `Weak`, never a strong reference, for the same
+        // cycle-avoidance reason as every other callback this watcher installs.
         let weak = Arc::downgrade(self);
         // SAFETY: `handle` was opened the same way every `DirectoryHandle` is
-        // (see its module), which is the association this endpoint requires, and
-        // ownership transfers here exclusively.
+        // (see its module), which is the association this endpoint requires,
+        // and ownership transfers here exclusively.
         let endpoint = unsafe { UnassociatedEndpoint::assume_overlapped(handle.into_handle()) };
-        let new_io = ThreadpoolIo::new(
+        let io = ThreadpoolIo::new(
             endpoint,
             move |completion: &IoCompletion| {
                 let Some(inner) = weak.upgrade() else {
@@ -628,20 +678,104 @@ impl WatcherInner {
             },
             None,
         )?;
-        *lock(&self.io) = Some(new_io);
+        *lock(&self.endpoint) = Some(Endpoint::Detailed(io));
+        Ok(())
+    }
 
+    /// Open a coarse handle over `self.path` and install it. Does not arm it --
+    /// call [`WatcherInner::arm`] afterward. The universal floor (D-17):
+    /// reached only after a detailed arm reports an unsupported-class failure,
+    /// or when `force_coarse` (M6.4's test seam) says to skip detailed
+    /// entirely.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from opening the coarse handle or binding it to the
+    /// pool.
+    fn establish_coarse(self: &Arc<Self>) -> io::Result<()> {
+        let subtree = lock(&self.routes)
+            .values()
+            .any(|route| route.scope.needs_kernel_subtree());
+        let coarse =
+            CoarseHandle::open(&self.path, subtree, self.filter).map_err(io::Error::other)?;
+        let weak = Arc::downgrade(self);
+        // SAFETY: `coarse` is a live `FindFirstChangeNotification` handle,
+        // transferred exclusively, and is never touched again except through
+        // the returned `WaitableHandle`.
+        let waitable = unsafe { coarse.into_waitable() };
+        let wait = ThreadpoolWait::new(
+            waitable,
+            move |activation: &WaitActivation<'_>| {
+                let Some(inner) = weak.upgrade() else {
+                    return;
+                };
+                inner.on_activation(activation);
+            },
+            None,
+        )?;
+        *lock(&self.endpoint) = Some(Endpoint::Coarse(wait));
+        Ok(())
+    }
+
+    /// (Re-)establish, choosing between detailed and coarse (D-17/M6.3).
+    ///
+    /// Reopens the directory rather than cancelling and resubmitting on the
+    /// same handle -- widening (M4.4) was the first thing this served, and
+    /// re-establishment (M5.1) and a tier downgrade (M6.3) reuse the same
+    /// mechanism: tear down whatever is installed, install something new.
+    /// Detailed reads on the same handle were measured not to pick up a
+    /// widened `bWatchSubtree`; a fresh `CreateFileW` does not have that
+    /// problem, and a coarse handle cannot be reconfigured at all (its
+    /// `bWatchSubtree` is fixed at open) so it needs exactly the same
+    /// treatment.
+    ///
+    /// Mode is re-resolved on every call: detailed is attempted first (unless
+    /// `force_coarse`, M6.4's test seam, says to skip it), and only an
+    /// unsupported-class failure (`ERROR_INVALID_FUNCTION`/`ERROR_NOT_SUPPORTED`,
+    /// D-17) falls back to coarse; every other failure is rearm-and-retry
+    /// (D-15) and propagates to the caller unchanged.
+    ///
+    /// A no-op when there is nothing live to (re-)establish: [`ArmGate::TornDown`]
+    /// has nothing left to reopen. Called both from [`ArmGate::Open`] (widening
+    /// or downgrading for a new route, see [`DirectoryWatcher::add_route`]) and
+    /// from [`ArmGate::Faulted`] (a re-establish attempt, see
+    /// [`WatcherInner::retry_reestablish`]); either way it takes over the gate
+    /// unconditionally except for `TornDown`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from establishing or arming whichever tier was
+    /// settled on.
+    fn reopen(self: &Arc<Self>, handle: DirectoryHandle) -> io::Result<()> {
         {
             let mut gate = lock(&self.gate);
             if *gate == ArmGate::TornDown {
-                // Torn down while this was in flight: the fresh endpoint was
-                // just installed with nothing outstanding on it, so `stop()`'s
-                // own cancel/run_down (already run once, above, against the old
-                // one) has nothing further to do here; leave it be rather than
-                // arming a read teardown never asked for.
                 return Ok(());
             }
-            *gate = ArmGate::Open;
+            // Transient and self-resolving: cleared by the eventual `arm()`
+            // call below, or left as `TornDown` if teardown wins the race.
+            *gate = ArmGate::Reopening;
         }
+
+        self.teardown_endpoint();
+
+        if self.force_coarse.load(Ordering::Relaxed) {
+            drop(handle);
+        } else {
+            self.establish_detailed(handle)?;
+            match self.arm() {
+                Ok(()) => return Ok(()),
+                Err(error) if classify(&error) == OpenFailure::Unsupported => {
+                    log::warn!(
+                        "windows-file-watcher: detailed watching unsupported, downgrading to coarse: {error}"
+                    );
+                    self.teardown_endpoint();
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        self.establish_coarse()?;
         self.arm()
     }
 
@@ -700,8 +834,8 @@ impl DirectoryWatcher {
     ///
     /// # Errors
     ///
-    /// Returns the error from binding the handle to the pool or from the first
-    /// `ReadDirectoryChangesW`.
+    /// Returns the error from establishing or arming whichever tier the
+    /// directory settles on (D-17).
     pub(crate) fn start(
         directory: DirectoryHandle,
         path: PathBuf,
@@ -723,6 +857,36 @@ impl DirectoryWatcher {
         buffer_bytes: usize,
         route: Route,
     ) -> io::Result<Self> {
+        Self::start_inner(directory, path, buffer_bytes, route, false)
+    }
+
+    /// As [`start`](Self::start), but skipping the detailed attempt entirely
+    /// and establishing coarse from the start (M6.4's test seam), regardless of
+    /// what the underlying volume actually supports.
+    ///
+    /// # Errors
+    ///
+    /// As [`start`](Self::start).
+    #[cfg(test)]
+    pub(crate) fn start_forcing_coarse(
+        directory: DirectoryHandle,
+        path: PathBuf,
+        route: Route,
+    ) -> io::Result<Self> {
+        Self::start_inner(directory, path, DEFAULT_BUFFER_BYTES, route, true)
+    }
+
+    /// Shared constructor body: build the resident state and its callback
+    /// machinery, then establish the first read or wait through
+    /// [`WatcherInner::reopen`] -- the same tier-choosing path used for every
+    /// later widen, re-establish, or downgrade.
+    fn start_inner(
+        directory: DirectoryHandle,
+        path: PathBuf,
+        buffer_bytes: usize,
+        route: Route,
+        force_coarse: bool,
+    ) -> io::Result<Self> {
         let watch = route.watch;
         let initial_sink = route.sink.clone();
         let mut routes = HashMap::new();
@@ -730,7 +894,7 @@ impl DirectoryWatcher {
 
         let inner = Arc::new(WatcherInner {
             path,
-            io: Mutex::new(None),
+            endpoint: Mutex::new(None),
             resume_work: OnceLock::new(),
             retry_timer: OnceLock::new(),
             filter: ALL_NOTIFY_FILTERS,
@@ -739,47 +903,13 @@ impl DirectoryWatcher {
             gate: Mutex::new(ArmGate::Open),
             fault: Mutex::new(None),
             stopped: Mutex::new(None),
+            force_coarse: AtomicBool::new(force_coarse),
         });
 
-        // The callback holds a `Weak`, never a strong reference. A strong one
-        // would be a cycle -- inner owns the I/O object, which owns the callback
-        // -- so the watcher could never drop. It also gives re-arm suppression
-        // for free: once the owner drops, the upgrade fails and the callback
-        // stops re-arming, which is exactly what lets rundown converge.
-        let weak = Arc::downgrade(&inner);
-
-        // SAFETY: `DirectoryHandle` only ever opens with FILE_FLAG_OVERLAPPED
-        // (see its module), which is the association this constructor requires,
-        // and ownership of the handle transfers here exclusively.
-        let endpoint = unsafe { UnassociatedEndpoint::assume_overlapped(directory.into_handle()) };
-
-        let io = ThreadpoolIo::new(
-            endpoint,
-            move |completion: &IoCompletion| {
-                let Some(inner) = weak.upgrade() else {
-                    // The watcher is being torn down. Claim the storage so it is
-                    // not leaked, then do nothing else -- in particular, do not
-                    // re-arm.
-                    // SAFETY: this object only ever carries
-                    // `Operation<ReadBuffer>`, claimed exactly once here.
-                    drop(unsafe { completion.claim::<ReadBuffer>() });
-                    return;
-                };
-                inner.on_completion(completion);
-            },
-            None,
-        )?;
-
-        inner
-            .io
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .replace(io);
-
-        // As with the completion callback, a `Weak` rather than a strong
-        // reference: the work object lives in `inner`, so a strong one would be a
-        // cycle, and a failed upgrade during teardown is exactly the suppression
-        // that lets rundown converge.
+        // As with the completion callback below, a `Weak` rather than a strong
+        // reference: the work object lives in `inner`, so a strong one would be
+        // a cycle, and a failed upgrade during teardown is exactly the
+        // suppression that lets rundown converge.
         let resuming = Arc::downgrade(&inner);
         let resume_work = ThreadpoolWork::new(
             move || {
@@ -816,7 +946,7 @@ impl DirectoryWatcher {
         // from the outset is still prodded when the client drains.
         initial_sink.register_resume(&inner);
 
-        inner.arm()?;
+        inner.reopen(directory)?;
         Ok(Self { inner })
     }
 
@@ -939,6 +1069,12 @@ impl DirectoryWatcher {
         lock(&self.inner.fault).is_some()
     }
 
+    /// Which tier is currently servicing this directory (D-13/D-17).
+    #[must_use]
+    pub(crate) fn mode(&self) -> WatchMode {
+        self.inner.mode()
+    }
+
     /// The current arm gate.
     pub fn gate(&self) -> ArmGate {
         *lock(&self.inner.gate)
@@ -965,22 +1101,19 @@ impl DirectoryWatcher {
         }
 
         // Stops any further retry attempt and, if one is in flight, blocks until
-        // it has fully returned -- so by the time this returns, `self.inner.io`
-        // is whatever a completed `reopen` last left it as, and is safe for the
-        // cancel/run_down below to act on directly (see `reopen`'s own
+        // it has fully returned -- so by the time this returns, `self.inner`'s
+        // endpoint is whatever a completed `reopen` last left it as, and is
+        // safe for teardown to act on directly (see `reopen`'s own
         // teardown-race handling).
         if let Some(timer) = self.inner.retry_timer.get() {
             timer.stop_and_drain();
         }
 
-        // With the gate closed, nothing new can be submitted, so cancelling
-        // retires everything outstanding and rundown converges. Both calls are
-        // safe to repeat: `cancel_all` reports `ERROR_NOT_FOUND` when nothing is
-        // outstanding, and `run_down` returns immediately on an empty registry.
-        if let Some(io) = lock(&self.inner.io).as_ref() {
-            let _ = io.cancel_all();
-            io.run_down();
-        }
+        // With the gate closed, nothing new can be submitted, so tearing down
+        // whichever endpoint is installed retires everything outstanding and
+        // rundown converges (D-20). Safe to repeat: `teardown_endpoint` takes
+        // the endpoint, so a second call finds nothing there.
+        self.inner.teardown_endpoint();
     }
 }
 

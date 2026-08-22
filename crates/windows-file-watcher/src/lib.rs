@@ -62,6 +62,9 @@
 mod directory;
 
 #[cfg(windows)]
+mod coarse;
+
+#[cfg(windows)]
 mod monitor;
 
 #[cfg(windows)]

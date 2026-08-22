@@ -49,14 +49,15 @@ impl FaultOperation {
     }
 }
 
-/// The mode a watch is established in. Only [`WatchMode::Detailed`] exists until
-/// M6 adds the coarse fallback (D-17); the type exists now so
-/// `Notification::Established`'s shape does not change when it does.
+/// The mode a watch is established in (D-13/D-17).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum WatchMode {
     /// `ReadDirectoryChangesW` on a `ThreadpoolIo`.
     Detailed,
+    /// `FindFirstChangeNotification` on a `ThreadpoolWait` (M6): the universal
+    /// floor, reached when the volume does not support the detailed API.
+    Coarse,
 }
 
 /// Clamp a resolved delay to the floor.

@@ -40,7 +40,7 @@ use crate::queue::{
     DEFAULT_BOUND, Notification, Outcome, Receiver, Reservation, Sender, StandingSlot, WatchId,
     channel_with_bound,
 };
-use crate::retry::{FaultOperation, WatchMode, clamp};
+use crate::retry::{FaultOperation, clamp};
 use crate::route::{Route, RouteScope};
 use crate::servicing::{Rejected, Servicer};
 use crate::session::Session;
@@ -640,10 +640,11 @@ fn park_pending(
 /// Route a successfully opened target into a coalesced watcher (D-6), starting
 /// one if this is the first subscription to reach this directory.
 ///
-/// `announce_established` is `true` only when this establishment happened
-/// after at least one earlier attempt reported `Outcome::Establishing` (M5.1):
-/// that Completion's reservation was already spent, so `Established` (D-13,
-/// opt-in) is what tells a `report_liveness` client the watch is now live.
+/// `Established` (D-13, opt-in) is sent whenever this succeeds, reporting
+/// whichever tier the directory actually settled on (D-17) -- on the very
+/// first establishment as well as a later one, matching its own documented
+/// contract ("reported once at first establishment and again after every
+/// re-establishment").
 ///
 /// `original_path` and `core_ref` are needed only for the fallback: if the
 /// watcher itself fails to arm despite a successful open (rare -- D-15's
@@ -662,7 +663,6 @@ fn route_established(
     options: WatchOptions,
     sink: Sender,
     fault_slot: Option<StandingSlot>,
-    announce_established: bool,
 ) {
     let id = handle.identity();
     let route = Route {
@@ -680,6 +680,7 @@ fn route_established(
         // recursive (M4.4) -- reopening is what that takes, and this handle is
         // exactly what a reopen needs, so nothing further is opened for it.
         watcher.add_route(route, handle);
+        let mode = watcher.mode();
         state.subscriptions.insert(
             watch,
             Subscription::Routed {
@@ -688,17 +689,15 @@ fn route_established(
             },
         );
         drop(state);
-        if announce_established && options.report_liveness {
-            let _ = sink.send(Notification::Established {
-                watch,
-                mode: WatchMode::Detailed,
-            });
+        if options.report_liveness {
+            let _ = sink.send(Notification::Established { watch, mode });
         }
         return;
     }
 
     match DirectoryWatcher::start(handle, opened_path, route) {
         Ok(watcher) => {
+            let mode = watcher.mode();
             state.directories.insert(id, watcher);
             state.subscriptions.insert(
                 watch,
@@ -708,11 +707,8 @@ fn route_established(
                 },
             );
             drop(state);
-            if announce_established && options.report_liveness {
-                let _ = sink.send(Notification::Established {
-                    watch,
-                    mode: WatchMode::Detailed,
-                });
+            if options.report_liveness {
+                let _ = sink.send(Notification::Established { watch, mode });
             }
         }
         Err(_) => {
@@ -828,7 +824,6 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
                 options,
                 sink,
                 fault_slot,
-                true,
             );
         }
     }
@@ -866,7 +861,6 @@ fn subscribe(
                 options,
                 sink,
                 fault_slot,
-                false,
             );
             Outcome::Subscribed
         }

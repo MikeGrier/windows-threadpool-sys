@@ -14,7 +14,7 @@ use super::{ArmGate, DirectoryWatcher, ReadBuffer};
 use crate::directory::DirectoryHandle;
 use crate::notify::{ChangeKind, DesyncCause};
 use crate::queue::{Notification, Receiver, Sender, WatchId, channel, channel_with_bound};
-use crate::retry::FaultOperation;
+use crate::retry::{FaultOperation, WatchMode};
 use crate::route::{Route, RouteScope};
 use crate::testing::TempDir;
 use crate::watch::RetryMode;
@@ -1245,5 +1245,129 @@ fn a_resolved_fault_reports_reestablished_and_the_opt_in_liveness_brackets() {
     });
 
     drop(watcher);
+    dir.cleanup();
+}
+
+// --- the coarse fallback (D-17, M6) ---
+
+#[test]
+fn forcing_coarse_establishes_in_coarse_mode() {
+    let dir = TempDir::new("coarse-forced");
+    let (sender, _receiver) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let route = plain_route(
+        test_watch(),
+        RouteScope::Directory { subtree: false },
+        sender,
+    );
+    let watcher = DirectoryWatcher::start_forcing_coarse(handle, dir.path().to_path_buf(), route)
+        .expect("start in forced-coarse mode");
+
+    assert_eq!(watcher.mode(), WatchMode::Coarse);
+    assert!(watcher.is_watching());
+    assert!(!watcher.is_faulted());
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn a_forced_coarse_watch_reports_a_change_as_desync_coarse() {
+    let dir = TempDir::new("coarse-desync");
+    let (sender, receiver) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let route = plain_route(
+        test_watch(),
+        RouteScope::Directory { subtree: false },
+        sender,
+    );
+    let watcher = DirectoryWatcher::start_forcing_coarse(handle, dir.path().to_path_buf(), route)
+        .expect("start in forced-coarse mode");
+    let collected = Drained::start(receiver);
+
+    std::fs::write(dir.path().join("changed.txt"), b"x").expect("create a file");
+    collected.wait_until("a coarse desync", |d| {
+        d.desyncs().contains(&DesyncCause::Coarse)
+    });
+
+    assert!(
+        watcher.is_watching(),
+        "a coarse activation must not stop the watcher: {:?}",
+        watcher.stop_reason()
+    );
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn a_recovered_fault_in_forced_coarse_mode_reports_established_coarse() {
+    let dir = TempDir::new("coarse-established");
+    let (sender, receiver) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let route = Route {
+        watch: test_watch(),
+        scope: RouteScope::Directory { subtree: false },
+        sink: sender,
+        retry: RetryMode::Defaults,
+        report_liveness: true,
+        fault_slot: None,
+    };
+    let watcher = DirectoryWatcher::start_forcing_coarse(handle, dir.path().to_path_buf(), route)
+        .expect("start in forced-coarse mode");
+    let collected = Drained::start(receiver);
+
+    watcher
+        .inner
+        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+
+    collected.wait_until("resumed, established coarse, and reestablished", |d| {
+        let seen = d.notifications();
+        seen.iter()
+            .any(|n| matches!(n, Notification::Resumed { .. }))
+            && seen.iter().any(|n| {
+                matches!(
+                    n,
+                    Notification::Established {
+                        mode: WatchMode::Coarse,
+                        ..
+                    }
+                )
+            })
+            && seen.iter().any(|n| {
+                matches!(
+                    n,
+                    Notification::Desync {
+                        cause: DesyncCause::Reestablished,
+                        ..
+                    }
+                )
+            })
+    });
+    assert_eq!(watcher.mode(), WatchMode::Coarse);
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn teardown_of_a_forced_coarse_watch_is_prompt() {
+    let dir = TempDir::new("coarse-teardown");
+    let (sender, _receiver) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let route = plain_route(
+        test_watch(),
+        RouteScope::Directory { subtree: false },
+        sender,
+    );
+    let watcher = DirectoryWatcher::start_forcing_coarse(handle, dir.path().to_path_buf(), route)
+        .expect("start in forced-coarse mode");
+
+    let started = std::time::Instant::now();
+    drop(watcher);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "coarse teardown did not converge promptly"
+    );
     dir.cleanup();
 }
