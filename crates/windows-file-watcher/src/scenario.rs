@@ -67,7 +67,17 @@ impl Rng {
     /// A uniform integer in `[low, high]` inclusive.
     pub fn range(&mut self, low: u64, high: u64) -> u64 {
         assert!(low <= high, "empty range: {low}..={high}");
-        let span = high - low + 1;
+        // `high - low + 1` overflows exactly when the requested range is the
+        // full width of `u64` (`low == 0 && high == u64::MAX`) -- the only
+        // case in which `wrapping_add` yields 0, since `high - low` itself
+        // cannot overflow given the assertion above. Every `u64` is in range
+        // then, so the raw output already is one; no modulus is needed (a
+        // literal span of `2^64` cannot be represented, and `% 0` would
+        // panic regardless of build profile).
+        let span = (high - low).wrapping_add(1);
+        if span == 0 {
+            return self.next_u64();
+        }
         low + self.next_u64() % span
     }
 
@@ -337,13 +347,31 @@ pub struct TempDir {
 
 impl TempDir {
     /// Creates a fresh, empty temp directory, its name incorporating `label`.
+    ///
+    /// `label` is sanitized before it becomes part of a path component: a
+    /// scenario's label is untrusted input (persisted JSON, M9.5), and a
+    /// label containing a path separator or a `..` component would otherwise
+    /// let `temp_dir().join(...)` normalize outside the system temp
+    /// directory -- after which [`TempDir::cleanup`] would recursively
+    /// remove whatever ended up there instead. The unsanitized label is
+    /// never lost: it stays on [`Scenario::label`] for diagnostics.
     pub fn new(label: &str) -> Self {
+        let sanitized: String = label
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "windows-file-watcher-scenario-{label}-{}-{nonce}",
+            "windows-file-watcher-scenario-{sanitized}-{}-{nonce}",
             std::process::id()
         ));
         std::fs::create_dir(&path).expect("create temp dir");
@@ -593,12 +621,34 @@ mod share_mode {
 /// (M9+.1) can share it across the threads it spawns for its branches; the
 /// lock is held only for the brief Fleet-mutating operations
 /// (`OpenSession`/`Subscribe`/... ), never around a filesystem call or sleep.
+///
+/// `deadline` bounds every operation that can itself block for a
+/// scenario-specified duration -- `Wait`, `WaitRandom`, `HoldOpen`, and each
+/// iteration of `Repeat` -- rather than only being checked by the caller
+/// between top-level operations (`run_scenario_keep_dir`'s own loop), which a
+/// single long `Wait`, a large `Repeat`, or a `Concurrent` branch could
+/// otherwise block through, hanging well past `params.timeout` despite the
+/// harness's bounded/wedge-detection contract. Exceeding it here panics with
+/// the same "wedged" framing the caller's own checks use, which composes
+/// correctly with `Concurrent`'s `thread::scope`: a panic in a spawned branch
+/// is re-raised by `scope` once every branch has been joined.
 pub fn apply_operation(
     root: &Path,
     fleet: &Mutex<Fleet<'_>>,
     operation: &Operation,
     rng: &mut Rng,
+    deadline: Instant,
 ) {
+    /// Panics if `duration` from now would run past `deadline`, instead of
+    /// sleeping through it -- checked *before* the sleep so even a single
+    /// oversized `Wait` is caught immediately rather than after it elapses.
+    fn check_bounded_sleep(duration: Duration, deadline: Instant, label: &str) {
+        assert!(
+            Instant::now() + duration <= deadline,
+            "a {label} operation's duration would exceed the harness's overall deadline"
+        );
+    }
+
     match operation {
         Operation::CreateFile { path } => {
             let target = root.join(path);
@@ -619,14 +669,23 @@ pub fn apply_operation(
         Operation::Rename { from, to } => {
             let _ = std::fs::rename(root.join(from), root.join(to));
         }
-        Operation::Wait { duration } => std::thread::sleep(*duration),
+        Operation::Wait { duration } => {
+            check_bounded_sleep(*duration, deadline, "Wait");
+            std::thread::sleep(*duration);
+        }
         Operation::WaitRandom { low, high } => {
-            std::thread::sleep(rng.duration_range(*low, *high));
+            let duration = rng.duration_range(*low, *high);
+            check_bounded_sleep(duration, deadline, "WaitRandom");
+            std::thread::sleep(duration);
         }
         Operation::Repeat { count, pattern } => {
             for _ in 0..*count {
+                assert!(
+                    Instant::now() < deadline,
+                    "a Repeat operation wedged applying its pattern"
+                );
                 for step in pattern {
-                    apply_operation(root, fleet, step, rng);
+                    apply_operation(root, fleet, step, rng, deadline);
                 }
             }
         }
@@ -652,6 +711,7 @@ pub fn apply_operation(
                 .share_mode(share_mode::READ_WRITE_NO_DELETE)
                 .open(root.join(path))
                 .expect("open file to hold");
+            check_bounded_sleep(*duration, deadline, "HoldOpen");
             std::thread::sleep(*duration);
             drop(file);
         }
@@ -666,7 +726,7 @@ pub fn apply_operation(
                     scope.spawn(move || {
                         let mut branch_rng = Rng::new(branch_seed);
                         for step in branch {
-                            apply_operation(root, fleet, step, &mut branch_rng);
+                            apply_operation(root, fleet, step, &mut branch_rng, deadline);
                         }
                     });
                 }
@@ -784,7 +844,7 @@ pub fn run_scenario_keep_dir(
     let mut outcome = HarnessOutcome::default();
 
     for operation in &scenario.operations {
-        apply_operation(dir.path(), &fleet, operation, &mut rng);
+        apply_operation(dir.path(), &fleet, operation, &mut rng, deadline);
         fleet.lock().unwrap().drain_available(&mut outcome);
         assert!(
             Instant::now() < deadline,

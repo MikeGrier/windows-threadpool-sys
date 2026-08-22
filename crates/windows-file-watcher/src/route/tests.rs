@@ -88,14 +88,29 @@ fn a_file_route_match_is_exact_not_a_prefix_or_substring() {
 }
 
 #[test]
-fn a_file_route_comparison_is_case_sensitive() {
-    // Documented scope, not an oversight: this crate never re-interprets a
-    // kernel-supplied name, and a locale-aware fold is a feature nobody asked
-    // for yet.
+fn a_file_route_comparison_is_case_insensitive_over_ascii() {
+    // The default Windows filesystem is case-insensitive but
+    // case-preserving: `CreateFileW` accepts a target regardless of casing,
+    // so a decoded notification's stored casing must still match a route
+    // whose subscribe path used different casing.
     let route = route(RouteScope::File {
         leaf: Wtf16String::from_units(&"Target.txt".encode_utf16().collect::<Vec<u16>>()),
     });
-    assert_eq!(selected(&route, &["target.txt"]), Vec::<String>::new());
+    assert_eq!(
+        selected(&route, &["target.txt", "TARGET.TXT", "TaRgEt.TxT"]),
+        vec!["target.txt", "TARGET.TXT", "TaRgEt.TxT"]
+    );
+}
+
+#[test]
+fn a_file_route_comparison_still_requires_the_same_length() {
+    let route = route(RouteScope::File {
+        leaf: Wtf16String::from_units(&"target.txt".encode_utf16().collect::<Vec<u16>>()),
+    });
+    assert_eq!(
+        selected(&route, &["target.tx", "target.txtx"]),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

@@ -10,10 +10,14 @@
 //!   no path separator in its relative name -- a direct child of the directory
 //!   actually opened.
 //! - **Name**: a directory subscription matches every name within its reach; a
-//!   file subscription (D-7) matches only its own leaf name, exactly. The
-//!   comparison is on raw UTF-16 units, never a locale-aware case fold: this
-//!   crate never re-interprets a name the kernel handed it, and a case-sensitive
-//!   match is the honest default until a client asks for anything richer.
+//!   file subscription (D-7) matches only its own leaf name. The comparison
+//!   is on raw UTF-16 units and case-insensitive over the ASCII range: the
+//!   default Windows filesystem is case-insensitive but case-preserving, so
+//!   `CreateFileW` accepts a target whose casing differs from the stored
+//!   name, while a decoded notification always carries the name as actually
+//!   stored -- an exact match would silently drop every one of those events.
+//!   Units outside the ASCII range are compared exactly rather than folded,
+//!   since replicating NTFS's own upcase table is out of scope here.
 //!
 //! A desync is never filtered by scope: it means "you may have missed something
 //! in this directory," which is equally true for every subscription within it.
@@ -61,7 +65,9 @@ impl RouteScope {
         match self {
             RouteScope::Directory { subtree: true } => true,
             RouteScope::Directory { subtree: false } => is_direct_child(name),
-            RouteScope::File { leaf } => is_direct_child(name) && name == leaf.as_units(),
+            RouteScope::File { leaf } => {
+                is_direct_child(name) && names_match_case_insensitively(name, leaf.as_units())
+            }
         }
     }
 }
@@ -70,6 +76,20 @@ impl RouteScope {
 /// than nested inside a subdirectory of it.
 fn is_direct_child(name: &[u16]) -> bool {
     !name.contains(&SEPARATOR)
+}
+
+/// Whether `a` and `b` are the same name under Windows' default
+/// case-insensitive (but case-preserving) filesystem semantics, folding only
+/// the ASCII range (`is_direct_child` above establishes reach; this decides
+/// identity within it, for [`RouteScope::File`]).
+fn names_match_case_insensitively(a: &[u16], b: &[u16]) -> bool {
+    fn fold(unit: u16) -> u16 {
+        match unit {
+            0x41..=0x5A => unit + 0x20, // 'A'..='Z' -> 'a'..='z'
+            _ => unit,
+        }
+    }
+    a.len() == b.len() && a.iter().zip(b).all(|(&x, &y)| fold(x) == fold(y))
 }
 
 /// One subscription's place within a coalesced directory watcher: what it wants

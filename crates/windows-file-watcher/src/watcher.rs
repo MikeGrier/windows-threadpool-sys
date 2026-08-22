@@ -515,24 +515,22 @@ impl WatcherInner {
 
         log::warn!("windows-file-watcher: {operation:?} failed, recovering: {error}");
 
+        // `routes` stays locked across installing `self.fault` and sending
+        // every `RetryQuestion`: an answer arriving between those two steps
+        // would find `self.fault` not yet naming that watch as awaiting
+        // (D-27), so `self.answer` would silently discard it and this
+        // interactive watch would wait forever for a question that was
+        // already asked and already answered.
+        let routes = lock(&self.routes);
         let mut awaiting = HashSet::new();
-        {
-            let routes = lock(&self.routes);
-            for route in routes.values() {
-                if route.report_liveness {
-                    let _ = route
-                        .sink
-                        .send(Notification::Suspended { watch: route.watch });
-                }
-                if route.retry == RetryMode::Interactive
-                    && let Some(slot) = &route.fault_slot
-                {
-                    slot.send(Notification::RetryQuestion {
-                        watch: route.watch,
-                        operation,
-                    });
-                    awaiting.insert(route.watch);
-                }
+        for route in routes.values() {
+            if route.report_liveness {
+                let _ = route
+                    .sink
+                    .send(Notification::Suspended { watch: route.watch });
+            }
+            if route.retry == RetryMode::Interactive && route.fault_slot.is_some() {
+                awaiting.insert(route.watch);
             }
         }
 
@@ -542,6 +540,19 @@ impl WatcherInner {
             awaiting,
             earliest: operation.default_delay(),
         });
+
+        for route in routes.values() {
+            if route.retry == RetryMode::Interactive
+                && let Some(slot) = &route.fault_slot
+            {
+                slot.send(Notification::RetryQuestion {
+                    watch: route.watch,
+                    operation,
+                });
+            }
+        }
+        drop(routes);
+
         if nobody_asked {
             self.resolve_and_schedule(operation.default_delay());
         }
