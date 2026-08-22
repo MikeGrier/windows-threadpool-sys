@@ -234,10 +234,13 @@ fn delete_wait_reintroduce_survives_irregular_timing() {
         return;
     }
     let rounds = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_REINTRODUCE_ROUNDS", 25);
+    // Bounds above Windows's ~23ms scheduling floor (D-73): a (1, 40) range
+    // would round every draw up to the same one tick, silently degrading
+    // "irregular" timing into a fixed delay.
     let scenario = delete_wait_reintroduce_scenario(
         rounds,
-        Duration::from_millis(1),
-        Duration::from_millis(40),
+        Duration::from_millis(25),
+        Duration::from_millis(250),
     );
     let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
     assert!(
@@ -378,10 +381,12 @@ fn sessions_and_watches_enter_and_exit_with_delays_between_transitions() {
         return;
     }
     let rounds = env_u64("WINDOWS_FILE_WATCHER_SCENARIO_LIFECYCLE_ROUNDS", 25);
+    // Bounds above Windows's ~23ms scheduling floor (D-73); see the
+    // back-to-back variant below for the intentionally near-zero posture.
     let scenario = session_watch_churn_with_delays_scenario(
         rounds,
-        Duration::from_millis(1),
-        Duration::from_millis(30),
+        Duration::from_millis(25),
+        Duration::from_millis(250),
     );
     let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
     assert!(

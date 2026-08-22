@@ -1,0 +1,10 @@
+{
+  "label": "directory-tree-rename",
+  "operations": [
+    { "CreateDir": { "path": "tree" } },
+    { "CreateDir": { "path": "tree/inner" } },
+    { "CreateFile": { "path": "tree/inner/leaf.txt" } },
+    { "Rename": { "from": "tree", "to": "tree-renamed" } },
+    { "CreateFile": { "path": "tree-renamed/inner/second-leaf.txt" } }
+  ]
+}

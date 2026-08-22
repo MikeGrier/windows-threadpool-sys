@@ -76,7 +76,12 @@ file create 2,000 times rather than listing 2,000 separate `CreateFile` entries:
 ### Example: irregular delete/wait/reintroduce timing
 
 `WaitRandom` draws its duration from `[low, high]` (milliseconds) using the run's own seeded PRNG, so the
-same file exercises different timing at a different seed without being edited:
+same file exercises different timing at a different seed without being edited.
+
+**Keep bounds above Windows's scheduling floor.** `std::thread::sleep` cannot sleep for less than the OS
+scheduling quantum -- commonly cited as ~15.6ms, though this crate's own stress runs measure an effective
+floor closer to ~23ms -- so a `(1, 20)` bound rounds every draw up to the same one tick, silently turning
+"irregular" timing into a fixed delay. Prefer something like `(25, 250)`:
 
 ```json
 {
@@ -88,9 +93,9 @@ same file exercises different timing at a different seed without being edited:
         "count": 10,
         "pattern": [
           { "RemoveFile": { "path": "marker.txt" } },
-          { "WaitRandom": { "low": 1, "high": 20 } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
           { "CreateFile": { "path": "marker.txt" } },
-          { "WaitRandom": { "low": 1, "high": 20 } }
+          { "WaitRandom": { "low": 25, "high": 250 } }
         ]
       }
     }
@@ -119,8 +124,21 @@ second session, watches from it, touches a file, then tears both down:
 
 ## More examples
 
-The full scenario library the `scenario_stress` test suite runs is checked in as JSON fixtures under
-[`../../tests/scenarios/`](../../tests/scenarios/) -- every file there is also a valid `run-scenario` input:
+The full scenario library the `scenario_stress` test suite runs is checked in as loose JSON files under
+[`../../tests/scenarios/`](../../tests/scenarios/) -- every file there is also a valid `run-scenario`
+input. Beyond the basics above, several files there are worth a look for less obvious composition:
+
+- `nested_repeat.json` -- an `Operation::Repeat` nested inside another, showing that repetition composes
+  rather than being a single flat loop.
+- `multi_directory_churn.json` -- churn spread across several sibling directories, not just one.
+- `narrow_watch_on_subdirectory.json` -- a second watch scoped to a subdirectory (non-recursive), alongside
+  the implicit root watch every scenario gets, so a change outside the narrow watch's path is still seen by
+  the root watch but not by it.
+- `directory_tree_rename.json` -- a directory containing a file is renamed as a whole, then a new file is
+  created inside it at its new location.
+- `rapid_session_name_reuse.json` -- the same session/watch name is opened, used, and closed five times in
+  a row with **no** delay between rounds -- see the WaitRandom timing-floor note above for why this is a
+  meaningfully different posture from spacing the same rounds out.
 
 ```powershell
 cargo build --features scenario-tool --bin run-scenario

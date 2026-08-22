@@ -164,6 +164,16 @@ pub enum Operation {
     /// the next operation -- resolved by the harness's own seeded [`Rng`] at
     /// execution time, not precomputed, so the same scenario value can be
     /// replayed at any seed.
+    ///
+    /// **Choose bounds above Windows's scheduling floor (D-73).**
+    /// `std::thread::sleep` cannot sleep for less than the OS scheduling
+    /// quantum -- commonly ~15.6ms, though this crate's own stress runs
+    /// measure an effective floor closer to ~23ms -- so a 1ms request and a
+    /// 20ms request both round up to the same one tick. Bounds entirely
+    /// below that floor silently collapse "spaced out" timing into
+    /// back-to-back timing without the scenario's author noticing; prefer
+    /// something like `(25, 250)` over `(1, 20)` when the intent is genuinely
+    /// irregular delays.
     WaitRandom {
         /// The inclusive lower bound, at millisecond resolution in JSON.
         #[serde(with = "millis")]

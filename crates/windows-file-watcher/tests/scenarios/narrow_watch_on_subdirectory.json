@@ -1,0 +1,19 @@
+{
+  "label": "narrow-watch-on-subdirectory",
+  "operations": [
+    { "CreateDir": { "path": "subdir" } },
+    { "OpenSession": { "name": "narrow" } },
+    {
+      "Subscribe": {
+        "session": "narrow",
+        "watch": "narrow-watch",
+        "path": "subdir",
+        "subtree": false
+      }
+    },
+    { "CreateFile": { "path": "subdir/inside.txt" } },
+    { "CreateFile": { "path": "outside.txt" } },
+    { "CancelWatch": { "watch": "narrow-watch" } },
+    { "CloseSession": { "name": "narrow" } }
+  ]
+}

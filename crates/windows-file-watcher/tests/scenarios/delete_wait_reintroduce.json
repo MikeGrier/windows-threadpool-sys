@@ -7,9 +7,9 @@
         "count": 10,
         "pattern": [
           { "RemoveFile": { "path": "marker.txt" } },
-          { "WaitRandom": { "low": 1, "high": 20 } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
           { "CreateFile": { "path": "marker.txt" } },
-          { "WaitRandom": { "low": 1, "high": 20 } }
+          { "WaitRandom": { "low": 25, "high": 250 } }
         ]
       }
     }

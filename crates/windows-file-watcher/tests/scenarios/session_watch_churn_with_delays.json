@@ -6,7 +6,7 @@
         "count": 10,
         "pattern": [
           { "OpenSession": { "name": "churn" } },
-          { "WaitRandom": { "low": 1, "high": 20 } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
           {
             "Subscribe": {
               "session": "churn",
@@ -15,13 +15,13 @@
               "subtree": true
             }
           },
-          { "WaitRandom": { "low": 1, "high": 20 } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
           { "CreateFile": { "path": "touched.txt" } },
-          { "WaitRandom": { "low": 1, "high": 20 } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
           { "CancelWatch": { "watch": "churn-watch" } },
-          { "WaitRandom": { "low": 1, "high": 20 } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
           { "CloseSession": { "name": "churn" } },
-          { "WaitRandom": { "low": 1, "high": 20 } }
+          { "WaitRandom": { "low": 25, "high": 250 } }
         ]
       }
     }
