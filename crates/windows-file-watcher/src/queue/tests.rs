@@ -781,15 +781,20 @@ fn dropping_a_standing_slot_while_its_message_is_still_queued_releases_capacity_
     drop(slot);
 
     assert!(
+        sender.reserve().is_none(),
+        "the message still occupies the queue's only slot"
+    );
+    assert!(
         receiver.try_recv().is_some(),
         "the queued message still arrives"
     );
-    // The slot's own reservation was already spent on the message just drained,
-    // so nothing further can ever be sent through it, and this capacity is
-    // gone for good.
+    // The slot is gone, so nothing will ever reserve this unit again for a
+    // future standing send -- draining its last message must return the
+    // capacity to the general pool rather than leaking it as permanently
+    // `reserved` for an owner that no longer exists.
     assert!(
-        sender.reserve().is_none(),
-        "the standing slot's capacity is not returned to the pool"
+        sender.reserve().is_some(),
+        "capacity is returned to the pool once the slot's last message drains"
     );
 }
 

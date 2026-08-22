@@ -87,8 +87,10 @@ pub(crate) struct Route {
     /// (D-13).
     pub(crate) report_liveness: bool,
     /// The standing reservation for this subscription's fault question
-    /// (D-27/D-28), if it can ever need one (`retry == Interactive` or
-    /// `report_liveness`).
+    /// (D-27/D-28), present iff it can ever be asked one (`retry ==
+    /// Interactive`). `report_liveness` alone never creates one:
+    /// `Suspended`/`Resumed`/`Established` all ride the ordinary best-effort
+    /// queue like any other observation (D-57).
     pub(crate) fault_slot: Option<StandingSlot>,
 }
 

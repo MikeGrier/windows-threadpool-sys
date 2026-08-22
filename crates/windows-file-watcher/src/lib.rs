@@ -49,9 +49,9 @@
 //! business. A client that does not want to dedicate one to [`Receiver::recv`]
 //! can take [`Receiver::doorbell`] -- a manual-reset event, created lazily -- and
 //! wait on it from its own thread pool, including from a `ThreadpoolWait`
-//! callback of its own. That is the one deliberate, bounded exception to "the
-//! crate never calls into client code": ringing a doorbell touches nothing and
-//! cannot block, unlike a callback carrying data.
+//! callback of its own: ringing a doorbell is crate-owned queue signaling, not a
+//! callback carrying client data, so this is not an exception to "the crate
+//! never calls into client code" -- there is no exception.
 //!
 //! # Losses are reported, never silent
 //!

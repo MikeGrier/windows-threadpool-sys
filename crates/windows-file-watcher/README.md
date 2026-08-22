@@ -53,9 +53,10 @@ asking a callback to behave.
 Which thread a client drains on is entirely its own business. A client that
 does not want to dedicate one to [`Receiver::recv`] can take
 [`Receiver::doorbell`] and wait on it from its own thread pool -- including from
-a `ThreadpoolWait` callback, which is the one deliberate exception to "the crate
-never calls into client code": ringing a doorbell is a bounded, non-blocking
-signal, not a callback carrying client data.
+a `ThreadpoolWait` callback: ringing a doorbell is crate-owned queue signaling,
+a bounded, non-blocking event, not a callback carrying client data, so this is
+not an exception to "the crate never calls into client code" -- there is no
+exception.
 
 ## Losses are reported, never silent
 
@@ -102,11 +103,12 @@ path first.
 It does not verify a reported change by re-reading content, does not cache
 per-volume capability across process restarts, and does not surface the
 extended `ReadDirectoryChangesExW` record format. These are recorded,
-deliberate v1 scope decisions (see `DESIGN-NOTES.md`), not oversights.
+deliberate v1 scope decisions (see [DESIGN-NOTES.md](DESIGN-NOTES.md)), not
+oversights.
 
 ## Stress-testing tool
 
-`src/bin/run_scenario.rs` replays a persisted JSON scenario file through the
+[`src/bin/run_scenario.rs`](src/bin/run_scenario.rs) replays a persisted JSON scenario file through the
 same data-driven stress model the test suite uses; see
 [`src/bin/README.md`](src/bin/README.md) for usage and examples. It is
 gated behind the `scenario-tool` feature (`serde`/`serde_json` are optional

@@ -104,7 +104,9 @@ queued notification (monitor -> client). The monitor's servicing is driven by a
 `ThreadpoolWork` that serializes all resident-state mutations, so there is a
 single logical authority, and **the crate never transfers control into client
 code** on that path -- there is no sink trait, no callback registration, and no
-client-supplied closure, with the single bounded exception of the D-25 doorbell.
+client-supplied closure. The D-25 doorbell was originally considered a bounded
+exception to that; it is not one (D-25): ringing an event is not a callback,
+and no client code runs on the cadence path to ring it.
 A `Session` binds a request-submission handle to a notification sink; every
 `Watch` created through a session delivers to that session's sink. The sink is a
 **crate-owned concrete queue sender**, not a client trait object: delivery is an

@@ -68,9 +68,15 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Fails only if the monitor has shut down. A path that cannot be watched is
-    /// not reported here, because whether it can be is not known until the
-    /// monitor tries; M3.6 reports that as a completion (D-30).
+    /// Returns [`io::ErrorKind::WouldBlock`] if the notification queue has no
+    /// room to guarantee this subscription's registration and cancellation
+    /// completions (D-33) -- backpressure lands here, synchronously, rather
+    /// than at a later delivery that has no safe way to fail. Returns
+    /// [`io::ErrorKind::NotConnected`] if the monitor has already shut down.
+    /// A path that cannot be watched is not reported by either of those:
+    /// whether it can be is not known until the monitor tries, and arrives
+    /// asynchronously as a [`Notification::Completion`](crate::Notification::Completion)
+    /// (D-30).
     pub fn subscribe(&self, path: impl AsRef<Path>, options: WatchOptions) -> io::Result<Watch> {
         crate::watch::subscribe(self, path.as_ref(), options)
     }

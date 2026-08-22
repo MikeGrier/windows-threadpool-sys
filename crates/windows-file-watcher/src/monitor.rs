@@ -348,13 +348,21 @@ impl Monitor {
     /// Whether a subscription currently has a live watcher.
     ///
     /// Distinct from [`Monitor::is_registered`]: a subscription whose target
-    /// cannot be opened yet is registered but not watching (D-14).
+    /// cannot be opened yet is registered but not watching (D-14). Also false
+    /// once the routed watcher has stopped permanently (D-22) -- being
+    /// `Subscription::Routed` alone is not proof of liveness, since a stopped
+    /// watcher stays routed until its subscription is cancelled.
     #[must_use]
     pub fn is_watching(&self, watch: WatchId) -> bool {
-        matches!(
-            lock(&self.resident).subscriptions.get(&watch),
-            Some(Subscription::Routed { .. })
-        )
+        let resident = lock(&self.resident);
+        let Some(Subscription::Routed { directory, .. }) = resident.subscriptions.get(&watch)
+        else {
+            return false;
+        };
+        resident
+            .directories
+            .get(directory)
+            .is_some_and(|watcher| watcher.stop_reason().is_none())
     }
 
     /// Why a subscription's watcher stopped *permanently*, if it has (D-22).
@@ -563,6 +571,16 @@ fn open_file_target(path: &std::path::Path) -> Opened {
         // A path with no parent (a bare volume root) or no final component
         // cannot be a file target; report the failure that led here.
         return Opened::Failed(OpenFailure::NotADirectory);
+    };
+    // A bare relative leaf (`target.txt`) has an empty `parent()`, which
+    // `CreateFileW` rejects outright -- normalize it to `.` (the current
+    // directory) so this target actually opens instead of spuriously
+    // reporting a permanent or retryable failure that has nothing to do with
+    // the target itself.
+    let parent = if parent.as_os_str().is_empty() {
+        std::path::Path::new(".")
+    } else {
+        parent
     };
     match DirectoryHandle::open(parent) {
         Ok(handle) => Opened::Handle {

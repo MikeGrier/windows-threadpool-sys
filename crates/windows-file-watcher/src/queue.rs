@@ -488,7 +488,10 @@ impl Sender {
         }
         Some(StandingSlot {
             sender: self.clone(),
-            in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            state: Arc::new(Mutex::new(StandingState {
+                slot_alive: true,
+                in_flight: false,
+            })),
         })
     }
 
@@ -559,6 +562,29 @@ impl Drop for Reservation {
     }
 }
 
+/// State shared between a [`StandingSlot`] and every [`StandingHold`] it has
+/// ever handed to a queued entry, protected by its own lock so the two halves
+/// of a reservation's transfer -- whether the slot is still alive, and
+/// whether its last send is still queued -- are always read and mutated
+/// together with the `reserved` count they gate, never observed mid-way.
+///
+/// Lock order is fixed as *this, then the queue's `items`* everywhere it is
+/// taken (`send`, both `Drop` impls), which is what makes the combined
+/// transition atomic: whichever of `StandingSlot::drop` or
+/// `StandingHold::drop` runs first holds this lock for its entire mutation of
+/// `reserved`, so the other side cannot observe a half-finished transfer.
+struct StandingState {
+    /// Whether the owning `StandingSlot` has been dropped. Once false, no
+    /// further send can ever happen, so an outstanding hold's eventual drain
+    /// must simply let its transferred unit go free rather than handing it
+    /// back to a slot that no longer exists to reuse it.
+    slot_alive: bool,
+    /// Whether the last-sent message is still queued, undrained -- meaning
+    /// the unit of `reserved` capacity this slot carved out is currently
+    /// manifested as that queued entry rather than sitting in `reserved`.
+    in_flight: bool,
+}
+
 /// A permanent slot in the notification queue, reserved once and reused for as
 /// long as the subscription lives (D-27/D-28).
 ///
@@ -568,14 +594,7 @@ impl Drop for Reservation {
 /// point `Drop` returns the slot to the pool.
 pub(crate) struct StandingSlot {
     sender: Sender,
-    /// Whether the last-sent message is still queued, undrained -- meaning the
-    /// unit of `reserved` capacity this slot carved out has been transferred
-    /// into that entry's [`StandingHold`] and is no longer this slot's to
-    /// release. Shared with that hold so whichever side is dropped first
-    /// -- the slot (subscription ending while a question is still queued) or
-    /// the hold (the entry finally drained) -- performs exactly the release
-    /// that is still outstanding, never both.
-    in_flight: Arc<std::sync::atomic::AtomicBool>,
+    state: Arc<Mutex<StandingState>>,
 }
 
 impl StandingSlot {
@@ -583,6 +602,8 @@ impl StandingSlot {
     /// capacity at registration and is never returned while this is held.
     pub(crate) fn send(&self, notification: Notification) {
         {
+            let mut standing = lock(&self.state);
+            standing.in_flight = true;
             let mut state = lock(&self.sender.shared.items);
             state.flush_latched();
             // The permanent reservation transfers into the queued entry
@@ -591,11 +612,9 @@ impl StandingSlot {
             // `queue.len()` slot -- the entry's `StandingHold` hands it back
             // once drained, wherever that happens to be by then.
             state.reserved -= 1;
-            self.in_flight
-                .store(true, std::sync::atomic::Ordering::Relaxed);
             let hold = StandingHold {
                 shared: Arc::clone(&self.sender.shared),
-                in_flight: Arc::clone(&self.in_flight),
+                state: Arc::clone(&self.state),
             };
             state.queue.push_back(Entry::standing(notification, hold));
             refresh_doorbell(&self.sender.shared, &state);
@@ -606,18 +625,21 @@ impl StandingSlot {
 
 impl Drop for StandingSlot {
     fn drop(&mut self) {
-        // If the last-sent message is still queued, its own `StandingHold`
-        // (embedded in that entry) owns releasing this reservation once it is
-        // eventually drained; releasing it here too would double-release the
-        // same unit of capacity. No concurrent `send` can race this check: a
-        // `StandingSlot` is uniquely held, so nothing else can still be
-        // calling `send` while this runs.
-        if self.in_flight.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut standing = lock(&self.state);
+        standing.slot_alive = false;
+        if standing.in_flight {
+            // The outstanding hold owns releasing this reservation once its
+            // message drains (`StandingHold::drop`); it will find the slot
+            // already gone and let the capacity go free rather than handing
+            // it back here, so this slot has nothing left to release itself.
             return;
         }
         // As for `Reservation`'s drop: releasing this permanent slot frees
         // capacity without any item being drained, so a paused producer must
-        // still be prodded on the same zero-to-one transition.
+        // still be prodded on the same zero-to-one transition. `standing`
+        // stays locked across this so a concurrent `StandingHold::drop` for
+        // this same slot cannot interleave with the check above and this
+        // mutation.
         let resumers = {
             let mut state = lock(&self.sender.shared.items);
             state.reserved -= 1;
@@ -636,24 +658,32 @@ impl std::fmt::Debug for StandingSlot {
 /// The reservation-release obligation a [`StandingSlot::send`] transfers into
 /// its queued entry.
 ///
-/// Restoring `reserved` on `Drop` -- rather than only in [`take`] -- means the
-/// release happens exactly once no matter how the entry is finally discarded
-/// (normal drain, or the queue itself going away), and it is what lets
-/// [`StandingSlot::drop`] safely skip releasing a unit it has already handed
-/// off.
+/// `Drop` -- rather than only [`take`] -- is what performs the release, so it
+/// happens exactly once no matter how the entry is finally discarded (normal
+/// drain, or the queue itself going away). Whether that release hands the
+/// unit back to the slot (still alive, so it can send again) or simply lets
+/// it go free (the slot is already gone) is decided by [`StandingState`],
+/// read and mutated under its own lock so this can never race
+/// [`StandingSlot::drop`] for the same slot.
 struct StandingHold {
     shared: Arc<Shared>,
-    in_flight: Arc<std::sync::atomic::AtomicBool>,
+    state: Arc<Mutex<StandingState>>,
 }
 
 impl Drop for StandingHold {
     fn drop(&mut self) {
-        self.in_flight
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-        let resumers = {
+        let mut standing = lock(&self.state);
+        standing.in_flight = false;
+        let resumers = if standing.slot_alive {
             let mut state = lock(&self.shared.items);
             state.reserved += 1;
             freed_resumers(&mut state, true)
+        } else {
+            // Nothing will ever reserve this unit again: `queue.len()`
+            // already accounted for its release when this entry left the
+            // queue, so there is nothing further to do here beyond
+            // recording that no hold remains outstanding.
+            Vec::new()
         };
         prod(resumers);
     }
