@@ -150,3 +150,46 @@ did not serialise) and M3.2's bound parameter (which had no meaning until M3.3 d
 - [x] **M4.5** -- Integration: several file-watches plus a recursive directory watch within one tree; assert
   each subscription receives exactly its matching events and nothing else.
   ([tests/watched_paths.rs](tests/watched_paths.rs))
+
+
+## Moved 2026-08-21 -- M5: fault model and the retry protocol
+
+- [x] **M5.1** -- Establish/re-establish state machine (D-14/D-15). **Corrected during execution (D-53):**
+  rather than a separately named `Opening -> ArmingDetailed -> WatchingDetailed` machine, the existing
+  `ArmGate` (already used for backpressure and widening) gained a fourth variant, `Faulted` -- it already
+  answered exactly the question a fault needs answered. A `Pending` subscription's own open-retry (before any
+  directory identity exists) and a coalesced watcher's arm-retry are two independent instances of the same
+  protocol (D-59), each with its own `ThreadpoolTimer`. Classification: every arm-completion error is
+  arm-and-retry (D-15); reopening (M4.4's existing mechanism) classifies its own open attempt through
+  `OpenError::failure()` -- retryable re-enters the fault loop, permanent is the one edge that still ends in
+  the pre-existing terminal `stopped` state. No downgrade-to-coarse edge yet (that is M6).
+
+- [x] **M5.2** -- The fault latch. **Corrected during execution (D-54/D-55):** the interactive fault
+  question is delivered through a standing per-subscription reservation (`StandingSlot`, taken once at
+  registration) rather than the resident coalescing latch originally sketched -- sound because a watcher
+  cannot fault twice concurrently, so one permanent slot is always enough. `FaultState` retains only which
+  operation faulted, not the triggering error (surfaced once via the M5.6 diagnostic and then discarded).
+
+- [x] **M5.3** -- The retry protocol (D-27, superseding D-16): defaults vs. interactive at registration,
+  earliest-answer-wins with a decliner counted at the default, clamped to the floor (500 ms default,
+  50 ms floor, separate for open vs. arm). **Scope note (D-56):** fixed per-operation defaults only -- no
+  growth multiplier, cap, jitter, or per-error-kind override, since `RetryMode`/`WatchOptions` carry no field
+  for any of them.
+
+- [x] **M5.4** -- Recovery notifications: `Desync { Reestablished }` (unconditional, like every other
+  desync) plus the opt-in `Suspended`/`Resumed`/`Established { mode }` brackets (D-13). **Corrected during
+  execution (D-57):** these liveness brackets ride the ordinary best-effort observation queue, like `Desync`
+  -- only `RetryQuestion` itself needs D-55's standing reservation.
+
+- [x] **M5.5** -- Cancellation from any intermediate state: removing the last route a fault is still
+  awaiting an answer from resolves that fault immediately (counted as a decline) rather than leaving it
+  wedged; a `Pending` subscription's own retry timer and standing slot are dropped the same way on cancel.
+
+- [x] **M5.6** -- Observable stall and diagnostics (D-31/D-58): the `log` facade at two call sites (entering
+  a fault, resolving one); `DirectoryWatcher::is_faulted` and `Monitor::is_faulted` expose the state directly.
+
+- [x] **M5.7** -- Integration (D-59): delete then recreate the watched directory. Confirmed empirically that
+  deleting a directory with an outstanding `ReadDirectoryChangesW` does fail that read (an arm-class fault),
+  and that recreating it lets the reopen loop re-establish, reporting `Suspended` -> `Resumed` /
+  `Established` / `Desync { Reestablished }`, with real subsequent changes reported again afterward.
+  ([tests/watched_paths.rs](tests/watched_paths.rs))

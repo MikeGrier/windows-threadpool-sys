@@ -74,6 +74,10 @@ pub struct WatchOptions {
     pub subtree: bool,
     /// How this subscription should be recovered from faults.
     pub retry: RetryMode,
+    /// Whether `Suspended`/`Resumed`/`Established` are reported (D-13). Off by
+    /// default: a subscription that only wants change data need not think about
+    /// the fault machine's liveness brackets at all.
+    pub report_liveness: bool,
 }
 
 impl WatchOptions {
@@ -94,6 +98,13 @@ impl WatchOptions {
     #[must_use]
     pub fn retry(mut self, retry: RetryMode) -> Self {
         self.retry = retry;
+        self
+    }
+
+    /// Opt in to `Suspended`/`Resumed`/`Established` (D-13).
+    #[must_use]
+    pub fn report_liveness(mut self, report_liveness: bool) -> Self {
+        self.report_liveness = report_liveness;
         self
     }
 }
@@ -185,6 +196,17 @@ pub(crate) fn subscribe(
     let completion = session.sink().reserve().ok_or_else(saturated)?;
     let cancellation = session.sink().reserve().ok_or_else(saturated)?;
 
+    // A standing fault-question slot (D-27/D-28), taken once here rather than
+    // per fault, so asking never competes with the queue's best-effort traffic.
+    // Only needed by a subscription that can ever be asked or ever wants the
+    // liveness brackets; a plain-defaults, non-reporting subscription carries no
+    // extra reserved capacity at all.
+    let fault_slot = if options.retry == RetryMode::Interactive || options.report_liveness {
+        Some(session.sink().reserve_standing().ok_or_else(saturated)?)
+    } else {
+        None
+    };
+
     let id = session.next_watch();
     let request = Request::Subscribe {
         watch: id,
@@ -195,6 +217,7 @@ pub(crate) fn subscribe(
         // got alongside the session (D-11).
         sink: session.sink().clone(),
         completion,
+        fault_slot,
     };
     session.submit(request).map_err(|_| {
         io::Error::new(

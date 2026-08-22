@@ -6,6 +6,7 @@ use wtf_string::Wtf16String;
 use super::{Route, RouteScope};
 use crate::notify::{Change, ChangeKind, RelativeName};
 use crate::queue::{WatchId, channel};
+use crate::watch::RetryMode;
 
 fn name(units: &str) -> RelativeName {
     RelativeName::from_units(units.encode_utf16().collect())
@@ -24,6 +25,9 @@ fn route(scope: RouteScope) -> Route {
         watch: WatchId::from_raw(1),
         scope,
         sink,
+        retry: RetryMode::Defaults,
+        report_liveness: false,
+        fault_slot: None,
     }
 }
 

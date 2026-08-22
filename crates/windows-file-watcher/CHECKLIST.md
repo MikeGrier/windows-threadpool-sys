@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-52** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-59** -- later
 decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-50...D-52 from M4,
-D-32 from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+D-53...D-59 from M5, D-32 from M8.1, and D-25/D-27...D-31 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -13,11 +13,10 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M5.1.** M1 through M4 are archived; nothing else is in progress. Note that a
+> **NEXT ACTIONABLE ITEM: M6.1.** M1 through M5 are archived; nothing else is in progress. Note that a
 > *satisfied cross-component prerequisite does not make its item startable* -- M17 in
-> `windows-threadpool-sys` cleared the external dependency for M6.1, but M6.1 remains gated behind M5 by
-> ordinary intra-component dependency order, because there is no fault machine to re-establish through until
-> M5 lands. Work the milestones in order.
+> `windows-threadpool-sys` cleared the external dependency for M6.1, and M5's fault machine now exists for
+> M6 to extend with the downgrade-to-coarse edge; work the milestones in order.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -25,46 +24,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----
 
 ## M5 -- Fault model and the retry protocol
 
-- [ ] **M5.1** -- Establish/re-establish state machine (D-14/D-15): `Opening -> ArmingDetailed ->
-  WatchingDetailed` plus `Cancelling/Closed`; classify every error into reopen-retry, rearm-retry, or (M6)
-  downgrade; no terminal state.
-
-
-- [ ] **M5.2** -- The fault latch (D-28): a fault is watcher state, not a queued item -- one error code plus
-  one bit, allocated with the watcher. A fault report is control data generated on the cadence, so it can
-  neither be dropped (the watch would silently never recover) nor block (deadlock); latching costs no queue
-  slot and cannot fail. A watcher cannot be faulted twice concurrently, because a faulted watcher is not
-  running. Generalise the same treatment to every `Desync`, extending what D-11 already does for
-  `QueueFull`: reporting that the queue filled must not itself require queue space.
-
-- [ ] **M5.3** -- The retry protocol (D-27, superseding D-16): each subscription selects **defaults** or
-  **interactive** at registration. On fault the watcher latches and schedules *nothing*; interactive
-  subscriptions receive a control message carrying the `WatchId`, the failing operation (open vs arm), and
-  the error code, and answer with the next delay. Because a directory is one coalesced watcher over several
-  subscriptions (D-6), ask every subscription and take the **earliest** answer, counting a decliner at its
-  default rather than cancelling it, then clamp to the floor. Values from `Azure/m`'s shipped code:
-  **500 ms default, 50 ms floor**, with separate open-failure and arm-failure defaults. Scheduling only
-  after the answer is what removes D-16's race -- there is no timer to race because none was armed.
-
-- [ ] **M5.4** -- Recovery notifications: `Desync { Reestablished }` for the post-outage gap, and the opt-in
-  `Suspended` / `Resumed` brackets (D-13).
-
-- [ ] **M5.5** -- Cancellation from any intermediate state -- establishing, backing off, latched-faulted, or
-  awaiting a retry answer (D-14) -- quiescing timers and any outstanding operation without racing a re-arm.
-
-- [ ] **M5.6** -- Observable stall and diagnostics (D-31): a watcher parked not-re-arming (faulted per D-28,
-  or backpressured per D-29) is indistinguishable from "nothing is changing" unless reported, so expose the
-  state and emit a diagnostic. Settle the transport first: a library emitting output is a dependency
-  decision (`eprintln!` is unfilterable and wrong for a library; the `log` facade is near-zero cost when no
-  logger is installed but is a public dependency), and per the repository's architectural pre-step rule the
-  first emission site must introduce an output abstraction rather than a call. It must **not** be a
-  client-supplied sink, which would be a callback on our path (D-2).
-
-- [ ] **M5.7** -- Integration: delete then recreate the watched directory; assert the `Suspended` ...
-  `Resumed` bracket with `Desync { Reestablished }` and that watching resumes; assert an interactive
-  subscription is asked and its answer honoured, that the earliest of several answers wins, that a decliner
-  is counted at its default, and that the floor clamps a zero answer; assert cancellation while faulted and
-  while awaiting an answer; verify recovery never wedges.
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----m5-fault-model-and-the-retry-protocol).
 
 ## M6 -- Coarse fallback
 

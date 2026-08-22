@@ -97,6 +97,7 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::directory::OpenFailure;
 use crate::notify::{Change, DesyncCause};
+use crate::retry::{FaultOperation, WatchMode};
 
 /// The bound used when a caller does not choose one.
 ///
@@ -197,6 +198,45 @@ pub enum Notification {
         /// What happened.
         outcome: Outcome,
     },
+    /// The watch stopped delivering while the monitor works to re-establish it
+    /// (D-14/D-15/D-31). Opt-in via `WatchOptions::report_liveness` (D-13).
+    Suspended {
+        /// The subscription affected.
+        watch: WatchId,
+    },
+    /// The watch is delivering again after a [`Notification::Suspended`]. A
+    /// [`Notification::Desync { Reestablished }`](DesyncCause::Reestablished)
+    /// always precedes or accompanies this, since the gap it bridges may have
+    /// hidden changes. Opt-in (D-13).
+    Resumed {
+        /// The subscription affected.
+        watch: WatchId,
+    },
+    /// Which tier is actually watching this subscription's target, reported
+    /// once at first establishment and again after every re-establishment. Only
+    /// [`WatchMode::Detailed`] exists until M6 adds the coarse fallback
+    /// (D-17). Opt-in (D-13).
+    Established {
+        /// The subscription affected.
+        watch: WatchId,
+        /// The tier now watching.
+        mode: WatchMode,
+    },
+    /// The monitor is asking this **interactive** subscription (D-27) how long
+    /// to wait before the next attempt. Answer through
+    /// [`crate::session::Session::answer`]; declining (never answering, or a
+    /// dropped `Watch`) is counted at the operation's default delay. This is the
+    /// one message a fault protocol cannot afford to lose, so it rides a
+    /// standing reservation ([`Sender::reserve_standing`]) taken once at
+    /// registration rather than the best-effort path -- sound because a watcher
+    /// cannot fault twice concurrently (D-28), so at most one question per
+    /// subscription is ever outstanding.
+    RetryQuestion {
+        /// The subscription being asked.
+        watch: WatchId,
+        /// Which operation faulted.
+        operation: FaultOperation,
+    },
 }
 
 impl Notification {
@@ -206,7 +246,11 @@ impl Notification {
         match self {
             Notification::Batch { watch, .. }
             | Notification::Desync { watch, .. }
-            | Notification::Completion { watch, .. } => *watch,
+            | Notification::Completion { watch, .. }
+            | Notification::Suspended { watch }
+            | Notification::Resumed { watch }
+            | Notification::Established { watch, .. }
+            | Notification::RetryQuestion { watch, .. } => *watch,
         }
     }
 }
@@ -386,6 +430,32 @@ impl Sender {
         })
     }
 
+    /// Permanently reserve one slot for this subscription's fault question
+    /// (D-27/D-28).
+    ///
+    /// Unlike [`Sender::reserve`], the capacity this claims is never returned:
+    /// the same subscription may fault many times over its life, and
+    /// [`StandingSlot::send`] must never be able to fail. That is sound because
+    /// a watcher cannot be faulted twice concurrently (D-28) -- the state
+    /// machine cannot ask a second question before the first is answered -- so
+    /// one permanently-reserved slot is always enough, unlike
+    /// [`Sender::reserve`]'s slot, which is claimed and released per message.
+    ///
+    /// Returns `None` if the queue has no free capacity to carve out at
+    /// registration.
+    pub(crate) fn reserve_standing(&self) -> Option<StandingSlot> {
+        {
+            let mut state = lock(&self.shared.items);
+            if state.free() == 0 {
+                return None;
+            }
+            state.reserved += 1;
+        }
+        Some(StandingSlot {
+            sender: self.clone(),
+        })
+    }
+
     /// Whether a best-effort notification would be accepted right now.
     ///
     /// The observation tier checks this *before* arming a read rather than
@@ -441,6 +511,43 @@ impl Drop for Reservation {
         if !self.used {
             lock(&self.sender.shared.items).reserved -= 1;
         }
+    }
+}
+
+/// A permanent slot in the notification queue, reserved once and reused for as
+/// long as the subscription lives (D-27/D-28).
+///
+/// See [`Sender::reserve_standing`] for why one slot is always enough. Unlike
+/// [`Reservation`], sending through this does not release the reservation --
+/// there is nothing to release until the subscription itself ends, at which
+/// point `Drop` returns the slot to the pool.
+pub(crate) struct StandingSlot {
+    sender: Sender,
+}
+
+impl StandingSlot {
+    /// Deliver the notification. Cannot fail: the slot was carved out of
+    /// capacity at registration and is never returned while this is held.
+    pub(crate) fn send(&self, notification: Notification) {
+        {
+            let mut state = lock(&self.sender.shared.items);
+            state.flush_latched();
+            state.queue.push_back(notification);
+            refresh_doorbell(&self.sender.shared, &state);
+        }
+        self.sender.shared.arrived.notify_all();
+    }
+}
+
+impl Drop for StandingSlot {
+    fn drop(&mut self) {
+        lock(&self.sender.shared.items).reserved -= 1;
+    }
+}
+
+impl std::fmt::Debug for StandingSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StandingSlot").finish_non_exhaustive()
     }
 }
 

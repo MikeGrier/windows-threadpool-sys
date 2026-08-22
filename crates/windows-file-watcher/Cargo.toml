@@ -45,6 +45,12 @@ windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys"
 # promises (D-8).
 wtf-string = { version = "0.2.0", path = "../wtf-string" }
 
+# The observable-stall diagnostic transport (D-31/M5.6): a library emitting
+# output is a dependency decision, and `log` is the near-zero-cost facade that
+# does not commit a client to any particular logger -- nothing is emitted
+# unless one is installed.
+log = { version = "0.4.22", default-features = false }
+
 windows-sys = {
 	version = "0.61.2",
 	default-features = false,

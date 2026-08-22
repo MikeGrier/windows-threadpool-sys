@@ -21,7 +21,8 @@
 use wtf_string::Wtf16String;
 
 use crate::notify::Change;
-use crate::queue::{Sender, WatchId};
+use crate::queue::{Sender, StandingSlot, WatchId};
+use crate::watch::RetryMode;
 
 /// The backslash that separates path components in a relative name.
 const SEPARATOR: u16 = b'\\' as u16;
@@ -80,6 +81,15 @@ pub(crate) struct Route {
     pub(crate) scope: RouteScope,
     /// This subscription's session sink (D-11).
     pub(crate) sink: Sender,
+    /// How this subscription wants faults recovered (D-27).
+    pub(crate) retry: RetryMode,
+    /// Whether this subscription wants `Suspended`/`Resumed`/`Established`
+    /// (D-13).
+    pub(crate) report_liveness: bool,
+    /// The standing reservation for this subscription's fault question
+    /// (D-27/D-28), if it can ever need one (`retry == Interactive` or
+    /// `report_liveness`).
+    pub(crate) fault_slot: Option<StandingSlot>,
 }
 
 impl Route {

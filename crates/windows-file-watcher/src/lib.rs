@@ -27,6 +27,9 @@
 //!         Notification::Batch { changes, .. } => println!("{} change(s)", changes.len()),
 //!         Notification::Desync { cause, .. } => println!("re-scan: {cause:?}"),
 //!         Notification::Completion { outcome, .. } => println!("request: {outcome:?}"),
+//!         // Suspended/Resumed/Established/RetryQuestion are opt-in (D-13/D-27)
+//!         // and never arrive unless requested through `WatchOptions`.
+//!         _ => {}
 //!     }
 //! }
 //! # drop(watch);
@@ -71,6 +74,9 @@ mod queue;
 mod route;
 
 #[cfg(windows)]
+mod retry;
+
+#[cfg(windows)]
 mod servicing;
 
 #[cfg(windows)]
@@ -93,6 +99,8 @@ pub use monitor::Monitor;
 pub use notify::{Change, ChangeKind, DecodedBatch, DesyncCause, RelativeName, decode_batch};
 #[cfg(windows)]
 pub use queue::{DEFAULT_BOUND, Notification, Outcome, Receiver, WatchId};
+#[cfg(windows)]
+pub use retry::{FaultOperation, WatchMode};
 #[cfg(windows)]
 pub use session::Session;
 #[cfg(windows)]

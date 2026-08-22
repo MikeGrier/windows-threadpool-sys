@@ -52,7 +52,12 @@ fn names(notification: &Notification) -> Vec<String> {
             .iter()
             .map(|c| c.name.to_os_string().to_string_lossy().into_owned())
             .collect(),
-        Notification::Desync { .. } | Notification::Completion { .. } => Vec::new(),
+        Notification::Desync { .. }
+        | Notification::Completion { .. }
+        | Notification::Suspended { .. }
+        | Notification::Resumed { .. }
+        | Notification::Established { .. }
+        | Notification::RetryQuestion { .. } => Vec::new(),
     }
 }
 

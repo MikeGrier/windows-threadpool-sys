@@ -38,6 +38,7 @@
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::monitor::{Core, Request};
 use crate::queue::{Sender, WatchId};
@@ -77,6 +78,16 @@ impl Session {
     /// monitor tries; M3.6 reports that as a completion (D-30).
     pub fn subscribe(&self, path: impl AsRef<Path>, options: WatchOptions) -> io::Result<Watch> {
         crate::watch::subscribe(self, path.as_ref(), options)
+    }
+
+    /// Answer an interactive subscription's [`Notification::RetryQuestion`](crate::Notification::RetryQuestion)
+    /// (D-27): `Some(delay)` names the next retry delay, `None` declines and is
+    /// counted at the failing operation's default. Not itself a request with a
+    /// lifecycle -- it is a response to one the crate posed -- so it carries no
+    /// completion and simply does nothing if `watch` is not currently awaiting
+    /// an answer (already resolved, already cancelled, or never asked).
+    pub fn answer(&self, watch: WatchId, delay: Option<Duration>) {
+        let _ = self.submit(Request::Answer { watch, delay });
     }
 
     /// Submit a request to the monitor.

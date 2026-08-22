@@ -27,10 +27,12 @@
 //! inline in the payload -- the `Box` indirection is what keeps the address the
 //! kernel was given valid.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::windows::io::AsRawHandle;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
 
 use windows_overlapped_io_sys::{Issued, Operation, Submitted, UnassociatedEndpoint};
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
@@ -40,12 +42,15 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_NOTIFY_CHANGE_SIZE, ReadDirectoryChangesW,
 };
 use windows_threadpool_sys::io::{IoCompletion, ThreadpoolIo};
+use windows_threadpool_sys::timer::ThreadpoolTimer;
 use windows_threadpool_sys::work::ThreadpoolWork;
 
 use crate::directory::DirectoryHandle;
 use crate::notify::{DecodedBatch, DesyncCause, decode_batch};
-use crate::queue::{Notification, Resume, Sender, WatchId};
-use crate::route::{Route, RouteScope};
+use crate::queue::{Notification, Resume, WatchId};
+use crate::retry::{FaultOperation, WatchMode, clamp};
+use crate::route::Route;
+use crate::watch::RetryMode;
 
 /// The completion-buffer size used unless a caller chooses otherwise.
 ///
@@ -135,23 +140,56 @@ pub enum ArmGate {
     /// reach to recursive (M4.4/D-6). Self-resolving: it becomes `Open` once the
     /// new endpoint is armed, or `TornDown` if teardown wins the race.
     Reopening,
+    /// Transiently closed while the monitor works to re-establish this watcher
+    /// after an open or arm fault (D-14/D-15/M5.1): asking any interactive
+    /// routes, waiting for their answers, backed off on a timer, or in the
+    /// middle of a retry attempt. Self-resolving: it becomes `Open` once a retry
+    /// succeeds, or `TornDown` if teardown wins the race. A permanent open
+    /// failure (D-22) is the one edge that does not return here -- see
+    /// `WatcherInner::stopped`.
+    Faulted,
     /// Torn down. Permanent: a watcher never re-opens.
     TornDown,
 }
 
+/// Fault-recovery state (D-14/D-15/D-27/M5.1): held while this watcher is
+/// working to re-establish itself, and absent otherwise.
+struct FaultState {
+    /// Which operation faulted -- an open (of the reopened directory) or an
+    /// arm (a live `ReadDirectoryChangesW` completion or resubmission). Each
+    /// carries its own default delay (D-15).
+    operation: FaultOperation,
+    /// Interactive routes (D-27) that have not yet answered this fault's
+    /// question. Emptied by an answer arriving, or by the route leaving
+    /// (M5.5): either way, once empty the resolved delay is scheduled.
+    awaiting: HashSet<WatchId>,
+    /// The soonest delay any answer has named so far, seeded at the
+    /// operation's default (D-27) and only ever lowered.
+    earliest: Duration,
+}
+
 /// The shared state a completion callback reaches.
 struct WatcherInner {
+    /// The path this directory was opened from, kept so re-establishment
+    /// (M5.1) knows what to reopen -- a live handle cannot be recovered once
+    /// its directory is gone, but the path can still be retried.
+    path: PathBuf,
     /// The endpoint currently in use. Replaced, not merely set once: widening a
     /// watcher's reach to recursive (M4.4) reopens the directory rather than
     /// cancelling and resubmitting on the same handle, because the latter was
     /// measured to leave the filesystem's recursive attachment unchanged --
     /// direct children kept being reported, nested ones never were. See
-    /// [`WatcherInner::reopen`].
+    /// [`WatcherInner::reopen`]. Re-establishment (M5.1) reuses the same
+    /// mechanism after a fresh open.
     io: Mutex<Option<ThreadpoolIo>>,
     /// Set once, as for `io` before it started being replaced. Queues the re-arm
     /// that ends a backpressure pause onto this crate's own pool, so it never
     /// runs on a client's thread.
     resume_work: OnceLock<ThreadpoolWork>,
+    /// Set once at construction. Fires the next re-establish attempt after a
+    /// fault's resolved delay (D-27); re-armed with a fresh due time, never
+    /// recreated, across however many faults this watcher lives through.
+    retry_timer: OnceLock<ThreadpoolTimer>,
     /// Every `FILE_NOTIFY_CHANGE_*` class this watcher asks for. Constant rather
     /// than a per-subscription union: no subscription can select a filter yet
     /// (`WatchOptions` has no such field), so the union over any set of
@@ -173,7 +211,13 @@ struct WatcherInner {
     /// acquisition waits for any in-flight submission to finish, after which no
     /// new one can start.
     gate: Mutex<ArmGate>,
-    /// The failure that stopped re-arming, if any.
+    /// Held while this watcher is working to re-establish itself; absent while
+    /// watching normally. See [`FaultState`].
+    fault: Mutex<Option<FaultState>>,
+    /// The failure that stopped re-arming *permanently*, if any. Only reached
+    /// by a re-establish attempt that finds its target permanently unwatchable
+    /// (D-22's `NotADirectory`/`InvalidPath`) -- every other failure retries
+    /// indefinitely through `fault` instead (D-14).
     stopped: Mutex<Option<io::Error>>,
 }
 
@@ -318,7 +362,12 @@ impl WatcherInner {
             if error.raw_os_error() == Some(OPERATION_ABORTED) {
                 return;
             }
-            self.record_stop(error);
+            // Every other completion failure is an arm-class fault (D-15):
+            // re-established indefinitely rather than treated as terminal
+            // (D-14). `stopped` is reserved for the one edge that genuinely
+            // cannot recover -- a permanent open failure discovered while
+            // re-establishing.
+            self.enter_fault(error, FaultOperation::Arm);
             return;
         }
 
@@ -326,7 +375,7 @@ impl WatcherInner {
         // until the next read is outstanding, so that window is minimised by
         // doing the re-arm first. Decoding touches only this completed buffer.
         if let Err(error) = self.arm() {
-            self.record_stop(error);
+            self.enter_fault(error, FaultOperation::Arm);
         }
 
         let transferred = completion.bytes_transferred();
@@ -383,6 +432,137 @@ impl WatcherInner {
             .any(|route| route.sink.has_room())
     }
 
+    /// Begin (or restart) fault recovery for this watcher (D-14/D-15/M5.1).
+    ///
+    /// Closes the gate, tells every route the watch is suspended (opt-in,
+    /// D-13), and asks every interactive route (D-27) how long to wait --
+    /// counting a non-interactive route at the operation's default from the
+    /// start. Once every asked route has answered (immediately, if none are
+    /// interactive), the resolved delay is scheduled on `retry_timer`.
+    fn enter_fault(self: &Arc<Self>, error: io::Error, operation: FaultOperation) {
+        {
+            let mut gate = lock(&self.gate);
+            if *gate == ArmGate::TornDown {
+                return;
+            }
+            *gate = ArmGate::Faulted;
+        }
+
+        log::warn!("windows-file-watcher: {operation:?} failed, recovering: {error}");
+
+        let mut awaiting = HashSet::new();
+        {
+            let routes = lock(&self.routes);
+            for route in routes.values() {
+                if route.report_liveness {
+                    let _ = route
+                        .sink
+                        .send(Notification::Suspended { watch: route.watch });
+                }
+                if route.retry == RetryMode::Interactive
+                    && let Some(slot) = &route.fault_slot
+                {
+                    slot.send(Notification::RetryQuestion {
+                        watch: route.watch,
+                        operation,
+                    });
+                    awaiting.insert(route.watch);
+                }
+            }
+        }
+
+        let nobody_asked = awaiting.is_empty();
+        *lock(&self.fault) = Some(FaultState {
+            operation,
+            awaiting,
+            earliest: operation.default_delay(),
+        });
+        if nobody_asked {
+            self.resolve_and_schedule(operation.default_delay());
+        }
+    }
+
+    /// Record an interactive route's answer to the current fault's question
+    /// (D-27), if there is one outstanding for it. A no-op otherwise: the fault
+    /// may already have resolved, or `watch` may never have been asked.
+    fn answer(&self, watch: WatchId, delay: Option<Duration>) {
+        let resolved = {
+            let mut fault = lock(&self.fault);
+            let Some(state) = fault.as_mut() else {
+                return;
+            };
+            if !state.awaiting.remove(&watch) {
+                return;
+            }
+            let candidate = delay.unwrap_or_else(|| state.operation.default_delay());
+            if candidate < state.earliest {
+                state.earliest = candidate;
+            }
+            state.awaiting.is_empty().then_some(state.earliest)
+        };
+        if let Some(delay) = resolved {
+            self.resolve_and_schedule(delay);
+        }
+    }
+
+    /// Arm `retry_timer` for the resolved delay, clamped to the floor (D-27).
+    fn resolve_and_schedule(&self, delay: Duration) {
+        if let Some(timer) = self.retry_timer.get() {
+            timer.set_after(clamp(delay));
+        }
+    }
+
+    /// `retry_timer`'s callback: attempt one re-establishment.
+    ///
+    /// Reopens the directory from its original path (a live handle cannot be
+    /// recovered once its target is gone, but the path can still be retried),
+    /// then arms a read on it. An open failure that is retryable (D-22)
+    /// re-enters the fault loop as an open-class fault; a permanent one is the
+    /// one edge that does not (`stopped`). An arm failure after a successful
+    /// open re-enters the fault loop as an arm-class fault.
+    fn retry_reestablish(self: &Arc<Self>) {
+        if *lock(&self.gate) == ArmGate::TornDown {
+            return;
+        }
+        match DirectoryHandle::open(&self.path) {
+            Ok(handle) => match self.reopen(handle) {
+                Ok(()) => self.resolve_fault_success(),
+                Err(error) => self.enter_fault(error, FaultOperation::Arm),
+            },
+            Err(open_error) => {
+                if open_error.failure().is_retryable() {
+                    self.enter_fault(io::Error::other(open_error), FaultOperation::Open);
+                } else {
+                    self.record_stop(io::Error::other(open_error));
+                }
+            }
+        }
+    }
+
+    /// Clear fault state after a successful re-establishment and tell every
+    /// route: the gap may have hidden changes (unconditional, like any other
+    /// desync, D-12), and -- opt-in (D-13) -- that the watch resumed and which
+    /// tier it resumed in.
+    fn resolve_fault_success(&self) {
+        *lock(&self.fault) = None;
+        log::info!("windows-file-watcher: recovery succeeded, re-established");
+        {
+            let routes = lock(&self.routes);
+            for route in routes.values() {
+                if route.report_liveness {
+                    let _ = route
+                        .sink
+                        .send(Notification::Resumed { watch: route.watch });
+                    let _ = route.sink.send(Notification::Established {
+                        watch: route.watch,
+                        mode: WatchMode::Detailed,
+                    });
+                }
+            }
+        }
+        self.publish(DecodedBatch::Desync(DesyncCause::Reestablished));
+    }
+
     /// Cancel the outstanding read solely to pick up a newly widened reach.
     ///
     /// Reopens the directory rather than cancelling and resubmitting on the
@@ -394,8 +574,11 @@ impl WatcherInner {
     /// `CreateFileW` does not have this problem.
     ///
     /// A no-op when there is nothing live to widen: [`ArmGate::TornDown`] has
-    /// nothing left to reopen, and this is only ever called while the gate is
-    /// [`ArmGate::Open`] (see [`DirectoryWatcher::add_route`]).
+    /// nothing left to reopen. Called both from [`ArmGate::Open`] (widening for
+    /// a new route, see [`DirectoryWatcher::add_route`]) and from
+    /// [`ArmGate::Faulted`] (a re-establish attempt, see
+    /// [`WatcherInner::retry_reestablish`]); either way it takes over the gate
+    /// unconditionally except for `TornDown`.
     ///
     /// # Errors
     ///
@@ -462,16 +645,21 @@ impl WatcherInner {
         self.arm()
     }
 
-    /// Record the failure that stopped this watcher, and tell the client the
-    /// change stream has a hole in it.
+    /// Record the *permanent* failure that stopped this watcher for good, and
+    /// tell every route the change stream has a hole in it.
+    ///
+    /// Reached only from [`WatcherInner::retry_reestablish`], when a
+    /// re-establish attempt's own open fails in a way D-22 classifies as
+    /// permanent -- the one edge D-14's "no terminal state" does not cover,
+    /// because retrying would spin forever against a target that can never
+    /// become watchable again. Every other failure goes through
+    /// [`WatcherInner::enter_fault`] instead.
     fn record_stop(&self, error: io::Error) {
         let mut stopped = lock(&self.stopped);
         if stopped.is_none() {
             *stopped = Some(error);
             drop(stopped);
-            // Dropping out of the watch loop means changes from here on are
-            // unobserved, which is precisely a desync (D-12). M5 replaces this
-            // with re-establishment.
+            *lock(&self.fault) = None;
             self.publish(DecodedBatch::Desync(DesyncCause::Overflow));
         }
     }
@@ -507,17 +695,19 @@ pub struct DirectoryWatcher {
 impl DirectoryWatcher {
     /// Open `directory` and arm the first read, with one initial route.
     ///
+    /// `path` is kept for re-establishment (M5.1): a live handle cannot be
+    /// recovered once its target is gone, but the path can still be retried.
+    ///
     /// # Errors
     ///
     /// Returns the error from binding the handle to the pool or from the first
     /// `ReadDirectoryChangesW`.
     pub(crate) fn start(
         directory: DirectoryHandle,
-        watch: WatchId,
-        scope: RouteScope,
-        sink: Sender,
+        path: PathBuf,
+        route: Route,
     ) -> io::Result<Self> {
-        Self::start_with(directory, DEFAULT_BUFFER_BYTES, watch, scope, sink)
+        Self::start_with(directory, path, DEFAULT_BUFFER_BYTES, route)
     }
 
     /// As [`start`](Self::start), with an explicit completion-buffer size.
@@ -529,22 +719,25 @@ impl DirectoryWatcher {
     /// As [`start`](Self::start).
     pub(crate) fn start_with(
         directory: DirectoryHandle,
+        path: PathBuf,
         buffer_bytes: usize,
-        watch: WatchId,
-        scope: RouteScope,
-        sink: Sender,
+        route: Route,
     ) -> io::Result<Self> {
+        let watch = route.watch;
+        let initial_sink = route.sink.clone();
         let mut routes = HashMap::new();
-        let initial_sink = sink.clone();
-        routes.insert(watch, Route { watch, scope, sink });
+        routes.insert(watch, route);
 
         let inner = Arc::new(WatcherInner {
+            path,
             io: Mutex::new(None),
             resume_work: OnceLock::new(),
+            retry_timer: OnceLock::new(),
             filter: ALL_NOTIFY_FILTERS,
             buffer_bytes,
             routes: Mutex::new(routes),
             gate: Mutex::new(ArmGate::Open),
+            fault: Mutex::new(None),
             stopped: Mutex::new(None),
         });
 
@@ -601,6 +794,24 @@ impl DirectoryWatcher {
             .set(resume_work)
             .unwrap_or_else(|_| unreachable!("the resume work is set exactly once, here"));
 
+        // Mirrors `resume_work`: a `Weak`, so a failed upgrade during teardown
+        // suppresses a retry that fires after the watcher is gone. Set once here
+        // and re-armed (never recreated) across however many faults this
+        // watcher lives through (M5.1).
+        let retrying = Arc::downgrade(&inner);
+        let retry_timer = ThreadpoolTimer::new(
+            move |_firing| {
+                if let Some(inner) = retrying.upgrade() {
+                    inner.retry_reestablish();
+                }
+            },
+            None,
+        )?;
+        inner
+            .retry_timer
+            .set(retry_timer)
+            .unwrap_or_else(|_| unreachable!("the retry timer is set exactly once, here"));
+
         // Registered before the first arm, so a watcher that is backpressured
         // from the outset is still prodded when the client drains.
         initial_sink.register_resume(&inner);
@@ -624,30 +835,20 @@ impl DirectoryWatcher {
     /// nothing but a few extra bytes to decode, where a read that is too
     /// *narrow* would silently under-report.
     ///
-    /// A reopen failure stops the whole watcher (D-15's rearm-and-retry
-    /// classification), reported to every route it currently serves rather than
-    /// only the one that triggered it, since they now share one endpoint.
-    pub(crate) fn add_route(
-        &self,
-        watch: WatchId,
-        scope: RouteScope,
-        sink: Sender,
-        fresh_handle: DirectoryHandle,
-    ) {
-        let widen = scope.needs_kernel_subtree();
+    /// A reopen failure enters the fault loop (D-15's rearm-and-retry
+    /// classification) rather than stopping the watcher, reported to every
+    /// route it currently serves rather than only the one that triggered it,
+    /// since they now share one endpoint.
+    pub(crate) fn add_route(&self, route: Route, fresh_handle: DirectoryHandle) {
+        let widen = route.scope.needs_kernel_subtree();
+        let watch = route.watch;
+        let sink = route.sink.clone();
         let already_recursive = {
             let mut routes = lock(&self.inner.routes);
             let already = routes
                 .values()
-                .any(|route| route.scope.needs_kernel_subtree());
-            routes.insert(
-                watch,
-                Route {
-                    watch,
-                    scope,
-                    sink: sink.clone(),
-                },
-            );
+                .any(|existing| existing.scope.needs_kernel_subtree());
+            routes.insert(watch, route);
             already
         };
         // Registered even when this route does not widen anything: it may still
@@ -658,7 +859,7 @@ impl DirectoryWatcher {
             && !already_recursive
             && let Err(error) = self.inner.reopen(fresh_handle)
         {
-            self.inner.record_stop(error);
+            self.inner.enter_fault(error, FaultOperation::Arm);
         }
     }
 
@@ -667,13 +868,49 @@ impl DirectoryWatcher {
     /// The caller tears this watcher down entirely once this reaches zero;
     /// removing the route itself never requires re-arming (see
     /// [`DirectoryWatcher::add_route`]).
+    ///
+    /// Cancellation from mid-fault (M5.5): a route awaiting an answer to the
+    /// current fault's question that is removed here is treated as if it had
+    /// just answered with a decline (it counts at the operation's default,
+    /// then is simply not asked again) -- it is leaving, not answering, but the
+    /// effect on the remaining reduction is identical, and if it was the last
+    /// one still awaited this resolves and schedules the retry immediately
+    /// rather than leaving the watcher waiting on an answer that can now never
+    /// arrive.
     pub(crate) fn remove_route(&self, watch: WatchId) -> usize {
-        let mut routes = lock(&self.inner.routes);
-        routes.remove(&watch);
-        routes.len()
+        let remaining = {
+            let mut routes = lock(&self.inner.routes);
+            routes.remove(&watch);
+            routes.len()
+        };
+        let resolved = {
+            let mut fault = lock(&self.inner.fault);
+            match fault.as_mut() {
+                Some(state) => {
+                    if state.awaiting.remove(&watch) && state.awaiting.is_empty() {
+                        Some(state.earliest)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            }
+        };
+        if let Some(delay) = resolved {
+            self.inner.resolve_and_schedule(delay);
+        }
+        remaining
     }
 
-    /// The failure that stopped this watcher re-arming, if any.
+    /// Answer this watcher's current fault question on behalf of `watch`
+    /// (D-27/M5.3), if one is outstanding. A no-op otherwise.
+    pub(crate) fn answer(&self, watch: WatchId, delay: Option<Duration>) {
+        self.inner.answer(watch, delay);
+    }
+
+    /// The failure that stopped this watcher re-arming, if any. Only ever set
+    /// by a *permanent* re-establish failure (D-22); a watcher that is merely
+    /// recovering (`is_faulted`) reports nothing here.
     pub fn stop_reason(&self) -> Option<io::Error> {
         lock(&self.inner.stopped).as_ref().map(|error| {
             error.raw_os_error().map_or_else(
@@ -685,12 +922,21 @@ impl DirectoryWatcher {
 
     /// Whether the watcher is still re-arming.
     ///
-    /// A backpressured watcher counts: it is paused, not stopped, and resumes on
-    /// its own when the client drains (D-29). D-31 is why the distinction is
-    /// observable at all -- a paused watcher is otherwise indistinguishable from
-    /// a quiet directory.
+    /// A backpressured, reopening, or faulted watcher counts: each is paused,
+    /// not stopped, and resumes on its own (D-14/D-29). D-31 is why the
+    /// distinction is observable at all -- a paused watcher is otherwise
+    /// indistinguishable from a quiet directory.
     pub fn is_watching(&self) -> bool {
         lock(&self.inner.stopped).is_none() && self.gate() != ArmGate::TornDown
+    }
+
+    /// Whether this watcher is currently working to re-establish itself
+    /// (D-31/M5.6): asking, awaiting an answer, or backed off. Distinct from a
+    /// permanent stop ([`DirectoryWatcher::stop_reason`]) and from a mere
+    /// backpressure pause.
+    #[must_use]
+    pub fn is_faulted(&self) -> bool {
+        lock(&self.inner.fault).is_some()
     }
 
     /// The current arm gate.
@@ -716,6 +962,15 @@ impl DirectoryWatcher {
         {
             let mut gate = lock(&self.inner.gate);
             *gate = ArmGate::TornDown;
+        }
+
+        // Stops any further retry attempt and, if one is in flight, blocks until
+        // it has fully returned -- so by the time this returns, `self.inner.io`
+        // is whatever a completed `reopen` last left it as, and is safe for the
+        // cancel/run_down below to act on directly (see `reopen`'s own
+        // teardown-race handling).
+        if let Some(timer) = self.inner.retry_timer.get() {
+            timer.stop_and_drain();
         }
 
         // With the gate closed, nothing new can be submitted, so cancelling

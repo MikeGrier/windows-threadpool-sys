@@ -14,8 +14,10 @@ use super::{ArmGate, DirectoryWatcher, ReadBuffer};
 use crate::directory::DirectoryHandle;
 use crate::notify::{ChangeKind, DesyncCause};
 use crate::queue::{Notification, Receiver, Sender, WatchId, channel, channel_with_bound};
-use crate::route::RouteScope;
+use crate::retry::FaultOperation;
+use crate::route::{Route, RouteScope};
 use crate::testing::TempDir;
+use crate::watch::RetryMode;
 
 /// Upper bound for waiting on a notification the kernel really should deliver.
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -23,6 +25,20 @@ const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
 /// The subscription every test in this module watches under.
 fn test_watch() -> WatchId {
     WatchId::from_raw(1)
+}
+
+/// A route with no fault-recovery involvement: `Defaults` retry, no liveness
+/// reporting, no standing fault slot. What every test in this module needs
+/// unless it is specifically exercising M5's fault machinery.
+fn plain_route(watch: WatchId, scope: RouteScope, sink: Sender) -> Route {
+    Route {
+        watch,
+        scope,
+        sink,
+        retry: RetryMode::Defaults,
+        report_liveness: false,
+        fault_slot: None,
+    }
 }
 
 /// Drains the queue in the background, so a test can assert on what has arrived
@@ -59,7 +75,12 @@ impl Drained {
             .into_iter()
             .filter_map(|item| match item {
                 Notification::Batch { changes, .. } => Some(changes),
-                Notification::Desync { .. } | Notification::Completion { .. } => None,
+                Notification::Desync { .. }
+                | Notification::Completion { .. }
+                | Notification::Suspended { .. }
+                | Notification::Resumed { .. }
+                | Notification::Established { .. }
+                | Notification::RetryQuestion { .. } => None,
             })
             .flatten()
             .map(|change| {
@@ -76,7 +97,12 @@ impl Drained {
             .into_iter()
             .filter_map(|item| match item {
                 Notification::Desync { cause, .. } => Some(cause),
-                Notification::Batch { .. } | Notification::Completion { .. } => None,
+                Notification::Batch { .. }
+                | Notification::Completion { .. }
+                | Notification::Suspended { .. }
+                | Notification::Resumed { .. }
+                | Notification::Established { .. }
+                | Notification::RetryQuestion { .. } => None,
             })
             .collect()
     }
@@ -113,13 +139,9 @@ impl Drained {
 fn watch(dir: &Path, subtree: bool) -> (DirectoryWatcher, Drained) {
     let (sender, receiver) = channel();
     let handle = DirectoryHandle::open(dir).expect("open the directory");
-    let watcher = DirectoryWatcher::start(
-        handle,
-        test_watch(),
-        RouteScope::Directory { subtree },
-        sender,
-    )
-    .expect("start the watcher");
+    let route = plain_route(test_watch(), RouteScope::Directory { subtree }, sender);
+    let watcher =
+        DirectoryWatcher::start(handle, dir.to_path_buf(), route).expect("start the watcher");
     (watcher, Drained::start(receiver))
 }
 
@@ -363,14 +385,13 @@ fn a_tiny_buffer_surfaces_the_kernel_overflow_as_a_desync() {
     let dir = TempDir::new("overflow");
     let (sender, receiver) = channel();
     let handle = DirectoryHandle::open(dir.path()).expect("open");
-    let watcher = DirectoryWatcher::start_with(
-        handle,
-        4,
+    let route = plain_route(
         test_watch(),
         RouteScope::Directory { subtree: false },
         sender,
-    )
-    .expect("start");
+    );
+    let watcher =
+        DirectoryWatcher::start_with(handle, dir.path().to_path_buf(), 4, route).expect("start");
     let collected = Drained::start(receiver);
 
     let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
@@ -514,13 +535,13 @@ fn teardown_releases_the_sender_so_the_receiver_disconnects() {
     let dir = TempDir::new("teardown-disconnect");
     let (sender, receiver) = channel();
     let handle = DirectoryHandle::open(dir.path()).expect("open");
-    let watcher = DirectoryWatcher::start(
-        handle,
+    let route = plain_route(
         test_watch(),
         RouteScope::Directory { subtree: false },
         sender,
-    )
-    .expect("start the watcher");
+    );
+    let watcher = DirectoryWatcher::start(handle, dir.path().to_path_buf(), route)
+        .expect("start the watcher");
 
     assert!(!receiver.is_disconnected(), "live while the watcher exists");
     drop(watcher);
@@ -640,13 +661,13 @@ fn watch_bounded(dir: &Path, bound: usize) -> (DirectoryWatcher, Receiver) {
     let handle = DirectoryHandle::open(dir).expect("open the watched directory");
     let (sender, receiver) =
         channel_with_bound(NonZeroUsize::new(bound).expect("a non-zero bound"));
-    let watcher = DirectoryWatcher::start(
-        handle,
+    let route = plain_route(
         test_watch(),
         RouteScope::Directory { subtree: false },
         sender,
-    )
-    .expect("arm the first read");
+    );
+    let watcher =
+        DirectoryWatcher::start(handle, dir.to_path_buf(), route).expect("arm the first read");
     (watcher, receiver)
 }
 
@@ -852,12 +873,16 @@ fn an_overflowed_read_is_reported_as_a_desync_and_the_watch_continues() {
     let dir = TempDir::new("watcher-overflow");
     let handle = DirectoryHandle::open(dir.path()).expect("open the watched directory");
     let (sender, receiver) = channel();
-    let watcher = DirectoryWatcher::start_with(
-        handle,
-        UNDERSIZED_BUFFER_BYTES,
+    let route = plain_route(
         test_watch(),
         RouteScope::Directory { subtree: false },
         sender,
+    );
+    let watcher = DirectoryWatcher::start_with(
+        handle,
+        dir.path().to_path_buf(),
+        UNDERSIZED_BUFFER_BYTES,
+        route,
     )
     .expect("arm the first read");
 
@@ -909,13 +934,13 @@ fn an_overflowed_read_is_reported_as_a_desync_and_the_watch_continues() {
 fn watch_with_sink(dir: &Path, subtree: bool) -> (DirectoryWatcher, Sender, Drained) {
     let (sender, receiver) = channel();
     let handle = DirectoryHandle::open(dir).expect("open the directory");
-    let watcher = DirectoryWatcher::start(
-        handle,
+    let route = plain_route(
         test_watch(),
         RouteScope::Directory { subtree },
         sender.clone(),
-    )
-    .expect("start the watcher");
+    );
+    let watcher =
+        DirectoryWatcher::start(handle, dir.to_path_buf(), route).expect("start the watcher");
     (watcher, sender, Drained::start(receiver))
 }
 
@@ -925,9 +950,11 @@ fn adding_a_shallow_route_to_a_shallow_watcher_needs_no_rearm() {
     let (watcher, sink, collected) = watch_with_sink(dir.path(), false);
 
     watcher.add_route(
-        WatchId::from_raw(2),
-        RouteScope::Directory { subtree: false },
-        sink,
+        plain_route(
+            WatchId::from_raw(2),
+            RouteScope::Directory { subtree: false },
+            sink,
+        ),
         DirectoryHandle::open(dir.path()).expect("open a second handle"),
     );
 
@@ -962,9 +989,11 @@ fn a_recursive_route_added_to_a_shallow_watcher_widens_its_reach() {
     );
 
     watcher.add_route(
-        WatchId::from_raw(2),
-        RouteScope::Directory { subtree: true },
-        sink,
+        plain_route(
+            WatchId::from_raw(2),
+            RouteScope::Directory { subtree: true },
+            sink,
+        ),
         DirectoryHandle::open(dir.path()).expect("open a second handle"),
     );
 
@@ -984,9 +1013,11 @@ fn removing_the_only_recursive_route_leaves_the_watcher_functional() {
     let (watcher, sink, collected) = watch_with_sink(dir.path(), true);
 
     watcher.add_route(
-        WatchId::from_raw(2),
-        RouteScope::Directory { subtree: false },
-        sink,
+        plain_route(
+            WatchId::from_raw(2),
+            RouteScope::Directory { subtree: false },
+            sink,
+        ),
         DirectoryHandle::open(dir.path()).expect("open a second handle"),
     );
     assert_eq!(watcher.remove_route(test_watch()), 1, "one route remains");
@@ -1004,6 +1035,215 @@ fn removing_every_route_is_observed_by_the_caller() {
     let (watcher, collected) = watch(dir.path(), false);
     assert_eq!(watcher.remove_route(test_watch()), 0);
     drop(collected);
+    drop(watcher);
+    dir.cleanup();
+}
+
+// --- fault recovery and the retry protocol (D-14/D-15/D-27, M5.1-M5.6) ---
+
+/// An interactive route (D-27), with its standing fault-question reservation
+/// (D-28) taken from `sink`.
+fn interactive_route(watch: WatchId, sink: Sender, report_liveness: bool) -> Route {
+    let fault_slot = sink
+        .reserve_standing()
+        .expect("room for the standing fault-question slot");
+    Route {
+        watch,
+        scope: RouteScope::Directory { subtree: false },
+        sink,
+        retry: RetryMode::Interactive,
+        report_liveness,
+        fault_slot: Some(fault_slot),
+    }
+}
+
+#[test]
+fn a_fresh_watcher_reports_not_faulted() {
+    let dir = TempDir::new("fault-not-yet");
+    let (watcher, _collected) = watch(dir.path(), false);
+    assert!(!watcher.is_faulted());
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn a_fault_with_only_default_routes_closes_the_gate_until_the_timer_resolves_it() {
+    let dir = TempDir::new("fault-default");
+    let (watcher, _collected) = watch(dir.path(), false);
+
+    watcher
+        .inner
+        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+
+    assert!(watcher.is_faulted());
+    assert_eq!(watcher.gate(), ArmGate::Faulted);
+    assert!(
+        watcher.is_watching(),
+        "a fault is recovering, not a permanent stop"
+    );
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn an_interactive_route_is_asked_and_its_answer_resolves_the_fault() {
+    let dir = TempDir::new("fault-interactive");
+    let (sender, receiver) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let route = interactive_route(test_watch(), sender, false);
+    let watcher = DirectoryWatcher::start(handle, dir.path().to_path_buf(), route).expect("start");
+    let collected = Drained::start(receiver);
+
+    watcher
+        .inner
+        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    assert!(watcher.is_faulted());
+    collected.wait_until("the retry question", |d| {
+        d.notifications().iter().any(
+            |n| matches!(n, Notification::RetryQuestion { watch, .. } if *watch == test_watch()),
+        )
+    });
+
+    watcher.answer(test_watch(), Some(Duration::from_millis(1)));
+
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    while watcher.is_faulted() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the fault never resolved after being answered"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(watcher.is_watching());
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn the_earliest_of_several_answers_wins_and_a_decliner_counts_at_the_default() {
+    let dir = TempDir::new("fault-earliest");
+    let (sender_a, _receiver_a) = channel();
+    let (sender_b, _receiver_b) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let watch_a = WatchId::from_raw(10);
+    let watch_b = WatchId::from_raw(11);
+    let route_a = interactive_route(watch_a, sender_a, false);
+    let watcher =
+        DirectoryWatcher::start(handle, dir.path().to_path_buf(), route_a).expect("start");
+    let fresh = DirectoryHandle::open(dir.path()).expect("a second handle");
+    watcher.add_route(interactive_route(watch_b, sender_b, false), fresh);
+
+    watcher
+        .inner
+        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    assert!(watcher.is_faulted());
+
+    // `watch_a` declines (counted at the 500ms default); `watch_b` names the
+    // floor. The earliest of the two must win regardless of answer order.
+    watcher.answer(watch_a, None);
+    watcher.answer(watch_b, Some(Duration::from_millis(1)));
+
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    while watcher.is_faulted() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the fault never resolved once both routes answered"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn removing_the_only_awaited_route_resolves_the_fault_rather_than_wedging_it() {
+    let dir = TempDir::new("fault-cancel-awaited");
+    let (sender, _receiver) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let route = interactive_route(test_watch(), sender, false);
+    let watcher = DirectoryWatcher::start(handle, dir.path().to_path_buf(), route).expect("start");
+
+    watcher
+        .inner
+        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    assert!(watcher.is_faulted());
+
+    assert_eq!(
+        watcher.remove_route(test_watch()),
+        0,
+        "the only route is gone"
+    );
+
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    while watcher.is_faulted() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "removing the last awaited route must resolve the fault, not wedge it"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn a_resolved_fault_reports_reestablished_and_the_opt_in_liveness_brackets() {
+    let dir = TempDir::new("fault-resolved-notify");
+    let (sender, receiver) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let route = Route {
+        watch: test_watch(),
+        scope: RouteScope::Directory { subtree: false },
+        sink: sender,
+        retry: RetryMode::Interactive,
+        report_liveness: true,
+        fault_slot: None,
+    };
+    // Interactive with no fault_slot: never asked (there is nowhere to ask), so
+    // this resolves at the default delay exactly like a Defaults route would.
+    let watcher = DirectoryWatcher::start(handle, dir.path().to_path_buf(), route).expect("start");
+    let collected = Drained::start(receiver);
+
+    watcher
+        .inner
+        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    collected.wait_until("suspended", |d| {
+        d.notifications()
+            .iter()
+            .any(|n| matches!(n, Notification::Suspended { .. }))
+    });
+
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    while watcher.is_faulted() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the default-delay fault never resolved"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    collected.wait_until("resumed, established, and reestablished", |d| {
+        let seen = d.notifications();
+        seen.iter()
+            .any(|n| matches!(n, Notification::Resumed { .. }))
+            && seen
+                .iter()
+                .any(|n| matches!(n, Notification::Established { .. }))
+            && seen.iter().any(|n| {
+                matches!(
+                    n,
+                    Notification::Desync {
+                        cause: DesyncCause::Reestablished,
+                        ..
+                    }
+                )
+            })
+    });
+
     drop(watcher);
     dir.cleanup();
 }

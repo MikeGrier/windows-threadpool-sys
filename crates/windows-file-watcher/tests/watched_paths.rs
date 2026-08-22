@@ -872,3 +872,53 @@ fn subscribe_ok(
     assert_eq!(drained.outcomes(id), vec![Outcome::Subscribed]);
     watch
 }
+
+// --- fault recovery integration (D-14/D-15/D-27, M5.7) ---
+
+#[test]
+fn deleting_and_recreating_the_watched_directory_reestablishes_the_watch() {
+    let dir = TempDir::new("m5-reestablish");
+    let (monitor, session, receiver, mut drained) = client();
+
+    let watch = subscribe(
+        &session,
+        &receiver,
+        &mut drained,
+        dir.path(),
+        WatchOptions::new().report_liveness(true),
+    );
+    let id = watch.id();
+
+    // Confirm it is genuinely watching before pulling the rug out.
+    std::fs::write(dir.path().join("before.txt"), b"x").expect("create before the outage");
+    drained.drain_until(&receiver, "the pre-outage change", |seen| {
+        seen.has(id, ChangeKind::Added, "before.txt")
+    });
+
+    std::fs::remove_dir_all(dir.path()).expect("delete the watched directory");
+
+    drained.drain_until(&receiver, "the suspended bracket", |seen| {
+        seen.items
+            .iter()
+            .any(|n| matches!(n, Notification::Suspended { watch: tag } if *tag == id))
+    });
+
+    std::fs::create_dir_all(dir.path()).expect("recreate the watched directory");
+
+    drained.drain_until(&receiver, "reestablishment", |seen| {
+        seen.items
+            .iter()
+            .any(|n| matches!(n, Notification::Resumed { watch: tag } if *tag == id))
+            && seen.desyncs(id).contains(&DesyncCause::Reestablished)
+    });
+
+    // And it is genuinely watching again, not merely reporting that it is.
+    std::fs::write(dir.path().join("after.txt"), b"x").expect("create after the outage");
+    drained.drain_until(&receiver, "a change after re-establishment", |seen| {
+        seen.has(id, ChangeKind::Added, "after.txt")
+    });
+
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
+}

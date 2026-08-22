@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use super::Monitor;
-use crate::queue::Receiver;
+use crate::queue::{Notification, Receiver};
 use crate::session::Session;
 use crate::testing::TempDir;
 use crate::watch::{Watch, WatchOptions};
@@ -378,6 +378,87 @@ fn many_subscriptions_on_one_directory_all_coalesce() {
     assert_eq!(monitor.directory_count(), 1);
 
     drop(watches);
+    drop(monitor);
+    dir.cleanup();
+}
+
+// --- open-fault re-establishment (D-14/D-15/D-27, M5.1/M5.3) ---
+
+#[test]
+fn a_target_that_does_not_exist_yet_establishes_once_it_appears() {
+    let dir = TempDir::new("monitor-retry-appears");
+    let target = dir.path().join("not-yet");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(&target, WatchOptions::new())
+        .expect("register the subscription");
+    monitor.quiesce();
+
+    assert_eq!(monitor.is_faulted(watch.id()), Some(true));
+    assert!(!monitor.is_watching(watch.id()));
+
+    std::fs::create_dir(&target).expect("create the target directory");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !monitor.is_watching(watch.id()) {
+        assert!(
+            Instant::now() < deadline,
+            "the subscription never established once its target appeared"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(monitor.is_faulted(watch.id()), Some(false));
+
+    drop(receiver);
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn an_interactive_subscription_is_asked_and_its_answer_speeds_up_establishment() {
+    let dir = TempDir::new("monitor-retry-interactive");
+    let target = dir.path().join("not-yet");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(
+            &target,
+            WatchOptions::new().retry(crate::watch::RetryMode::Interactive),
+        )
+        .expect("register the subscription");
+    monitor.quiesce();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut asked = false;
+    while !asked {
+        assert!(
+            Instant::now() < deadline,
+            "the interactive subscription was never asked"
+        );
+        if let Some(notification) = receiver.try_recv()
+            && matches!(notification, Notification::RetryQuestion { watch: id, .. } if id == watch.id())
+        {
+            asked = true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    std::fs::create_dir(&target).expect("create the target directory");
+    session.answer(watch.id(), Some(Duration::from_millis(1)));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !monitor.is_watching(watch.id()) {
+        assert!(
+            Instant::now() < deadline,
+            "the subscription never established after answering"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    drop(receiver);
+    drop(watch);
     drop(monitor);
     dir.cleanup();
 }
