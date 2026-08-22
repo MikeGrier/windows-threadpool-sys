@@ -22,7 +22,7 @@ use std::os::windows::io::AsRawHandle;
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-use crate::operation::payload_ptr_from_overlapped;
+use crate::operation::{payload_ptr_from_overlapped, sync_bytes_ptr_from_overlapped};
 use crate::{
     AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Started,
     Submitted,
@@ -193,6 +193,7 @@ impl AssociatedEndpoint<'_> {
         // closure, which runs at the FFI boundary and cannot report an error.
         let in_len = checked_len(input.len(), "input")?;
         let out_len = checked_len(output_len, "output")?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
 
         let operation = Operation::new(DeviceIoPayload {
             input,
@@ -200,12 +201,13 @@ impl AssociatedEndpoint<'_> {
         });
         // SAFETY: issues exactly one DeviceIoControl reading the payload's input
         // and writing its output, both reached through the pinned OVERLAPPED;
-        // they live until the completion is claimed.
+        // they and the byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
                 let payload = payload_ptr_from_overlapped::<DeviceIoPayload>(overlapped);
                 let in_ptr = in_ptr(&(*payload).input);
                 let out_ptr = out_ptr(&mut (*payload).output);
+                let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = DeviceIoControl(
                     handle.as_raw_handle(),
                     code,
@@ -213,57 +215,54 @@ impl AssociatedEndpoint<'_> {
                     in_len,
                     out_ptr,
                     out_len,
-                    std::ptr::null_mut(),
+                    bytes,
                     overlapped,
                 );
-                classify_issued(ok)
+                classify_issued(ok, skip, bytes)
             })
         };
         finish_device(submitted)
     }
 }
 
-/// Map a native `BOOL` into the IOCP submission contract, expecting a completion
-/// packet on success because this adapter is only used on endpoints that are not
-/// in skip-on-success mode.
+/// Map a native `BOOL` into the IOCP submission contract.
 ///
-/// # Why an immediate `TRUE` is `Pending` and not `Completed`
+/// # Why an immediate `TRUE` is usually `Pending`
 ///
 /// [`Issued`] does not record whether `DeviceIoControl` finished synchronously.
 /// It records whether a **completion packet will arrive on the port**, and for
 /// an overlapped handle bound to an IOCP those are different facts: the I/O
 /// Manager queues a packet for every request it completes, *including* one that
-/// succeeds immediately without returning `ERROR_IO_PENDING`. The one documented
-/// exception is `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`. See [`Issued::Pending`]
-/// for the full statement of that rule.
+/// succeeds immediately without returning `ERROR_IO_PENDING`. See
+/// [`Issued::Pending`] for the full statement of that rule.
 ///
-/// So `ok != 0` means the *I/O* is already done -- and its packet is already
-/// queued, waiting to be claimed. That is exactly `Pending`: the kernel still
-/// holds the operation's storage, and [`Completion::claim`] is still what
-/// recovers the output buffer and byte count. Answering `Completed` here would
-/// tell the port to reclaim that storage inline while a packet carrying the
-/// same `OVERLAPPED` was still in flight -- a use-after-free on claim, and a
-/// rundown that returns while an operation is still outstanding.
+/// The single exception is `skip_on_success`, which is why this needs to know
+/// it: on an endpoint in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode no packet
+/// is queued for an immediate success, so that -- and only that -- is an
+/// [`Issued::Completed`]. Both directions of getting this wrong are serious.
+/// Answering `Completed` when a packet is coming tells the port to reclaim the
+/// operation's storage inline, and the packet then arrives carrying a dangling
+/// `OVERLAPPED` -- a use-after-free on claim. Answering `Pending` when none is
+/// coming leaves the operation counted as outstanding forever, so
+/// [`crate::CompletionPort::run_down`] spins waiting for a packet that will
+/// never be queued.
 ///
-/// # Skip-on-success is supported by the core, just not by this adapter
+/// # Safety
 ///
-/// This is a limitation of the *buffer-owning adapter*, not of the crate. The
-/// submission seam handles skip-on-success fully -- that is what
-/// [`Issued::Completed`] and [`Submitted::Completed`] are for, and both backends
-/// implement the inline-reclaim path for it. What [`AssociatedEndpoint::ioctl`]
-/// cannot express is the *result*: it hands back a [`DeviceIoControlIo`] token
-/// whose entire contract is "claim me from a completion later", and there is no
-/// room in that shape for "already done, here is your output buffer". So
-/// [`finish_device`] reports a synchronous completion as an error rather than
-/// silently losing the result. Widening the adapters to return an
-/// already-complete result is a deliberate, still-unbuilt piece of work, not a
-/// judgement that the flag is unwanted.
-fn classify_issued(ok: i32) -> io::Result<Issued> {
-    // Both success shapes are `Pending` for the same reason: a packet is coming
-    // either way. `TRUE` means it is queued already; `ERROR_IO_PENDING` means it
-    // is queued once the request finishes. The port cannot distinguish them from
-    // the packet alone, and has no need to.
+/// `sync_bytes` must be the byte-count cell of the operation being submitted,
+/// which is live for the whole call.
+unsafe fn classify_issued(
+    ok: i32,
+    skip_on_success: bool,
+    sync_bytes: *mut u32,
+) -> io::Result<Issued> {
     if ok != 0 {
+        if skip_on_success {
+            // SAFETY: the call reported immediate success, so the kernel has
+            // already written the count and will not write it again.
+            let bytes_transferred = unsafe { *sync_bytes };
+            return Ok(Issued::Completed { bytes_transferred });
+        }
         return Ok(Issued::Pending);
     }
     let error = io::Error::last_os_error();

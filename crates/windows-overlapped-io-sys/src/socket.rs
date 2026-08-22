@@ -252,22 +252,23 @@ fn send_payload(mut data: Vec<u8>) -> io::Result<SocketPayload> {
     })
 }
 
-/// Map a Winsock call's return value into the submission contract, expecting a
-/// completion packet on success because this adapter is only used on sockets
-/// that are not in a skip-on-success mode.
+/// Map a Winsock call's return value into the submission contract.
 ///
-/// An immediate `0` (Winsock success) is [`Issued::Pending`], not `Completed`:
-/// [`Issued`] records whether a completion packet will arrive, not whether the
-/// call finished synchronously, and an IOCP-bound overlapped socket gets a
-/// packet for a synchronously-successful request too unless it is in
-/// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode. See [`Issued::Pending`] for why,
-/// and for what answering `Completed` would break.
+/// Always [`Issued::Pending`] on success, and correctly so: [`Issued`] records
+/// whether a completion packet will arrive, and an IOCP-bound overlapped socket
+/// gets one for a synchronously-successful request unless it is in
+/// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode -- which no socket reached
+/// through this crate can be, because the notification-mode setter is offered
+/// only on [`crate::UnassociatedEndpoint`] and sockets have no equivalent type.
+/// (Win32 also restricts skip-on-success on a socket to Layered Service
+/// Providers that return IFS handles, so enabling it is a per-socket capability
+/// question rather than a flag to set blind.)
 ///
-/// The core seam supports skip-on-success ([`Issued::Completed`] exists for it);
-/// what these buffer-owning adapters cannot express is an *already-complete*
-/// result, since they hand back a claim-later token. Note that for sockets the
-/// flag is additionally only compatible with LSPs that return IFS handles, so
-/// enabling it is a per-socket capability question rather than a blanket win.
+/// **If a socket-side notification-mode setter is ever added, this function must
+/// change with it**, exactly as `fs::classify_issued` and
+/// `device::classify_issued` did: reporting `Pending` for an operation whose
+/// packet is suppressed leaves it outstanding forever and wedges
+/// [`crate::CompletionPort::run_down`].
 fn classify_socket(ret: i32) -> io::Result<Issued> {
     if ret == 0 {
         return Ok(Issued::Pending);

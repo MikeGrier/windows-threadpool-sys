@@ -114,6 +114,9 @@ impl CompletionPort {
         endpoint: UnassociatedEndpoint,
         key: usize,
     ) -> io::Result<AssociatedEndpoint<'_>> {
+        // Read before the handle is taken out, so the mode travels with the
+        // endpoint into association rather than being lost at the boundary.
+        let modes = endpoint.notification_modes();
         let handle = endpoint.into_handle();
         // SAFETY: associating a valid handle with a valid port; the concurrency
         // argument is ignored when an existing port is supplied.
@@ -125,6 +128,7 @@ impl CompletionPort {
             port: self,
             handle,
             key,
+            modes,
         })
     }
 
@@ -438,6 +442,7 @@ pub struct AssociatedEndpoint<'port> {
     port: &'port CompletionPort,
     handle: OwnedHandle,
     key: usize,
+    modes: crate::NotificationModes,
 }
 
 impl<'port> AssociatedEndpoint<'port> {
@@ -451,6 +456,18 @@ impl<'port> AssociatedEndpoint<'port> {
     #[must_use]
     pub fn key(&self) -> usize {
         self.key
+    }
+
+    /// The completion-notification modes this endpoint carries, as declared
+    /// before it was associated.
+    ///
+    /// The adapters read this to classify a synchronous native success: with
+    /// [`crate::NotificationModes::skip_completion_port_on_success`] set, no
+    /// packet will arrive for one, so it is an [`Issued::Completed`] rather than
+    /// an [`Issued::Pending`].
+    #[must_use]
+    pub fn notification_modes(&self) -> crate::NotificationModes {
+        self.modes
     }
 
     /// The completion port this endpoint is associated with.

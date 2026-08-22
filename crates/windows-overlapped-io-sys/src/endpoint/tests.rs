@@ -75,7 +75,7 @@ mod notification_modes {
 
     #[test]
     fn setting_no_modes_is_accepted_as_a_no_op() {
-        let (endpoint, path) = temp_endpoint("none");
+        let (mut endpoint, path) = temp_endpoint("none");
         endpoint
             .set_notification_modes(NotificationModes::default())
             .expect("setting no modes succeeds");
@@ -85,7 +85,7 @@ mod notification_modes {
 
     #[test]
     fn skip_on_success_is_accepted_on_a_file_endpoint() {
-        let (endpoint, path) = temp_endpoint("skip");
+        let (mut endpoint, path) = temp_endpoint("skip");
         endpoint
             .set_notification_modes(NotificationModes {
                 skip_completion_port_on_success: true,
@@ -98,7 +98,7 @@ mod notification_modes {
 
     #[test]
     fn skip_set_event_on_handle_is_accepted_on_a_file_endpoint() {
-        let (endpoint, path) = temp_endpoint("event");
+        let (mut endpoint, path) = temp_endpoint("event");
         endpoint
             .set_notification_modes(NotificationModes {
                 skip_set_event_on_handle: true,
@@ -111,7 +111,7 @@ mod notification_modes {
 
     #[test]
     fn both_modes_can_be_set_in_one_call() {
-        let (endpoint, path) = temp_endpoint("both");
+        let (mut endpoint, path) = temp_endpoint("both");
         endpoint
             .set_notification_modes(NotificationModes {
                 skip_completion_port_on_success: true,
@@ -126,7 +126,7 @@ mod notification_modes {
     fn setting_modes_is_additive_across_calls() {
         // A mode cannot be removed once set, so a second call can only add to
         // the first; neither call is rejected for repeating what is already on.
-        let (endpoint, path) = temp_endpoint("additive");
+        let (mut endpoint, path) = temp_endpoint("additive");
         let skip_success = NotificationModes {
             skip_completion_port_on_success: true,
             ..NotificationModes::default()
@@ -154,7 +154,7 @@ mod notification_modes {
         // must not interfere with the association itself.
         use crate::CompletionPort;
 
-        let (endpoint, path) = temp_endpoint("associate");
+        let (mut endpoint, path) = temp_endpoint("associate");
         endpoint
             .set_notification_modes(NotificationModes {
                 skip_completion_port_on_success: true,

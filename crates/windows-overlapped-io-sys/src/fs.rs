@@ -14,12 +14,13 @@ use std::os::windows::io::AsRawHandle;
 use std::ptr::NonNull;
 use std::slice;
 
-use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
+use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, FALSE};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_SEGMENT_ELEMENT, ReadFile, ReadFileScatter, WriteFile, WriteFileGather,
 };
+use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 
-use crate::operation::payload_ptr_from_overlapped;
+use crate::operation::{payload_ptr_from_overlapped, sync_bytes_ptr_from_overlapped};
 use crate::{
     AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Started,
     Submitted,
@@ -200,22 +201,24 @@ impl AssociatedEndpoint<'_> {
     #[track_caller]
     pub fn read(&self, len: usize, offset: u64) -> io::Result<Started<FileIo, Vec<u8>>> {
         let buf_len = checked_len(len, "read buffer")?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
         let mut operation = Operation::new(vec![0_u8; len]);
         operation.set_offset(offset);
         // SAFETY: issues exactly one ReadFile into the operation's own payload
-        // buffer, reached through the pinned OVERLAPPED; the payload lives until
-        // the completion is claimed.
+        // buffer, reached through the pinned OVERLAPPED; the payload and the
+        // byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
                 let payload = payload_ptr_from_overlapped::<Vec<u8>>(overlapped);
+                let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = ReadFile(
                     handle.as_raw_handle(),
                     (*payload).as_mut_ptr(),
                     buf_len,
-                    std::ptr::null_mut(),
+                    bytes,
                     overlapped,
                 );
-                classify_issued(ok)
+                classify_issued(ok, skip, bytes)
             })
         };
         finish(submitted)
@@ -234,45 +237,107 @@ impl AssociatedEndpoint<'_> {
     #[track_caller]
     pub fn write(&self, data: Vec<u8>, offset: u64) -> io::Result<Started<FileIo, Vec<u8>>> {
         let data_len = checked_len(data.len(), "write buffer")?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
         let mut operation = Operation::new(data);
         operation.set_offset(offset);
         // SAFETY: issues exactly one WriteFile from the operation's own payload
-        // buffer, reached through the pinned OVERLAPPED; the payload lives until
-        // the completion is claimed.
+        // buffer, reached through the pinned OVERLAPPED; the payload and the
+        // byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
                 let payload = payload_ptr_from_overlapped::<Vec<u8>>(overlapped);
+                let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = WriteFile(
                     handle.as_raw_handle(),
                     (*payload).as_ptr(),
                     data_len,
-                    std::ptr::null_mut(),
+                    bytes,
                     overlapped,
                 );
-                classify_issued(ok)
+                classify_issued(ok, skip, bytes)
             })
         };
         finish(submitted)
     }
 }
 
-/// Map a native `BOOL` into the IOCP submission contract, expecting a completion
-/// packet on success because this adapter is only used on endpoints that are not
-/// in skip-on-success mode.
+/// Map a native `BOOL` into the IOCP submission contract.
 ///
-/// An immediate `TRUE` is [`Issued::Pending`], not `Completed`: [`Issued`]
-/// records whether a completion packet will arrive, not whether the call
-/// finished synchronously, and an IOCP-bound overlapped handle gets a packet for
-/// a synchronously-successful request too unless it is in
-/// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode. See [`Issued::Pending`] for why,
-/// and for what answering `Completed` would break.
+/// # Why an immediate `TRUE` is usually `Pending`
 ///
-/// The core seam supports skip-on-success ([`Issued::Completed`] exists for it);
-/// what these buffer-owning adapters cannot express is an *already-complete*
-/// result, since they hand back a claim-later token. That is an unbuilt
-/// widening, not a rejection of the flag.
-fn classify_issued(ok: i32) -> io::Result<Issued> {
+/// [`Issued`] does not record whether the call finished synchronously. It
+/// records whether a **completion packet will arrive**, and for an IOCP-bound
+/// overlapped handle those are different facts: the I/O Manager queues a packet
+/// for every request it completes, *including* one that succeeded immediately
+/// without returning `ERROR_IO_PENDING`. See [`Issued::Pending`].
+///
+/// The single exception is `skip_on_success`, which is why this needs to know
+/// it: on an endpoint in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode no packet
+/// is queued for an immediate success, so that -- and only that -- is an
+/// [`Issued::Completed`]. Getting this backwards in either direction is a bug
+/// with teeth: claiming `Completed` when a packet is coming frees the operation
+/// under a live `OVERLAPPED`, and claiming `Pending` when none is coming leaves
+/// the operation outstanding forever and wedges rundown.
+///
+/// # Safety
+///
+/// `sync_bytes` must be the byte-count cell of the operation being submitted,
+/// which is live for the whole call.
+unsafe fn classify_issued(
+    ok: i32,
+    skip_on_success: bool,
+    sync_bytes: *mut u32,
+) -> io::Result<Issued> {
     if ok != 0 {
+        if skip_on_success {
+            // SAFETY: the call reported immediate success, so the kernel has
+            // already written the count and will not write it again.
+            let bytes_transferred = unsafe { *sync_bytes };
+            return Ok(Issued::Completed { bytes_transferred });
+        }
+        return Ok(Issued::Pending);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+        Ok(Issued::Pending)
+    } else {
+        Err(error)
+    }
+}
+
+/// As [`classify_issued`], for the scatter/gather calls.
+///
+/// `ReadFileScatter` and `WriteFileGather` take no byte-count out-parameter --
+/// the slot in that position is `lpReserved` and must be null -- so on the
+/// skip-on-success path the count comes from `GetOverlappedResult` instead.
+/// That is the sanctioned way to read it (`Internal`/`InternalHigh` are never
+/// touched directly), and it cannot block here: it is called only after the
+/// call reported immediate success, so the operation is already complete and
+/// `bWait` is `FALSE`.
+///
+/// # Safety
+///
+/// `handle` must be the endpoint's live handle and `overlapped` the identity of
+/// the operation just submitted through it.
+unsafe fn classify_scatter(
+    ok: i32,
+    skip_on_success: bool,
+    handle: std::os::windows::io::RawHandle,
+    overlapped: *mut OVERLAPPED,
+) -> io::Result<Issued> {
+    if ok != 0 {
+        if skip_on_success {
+            let mut bytes_transferred = 0_u32;
+            // SAFETY: a live handle and the completed operation's own
+            // OVERLAPPED; `bWait` is FALSE, so this only reads what is already
+            // recorded.
+            let got =
+                unsafe { GetOverlappedResult(handle, overlapped, &mut bytes_transferred, FALSE) };
+            if got == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            return Ok(Issued::Completed { bytes_transferred });
+        }
         return Ok(Issued::Pending);
     }
     let error = io::Error::last_os_error();
@@ -575,6 +640,7 @@ impl AssociatedEndpoint<'_> {
         // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
         // page count into an ordinary error.
         let total = scatter_gather_len(pages)?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
         let buffers = PageBuffers::new(pages);
         let segments = buffers.segment_array();
         let mut operation = Operation::new(ScatterPayload { buffers, segments });
@@ -585,14 +651,15 @@ impl AssociatedEndpoint<'_> {
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
                 let payload = payload_ptr_from_overlapped::<ScatterPayload>(overlapped);
+                let raw = handle.as_raw_handle();
                 let ok = ReadFileScatter(
-                    handle.as_raw_handle(),
+                    raw,
                     (*payload).segments.as_ptr(),
                     total,
                     std::ptr::null(),
                     overlapped,
                 );
-                classify_issued(ok)
+                classify_scatter(ok, skip, raw, overlapped)
             })
         };
         finish_scatter(submitted)
@@ -617,6 +684,7 @@ impl AssociatedEndpoint<'_> {
         offset: u64,
     ) -> io::Result<Started<ScatterGatherIo, PageBuffers>> {
         let total = checked_len(buffers.len(), "scatter/gather buffer set")?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
         let segments = buffers.segment_array();
         let mut operation = Operation::new(ScatterPayload { buffers, segments });
         operation.set_offset(offset);
@@ -626,14 +694,15 @@ impl AssociatedEndpoint<'_> {
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
                 let payload = payload_ptr_from_overlapped::<ScatterPayload>(overlapped);
+                let raw = handle.as_raw_handle();
                 let ok = WriteFileGather(
-                    handle.as_raw_handle(),
+                    raw,
                     (*payload).segments.as_ptr(),
                     total,
                     std::ptr::null(),
                     overlapped,
                 );
-                classify_issued(ok)
+                classify_scatter(ok, skip, raw, overlapped)
             })
         };
         finish_scatter(submitted)

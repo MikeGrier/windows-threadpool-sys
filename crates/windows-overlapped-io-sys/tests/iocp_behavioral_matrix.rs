@@ -41,7 +41,7 @@ fn skip_on_success_completes_synchronously_without_a_packet() {
     // documents: the flag is inert until the handle reaches a port, so there is
     // never a window in which an operation could be issued against a handle
     // whose notification behaviour is still undecided.
-    let endpoint = open_overlapped(&path);
+    let mut endpoint = open_overlapped(&path);
     endpoint
         .set_notification_modes(NotificationModes {
             skip_completion_port_on_success: true,

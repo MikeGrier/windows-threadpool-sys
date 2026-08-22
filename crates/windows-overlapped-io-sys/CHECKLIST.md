@@ -57,7 +57,7 @@ inserted here; the original M10.4/M10.5 became M10.6/M10.7.
   yields (the `Vec<u8>`, the `PageBuffers`, `DeviceIoPayload::output`, `SocketPayload::buffer`) so the two
   paths report the same shape. Update every in-crate caller and test.
 
-- [ ] **M10.4** -- Give `Operation` a synchronous byte-count cell in its header, reachable from the
+- [x] **M10.4** -- Give `Operation` a synchronous byte-count cell in its header, reachable from the
   `OVERLAPPED` identity the way `payload_ptr_from_overlapped` reaches the payload, and use it as the
   `lpNumberOfBytesTransferred` / `lpBytesReturned` out-parameter every adapter currently passes as `null`.
   It has to live in the pinned operation rather than on the adapter's stack: `DeviceIoControl` documents
@@ -66,7 +66,7 @@ inserted here; the original M10.4/M10.5 became M10.6/M10.7.
   a dangling write whenever the operation goes asynchronous. Keep the cell before `payload` so the
   reclaim thunk's offset stays identical for every `P`.
 
-- [ ] **M10.5** -- Carry `NotificationModes` on the endpoint through association so the adapters can
+- [x] **M10.5** -- Carry `NotificationModes` on the endpoint through association so the adapters can
   classify: record what `set_notification_modes` established on `UnassociatedEndpoint`, propagate it into
   `AssociatedEndpoint` (and expose it), and make `classify_issued` / `classify_socket` answer
   `Issued::Completed { bytes_transferred }` -- reading M10.4's cell -- exactly when the endpoint is in
@@ -77,7 +77,7 @@ inserted here; the original M10.4/M10.5 became M10.6/M10.7.
   wrapped) must be declared through `set_notification_modes` so the endpoint agrees with the handle;
   the call is additive and idempotent, so re-declaring an already-set mode is safe.
 
-- [ ] **M10.6** -- End-to-end coverage: for at least the file and device adapters, set skip-on-success on
+- [x] **M10.6** -- End-to-end coverage: for at least the file and device adapters, set skip-on-success on
   the endpoint, drive an operation that completes synchronously, and assert the adapter returns
   `Started::Completed` with the right bytes and payload, that no packet arrives on the port, and that
   rundown converges immediately (the outstanding count was balanced inline). Pair each with the existing

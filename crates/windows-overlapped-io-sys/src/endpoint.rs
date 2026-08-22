@@ -61,6 +61,10 @@ pub struct NotificationModes {
     /// Independent of the completion port: it concerns the handle's internal
     /// event, which completion-port-driven code does not wait on. An event
     /// supplied explicitly in the `OVERLAPPED` is still signalled.
+    ///
+    /// **Do not set this on an endpoint destined for
+    /// [`crate::BlockingEndpoint`]**, which waits on exactly that internal
+    /// event: suppressing it leaves the wait with nothing to wake it.
     pub skip_set_event_on_handle: bool,
 }
 
@@ -74,6 +78,11 @@ pub struct NotificationModes {
 #[derive(Debug)]
 pub struct UnassociatedEndpoint {
     handle: OwnedHandle,
+    /// What [`UnassociatedEndpoint::set_notification_modes`] has established on
+    /// the handle. Carried with the endpoint, and onward into association,
+    /// because the submission seam has to answer "will a completion packet
+    /// arrive" and skip-on-success is what changes that answer.
+    modes: NotificationModes,
 }
 
 impl UnassociatedEndpoint {
@@ -120,11 +129,22 @@ impl UnassociatedEndpoint {
     ///   with `FILE_FLAG_OVERLAPPED`, or an overlapped-capable socket handle);
     /// - the handle is not already associated with any completion port;
     /// - no duplicate of the handle exists that could generate competing
-    ///   completions for the same operations; and
-    /// - ownership is transferred exclusively into the returned endpoint.
+    ///   completions for the same operations;
+    /// - ownership is transferred exclusively into the returned endpoint; and
+    /// - **any completion-notification mode already set on the handle is
+    ///   declared** through [`UnassociatedEndpoint::set_notification_modes`].
+    ///   The endpoint is assumed to be in the default mode, and the submission
+    ///   seam relies on that to decide whether a completion packet will arrive;
+    ///   a handle silently in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode would
+    ///   have its synchronous successes reported as pending, leaving operations
+    ///   outstanding forever. Re-declaring is safe: the call is additive and
+    ///   idempotent.
     #[must_use]
     pub unsafe fn assume_overlapped(handle: OwnedHandle) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            modes: NotificationModes::default(),
+        }
     }
 
     /// Borrow the underlying handle for the duration of a native call.
@@ -136,10 +156,18 @@ impl UnassociatedEndpoint {
         self.handle.as_handle()
     }
 
+    /// The completion-notification modes established on this endpoint.
+    #[must_use]
+    pub fn notification_modes(&self) -> NotificationModes {
+        self.modes
+    }
+
     /// Consume the endpoint and recover the owned handle.
     ///
     /// This abandons the overlapped-endpoint invariants; the recovered handle is
-    /// an ordinary [`OwnedHandle`] again.
+    /// an ordinary [`OwnedHandle`] again. Any notification mode set on it stays
+    /// set -- Win32 offers no way to clear one -- so a handle rewrapped later
+    /// must re-declare it.
     #[must_use]
     pub fn into_handle(self) -> OwnedHandle {
         self.handle
@@ -175,7 +203,7 @@ impl UnassociatedEndpoint {
     /// reports `ERROR_INVALID_PARAMETER` for a handle whose device does not
     /// support the requested mode.
     #[cfg(feature = "fs")]
-    pub fn set_notification_modes(&self, modes: NotificationModes) -> io::Result<()> {
+    pub fn set_notification_modes(&mut self, modes: NotificationModes) -> io::Result<()> {
         use std::os::windows::io::AsRawHandle;
 
         let mut flags = 0_u8;
@@ -197,6 +225,10 @@ impl UnassociatedEndpoint {
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
+        // Accumulated, never replaced: Win32 cannot clear a mode, so what this
+        // endpoint records has to be the union of everything ever set on it.
+        self.modes.skip_completion_port_on_success |= modes.skip_completion_port_on_success;
+        self.modes.skip_set_event_on_handle |= modes.skip_set_event_on_handle;
         Ok(())
     }
 }
