@@ -46,6 +46,9 @@ mod blocking;
 #[cfg(windows)]
 mod config;
 
+#[cfg(windows)]
+mod buf;
+
 #[cfg(all(windows, feature = "device"))]
 mod device;
 
@@ -72,6 +75,9 @@ mod started;
 
 #[cfg(windows)]
 pub use blocking::BlockingEndpoint;
+
+#[cfg(windows)]
+pub use buf::{IoBuf, IoBufMut};
 
 #[cfg(windows)]
 pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_enabled};

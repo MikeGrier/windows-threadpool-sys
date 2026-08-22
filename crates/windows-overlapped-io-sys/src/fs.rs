@@ -524,6 +524,27 @@ impl Drop for PageBuffers {
     }
 }
 
+// SAFETY: the bytes live in a page-aligned heap allocation `PageBuffers` owns
+// outright, so moving the value moves the pointer and not the bytes, and the
+// page count is fixed at construction. `alloc_zeroed` initializes all of them.
+unsafe impl crate::IoBuf for PageBuffers {
+    fn stable_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
+    }
+
+    fn bytes_len(&self) -> usize {
+        self.len()
+    }
+}
+
+// SAFETY: as above; `PageBuffers` is a unique owner, so `&mut self` is exclusive
+// access to the same allocation `stable_ptr` reports.
+unsafe impl crate::IoBufMut for PageBuffers {
+    fn stable_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
+}
+
 impl BlockingEndpoint {
     /// Scatter-read `pages` pages starting at `offset` into a fresh page-aligned
     /// buffer, blocking until the read completes.

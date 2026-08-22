@@ -22,7 +22,7 @@ buffer it already has, including a shared one. A naive caller passing a slice st
 fine and expected -- but it has to be *visible at the call site*, never something the adapter does behind
 a performance-minded caller's back.
 
-- [ ] **M11.1** -- Add `IoBuf` (readable) and `IoBufMut` (writable) to a new `buf` module, re-exported
+- [x] **M11.1** -- Add `IoBuf` (readable) and `IoBufMut` (writable) to a new `buf` module, re-exported
   from the crate root. Both are `unsafe` traits, because the whole contract is a promise the compiler
   cannot check: the address must be **stable** for the value's life, so a type whose accessor returns a
   fresh address each call (or reallocates) is what makes the operation write into freed memory. Require
@@ -61,3 +61,4 @@ a performance-minded caller's back.
   trait is `unsafe` and what the stable-address contract means; why read buffers are fully initialized
   instead of init-tracked; and why the split into `IoBuf`/`IoBufMut` exists (so a shared `Arc<[u8]>` can be
   written from but never read into). Update the README's adapter section.
+
