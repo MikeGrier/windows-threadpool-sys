@@ -39,14 +39,19 @@
 //! # Everything is queued, in both directions
 //!
 //! The crate never calls into client code. A request is something the client
-//! enqueues; a notification is something the crate enqueues and the client
-//! collects. So nothing a client does -- blocking, panicking, being slow -- can
-//! stall or unwind the crate's own cadence, and that holds by construction rather
-//! than by asking a callback to behave.
+//! enqueues (the request queue); a notification is something the crate enqueues
+//! and the client collects (the notification queue). So nothing a client does --
+//! blocking, panicking, being slow -- can stall or unwind the crate's own
+//! cadence, and that holds by construction rather than by asking a callback to
+//! behave.
 //!
-//! Which thread a client drains on is entirely its own business. A client that
-//! does not want to dedicate one to [`Receiver::recv`] can take
-//! [`Receiver::doorbell`] and wait on it from its own thread pool.
+//! Which thread a client drains the notification queue on is entirely its own
+//! business. A client that does not want to dedicate one to [`Receiver::recv`]
+//! can take [`Receiver::doorbell`] -- a manual-reset event, created lazily -- and
+//! wait on it from its own thread pool, including from a `ThreadpoolWait`
+//! callback of its own. That is the one deliberate, bounded exception to "the
+//! crate never calls into client code": ringing a doorbell touches nothing and
+//! cannot block, unlike a callback carrying data.
 //!
 //! # Losses are reported, never silent
 //!
@@ -55,6 +60,28 @@
 //! reported as one cause-tagged [`Notification::Desync`] meaning *re-scan*.
 //! Honest reporting of that limitation is a core requirement of this crate rather
 //! than an afterthought.
+//!
+//! # Faults recover on their own, or on your terms
+//!
+//! An open failure or a live-watch fault is never terminal (D-14): the monitor
+//! retries indefinitely, and only a target that can genuinely never become
+//! watchable is reported permanently rather than retried forever. Recovery
+//! timing is chosen per subscription, through [`WatchOptions::retry`]:
+//!
+//! - [`RetryMode::Defaults`] (the default) retries autonomously at a fixed
+//!   500ms delay.
+//! - [`RetryMode::Interactive`] asks: a [`Notification::RetryQuestion`] names
+//!   the failing operation, and [`Session::answer`] supplies the next delay
+//!   (clamped to a 50ms floor). Several subscriptions sharing a coalesced
+//!   directory watcher take the earliest answer, counting one that never
+//!   answers at the default.
+//!
+//! Opting a subscription into [`WatchOptions::report_liveness`] additionally
+//! delivers `Suspended`/`Resumed` brackets around an outage and an
+//! `Established { mode }` report naming which tier -- detailed
+//! (`ReadDirectoryChangesW`) or the coarse `FindFirstChangeNotification`
+//! fallback for volumes that do not support the detailed API -- is actually
+//! watching.
 
 #![warn(missing_docs)]
 

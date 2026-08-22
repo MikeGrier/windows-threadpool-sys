@@ -249,3 +249,128 @@ padding case and the misaligned-tail case are pinned by tests
 (`zero_offset_trailing_alignment_padding_decodes_cleanly`,
 `zero_offset_misaligned_trailing_tail_is_desync`,
 `zero_offset_with_trailing_record_is_desync`).
+
+
+## Arming is gated by a lock, not a flag (D-23)
+
+The first implementation used a `Mutex<bool>` checked *before* submitting a
+read. That deadlocked under test: a completion callback passes the check,
+teardown then cancels the outstanding read and begins waiting for rundown, and
+only then does the callback finish submitting -- leaving a fresh pending read
+that nothing will ever complete, because only a future directory change could.
+The fix generalizes past "check a flag" to "hold the lock across the entire
+submission": teardown's own acquisition then waits for any in-flight submission
+to finish, and once it closes the gate, no new one can start. The `Weak`-upgrade
+suppression in the completion callback looks like it should be enough on its
+own -- it is not, because during `Drop` the strong count is still non-zero, so
+the upgrade still succeeds and the callback still runs.
+
+## Open failures are bad input, not faults (D-22)
+
+The instinct on first classifying an open failure is to make everything
+retryable, matching D-14's "no terminal state." That is wrong for exactly two
+cases: a path that names something other than a directory, and a path Win32
+cannot even receive (an interior NUL). Both are the caller naming something that
+can never become a watched directory -- retrying spins forever against input
+that will never change, which is a resource leak dressed up as patience, not
+recovery. The permanent/retryable split is therefore about *whose problem it
+is* -- caller input vs. environment -- not about severity. An unrecognised error
+still classifies retryable, deliberately: a watcher that gives up on an error
+code it has never seen is a watcher that silently stops working on some future
+Windows release.
+
+## The fault latch became a standing reservation, not resident state (D-28, D-55)
+
+The first sketch of D-28 described a fault as *resident watcher state* -- one
+error code plus one bit, allocated with the watcher, the same shape as a queue
+depth counter. That framing quietly broke two promises the crate had already
+made (D-12, D-26): a fault communicated out-of-band, rather than riding the
+notification queue in order, destroys exactly the "a client seeing a `Desync`
+knows everything before it is accounted for" guarantee. The corrected shape
+treats a fault as a **message**, not a flag, delivered in-stream like anything
+else -- and a message that must never be lost needs a *reservation*, not a
+best-effort send. A reservation taken fresh per fault (the ordinary
+`Sender::reserve` shape) would not do, because it can fail if the queue happens
+to be full at exactly the wrong moment, and a fault report failing to enqueue is
+the one loss this protocol cannot survive. So `StandingSlot` (D-55) generalizes
+`Reservation` into a *permanent* carve-out, taken once at registration and never
+released until the subscription ends. The proof this is sufficient, not merely
+convenient, is D-28's own observation: a watcher cannot fault twice
+concurrently, so at most one question is ever outstanding per subscription, and
+one permanently-reserved slot is provably always enough.
+
+## Fixed retry delays, not a policy-reduction engine (D-27, D-56)
+
+An earlier design pass (recorded in the "Fault model" prose of D-14/D-15/D-16,
+before D-27 replaced D-16) imagined a per-field *soonest-recovering reduction*
+over several subscriptions' retry policies -- minimum initial delay, minimum
+growth multiplier, minimum cap, minimum jitter, minimum per-error-kind override.
+None of that survived contact with what `WatchOptions` actually carries:
+`RetryMode` is a two-variant enum, `Defaults` or `Interactive`, with no field for
+any of those knobs. Building the reduction machinery anyway -- against fields
+that do not exist -- would have been speculative generality serving no caller.
+D-27's literal text (`Azure/m`'s shipped 500ms default / 50ms floor) is exactly
+what shipped, and the earlier language is left in the design notes as an
+explicit, labelled "not implemented" marker rather than quietly deleted, so a
+future contributor adding real per-subscription tuning knows where the seam
+was always meant to go.
+
+## Two independent retry loops, not one shared object (D-59)
+
+It is tempting to unify "a still-`Pending` subscription retrying its own open"
+and "a coalesced watcher retrying its arm" into one retry engine, since both
+apply the identical ask/resolve/floor protocol (D-27). They stay separate
+because their *ownership* genuinely differs: a `Pending` subscription has no
+directory identity yet (D-6's coalescing only happens once a directory is
+successfully opened), so its retry reduction is trivially over a set of exactly
+one; a coalesced watcher's is a real reduction over however many routes
+currently share it. Forcing them through one shared type would mean modelling
+"sometimes exactly one, sometimes many" generically, for no payoff -- the
+protocol logic (`resolve_and_schedule`, the earliest-answer accumulation) is
+already factored out at the right level (D-27's rules), and each owner simply
+applies it against its own `ThreadpoolTimer`.
+
+## Cancel-and-resubmit does not widen a live read, measured directly (D-52)
+
+The obvious way to widen a directory watcher's reach to recursive -- cancel the
+outstanding `ReadDirectoryChangesW`, then resubmit with `bWatchSubtree = TRUE`
+on the *same* handle -- was the original plan (it is what M4.4's checklist item
+originally said). It was tried first and does not work: after the resubmit, the
+kernel kept reporting only the directory's direct children, and a change nested
+one level down was never reported, for as long as a test was willing to wait or
+however many further changes it made. This was measured directly with debug
+instrumentation before being accepted as fact. A fresh `CreateFileW` does not
+have the problem -- the filesystem's recursive-watch attachment is evidently
+tied to the *handle's creation*, not reconfigurable on a live one. This is why
+`reopen` tears the endpoint down and rebuilds it from a new handle rather than
+attempting any in-place reconfiguration, and it is also why M6's coarse handle
+(whose `bWatchSubtree` is likewise fixed at `FindFirstChangeNotificationW`) reuses
+the identical mechanism (D-62) rather than needing one of its own.
+
+## One `WatcherInner`, two tiers, not two watcher types (D-60)
+
+M6 could have added a wholly separate `CoarseWatcher` type, parallel to
+`DirectoryWatcher`, with the monitor choosing which to construct and the
+`Resident.directories` map holding an enum of the two. That would have
+duplicated the entire coalescing, routing, and fault/retry machinery M4 and M5
+had just finished building, for a difference that is genuinely narrow: which
+Win32 API arms a read and what a completion looks like. So instead
+`WatcherInner` gained one `Endpoint` field (`Detailed(ThreadpoolIo)` or
+`Coarse(ThreadpoolWait)`), and only `arm_locked` (which API to call) and
+completion handling (`on_completion` vs. the new `on_activation`) branch on it;
+routes, the fault state machine, backpressure, and teardown are identical code
+regardless of tier. The cost of this choice is that `reopen` has to know how to
+build *either* tier and fall back between them, which it already needed to do
+for the downgrade edge (D-17) in the first place.
+
+## The M6.4 test seam is a private constructor, not a public feature flag (D-64)
+
+M3.8 already retired `unstable-internals`, a feature-gated, `#[doc(hidden)]`
+public surface that let the external `tests/` integration crate reach
+crate-internal state for exactly this kind of forcing seam. Reintroducing that
+shape for M6's "force coarse mode" need would have undone that decision for one
+test's convenience. `DirectoryWatcher::start_forcing_coarse` is instead
+`#[cfg(test)]` and reachable only from the crate's own unit-test tree -- which is
+also where M6.5's test lives, alongside M4's and M5's own fault-machinery tests,
+for the identical reason (D-65): the seam they all need is `pub(crate)`, and
+`tests/` can only ever reach `pub` items.

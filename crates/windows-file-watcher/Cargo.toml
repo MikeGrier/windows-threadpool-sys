@@ -10,7 +10,8 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/windows-file-watcher"
-description = "Memory-safe, queue-mediated Windows path-change watching over ReadDirectoryChangesW (in development)."
+description = "Memory-safe, queue-mediated Windows path-change watching over ReadDirectoryChangesW, with a coarse fallback."
+readme = "README.md"
 keywords = ["windows", "filesystem", "notify", "watcher", "ffi"]
 categories = ["api-bindings", "os::windows-apis", "filesystem"]
 

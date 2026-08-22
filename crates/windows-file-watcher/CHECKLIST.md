@@ -13,7 +13,7 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M7.1.** M1 through M6 are archived; nothing else is in progress. Work the
+> **NEXT ACTIONABLE ITEM: M8.2.** M1 through M7 are archived; nothing else is in progress. Work the
 > milestones in order.
 
 ## M4 -- Coalescing by directory and file targets
@@ -30,21 +30,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----
 
 ## M7 -- Documentation, examples, stress
 
-- [ ] **M7.1** -- A crate README and the [lib.rs](src/lib.rs) top-level docs: the monitor/session/watch model, the
-  two queues and their doorbells (D-25), the fidelity-and-limitation contract, the `Desync` primitive, and
-  the D-27 retry protocol including how to choose between defaults and interactive at registration.
-
-- [ ] **M7.2** -- Runnable examples: a minimal directory watch, a single-file watch, and a fault-recovery
-  demonstration.
-
-- [ ] **M7.3** -- Finalise Tier-1 [DESIGN-NOTES.md](DESIGN-NOTES.md) / Tier-2 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) from the session, with
-  every shipped decision cross-referenced.
-
-- [ ] **M7.4** -- Opt-in, env-gated stress suite: change churn, fault storms (repeated delete/recreate),
-  teardown races, and coalesced multi-subscription load.
-
-- [ ] **M7.5** -- Publication readiness: crate metadata, changelog, and a final review pass over the public
-  surface for the v1 scope (D-18) and the deferred seams (D-19).
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----m7-documentation-examples-stress).
 
 ## M8 -- Adopt wtf-string for relative names
 

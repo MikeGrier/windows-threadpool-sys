@@ -227,7 +227,7 @@ pub enum Notification {
     /// [`crate::session::Session::answer`]; declining (never answering, or a
     /// dropped `Watch`) is counted at the operation's default delay. This is the
     /// one message a fault protocol cannot afford to lose, so it rides a
-    /// standing reservation ([`Sender::reserve_standing`]) taken once at
+    /// standing reservation (`Sender::reserve_standing`) taken once at
     /// registration rather than the best-effort path -- sound because a watcher
     /// cannot fault twice concurrently (D-28), so at most one question per
     /// subscription is ever outstanding.
