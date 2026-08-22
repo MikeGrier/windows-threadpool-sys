@@ -14,8 +14,9 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M9.4** -- wire the M9.3 scenarios into an opt-in integration test. M1 through
-> M8 are archived; M9.1 through M9.3 are done, and M9+ / M-inf hold only parked, ungated follow-on work.
+> **NEXT ACTIONABLE ITEM: M9.4** -- add session/watch lifecycle operations to the data model and
+> generalize the harness to track them by name. M1 through M8 are archived; M9.1 through M9.3 are done,
+> M9.5 follows M9.4, and M9+ / M-inf hold only parked, ungated follow-on work.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -44,9 +45,13 @@ is a value (an ordered list of filesystem operations plus timing parameters) tha
 executes and checks against the same generic invariants (no wedge, no panic, every desync is reported
 rather than silently swallowed -- D-12). New scenarios are added by describing them, not by writing new
 test bodies. Parameters (entity counts, wait-duration ranges, PRNG seed) are overridable so the same suite
-can be run wider without code changes. This milestone covers only the single-modifier basics the user
-asked to start with; concurrent modifiers, held-open "spoiler" handles, nested operations, and queue
-overwhelm are explicitly deferred to M9+ below once M9 is solid.
+can be run wider without code changes. Re-planned after M9.3: a scenario's *filesystem* actions (M9.1) are
+only one dimension: a real client also opens and closes sessions and adds/removes watches while a
+directory is live, and that lifecycle churn is a first-class part of the basic tier, not deferred to M9+
+(M9+ is specifically the *concurrency* axis -- multiple threads, spoilers, nesting, queue overwhelm -- not
+the single-threaded lifecycle churn M9.4/M9.5 add). This milestone covers only the single-modifier basics
+the user asked to start with; concurrent modifiers, held-open "spoiler" handles, nested operations, and
+queue overwhelm are explicitly deferred to M9+ below once M9 is solid.
 
 - [x] **M9.1** -- Data-driven scenario model: an `Operation` enum (create file, delete path, rename,
   make directory, wait) and a `Scenario { label, operations: Vec<Operation> }` (or builder) that a
@@ -78,10 +83,21 @@ overwhelm are explicitly deferred to M9+ below once M9 is solid.
   trip the harness's fixed 120s timeout on throughput alone; `HarnessParams::for_operation_count` scales
   the budget from the scenario's own operation count so only a genuine stall still fails the assertion.
 
-- [ ] **M9.4** -- Wire the M9.3 scenarios into an opt-in integration test (gated the same way as
-  [tests/stress.rs](tests/stress.rs), consistent naming e.g. `WINDOWS_FILE_WATCHER_STRESS`) that iterates
-  the scenario table through the M9.2 harness with parameterizable counts/seed, and passes. Integration
-  test for the milestone.
+- [ ] **M9.4** -- Session/watch lifecycle operations: extend the data model with operations that open and
+  close *sessions* and subscribe and cancel *watches* mid-scenario (`Monitor::session` mints an independent
+  channel per call -- D-2 -- so this is not a variation on M9.1's fixed single watch, it is a second kind of
+  entity the harness must track by name and drain independently). Generalize the M9.2 harness from one
+  fixed session/watch/receiver to a name-keyed table so a scenario can reference "the watch/session named
+  X" from a later operation. Same generic invariants apply: no wedge, no panic, every desync counted; a
+  session or watch that is already closed when an operation targets it is a scenario-authoring bug (assert),
+  not a fault the harness tolerates -- unlike the M9+ .2 "spoiler" case, which is deliberately about a live
+  handle blocking an operation.
+
+- [ ] **M9.5** -- Lifecycle scenario library built on M9.4 (sessions/watches opened and closed while
+  filesystem churn continues underneath, watches re-subscribed to a path a just-closed watch covered, etc.),
+  then wire the complete M9.3+M9.5 scenario set into an opt-in integration test (gated the same way as
+  [tests/stress.rs](tests/stress.rs), consistent naming e.g. `WINDOWS_FILE_WATCHER_STRESS`) with
+  parameterizable counts/seed. Integration test for the milestone.
 
 ## M9+ -- Concurrent modifiers, spoilers, nesting, and queue overwhelm
 
