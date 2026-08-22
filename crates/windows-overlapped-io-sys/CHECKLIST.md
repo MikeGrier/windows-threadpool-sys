@@ -10,7 +10,7 @@ CHECKLIST files are action-only, and a parked item belongs in an `M-inf` bucket 
 paragraph. On review neither belongs in `M-inf` either: one had no blocker at all, and the other's blocker
 turned out to be a design fork the engineer has now settled.
 
-- [ ] **M12.1** -- Implement `IoBuf` for `&'static mut [u8]`, the natural handoff for a leaked or
+- [x] **M12.1** -- Implement `IoBuf` for `&'static mut [u8]`, the natural handoff for a leaked or
   statically-allocated pool. It is sound on every count the trait asks for: exclusive by construction,
   stable because the referent is `'static` and never moves, and already `Send + 'static`. Implement
   `IoBufMut` for it too -- unlike `Arc<[u8]>` and `&'static [u8]`, a `&'static mut` is *exclusive*, so it

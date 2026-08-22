@@ -155,6 +155,29 @@ unsafe impl IoBuf for &'static [u8] {
     }
 }
 
+// SAFETY: as `&'static [u8]` -- the referent is valid forever and never moves,
+// and the reference itself moving does not move the bytes.
+unsafe impl IoBuf for &'static mut [u8] {
+    fn stable_ptr(&self) -> *const u8 {
+        <[u8]>::as_ptr(self)
+    }
+
+    fn bytes_len(&self) -> usize {
+        <[u8]>::len(self)
+    }
+}
+
+// SAFETY: the one reference type that *is* a legal read destination. Unlike
+// `Arc<[u8]>` and `&'static [u8]`, a `&'static mut` is exclusive by
+// construction -- no other live reference to those bytes can exist -- so the
+// kernel writing into them cannot race or alias anything. Excluding it would be
+// the arbitrary half of the split, not a safety measure.
+unsafe impl IoBufMut for &'static mut [u8] {
+    fn stable_mut_ptr(&mut self) -> *mut u8 {
+        <[u8]>::as_mut_ptr(self)
+    }
+}
+
 /// A buffer that reports a length no `u32` can express, without allocating one.
 ///
 /// Every adapter checks the length and rejects the request before issuing any

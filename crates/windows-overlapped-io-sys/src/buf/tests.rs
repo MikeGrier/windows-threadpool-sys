@@ -165,3 +165,24 @@ fn a_caller_defined_buffer_can_implement_the_traits() {
     let moved = buffer;
     assert_eq!(moved.stable_ptr(), before);
 }
+
+#[test]
+fn a_static_mut_slice_is_readable_and_writable() {
+    // The one reference type that is a legal read destination: `&'static mut`
+    // is exclusive, so unlike `Arc<[u8]>` or `&'static [u8]` nothing else can
+    // observe the kernel writing.
+    let buffer: &'static mut [u8] = Box::leak(vec![0_u8; 32].into_boxed_slice());
+    let before = buffer.stable_ptr();
+    assert_eq!(buffer.bytes_len(), 32);
+
+    let mut buffer = buffer;
+    assert_eq!(buffer.stable_mut_ptr().cast_const(), before);
+}
+
+#[test]
+fn a_static_mut_slices_address_survives_moving_the_reference() {
+    let buffer: &'static mut [u8] = Box::leak(vec![0_u8; 16].into_boxed_slice());
+    let before = buffer.stable_ptr();
+    let moved = buffer;
+    assert_eq!(moved.stable_ptr(), before, "the reference moved, the bytes must not");
+}
