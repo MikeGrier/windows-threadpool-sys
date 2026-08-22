@@ -351,3 +351,35 @@ queue overwhelm are explicitly deferred to M9+ once M9 is solid.
   one argument and printing the resulting `HarnessOutcome`. **The JSON schema is explicitly not part of
   this crate's semver contract (D-71)** -- by the engineer's own direction, since it is a testing/ops tool
   input, not a documented data format. Integration test for the milestone.
+
+## Moved 2026-08-22 -- M9+: concurrent modifiers, spoilers, nesting, and queue overwhelm
+
+Gated on M9 being solid: these widen the same data-driven model once the single-modifier basics
+pass, per the user's own "start simple ... over time" sequencing. All four share one prerequisite --
+`Fleet` moving behind a `Mutex` so `Operation::Concurrent`'s spawned threads can share it -- so they landed
+together in one commit rather than four artificially separated ones.
+
+- [x] **M9+.1** -- Concurrent modifiers: `Operation::Concurrent { branches: Vec<Vec<Operation>> }` runs
+  every branch on its own thread (`std::thread::scope`, D-74), joining before the next top-level operation
+  runs. Each branch draws its own PRNG seed from the parent before spawning, so a scenario stays
+  reproducible for a given seed regardless of OS scheduling. Checked against the same no-wedge/no-panic/
+  no-silent-loss invariants as any other operation.
+
+- [x] **M9+.2** -- "Spoilers": `Operation::HoldOpen { path, duration }` opens a file without
+  `FILE_SHARE_DELETE` (D-75) and holds it for `duration`, so a concurrent `Rename`/`RemoveFile`/`RemoveDir`
+  targeting the same path fails with a real Win32 sharing violation -- verified by asserting the spoiled
+  file is still present on disk afterward, not merely by notification counts.
+
+- [x] **M9+.3** -- Nested operations: needed no new primitive. A `Concurrent` branch is an ordinary
+  `Vec<Operation>` that may itself contain `Concurrent`, `Repeat`, or anything else in the model, so
+  operation nesting (a rename racing an in-flight hold, a nested fork-join) falls out of D-74's design for
+  free; demonstrated in `tests/scenarios/nested_concurrent_composition.json`.
+
+- [x] **M9+.4** -- Queue overwhelm: `Operation::OpenSessionBounded { name, bound }` opens a session with an
+  explicit, deliberately tiny queue bound (reusing `Monitor::session_with_bound`, D-76) instead of the
+  crate's default, so a single large `Repeat` of churn -- applied before the harness's next drain pass --
+  genuinely saturates it. The check is structural: the harness's own overall deadline is what would fail if
+  backpressure ever became a wedge instead of a stall; the test deliberately does not assert on desync
+  counts. Integration test for the milestone: `tests/scenario_stress.rs`'s three new M9+ tests plus four new
+  JSON fixtures (`concurrent_file_churn.json`, `spoiler_blocks_delete.json`, `queue_overwhelm.json`,
+  `nested_concurrent_composition.json`) all pass through the generic fixture runner.

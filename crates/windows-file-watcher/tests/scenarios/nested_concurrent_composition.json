@@ -1,0 +1,37 @@
+{
+  "label": "nested-concurrent-composition",
+  "operations": [
+    { "CreateFile": { "path": "held.txt" } },
+    {
+      "Concurrent": {
+        "branches": [
+          [
+            {
+              "Repeat": {
+                "count": 50,
+                "pattern": [{ "CreateFile": { "path": "burst.txt" } }]
+              }
+            }
+          ],
+          [
+            {
+              "Concurrent": {
+                "branches": [
+                  [
+                    { "CreateDir": { "path": "nested-a" } },
+                    { "CreateFile": { "path": "nested-a/x.txt" } }
+                  ],
+                  [
+                    { "CreateDir": { "path": "nested-b" } },
+                    { "CreateFile": { "path": "nested-b/y.txt" } }
+                  ]
+                ]
+              }
+            }
+          ],
+          [{ "HoldOpen": { "path": "held.txt", "duration": 150 } }]
+        ]
+      }
+    }
+  ]
+}

@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-72** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-76** -- later
 decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-50...D-52 from M4,
-D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66...D-72 from M9.1...M9.5, and D-25/D-27...D-31
+D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66...D-76 from M9.1...M9+.4, and D-25/D-27...D-31
 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
@@ -14,9 +14,8 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: none.** M1 through M9 are archived/done. Only M9+ (concurrency: multiple
-> modifiers, spoilers, nesting, queue overwhelm) and the parked, ungated M-inf horizon items remain, and
-> neither is an open obligation of any current milestone.
+> **NEXT ACTIONABLE ITEM: none.** M1 through M9+ are archived/done. Only the parked, ungated M-inf
+> horizon items remain, and none is an open obligation of any current milestone.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -44,24 +43,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----
 
 ## M9+ -- Concurrent modifiers, spoilers, nesting, and queue overwhelm
 
-Gated on M9 (above) being solid: these widen the same data-driven model once the single-modifier basics
-pass, per the user's own "start simple ... over time" sequencing. Not started until M9 completes.
-
-- [ ] **M9+.1** -- Concurrent modifiers: parameterize the M9.2 harness to apply a scenario's operations (or
-  several independent scenario instances) from multiple threads concurrently, with the modifier count as a
-  parameter, still checked against the same no-wedge/no-panic/no-silent-loss invariants.
-
-- [ ] **M9+.2** -- "Spoilers": a modifier that holds a file or directory handle open in a way that blocks a
-  rename/delete the scenario is attempting, so the scenario must observe and tolerate the resulting Win32
-  failure (or retry) rather than wedging. Parameterize which operations are spoiled and for how long.
-
-- [ ] **M9+.3** -- Nested operations: compose operations (e.g., a rename targeting a path while an
-  operation on that same path is still in flight) so the scenario model can express operation nesting, not
-  just a flat sequence.
-
-- [ ] **M9+.4** -- Queue overwhelm: parameterize scenario load (entity counts, modifier concurrency, burst
-  size) specifically to exceed the crate's documented queue capacity, and assert the crate's documented
-  backpressure/loss-reporting behavior holds under deliberate overwhelm rather than a wedge or silent drop.
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-22----m9-concurrent-modifiers-spoilers-nesting-and-queue-overwhelm).
 
 ## M-inf -- Horizon (ungated, post-v1)
 

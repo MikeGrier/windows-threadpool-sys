@@ -446,6 +446,124 @@ fn multiple_sessions_can_be_open_at_once_and_each_is_drained() {
 }
 
 // ---------------------------------------------------------------------------
+// M9+: concurrent modifiers, spoilers, nesting, and queue overwhelm. All four
+// share one prerequisite -- `Fleet` moving behind a `Mutex` so
+// `Operation::Concurrent`'s spawned threads can share it -- so they land
+// together rather than as four artificially separated commits.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn concurrent_branches_run_at_the_same_time_and_are_all_accounted_for() {
+    if !stress_enabled() {
+        return;
+    }
+    let scenario = Scenario::new("concurrent-branches").then(Operation::Concurrent {
+        branches: vec![
+            vec![
+                Operation::CreateFile {
+                    path: PathBuf::from("a.txt"),
+                },
+                Operation::CreateFile {
+                    path: PathBuf::from("b.txt"),
+                },
+            ],
+            vec![
+                Operation::CreateFile {
+                    path: PathBuf::from("c.txt"),
+                },
+                Operation::CreateFile {
+                    path: PathBuf::from("d.txt"),
+                },
+            ],
+        ],
+    });
+    let outcome = run_scenario(&scenario, seed(), &HarnessParams::default());
+    assert!(
+        outcome.batches > 0,
+        "expected at least one batch from two concurrent branches"
+    );
+}
+
+#[test]
+fn a_held_open_file_blocks_a_concurrent_delete_with_a_real_sharing_violation() {
+    if !stress_enabled() {
+        return;
+    }
+    let scenario = Scenario::new("spoiler-blocks-delete")
+        .then(Operation::CreateFile {
+            path: PathBuf::from("spoiled.txt"),
+        })
+        .then(Operation::Concurrent {
+            branches: vec![
+                vec![Operation::HoldOpen {
+                    path: PathBuf::from("spoiled.txt"),
+                    duration: Duration::from_millis(300),
+                }],
+                vec![
+                    Operation::Wait {
+                        duration: Duration::from_millis(50),
+                    },
+                    Operation::RemoveFile {
+                        path: PathBuf::from("spoiled.txt"),
+                    },
+                ],
+            ],
+        });
+    let (outcome, dir) = run_scenario_keep_dir(&scenario, seed(), &HarnessParams::default());
+
+    // The held-open handle has no FILE_SHARE_DELETE, so the concurrent
+    // RemoveFile must fail with a real sharing violation while the hold is
+    // still active -- the file is still here, not merely "probably" spoiled.
+    assert!(
+        dir.path().join("spoiled.txt").exists(),
+        "the spoiler should have blocked the concurrent delete"
+    );
+    assert!(outcome.batches > 0, "expected at least the create batch");
+
+    dir.cleanup();
+}
+
+#[test]
+fn a_deliberately_tiny_queue_bound_never_wedges_under_overwhelming_load() {
+    if !stress_enabled() {
+        return;
+    }
+    let scenario = Scenario::new("queue-overwhelm")
+        .then(Operation::OpenSessionBounded {
+            name: "tiny".to_string(),
+            bound: 2,
+        })
+        .then(Operation::Subscribe {
+            session: "tiny".to_string(),
+            watch: "tiny-watch".to_string(),
+            path: PathBuf::new(),
+            subtree: true,
+        })
+        .then_repeated(
+            5_000,
+            vec![Operation::CreateFile {
+                path: PathBuf::from("overwhelmed.txt"),
+            }],
+        )
+        .then(Operation::CancelWatch {
+            watch: "tiny-watch".to_string(),
+        })
+        .then(Operation::CloseSession {
+            name: "tiny".to_string(),
+        });
+    let params = HarnessParams::for_operation_count(scenario.operation_count());
+    // A bound this small, hit this hard, is expected to force backpressure
+    // (D-11/D-29) -- the point of this test is that the harness's own
+    // deadline assertion inside `run_scenario` never trips, not that zero
+    // desyncs occur.
+    let outcome = run_scenario(&scenario, seed(), &params);
+    assert!(
+        outcome.batches > 0,
+        "expected at least one batch despite the tiny queue bound"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // M9.5: the scenario library above is also persisted as JSON fixtures under
 // `tests/scenarios/`. This test is the generic, data-driven runner: it does
 // not know about any particular scenario, only how to load and execute one.

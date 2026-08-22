@@ -31,6 +31,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -227,6 +228,42 @@ pub enum Operation {
         /// The watch's name, as given to a prior `Subscribe`.
         watch: String,
     },
+    /// Open a new session named `name`, like `OpenSession`, but with an
+    /// explicit queue `bound` instead of the crate's default (M9+.4) --
+    /// small enough to deliberately overwhelm under load, so a scenario can
+    /// exercise the documented backpressure behavior (a full queue stops the
+    /// producer rather than dropping data, D-11/D-29) instead of the
+    /// crate's ordinary, much larger capacity.
+    OpenSessionBounded {
+        /// The name this session is known by for the rest of the scenario.
+        name: String,
+        /// The queue bound; must be nonzero.
+        bound: usize,
+    },
+    /// Open (or create) the file at `path` without `FILE_SHARE_DELETE`, hold
+    /// it open for `duration`, then close it (M9+.2) -- a *real* Win32
+    /// sharing violation for a concurrent `Rename`/`RemoveFile`/`RemoveDir`
+    /// targeting the same path, a genuine spoiler rather than a simulated
+    /// one. `path` must already exist. Typically placed in one branch of a
+    /// `Concurrent` alongside the operation it is meant to block.
+    HoldOpen {
+        /// The file's path, relative to the scenario root. Must exist.
+        path: PathBuf,
+        /// How long to hold the handle open, at millisecond resolution in
+        /// JSON.
+        #[serde(with = "millis")]
+        duration: Duration,
+    },
+    /// Run every operation list in `branches` concurrently, each on its own
+    /// thread, waiting for all branches to finish before the next top-level
+    /// operation runs (M9+.1). This is the model's only concurrency
+    /// primitive; nesting (M9+.3) falls out for free, since a branch is
+    /// itself an ordinary operation list that may contain another
+    /// `Concurrent`, a `Repeat`, or anything else in this enum.
+    Concurrent {
+        /// Independent operation sequences to run at the same time.
+        branches: Vec<Vec<Operation>>,
+    },
 }
 
 /// A named, ordered sequence of [`Operation`]s. The harness executes a
@@ -391,6 +428,20 @@ impl<'m> Fleet<'m> {
         self.sessions.insert(name.to_string(), (session, receiver));
     }
 
+    /// Like [`Self::open_session`], but with an explicit queue `bound`
+    /// (M9+.4) instead of the crate's default. Panics if `name` is already
+    /// open or `bound` is zero.
+    pub fn open_session_bounded(&mut self, name: &str, bound: usize) {
+        assert!(
+            !self.sessions.contains_key(name),
+            "scenario bug: session '{name}' is already open"
+        );
+        let bound = std::num::NonZeroUsize::new(bound)
+            .unwrap_or_else(|| panic!("scenario bug: bound must be nonzero"));
+        let (session, receiver) = self.monitor.session_with_bound(bound);
+        self.sessions.insert(name.to_string(), (session, receiver));
+    }
+
     /// Cancels every watch still registered through `name`, then drops the
     /// session itself. Panics if `name` is not open.
     pub fn close_session(&mut self, name: &str) {
@@ -507,17 +558,36 @@ impl HarnessOutcome {
     }
 }
 
-/// Applies one [`Operation`] (recursively expanding [`Operation::Repeat`])
-/// against `root`/`fleet`, drawing any `WaitRandom` duration from `rng`.
-/// Individual filesystem calls are best-effort: `Remove*`/`Rename` are
-/// allowed to fail (a scenario may target a path that a prior step already
-/// removed, and the M9+ "spoiler" work will make failure routine), while
-/// `Create*` failures abort the run -- a scenario that cannot even establish
-/// its own inputs is a broken scenario, not interesting fault behavior.
-/// Session/watch lifecycle operations (M9.4) instead assert on misuse (an
-/// unknown or already-open/closed name): that is a scenario-authoring bug,
-/// never a fault the harness tolerates.
-pub fn apply_operation(root: &Path, fleet: &mut Fleet<'_>, operation: &Operation, rng: &mut Rng) {
+/// The two Win32 sharing flags a [`Operation::HoldOpen`] handle is opened
+/// with -- `FILE_SHARE_READ | FILE_SHARE_WRITE`, deliberately omitting
+/// `FILE_SHARE_DELETE` so a concurrent rename or delete of the same path
+/// fails with a real sharing violation (M9+.2).
+mod share_mode {
+    pub(super) const READ_WRITE_NO_DELETE: u32 = 0x0000_0001 | 0x0000_0002;
+}
+
+/// Applies one [`Operation`] (recursively expanding [`Operation::Repeat`]/
+/// [`Operation::Concurrent`]) against `root`/`fleet`, drawing any
+/// `WaitRandom` duration from `rng`. Individual filesystem calls are
+/// best-effort: `Remove*`/`Rename` are allowed to fail (a scenario may
+/// target a path that a prior step already removed, or that an
+/// `Operation::HoldOpen` spoiler is deliberately blocking -- M9+.2), while
+/// `Create*`/`HoldOpen` failures abort the run -- a scenario that cannot even
+/// establish its own inputs is a broken scenario, not interesting fault
+/// behavior. Session/watch lifecycle operations (M9.4/M9+.4) instead assert
+/// on misuse (an unknown or already-open/closed name): that is a
+/// scenario-authoring bug, never a fault the harness tolerates.
+///
+/// `fleet` is a `Mutex` (not a plain `&mut`) so that [`Operation::Concurrent`]
+/// (M9+.1) can share it across the threads it spawns for its branches; the
+/// lock is held only for the brief Fleet-mutating operations
+/// (`OpenSession`/`Subscribe`/... ), never around a filesystem call or sleep.
+pub fn apply_operation(
+    root: &Path,
+    fleet: &Mutex<Fleet<'_>>,
+    operation: &Operation,
+    rng: &mut Rng,
+) {
     match operation {
         Operation::CreateFile { path } => {
             let target = root.join(path);
@@ -549,15 +619,48 @@ pub fn apply_operation(root: &Path, fleet: &mut Fleet<'_>, operation: &Operation
                 }
             }
         }
-        Operation::OpenSession { name } => fleet.open_session(name),
-        Operation::CloseSession { name } => fleet.close_session(name),
+        Operation::OpenSession { name } => fleet.lock().unwrap().open_session(name),
+        Operation::OpenSessionBounded { name, bound } => {
+            fleet.lock().unwrap().open_session_bounded(name, *bound)
+        }
+        Operation::CloseSession { name } => fleet.lock().unwrap().close_session(name),
         Operation::Subscribe {
             session,
             watch,
             path,
             subtree,
-        } => fleet.subscribe(session, watch, &root.join(path), *subtree),
-        Operation::CancelWatch { watch } => fleet.cancel_watch(watch),
+        } => fleet
+            .lock()
+            .unwrap()
+            .subscribe(session, watch, &root.join(path), *subtree),
+        Operation::CancelWatch { watch } => fleet.lock().unwrap().cancel_watch(watch),
+        Operation::HoldOpen { path, duration } => {
+            use std::os::windows::fs::OpenOptionsExt;
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(share_mode::READ_WRITE_NO_DELETE)
+                .open(root.join(path))
+                .expect("open file to hold");
+            std::thread::sleep(*duration);
+            drop(file);
+        }
+        Operation::Concurrent { branches } => {
+            // Draw each branch's seed on the calling thread, before
+            // spawning, so the whole scenario stays reproducible for a
+            // given top-level seed (D-66) regardless of how the OS
+            // schedules the branches.
+            let branch_seeds: Vec<u64> = branches.iter().map(|_| rng.next_u64()).collect();
+            std::thread::scope(|scope| {
+                for (branch, branch_seed) in branches.iter().zip(branch_seeds) {
+                    scope.spawn(move || {
+                        let mut branch_rng = Rng::new(branch_seed);
+                        for step in branch {
+                            apply_operation(root, fleet, step, &mut branch_rng);
+                        }
+                    });
+                }
+            });
+        }
     }
 }
 
@@ -589,17 +692,20 @@ pub fn run_scenario_keep_dir(
 ) -> (HarnessOutcome, TempDir) {
     let dir = TempDir::new(&scenario.label);
     let monitor = Monitor::new().expect("create the monitor");
-    let mut fleet = Fleet::new(&monitor);
-    fleet.open_session(INITIAL_SESSION);
-    fleet.subscribe(INITIAL_SESSION, INITIAL_WATCH, dir.path(), true);
+    let fleet = Mutex::new(Fleet::new(&monitor));
+    fleet.lock().unwrap().open_session(INITIAL_SESSION);
+    fleet
+        .lock()
+        .unwrap()
+        .subscribe(INITIAL_SESSION, INITIAL_WATCH, dir.path(), true);
 
     let deadline = Instant::now() + params.timeout;
     let mut rng = Rng::new(seed);
     let mut outcome = HarnessOutcome::default();
 
     for operation in &scenario.operations {
-        apply_operation(dir.path(), &mut fleet, operation, &mut rng);
-        fleet.drain_available(&mut outcome);
+        apply_operation(dir.path(), &fleet, operation, &mut rng);
+        fleet.lock().unwrap().drain_available(&mut outcome);
         assert!(
             Instant::now() < deadline,
             "scenario '{}' wedged applying its operations",
@@ -616,7 +722,7 @@ pub fn run_scenario_keep_dir(
     let mut last_activity = Instant::now();
     while last_activity.elapsed() < params.quiet_period {
         let before = outcome.total();
-        fleet.drain_available(&mut outcome);
+        fleet.lock().unwrap().drain_available(&mut outcome);
         if outcome.total() != before {
             last_activity = Instant::now();
         } else {
