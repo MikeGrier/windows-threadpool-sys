@@ -24,6 +24,16 @@ adapters are fully safe; the `device` adapter owns its buffers but its `ioctl` i
 | `socket` | socket send/receive, on the blocking and IOCP backends | yes |
 | `device` | `DeviceIoControl`, on the blocking and IOCP backends | no — buffer-owning `unsafe` raw-code seam |
 
+On the IOCP backend an adapter submission returns `Started`, not a bare token:
+`Started::Pending(token)` when a completion will arrive and the result is claimed
+from it, or `Started::Completed { payload, bytes_transferred }` when the
+operation finished with no completion to come. The second arm exists only for an
+endpoint put into `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode with
+`UnassociatedEndpoint::set_notification_modes`, which drops the packet, dequeue,
+and worker wakeup for every synchronously-completing operation. A caller that
+never enables it cannot reach that arm and can say so with
+`Started::expect_pending`.
+
 The default feature set is empty, keeping the core completion machinery (raw IOCP
 and blocking backends, owned endpoints, pinned operations) minimal. A narrow
 unsafe submission seam remains available for families without an adapter, and the

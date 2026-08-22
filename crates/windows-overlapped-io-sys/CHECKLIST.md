@@ -86,7 +86,7 @@ inserted here; the original M10.4/M10.5 became M10.6/M10.7.
   it observes rather than requiring the synchronous one; the non-skip pairing, where `Pending` *is*
   guaranteed, is asserted exactly.
 
-- [ ] **M10.7** -- Record the decisions in [DESIGN-NOTES.md](DESIGN-NOTES.md): why `Issued` answers "will a
+- [x] **M10.7** -- Record the decisions in [DESIGN-NOTES.md](DESIGN-NOTES.md): why `Issued` answers "will a
   packet arrive" rather than "did it finish synchronously" (the distinction that makes an immediate `TRUE`
   a `Pending` on a default endpoint and a `Completed` on a skip-mode one), why the adapters return a
   two-state outcome instead of hiding the synchronous case, why the notification mode has to be tracked on

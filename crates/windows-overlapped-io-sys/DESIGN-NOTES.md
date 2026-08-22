@@ -144,6 +144,50 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	outstanding count permanently high and hang rundown, so the distinction is part of the seam's safety contract,
 	not an optimization.
 
+## Skip-on-success completion notification modes (M10)
+
+- **`Issued` answers "will a completion packet arrive", not "did the call finish synchronously".** Those come
+	apart precisely because an IOCP-associated overlapped handle receives a packet for *every* request it
+	completes, including one that returns success immediately without `ERROR_IO_PENDING`. The proof is in
+	`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`'s own definition, which says the I/O Manager "does not queue a
+	completion entry to the port, *when it would ordinarily do so*" -- ordinarily, it does. So an immediate
+	`TRUE` is `Issued::Pending` on a default endpoint and `Issued::Completed` on a skip-mode one, and the same
+	native return value means different things depending on the endpoint. This is the single most
+	misread part of the seam, so both `Issued` variants document it at length.
+- **The notification mode is tracked on the endpoint, not passed per call.** This is what
+	"opt-in endpoint provenance attribute" has to mean in practice. `set_notification_modes` records what it
+	established on `UnassociatedEndpoint`, `CompletionPort::associate` carries it into `AssociatedEndpoint`, and
+	the adapters read it to classify. A fire-and-forget setter that only called Win32 would leave every adapter
+	unable to answer the one question the seam requires, which is exactly the defect that made an ioctl on a
+	skip-mode endpoint hang rundown before M10.5. The mode is accumulated rather than replaced, because Win32
+	cannot clear one once set; `assume_overlapped` therefore requires a caller who set a mode on the raw handle
+	to re-declare it, so the endpoint's record agrees with the handle's reality.
+- **The mode is set before association, deliberately.** The flag is inert until the handle reaches a port, so
+	establishing it first means there is never a window in which an operation could be issued against a handle
+	whose notification behaviour is still undecided.
+- **The synchronous byte count lives in the operation header, not on the submitting stack frame.**
+	`Operation` carries a `sync_bytes` cell (before `payload`, so the reclaim thunk's offset stays identical for
+	every `P`) that adapters pass as `lpNumberOfBytesTransferred` / `lpBytesReturned`. A stack local would be a
+	dangling write: `DeviceIoControl` documents that with a non-null `lpOverlapped` the count "is meaningless
+	until the overlapped operation has completed", so the kernel may write it after the submitting call has
+	returned. Scatter/gather has no such out-parameter at all -- that argument slot is `lpReserved` -- so it
+	recovers the count from `GetOverlappedResult` with `bWait: FALSE`, which is the sanctioned reader and cannot
+	block because the operation is already complete.
+- **The buffer-owning adapters report a two-state outcome (`Started`) rather than hiding the synchronous case.**
+	An adapter owns the operation's buffers, so the two paths differ in *who owns the payload*, not merely in
+	timing: a caller that ignored the distinction would either wait forever for a packet that is not coming or
+	drop a result already delivered. `Started::Completed` reduces the operation to exactly the payload the
+	token's `claim` would have yielded, so both arms report the same shape, and `expect_pending` serves the
+	common case of a caller that never enables the mode.
+- **Sockets are excluded from the setter, and that is why `classify_socket` may answer `Pending`
+	unconditionally.** There is no unassociated socket type to hang the provenance attribute on, and Win32
+	restricts skip-on-success on a socket to LSPs returning IFS handles, making it a per-socket capability probe
+	rather than a flag to set blind. No socket reached through this crate can therefore be in skip mode. If a
+	socket-side setter is ever added, `classify_socket` must change with it.
+- **`FILE_SKIP_SET_EVENT_ON_HANDLE` is unsafe to combine with the blocking backend**, which waits on precisely
+	the handle event that flag suppresses. Recorded on the flag's own documentation rather than prevented,
+	because the two are independently useful and the endpoint does not know its future backend.
+
 ## Cancellation and rundown
 
 - Targeted cancellation uses `CancelIoEx(handle, &overlapped)`; whole-endpoint cancellation uses
