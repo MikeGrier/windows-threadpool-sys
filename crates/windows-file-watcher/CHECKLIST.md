@@ -2,10 +2,10 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-66** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-67** -- later
 decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-50...D-52 from M4,
-D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66 from M9.1, and D-25/D-27...D-31 plus D-33
-from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
+D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66/D-67 from M9.1/M9.2, and D-25/D-27...D-31
+plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
@@ -14,8 +14,8 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M9.2** -- build the shared scenario-execution harness. M1 through M8 are
-> archived; M9.1 is done, and M9+ / M-inf hold only parked, ungated follow-on work.
+> **NEXT ACTIONABLE ITEM: M9.3** -- build the basic scenario library. M1 through M8 are archived; M9.1
+> and M9.2 are done, and M9+ / M-inf hold only parked, ungated follow-on work.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -56,19 +56,24 @@ overwhelm are explicitly deferred to M9+ below once M9 is solid.
   sampling-without-approval rule) with an env-var override to explore other seeds. Record the seeding
   decision in [DESIGN-NOTES.md](DESIGN-NOTES.md) with a new D-number.
 
-- [ ] **M9.2** -- Shared harness: given a `Scenario`, create a temp directory, subscribe a watch, apply
+- [x] **M9.2** -- Shared harness: given a `Scenario`, create a temp directory, subscribe a watch, apply
   every `Operation` in order (honoring `Wait`), and assert only the scenario-independent invariants: the
   watch never wedges (a liveness/notification deadline is always met while operations are still being
   applied), no panic, and every `Notification::Desync` is a reported loss rather than silence (D-12). The
   harness takes the scenario and its parameters (counts, timing ranges, seed) as arguments -- it has no
-  hardcoded scenario knowledge.
+  hardcoded scenario knowledge. **Scaled for hundreds of thousands of operations per run (D-67):** the
+  harness reports bounded per-kind tallies (`HarnessOutcome`), never a growing `Vec<Notification>`, and
+  drains the queue non-blockingly after every operation so a long run never backs up the crate's own
+  bounded queue between checks; `Operation::Repeat` keeps a large scenario's data small regardless of how
+  many times it actually runs.
 
 - [ ] **M9.3** -- Basic scenario library, expressed as data through M9.1/M9.2: (a) a few files with a
-  burst of changes; (b) delete-wait-reintroduce with irregular (PRNG-drawn) wait durations; (c) plain
-  renames; (d) a directory created with the name a file used to occupy, and vice versa (cross-type name
-  reuse); (e) a fast two-entity swap race: renaming file `x` -> `y` while concurrently (within the same
-  operation batch, minimal or zero inter-op wait) renaming directory `z` -> `x`, to probe whether the two
-  renames are ever misattributed to each other.
+  burst of changes, scaled up with `Operation::Repeat` to the hundreds-of-thousands-of-operations range a
+  real stress run is expected to exercise; (b) delete-wait-reintroduce with irregular (PRNG-drawn) wait
+  durations; (c) plain renames; (d) a directory created with the name a file used to occupy, and vice versa
+  (cross-type name reuse); (e) a fast two-entity swap race: renaming file `x` -> `y` while concurrently
+  (within the same operation batch, minimal or zero inter-op wait) renaming directory `z` -> `x`, to probe
+  whether the two renames are ever misattributed to each other.
 
 - [ ] **M9.4** -- Wire the M9.3 scenarios into an opt-in integration test (gated the same way as
   [tests/stress.rs](tests/stress.rs), consistent naming e.g. `WINDOWS_FILE_WATCHER_STRESS`) that iterates
