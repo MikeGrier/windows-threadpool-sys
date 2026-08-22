@@ -45,7 +45,7 @@ turned out to be a design fork the engineer has now settled.
   `WSARecv`/`WSASend`'s `lpNumberOfBytesTransferred` out-parameter (currently passed as null) via the
   operation's `sync_bytes` cell.
 
-- [ ] **M12.3** -- Cover both: that a `&'static mut [u8]` round-trips through a write and a read with its
+- [x] **M12.3** -- Cover both: that a `&'static mut [u8]` round-trips through a write and a read with its
   address intact; that the probe accepts an ordinary TCP socket (the base Winsock provider is IFS) and that
   the setter's refusal path returns `Unsupported` rather than a Win32 error; and that a socket in
   skip-on-success mode reports `Started::Completed` with no packet queued and nothing left outstanding,

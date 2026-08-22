@@ -135,3 +135,106 @@ fn submitted_recv_rejects_an_oversized_length() {
         "the request should be rejected before reaching Winsock: {error}"
     );
 }
+
+// --- skip-on-success capability probe ---
+
+/// The refusal arm, reached directly. Every base Winsock provider on a stock
+/// Windows returns IFS handles, so a socket that fails the probe cannot be
+/// manufactured in a test without installing a Layered Service Provider --
+/// which is exactly why the decision is split out from the `getsockopt` that
+/// feeds it.
+#[test]
+fn require_ifs_handles_refuses_a_provider_without_the_flag() {
+    use crate::socket::require_ifs_handles;
+    use windows_sys::Win32::Networking::WinSock::{XP1_GUARANTEED_DELIVERY, XP1_IFS_HANDLES};
+
+    let error = require_ifs_handles(0).expect_err("a provider with no flags cannot support it");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert!(
+        error.raw_os_error().is_none(),
+        "nothing failed -- the question was asked and answered: {error}"
+    );
+
+    // Other service flags do not stand in for the one that matters.
+    assert!(
+        require_ifs_handles(XP1_GUARANTEED_DELIVERY).is_err(),
+        "only XP1_IFS_HANDLES answers this question"
+    );
+
+    require_ifs_handles(XP1_IFS_HANDLES).expect("the flag alone is sufficient");
+    require_ifs_handles(XP1_IFS_HANDLES | XP1_GUARANTEED_DELIVERY)
+        .expect("other flags alongside it are irrelevant");
+}
+
+/// An ordinary loopback TCP socket comes from the base provider, which is IFS,
+/// so the probe must accept it -- otherwise the feature would be unreachable in
+/// practice even though Win32 supports it.
+#[test]
+fn the_probe_accepts_an_ordinary_tcp_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    let client = TcpStream::connect(addr).expect("connect");
+    let (_server, _peer) = listener.accept().expect("accept");
+
+    let port = CompletionPort::new(0).expect("create port");
+    let mut socket = port
+        .associate_socket(OwnedSocket::from(client), 0)
+        .expect("associate socket");
+
+    assert_eq!(
+        socket.notification_modes(),
+        crate::NotificationModes::default(),
+        "a freshly associated socket has taken no shortcuts"
+    );
+
+    socket
+        .set_notification_modes(skip_on_success())
+        .expect("the base Winsock provider returns IFS handles");
+    assert!(
+        socket.notification_modes().skip_completion_port_on_success,
+        "the socket must record what it established"
+    );
+}
+
+/// The mode accumulates rather than replacing, because Win32 cannot clear one.
+#[test]
+fn setting_a_second_mode_does_not_clear_the_first() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    let client = TcpStream::connect(addr).expect("connect");
+    let (_server, _peer) = listener.accept().expect("accept");
+
+    let port = CompletionPort::new(0).expect("create port");
+    let mut socket = port
+        .associate_socket(OwnedSocket::from(client), 0)
+        .expect("associate socket");
+
+    socket
+        .set_notification_modes(skip_on_success())
+        .expect("set skip-on-success");
+    socket
+        .set_notification_modes(crate::NotificationModes {
+            skip_set_event_on_handle: true,
+            ..crate::NotificationModes::default()
+        })
+        .expect("set skip-set-event");
+
+    let modes = socket.notification_modes();
+    assert!(
+        modes.skip_completion_port_on_success && modes.skip_set_event_on_handle,
+        "the record must be the union of everything ever set: {modes:?}"
+    );
+
+    // An all-false call is a no-op, not a reset.
+    socket
+        .set_notification_modes(crate::NotificationModes::default())
+        .expect("an empty request is a no-op");
+    assert_eq!(socket.notification_modes(), modes);
+}
+
+fn skip_on_success() -> crate::NotificationModes {
+    crate::NotificationModes {
+        skip_completion_port_on_success: true,
+        ..crate::NotificationModes::default()
+    }
+}
