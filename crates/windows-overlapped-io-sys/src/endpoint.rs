@@ -20,7 +20,6 @@ const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
 /// `windows-sys` does not export these, so they are named here rather than
 /// written as bare literals at the call site. Changing either value is a
 /// breaking change.
-#[cfg(any(feature = "fs", feature = "socket"))]
 pub(crate) mod notification_flags {
     /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`.
     pub(crate) const SKIP_COMPLETION_PORT_ON_SUCCESS: u8 = 0x1;
@@ -204,7 +203,6 @@ impl UnassociatedEndpoint {
     /// Returns any error from `SetFileCompletionNotificationModes`, which
     /// reports `ERROR_INVALID_PARAMETER` for a handle whose device does not
     /// support the requested mode.
-    #[cfg(feature = "fs")]
     pub fn set_notification_modes(&mut self, modes: NotificationModes) -> io::Result<()> {
         use std::os::windows::io::AsRawHandle;
 

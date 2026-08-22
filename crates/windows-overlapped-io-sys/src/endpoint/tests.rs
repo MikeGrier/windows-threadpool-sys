@@ -51,7 +51,6 @@ fn open_creates_an_overlapped_endpoint() {
     let _ = std::fs::remove_file(&path);
 }
 
-#[cfg(feature = "fs")]
 mod notification_modes {
     use super::super::{NotificationModes, UnassociatedEndpoint};
     use std::path::PathBuf;

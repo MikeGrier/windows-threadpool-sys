@@ -29,22 +29,24 @@ targets = ["x86_64-pc-windows-msvc"]
 [features]
 # The default build carries only the core completion machinery: the raw IOCP
 # backend, the blocking backend, owned endpoints, and pinned operations. That
-# needs just Win32_Foundation + Win32_System_IO (declared as direct dependency
-# features below), so the published default feature set stays empty.
+# needs Win32_Foundation + Win32_System_IO + Win32_Storage_FileSystem (declared
+# as direct dependency features below), so the published default feature set
+# stays empty.
+#
+# Win32_Storage_FileSystem is core, not an `fs`-family add-on, because
+# `UnassociatedEndpoint::set_notification_modes` (`SetFileCompletionNotificationModes`)
+# lives there and is itself core: `assume_overlapped`'s safety contract requires
+# a caller to be able to re-declare a handle's notification mode regardless of
+# which operation family that handle belongs to (M13.1).
 default = []
 
-# Operation-family features widen the windows-sys binding surface for one family
-# of overlapped operations. Downstream crates and this crate's future safe
-# operation adapters opt into exactly the families they use; enabling a family
-# never changes the completion machinery, only which native calls are in scope.
-fs = ["windows-sys/Win32_Storage_FileSystem"]
-# `Win32_Storage_FileSystem` is not a stray dependency here: the socket family's
-# own notification-mode setter calls `SetFileCompletionNotificationModes`, which
-# lives in that module even though its `FileHandle` parameter accepts a socket.
-socket = [
-	"windows-sys/Win32_Networking_WinSock",
-	"windows-sys/Win32_Storage_FileSystem",
-]
+# Operation-family features gate this crate's own safe adapter modules
+# (`src/fs.rs`, `src/socket.rs`, `src/device.rs`). `fs` and `socket` add no
+# further windows-sys features of their own: `Win32_Storage_FileSystem` is
+# already unconditional (see above), and Win32_Networking_WinSock /
+# Win32_System_Ioctl are the only bindings those two families need beyond it.
+fs = []
+socket = ["windows-sys/Win32_Networking_WinSock"]
 device = ["windows-sys/Win32_System_Ioctl"]
 
 # Capture a full backtrace at each operation submission so the drop-time
@@ -56,7 +58,7 @@ operation-backtrace = []
 windows-sys = {
 	version = "0.61.2",
 	default-features = false,
-	features = ["Win32_Foundation", "Win32_System_IO"],
+	features = ["Win32_Foundation", "Win32_System_IO", "Win32_Storage_FileSystem"],
 }
 
 # Extra windows-sys features used only by tests that issue real overlapped I/O.
