@@ -543,10 +543,8 @@ unsafe extern "system" fn wait_trampoline(
         result: WaitResult::from_raw(wait_result),
         ctx,
     };
-    // A panic must never unwind across the FFI boundary into the pool's frame.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        (ctx.callback)(&activation);
-    }));
+    // Not contained: see the callback contract in the crate docs.
+    (ctx.callback)(&activation);
 }
 
 /// An owned thread-pool wait object bound to one waitable handle.
@@ -645,9 +643,9 @@ impl ThreadpoolWait {
     /// uses the process-default pool with default priority.
     ///
     /// The callback runs on a shared, process-managed pool thread, must restore
-    /// any thread state it changes, and must not terminate its thread. A panic
-    /// inside it is caught at the FFI boundary rather than unwinding into the
-    /// pool.
+    /// any thread state it changes, and must not terminate its thread. It must
+    /// not panic: a panic unwinds to the `extern "system"` trampoline and aborts
+    /// the process.
     ///
     /// Taking a [`WaitableHandle`] rather than a bare handle is what keeps this
     /// constructor safe: the thread pool does not support every waitable object,

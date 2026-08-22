@@ -322,14 +322,10 @@ unsafe extern "system" fn timer_trampoline(
         ctx,
         pending: Cell::new(None),
     };
-    // A panic must never unwind across the FFI boundary into the pool's frame.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        (ctx.callback)(&firing);
-    }));
+    // Not contained: see the callback contract in the crate docs.
+    (ctx.callback)(&firing);
     // Applied only now that the callback has returned, so a requested delay runs
-    // from the end of this firing and the next one cannot overlap it. A callback
-    // that panicked after requesting a re-arm still gets it, matching the
-    // accounting behaviour of the crate's other trampolines.
+    // from the end of this firing and the next one cannot overlap it.
     firing.apply_pending();
 }
 
@@ -432,9 +428,9 @@ impl ThreadpoolTimer {
     /// uses the process-default pool with default priority.
     ///
     /// The callback runs on a shared, process-managed pool thread. It must
-    /// restore any thread state it changes and must not terminate its thread. A
-    /// panic inside it is caught at the FFI boundary rather than unwinding into
-    /// the pool.
+    /// restore any thread state it changes and must not terminate its thread. It
+    /// must not panic: a panic unwinds to the `extern "system"` trampoline and
+    /// aborts the process.
     ///
     /// # Errors
     ///

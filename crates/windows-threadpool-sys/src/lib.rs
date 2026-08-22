@@ -101,11 +101,11 @@
 //!   returning, and must not terminate its thread.
 //! - It must not block waiting on its own object's rundown, which would wait on
 //!   itself.
-//! - It may panic without breaking the pool: every trampoline catches unwinding
-//!   at the FFI boundary, because unwinding into the pool's frame is undefined.
-//!   No error is propagated to whoever queued the callback -- but the process's
-//!   panic hook still runs first, so by default the panic is written to stderr.
-//!   A callback that cares should catch its own errors.
+//! - It must not panic. A panic unwinds to the `extern "system"` trampoline,
+//!   where an escaping unwind aborts the process; nothing contains it. The panic
+//!   hook still runs first, so the message and location reach stderr by default
+//!   -- what is given up is the process, not the diagnostic. A callback that can
+//!   fail must handle its own errors rather than panicking.
 //!
 //! # Relationship to `windows-overlapped-io-sys`
 //!

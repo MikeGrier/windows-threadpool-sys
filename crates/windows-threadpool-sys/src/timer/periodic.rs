@@ -70,10 +70,8 @@ unsafe extern "system" fn periodic_trampoline(
     // SAFETY: context is a valid *mut PeriodicContext for the full callback duration.
     let ctx = unsafe { &*(context as *const PeriodicContext) };
     let tick = PeriodicTick { ctx };
-    // A panic must never unwind across the FFI boundary into the pool's frame.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        (ctx.callback)(&tick);
-    }));
+    // Not contained: see the callback contract in the crate docs.
+    (ctx.callback)(&tick);
 }
 
 /// An owned repeating thread-pool timer.
@@ -218,9 +216,9 @@ impl ThreadpoolPeriodicTimer {
     ///
     /// The callback runs on a shared, process-managed pool thread, may run
     /// concurrently with itself (see the type documentation), must restore any
-    /// thread state it changes, and must not terminate its thread. A panic
-    /// inside it is caught at the FFI boundary rather than unwinding into the
-    /// pool, and does not stop the timer.
+    /// thread state it changes, and must not terminate its thread. It must not
+    /// panic: a panic unwinds to the `extern "system"` trampoline and aborts the
+    /// process.
     ///
     /// # Errors
     ///

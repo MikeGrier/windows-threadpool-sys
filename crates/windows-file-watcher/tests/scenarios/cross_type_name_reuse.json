@@ -1,0 +1,10 @@
+{
+  "label": "cross-type-name-reuse",
+  "operations": [
+    { "CreateFile": { "path": "thing" } },
+    { "RemoveFile": { "path": "thing" } },
+    { "CreateDir": { "path": "thing" } },
+    { "RemoveDir": { "path": "thing" } },
+    { "CreateFile": { "path": "thing" } }
+  ]
+}

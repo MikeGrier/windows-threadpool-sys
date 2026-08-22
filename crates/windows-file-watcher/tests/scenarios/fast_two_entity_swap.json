@@ -1,0 +1,9 @@
+{
+  "label": "fast-two-entity-swap",
+  "operations": [
+    { "CreateFile": { "path": "x" } },
+    { "CreateDir": { "path": "z" } },
+    { "Rename": { "from": "x", "to": "y" } },
+    { "Rename": { "from": "z", "to": "x" } }
+  ]
+}

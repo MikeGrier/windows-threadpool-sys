@@ -1,0 +1,29 @@
+{
+  "label": "session-watch-churn-back-to-back",
+  "operations": [
+    {
+      "Repeat": {
+        "count": 10,
+        "pattern": [
+          { "OpenSession": { "name": "churn" } },
+          { "WaitRandom": { "low": 0, "high": 0 } },
+          {
+            "Subscribe": {
+              "session": "churn",
+              "watch": "churn-watch",
+              "path": "",
+              "subtree": true
+            }
+          },
+          { "WaitRandom": { "low": 0, "high": 0 } },
+          { "CreateFile": { "path": "touched.txt" } },
+          { "WaitRandom": { "low": 0, "high": 0 } },
+          { "CancelWatch": { "watch": "churn-watch" } },
+          { "WaitRandom": { "low": 0, "high": 0 } },
+          { "CloseSession": { "name": "churn" } },
+          { "WaitRandom": { "low": 0, "high": 0 } }
+        ]
+      }
+    }
+  ]
+}

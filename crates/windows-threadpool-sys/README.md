@@ -75,11 +75,11 @@ in the [API documentation](https://docs.rs/windows-threadpool-sys).
 Callbacks run on shared, process-managed threads, so every object type holds its
 callback to the same contract: restore any thread state you change, do not
 terminate the thread, and do not block waiting on your own object's rundown. A
-callback may panic without breaking the pool — every trampoline catches
-unwinding at the FFI boundary, because unwinding into the pool's frame is
-undefined — and no error is propagated to whoever queued the callback, but the
-process's panic hook still runs first, so by default the panic is written to
-stderr; a callback that cares should catch its own errors.
+callback must not panic — a panic unwinds to the `extern "system"` trampoline,
+where an escaping unwind aborts the process. Nothing contains it. The panic hook
+still runs first, so the message and location reach stderr by default; what is
+given up is the process, not the diagnostic. A callback that can fail must
+handle its own errors rather than panicking.
 
 ## Safety highlights
 
@@ -106,8 +106,9 @@ the caller to remember:
 - **Cleanup-group members are protected at compile time.** Members borrow the
   group and `close_members` takes `&mut self`, so using a member after the group
   released it is a borrow-check error rather than a documented rule.
-- **Panics cannot unwind into the pool.** Every callback trampoline catches
-  unwinding at the FFI boundary, and the accounting stays exact when it does.
+- **A panicking callback aborts.** Nothing contains an unwind at the trampoline;
+  the callback contract forbids panicking, and a violation ends the process
+  rather than being silently forgiven.
 - **Teardown is ordered.** Every object disarms or cancels before draining
   callbacks, then releases its callback context last, so a callback can never
   outlive the state it captured.

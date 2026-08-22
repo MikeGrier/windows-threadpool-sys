@@ -114,6 +114,9 @@ impl CompletionPort {
         endpoint: UnassociatedEndpoint,
         key: usize,
     ) -> io::Result<AssociatedEndpoint<'_>> {
+        // Read before the handle is taken out, so the mode travels with the
+        // endpoint into association rather than being lost at the boundary.
+        let modes = endpoint.notification_modes();
         let handle = endpoint.into_handle();
         // SAFETY: associating a valid handle with a valid port; the concurrency
         // argument is ignored when an existing port is supplied.
@@ -125,6 +128,7 @@ impl CompletionPort {
             port: self,
             handle,
             key,
+            modes,
         })
     }
 
@@ -321,7 +325,7 @@ impl CompletionPort {
     #[track_caller]
     pub(crate) unsafe fn submit_with<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
-        P: Send,
+        P: Send + 'static,
         F: FnOnce(*mut OVERLAPPED) -> io::Result<Issued>,
     {
         // Transfer the operation's storage out; the caller (kernel) owns it until
@@ -438,6 +442,7 @@ pub struct AssociatedEndpoint<'port> {
     port: &'port CompletionPort,
     handle: OwnedHandle,
     key: usize,
+    modes: crate::NotificationModes,
 }
 
 impl<'port> AssociatedEndpoint<'port> {
@@ -451,6 +456,18 @@ impl<'port> AssociatedEndpoint<'port> {
     #[must_use]
     pub fn key(&self) -> usize {
         self.key
+    }
+
+    /// The completion-notification modes this endpoint carries, as declared
+    /// before it was associated.
+    ///
+    /// The adapters read this to classify a synchronous native success: with
+    /// [`crate::NotificationModes::skip_completion_port_on_success`] set, no
+    /// packet will arrive for one, so it is an [`Issued::Completed`] rather than
+    /// an [`Issued::Pending`].
+    #[must_use]
+    pub fn notification_modes(&self) -> crate::NotificationModes {
+        self.modes
     }
 
     /// The completion port this endpoint is associated with.
@@ -495,10 +512,14 @@ impl<'port> AssociatedEndpoint<'port> {
     /// `issue` must not unwind: a panic out of it can leave an operation
     /// registered with no completion coming, which makes rundown wait forever. A
     /// closure that might panic must catch it and return `Err`.
+    ///
+    /// `P: 'static` because submitting leaks the operation's storage, to be
+    /// freed later through a thunk carrying no lifetime -- see
+    /// [`Operation::into_overlapped`].
     #[track_caller]
     pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
-        P: Send,
+        P: Send + 'static,
         F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<Issued>,
     {
         let handle = self.handle();
@@ -560,18 +581,56 @@ impl<'port> AssociatedEndpoint<'port> {
 ///
 /// `issue` returns this to tell the backend whether a completion packet will be
 /// delivered, so the port's outstanding-operation accounting stays correct.
+///
+/// This asks **"will a completion packet arrive?"**, *not* "did the native call
+/// finish synchronously?". Those come apart precisely because Windows queues a
+/// packet for a synchronously-successful overlapped request too -- see
+/// [`Issued::Pending`], which is where that distinction is spelled out.
 #[derive(Debug, Clone, Copy)]
 pub enum Issued {
     /// A completion packet will be delivered to the port; the operation's
     /// storage stays with the kernel until [`Completion::claim`] recovers it.
-    /// This covers both native success that queues a packet and
-    /// `ERROR_IO_PENDING`.
+    ///
+    /// This covers **both** of the native call's success shapes, and it is the
+    /// right answer for both for the same reason -- a packet is coming either
+    /// way:
+    ///
+    /// - `ERROR_IO_PENDING`: the request has not finished; its packet is queued
+    ///   when it does.
+    /// - **Native success returned immediately** (`TRUE`, or `0` from Winsock):
+    ///   the request has *already* finished, and its packet is *already*
+    ///   queued.
+    ///
+    /// The second is the counter-intuitive one, so it is worth stating why it
+    /// holds. For a handle opened for asynchronous I/O and associated with a
+    /// completion port, the I/O Manager queues a completion packet for every
+    /// request it completes, including one that succeeds immediately without
+    /// returning `ERROR_IO_PENDING`. The single documented exception is
+    /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`, and that flag's own definition
+    /// is what establishes the general rule: it says the I/O Manager "does not
+    /// queue a completion entry to the port, *when it would ordinarily do so*"
+    /// for a request that "returns success immediately without returning
+    /// ERROR_PENDING". Ordinarily -- that is, without the flag -- it does.
+    ///
+    /// So an immediate `TRUE` tells a caller that the *I/O* is done. It says
+    /// nothing about whether the *packet* is still coming, which is the only
+    /// thing this enum is about.
     Pending,
     /// The operation finished synchronously and no completion packet will
     /// arrive -- the outcome a handle in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`
     /// mode reports on synchronous success. `bytes_transferred` is the count the
     /// native call reported; the operation's storage is reclaimed inline and
     /// returned through [`Submitted::Completed`].
+    ///
+    /// Reporting this when a packet *will* in fact arrive is a memory-safety
+    /// bug, not a bookkeeping one: `submit_with` treats it as license to drop
+    /// the operation from the port's outstanding set and reclaim its boxed
+    /// storage inline. The packet that was nevertheless queued then arrives
+    /// carrying a dangling `OVERLAPPED`, and claiming it frees that box a
+    /// second time -- while [`CompletionPort::run_down`] has already been told
+    /// there is nothing left to wait for. This is why every adapter that does
+    /// not enable skip-on-success mode reports [`Issued::Pending`] on immediate
+    /// native success.
     Completed {
         /// The number of bytes the synchronous call transferred.
         bytes_transferred: u32,

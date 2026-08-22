@@ -46,7 +46,8 @@ The SDK contracts impose several requirements that the safe API must represent:
 - `StartThreadpoolIo` must precede every overlapped operation. A failed operation, or an immediate success on
 	a handle using `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`, must be balanced with `CancelThreadpoolIo`.
 - Callback code runs on shared, process-managed threads. It must restore thread-local state before returning,
-	must not terminate the thread, and must not unwind across the FFI boundary.
+	must not terminate the thread, and must not unwind across the FFI boundary -- an escaping unwind aborts the
+	process, and nothing contains it.
 - Teardown must prevent new submissions, disarm callback sources, account for outstanding I/O, wait for
 	executing callbacks, and only then release callback context and dependent native resources.
 
@@ -96,7 +97,9 @@ below are the common surface both must satisfy.
 
 - Callbacks run on shared, process-managed threads. A callback must not unwind across the FFI boundary, must not
 	terminate its thread, must restore any thread-local or thread state it changed before returning, and must not
-	block on downstream consumer progress.
+	block on downstream consumer progress. The trampolines do **not** contain a panic: an unwind reaching an
+	`extern "system"` frame aborts the process. This is deliberate -- see
+	[the panic-containment decision](#a-panicking-callback-aborts-rather-than-being-contained).
 - Teardown, in both crates, follows one order: prevent new submissions, disarm or cancel outstanding work,
 	account for and drain outstanding completions, wait for executing callbacks to finish, and only then release
 	the callback context and the dependent native resources.
@@ -255,8 +258,7 @@ Deregistering afterwards is not sufficient no matter how the guards are ordered,
 hands the storage to the callback, which may drop it -- freeing the address -- part-way through its own body.
 The kernel is finished with the operation by the time its callback is entered, so there is nothing to lose by
 deregistering there, and it makes `cancel` correctly reject an operation whose completion is already being
-delivered. Doing it unconditionally before `catch_unwind` also keeps the accounting exact when a callback
-panics, which is why no drop guard is needed for it.
+delivered.
 
 The cost is that an empty registry no longer implies the callbacks have finished, so `run_down` waits for two
 things: first that no operation is outstanding, then -- via `WaitForThreadpoolIoCallbacks` -- that no callback
@@ -791,6 +793,41 @@ leak into a supported lifecycle rather than into a new error path.
 The general shape is worth remembering, because it is the same mistake as the period check above: both guards
 tested the condition that had been *written down* (has this run before; is the period zero) rather than the one
 that actually mattered (are there members to release; will the period round to zero).
+
+## <a id="a-panicking-callback-aborts-rather-than-being-contained"></a>A panicking callback aborts, rather than being contained
+
+Every trampoline used to wrap its callback in `catch_unwind` and discard the payload. That is now removed, and
+a callback that panics aborts the process.
+
+The containment contradicted the crate's own contract. The callback contract already said a callback **must
+not unwind across the FFI boundary** -- so unwinding was a documented violation, and the `catch_unwind` then
+quietly forgave it. A guarantee that silently rescues callers from breaking a stated rule makes the rule
+unenforceable and teaches callers that panicking is supported.
+
+Removing it costs nothing in diagnosability, which is the point most likely to be misjudged. `catch_unwind`
+discards the panic *payload*, not the message: the panic hook runs before unwinding begins, so the default
+hook has already printed the message and location to stderr. Containment was buying process survival only,
+never visibility. What changes is that a violation now stops the program instead of being absorbed.
+
+The mechanism is Rust's, not this crate's: since Rust 1.81 an unwind escaping an `extern "C"`-family function
+aborts. Removing the catch does not *add* an abort path, it stops intercepting the one the language already
+defines.
+
+Consequences worth knowing:
+
+- The behaviour cannot be tested in-process, because the abort takes the test runner with it. It is covered by
+	[crates/windows-threadpool-sys/tests/callback_panic_aborts.rs](crates/windows-threadpool-sys/tests/callback_panic_aborts.rs),
+	which re-executes the test binary as a child selected by an environment variable and asserts from the parent
+	that the child died abnormally. The parent asserts *not a clean exit* rather than a specific status, because
+	the exact code Windows reports for a Rust abort is a toolchain detail that has changed across releases;
+	pinning it would produce failures that are not regressions in this crate.
+- Two of those children cannot join their callback deterministically. `WaitForThreadpoolTimerCallbacks` and
+	`WaitForThreadpoolWaitCallbacks` wait for callbacks that are *executing*, not ones merely queued, so a child
+	that armed a 1 ms timer and immediately waited would return before the callback started and exit cleanly.
+	Those children outlive the firing by sleeping instead. The work and I/O children need no such treatment,
+	because `WaitForThreadpoolWorkCallbacks` covers pending submissions and `run_down` waits for the completion.
+- The stress suite's deliberate-panic scenario is gone, and with it the process-global panic-hook swapping it
+	required -- a hazard already recorded further down this file.
 
 ## The timer stress suite is opt-in, and asserts only what load cannot perturb
 

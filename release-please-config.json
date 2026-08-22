@@ -4,6 +4,13 @@
     "include-component-in-tag": true,
     "separate-pull-requests": true,
     "packages": {
+        "crates/windows-file-watcher": {
+            "package-name": "windows-file-watcher",
+            "component": "windows-file-watcher",
+            "extra-files": [
+                "Cargo.toml"
+            ]
+        },
         "crates/windows-overlapped-io-sys": {
             "package-name": "windows-overlapped-io-sys",
             "component": "windows-overlapped-io-sys",

@@ -1,0 +1,29 @@
+{
+  "label": "session-watch-churn-with-delays",
+  "operations": [
+    {
+      "Repeat": {
+        "count": 10,
+        "pattern": [
+          { "OpenSession": { "name": "churn" } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
+          {
+            "Subscribe": {
+              "session": "churn",
+              "watch": "churn-watch",
+              "path": "",
+              "subtree": true
+            }
+          },
+          { "WaitRandom": { "low": 25, "high": 250 } },
+          { "CreateFile": { "path": "touched.txt" } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
+          { "CancelWatch": { "watch": "churn-watch" } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
+          { "CloseSession": { "name": "churn" } },
+          { "WaitRandom": { "low": 25, "high": 250 } }
+        ]
+      }
+    }
+  ]
+}

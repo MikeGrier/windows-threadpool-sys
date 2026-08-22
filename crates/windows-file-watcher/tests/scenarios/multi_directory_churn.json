@@ -1,0 +1,26 @@
+{
+  "label": "multi-directory-churn",
+  "operations": [
+    { "CreateDir": { "path": "dir-0" } },
+    { "CreateDir": { "path": "dir-1" } },
+    { "CreateDir": { "path": "dir-2" } },
+    {
+      "Repeat": {
+        "count": 200,
+        "pattern": [{ "CreateFile": { "path": "dir-0/file.txt" } }]
+      }
+    },
+    {
+      "Repeat": {
+        "count": 200,
+        "pattern": [{ "CreateFile": { "path": "dir-1/file.txt" } }]
+      }
+    },
+    {
+      "Repeat": {
+        "count": 200,
+        "pattern": [{ "CreateFile": { "path": "dir-2/file.txt" } }]
+      }
+    }
+  ]
+}

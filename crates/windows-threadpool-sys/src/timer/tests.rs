@@ -746,28 +746,6 @@ fn a_timer_runs_on_a_private_pool() {
     assert_eq!(fires.count(), 1);
 }
 
-/// A panicking callback must be contained at the FFI boundary.
-///
-/// The caught panic prints to stderr; that output is expected.
-#[test]
-fn a_panicking_callback_is_contained() {
-    let fires = Fires::new();
-    let recorder = Arc::clone(&fires);
-    let timer = ThreadpoolTimer::new(
-        move |_firing| {
-            recorder.record();
-            panic!("timer callback panics on purpose");
-        },
-        None,
-    )
-    .expect("create timer");
-
-    timer.set_after(Duration::from_millis(1));
-    fires.wait_for(1);
-    timer.wait();
-    assert_eq!(fires.count(), 1);
-}
-
 #[test]
 fn a_timer_is_send_and_sync() {
     fn assert_send<T: Send>() {}

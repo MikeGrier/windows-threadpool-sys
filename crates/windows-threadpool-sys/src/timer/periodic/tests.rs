@@ -475,30 +475,6 @@ fn a_timer_runs_on_a_private_pool() {
     timer.stop_and_drain();
 }
 
-/// A panicking tick must be contained at the FFI boundary, and must not stop the
-/// timer.
-///
-/// The caught panic prints to stderr; that output is expected.
-#[test]
-fn a_panicking_tick_is_contained_and_the_timer_continues() {
-    let fires = Fires::new();
-    let recorder = Arc::clone(&fires);
-    let timer = ThreadpoolPeriodicTimer::new(
-        Duration::from_millis(2),
-        move |_tick| {
-            recorder.record();
-            panic!("periodic tick panics on purpose");
-        },
-        None,
-    )
-    .expect("create timer");
-
-    timer.start_after(Duration::from_millis(1));
-    fires.wait_for(3);
-    timer.stop_and_drain();
-    assert!(fires.count() >= 3, "panics must not stop the timer");
-}
-
 #[test]
 fn a_periodic_timer_is_send_and_sync() {
     fn assert_send<T: Send>() {}

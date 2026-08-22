@@ -7,8 +7,10 @@ plans tracker: [crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overla
 [crates/wtf-string/PLANS.md](crates/wtf-string/PLANS.md). Checklists whose work is
 finished move to [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
 
+No active checklist. Every crate's own `PLANS.md` currently shows no active plan (each remains open only
+for its own parked, ungated `M-inf` horizon bucket).
+
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [crates/windows-file-watcher/CHECKLIST.md](crates/windows-file-watcher/CHECKLIST.md) | in progress | Memory-safe Windows path-change watcher over `ReadDirectoryChangesW` with a `FindFirstChangeNotification` coarse fallback: queue-mediated monitor/session/watch model, per-directory coalescing, a resident-policy autonomous fault machine with no terminal state, and the `Desync` re-scan primitive (M1 scaffold+decode -> M8 wtf-string adoption). | [crates/windows-file-watcher/DESIGN-NOTES.md](crates/windows-file-watcher/DESIGN-NOTES.md) |
 
 Add a row here when new work is planned, against [CHECKLIST.md](CHECKLIST.md) or any crate's.

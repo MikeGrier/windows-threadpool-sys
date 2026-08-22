@@ -1,0 +1,17 @@
+{
+  "label": "two-sessions",
+  "operations": [
+    { "OpenSession": { "name": "second" } },
+    {
+      "Subscribe": {
+        "session": "second",
+        "watch": "second-watch",
+        "path": "",
+        "subtree": true
+      }
+    },
+    { "CreateFile": { "path": "seen-by-both.txt" } },
+    { "CancelWatch": { "watch": "second-watch" } },
+    { "CloseSession": { "name": "second" } }
+  ]
+}
