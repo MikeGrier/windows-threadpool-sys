@@ -32,7 +32,7 @@ are in [DESIGN-NOTES.md](DESIGN-NOTES.md).
   `windows-sys` bindings at all" -- true when written, false since `assume_overlapped` took on that
   obligation. `windows-sys` is a bindings-only crate, so the cost is compile-time surface, not emitted code.
 
-- [ ] **M13.2** -- Give the device family its own skip-on-success integration test, gated on `device` alone,
+- [x] **M13.2** -- Give the device family its own skip-on-success integration test, gated on `device` alone,
   rather than leaving it nested inside a file that requires `fs`.
 
   **Gap:** [`tests/skip_on_success_adapters.rs`](tests/skip_on_success_adapters.rs) is
