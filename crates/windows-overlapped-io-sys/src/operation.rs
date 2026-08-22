@@ -196,8 +196,47 @@ impl<P> Operation<P> {
     /// completion), or with [`reclaim_overlapped`] when it is not (as during
     /// rundown). This is the submission seam shared by the completion-port and
     /// thread-pool backends.
+    ///
+    /// `P: 'static` because this is the moment the storage is leaked. The box is
+    /// freed later through a type-erased thunk that carries no lifetime, by
+    /// whichever path reclaims it -- a completion, or rundown -- and nothing at
+    /// that point can prove a borrow inside `P` is still live. A payload holding
+    /// a `&'a T` would compile without this bound and could then have its `Drop`
+    /// run after `'a` ended. The bound sits here, rather than on `Operation`
+    /// itself, because it is the leak that requires it: the blocking backend
+    /// drives an operation through `&mut` without ever leaking it, and correctly
+    /// needs neither this nor `Send`.
+    ///
+    /// # Examples
+    ///
+    /// An owned payload submits fine:
+    ///
+    /// ```
+    /// use windows_overlapped_io_sys::Operation;
+    ///
+    /// let operation = Operation::new(vec![0_u8; 32]);
+    /// let overlapped = operation.into_overlapped();
+    /// // SAFETY: nothing was submitted against it, so this reclaims the
+    /// // storage exactly once and no completion can be outstanding.
+    /// unsafe { windows_overlapped_io_sys::reclaim_overlapped(overlapped) };
+    /// ```
+    ///
+    /// A payload borrowing from the caller's frame is rejected, rather than
+    /// having its `Drop` run later against an expired borrow:
+    ///
+    /// ```compile_fail
+    /// use windows_overlapped_io_sys::Operation;
+    ///
+    /// fn leak_a_borrow(bytes: &[u8]) -> *mut std::ffi::c_void {
+    ///     let operation = Operation::new(bytes);
+    ///     operation.into_overlapped().cast()
+    /// }
+    /// ```
     #[must_use]
-    pub fn into_overlapped(mut self) -> *mut OVERLAPPED {
+    pub fn into_overlapped(mut self) -> *mut OVERLAPPED
+    where
+        P: 'static,
+    {
         self.arm();
         self.state = OperationState::Pending;
         let boxed = Box::new(self);

@@ -325,7 +325,7 @@ impl CompletionPort {
     #[track_caller]
     pub(crate) unsafe fn submit_with<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
-        P: Send,
+        P: Send + 'static,
         F: FnOnce(*mut OVERLAPPED) -> io::Result<Issued>,
     {
         // Transfer the operation's storage out; the caller (kernel) owns it until
@@ -512,10 +512,14 @@ impl<'port> AssociatedEndpoint<'port> {
     /// `issue` must not unwind: a panic out of it can leave an operation
     /// registered with no completion coming, which makes rundown wait forever. A
     /// closure that might panic must catch it and return `Err`.
+    ///
+    /// `P: 'static` because submitting leaks the operation's storage, to be
+    /// freed later through a thunk carrying no lifetime -- see
+    /// [`Operation::into_overlapped`].
     #[track_caller]
     pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
-        P: Send,
+        P: Send + 'static,
         F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<Issued>,
     {
         let handle = self.handle();

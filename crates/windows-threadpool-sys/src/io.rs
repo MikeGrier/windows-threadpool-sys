@@ -321,9 +321,13 @@ impl ThreadpoolIo {
     /// starting the I/O is indistinguishable from one after -- rundown could then
     /// wait forever for a callback that will never arrive. A closure that might
     /// panic must catch it and return `Err` instead.
+    ///
+    /// `P: 'static` because submitting leaks the operation's storage, to be
+    /// freed later through a thunk carrying no lifetime -- see
+    /// [`Operation::into_overlapped`].
     pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
-        P: Send,
+        P: Send + 'static,
         F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<Issued>,
     {
         // Transfer the operation's storage out; the kernel owns it until it is
