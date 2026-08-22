@@ -63,9 +63,19 @@ pub enum RetryMode {
 
 /// What a client states when it registers a subscription.
 ///
-/// Non-exhaustive because M4 adds the change-type filter here: build one with
-/// [`WatchOptions::new`] and the setters rather than a struct literal, so that
-/// addition is not a breaking change.
+/// Non-exhaustive so that a future additive option is not a breaking change:
+/// build one with [`WatchOptions::new`] and the setters rather than a struct
+/// literal.
+///
+/// There is deliberately **no change-type filter** here, and none is planned.
+/// This crate's contract is completeness: a change notification is positive
+/// evidence that a file was *not* finished, never evidence that it was, so a
+/// client can only decide "is it done yet?" by watching the change traffic go
+/// quiet. A filter would discard exactly that evidence, and under the crate's
+/// per-directory coalescing it could not even be applied faithfully -- the five
+/// content-ish change classes all arrive as one indistinguishable
+/// [`ChangeKind::Modified`](crate::ChangeKind::Modified) action. See D-77 in the
+/// crate's design notes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct WatchOptions {

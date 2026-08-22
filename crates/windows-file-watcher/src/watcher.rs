@@ -69,9 +69,10 @@ const BYTES_PER_WORD: usize = std::mem::size_of::<u32>();
 
 /// Every `FILE_NOTIFY_CHANGE_*` class this crate can report.
 ///
-/// M4 narrows this to the union of a directory's subscriptions; until then a
-/// single watcher asks for everything so the decoder sees the full range of
-/// actions.
+/// Every watcher always asks for all of them. This is the permanent arrangement,
+/// not a placeholder for a later per-subscription union: D-77 withdrew the
+/// change-type filter outright, so there is nothing to narrow this to and never
+/// will be (D-51).
 pub(crate) const ALL_NOTIFY_FILTERS: u32 = FILE_NOTIFY_CHANGE_FILE_NAME
     | FILE_NOTIFY_CHANGE_DIR_NAME
     | FILE_NOTIFY_CHANGE_ATTRIBUTES
@@ -206,11 +207,12 @@ struct WatcherInner {
     /// recreated, across however many faults this watcher lives through.
     retry_timer: OnceLock<ThreadpoolTimer>,
     /// Every `FILE_NOTIFY_CHANGE_*` class this watcher asks for. Constant rather
-    /// than a per-subscription union: no subscription can select a filter yet
-    /// (`WatchOptions` has no such field), so the union over any set of
-    /// subscriptions is trivially this same constant. Shared by both tiers: the
-    /// wire type (`FILE_NOTIFY_CHANGE`, a `u32`) is identical between
-    /// `ReadDirectoryChangesW` and `FindFirstChangeNotificationW`.
+    /// than a per-subscription union: no subscription can select a filter
+    /// (`WatchOptions` has no such field, and D-77 withdrew the feature outright),
+    /// so the union over any set of subscriptions is trivially this same
+    /// constant. Shared by both tiers: the wire type (`FILE_NOTIFY_CHANGE`, a
+    /// `u32`) is identical between `ReadDirectoryChangesW` and
+    /// `FindFirstChangeNotificationW`.
     filter: u32,
     buffer_bytes: usize,
     /// Every subscription this directory currently serves, keyed by the
