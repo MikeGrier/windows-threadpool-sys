@@ -9,7 +9,7 @@
 #![cfg(windows)]
 
 use std::ffi::OsString;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 use std::ptr;
 use std::sync::mpsc;
@@ -27,15 +27,15 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
-use windows_file_watcher::{ChangeKind, DecodedBatch, decode_batch};
+use windows_file_watcher::{Change, ChangeKind, DecodedBatch, decode_batch};
 
 /// The NUL-terminated wide form of a path, for `CreateFileW`.
 fn wide_z(p: &Path) -> Vec<u16> {
     p.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
-/// The `(kind, name)` pairs the worker decodes, or an error string.
-type WatchResult = Result<Vec<(ChangeKind, OsString)>, String>;
+/// The decoded changes a completion carried, or an error string.
+type WatchResult = Result<Vec<Change>, String>;
 
 /// Joins its worker on drop, so a panic before the explicit join cannot detach an
 /// armed read into later tests. The worker's read is bounded and self-cancelling,
@@ -96,14 +96,97 @@ fn decodes_a_real_read_directory_changes_buffer() {
         .expect("the completion must decode to changes, not a desync");
 
     assert!(
-        changes.iter().any(|(kind, name)| {
-            *kind == ChangeKind::Added && name == &OsString::from("created.txt")
+        changes.iter().any(|change| {
+            change.kind == ChangeKind::Added && change.name.to_os_string() == "created.txt"
         }),
         "expected an Added record for created.txt; got {changes:?}"
     );
 
     // Reached only on a clean pass; on failure the directory is intentionally
     // left for analysis (see the note at creation).
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// A real kernel32 wide entry point, declared inline: it counts code units up to
+// the terminator, so it proves a pointer handed to `lstrlenW` really is a valid
+// `LPCWSTR` rather than merely being typed as one -- the same proof M8.1's unit
+// tests make against a synthetic buffer, made here against a real one (M8.2).
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn lstrlenW(lpstring: *const u16) -> i32;
+}
+
+#[test]
+fn decodes_an_unpaired_surrogate_name_from_a_real_buffer() {
+    // A lone high surrogate is invalid Unicode but legal on NTFS (D-8's lossless
+    // promise exists precisely for names like this). `OsString::from_wide`
+    // preserves it exactly; Rust's Windows path handling carries that straight
+    // through to `CreateFileW`, so this creates a real file with this literal
+    // name rather than a sanitised approximation of one.
+    let leaf_units: Vec<u16> = vec![
+        u16::from(b'a'),
+        0xD800, // an unpaired high surrogate
+        u16::from(b'b'),
+        u16::from(b'.'),
+        u16::from(b't'),
+        u16::from(b'x'),
+        u16::from(b't'),
+    ];
+    let leaf = OsString::from_wide(&leaf_units);
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "windows-file-watcher-decode-surrogate-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&dir).expect("create temp dir");
+
+    let (armed_tx, armed_rx) = mpsc::channel::<()>();
+    let watch_dir = dir.clone();
+    let mut worker = JoinOnDrop(Some(std::thread::spawn(move || {
+        watch_once(&watch_dir, &armed_tx)
+    })));
+
+    armed_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the worker must arm the read");
+    std::fs::write(dir.join(&leaf), b"hi").expect("create the surrogate-named file");
+
+    let changes = worker
+        .0
+        .take()
+        .expect("worker handle present")
+        .join()
+        .expect("the worker thread must not panic")
+        .expect("the completion must decode to changes, not a desync");
+
+    let change = changes
+        .iter()
+        .find(|change| change.kind == ChangeKind::Added)
+        .unwrap_or_else(|| panic!("expected an Added record; got {changes:?}"));
+
+    // The raw units the kernel reported, exactly, surrogate included (D-8).
+    assert_eq!(change.name.as_wide(), leaf_units.as_slice());
+
+    // The lossless OsString/Path conversions round-trip the same units back out.
+    assert_eq!(change.name.to_os_string(), leaf);
+    assert_eq!(change.name.to_path_buf(), Path::new(&leaf));
+    let round_trip: Vec<u16> = change.name.to_os_string().encode_wide().collect();
+    assert_eq!(round_trip, leaf_units);
+
+    // A direct wide-pointer hand-off to a real Windows API, from a name a real
+    // ReadDirectoryChangesW completion produced -- no WTF-8 re-encode in between.
+    assert!(!change.name.has_interior_nul());
+    // SAFETY: `as_terminated_ptr` is NUL-terminated and the name has no interior
+    // NUL, which is exactly what `lstrlenW` requires; it reads only as far as
+    // that terminator.
+    let counted = unsafe { lstrlenW(change.name.as_wtf16().as_terminated_ptr()) };
+    assert_eq!(counted as usize, change.name.len());
+    assert_eq!(change.name.len(), leaf_units.len());
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -114,7 +197,7 @@ fn decodes_a_real_read_directory_changes_buffer() {
 /// exactly once on every path where the read is confirmed retired, and is
 /// deliberately leaked, alongside the other in-flight resources, on the one path
 /// where retirement could not be confirmed.
-fn watch_once(dir: &Path, armed: &mpsc::Sender<()>) -> Result<Vec<(ChangeKind, OsString)>, String> {
+fn watch_once(dir: &Path, armed: &mpsc::Sender<()>) -> WatchResult {
     let name = wide_z(dir);
     // SAFETY: `name` is a valid NUL-terminated wide path.
     let handle = unsafe {
@@ -150,10 +233,7 @@ fn watch_once(dir: &Path, armed: &mpsc::Sender<()>) -> Result<Vec<(ChangeKind, O
 /// `windows-overlapped-io-sys/DESIGN-NOTES.md`: closing a handle only cancels
 /// its outstanding operations, reclamation must wait for the completion to be
 /// observed) applied to a caller with no completion port to later observe it.
-fn read_overlapped(
-    handle: HANDLE,
-    armed: &mpsc::Sender<()>,
-) -> Result<Vec<(ChangeKind, OsString)>, String> {
+fn read_overlapped(handle: HANDLE, armed: &mpsc::Sender<()>) -> WatchResult {
     /// The read is bounded so a missed change surfaces as an error, never a hang.
     const TIMEOUT_MS: u32 = 30_000;
 
@@ -295,14 +375,11 @@ fn read_overlapped(
     ))
 }
 
-/// Decode a completion buffer into `(kind, name)` pairs, mapping a desync to an
-/// error so the test fails loudly rather than silently.
-fn decode(bytes: &[u8]) -> Result<Vec<(ChangeKind, OsString)>, String> {
+/// Decode a completion buffer into its changes, mapping a desync to an error so
+/// the test fails loudly rather than silently.
+fn decode(bytes: &[u8]) -> WatchResult {
     match decode_batch(bytes) {
-        DecodedBatch::Changes(changes) => Ok(changes
-            .into_iter()
-            .map(|c| (c.kind, c.name.to_os_string()))
-            .collect()),
+        DecodedBatch::Changes(changes) => Ok(changes),
         DecodedBatch::Desync(cause) => Err(format!("unexpected desync: {cause:?}")),
     }
 }
