@@ -29,7 +29,7 @@ surface forever.
   shape every adapter's submission returns once M10.3 lands; it is `Submitted` with the `Failed` arm
   folded into `io::Result`'s `Err` and the operation storage already reduced to its payload.
 
-- [ ] **M10.2** -- Add the notification-mode setter as an endpoint provenance attribute:
+- [x] **M10.2** -- Add the notification-mode setter as an endpoint provenance attribute:
   `NotificationModes { skip_completion_port_on_success, skip_set_event_on_handle }` plus
   `UnassociatedEndpoint::set_notification_modes`, feature-gated on `fs` (it needs
   `Win32_Storage_FileSystem`). Document that the mode is irreversible once set (Win32: "after a mode has

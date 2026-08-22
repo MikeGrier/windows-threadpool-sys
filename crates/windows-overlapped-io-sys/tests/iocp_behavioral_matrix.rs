@@ -12,15 +12,12 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use windows_overlapped_io_sys::{
-    CompletionPort, Issued, Operation, OperationState, Submitted, UnassociatedEndpoint,
+    CompletionPort, Issued, NotificationModes, Operation, OperationState, Submitted,
+    UnassociatedEndpoint,
 };
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
-use windows_sys::Win32::Storage::FileSystem::{ReadFile, SetFileCompletionNotificationModes};
+use windows_sys::Win32::Storage::FileSystem::ReadFile;
 use windows_sys::Win32::System::IO::OVERLAPPED;
-
-/// The Win32 `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` flag for
-/// `SetFileCompletionNotificationModes`; windows-sys does not export it.
-const FILE_SKIP_COMPLETION_PORT_ON_SUCCESS: u8 = 0x1;
 
 fn temp_file_with(content: &[u8], tag: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -40,25 +37,20 @@ fn skip_on_success_completes_synchronously_without_a_packet() {
     let content = b"skip on success payload";
     let path = temp_file_with(content, "skip");
 
-    let port = CompletionPort::new(0).expect("create port");
-    let endpoint = port
-        .associate(open_overlapped(&path), 0x20)
-        .expect("associate");
+    // Set before association, which is the ordering `set_notification_modes`
+    // documents: the flag is inert until the handle reaches a port, so there is
+    // never a window in which an operation could be issued against a handle
+    // whose notification behaviour is still undecided.
+    let endpoint = open_overlapped(&path);
+    endpoint
+        .set_notification_modes(NotificationModes {
+            skip_completion_port_on_success: true,
+            ..NotificationModes::default()
+        })
+        .expect("a file handle supports skip-on-success");
 
-    // Ask the handle to skip queuing a completion packet on synchronous success.
-    // SAFETY: `endpoint` owns a valid overlapped handle associated with `port`.
-    let modes_ok = unsafe {
-        SetFileCompletionNotificationModes(
-            endpoint.handle().as_raw_handle(),
-            FILE_SKIP_COMPLETION_PORT_ON_SUCCESS,
-        )
-    };
-    assert_ne!(
-        modes_ok,
-        0,
-        "SetFileCompletionNotificationModes failed: {}",
-        io::Error::last_os_error()
-    );
+    let port = CompletionPort::new(0).expect("create port");
+    let endpoint = port.associate(endpoint, 0x20).expect("associate");
 
     let mut buffer = [0_u8; 64];
     let buf_ptr = buffer.as_mut_ptr();

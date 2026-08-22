@@ -80,7 +80,7 @@ pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_
 pub use device::DeviceIoControlIo;
 
 #[cfg(windows)]
-pub use endpoint::UnassociatedEndpoint;
+pub use endpoint::{NotificationModes, UnassociatedEndpoint};
 
 #[cfg(all(windows, feature = "fs"))]
 pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PAGE_SIZE, PageBuffers, ScatterGatherIo};
