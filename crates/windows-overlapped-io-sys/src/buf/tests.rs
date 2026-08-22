@@ -184,5 +184,9 @@ fn a_static_mut_slices_address_survives_moving_the_reference() {
     let buffer: &'static mut [u8] = Box::leak(vec![0_u8; 16].into_boxed_slice());
     let before = buffer.stable_ptr();
     let moved = buffer;
-    assert_eq!(moved.stable_ptr(), before, "the reference moved, the bytes must not");
+    assert_eq!(
+        moved.stable_ptr(),
+        before,
+        "the reference moved, the bytes must not"
+    );
 }

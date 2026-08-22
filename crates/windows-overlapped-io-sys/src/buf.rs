@@ -185,11 +185,11 @@ unsafe impl IoBufMut for &'static mut [u8] {
 /// never dereferenced -- which is the only reason it can exist. The traits'
 /// validity promise binds while an operation holds the buffer, and no operation
 /// ever holds this one.
-#[cfg(test)]
+#[cfg(all(test, any(feature = "socket", feature = "device")))]
 #[derive(Debug)]
 pub(crate) struct OversizedBuffer;
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "socket", feature = "device")))]
 // SAFETY: see the type's documentation -- the promise is never relied upon,
 // because every path that would rely on it rejects this length first.
 unsafe impl IoBuf for OversizedBuffer {
@@ -202,7 +202,7 @@ unsafe impl IoBuf for OversizedBuffer {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "socket", feature = "device")))]
 // SAFETY: as above.
 unsafe impl IoBufMut for OversizedBuffer {
     fn stable_mut_ptr(&mut self) -> *mut u8 {

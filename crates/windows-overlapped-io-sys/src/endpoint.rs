@@ -20,12 +20,12 @@ const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
 /// `windows-sys` does not export these, so they are named here rather than
 /// written as bare literals at the call site. Changing either value is a
 /// breaking change.
-#[cfg(feature = "fs")]
-mod notification_flags {
+#[cfg(any(feature = "fs", feature = "socket"))]
+pub(crate) mod notification_flags {
     /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`.
-    pub(super) const SKIP_COMPLETION_PORT_ON_SUCCESS: u8 = 0x1;
+    pub(crate) const SKIP_COMPLETION_PORT_ON_SUCCESS: u8 = 0x1;
     /// `FILE_SKIP_SET_EVENT_ON_HANDLE`.
-    pub(super) const SKIP_SET_EVENT_ON_HANDLE: u8 = 0x2;
+    pub(crate) const SKIP_SET_EVENT_ON_HANDLE: u8 = 0x2;
 }
 
 /// Which completion-notification shortcuts a handle should take.
@@ -192,10 +192,12 @@ impl UnassociatedEndpoint {
     /// association exists the flag is simply inert, which is why setting it
     /// first is safe.
     ///
-    /// Sockets are out of scope here: they have no unassociated endpoint type,
-    /// and Win32 additionally restricts skip-on-success to Layered Service
-    /// Providers that return IFS handles, making it a per-socket capability
-    /// question rather than a flag to set blind.
+    /// Sockets set their modes elsewhere, on
+    /// [`AssociatedSocket::set_notification_modes`](crate::AssociatedSocket::set_notification_modes):
+    /// they have no unassociated stage to hang provenance on, and Win32
+    /// additionally restricts skip-on-success to Layered Service Providers that
+    /// return IFS handles, so that setter probes the socket's own provider
+    /// rather than setting the flag blind.
     ///
     /// # Errors
     ///

@@ -38,7 +38,13 @@ default = []
 # operation adapters opt into exactly the families they use; enabling a family
 # never changes the completion machinery, only which native calls are in scope.
 fs = ["windows-sys/Win32_Storage_FileSystem"]
-socket = ["windows-sys/Win32_Networking_WinSock"]
+# `Win32_Storage_FileSystem` is not a stray dependency here: the socket family's
+# own notification-mode setter calls `SetFileCompletionNotificationModes`, which
+# lives in that module even though its `FileHandle` parameter accepts a socket.
+socket = [
+	"windows-sys/Win32_Networking_WinSock",
+	"windows-sys/Win32_Storage_FileSystem",
+]
 device = ["windows-sys/Win32_System_Ioctl"]
 
 # Capture a full backtrace at each operation submission so the drop-time

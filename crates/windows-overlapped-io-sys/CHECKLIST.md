@@ -19,7 +19,7 @@ turned out to be a design fork the engineer has now settled.
   M11 left this out on the stated grounds that "nothing has asked for it," which is precisely the
   reasoning the PRIME DIRECTIVE forbids. Recorded here so the correction is visible rather than silent.
 
-- [ ] **M12.2** -- Add `AssociatedSocket::set_notification_modes`, gated behind a capability probe, and
+- [x] **M12.2** -- Add `AssociatedSocket::set_notification_modes`, gated behind a capability probe, and
   update `classify_socket` in the same change so the two can never disagree.
 
   The three questions M11 parked, and their answers:

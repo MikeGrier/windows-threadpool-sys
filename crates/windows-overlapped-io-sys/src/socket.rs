@@ -16,14 +16,17 @@ use std::os::windows::io::{AsRawSocket, AsSocket, BorrowedSocket, OwnedSocket};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Networking::WinSock::{
-    SOCKET, WSA_INVALID_EVENT, WSA_IO_PENDING, WSABUF, WSACloseEvent, WSACreateEvent, WSAEVENT,
-    WSAGetOverlappedResult, WSARecv, WSASend,
+    SO_PROTOCOL_INFOW, SOCKET, SOCKET_ERROR, SOL_SOCKET, WSA_INVALID_EVENT, WSA_IO_PENDING, WSABUF,
+    WSACloseEvent, WSACreateEvent, WSAEVENT, WSAGetOverlappedResult, WSAPROTOCOL_INFOW, WSARecv,
+    WSASend, XP1_IFS_HANDLES, getsockopt,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, CreateIoCompletionPort, OVERLAPPED};
 
-use crate::operation::payload_ptr_from_overlapped;
+use crate::endpoint::notification_flags;
+use crate::operation::{payload_ptr_from_overlapped, sync_bytes_ptr_from_overlapped};
 use crate::{
-    Completion, CompletionPort, IoBuf, IoBufMut, Issued, Operation, OperationId, Started, Submitted,
+    Completion, CompletionPort, IoBuf, IoBufMut, Issued, NotificationModes, Operation, OperationId,
+    Started, Submitted,
 };
 
 impl CompletionPort {
@@ -59,6 +62,7 @@ impl CompletionPort {
             port: self,
             socket,
             key,
+            modes: NotificationModes::default(),
         })
     }
 }
@@ -72,6 +76,11 @@ pub struct AssociatedSocket<'port> {
     port: &'port CompletionPort,
     socket: OwnedSocket,
     key: usize,
+    /// What [`AssociatedSocket::set_notification_modes`] has established.
+    ///
+    /// Read at every submission, because it decides whether a synchronous
+    /// success will be followed by a completion packet.
+    modes: NotificationModes,
 }
 
 impl<'port> AssociatedSocket<'port> {
@@ -93,8 +102,104 @@ impl<'port> AssociatedSocket<'port> {
         self.port
     }
 
+    /// The completion-notification modes established on this socket.
+    #[must_use]
+    pub fn notification_modes(&self) -> NotificationModes {
+        self.modes
+    }
+
     fn raw_socket(&self) -> SOCKET {
         self.socket.as_raw_socket() as usize
+    }
+
+    /// Set this socket's completion-notification modes, after checking that its
+    /// provider actually supports them.
+    ///
+    /// The handle side declares its modes *before* association, on
+    /// [`UnassociatedEndpoint::set_notification_modes`](crate::UnassociatedEndpoint::set_notification_modes),
+    /// because there the mode is part of an endpoint's provenance. A socket has
+    /// no unassociated stage to hang that on, so it declares here instead.
+    /// Setting after association is still safe: the flag only takes effect at
+    /// I/O time, and `recv`/`send` take `&self`, so a caller sets the mode once
+    /// against `&mut self` and then submits freely.
+    ///
+    /// Passing every field `false` is a no-op call, not a reset. **A mode cannot
+    /// be removed once set** -- a Win32 property of the handle, not a limitation
+    /// of this wrapper -- so a second call can only ever add modes.
+    ///
+    /// # The capability probe
+    ///
+    /// Win32 restricts [`NotificationModes::skip_completion_port_on_success`] on
+    /// a socket to Layered Service Providers that return IFS handles, and a
+    /// socket wrongly put in that mode reports [`Started::Pending`] for an
+    /// operation whose packet was suppressed -- leaving it outstanding forever
+    /// and wedging [`CompletionPort::run_down`]. So this asks first, reading
+    /// *this* socket's own `WSAPROTOCOL_INFOW` via `SO_PROTOCOL_INFOW` and
+    /// requiring `XP1_IFS_HANDLES`. That is narrower and more accurate than the
+    /// `WSAEnumProtocols` sweep the flag's documentation suggests: it asks about
+    /// the provider that actually created this socket, not about every LSP
+    /// installed on the machine.
+    ///
+    /// `skip_set_event_on_handle` carries no such restriction and is not probed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] if skip-on-success was requested
+    /// and this socket's provider does not return IFS handles, or any error from
+    /// `getsockopt` or `SetFileCompletionNotificationModes`.
+    pub fn set_notification_modes(&mut self, modes: NotificationModes) -> io::Result<()> {
+        if modes.skip_completion_port_on_success {
+            require_ifs_handles(self.provider_service_flags()?)?;
+        }
+
+        let mut flags = 0_u8;
+        if modes.skip_completion_port_on_success {
+            flags |= notification_flags::SKIP_COMPLETION_PORT_ON_SUCCESS;
+        }
+        if modes.skip_set_event_on_handle {
+            flags |= notification_flags::SKIP_SET_EVENT_ON_HANDLE;
+        }
+        // SAFETY: a live socket this endpoint owns -- a socket handle is a
+        // kernel handle, which is why this file-named call accepts one -- and a
+        // flags byte built only from the two documented bits. The call sets a
+        // handle attribute and starts no I/O.
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::SetFileCompletionNotificationModes(
+                self.raw_socket() as HANDLE,
+                flags,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Accumulated, never replaced: Win32 cannot clear a mode, so what this
+        // socket records has to be the union of everything ever set on it.
+        self.modes.skip_completion_port_on_success |= modes.skip_completion_port_on_success;
+        self.modes.skip_set_event_on_handle |= modes.skip_set_event_on_handle;
+        Ok(())
+    }
+
+    /// The `dwServiceFlags1` word of the provider that created this socket.
+    fn provider_service_flags(&self) -> io::Result<u32> {
+        let mut info = std::mem::MaybeUninit::<WSAPROTOCOL_INFOW>::uninit();
+        let mut len = i32::try_from(size_of::<WSAPROTOCOL_INFOW>())
+            .expect("WSAPROTOCOL_INFOW is far smaller than i32::MAX");
+        // SAFETY: a live socket, a documented option pair, and an output buffer
+        // exactly `len` bytes long that Winsock fills before returning success.
+        let ret = unsafe {
+            getsockopt(
+                self.raw_socket(),
+                SOL_SOCKET,
+                SO_PROTOCOL_INFOW,
+                info.as_mut_ptr().cast(),
+                &raw mut len,
+            )
+        };
+        if ret == SOCKET_ERROR {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `getsockopt` reported success, so it wrote the whole struct.
+        Ok(unsafe { info.assume_init() }.dwServiceFlags1)
     }
 
     /// Submit an overlapped receive into `buffer`.
@@ -117,23 +222,25 @@ impl<'port> AssociatedSocket<'port> {
     #[track_caller]
     pub fn recv<B: IoBufMut>(&self, buffer: B) -> io::Result<Started<SocketIo<B>, B>> {
         let socket = self.raw_socket();
+        let skip = self.modes.skip_completion_port_on_success;
         let operation = Operation::new(recv_payload(buffer)?);
         // SAFETY: issues exactly one WSARecv into the payload's buffer via its
         // WSABUF and flags word, both reached through the pinned OVERLAPPED; they
-        // live until the completion is claimed.
+        // and the byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.port.submit_with(operation, |overlapped| {
                 let payload = payload_ptr_from_overlapped::<SocketPayload<B>>(overlapped);
+                let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ret = WSARecv(
                     socket,
                     std::ptr::addr_of!((*payload).wsabuf),
                     1,
-                    std::ptr::null_mut(),
+                    bytes,
                     std::ptr::addr_of_mut!((*payload).flags),
                     overlapped,
                     None,
                 );
-                classify_socket(ret)
+                classify_socket(ret, skip, bytes)
             })
         };
         finish_socket(submitted)
@@ -158,23 +265,25 @@ impl<'port> AssociatedSocket<'port> {
     #[track_caller]
     pub fn send<B: IoBuf>(&self, buffer: B) -> io::Result<Started<SocketIo<B>, B>> {
         let socket = self.raw_socket();
+        let skip = self.modes.skip_completion_port_on_success;
         let operation = Operation::new(send_payload(buffer)?);
         // SAFETY: issues exactly one WSASend from the payload's buffer via its
-        // WSABUF, reached through the pinned OVERLAPPED; it lives until the
-        // completion is claimed.
+        // WSABUF, reached through the pinned OVERLAPPED; it and the byte-count
+        // cell live until the completion is claimed.
         let submitted = unsafe {
             self.port.submit_with(operation, |overlapped| {
                 let payload = payload_ptr_from_overlapped::<SocketPayload<B>>(overlapped);
+                let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ret = WSASend(
                     socket,
                     std::ptr::addr_of!((*payload).wsabuf),
                     1,
-                    std::ptr::null_mut(),
+                    bytes,
                     0,
                     overlapped,
                     None,
                 );
-                classify_socket(ret)
+                classify_socket(ret, skip, bytes)
             })
         };
         finish_socket(submitted)
@@ -264,25 +373,60 @@ fn send_payload<B: IoBuf>(buffer: B) -> io::Result<SocketPayload<B>> {
     })
 }
 
+/// Decide whether a provider's `dwServiceFlags1` permits skip-on-success.
+///
+/// Split from the `getsockopt` that reads the word so the refusal can be tested
+/// directly: every base Winsock provider on a stock Windows returns IFS handles,
+/// so the failing arm is otherwise unreachable without installing a Layered
+/// Service Provider.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::Unsupported`] -- deliberately not a Win32 error,
+/// because nothing failed: the question was asked and answered.
+fn require_ifs_handles(service_flags1: u32) -> io::Result<()> {
+    if service_flags1 & XP1_IFS_HANDLES == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this socket's provider does not return IFS handles, so Win32 does not support \
+             FILE_SKIP_COMPLETION_PORT_ON_SUCCESS on it",
+        ));
+    }
+    Ok(())
+}
+
 /// Map a Winsock call's return value into the submission contract.
 ///
-/// Always [`Issued::Pending`] on success, and correctly so: [`Issued`] records
-/// whether a completion packet will arrive, and an IOCP-bound overlapped socket
-/// gets one for a synchronously-successful request unless it is in
-/// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode -- which no socket reached
-/// through this crate can be, because the notification-mode setter is offered
-/// only on [`crate::UnassociatedEndpoint`] and sockets have no equivalent type.
-/// (Win32 also restricts skip-on-success on a socket to Layered Service
-/// Providers that return IFS handles, so enabling it is a per-socket capability
-/// question rather than a flag to set blind.)
+/// [`Issued`] records whether a **completion packet will arrive**, not whether
+/// the call finished synchronously. For an IOCP-bound overlapped socket those
+/// are different facts: a packet is queued for every completed request,
+/// *including* one that succeeded immediately without `WSA_IO_PENDING`.
 ///
-/// **If a socket-side notification-mode setter is ever added, this function must
-/// change with it**, exactly as `fs::classify_issued` and
-/// `device::classify_issued` did: reporting `Pending` for an operation whose
-/// packet is suppressed leaves it outstanding forever and wedges
-/// [`crate::CompletionPort::run_down`].
-fn classify_socket(ret: i32) -> io::Result<Issued> {
+/// The single exception is `skip_on_success`, which is why this needs to know
+/// it: on a socket put into `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode by
+/// [`AssociatedSocket::set_notification_modes`] no packet is queued for an
+/// immediate success, so that -- and only that -- is an [`Issued::Completed`].
+/// Getting this backwards in either direction is a bug with teeth: claiming
+/// `Completed` when a packet is coming frees the operation under a live
+/// `OVERLAPPED`, and claiming `Pending` when none is coming leaves the operation
+/// outstanding forever and wedges [`CompletionPort::run_down`].
+///
+/// # Safety
+///
+/// `sync_bytes` must be the byte-count cell of the operation being submitted,
+/// which is live for the whole call.
+unsafe fn classify_socket(
+    ret: i32,
+    skip_on_success: bool,
+    sync_bytes: *mut u32,
+) -> io::Result<Issued> {
     if ret == 0 {
+        if skip_on_success {
+            // SAFETY: the call reported immediate success, so Winsock has
+            // already written the count and will not write it again.
+            let bytes_transferred = unsafe { *sync_bytes };
+            return Ok(Issued::Completed { bytes_transferred });
+        }
         return Ok(Issued::Pending);
     }
     let error = io::Error::last_os_error();
