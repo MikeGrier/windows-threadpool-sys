@@ -23,7 +23,7 @@ The adapter change is deliberately **breaking**: every adapter submission return
 rather than a token. Taken now, while the crate has no adopters, rather than carried as a parallel
 surface forever.
 
-- [ ] **M10.1** -- Add the `Started<T, P>` outcome enum (`Pending(T)` / `Completed { payload,
+- [x] **M10.1** -- Add the `Started<T, P>` outcome enum (`Pending(T)` / `Completed { payload,
   bytes_transferred }`) to a new `started` module, re-exported from the crate root, with the accessors an
   ordinary caller needs (`is_pending`, `is_completed`, `pending`, `completed`) and unit tests. This is the
   shape every adapter's submission returns once M10.3 lands; it is `Submitted` with the `Failed` arm

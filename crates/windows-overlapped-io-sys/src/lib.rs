@@ -68,6 +68,9 @@ mod operation;
 mod socket;
 
 #[cfg(windows)]
+mod started;
+
+#[cfg(windows)]
 pub use blocking::BlockingEndpoint;
 
 #[cfg(windows)]
@@ -93,3 +96,6 @@ pub use operation::{Operation, OperationState, reclaim_overlapped};
 
 #[cfg(all(windows, feature = "socket"))]
 pub use socket::{AssociatedSocket, BlockingSocket, SocketIo};
+
+#[cfg(windows)]
+pub use started::Started;
