@@ -752,11 +752,25 @@ fn a_blocked_receiver_is_woken_by_a_latched_loss() {
     deliver(&sender, batch(watch, &["a.txt"]));
     assert_eq!(names(&receiver.recv().expect("a")), vec!["a.txt"]);
 
+    // The background thread only delivers "b.txt" and hands `sender` back
+    // once that has happened; the overflow send that must observe a full
+    // queue runs here, after delivery is confirmed and before anything can
+    // drain it. This was previously racy: if the overflow send ran on the
+    // background thread immediately after its own `deliver`, this thread's
+    // `recv` for "b.txt" could occasionally win the race and drain it first
+    // (an OS scheduling detail, not anything the crate promises), making the
+    // overflow observe room instead of a full queue and fail to latch.
+    let (delivered_tx, delivered_rx) = std::sync::mpsc::channel();
     let handle = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
         deliver(&sender, batch(watch, &["b.txt"]));
-        assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
+        delivered_tx.send(sender).expect("signal delivery");
     });
+
+    let sender = delivered_rx
+        .recv()
+        .expect("the background thread delivered");
+    assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
 
     assert_eq!(names(&receiver.recv().expect("b")), vec!["b.txt"]);
     assert!(matches!(
