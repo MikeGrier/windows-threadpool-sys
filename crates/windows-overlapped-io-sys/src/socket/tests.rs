@@ -17,7 +17,10 @@ fn iocp_socket_recv_and_send_round_trip() {
         .expect("associate_socket");
 
     // Receive: submit, have the peer send, then dequeue and claim.
-    let recv_token = endpoint.recv(64).expect("submit recv");
+    let recv_token = endpoint
+        .recv(64)
+        .expect("submit recv")
+        .expect_pending("this socket is not in skip-on-success mode");
     server.write_all(b"ping").expect("peer write");
     let completion = port.get(5_000).expect("get").expect("recv completion");
     let (mut buffer, result) = match recv_token.claim(&completion) {
@@ -30,7 +33,10 @@ fn iocp_socket_recv_and_send_round_trip() {
     assert_eq!(port.outstanding(), 0);
 
     // Send: our side sends, the peer reads it back.
-    let send_token = endpoint.send(b"pong".to_vec()).expect("submit send");
+    let send_token = endpoint
+        .send(b"pong".to_vec())
+        .expect("submit send")
+        .expect_pending("this socket is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("send completion");
     let (_data, result) = match send_token.claim(&completion) {
         Ok(pair) => pair,

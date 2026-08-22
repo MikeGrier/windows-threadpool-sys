@@ -50,7 +50,10 @@ fn iocp_backend_round_trips_a_file() {
     let data = b"iocp safe adapter round trip".to_vec();
 
     // Write, then dequeue and claim its completion via the token.
-    let write_token = endpoint.write(data.clone(), 0).expect("submit write");
+    let write_token = endpoint
+        .write(data.clone(), 0)
+        .expect("submit write")
+        .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("write completion");
     let (returned, result) = write_token
         .claim(&completion)
@@ -60,7 +63,10 @@ fn iocp_backend_round_trips_a_file() {
     assert_eq!(port.outstanding(), 0);
 
     // Read it back the same way.
-    let read_token = endpoint.read(data.len(), 0).expect("submit read");
+    let read_token = endpoint
+        .read(data.len(), 0)
+        .expect("submit read")
+        .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("read completion");
     let (buffer, result) = read_token
         .claim(&completion)

@@ -38,7 +38,7 @@ surface forever.
   Cover with a test that sets the mode and observes a synchronous no-packet completion through the raw
   seam.
 
-- [ ] **M10.3** -- Convert every buffer-owning adapter's submission to return `io::Result<Started<..>>`,
+- [x] **M10.3** -- Convert every buffer-owning adapter's submission to return `io::Result<Started<..>>`,
   deleting the `finish` / `finish_scatter` / `finish_device` / `finish_socket` error arms that currently
   reject a synchronous completion: `fs::read`, `fs::write`, `fs::read_scatter`, `fs::write_gather`,
   `device::ioctl` (both the `AssociatedEndpoint` and blocking forms as applicable), `socket::recv`,

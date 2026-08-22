@@ -66,7 +66,10 @@ fn iocp_backend_scatter_gather_round_trips() {
     let expected = src.as_bytes().to_vec();
 
     // Gather-write, then dequeue and claim via the token.
-    let write_token = endpoint.write_gather(src, 0).expect("submit write_gather");
+    let write_token = endpoint
+        .write_gather(src, 0)
+        .expect("submit write_gather")
+        .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("write completion");
     let (returned, result) = write_token
         .claim(&completion)
@@ -77,7 +80,8 @@ fn iocp_backend_scatter_gather_round_trips() {
     // Scatter-read the same pages back.
     let read_token = endpoint
         .read_scatter(PAGES, 0)
-        .expect("submit read_scatter");
+        .expect("submit read_scatter")
+        .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("read completion");
     let (buffers, result) = read_token
         .claim(&completion)

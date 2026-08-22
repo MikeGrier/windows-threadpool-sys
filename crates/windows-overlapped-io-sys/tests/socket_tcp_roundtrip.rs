@@ -17,7 +17,10 @@ const PAYLOAD: usize = 8192;
 fn send_all(endpoint: &AssociatedSocket<'_>, port: &CompletionPort, data: &[u8]) {
     let mut sent = 0;
     while sent < data.len() {
-        let token = endpoint.send(data[sent..].to_vec()).expect("submit send");
+        let token = endpoint
+            .send(data[sent..].to_vec())
+            .expect("submit send")
+            .expect_pending("this socket is not in skip-on-success mode");
         let completion = port.get(5_000).expect("get").expect("send completion");
         let (_data, result) = match token.claim(&completion) {
             Ok(pair) => pair,
@@ -32,7 +35,10 @@ fn send_all(endpoint: &AssociatedSocket<'_>, port: &CompletionPort, data: &[u8])
 fn recv_exact(endpoint: &AssociatedSocket<'_>, port: &CompletionPort, total: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(total);
     while out.len() < total {
-        let token = endpoint.recv(total - out.len()).expect("submit recv");
+        let token = endpoint
+            .recv(total - out.len())
+            .expect("submit recv")
+            .expect_pending("this socket is not in skip-on-success mode");
         let completion = port.get(5_000).expect("get").expect("recv completion");
         let (mut buffer, result) = match token.claim(&completion) {
             Ok(pair) => pair,

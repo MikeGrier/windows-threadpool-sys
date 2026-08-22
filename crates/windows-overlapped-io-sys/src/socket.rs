@@ -22,7 +22,7 @@ use windows_sys::Win32::Networking::WinSock::{
 use windows_sys::Win32::System::IO::{CancelIoEx, CreateIoCompletionPort, OVERLAPPED};
 
 use crate::operation::payload_ptr_from_overlapped;
-use crate::{Completion, CompletionPort, Issued, Operation, OperationId, Submitted};
+use crate::{Completion, CompletionPort, Issued, Operation, OperationId, Started, Submitted};
 
 impl CompletionPort {
     /// Associate an overlapped socket with this port under `key`.
@@ -95,12 +95,13 @@ impl<'port> AssociatedSocket<'port> {
         self.socket.as_raw_socket() as usize
     }
 
-    /// Submit an overlapped receive of up to `len` bytes, returning a
-    /// [`SocketIo`] token that recovers the buffer and byte count from the
-    /// operation's completion.
+    /// Submit an overlapped receive of up to `len` bytes.
     ///
-    /// The socket must not be in a skip-on-success completion mode; this adapter
-    /// always expects a completion packet.
+    /// Returns [`Started::Pending`] with a [`SocketIo`] token that recovers the
+    /// buffer and byte count from the operation's completion, or -- only on a
+    /// socket in a skip-on-success completion mode, where a synchronous success
+    /// queues no packet -- [`Started::Completed`] with the buffer already in
+    /// hand.
     ///
     /// # Errors
     ///
@@ -108,7 +109,7 @@ impl<'port> AssociatedSocket<'port> {
     /// which `WSABUF`'s byte count cannot express, or any immediate failure from
     /// issuing the receive.
     #[track_caller]
-    pub fn recv(&self, len: usize) -> io::Result<SocketIo> {
+    pub fn recv(&self, len: usize) -> io::Result<Started<SocketIo, Vec<u8>>> {
         let socket = self.raw_socket();
         let operation = Operation::new(recv_payload(len)?);
         // SAFETY: issues exactly one WSARecv into the payload's buffer via its
@@ -132,10 +133,12 @@ impl<'port> AssociatedSocket<'port> {
         finish_socket(submitted)
     }
 
-    /// Submit an overlapped send of `data`, returning a [`SocketIo`] token that
-    /// recovers the buffer and byte count from the operation's completion.
+    /// Submit an overlapped send of `data`.
     ///
-    /// The socket must not be in a skip-on-success completion mode.
+    /// Returns [`Started::Pending`] with a [`SocketIo`] token, or
+    /// [`Started::Completed`] with the buffer already in hand when the socket is
+    /// in a skip-on-success completion mode and the send completed
+    /// synchronously.
     ///
     /// # Errors
     ///
@@ -143,7 +146,7 @@ impl<'port> AssociatedSocket<'port> {
     /// `u32::MAX`, which `WSABUF`'s byte count cannot express, or any immediate
     /// failure from issuing the send.
     #[track_caller]
-    pub fn send(&self, data: Vec<u8>) -> io::Result<SocketIo> {
+    pub fn send(&self, data: Vec<u8>) -> io::Result<Started<SocketIo, Vec<u8>>> {
         let socket = self.raw_socket();
         let operation = Operation::new(send_payload(data)?);
         // SAFETY: issues exactly one WSASend from the payload's buffer via its
@@ -277,14 +280,17 @@ fn classify_socket(ret: i32) -> io::Result<Issued> {
     }
 }
 
-/// Turn a socket submission outcome into a token or an immediate error.
-fn finish_socket(submitted: Submitted<SocketPayload>) -> io::Result<SocketIo> {
+/// Turn a socket submission outcome into the adapter's two-state outcome.
+fn finish_socket(submitted: Submitted<SocketPayload>) -> io::Result<Started<SocketIo, Vec<u8>>> {
     match submitted {
-        Submitted::Pending(id) => Ok(SocketIo { id }),
-        Submitted::Completed { .. } => Err(io::Error::other(
-            "socket adapter observed a synchronous completion; the socket must not be in a \
-             skip-on-success completion mode",
-        )),
+        Submitted::Pending(id) => Ok(Started::Pending(SocketIo { id })),
+        Submitted::Completed {
+            operation,
+            bytes_transferred,
+        } => Ok(Started::Completed {
+            payload: operation.into_payload().buffer,
+            bytes_transferred: bytes_transferred as usize,
+        }),
         Submitted::Failed { error, .. } => Err(error),
     }
 }

@@ -46,7 +46,10 @@ fn iocp_read_via_file_io_token() {
         )
         .expect("associate");
 
-    let token = endpoint.read(content.len(), 0).expect("submit read");
+    let token = endpoint
+        .read(content.len(), 0)
+        .expect("submit read")
+        .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("a completion");
     let (buffer, result) = match token.claim(&completion) {
         Ok(pair) => pair,
@@ -86,7 +89,10 @@ fn iocp_scatter_gather_via_token() {
     let expected: Vec<u8> = src.as_bytes().to_vec();
 
     // Gather-write, then dequeue and claim.
-    let write_token = endpoint.write_gather(src, 0).expect("submit write_gather");
+    let write_token = endpoint
+        .write_gather(src, 0)
+        .expect("submit write_gather")
+        .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("write completion");
     let (returned, result) = match write_token.claim(&completion) {
         Ok(pair) => pair,
@@ -96,7 +102,10 @@ fn iocp_scatter_gather_via_token() {
     assert_eq!(port.outstanding(), 0);
 
     // Scatter-read the same pages back.
-    let read_token = endpoint.read_scatter(2, 0).expect("submit read_scatter");
+    let read_token = endpoint
+        .read_scatter(2, 0)
+        .expect("submit read_scatter")
+        .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("read completion");
     let (buffers, result) = match read_token.claim(&completion) {
         Ok(pair) => pair,

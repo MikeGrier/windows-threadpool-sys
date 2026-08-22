@@ -21,7 +21,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use crate::operation::payload_ptr_from_overlapped;
 use crate::{
-    AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Submitted,
+    AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Started,
+    Submitted,
 };
 
 impl BlockingEndpoint {
@@ -184,19 +185,20 @@ fn checked_len(len: usize, which: &str) -> io::Result<u32> {
 }
 
 impl AssociatedEndpoint<'_> {
-    /// Submit an overlapped read of up to `len` bytes starting at `offset`,
-    /// returning a [`FileIo`] token that recovers the buffer and byte count from
-    /// the operation's completion.
+    /// Submit an overlapped read of up to `len` bytes starting at `offset`.
     ///
-    /// The endpoint must not be in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode;
-    /// this adapter always expects a completion packet to arrive.
+    /// Returns [`Started::Pending`] with a [`FileIo`] token that recovers the
+    /// buffer and byte count from the operation's completion, or -- only on an
+    /// endpoint in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode, where a
+    /// synchronous success queues no packet -- [`Started::Completed`] with the
+    /// buffer already in hand.
     ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`, or
     /// any immediate failure from issuing the read.
     #[track_caller]
-    pub fn read(&self, len: usize, offset: u64) -> io::Result<FileIo> {
+    pub fn read(&self, len: usize, offset: u64) -> io::Result<Started<FileIo, Vec<u8>>> {
         let buf_len = checked_len(len, "read buffer")?;
         let mut operation = Operation::new(vec![0_u8; len]);
         operation.set_offset(offset);
@@ -219,18 +221,18 @@ impl AssociatedEndpoint<'_> {
         finish(submitted)
     }
 
-    /// Submit an overlapped write of `data` starting at `offset`, returning a
-    /// [`FileIo`] token that recovers the buffer and byte count from the
-    /// operation's completion.
+    /// Submit an overlapped write of `data` starting at `offset`.
     ///
-    /// The endpoint must not be in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    /// Returns [`Started::Pending`] with a [`FileIo`] token, or
+    /// [`Started::Completed`] with the buffer already in hand when the endpoint
+    /// is in skip-on-success mode and the write completed synchronously.
     ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::InvalidInput`] if `data` is longer than
     /// `u32::MAX`, or any immediate failure from issuing the write.
     #[track_caller]
-    pub fn write(&self, data: Vec<u8>, offset: u64) -> io::Result<FileIo> {
+    pub fn write(&self, data: Vec<u8>, offset: u64) -> io::Result<Started<FileIo, Vec<u8>>> {
         let data_len = checked_len(data.len(), "write buffer")?;
         let mut operation = Operation::new(data);
         operation.set_offset(offset);
@@ -281,14 +283,17 @@ fn classify_issued(ok: i32) -> io::Result<Issued> {
     }
 }
 
-/// Turn a submission outcome into a [`FileIo`] token or an immediate error.
-fn finish(submitted: Submitted<Vec<u8>>) -> io::Result<FileIo> {
+/// Turn a submission outcome into the adapter's two-state outcome.
+fn finish(submitted: Submitted<Vec<u8>>) -> io::Result<Started<FileIo, Vec<u8>>> {
     match submitted {
-        Submitted::Pending(id) => Ok(FileIo { id }),
-        Submitted::Completed { .. } => Err(io::Error::other(
-            "file adapter observed a synchronous completion; the endpoint must not be in \
-             FILE_SKIP_COMPLETION_PORT_ON_SUCCESS mode",
-        )),
+        Submitted::Pending(id) => Ok(Started::Pending(FileIo { id })),
+        Submitted::Completed {
+            operation,
+            bytes_transferred,
+        } => Ok(Started::Completed {
+            payload: operation.into_payload(),
+            bytes_transferred: bytes_transferred as usize,
+        }),
         Submitted::Failed { error, .. } => Err(error),
     }
 }
@@ -548,10 +553,12 @@ unsafe impl Send for ScatterPayload {}
 
 impl AssociatedEndpoint<'_> {
     /// Submit an overlapped scatter-read of `pages` pages starting at `offset`
-    /// into a fresh page-aligned buffer, returning a [`ScatterGatherIo`] token.
+    /// into a fresh page-aligned buffer.
     ///
-    /// The endpoint must be opened with [`FILE_FLAG_NO_BUFFERING`] and must not be
-    /// in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    /// Returns [`Started::Pending`] with a [`ScatterGatherIo`] token, or
+    /// [`Started::Completed`] with the [`PageBuffers`] already in hand when the
+    /// endpoint is in skip-on-success mode and the read completed synchronously.
+    /// The endpoint must be opened with [`FILE_FLAG_NO_BUFFERING`].
     ///
     /// # Errors
     ///
@@ -559,7 +566,11 @@ impl AssociatedEndpoint<'_> {
     /// total more than `u32::MAX` bytes, or any immediate failure from issuing
     /// the scatter-read.
     #[track_caller]
-    pub fn read_scatter(&self, pages: usize, offset: u64) -> io::Result<ScatterGatherIo> {
+    pub fn read_scatter(
+        &self,
+        pages: usize,
+        offset: u64,
+    ) -> io::Result<Started<ScatterGatherIo, PageBuffers>> {
         // Checked before allocating, so an unusable request costs nothing. This
         // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
         // page count into an ordinary error.
@@ -587,18 +598,24 @@ impl AssociatedEndpoint<'_> {
         finish_scatter(submitted)
     }
 
-    /// Submit an overlapped gather-write of `buffers` starting at `offset`,
-    /// returning a [`ScatterGatherIo`] token.
+    /// Submit an overlapped gather-write of `buffers` starting at `offset`.
     ///
-    /// The endpoint must be opened with [`FILE_FLAG_NO_BUFFERING`] and must not be
-    /// in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    /// Returns [`Started::Pending`] with a [`ScatterGatherIo`] token, or
+    /// [`Started::Completed`] with the [`PageBuffers`] already in hand when the
+    /// endpoint is in skip-on-success mode and the write completed
+    /// synchronously. The endpoint must be opened with
+    /// [`FILE_FLAG_NO_BUFFERING`].
     ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::InvalidInput`] if the buffers total more than
     /// `u32::MAX` bytes, or any immediate failure from issuing the gather-write.
     #[track_caller]
-    pub fn write_gather(&self, buffers: PageBuffers, offset: u64) -> io::Result<ScatterGatherIo> {
+    pub fn write_gather(
+        &self,
+        buffers: PageBuffers,
+        offset: u64,
+    ) -> io::Result<Started<ScatterGatherIo, PageBuffers>> {
         let total = checked_len(buffers.len(), "scatter/gather buffer set")?;
         let segments = buffers.segment_array();
         let mut operation = Operation::new(ScatterPayload { buffers, segments });
@@ -623,14 +640,20 @@ impl AssociatedEndpoint<'_> {
     }
 }
 
-/// Turn a scatter/gather submission outcome into a token or an immediate error.
-fn finish_scatter(submitted: Submitted<ScatterPayload>) -> io::Result<ScatterGatherIo> {
+/// Turn a scatter/gather submission outcome into the adapter's two-state
+/// outcome.
+fn finish_scatter(
+    submitted: Submitted<ScatterPayload>,
+) -> io::Result<Started<ScatterGatherIo, PageBuffers>> {
     match submitted {
-        Submitted::Pending(id) => Ok(ScatterGatherIo { id }),
-        Submitted::Completed { .. } => Err(io::Error::other(
-            "scatter/gather adapter observed a synchronous completion; the endpoint must not be in \
-             FILE_SKIP_COMPLETION_PORT_ON_SUCCESS mode",
-        )),
+        Submitted::Pending(id) => Ok(Started::Pending(ScatterGatherIo { id })),
+        Submitted::Completed {
+            operation,
+            bytes_transferred,
+        } => Ok(Started::Completed {
+            payload: operation.into_payload().buffers,
+            bytes_transferred: bytes_transferred as usize,
+        }),
         Submitted::Failed { error, .. } => Err(error),
     }
 }

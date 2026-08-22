@@ -24,7 +24,8 @@ use windows_sys::Win32::System::IO::DeviceIoControl;
 
 use crate::operation::payload_ptr_from_overlapped;
 use crate::{
-    AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Submitted,
+    AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Started,
+    Submitted,
 };
 
 impl BlockingEndpoint {
@@ -148,13 +149,17 @@ struct DeviceIoPayload {
 }
 
 impl AssociatedEndpoint<'_> {
-    /// Submit an overlapped `DeviceIoControl` with control code `code`, returning
-    /// a [`DeviceIoControlIo`] token that recovers the output buffer and byte
-    /// count from the operation's completion.
+    /// Submit an overlapped `DeviceIoControl` with control code `code`.
+    ///
+    /// Returns [`Started::Pending`] with a [`DeviceIoControlIo`] token that
+    /// recovers the output buffer and byte count from the operation's
+    /// completion, or -- only on an endpoint in
+    /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode, where a synchronous success
+    /// queues no packet -- [`Started::Completed`] with the output buffer already
+    /// in hand.
     ///
     /// `input` is the input buffer (empty for control codes that take none) and
-    /// `output_len` sizes the output buffer. The endpoint must not be in
-    /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    /// `output_len` sizes the output buffer.
     ///
     /// # Errors
     ///
@@ -182,7 +187,7 @@ impl AssociatedEndpoint<'_> {
         code: u32,
         input: Vec<u8>,
         output_len: usize,
-    ) -> io::Result<DeviceIoControlIo> {
+    ) -> io::Result<Started<DeviceIoControlIo, Vec<u8>>> {
         // Checked before allocating, so an unusable request costs nothing. The
         // lengths are captured here rather than measured inside the submission
         // closure, which runs at the FFI boundary and cannot report an error.
@@ -269,15 +274,19 @@ fn classify_issued(ok: i32) -> io::Result<Issued> {
     }
 }
 
-/// Turn a device submission outcome into a [`DeviceIoControlIo`] token or an
-/// immediate error.
-fn finish_device(submitted: Submitted<DeviceIoPayload>) -> io::Result<DeviceIoControlIo> {
+/// Turn a device submission outcome into the adapter's two-state outcome.
+fn finish_device(
+    submitted: Submitted<DeviceIoPayload>,
+) -> io::Result<Started<DeviceIoControlIo, Vec<u8>>> {
     match submitted {
-        Submitted::Pending(id) => Ok(DeviceIoControlIo { id }),
-        Submitted::Completed { .. } => Err(io::Error::other(
-            "device adapter observed a synchronous completion; the endpoint must not be in \
-             FILE_SKIP_COMPLETION_PORT_ON_SUCCESS mode",
-        )),
+        Submitted::Pending(id) => Ok(Started::Pending(DeviceIoControlIo { id })),
+        Submitted::Completed {
+            operation,
+            bytes_transferred,
+        } => Ok(Started::Completed {
+            payload: operation.into_payload().output,
+            bytes_transferred: bytes_transferred as usize,
+        }),
         Submitted::Failed { error, .. } => Err(error),
     }
 }

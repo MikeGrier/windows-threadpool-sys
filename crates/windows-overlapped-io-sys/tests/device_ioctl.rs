@@ -56,7 +56,8 @@ fn iocp_backend_queries_compression() {
     // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- empty input, and it
     // writes only the owned output buffer, embedding no pointers.
     let token = unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, Vec::new(), COMPRESSION_STATE_LEN) }
-        .expect("submit ioctl");
+        .expect("submit ioctl")
+        .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("a completion");
     let (output, result) = token
         .claim(&completion)
