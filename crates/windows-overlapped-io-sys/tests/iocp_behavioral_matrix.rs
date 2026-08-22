@@ -12,8 +12,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use windows_overlapped_io_sys::{
-    CompletionPort, Issued, NotificationModes, Operation, OperationState, Submitted,
-    UnassociatedEndpoint,
+    CompletionPort, Issued, Operation, OperationState, Submitted, UnassociatedEndpoint,
 };
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
@@ -32,8 +31,12 @@ fn open_overlapped(path: &Path) -> UnassociatedEndpoint {
     UnassociatedEndpoint::open(path, true, false, 0).expect("open overlapped endpoint")
 }
 
+// Needs the `fs` feature, which is what carries the notification-mode setter.
+#[cfg(feature = "fs")]
 #[test]
 fn skip_on_success_completes_synchronously_without_a_packet() {
+    use windows_overlapped_io_sys::NotificationModes;
+
     let content = b"skip on success payload";
     let path = temp_file_with(content, "skip");
 
