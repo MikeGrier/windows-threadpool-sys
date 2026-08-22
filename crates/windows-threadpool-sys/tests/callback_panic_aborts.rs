@@ -52,6 +52,11 @@ fn assert_child_aborts(scenario: &str) {
     let exe = std::env::current_exe().expect("locate the test binary");
     let mut child = Command::new(exe)
         .env(SCENARIO_VAR, scenario)
+        // The harness would otherwise run every plain fn in this binary as its
+        // own libtest thread; the child scenarios are plain fns precisely so the
+        // *parent's* run never executes them, but a child that somehow saw more
+        // than one still must not race several scenarios concurrently.
+        .env("RUST_TEST_THREADS", "1")
         // The child's panic message is expected output, not a failure; keep it
         // out of the parent's stderr so a passing run stays readable.
         .stdout(Stdio::null())
@@ -64,11 +69,17 @@ fn assert_child_aborts(scenario: &str) {
         if let Some(status) = child.try_wait().expect("poll the child") {
             break status;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the {scenario} child neither aborted nor exited within {CHILD_TIMEOUT:?}; \
-             the panic was probably contained, or the callback never ran"
-        );
+        if std::time::Instant::now() >= deadline {
+            // A child that neither aborted nor exited is still running: kill and
+            // reap it before failing, or it survives this test as an orphan that
+            // can hang or contaminate the rest of the CI run.
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "the {scenario} child neither aborted nor exited within {CHILD_TIMEOUT:?}; \
+                 the panic was probably contained, or the callback never ran"
+            );
+        }
         std::thread::sleep(Duration::from_millis(20));
     };
 

@@ -26,13 +26,11 @@
 //!
 //! Recovery behaviour is a property of the *subscription*, not of the monitor
 //! (D-27), and registration is the only place a client can state it -- so
-//! [`WatchOptions`] carries it from the start even though M5.3 is what will act
-//! on it. Adding it later would be a breaking change to the one call that has to
-//! carry it.
-
-// The retry mode is recorded at registration and consumed by M5.3; until then it
-// is observable state rather than behaviour.
-#![allow(dead_code)]
+//! [`WatchOptions`] carries it from the start. The monitor's fault machinery
+//! reads it on every fault (D-27's interactive retry protocol): an
+//! `Interactive` subscription is asked how long to wait before the next
+//! attempt via a [`crate::queue::Notification::RetryQuestion`], while a
+//! `Defaults` one retries autonomously at a fixed delay.
 
 use std::io;
 use std::path::Path;
