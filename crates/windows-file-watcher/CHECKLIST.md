@@ -2,9 +2,9 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-68** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-70** -- later
 decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-50...D-52 from M4,
-D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66...D-68 from M9.1...M9.3, and D-25/D-27...D-31
+D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66...D-70 from M9.1...M9.4, and D-25/D-27...D-31
 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md),
 which **overturned D-16**) are added there as milestones complete.
 
@@ -14,9 +14,10 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M9.4** -- add session/watch lifecycle operations to the data model and
-> generalize the harness to track them by name. M1 through M8 are archived; M9.1 through M9.3 are done,
-> M9.5 follows M9.4, and M9+ / M-inf hold only parked, ungated follow-on work.
+> **NEXT ACTIONABLE ITEM: M9.5** -- persist the scenario model as JSON: serde-based (de)serialization,
+> checked-in JSON fixtures for the existing scenario library, and a generic JSON-driven test runner. M1
+> through M8 are archived; M9.1 through M9.4 are done, and M9+ / M-inf hold only parked, ungated
+> follow-on work.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -83,21 +84,31 @@ queue overwhelm are explicitly deferred to M9+ below once M9 is solid.
   trip the harness's fixed 120s timeout on throughput alone; `HarnessParams::for_operation_count` scales
   the budget from the scenario's own operation count so only a genuine stall still fails the assertion.
 
-- [ ] **M9.4** -- Session/watch lifecycle operations: extend the data model with operations that open and
+- [x] **M9.4** -- Session/watch lifecycle operations: extend the data model with operations that open and
   close *sessions* and subscribe and cancel *watches* mid-scenario (`Monitor::session` mints an independent
   channel per call -- D-2 -- so this is not a variation on M9.1's fixed single watch, it is a second kind of
   entity the harness must track by name and drain independently). Generalize the M9.2 harness from one
-  fixed session/watch/receiver to a name-keyed table so a scenario can reference "the watch/session named
-  X" from a later operation. Same generic invariants apply: no wedge, no panic, every desync counted; a
-  session or watch that is already closed when an operation targets it is a scenario-authoring bug (assert),
-  not a fault the harness tolerates -- unlike the M9+ .2 "spoiler" case, which is deliberately about a live
-  handle blocking an operation.
+  fixed session/watch/receiver to a name-keyed table (`Fleet`, D-69) so a scenario can reference "the
+  watch/session named X" from a later operation. Same generic invariants apply: no wedge, no panic, every
+  desync counted; a session or watch that is already closed when an operation targets it is a
+  scenario-authoring bug (assert), not a fault the harness tolerates -- unlike the M9+.2 "spoiler" case,
+  which is deliberately about a live handle blocking an operation. **Delivered with both a delayed and a
+  back-to-back timing posture (D-70):** session/watch churn spaced out with PRNG-drawn waits between every
+  transition, and the same generator invoked with a near-zero wait bound for tight, continuous churn --
+  because a fault or race is often a timing-window problem that only reproduces when transitions are
+  spaced out enough to land mid-flight, not just under maximum throughput.
 
-- [ ] **M9.5** -- Lifecycle scenario library built on M9.4 (sessions/watches opened and closed while
-  filesystem churn continues underneath, watches re-subscribed to a path a just-closed watch covered, etc.),
-  then wire the complete M9.3+M9.5 scenario set into an opt-in integration test (gated the same way as
-  [tests/stress.rs](tests/stress.rs), consistent naming e.g. `WINDOWS_FILE_WATCHER_STRESS`) with
-  parameterizable counts/seed. Integration test for the milestone.
+- [ ] **M9.5** -- Persist the scenario model as JSON. Re-planned after M9.4: the user deliberately left
+  "data-driven" underspecified until the model converged, and now wants the literal input to the stress
+  tool to be a **persisted JSON model**, not only an in-memory `Scenario` value built by Rust code.
+  Concretely: `#[derive(Serialize, Deserialize)]` on `Operation`/`Scenario` (via `serde`/`serde_json`
+  dev-dependencies -- test-only, so this never touches the shipped crate's runtime dependency surface),
+  a `Duration` representation that round-trips through JSON (e.g. milliseconds), checked-in JSON fixture
+  files under `tests/scenarios/` for the M9.3/M9.4 scenario library (replacing the hardcoded Rust builder
+  functions as the source of truth -- they may remain as generators/tests of the model itself, but the
+  fixtures are what the stress tool actually reads), and a single generic test that walks every fixture
+  file, deserializes it, and runs it through the M9.2/M9.4 harness with parameterizable counts/seed.
+  Integration test for the milestone.
 
 ## M9+ -- Concurrent modifiers, spoilers, nesting, and queue overwhelm
 
