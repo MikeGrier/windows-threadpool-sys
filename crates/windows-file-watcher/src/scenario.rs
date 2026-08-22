@@ -34,6 +34,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+mod tests;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{Monitor, Notification, Receiver, Session, Watch, WatchOptions};
@@ -303,17 +306,25 @@ impl Scenario {
     }
 
     /// The number of concrete actions this scenario describes, counting
-    /// through every [`Operation::Repeat`] -- for diagnostics and tests, not
-    /// evaluated on the hot path.
+    /// through every [`Operation::Repeat`] and every [`Operation::Concurrent`]
+    /// branch -- for diagnostics and tests, not evaluated on the hot path.
+    /// Saturates rather than overflows, since a persisted scenario's `Repeat`
+    /// counts are untrusted input.
     pub fn operation_count(&self) -> u64 {
         fn count(operations: &[Operation]) -> u64 {
             operations
                 .iter()
                 .map(|operation| match operation {
-                    Operation::Repeat { count: n, pattern } => n * count(pattern),
+                    Operation::Repeat { count: n, pattern } => n.saturating_mul(count(pattern)),
+                    Operation::Concurrent { branches } => branches
+                        .iter()
+                        .map(|branch| count(branch))
+                        .fold(0u64, |total, branch_count| {
+                            total.saturating_add(branch_count)
+                        }),
                     _ => 1,
                 })
-                .sum()
+                .fold(0u64, |total, one| total.saturating_add(one))
         }
         count(&self.operations)
     }
@@ -664,6 +675,65 @@ pub fn apply_operation(
     }
 }
 
+/// Rejects a path that is not confined to the scenario root: absolute paths
+/// (including a bare drive prefix like `C:`) and any `..` component are
+/// refused. Every path-bearing [`Operation`] is joined directly onto the
+/// scenario's real temp directory, and a persisted JSON scenario is
+/// untrusted-by-default input to `run-scenario` -- without this check, an
+/// absolute path would replace the root entirely and a `..` component would
+/// escape it, letting a crafted scenario file make `RemoveDir` (or any other
+/// operation) act on an arbitrary caller-accessible path.
+fn validate_confined(path: &Path) -> Result<(), String> {
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                return Err(format!(
+                    "path {path:?} is not relative to the scenario root"
+                ));
+            }
+            std::path::Component::ParentDir => {
+                return Err(format!("path {path:?} escapes the scenario root via '..'"));
+            }
+            std::path::Component::CurDir | std::path::Component::Normal(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Validates every path-bearing operation in `operations`, recursing through
+/// [`Operation::Repeat`]'s pattern and every [`Operation::Concurrent`] branch,
+/// so a path smuggled into a nested or concurrent operation is caught just as
+/// surely as a top-level one.
+fn validate_paths(operations: &[Operation]) -> Result<(), String> {
+    for operation in operations {
+        match operation {
+            Operation::CreateFile { path }
+            | Operation::CreateDir { path }
+            | Operation::RemoveFile { path }
+            | Operation::RemoveDir { path } => validate_confined(path)?,
+            Operation::Rename { from, to } => {
+                validate_confined(from)?;
+                validate_confined(to)?;
+            }
+            Operation::Subscribe { path, .. } => validate_confined(path)?,
+            Operation::HoldOpen { path, .. } => validate_confined(path)?,
+            Operation::Wait { .. }
+            | Operation::WaitRandom { .. }
+            | Operation::OpenSession { .. }
+            | Operation::OpenSessionBounded { .. }
+            | Operation::CloseSession { .. }
+            | Operation::CancelWatch { .. } => {}
+            Operation::Repeat { pattern, .. } => validate_paths(pattern)?,
+            Operation::Concurrent { branches } => {
+                for branch in branches {
+                    validate_paths(branch)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Executes `scenario` against a real temp directory and a live
 /// [`Monitor`], checking only the invariants this harness itself knows
 /// about: the run completes within `params.timeout` (a wedge, not a slow
@@ -685,11 +755,21 @@ pub fn run_scenario(scenario: &Scenario, seed: u64, params: &HarnessParams) -> H
 /// it up, for a scenario-specific check that needs to inspect the real
 /// filesystem end state -- e.g. confirming two racing renames both actually
 /// landed, independent of what the notification stream reported.
+///
+/// Panics if any path-bearing operation (including nested inside a `Repeat`
+/// or a `Concurrent` branch) is not confined to the scenario root -- every
+/// path is rejected if absolute or containing a `..` component -- *before*
+/// creating the temp directory or applying anything, so an unconfined path
+/// never reaches a real filesystem call.
 pub fn run_scenario_keep_dir(
     scenario: &Scenario,
     seed: u64,
     params: &HarnessParams,
 ) -> (HarnessOutcome, TempDir) {
+    if let Err(reason) = validate_paths(&scenario.operations) {
+        panic!("scenario '{}' is unsafe to run: {reason}", scenario.label);
+    }
+
     let dir = TempDir::new(&scenario.label);
     let monitor = Monitor::new().expect("create the monitor");
     let fleet = Mutex::new(Fleet::new(&monitor));

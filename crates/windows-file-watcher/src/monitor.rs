@@ -652,6 +652,15 @@ fn park_pending(
 /// rather than losing it, and a fresh open retry needs the client's original
 /// path (which may re-resolve differently, D-7) and a working retry timer.
 #[allow(clippy::too_many_arguments)]
+/// Routes a freshly opened handle to its watcher, coalescing with an existing
+/// one for the same directory (D-6) or starting a new [`DirectoryWatcher`].
+///
+/// Returns whether the subscription is now fully routed to a live watcher
+/// (`true`) or fell back to `Pending` because starting a *new* watcher failed
+/// immediately after its directory opened (`false`, D-15's rearm-and-retry
+/// case) -- the caller needs this to report the correct [`Outcome`]: reaching
+/// this function at all means the open succeeded, but that is not the same as
+/// the subscription being live.
 fn route_established(
     resident: &Mutex<Resident>,
     core_ref: &Arc<OnceLock<Weak<Core>>>,
@@ -663,7 +672,7 @@ fn route_established(
     options: WatchOptions,
     sink: Sender,
     fault_slot: Option<StandingSlot>,
-) {
+) -> bool {
     let id = handle.identity();
     let route = Route {
         watch,
@@ -692,7 +701,7 @@ fn route_established(
         if options.report_liveness {
             let _ = sink.send(Notification::Established { watch, mode });
         }
-        return;
+        return true;
     }
 
     match DirectoryWatcher::start(handle, opened_path, route) {
@@ -710,6 +719,7 @@ fn route_established(
             if options.report_liveness {
                 let _ = sink.send(Notification::Established { watch, mode });
             }
+            true
         }
         Err(_) => {
             // Arming failed against a directory that just opened -- D-15's
@@ -731,6 +741,7 @@ fn route_established(
                 sink,
                 None,
             );
+            false
         }
     }
 }
@@ -813,7 +824,10 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
             scope,
             opened_path,
         } => {
-            route_established(
+            // Background retry path: no synchronous caller is waiting on an
+            // `Outcome` here, so whether this fully routed or fell back to
+            // `Pending` again is not this call site's concern.
+            let _ = route_established(
                 resident,
                 core_ref,
                 watch,
@@ -850,7 +864,7 @@ fn subscribe(
             scope,
             opened_path,
         } => {
-            route_established(
+            let routed = route_established(
                 resident,
                 core_ref,
                 watch,
@@ -862,7 +876,15 @@ fn subscribe(
                 sink,
                 fault_slot,
             );
-            Outcome::Subscribed
+            // A failed start immediately after opening falls back to
+            // `Pending` (D-15's rearm-and-retry case) rather than routing to
+            // a live watcher, so the client must be told it is still
+            // establishing, not that it is already subscribed.
+            if routed {
+                Outcome::Subscribed
+            } else {
+                Outcome::Establishing
+            }
         }
     }
 }

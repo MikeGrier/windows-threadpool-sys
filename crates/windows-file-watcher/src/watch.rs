@@ -196,10 +196,11 @@ pub(crate) fn subscribe(
 
     // A standing fault-question slot (D-27/D-28), taken once here rather than
     // per fault, so asking never competes with the queue's best-effort traffic.
-    // Only needed by a subscription that can ever be asked or ever wants the
-    // liveness brackets; a plain-defaults, non-reporting subscription carries no
-    // extra reserved capacity at all.
-    let fault_slot = if options.retry == RetryMode::Interactive || options.report_liveness {
+    // Only an `Interactive` subscription can ever be asked (D-57): `Suspended`/
+    // `Resumed`/`Established` ride the ordinary best-effort queue like any other
+    // observation, so a `report_liveness`-only subscription reserves nothing
+    // extra.
+    let fault_slot = if options.retry == RetryMode::Interactive {
         Some(session.sink().reserve_standing().ok_or_else(saturated)?)
     } else {
         None

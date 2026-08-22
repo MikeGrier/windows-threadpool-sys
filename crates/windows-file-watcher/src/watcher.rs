@@ -432,8 +432,14 @@ impl WatcherInner {
         // SAFETY: the endpoint owns this handle for as long as it is installed,
         // and this runs only from within the wait's own callback while it
         // still is.
-        unsafe {
-            FindNextChangeNotification(activation.handle().as_raw_handle());
+        let reset = unsafe { FindNextChangeNotification(activation.handle().as_raw_handle()) };
+        if reset == 0 {
+            // A failed reset leaves the handle's signalled state undefined, so
+            // re-arming on top of it could wedge (repeated callbacks) or wait
+            // on a handle that will never signal again -- treat it exactly
+            // like any other arm-class fault (D-15) rather than proceeding.
+            self.enter_fault(io::Error::last_os_error(), FaultOperation::Arm);
+            return;
         }
         if let Err(error) = self.arm() {
             self.enter_fault(error, FaultOperation::Arm);
@@ -606,21 +612,23 @@ impl WatcherInner {
         *lock(&self.fault) = None;
         log::info!("windows-file-watcher: recovery succeeded, re-established");
         let mode = self.mode();
-        {
-            let routes = lock(&self.routes);
-            for route in routes.values() {
-                if route.report_liveness {
-                    let _ = route
-                        .sink
-                        .send(Notification::Resumed { watch: route.watch });
-                    let _ = route.sink.send(Notification::Established {
-                        watch: route.watch,
-                        mode,
-                    });
-                }
+        // The desync is published *before* Resumed/Established: their own
+        // documented contract ("a Desync always precedes or accompanies
+        // this") means a client must be told to re-scan the gap before being
+        // told it can trust incremental changes again, never the reverse.
+        self.publish(DecodedBatch::Desync(DesyncCause::Reestablished));
+        let routes = lock(&self.routes);
+        for route in routes.values() {
+            if route.report_liveness {
+                let _ = route
+                    .sink
+                    .send(Notification::Resumed { watch: route.watch });
+                let _ = route.sink.send(Notification::Established {
+                    watch: route.watch,
+                    mode,
+                });
             }
         }
-        self.publish(DecodedBatch::Desync(DesyncCause::Reestablished));
     }
 
     /// Which tier is currently servicing this directory (D-13/D-17). Detailed

@@ -40,6 +40,15 @@ const CHILD_TIMEOUT: Duration = Duration::from_secs(60);
 /// happen, so it costs nothing on a passing run.
 const CHILD_LINGER: Duration = Duration::from_secs(5);
 
+/// Exit code a child reports when it fails during *setup* -- before its
+/// callback could even be armed to panic -- rather than reporting the
+/// FFI-boundary abort this suite exists to prove. Any nonzero exit otherwise
+/// looks like a pass to `assert_child_aborts`, so a setup `.expect(...)`
+/// failure, an unknown scenario name, or an ordinary caught panic on the
+/// child's main thread must be distinguishable from a real abort rather than
+/// silently counting as one.
+const SETUP_FAILURE_EXIT_CODE: i32 = 111;
+
 /// Run `scenario` in a child copy of this binary and assert it aborted.
 ///
 /// "Aborted" is asserted as *did not exit successfully* rather than as a specific
@@ -86,6 +95,12 @@ fn assert_child_aborts(scenario: &str) {
     assert!(
         !status.success(),
         "the {scenario} child exited cleanly, so its callback panic was contained"
+    );
+    assert_ne!(
+        status.code(),
+        Some(SETUP_FAILURE_EXIT_CODE),
+        "the {scenario} child failed during setup, before its callback could ever \
+         run -- this proves nothing about whether a callback panic aborts"
     );
 }
 
@@ -192,16 +207,30 @@ fn child_io_panics() -> ! {
 /// libtest runs every `#[test]` in the binary, so the dispatch has to happen from
 /// inside one of them rather than from a `main`. Each test calls this first; in a
 /// child it never returns.
+///
+/// Every `child_*_panics` function diverges (`-> !`) by either aborting the
+/// whole process (the callback panic reached the FFI boundary -- success) or
+/// falling through to a controlled `process::exit(0)` (the panic was
+/// contained -- a regression). `catch_unwind` here exists for neither of
+/// those: it exists for the third possibility, a panic on *this* thread
+/// during setup (an `.expect(...)` before the callback could be armed, or an
+/// unknown scenario name), which must report [`SETUP_FAILURE_EXIT_CODE`]
+/// rather than being indistinguishable from a real abort. A pool thread's
+/// callback panic is untouched by this: `catch_unwind` only ever catches an
+/// unwind on the thread that calls it.
 fn dispatch_if_child() {
     let Ok(scenario) = std::env::var(SCENARIO_VAR) else {
         return;
     };
-    match scenario.as_str() {
+    let caught = std::panic::catch_unwind(|| match scenario.as_str() {
         "work" => child_work_panics(),
         "timer" => child_timer_panics(),
         "wait" => child_wait_panics(),
         "io" => child_io_panics(),
         other => panic!("unknown child scenario {other}"),
+    });
+    if caught.is_err() {
+        std::process::exit(SETUP_FAILURE_EXIT_CODE);
     }
 }
 
