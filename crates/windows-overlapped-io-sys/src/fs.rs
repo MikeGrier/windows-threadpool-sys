@@ -22,8 +22,8 @@ use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 
 use crate::operation::{payload_ptr_from_overlapped, sync_bytes_ptr_from_overlapped};
 use crate::{
-    AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Started,
-    Submitted,
+    AssociatedEndpoint, BlockingEndpoint, Completion, IoBuf, IoBufMut, Issued, Operation,
+    OperationId, Started, Submitted,
 };
 
 impl BlockingEndpoint {
@@ -186,7 +186,13 @@ fn checked_len(len: usize, which: &str) -> io::Result<u32> {
 }
 
 impl AssociatedEndpoint<'_> {
-    /// Submit an overlapped read of up to `len` bytes starting at `offset`.
+    /// Submit an overlapped read into `buffer`, starting at `offset`.
+    ///
+    /// The buffer is any owned [`IoBufMut`] -- a `Vec<u8>`, a `Box<[u8]>`, a
+    /// [`PageBuffers`], or a caller's own pooled or aligned type -- handed over
+    /// for the operation's life and returned when it completes. Nothing is
+    /// copied and nothing is allocated here: a caller that wants a fresh `Vec`
+    /// writes `vec![0; n]` at the call site, where the allocation is visible.
     ///
     /// Returns [`Started::Pending`] with a [`FileIo`] token that recovers the
     /// buffer and byte count from the operation's completion, or -- only on an
@@ -196,24 +202,25 @@ impl AssociatedEndpoint<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`, or
-    /// any immediate failure from issuing the read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if the buffer is longer than
+    /// `u32::MAX`, or any immediate failure from issuing the read.
     #[track_caller]
-    pub fn read(&self, len: usize, offset: u64) -> io::Result<Started<FileIo, Vec<u8>>> {
-        let buf_len = checked_len(len, "read buffer")?;
+    pub fn read<B: IoBufMut>(&self, buffer: B, offset: u64) -> io::Result<Started<FileIo<B>, B>> {
+        let buf_len = checked_len(buffer.bytes_len(), "read buffer")?;
         let skip = self.notification_modes().skip_completion_port_on_success;
-        let mut operation = Operation::new(vec![0_u8; len]);
+        let mut operation = Operation::new(buffer);
         operation.set_offset(offset);
         // SAFETY: issues exactly one ReadFile into the operation's own payload
-        // buffer, reached through the pinned OVERLAPPED; the payload and the
-        // byte-count cell live until the completion is claimed.
+        // buffer, reached through the pinned OVERLAPPED; `IoBufMut` promises that
+        // address is stable and exclusively owned, and the payload and byte-count
+        // cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
-                let payload = payload_ptr_from_overlapped::<Vec<u8>>(overlapped);
+                let payload = payload_ptr_from_overlapped::<B>(overlapped);
                 let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = ReadFile(
                     handle.as_raw_handle(),
-                    (*payload).as_mut_ptr(),
+                    (*payload).stable_mut_ptr(),
                     buf_len,
                     bytes,
                     overlapped,
@@ -224,7 +231,12 @@ impl AssociatedEndpoint<'_> {
         finish(submitted)
     }
 
-    /// Submit an overlapped write of `data` starting at `offset`.
+    /// Submit an overlapped write of `buffer`, starting at `offset`.
+    ///
+    /// The buffer is any owned [`IoBuf`] -- including a shared `Arc<[u8]>` or a
+    /// `&'static [u8]`, neither of which can be a read destination -- handed over
+    /// for the operation's life and returned when it completes. Nothing is
+    /// copied.
     ///
     /// Returns [`Started::Pending`] with a [`FileIo`] token, or
     /// [`Started::Completed`] with the buffer already in hand when the endpoint
@@ -232,24 +244,25 @@ impl AssociatedEndpoint<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `data` is longer than
+    /// Returns [`io::ErrorKind::InvalidInput`] if the buffer is longer than
     /// `u32::MAX`, or any immediate failure from issuing the write.
     #[track_caller]
-    pub fn write(&self, data: Vec<u8>, offset: u64) -> io::Result<Started<FileIo, Vec<u8>>> {
-        let data_len = checked_len(data.len(), "write buffer")?;
+    pub fn write<B: IoBuf>(&self, buffer: B, offset: u64) -> io::Result<Started<FileIo<B>, B>> {
+        let data_len = checked_len(buffer.bytes_len(), "write buffer")?;
         let skip = self.notification_modes().skip_completion_port_on_success;
-        let mut operation = Operation::new(data);
+        let mut operation = Operation::new(buffer);
         operation.set_offset(offset);
         // SAFETY: issues exactly one WriteFile from the operation's own payload
-        // buffer, reached through the pinned OVERLAPPED; the payload and the
+        // buffer, reached through the pinned OVERLAPPED; `IoBuf` promises that
+        // address is stable and its bytes unmodified, and the payload and
         // byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
-                let payload = payload_ptr_from_overlapped::<Vec<u8>>(overlapped);
+                let payload = payload_ptr_from_overlapped::<B>(overlapped);
                 let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = WriteFile(
                     handle.as_raw_handle(),
-                    (*payload).as_ptr(),
+                    (*payload).stable_ptr(),
                     data_len,
                     bytes,
                     overlapped,
@@ -349,9 +362,12 @@ unsafe fn classify_scatter(
 }
 
 /// Turn a submission outcome into the adapter's two-state outcome.
-fn finish(submitted: Submitted<Vec<u8>>) -> io::Result<Started<FileIo, Vec<u8>>> {
+fn finish<B: IoBuf>(submitted: Submitted<B>) -> io::Result<Started<FileIo<B>, B>> {
     match submitted {
-        Submitted::Pending(id) => Ok(Started::Pending(FileIo { id })),
+        Submitted::Pending(id) => Ok(Started::Pending(FileIo {
+            id,
+            buffer: std::marker::PhantomData,
+        })),
         Submitted::Completed {
             operation,
             bytes_transferred,
@@ -366,15 +382,18 @@ fn finish(submitted: Submitted<Vec<u8>>) -> io::Result<Started<FileIo, Vec<u8>>>
 /// A pending file operation submitted through [`AssociatedEndpoint::read`] or
 /// [`AssociatedEndpoint::write`].
 ///
-/// The token carries the operation's identity and its `Vec<u8>` payload type, so
-/// [`FileIo::claim`] recovers the buffer and byte count safely once the matching
-/// completion is dequeued.
+/// The token carries the operation's identity and remembers the buffer type it
+/// was submitted with, so [`FileIo::claim`] hands back the caller's own buffer
+/// -- the same value, not a copy -- once the matching completion is dequeued.
 #[derive(Debug)]
-pub struct FileIo {
+pub struct FileIo<B> {
     id: OperationId,
+    /// The buffer itself is in the pinned operation, not here; this only keeps
+    /// the token's type tied to it so `claim` cannot be handed the wrong one.
+    buffer: std::marker::PhantomData<fn() -> B>,
 }
 
-impl FileIo {
+impl<B: IoBuf> FileIo<B> {
     /// The identity of the in-flight operation, for cancellation or matching.
     #[must_use]
     pub fn id(&self) -> OperationId {
@@ -383,20 +402,21 @@ impl FileIo {
 
     /// Claim this operation's result from `completion`.
     ///
-    /// On a match returns `Ok((buffer, result))`: `buffer` is the payload -- the
-    /// bytes read, or the data written -- and `result` is the byte count or the
-    /// operation's error. Returns `Err(self)` when `completion` belongs to a
-    /// different operation, so the caller can try the token against another one.
-    pub fn claim(self, completion: &Completion) -> Result<(Vec<u8>, io::Result<usize>), Self> {
+    /// On a match returns `Ok((buffer, result))`: `buffer` is the one the caller
+    /// handed over -- the bytes read, or the data written -- and `result` is the
+    /// byte count or the operation's error. Returns `Err(self)` when
+    /// `completion` belongs to a different operation, so the caller can try the
+    /// token against another one.
+    pub fn claim(self, completion: &Completion) -> Result<(B, io::Result<usize>), Self> {
         if completion.id() != Some(self.id) {
             return Err(self);
         }
         // SAFETY: the full identity -- address *and* generation -- matches, which
         // an address alone would not: a recycled address can belong to a later
         // operation of a different payload type. The match therefore proves this
-        // completion is the
-        // Operation<Vec<u8>> this token submitted; claim it exactly once.
-        let operation = unsafe { completion.claim::<Vec<u8>>() };
+        // completion is the Operation<B> this token submitted, and the token's
+        // own type parameter names that B; claim it exactly once.
+        let operation = unsafe { completion.claim::<B>() };
         let buffer = operation.into_payload();
         let result = match completion.error() {
             Some(error) => Err(io::Error::from_raw_os_error(

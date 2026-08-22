@@ -47,7 +47,7 @@ fn iocp_read_via_file_io_token() {
         .expect("associate");
 
     let token = endpoint
-        .read(content.len(), 0)
+        .read(vec![0_u8; content.len()], 0)
         .expect("submit read")
         .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("a completion");
@@ -293,5 +293,213 @@ fn blocking_read_scatter_rejects_a_zero_page_count() {
         "the request should be rejected before reaching the kernel: {error}"
     );
 
+    let _ = std::fs::remove_file(&path);
+}
+
+// --- caller-supplied owned buffers (M11) ---
+
+/// Open a temp file holding `content` and associate it with a fresh port.
+fn iocp_endpoint<'port>(
+    port: &'port CompletionPort,
+    content: &[u8],
+    tag: &str,
+) -> (crate::AssociatedEndpoint<'port>, std::path::PathBuf) {
+    let path = std::env::temp_dir().join(format!(
+        "windows-overlapped-io-sys-fs-buf-{tag}-{}.tmp",
+        std::process::id()
+    ));
+    std::fs::write(&path, content).expect("write file");
+    let endpoint = port
+        .associate(
+            UnassociatedEndpoint::open(&path, true, true, 0).expect("open endpoint"),
+            0,
+        )
+        .expect("associate");
+    (endpoint, path)
+}
+
+#[test]
+fn a_written_buffer_comes_back_as_the_same_allocation() {
+    // The point of the whole owned-buffer design: the adapter must not copy the
+    // caller's bytes, so what `claim` returns has to be the very allocation that
+    // was handed in, not an equal one.
+    use crate::IoBuf;
+
+    let port = CompletionPort::new(0).expect("create port");
+    let (endpoint, path) = iocp_endpoint(&port, b"", "same-alloc");
+
+    let buffer = b"no copies anywhere in this path".to_vec();
+    let expected_len = buffer.len();
+    let expected_ptr = buffer.stable_ptr();
+
+    let token = endpoint
+        .write(buffer, 0)
+        .expect("submit write")
+        .expect_pending("this endpoint is not in skip-on-success mode");
+    let completion = port.get(5_000).expect("get").expect("a completion");
+    let (returned, result) = token.claim(&completion).expect("token matches");
+
+    assert_eq!(result.expect("write result"), expected_len);
+    assert_eq!(
+        returned.stable_ptr(),
+        expected_ptr,
+        "the buffer was copied somewhere along the way"
+    );
+
+    drop(endpoint);
+    drop(port);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_read_fills_the_callers_own_buffer_in_place() {
+    use crate::IoBuf;
+
+    let content = b"read straight into the caller's pages";
+    let port = CompletionPort::new(0).expect("create port");
+    let (endpoint, path) = iocp_endpoint(&port, content, "read-in-place");
+
+    let buffer = vec![0_u8; content.len()];
+    let expected_ptr = buffer.stable_ptr();
+
+    let token = endpoint
+        .read(buffer, 0)
+        .expect("submit read")
+        .expect_pending("this endpoint is not in skip-on-success mode");
+    let completion = port.get(5_000).expect("get").expect("a completion");
+    let (returned, result) = token.claim(&completion).expect("token matches");
+
+    let read = result.expect("read result");
+    assert_eq!(read, content.len());
+    assert_eq!(&returned[..read], content);
+    assert_eq!(
+        returned.stable_ptr(),
+        expected_ptr,
+        "the read did not land in the caller's own buffer"
+    );
+
+    drop(endpoint);
+    drop(port);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_shared_arc_buffer_can_be_written_without_copying_it() {
+    // The case that motivated splitting `IoBuf` from `IoBufMut`: an `Arc<[u8]>`
+    // is a legitimate source, and sending it must not deep-copy the payload just
+    // to satisfy the adapter.
+    use crate::IoBuf;
+    use std::sync::Arc;
+
+    let port = CompletionPort::new(0).expect("create port");
+    let (endpoint, path) = iocp_endpoint(&port, b"", "arc");
+
+    let shared: Arc<[u8]> = Arc::from(b"shared bytes sent without a copy".to_vec());
+    let expected_ptr = shared.stable_ptr();
+    let expected_len = shared.len();
+    // A second owner, proving the bytes really are shared while in flight.
+    let observer = Arc::clone(&shared);
+
+    let token = endpoint
+        .write(shared, 0)
+        .expect("submit write")
+        .expect_pending("this endpoint is not in skip-on-success mode");
+    let completion = port.get(5_000).expect("get").expect("a completion");
+    let (returned, result) = token.claim(&completion).expect("token matches");
+
+    assert_eq!(result.expect("write result"), expected_len);
+    assert_eq!(returned.stable_ptr(), expected_ptr);
+    assert_eq!(
+        observer.stable_ptr(),
+        expected_ptr,
+        "the other owner must still name the same bytes"
+    );
+    assert_eq!(std::fs::read(&path).expect("read back"), &*observer);
+
+    drop(endpoint);
+    drop(port);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_boxed_slice_round_trips_through_a_write() {
+    use crate::IoBuf;
+
+    let port = CompletionPort::new(0).expect("create port");
+    let (endpoint, path) = iocp_endpoint(&port, b"", "boxed");
+
+    let buffer: Box<[u8]> = b"a boxed slice needs no conversion"
+        .to_vec()
+        .into_boxed_slice();
+    let expected_ptr = buffer.stable_ptr();
+    let expected_len = buffer.len();
+
+    let token = endpoint
+        .write(buffer, 0)
+        .expect("submit write")
+        .expect_pending("this endpoint is not in skip-on-success mode");
+    let completion = port.get(5_000).expect("get").expect("a completion");
+    let (returned, result) = token.claim(&completion).expect("token matches");
+
+    assert_eq!(result.expect("write result"), expected_len);
+    assert_eq!(returned.stable_ptr(), expected_ptr);
+
+    drop(endpoint);
+    drop(port);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_static_slice_can_be_written_with_no_allocation_at_all() {
+    use crate::IoBuf;
+
+    const PAYLOAD: &[u8] = b"a static payload owns nothing";
+
+    let port = CompletionPort::new(0).expect("create port");
+    let (endpoint, path) = iocp_endpoint(&port, b"", "static");
+
+    let token = endpoint
+        .write(PAYLOAD, 0)
+        .expect("submit write")
+        .expect_pending("this endpoint is not in skip-on-success mode");
+    let completion = port.get(5_000).expect("get").expect("a completion");
+    let (returned, result) = token.claim(&completion).expect("token matches");
+
+    assert_eq!(result.expect("write result"), PAYLOAD.len());
+    assert_eq!(returned.stable_ptr(), PAYLOAD.as_ptr());
+
+    drop(endpoint);
+    drop(port);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn page_buffers_can_be_read_into_directly_keeping_their_alignment() {
+    // A caller that chose `PageBuffers` for alignment must be able to hand it
+    // straight to an ordinary read, rather than converting through a `Vec` and
+    // losing both the alignment and a copy.
+    use crate::IoBuf;
+
+    let content = vec![0xAB_u8; PAGE_SIZE];
+    let port = CompletionPort::new(0).expect("create port");
+    let (endpoint, path) = iocp_endpoint(&port, &content, "pages");
+
+    let buffers = PageBuffers::new(1);
+    let expected_ptr = buffers.stable_ptr();
+
+    let token = endpoint
+        .read(buffers, 0)
+        .expect("submit read")
+        .expect_pending("this endpoint is not in skip-on-success mode");
+    let completion = port.get(5_000).expect("get").expect("a completion");
+    let (returned, result) = token.claim(&completion).expect("token matches");
+
+    assert_eq!(result.expect("read result"), PAGE_SIZE);
+    assert_eq!(returned.stable_ptr(), expected_ptr);
+    assert_eq!(returned.stable_ptr().addr() % PAGE_SIZE, 0);
+    assert_eq!(returned.as_bytes(), &content[..]);
+
+    drop(endpoint);
+    drop(port);
     let _ = std::fs::remove_file(&path);
 }

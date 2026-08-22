@@ -57,7 +57,10 @@ fn a_read_on_a_skip_endpoint_reports_whichever_arm_the_io_manager_chose() {
     let port = CompletionPort::new(0).expect("create port");
     let endpoint = port.associate(endpoint, 0).expect("associate");
 
-    match endpoint.read(content.len(), 0).expect("submit read") {
+    match endpoint
+        .read(vec![0_u8; content.len()], 0)
+        .expect("submit read")
+    {
         Started::Completed {
             payload,
             bytes_transferred,
@@ -106,7 +109,9 @@ fn the_same_read_on_a_default_endpoint_is_always_pending() {
         )
         .expect("associate");
 
-    let started = endpoint.read(content.len(), 0).expect("submit read");
+    let started = endpoint
+        .read(vec![0_u8; content.len()], 0)
+        .expect("submit read");
     assert!(
         started.is_pending(),
         "an endpoint in the default mode always gets a completion packet"

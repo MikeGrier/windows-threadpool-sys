@@ -36,7 +36,7 @@ a performance-minded caller's back.
   for the life of the pool, so the cost is per-pool, not per-operation, and that buys an API with no
   `set_init`-style obligation to get wrong. Record the trade in DESIGN-NOTES (M11.6).
 
-- [ ] **M11.2** -- Make the file adapters generic over the buffer: `AssociatedEndpoint::read<B: IoBufMut>`
+- [x] **M11.2** -- Make the file adapters generic over the buffer: `AssociatedEndpoint::read<B: IoBufMut>`
   takes the buffer to read into instead of a length it allocates, `write<B: IoBuf>` takes any readable
   owned buffer, and `FileIo<B>` / the `Started` payload carry `B` so `claim` returns the caller's own
   buffer back. Allocating a `Vec` becomes the caller's visible `vec![0; n]` rather than something the

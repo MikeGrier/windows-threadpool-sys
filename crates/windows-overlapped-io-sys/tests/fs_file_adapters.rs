@@ -64,7 +64,7 @@ fn iocp_backend_round_trips_a_file() {
 
     // Read it back the same way.
     let read_token = endpoint
-        .read(data.len(), 0)
+        .read(vec![0_u8; data.len()], 0)
         .expect("submit read")
         .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("read completion");
