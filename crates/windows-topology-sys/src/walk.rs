@@ -184,6 +184,26 @@ unsafe fn read_group_affinities(base: *const u8, count: u16) -> Vec<GroupAffinit
         .collect()
 }
 
+/// As [`read_group_affinities`], for `CACHE_RELATIONSHIP`/
+/// `NUMA_NODE_RELATIONSHIP`'s union-based `GroupMask`/`GroupMasks` layout.
+///
+/// `GroupCount` was introduced in Windows 20H2 for these two structures and
+/// reads `0` on every earlier version -- not because there are no groups,
+/// but because the union there still holds the legacy singular `GroupMask`
+/// member rather than an empty `GroupMasks` array. Both members share the
+/// same offset, so treating `group_count == 0` as "read one entry" recovers
+/// that legacy affinity instead of silently decoding it as an empty set.
+///
+/// # Safety
+///
+/// `base` must address at least `group_count.max(1)` consecutive,
+/// initialized `GROUP_AFFINITY` values.
+unsafe fn read_legacy_group_affinities(base: *const u8, group_count: u16) -> Vec<GroupAffinity> {
+    let count = group_count.max(1);
+    // SAFETY: forwarded from the caller.
+    unsafe { read_group_affinities(base, count) }
+}
+
 /// # Safety
 ///
 /// `buffer` must address `length` initialized bytes written by
@@ -294,8 +314,10 @@ unsafe fn read_processor_body(base: *const u8) -> ProcessorBody {
 /// # Safety
 ///
 /// `base` must address a `CACHE_RELATIONSHIP` whose trailing `GroupMask`
-/// array (behind its anonymous union) has at least `GroupCount` initialized
-/// entries.
+/// array (behind its anonymous union) has at least `GroupCount.max(1)`
+/// initialized entries -- pre-Windows-20H2 records report `GroupCount == 0`
+/// but still have exactly one legacy `GroupMask` entry there (see
+/// [`read_legacy_group_affinities`]).
 unsafe fn read_cache_body(base: *const u8) -> CacheBody {
     // SAFETY: forwarded from the caller.
     let level: u8 = unsafe { read_at(base, core::mem::offset_of!(CACHE_RELATIONSHIP, Level)) };
@@ -319,7 +341,7 @@ unsafe fn read_cache_body(base: *const u8) -> CacheBody {
         unsafe { read_at(base, core::mem::offset_of!(CACHE_RELATIONSHIP, GroupCount)) };
     // SAFETY: forwarded from the caller; `group_count` names the true length.
     let group_masks = unsafe {
-        read_group_affinities(
+        read_legacy_group_affinities(
             base.add(core::mem::offset_of!(CACHE_RELATIONSHIP, Anonymous)),
             group_count,
         )
@@ -337,8 +359,10 @@ unsafe fn read_cache_body(base: *const u8) -> CacheBody {
 /// # Safety
 ///
 /// `base` must address a `NUMA_NODE_RELATIONSHIP` whose trailing `GroupMask`
-/// array (behind its anonymous union) has at least `GroupCount` initialized
-/// entries.
+/// array (behind its anonymous union) has at least `GroupCount.max(1)`
+/// initialized entries -- pre-Windows-20H2 records report `GroupCount == 0`
+/// but still have exactly one legacy `GroupMask` entry there (see
+/// [`read_legacy_group_affinities`]).
 unsafe fn read_numa_body(base: *const u8) -> NumaNodeBody {
     // SAFETY: forwarded from the caller.
     let node_number: u32 = unsafe {
@@ -356,7 +380,7 @@ unsafe fn read_numa_body(base: *const u8) -> NumaNodeBody {
     };
     // SAFETY: forwarded from the caller; `group_count` names the true length.
     let group_masks = unsafe {
-        read_group_affinities(
+        read_legacy_group_affinities(
             base.add(core::mem::offset_of!(NUMA_NODE_RELATIONSHIP, Anonymous)),
             group_count,
         )

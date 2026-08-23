@@ -24,7 +24,8 @@ use crate::processor_set::ProcessorSet;
 pub struct ProcessorId {
     /// The processor group.
     pub group: u16,
-    /// The processor's number within that group (0..64).
+    /// The processor's number within that group (0..[`MAX_PROCESSORS_PER_GROUP`],
+    /// i.e. 0..`usize::BITS`).
     pub number: u8,
 }
 
@@ -206,11 +207,12 @@ mod serde_impl {
     use std::fmt;
 
     use serde::de::{Error, MapAccess, SeqAccess, Visitor};
-    use serde::ser::SerializeMap;
+    use serde::ser::{Error as SerError, SerializeMap};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     use super::{AttributeValue, Domain, DomainKind};
     use crate::CacheKind;
+    use crate::processor_set::MAX_PROCESSORS_PER_GROUP;
     use crate::processor_set::ProcessorSet;
 
     impl Serialize for AttributeValue {
@@ -307,6 +309,25 @@ mod serde_impl {
         u32::try_from(as_u64(value)?).map_err(|_| E::custom("number is too large for this field"))
     }
 
+    /// As [`as_u64`], but over the signed range: `CacheKind::Other` carries a
+    /// raw `PROCESSOR_CACHE_TYPE`, a C enum backed by `i32`, which is not
+    /// guaranteed non-negative.
+    fn as_i64<E: Error>(value: AttributeValue) -> Result<i64, E> {
+        match value {
+            AttributeValue::Number(n)
+                if n.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&n) =>
+            {
+                Ok(n as i64)
+            }
+            AttributeValue::Number(_) => Err(E::custom("expected a whole number")),
+            _ => Err(E::custom("expected a number")),
+        }
+    }
+
+    fn as_i32<E: Error>(value: AttributeValue) -> Result<i32, E> {
+        i32::try_from(as_i64(value)?).map_err(|_| E::custom("number is too large for this field"))
+    }
+
     fn as_u16<E: Error>(value: AttributeValue) -> Result<u16, E> {
         u16::try_from(as_u64(value)?).map_err(|_| E::custom("number is too large for this field"))
     }
@@ -330,7 +351,7 @@ mod serde_impl {
                 other => Err(E::custom(format!("unrecognised cache_type \"{other}\""))),
             },
             AttributeValue::Object(mut map) if map.len() == 1 => match map.remove("other") {
-                Some(raw) => Ok(CacheKind::Other(as_u32(raw)? as i32)),
+                Some(raw) => Ok(CacheKind::Other(as_i32(raw)?)),
                 None => Err(E::custom("cache_type object must have an \"other\" key")),
             },
             _ => Err(E::custom(
@@ -357,13 +378,13 @@ mod serde_impl {
             };
             let group = as_u16(take(&mut object, "group")?)?;
             let number = as_u8(take(&mut object, "number")?)?;
-            if number >= 64 {
+            if u32::from(number) >= MAX_PROCESSORS_PER_GROUP {
                 // A real Windows GROUP_AFFINITY.Mask is one machine word, so
                 // a group genuinely cannot hold this processor: reject rather
                 // than silently truncate (D-10 in `DESIGN-NOTES.md`).
                 return Err(E::custom(format!(
-                    "processor number {number} is out of range: a processor group has at most 64 \
-                     processors on this platform"
+                    "processor number {number} is out of range: a processor group has at most \
+                     {MAX_PROCESSORS_PER_GROUP} processors on this platform"
                 )));
             }
             set.insert(group, number);
@@ -427,6 +448,15 @@ mod serde_impl {
                 }
                 DomainKind::Other { attributes, .. } => {
                     for (key, value) in attributes {
+                        if matches!(key.as_str(), "kind" | "id" | "processors") {
+                            // These three keys are always written above;
+                            // silently letting an attribute reuse one would
+                            // corrupt the wire shape rather than round-trip.
+                            return Err(S::Error::custom(format!(
+                                "domain attribute \"{key}\" collides with the reserved \
+                                 \"kind\"/\"id\"/\"processors\" field names"
+                            )));
+                        }
                         map.serialize_entry(key, value)?;
                     }
                 }

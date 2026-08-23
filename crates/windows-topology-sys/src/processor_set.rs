@@ -3,6 +3,12 @@
 
 use std::collections::BTreeMap;
 
+/// How many processors one group's mask can name: one bit per machine word
+/// bit, not a hardcoded 64 -- a 32-bit target's `usize` mask is only 32 bits
+/// wide, and hardcoding 64 there would let `insert`/`contains` silently
+/// address bits past the mask's actual width.
+pub(crate) const MAX_PROCESSORS_PER_GROUP: u32 = usize::BITS;
+
 /// A set of logical processors, correctly spanning more than one processor
 /// group.
 ///
@@ -38,12 +44,12 @@ impl ProcessorSet {
     ///
     /// # Panics
     ///
-    /// Panics if `number` is 64 or greater: a processor group has at most 64
-    /// processors, since a mask is one machine word.
+    /// Panics if `number` is [`MAX_PROCESSORS_PER_GROUP`] or greater: a
+    /// processor group cannot hold more processors than a mask has bits.
     pub fn insert(&mut self, group: u16, number: u8) {
         assert!(
-            number < 64,
-            "a processor group has at most 64 processors, got {number}"
+            u32::from(number) < MAX_PROCESSORS_PER_GROUP,
+            "a processor group has at most {MAX_PROCESSORS_PER_GROUP} processors, got {number}"
         );
         *self.groups.entry(group).or_insert(0) |= 1_usize << number;
     }
@@ -66,7 +72,7 @@ impl ProcessorSet {
     /// Whether `group`/`number` is a member of this set.
     #[must_use]
     pub fn contains(&self, group: u16, number: u8) -> bool {
-        if number >= 64 {
+        if u32::from(number) >= MAX_PROCESSORS_PER_GROUP {
             return false;
         }
         self.groups
@@ -89,7 +95,7 @@ impl ProcessorSet {
     /// Iterate over every `(group, number)` member, in ascending order.
     pub fn iter(&self) -> impl Iterator<Item = (u16, u8)> + '_ {
         self.groups.iter().flat_map(|(&group, &mask)| {
-            (0..64_u8)
+            (0..MAX_PROCESSORS_PER_GROUP as u8)
                 .filter(move |&n| mask & (1_usize << n) != 0)
                 .map(move |n| (group, n))
         })
@@ -172,13 +178,13 @@ impl<'de> serde::Deserialize<'de> for ProcessorSet {
         let wire = Vec::<WireProcessor>::deserialize(deserializer)?;
         let mut set = Self::empty();
         for entry in wire {
-            if entry.number >= 64 {
+            if u32::from(entry.number) >= MAX_PROCESSORS_PER_GROUP {
                 // A real Windows GROUP_AFFINITY.Mask is one machine word, so a
                 // group genuinely cannot hold this processor: reject rather
                 // than silently truncate (D-10 in `DESIGN-NOTES.md`).
                 return Err(serde::de::Error::custom(format!(
-                    "processor number {} is out of range: a processor group has at most 64 \
-                     processors on this platform",
+                    "processor number {} is out of range: a processor group has at most \
+                     {MAX_PROCESSORS_PER_GROUP} processors on this platform",
                     entry.number
                 )));
             }

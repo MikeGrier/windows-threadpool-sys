@@ -177,6 +177,30 @@ mod serde_tests {
     }
 
     #[test]
+    fn a_cache_domain_with_a_negative_unrecognised_cache_type_round_trips() {
+        // PROCESSOR_CACHE_TYPE is a raw i32 enum; a value Windows reports
+        // that happens to be negative must round-trip, not just the
+        // non-negative range a u32-shaped decode would accept.
+        let domain = Domain {
+            kind: DomainKind::Cache {
+                level: 1,
+                associativity: 8,
+                line_size: 64,
+                size_bytes: 32 * 1024,
+                cache_type: CacheKind::Other(-7),
+            },
+            id: 0,
+            processors: ProcessorSet::from_group_mask(0, 0b1),
+        };
+        let json = serde_json::to_string(&domain).expect("serialize");
+        assert!(
+            json.contains(r#""cache_type":{"other":-7}"#),
+            "unexpected JSON: {json}"
+        );
+        assert_eq!(round_trip(&domain), domain);
+    }
+
+    #[test]
     fn a_memory_only_domain_round_trips_with_no_processors() {
         // The CXL-expander case (D-5): a memory domain with a known size and
         // no processors at all.
@@ -221,6 +245,25 @@ mod serde_tests {
             processors: ProcessorSet::empty(),
         };
         assert_eq!(round_trip(&domain), domain);
+    }
+
+    #[test]
+    fn an_unrecognised_domain_kinds_attribute_colliding_with_a_reserved_field_name_is_refused() {
+        for reserved in ["kind", "id", "processors"] {
+            let mut attributes = BTreeMap::new();
+            attributes.insert(reserved.to_string(), AttributeValue::Number(1.0));
+            let domain = Domain {
+                kind: DomainKind::Other {
+                    name: "power".to_string(),
+                    attributes,
+                },
+                id: 2,
+                processors: ProcessorSet::empty(),
+            };
+            serde_json::to_string(&domain).expect_err(&format!(
+                "an attribute named {reserved:?} must not silently overwrite the reserved field"
+            ));
+        }
     }
 
     #[test]

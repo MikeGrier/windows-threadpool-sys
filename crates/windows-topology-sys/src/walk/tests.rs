@@ -290,6 +290,53 @@ fn cache_kind_from_raw_preserves_an_unrecognised_value() {
 }
 
 #[test]
+fn a_cache_relationship_reporting_group_count_zero_still_reads_its_legacy_group_mask() {
+    // Pre-Windows-20H2 systems always report GroupCount == 0 for
+    // CACHE_RELATIONSHIP, yet the union at that same offset holds exactly
+    // one legacy GROUP_AFFINITY -- decoding this as "zero groups" would
+    // silently drop it.
+    let mut record = cache_record(2, 8, 64, 1024 * 1024, CacheData, &[(3, 0b110)]);
+    write_at(
+        &mut record,
+        UNION_OFFSET + core::mem::offset_of!(CACHE_RELATIONSHIP, GroupCount),
+        0_u16,
+    );
+    // SAFETY: a well-formed single record; only its GroupCount field was
+    // overwritten to simulate the legacy layout, its one trailing
+    // GROUP_AFFINITY entry is left intact.
+    let decoded = unsafe { decode(record.as_ptr(), record.len() as u32) };
+    let Record::Cache(body) = &decoded[0] else {
+        panic!("expected Cache")
+    };
+    assert_eq!(body.group_masks.len(), 1);
+    assert_eq!(
+        (body.group_masks[0].group, body.group_masks[0].mask),
+        (3, 0b110)
+    );
+}
+
+#[test]
+fn a_numa_node_relationship_reporting_group_count_zero_still_reads_its_legacy_group_mask() {
+    let mut record = numa_record(9, &[(2, 0b1010)]);
+    write_at(
+        &mut record,
+        UNION_OFFSET + core::mem::offset_of!(NUMA_NODE_RELATIONSHIP, GroupCount),
+        0_u16,
+    );
+    // SAFETY: as above, only GroupCount was overwritten.
+    let decoded = unsafe { decode(record.as_ptr(), record.len() as u32) };
+    let Record::NumaNode(body) = &decoded[0] else {
+        panic!("expected NumaNode")
+    };
+    assert_eq!(body.node_number, 9);
+    assert_eq!(body.group_masks.len(), 1);
+    assert_eq!(
+        (body.group_masks[0].group, body.group_masks[0].mask),
+        (2, 0b1010)
+    );
+}
+
+#[test]
 fn decodes_a_group_relationship_with_multiple_groups() {
     let record = group_record(&[(64, 64, usize::MAX), (32, 16, 0xFFFF)]);
     // SAFETY: a well-formed single record.

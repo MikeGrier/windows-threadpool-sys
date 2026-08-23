@@ -32,8 +32,9 @@ pub struct CoreRelation {
     /// hyperthreading).
     pub simultaneous_multithreading: bool,
     /// The scheduler's efficiency class for this core. Windows documents only
-    /// that a higher value means a more efficient (and typically lower
-    /// performance) core on a hybrid part; it does not fix an absolute scale.
+    /// that a higher value means intrinsically greater performance and less
+    /// power efficiency than a lower value on a hybrid part; it does not fix
+    /// an absolute scale.
     pub efficiency_class: u8,
     /// The logical processors that make up this core.
     pub processors: ProcessorSet,
