@@ -6,7 +6,7 @@ Completed milestones are archived in COMPLETED-CHECKLIST.md once there are any.
 
 ## M1 -- Ring lifecycle and capability negotiation
 
-- [ ] **M1.1** -- Create the crate skeleton: `Cargo.toml`, `src/lib.rs`, README, and add it to the
+- [x] **M1.1** -- Create the crate skeleton: `Cargo.toml`, `src/lib.rs`, README, and add it to the
   workspace `members`. `windows-sys` features are `Win32_Foundation`, `Win32_System_IO`, and
   `Win32_Storage_FileSystem` (which is where the IoRing bindings live). Everything is behind
   `cfg(windows)`, as elsewhere in this repository.

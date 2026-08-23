@@ -11,6 +11,13 @@
                 "Cargo.toml"
             ]
         },
+        "crates/windows-ioring-sys": {
+            "package-name": "windows-ioring-sys",
+            "component": "windows-ioring-sys",
+            "extra-files": [
+                "Cargo.toml"
+            ]
+        },
         "crates/windows-overlapped-io-sys": {
             "package-name": "windows-overlapped-io-sys",
             "component": "windows-overlapped-io-sys",
