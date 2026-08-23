@@ -684,7 +684,13 @@ impl StandingSlot {
                 // with the pop when the entry is eventually drained.
                 state.reserved -= 1;
                 let hold = StandingHold {
-                    shared: Arc::clone(&self.sender.shared),
+                    // Weak, not Arc: this hold lives inside `Entry` inside
+                    // `state.queue` inside this very `Shared` (PR #20 review
+                    // response) -- a strong reference here would be a
+                    // self-cycle that keeps `Shared` (and its doorbell
+                    // handle) alive forever if this entry is ever left
+                    // permanently undrained.
+                    shared: Arc::downgrade(&self.sender.shared),
                     state: Arc::clone(&self.state),
                     resolved: false,
                 };
@@ -744,7 +750,15 @@ impl std::fmt::Debug for StandingSlot {
 /// `resolved` so this `Drop` becomes a no-op for that path; `Drop` remains
 /// the fallback for every other discard.
 struct StandingHold {
-    shared: Arc<Shared>,
+    /// `Weak`, not `Arc` (PR #20 review response): this hold lives inside an
+    /// `Entry` inside `Shared.items.queue` -- inside the very `Shared` a
+    /// strong reference here would point back to, a self-cycle that would
+    /// keep `Shared` (and its doorbell handle) alive forever if this entry
+    /// is ever left permanently undrained (every `Sender`/`Receiver` and
+    /// route dropped before it is). Upgrading fails only when `Shared`
+    /// itself is already being torn down, in which case there is no
+    /// `reserved` accounting left to update.
+    shared: Weak<Shared>,
     state: Arc<Mutex<StandingState>>,
     /// Set once this hold's release has already been performed inline by
     /// `take`, so `Drop` does not perform it a second time.
@@ -758,7 +772,11 @@ impl Drop for StandingHold {
         if self.resolved {
             return;
         }
-        let mut state = lock(&self.shared.items);
+        let Some(shared) = self.shared.upgrade() else {
+            // `Shared` is already being torn down; nothing to update.
+            return;
+        };
+        let mut state = lock(&shared.items);
         let mut standing = lock(&self.state);
         standing.in_flight = false;
         standing.queued = None;
