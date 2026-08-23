@@ -65,7 +65,10 @@ pub fn copy_domain(
         // actually had rather than writing uninitialized tail bytes or
         // spinning forever on an offset that never advances.
         let transferred = submit_one(&mut ring, |batch| {
-            batch.read_registered(source, &registration, read_span, offset, PushOptions::new())
+            // SAFETY: `source` stays open for this domain's whole copy pass.
+            unsafe {
+                batch.read_registered(source, &registration, read_span, offset, PushOptions::new())
+            }
         })?;
         if transferred == 0 {
             break;
@@ -77,13 +80,16 @@ pub fn copy_domain(
             len: transferred,
         };
         submit_one(&mut ring, |batch| {
-            batch.write_registered(
-                destination,
-                &registration,
-                write_span,
-                offset,
-                PushOptions::new(),
-            )
+            // SAFETY: `destination` stays open for this domain's whole copy pass.
+            unsafe {
+                batch.write_registered(
+                    destination,
+                    &registration,
+                    write_span,
+                    offset,
+                    PushOptions::new(),
+                )
+            }
         })?;
 
         offset += u64::from(transferred);

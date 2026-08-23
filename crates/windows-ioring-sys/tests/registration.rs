@@ -32,9 +32,9 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
 
     // Register the file handle.
     let mut batch = Batch::new(&mut ring);
-    let files_pending = batch
-        .register_files(&[handle])
-        .expect("queue file registration");
+    // SAFETY: `handle` stays open for the whole test.
+    let files_pending =
+        unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
         .try_pop()
@@ -68,15 +68,16 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         offset: 0,
         len: 256,
     };
-    let token = batch
-        .read_registered(
+    let token = unsafe {
+        batch.read_registered(
             registered_file,
             &registered_buffers,
             span,
             0,
             PushOptions::new(),
         )
-        .expect("queue registered read");
+    }
+    .expect("queue registered read");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
 
     let completion = ring
@@ -98,15 +99,16 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
     // more reads through the same registration.
     for _ in 0..4 {
         let mut batch = Batch::new(&mut ring);
-        let token = batch
-            .read_registered(
+        let token = unsafe {
+            batch.read_registered(
                 registered_file,
                 &registered_buffers,
                 span,
                 0,
                 PushOptions::new(),
             )
-            .expect("queue another registered read");
+        }
+        .expect("queue another registered read");
         batch.submit_and_wait(1, 5_000).expect("submit and wait");
         let completion = ring
             .try_pop()
@@ -138,9 +140,9 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
     let mut ring = IoRing::new(16, 16).expect("create ring");
 
     let mut batch = Batch::new(&mut ring);
-    let files_pending = batch
-        .register_files(&[handle])
-        .expect("queue first file registration");
+    // SAFETY: `handle` stays open for the whole test.
+    let files_pending =
+        unsafe { batch.register_files(&[handle]) }.expect("queue first file registration");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
         .try_pop()
@@ -152,8 +154,8 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
         .expect("file registration succeeded");
 
     let mut batch = Batch::new(&mut ring);
-    let error = batch
-        .register_files(&[handle])
+    // SAFETY: as above.
+    let error = unsafe { batch.register_files(&[handle]) }
         .expect_err("a second file registration must be refused");
     assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
     drop(batch);
@@ -255,9 +257,9 @@ fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees()
         offset: 0,
         len: 64,
     };
-    let token = batch
-        .read_registered(handle, &registered_buffers, span, 0, PushOptions::new())
-        .expect("queue registered read");
+    let token =
+        unsafe { batch.read_registered(handle, &registered_buffers, span, 0, PushOptions::new()) }
+            .expect("queue registered read");
     batch.submit_and_wait(0, 0).expect("submit without waiting");
     // Deliberately do not observe this read's completion, so
     // `registered_buffers`'s outstanding count is still 1 when dropped below.

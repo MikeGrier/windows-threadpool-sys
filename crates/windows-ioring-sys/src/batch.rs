@@ -4,6 +4,7 @@
 use std::ffi::c_void;
 use std::io;
 use std::mem::ManuallyDrop;
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -121,6 +122,40 @@ impl From<HANDLE> for FileRef {
 impl From<RegisteredFile> for FileRef {
     fn from(file: RegisteredFile) -> Self {
         FileRef::Registered(file)
+    }
+}
+
+/// A file handle this crate can read/write through without the caller
+/// having to prove it outlives every operation pushed against it (M8, PR
+/// #20 review response).
+///
+/// Backed by `Arc<OwnedHandle>` rather than [`Token`]'s exclusive-ownership
+/// shape: unlike a buffer, one handle is legitimately the target of many
+/// concurrent pushes, so what must survive until every one of them
+/// completes is a *reference*, not sole ownership. Every `*_shared` push
+/// method clones this `Arc` into the same [`Token`] that already tracks the
+/// operation's own payload, so the underlying handle survives until that
+/// token is claimed or leaked (D-4 in `DESIGN-NOTES.md`), regardless of
+/// what the caller does with its own clone.
+#[derive(Clone, Debug)]
+pub struct SharedFile(Arc<OwnedHandle>);
+
+impl SharedFile {
+    /// Wrap an owned handle so it can be read/written through the ring
+    /// safely.
+    #[must_use]
+    pub fn new(handle: OwnedHandle) -> Self {
+        Self(Arc::new(handle))
+    }
+
+    fn raw_handle(&self) -> HANDLE {
+        self.0.as_raw_handle()
+    }
+}
+
+impl From<OwnedHandle> for SharedFile {
+    fn from(handle: OwnedHandle) -> Self {
+        Self::new(handle)
     }
 }
 
@@ -414,6 +449,16 @@ impl<'ring> Batch<'ring> {
 
     /// Queue a read of `buffer.bytes_len()` bytes from `file` at `offset`.
     ///
+    /// # Safety
+    ///
+    /// If `file` is [`FileRef::Raw`], the handle must be valid, opened with
+    /// read access, and must remain valid -- not closed, not reused for a
+    /// different object -- until this operation's completion is observed
+    /// (via a popped [`Completion`] or [`Token::claim_if`]) or until the
+    /// ring runs down (M8, PR #20 review response). Use
+    /// [`Batch::read_shared`] for a caller who does not want to prove this
+    /// itself. A [`FileRef::Registered`] target needs none of this.
+    ///
     /// # Errors
     ///
     /// [`io::ErrorKind::Unsupported`] if the ring was not probed as
@@ -423,7 +468,7 @@ impl<'ring> Batch<'ring> {
     /// auto-flushed -- see [`Batch`]'s own docs); or any other error from
     /// `BuildIoRingReadFile`. On any error the buffer is dropped normally,
     /// not leaked or handed back.
-    pub fn read<B: IoBufMut>(
+    pub unsafe fn read<B: IoBufMut>(
         &mut self,
         file: impl Into<FileRef>,
         mut buffer: B,
@@ -437,7 +482,8 @@ impl<'ring> Batch<'ring> {
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
         // promised stable, exclusively-owned pointer, valid for `len` bytes
-        // until `token` is claimed; `file` is the caller's to keep alive.
+        // until `token` is claimed; `file` is the caller's to keep alive,
+        // forwarded from this function's own contract.
         let hr = unsafe {
             BuildIoRingReadFile(
                 self.ring.raw_handle(),
@@ -452,12 +498,57 @@ impl<'ring> Batch<'ring> {
         self.finish_push(hr, token)
     }
 
+    /// As [`Batch::read`], but safe: `file` is a [`SharedFile`] rather than
+    /// a bare [`FileRef`], so the pushed operation keeps its own clone of
+    /// the handle alive regardless of what the caller does with its copy.
+    /// The returned token yields `(buffer, file)` once claimed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::read`].
+    pub fn read_shared<B: IoBufMut>(
+        &mut self,
+        file: &SharedFile,
+        mut buffer: B,
+        offset: u64,
+        options: PushOptions,
+    ) -> io::Result<Token<(B, SharedFile)>> {
+        self.require(Op::Read)?;
+        let len = checked_len(buffer.bytes_len())?;
+        let address = buffer.stable_mut_ptr().cast::<c_void>();
+        let raw = file.raw_handle();
+        let token = Token::new(self.ring, (buffer, file.clone()))?;
+        let user_data = token.id();
+        // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
+        // promised stable, exclusively-owned pointer, valid for `len` bytes
+        // until `token` is claimed; `raw` stays valid at least that long
+        // too, since `token` holds its own clone of `file`'s `Arc`.
+        let hr = unsafe {
+            BuildIoRingReadFile(
+                self.ring.raw_handle(),
+                handle_ref(FileRef::Raw(raw)),
+                raw_buffer_ref(address),
+                len,
+                offset,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_push(hr, token)
+    }
+
     /// Queue a write of `buffer.bytes_len()` bytes to `file` at `offset`.
+    ///
+    /// # Safety
+    ///
+    /// As [`Batch::read`]'s, for a write-access handle. Use
+    /// [`Batch::write_shared`] for a caller who does not want to prove this
+    /// itself.
     ///
     /// # Errors
     ///
     /// As [`Batch::read`], plus any error from `BuildIoRingWriteFile`.
-    pub fn write<B: IoBuf>(
+    pub unsafe fn write<B: IoBuf>(
         &mut self,
         file: impl Into<FileRef>,
         buffer: B,
@@ -477,6 +568,43 @@ impl<'ring> Batch<'ring> {
             BuildIoRingWriteFile(
                 self.ring.raw_handle(),
                 handle_ref(file.into()),
+                raw_buffer_ref(address),
+                len,
+                offset,
+                FILE_WRITE_FLAGS_NONE,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_push(hr, token)
+    }
+
+    /// As [`Batch::write`], but safe: `file` is a [`SharedFile`] rather
+    /// than a bare [`FileRef`]. The returned token yields `(buffer, file)`
+    /// once claimed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::write`].
+    pub fn write_shared<B: IoBuf>(
+        &mut self,
+        file: &SharedFile,
+        buffer: B,
+        offset: u64,
+        options: PushOptions,
+    ) -> io::Result<Token<(B, SharedFile)>> {
+        self.require(Op::Write)?;
+        let len = checked_len(buffer.bytes_len())?;
+        let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
+        let raw = file.raw_handle();
+        let token = Token::new(self.ring, (buffer, file.clone()))?;
+        let user_data = token.id();
+        // SAFETY: as `write`'s; `raw` stays valid at least as long as
+        // `token`'s own clone of `file`'s `Arc` does.
+        let hr = unsafe {
+            BuildIoRingWriteFile(
+                self.ring.raw_handle(),
+                handle_ref(FileRef::Raw(raw)),
                 raw_buffer_ref(address),
                 len,
                 offset,
@@ -518,17 +646,28 @@ impl<'ring> Batch<'ring> {
     /// rather than a [`Token`]: nothing owns a buffer for a completion to
     /// hand back.
     ///
+    /// # Safety
+    ///
+    /// As [`Batch::read`]'s, for a [`FileRef::Raw`] target. Use
+    /// [`Batch::flush_shared`] for a caller who does not want to prove this
+    /// itself.
+    ///
     /// # Errors
     ///
     /// [`io::ErrorKind::Unsupported`] if the ring was not probed as
     /// supporting [`Op::Flush`]; an [`crate::IoRingError`] wrapping
     /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room; or any
     /// other error from `BuildIoRingFlushFile`.
-    pub fn flush(&mut self, file: impl Into<FileRef>, options: PushOptions) -> io::Result<usize> {
+    pub unsafe fn flush(
+        &mut self,
+        file: impl Into<FileRef>,
+        options: PushOptions,
+    ) -> io::Result<usize> {
         self.require(Op::Flush)?;
         let user_data = self.ring.reserve_user_data()?;
         // SAFETY: `self.ring`'s handle is live; `file` is the caller's to
-        // keep alive; there is no buffer.
+        // keep alive, forwarded from this function's own contract; there is
+        // no buffer.
         let hr = unsafe {
             BuildIoRingFlushFile(
                 self.ring.raw_handle(),
@@ -545,6 +684,36 @@ impl<'ring> Batch<'ring> {
         Ok(user_data)
     }
 
+    /// As [`Batch::flush`], but safe: `file` is a [`SharedFile`], and the
+    /// returned [`Token`] (rather than a bare `UserData`) keeps `file`'s
+    /// clone alive until this operation's completion is observed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::flush`].
+    pub fn flush_shared(
+        &mut self,
+        file: &SharedFile,
+        options: PushOptions,
+    ) -> io::Result<Token<SharedFile>> {
+        self.require(Op::Flush)?;
+        let raw = file.raw_handle();
+        let token = Token::new(self.ring, file.clone())?;
+        let user_data = token.id();
+        // SAFETY: `raw` stays valid at least as long as `token`'s own clone
+        // of `file`'s `Arc` does; there is no buffer.
+        let hr = unsafe {
+            BuildIoRingFlushFile(
+                self.ring.raw_handle(),
+                handle_ref(FileRef::Raw(raw)),
+                FILE_FLUSH_DEFAULT,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_push(hr, token)
+    }
+
     /// Queue cancellation of the operation identified by `target` (the
     /// `usize` a prior push returned), against `file`.
     ///
@@ -554,18 +723,24 @@ impl<'ring> Batch<'ring> {
     /// was never outstanding -- reports `ERROR_NOT_FOUND` through *this*
     /// completion rather than failing to build (M3.6).
     ///
+    /// # Safety
+    ///
+    /// As [`Batch::read`]'s, for a [`FileRef::Raw`] target. Use
+    /// [`Batch::cancel_shared`] for a caller who does not want to prove
+    /// this itself.
+    ///
     /// # Errors
     ///
     /// [`io::ErrorKind::Unsupported`] if the ring was not probed as
     /// supporting [`Op::Cancel`]; an [`crate::IoRingError`] wrapping
     /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room; or any
     /// other error from `BuildIoRingCancelRequest`.
-    pub fn cancel(&mut self, file: impl Into<FileRef>, target: usize) -> io::Result<usize> {
+    pub unsafe fn cancel(&mut self, file: impl Into<FileRef>, target: usize) -> io::Result<usize> {
         self.require(Op::Cancel)?;
         let user_data = self.ring.reserve_user_data()?;
         // SAFETY: `self.ring`'s handle is live; `file` is the caller's to
-        // keep alive; `BuildIoRingCancelRequest` takes no SQE-flags
-        // parameter.
+        // keep alive, forwarded from this function's own contract;
+        // `BuildIoRingCancelRequest` takes no SQE-flags parameter.
         let hr = unsafe {
             BuildIoRingCancelRequest(
                 self.ring.raw_handle(),
@@ -579,6 +754,36 @@ impl<'ring> Batch<'ring> {
             return Err(error);
         }
         Ok(user_data)
+    }
+
+    /// As [`Batch::cancel`], but safe: `file` is a [`SharedFile`], and the
+    /// returned [`Token`] keeps `file`'s clone alive until this operation's
+    /// completion is observed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::cancel`].
+    pub fn cancel_shared(
+        &mut self,
+        file: &SharedFile,
+        target: usize,
+    ) -> io::Result<Token<SharedFile>> {
+        self.require(Op::Cancel)?;
+        let raw = file.raw_handle();
+        let token = Token::new(self.ring, file.clone())?;
+        let user_data = token.id();
+        // SAFETY: `raw` stays valid at least as long as `token`'s own clone
+        // of `file`'s `Arc` does; `BuildIoRingCancelRequest` takes no
+        // SQE-flags parameter.
+        let hr = unsafe {
+            BuildIoRingCancelRequest(
+                self.ring.raw_handle(),
+                handle_ref(FileRef::Raw(raw)),
+                target,
+                user_data,
+            )
+        };
+        self.finish_push(hr, token)
     }
 
     /// Queue registration of `handles` as a ring's file-handle table (M5.1).
@@ -600,6 +805,16 @@ impl<'ring> Batch<'ring> {
     /// crate does not take ownership of them, only of their assigned
     /// indices' bookkeeping.
     ///
+    /// # Safety
+    ///
+    /// Every handle in `handles` must be valid, and must remain valid for
+    /// as long as the resulting registration is used -- for the ring's
+    /// remaining life, since Win32 has no unregister call (M8, PR #20
+    /// review response). There is no `_shared` counterpart: a single-push
+    /// `Token` cannot express a lifetime spanning arbitrarily many later
+    /// reads and writes against every registered index, unlike a `Token`
+    /// tied to one push's own completion.
+    ///
     /// # Errors
     ///
     /// [`io::ErrorKind::AlreadyExists`] if this ring already has a
@@ -610,7 +825,10 @@ impl<'ring> Batch<'ring> {
     /// `u32::MAX` entries; an [`crate::IoRingError`] wrapping
     /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room; or any
     /// other error from `BuildIoRingRegisterFileHandles`.
-    pub fn register_files(&mut self, handles: &[HANDLE]) -> io::Result<PendingFileRegistration> {
+    pub unsafe fn register_files(
+        &mut self,
+        handles: &[HANDLE],
+    ) -> io::Result<PendingFileRegistration> {
         self.require(Op::RegisterFiles)?;
         if self.ring.registered_file_count() > 0 {
             return Err(io::Error::new(
@@ -718,11 +936,16 @@ impl<'ring> Batch<'ring> {
     /// itself afterward, for example via a caller-side accessor into the
     /// buffer it was constructed from.
     ///
+    /// # Safety
+    ///
+    /// As [`Batch::read`]'s. Use [`Batch::read_registered_shared`] for a
+    /// caller who does not want to prove this itself.
+    ///
     /// # Errors
     ///
     /// As [`Batch::read`], plus [`io::ErrorKind::InvalidInput`] if
     /// `span.buffer_index` is out of range for `registration`.
-    pub fn read_registered<B: IoBufMut>(
+    pub unsafe fn read_registered<B: IoBufMut>(
         &mut self,
         file: impl Into<FileRef>,
         registration: &RegisteredBuffers<B>,
@@ -740,11 +963,56 @@ impl<'ring> Batch<'ring> {
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `index` was just checked
         // against `registration`, whose buffer stays put until it drops;
-        // `file` is the caller's to keep alive.
+        // `file` is the caller's to keep alive, forwarded from this
+        // function's own contract.
         let hr = unsafe {
             BuildIoRingReadFile(
                 self.ring.raw_handle(),
                 handle_ref(file.into()),
+                registered_buffer_ref(index, span.offset),
+                span.len,
+                file_offset,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_push(hr, token)
+    }
+
+    /// As [`Batch::read_registered`], but safe: `file` is a [`SharedFile`]
+    /// rather than a bare [`FileRef`]. The returned token yields
+    /// `(RegisteredUse, file)` once claimed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::read_registered`].
+    pub fn read_registered_shared<B: IoBufMut>(
+        &mut self,
+        file: &SharedFile,
+        registration: &RegisteredBuffers<B>,
+        span: RegisteredSpan,
+        file_offset: u64,
+        options: PushOptions,
+    ) -> io::Result<Token<(RegisteredUse, SharedFile)>> {
+        self.require(Op::Read)?;
+        let index = registration.checked_span(span)?;
+        registration.outstanding.fetch_add(1, Ordering::SeqCst);
+        let raw = file.raw_handle();
+        let token = Token::new(
+            self.ring,
+            (
+                RegisteredUse(Arc::clone(&registration.outstanding)),
+                file.clone(),
+            ),
+        )?;
+        let user_data = token.id();
+        // SAFETY: `index` was just checked against `registration`, whose
+        // buffer stays put until it drops; `raw` stays valid at least as
+        // long as `token`'s own clone of `file`'s `Arc` does.
+        let hr = unsafe {
+            BuildIoRingReadFile(
+                self.ring.raw_handle(),
+                handle_ref(FileRef::Raw(raw)),
                 registered_buffer_ref(index, span.offset),
                 span.len,
                 file_offset,
@@ -761,10 +1029,16 @@ impl<'ring> Batch<'ring> {
     ///
     /// As [`Batch::read_registered`], but for `BuildIoRingWriteFile`.
     ///
+    /// # Safety
+    ///
+    /// As [`Batch::read_registered`]'s. Use
+    /// [`Batch::write_registered_shared`] for a caller who does not want to
+    /// prove this itself.
+    ///
     /// # Errors
     ///
     /// As [`Batch::read_registered`].
-    pub fn write_registered<B: IoBufMut>(
+    pub unsafe fn write_registered<B: IoBufMut>(
         &mut self,
         file: impl Into<FileRef>,
         registration: &RegisteredBuffers<B>,
@@ -786,6 +1060,50 @@ impl<'ring> Batch<'ring> {
             BuildIoRingWriteFile(
                 self.ring.raw_handle(),
                 handle_ref(file.into()),
+                registered_buffer_ref(index, span.offset),
+                span.len,
+                file_offset,
+                FILE_WRITE_FLAGS_NONE,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_push(hr, token)
+    }
+
+    /// As [`Batch::write_registered`], but safe: `file` is a [`SharedFile`]
+    /// rather than a bare [`FileRef`]. The returned token yields
+    /// `(RegisteredUse, file)` once claimed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::write_registered`].
+    pub fn write_registered_shared<B: IoBufMut>(
+        &mut self,
+        file: &SharedFile,
+        registration: &RegisteredBuffers<B>,
+        span: RegisteredSpan,
+        file_offset: u64,
+        options: PushOptions,
+    ) -> io::Result<Token<(RegisteredUse, SharedFile)>> {
+        self.require(Op::Write)?;
+        let index = registration.checked_span(span)?;
+        registration.outstanding.fetch_add(1, Ordering::SeqCst);
+        let raw = file.raw_handle();
+        let token = Token::new(
+            self.ring,
+            (
+                RegisteredUse(Arc::clone(&registration.outstanding)),
+                file.clone(),
+            ),
+        )?;
+        let user_data = token.id();
+        // SAFETY: as `read_registered_shared`; the kernel only reads
+        // through this reference for a write.
+        let hr = unsafe {
+            BuildIoRingWriteFile(
+                self.ring.raw_handle(),
+                handle_ref(FileRef::Raw(raw)),
                 registered_buffer_ref(index, span.offset),
                 span.len,
                 file_offset,

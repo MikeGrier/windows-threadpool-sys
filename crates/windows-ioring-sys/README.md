@@ -16,22 +16,23 @@ allocated anything to track it.
 Submit a read, then pop its completion once it is ready:
 
 ```rust,no_run
-use windows_ioring_sys::{Batch, IoRing};
-use std::os::windows::io::AsRawHandle;
+use windows_ioring_sys::{Batch, IoRing, SharedFile};
+use std::os::windows::io::OwnedHandle;
 
 let file = std::fs::File::open(r"C:\some\file.bin")?;
+let shared = SharedFile::new(OwnedHandle::from(file));
 let mut ring = IoRing::new(8, 8)?;
 
 let token = {
     let mut batch = Batch::new(&mut ring);
-    let token = batch.read(file.as_raw_handle(), vec![0_u8; 4096], 0, Default::default())?;
+    let token = batch.read_shared(&shared, vec![0_u8; 4096], 0, Default::default())?;
     batch.submit_and_wait(1, 5_000)?;
     token
 };
 
 let completion = ring.try_pop()?.expect("a completion is ready");
 completion.result()?;
-let buffer = token.claim_if(&completion).expect("token claims its own completion");
+let (buffer, _file) = token.claim_if(&completion).expect("token claims its own completion");
 println!("read {} bytes", buffer.len());
 # Ok::<(), std::io::Error>(())
 ```

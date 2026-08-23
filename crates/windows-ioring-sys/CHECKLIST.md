@@ -53,18 +53,26 @@ between push and completion.
   `windows-overlapped-io-sys`'s endpoints do (defeats `FileRef::Raw`'s zero-setup reason to exist).
   `FileRef::Registered` needs none of this and stays unaffected.
 
-- [ ] **M8.2** -- Add `SharedFile` (`pub struct SharedFile(Arc<OwnedHandle>)`) with a constructor from
+- [x] **M8.2** -- Added `SharedFile` (`pub struct SharedFile(Arc<OwnedHandle>)`) with a constructor from
   `OwnedHandle`, `Clone`, and a raw-handle accessor for building an `IORING_HANDLE_REF`.
 
-- [ ] **M8.3** -- Mark `Batch::read`/`write`/`flush`/`cancel`/`register_files`'s raw-`HANDLE`-taking forms
-  `unsafe fn` with a `# Safety` section stating the real obligation (valid handle, correct access rights,
-  remains valid until the pushed operation's completion is observed or the ring runs down). Breaking
-  change; commit as `feat(ioring)!`.
+- [x] **M8.3** -- Marked `Batch::read`/`write`/`flush`/`cancel`/`register_files`'s raw-`HANDLE`-taking
+  forms `unsafe fn` with a `# Safety` section stating the real obligation (valid handle, correct access
+  rights, remains valid until the pushed operation's completion is observed or the ring runs down).
+  **Scope correction found during execution:** `read_registered`/`write_registered` take the identical
+  `impl Into<FileRef>` shape for their own `file` argument and carry the same hazard, so they were marked
+  `unsafe fn` too, with no separate checklist item -- the original enumeration omitted them by oversight,
+  not by decision. Committed as `feat(ioring)!`.
 
-- [ ] **M8.4** -- Add safe overloads of `read`/`write`/`flush`/`cancel` taking `&SharedFile`, cloning the
-  `Arc` into the same `Token` (or a new `Token<Arc<OwnedHandle>>` for `flush`/`cancel`, which have no
-  buffer of their own today) so a caller never needs `unsafe` for the common case.
+- [x] **M8.4** -- Added safe overloads `read_shared`/`write_shared`/`flush_shared`/`cancel_shared` (plus
+  `read_registered_shared`/`write_registered_shared`, for the same reason as M8.3's correction) taking
+  `&SharedFile`, cloning the `Arc` into the same `Token` (a tuple with the buffer for `read`/`write`-shaped
+  pushes, or `Token<SharedFile>` alone for `flush`/`cancel`, which have no buffer of their own) so a caller
+  never needs `unsafe` for the common case. `register_files` gets no `_shared` counterpart: a registration's
+  handles must stay valid for the ring's remaining life, a lifetime no single push's `Token` can express.
 
-- [ ] **M8.5** -- Integration test: drop the caller's own `SharedFile` clone (its only external reference)
-  while a push against it is still outstanding; assert the operation still completes correctly against a
-  live handle, proving the `Arc` clone inside the token -- not the caller's copy -- is what kept it open.
+- [x] **M8.5** -- Integration test
+  (`dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_handle`,
+  `tests/submission_lifecycle.rs`): drop the caller's own `SharedFile` clone (its only external reference)
+  while a push against it is still outstanding; the read still completes correctly against a live handle,
+  proving the `Arc` clone inside the token -- not the caller's copy -- is what kept it open.

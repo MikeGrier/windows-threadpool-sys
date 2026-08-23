@@ -54,7 +54,8 @@ fn main() -> std::io::Result<()> {
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let token = batch.read(handle, buffer, offset, PushOptions::new())?;
+            // SAFETY: `handle` stays open for this whole example.
+            let token = unsafe { batch.read(handle, buffer, offset, PushOptions::new()) }?;
             tokens.insert(token.id(), token);
         }
         // `wait_operations = 0`: submit and return immediately. This thread

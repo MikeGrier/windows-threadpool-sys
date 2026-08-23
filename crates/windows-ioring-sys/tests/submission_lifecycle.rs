@@ -5,10 +5,10 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::PathBuf;
 
-use windows_ioring_sys::{Batch, IoRing, IoRingError, PushOptions, Token};
+use windows_ioring_sys::{Batch, IoRing, IoRingError, PushOptions, SharedFile, Token};
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 
 const CHUNKS: usize = 8;
@@ -62,8 +62,7 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let token = batch
-                .read(handle, buffer, offset, PushOptions::new())
+            let token = unsafe { batch.read(handle, buffer, offset, PushOptions::new()) }
                 .expect("queue read");
             pending.insert(token.id(), (chunk_index, token));
         }
@@ -115,7 +114,8 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
     let overflow_error = {
         let mut batch = Batch::new(&mut ring);
         loop {
-            match batch.flush(handle, PushOptions::new()) {
+            // SAFETY: `handle` stays open for the whole test.
+            match unsafe { batch.flush(handle, PushOptions::new()) } {
                 Ok(_user_data) => {
                     queued += 1;
                     assert!(
@@ -149,8 +149,8 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
 
     // The ring stays usable: push and submit once more, cleanly.
     let mut batch = Batch::new(&mut ring);
-    let user_data = batch
-        .flush(handle, PushOptions::new())
+    // SAFETY: `handle` stays open for the whole test.
+    let user_data = unsafe { batch.flush(handle, PushOptions::new()) }
         .expect("ring still accepts pushes after backpressure");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
@@ -176,9 +176,8 @@ fn a_dropped_batch_still_submits_its_queued_operations() {
     let buffer = vec![0_u8; content.len()];
     let token = {
         let mut batch = Batch::new(&mut ring);
-        batch
-            .read(handle, buffer, 0, PushOptions::new())
-            .expect("queue read")
+        // SAFETY: `handle` stays open for the whole test.
+        unsafe { batch.read(handle, buffer, 0, PushOptions::new()) }.expect("queue read")
         // `batch` drops here without an explicit `submit()` call (D-5).
     };
     let user_data = token.id();
@@ -216,7 +215,8 @@ fn cancelling_a_target_that_is_not_outstanding_reports_error_not_found_through_c
     let mut ring = IoRing::new(8, 8).expect("create ring");
     let cancel_user_data = {
         let mut batch = Batch::new(&mut ring);
-        let user_data = batch.cancel(handle, 999_999).expect("queue cancel");
+        // SAFETY: `handle` stays open for the whole test.
+        let user_data = unsafe { batch.cancel(handle, 999_999) }.expect("queue cancel");
         batch.submit_and_wait(1, 5_000).expect("submit and wait");
         user_data
     };
@@ -234,4 +234,50 @@ fn cancelling_a_target_that_is_not_outstanding_reports_error_not_found_through_c
         ERROR_NOT_FOUND,
         "expected ERROR_NOT_FOUND in the HRESULT"
     );
+}
+
+#[test]
+fn dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_handle() {
+    let path = temp_file("shared-file");
+    let content = vec![9_u8; CHUNK_LEN];
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let shared = SharedFile::new(OwnedHandle::from(file));
+    let buffer = vec![0_u8; CHUNK_LEN];
+    let token = {
+        let mut batch = Batch::new(&mut ring);
+        let token = batch
+            .read_shared(&shared, buffer, 0, PushOptions::new())
+            .expect("queue shared read");
+        batch.submit_and_wait(0, 0).expect("submit without waiting");
+        token
+    };
+
+    // Drop the caller's own SharedFile clone -- its only external
+    // reference. If the token's own clone were not keeping the underlying
+    // handle open, the read below would fail against a closed handle.
+    drop(shared);
+
+    Batch::new(&mut ring)
+        .submit_and_wait(1, 5_000)
+        .expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    assert_eq!(
+        completion
+            .result()
+            .expect("read succeeded against a still-open handle"),
+        CHUNK_LEN
+    );
+    let (buffer, _file) = token
+        .claim_if(&completion)
+        .expect("token claims its own completion");
+    assert_eq!(buffer, content);
 }
