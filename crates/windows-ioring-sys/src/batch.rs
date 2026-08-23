@@ -1,20 +1,25 @@
 // Copyright (c) 2026 Mike Grier
-//! `Batch`: a scoped, exclusive submission window (M3.1-M3.3, M3.5).
+//! `Batch`: a scoped, exclusive submission window (M3.1-M3.3, M3.5, M5).
 
 use std::ffi::c_void;
 use std::io;
+use std::mem::ManuallyDrop;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
-    BuildIoRingCancelRequest, BuildIoRingFlushFile, BuildIoRingReadFile, BuildIoRingWriteFile,
-    FILE_FLUSH_DEFAULT, FILE_WRITE_FLAGS_NONE, IORING_BUFFER_REF, IORING_BUFFER_REF_0,
-    IORING_HANDLE_REF, IORING_HANDLE_REF_0, IORING_REF_RAW, IORING_SQE_FLAGS,
+    BuildIoRingCancelRequest, BuildIoRingFlushFile, BuildIoRingReadFile,
+    BuildIoRingRegisterBuffers, BuildIoRingRegisterFileHandles, BuildIoRingWriteFile,
+    FILE_FLUSH_DEFAULT, FILE_WRITE_FLAGS_NONE, IORING_BUFFER_INFO, IORING_BUFFER_REF,
+    IORING_BUFFER_REF_0, IORING_HANDLE_REF, IORING_HANDLE_REF_0, IORING_REF_RAW,
+    IORING_REF_REGISTERED, IORING_REGISTERED_BUFFER, IORING_SQE_FLAGS,
     IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE, SubmitIoRing,
 };
 
 use crate::buf::{IoBuf, IoBufMut};
 use crate::error::check;
-use crate::ring::{IoRing, Op};
+use crate::ring::{Completion, IoRing, Op};
 use crate::token::Token;
 
 /// Per-push options shared across every op builder (M3.2).
@@ -48,10 +53,18 @@ impl PushOptions {
     }
 }
 
-fn raw_handle_ref(file: HANDLE) -> IORING_HANDLE_REF {
-    IORING_HANDLE_REF {
-        Kind: IORING_REF_RAW,
-        Handle: IORING_HANDLE_REF_0 { Handle: file },
+fn handle_ref(file: FileRef) -> IORING_HANDLE_REF {
+    match file {
+        FileRef::Raw(handle) => IORING_HANDLE_REF {
+            Kind: IORING_REF_RAW,
+            Handle: IORING_HANDLE_REF_0 { Handle: handle },
+        },
+        FileRef::Registered(file) => IORING_HANDLE_REF {
+            Kind: IORING_REF_REGISTERED,
+            Handle: IORING_HANDLE_REF_0 {
+                Index: file.index(),
+            },
+        },
     }
 }
 
@@ -62,6 +75,18 @@ fn raw_buffer_ref(address: *mut c_void) -> IORING_BUFFER_REF {
     }
 }
 
+fn registered_buffer_ref(index: u32, offset: u32) -> IORING_BUFFER_REF {
+    IORING_BUFFER_REF {
+        Kind: IORING_REF_REGISTERED,
+        Buffer: IORING_BUFFER_REF_0 {
+            IndexAndOffset: IORING_REGISTERED_BUFFER {
+                BufferIndex: index,
+                Offset: offset,
+            },
+        },
+    }
+}
+
 fn checked_len(len: usize) -> io::Result<u32> {
     u32::try_from(len).map_err(|_| {
         io::Error::new(
@@ -69,6 +94,262 @@ fn checked_len(len: usize) -> io::Result<u32> {
             format!("an IoRing buffer is limited to u32::MAX bytes; {len} does not fit"),
         )
     })
+}
+
+/// A file, addressed either by a raw `HANDLE` or by the index a prior
+/// [`Batch::register_files`] assigned it (M5.1).
+///
+/// A distinct type per addressing mode -- rather than one method accepting
+/// either a `HANDLE` or a bare `u32` -- is what makes "read against a
+/// registered file" and "read against an unregistered one" impossible to
+/// confuse by accident: a [`RegisteredFile`] cannot be mistaken for a raw
+/// `HANDLE`, or vice versa, because they are different types.
+#[derive(Clone, Copy, Debug)]
+pub enum FileRef {
+    /// `IORING_REF_RAW`: the caller's own open handle.
+    Raw(HANDLE),
+    /// `IORING_REF_REGISTERED`: an index from [`Batch::register_files`].
+    Registered(RegisteredFile),
+}
+
+impl From<HANDLE> for FileRef {
+    fn from(handle: HANDLE) -> Self {
+        FileRef::Raw(handle)
+    }
+}
+
+impl From<RegisteredFile> for FileRef {
+    fn from(file: RegisteredFile) -> Self {
+        FileRef::Registered(file)
+    }
+}
+
+/// One index a [`Batch::register_files`] registration assigned (M5.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegisteredFile(u32);
+
+impl RegisteredFile {
+    /// The raw registered-file index.
+    #[must_use]
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
+/// The confirmed result of a [`Batch::register_files`] push: `count`
+/// contiguous indices starting at `base_index`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegisteredFiles {
+    base_index: u32,
+    count: u32,
+}
+
+impl RegisteredFiles {
+    /// How many handles this registration covers.
+    #[must_use]
+    pub fn len(&self) -> u32 {
+        self.count
+    }
+
+    /// Whether this registration covers no handles.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// The [`RegisteredFile`] for the `i`-th handle passed to
+    /// [`Batch::register_files`], or `None` if `i` is out of range.
+    #[must_use]
+    pub fn get(&self, i: u32) -> Option<RegisteredFile> {
+        (i < self.count).then(|| RegisteredFile(self.base_index + i))
+    }
+}
+
+/// A [`Batch::register_files`] push not yet matched to its completion.
+#[derive(Debug)]
+pub struct PendingFileRegistration {
+    user_data: usize,
+    base_index: u32,
+    count: u32,
+}
+
+impl PendingFileRegistration {
+    /// This push's `UserData` identity, to match against a popped
+    /// [`Completion`].
+    #[must_use]
+    pub fn user_data(&self) -> usize {
+        self.user_data
+    }
+
+    /// Turn this pending registration into usable [`RegisteredFiles`] once
+    /// `completion` names it, or hand it back unchanged if `completion`
+    /// names a different operation.
+    ///
+    /// # Errors
+    ///
+    /// The inner `Result` is `Err` if the registration itself failed --
+    /// nothing is lost, since no owned resource was ever handed over for
+    /// this op (M5.1, unlike [`Token`]).
+    pub fn claim_if(self, completion: &Completion) -> Result<io::Result<RegisteredFiles>, Self> {
+        if completion.user_data() != self.user_data {
+            return Err(self);
+        }
+        Ok(completion.result().map(|_| RegisteredFiles {
+            base_index: self.base_index,
+            count: self.count,
+        }))
+    }
+}
+
+/// A marker a [`Token`] owns while a registered-buffer-indexed read or write
+/// is outstanding (M5.2, M5.3).
+///
+/// Decrements [`RegisteredBuffers`]'s own count only when actually claimed:
+/// dropping an unclaimed token forgets this like any other value a `Token`
+/// holds, which correctly leaves the registration believing the use is
+/// still outstanding, since nothing proved otherwise.
+pub struct RegisteredUse(Arc<AtomicUsize>);
+
+impl Drop for RegisteredUse {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Buffers registered with a ring so later reads and writes can address them
+/// by index instead of handing over a fresh owned buffer each call (M5.2).
+///
+/// Win32's `IoRing` has no unregister call at all: once registered, an
+/// index is valid for the ring's remaining life. This type's own job is
+/// narrower than reproducing that -- refusing to let its *backing memory*
+/// be freed while this crate still has an operation outstanding against it
+/// (M5.3) -- not proving an index will never be touched again by some
+/// later, differently-built SQE. That wider hazard belongs to
+/// [`crate::IoRing::push_raw`]'s existing `unsafe` contract, the same as any
+/// raw use of an index this crate handed out.
+pub struct RegisteredBuffers<B: IoBufMut> {
+    buffers: ManuallyDrop<Vec<B>>,
+    base_index: u32,
+    outstanding: Arc<AtomicUsize>,
+}
+
+impl<B: IoBufMut> RegisteredBuffers<B> {
+    /// How many buffers this registration holds.
+    #[must_use]
+    pub fn len(&self) -> u32 {
+        u32::try_from(self.buffers.len()).unwrap_or(u32::MAX)
+    }
+
+    /// Whether this registration holds no buffers.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.buffers.is_empty()
+    }
+
+    /// Borrow the `i`-th buffer directly, for reading a completed read's or
+    /// write's bytes without going through the ring at all.
+    #[must_use]
+    pub fn get(&self, i: u32) -> Option<&B> {
+        self.buffers.get(i as usize)
+    }
+
+    /// The registered index of the `i`-th buffer, or an
+    /// [`io::ErrorKind::InvalidInput`] error if out of range.
+    fn checked_index(&self, i: u32) -> io::Result<u32> {
+        if i < self.len() {
+            Ok(self.base_index + i)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("buffer index {i} is out of range for this registration"),
+            ))
+        }
+    }
+}
+
+impl<B: IoBufMut> Drop for RegisteredBuffers<B> {
+    fn drop(&mut self) {
+        if self.outstanding.load(Ordering::SeqCst) > 0 {
+            // Refused, not silently permitted (M5.3): freeing now would
+            // leave an outstanding `IORING_BUFFER_REF` pointing at freed
+            // memory. Loud in debug builds; in release, leaking is the safe
+            // failure mode -- the same choice `Token` already makes
+            // ("leak is safe, use-after-free is not"), so `buffers` is
+            // simply never reclaimed rather than freed out from under a
+            // still-outstanding op.
+            debug_assert!(
+                false,
+                "RegisteredBuffers dropped while an operation still references it"
+            );
+            return;
+        }
+        // SAFETY: `outstanding == 0`, so no operation still references these
+        // buffers, and this is the only place `buffers` is ever dropped.
+        unsafe { ManuallyDrop::drop(&mut self.buffers) };
+    }
+}
+
+/// Which bytes of one [`RegisteredBuffers`] entry an op reads or writes
+/// (M5.2): bundled into one value so `read_registered`/`write_registered`
+/// stay under a sane argument count.
+#[derive(Clone, Copy, Debug)]
+pub struct RegisteredSpan {
+    /// Which buffer within the registration, per [`RegisteredBuffers::get`].
+    pub buffer_index: u32,
+    /// The starting byte offset within that buffer.
+    pub offset: u32,
+    /// How many bytes to read or write.
+    pub len: u32,
+}
+
+/// A [`Batch::register_buffers`] push not yet matched to its completion.
+pub struct PendingBufferRegistration<B: IoBufMut> {
+    user_data: usize,
+    base_index: u32,
+    buffers: Vec<B>,
+}
+
+impl<B: IoBufMut> PendingBufferRegistration<B> {
+    /// This push's `UserData` identity, to match against a popped
+    /// [`Completion`].
+    #[must_use]
+    pub fn user_data(&self) -> usize {
+        self.user_data
+    }
+
+    /// Turn this pending registration into usable [`RegisteredBuffers`] once
+    /// `completion` names it, or hand it back unchanged if `completion`
+    /// names a different operation.
+    ///
+    /// # Errors
+    ///
+    /// The inner `Result` is `Err` if the registration itself failed; the
+    /// buffers are dropped normally in that case, exactly as if they had
+    /// never been registered.
+    pub fn claim_if(
+        self,
+        completion: &Completion,
+    ) -> Result<io::Result<RegisteredBuffers<B>>, Self> {
+        if completion.user_data() != self.user_data {
+            return Err(self);
+        }
+        Ok(completion.result().map(|_| RegisteredBuffers {
+            buffers: ManuallyDrop::new(self.buffers),
+            base_index: self.base_index,
+            outstanding: Arc::new(AtomicUsize::new(0)),
+        }))
+    }
+}
+
+impl<B: IoBufMut> std::fmt::Debug for PendingBufferRegistration<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Not derived: deriving would require `B: Debug`, which a caller's
+        // buffer type need not satisfy.
+        f.debug_struct("PendingBufferRegistration")
+            .field("user_data", &self.user_data)
+            .field("base_index", &self.base_index)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A scoped, exclusive submission window over one [`IoRing`] (D-5).
@@ -117,7 +398,7 @@ impl<'ring> Batch<'ring> {
     /// not leaked or handed back.
     pub fn read<B: IoBufMut>(
         &mut self,
-        file: HANDLE,
+        file: impl Into<FileRef>,
         mut buffer: B,
         offset: u64,
         options: PushOptions,
@@ -133,7 +414,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingReadFile(
                 self.ring.raw_handle(),
-                raw_handle_ref(file),
+                handle_ref(file.into()),
                 raw_buffer_ref(address),
                 len,
                 offset,
@@ -151,7 +432,7 @@ impl<'ring> Batch<'ring> {
     /// As [`Batch::read`], plus any error from `BuildIoRingWriteFile`.
     pub fn write<B: IoBuf>(
         &mut self,
-        file: HANDLE,
+        file: impl Into<FileRef>,
         buffer: B,
         offset: u64,
         options: PushOptions,
@@ -168,7 +449,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingWriteFile(
                 self.ring.raw_handle(),
-                raw_handle_ref(file),
+                handle_ref(file.into()),
                 raw_buffer_ref(address),
                 len,
                 offset,
@@ -180,19 +461,19 @@ impl<'ring> Batch<'ring> {
         self.finish_push(hr, token, user_data)
     }
 
-    /// Reclaim `token`'s buffer and release its reservation if `hr` failed,
-    /// or hand `token` back unchanged on success -- the shared tail of
-    /// [`Batch::read`] and [`Batch::write`].
-    fn finish_push<B: IoBuf>(
+    /// Reclaim `token`'s value and release its reservation if `hr` failed,
+    /// or hand `token` back unchanged on success -- the shared tail of every
+    /// push in this module.
+    fn finish_push<T: Send + 'static>(
         &mut self,
         hr: windows_sys::core::HRESULT,
-        token: Token<B>,
+        token: Token<T>,
         user_data: usize,
-    ) -> io::Result<Token<B>> {
+    ) -> io::Result<Token<T>> {
         match check(hr) {
             Ok(()) => Ok(token),
             Err(error) => {
-                // The SQE was never queued: reclaim and drop the buffer
+                // The SQE was never queued: reclaim and drop the value
                 // normally instead of leaking it (claiming a token by its
                 // own id always succeeds), and release the reservation so
                 // it does not count against rundown.
@@ -215,7 +496,7 @@ impl<'ring> Batch<'ring> {
     /// supporting [`Op::Flush`]; an [`crate::IoRingError`] wrapping
     /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room; or any
     /// other error from `BuildIoRingFlushFile`.
-    pub fn flush(&mut self, file: HANDLE, options: PushOptions) -> io::Result<usize> {
+    pub fn flush(&mut self, file: impl Into<FileRef>, options: PushOptions) -> io::Result<usize> {
         self.require(Op::Flush)?;
         let user_data = self.ring.reserve_user_data()?;
         // SAFETY: `self.ring`'s handle is live; `file` is the caller's to
@@ -223,7 +504,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingFlushFile(
                 self.ring.raw_handle(),
-                raw_handle_ref(file),
+                handle_ref(file.into()),
                 FILE_FLUSH_DEFAULT,
                 user_data,
                 options.sqe_flags(),
@@ -251,7 +532,7 @@ impl<'ring> Batch<'ring> {
     /// supporting [`Op::Cancel`]; an [`crate::IoRingError`] wrapping
     /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room; or any
     /// other error from `BuildIoRingCancelRequest`.
-    pub fn cancel(&mut self, file: HANDLE, target: usize) -> io::Result<usize> {
+    pub fn cancel(&mut self, file: impl Into<FileRef>, target: usize) -> io::Result<usize> {
         self.require(Op::Cancel)?;
         let user_data = self.ring.reserve_user_data()?;
         // SAFETY: `self.ring`'s handle is live; `file` is the caller's to
@@ -260,7 +541,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingCancelRequest(
                 self.ring.raw_handle(),
-                raw_handle_ref(file),
+                handle_ref(file.into()),
                 target,
                 user_data,
             )
@@ -270,6 +551,191 @@ impl<'ring> Batch<'ring> {
             return Err(error);
         }
         Ok(user_data)
+    }
+
+    /// Queue registration of `handles` as the next `handles.len()` registered
+    /// file indices (M5.1), starting at [`IoRing::registered_file_count`].
+    ///
+    /// `handles` only needs to stay valid for this call, unlike a data
+    /// buffer referenced through an `IORING_HANDLE_REF`/`IORING_BUFFER_REF`:
+    /// `BuildIoRingRegisterFileHandles` has no such ref, it takes the array
+    /// directly and reads it synchronously. The handles themselves must
+    /// still stay open for as long as the registration is used -- this
+    /// crate does not take ownership of them, only of their assigned
+    /// indices' bookkeeping.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::Unsupported`] if the ring was not probed as
+    /// supporting [`Op::RegisterFiles`](crate::Op::RegisterFiles);
+    /// [`io::ErrorKind::InvalidInput`] if `handles` has more than
+    /// `u32::MAX` entries; an [`crate::IoRingError`] wrapping
+    /// `IORING_E_SUBMISSION_QUEUE_FULL` if the queue has no room; or any
+    /// other error from `BuildIoRingRegisterFileHandles`.
+    pub fn register_files(&mut self, handles: &[HANDLE]) -> io::Result<PendingFileRegistration> {
+        self.require(Op::RegisterFiles)?;
+        let count = checked_len(handles.len())?;
+        let base_index = self.ring.registered_file_count();
+        let user_data = self.ring.reserve_user_data()?;
+        // SAFETY: `self.ring`'s handle is live; `handles` is read
+        // synchronously for the duration of this call only.
+        let hr = unsafe {
+            BuildIoRingRegisterFileHandles(
+                self.ring.raw_handle(),
+                count,
+                handles.as_ptr(),
+                user_data,
+            )
+        };
+        if let Err(error) = check(hr) {
+            self.ring.cancel_reservation();
+            return Err(error);
+        }
+        self.ring.reserve_registered_files(count);
+        Ok(PendingFileRegistration {
+            user_data,
+            base_index,
+            count,
+        })
+    }
+
+    /// Queue registration of `buffers` as the next `buffers.len()` registered
+    /// buffer indices (M5.2), starting at [`IoRing::registered_buffer_count`].
+    ///
+    /// Unlike [`Batch::register_files`], what must outlive this call is not
+    /// the array `BuildIoRingRegisterBuffers` reads (also synchronous, also
+    /// a bare pointer with no ref indirection) but the *bytes each entry
+    /// points at* -- this is exactly the registration case `IoBuf`'s
+    /// contract was extended to cover (D-11), so `buffers` is taken by
+    /// value and kept inside the returned [`RegisteredBuffers`] once claimed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::register_files`], for [`Op::RegisterBuffers`](crate::Op::RegisterBuffers)
+    /// and `BuildIoRingRegisterBuffers`.
+    pub fn register_buffers<B: IoBufMut>(
+        &mut self,
+        mut buffers: Vec<B>,
+    ) -> io::Result<PendingBufferRegistration<B>> {
+        self.require(Op::RegisterBuffers)?;
+        let count = checked_len(buffers.len())?;
+        let base_index = self.ring.registered_buffer_count();
+        let mut infos = Vec::with_capacity(buffers.len());
+        for buffer in &mut buffers {
+            let length = checked_len(buffer.bytes_len())?;
+            infos.push(IORING_BUFFER_INFO {
+                Address: buffer.stable_mut_ptr().cast::<c_void>(),
+                Length: length,
+            });
+        }
+        let user_data = self.ring.reserve_user_data()?;
+        // SAFETY: `self.ring`'s handle is live; `infos` is read synchronously
+        // for the duration of this call; each `Address` points into
+        // `buffers`, which the caller keeps alive via the returned
+        // `PendingBufferRegistration` and, once claimed, `RegisteredBuffers`.
+        let hr = unsafe {
+            BuildIoRingRegisterBuffers(self.ring.raw_handle(), count, infos.as_ptr(), user_data)
+        };
+        if let Err(error) = check(hr) {
+            self.ring.cancel_reservation();
+            return Err(error);
+        }
+        self.ring.reserve_registered_buffers(count);
+        Ok(PendingBufferRegistration {
+            user_data,
+            base_index,
+            buffers,
+        })
+    }
+
+    /// Queue a read of `span.len` bytes from `file` at `file_offset`, into
+    /// `span`'s byte offset of `registration`'s buffer at `span.buffer_index`,
+    /// instead of handing over a fresh owned buffer (M5.2).
+    ///
+    /// The returned [`Token`] must be claimed once its completion is
+    /// observed, exactly like [`Batch::read`]'s -- but claiming it recovers
+    /// no buffer, only releases this use against `registration`'s own drop
+    /// check (M5.3). Read the transferred bytes back from `registration`
+    /// itself afterward, for example via a caller-side accessor into the
+    /// buffer it was constructed from.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::read`], plus [`io::ErrorKind::InvalidInput`] if
+    /// `span.buffer_index` is out of range for `registration`.
+    pub fn read_registered<B: IoBufMut>(
+        &mut self,
+        file: impl Into<FileRef>,
+        registration: &RegisteredBuffers<B>,
+        span: RegisteredSpan,
+        file_offset: u64,
+        options: PushOptions,
+    ) -> io::Result<Token<RegisteredUse>> {
+        self.require(Op::Read)?;
+        let index = registration.checked_index(span.buffer_index)?;
+        registration.outstanding.fetch_add(1, Ordering::SeqCst);
+        let token = Token::new(
+            self.ring,
+            RegisteredUse(Arc::clone(&registration.outstanding)),
+        )?;
+        let user_data = token.id();
+        // SAFETY: `self.ring`'s handle is live; `index` was just checked
+        // against `registration`, whose buffer stays put until it drops;
+        // `file` is the caller's to keep alive.
+        let hr = unsafe {
+            BuildIoRingReadFile(
+                self.ring.raw_handle(),
+                handle_ref(file.into()),
+                registered_buffer_ref(index, span.offset),
+                span.len,
+                file_offset,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_push(hr, token, user_data)
+    }
+
+    /// Queue a write of `span.len` bytes to `file` at `file_offset`, from
+    /// `span`'s byte offset of `registration`'s buffer at `span.buffer_index`
+    /// (M5.2).
+    ///
+    /// As [`Batch::read_registered`], but for `BuildIoRingWriteFile`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Batch::read_registered`].
+    pub fn write_registered<B: IoBufMut>(
+        &mut self,
+        file: impl Into<FileRef>,
+        registration: &RegisteredBuffers<B>,
+        span: RegisteredSpan,
+        file_offset: u64,
+        options: PushOptions,
+    ) -> io::Result<Token<RegisteredUse>> {
+        self.require(Op::Write)?;
+        let index = registration.checked_index(span.buffer_index)?;
+        registration.outstanding.fetch_add(1, Ordering::SeqCst);
+        let token = Token::new(
+            self.ring,
+            RegisteredUse(Arc::clone(&registration.outstanding)),
+        )?;
+        let user_data = token.id();
+        // SAFETY: as `read_registered`; the kernel only reads through this
+        // reference for a write.
+        let hr = unsafe {
+            BuildIoRingWriteFile(
+                self.ring.raw_handle(),
+                handle_ref(file.into()),
+                registered_buffer_ref(index, span.offset),
+                span.len,
+                file_offset,
+                FILE_WRITE_FLAGS_NONE,
+                user_data,
+                options.sqe_flags(),
+            )
+        };
+        self.finish_push(hr, token, user_data)
     }
 
     /// Submit everything queued so far, returning the number of entries the

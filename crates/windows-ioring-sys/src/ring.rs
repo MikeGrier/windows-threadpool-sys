@@ -173,6 +173,12 @@ pub struct IoRing {
     next_user_data: usize,
     /// Operations minted but not yet observed to have completed (M2.4).
     outstanding: usize,
+    /// How many file handles are registered so far, across every confirmed
+    /// `BuildIoRingRegisterFileHandles` (M5.1). The base index of the next
+    /// registration.
+    registered_files: u32,
+    /// As `registered_files`, for `BuildIoRingRegisterBuffers` (M5.2).
+    registered_buffers: u32,
 }
 
 // SAFETY: HIORING is a Windows kernel object handle. Windows handles are not
@@ -233,6 +239,8 @@ impl IoRing {
             supported_ops,
             next_user_data: 0,
             outstanding: 0,
+            registered_files: 0,
+            registered_buffers: 0,
         })
     }
 
@@ -276,6 +284,43 @@ impl IoRing {
     pub fn supports_raw(&self, op_code: IORING_OP_CODE) -> bool {
         // SAFETY: `self.handle` is a live ring.
         unsafe { IsIoRingOpSupported(self.handle, op_code) != 0 }
+    }
+
+    /// How many file handles are registered on this ring so far, across
+    /// every `BuildIoRingRegisterFileHandles` this crate has successfully
+    /// queued (M5.1). This is the base index the next registration will
+    /// start from -- see [`IoRing::reserve_registered_files`] for why it
+    /// advances eagerly rather than waiting for a completion (D-14).
+    #[must_use]
+    pub fn registered_file_count(&self) -> u32 {
+        self.registered_files
+    }
+
+    /// As [`IoRing::registered_file_count`], for registered buffers (M5.2).
+    #[must_use]
+    pub fn registered_buffer_count(&self) -> u32 {
+        self.registered_buffers
+    }
+
+    /// Advance the registered-file base index by `count`, the instant a
+    /// `BuildIoRingRegisterFileHandles` call successfully queues (not once
+    /// its completion is observed).
+    ///
+    /// Recorded as an explicitly unverified assumption (D-14, mirroring
+    /// D-10 above): this crate does not know whether the kernel claims
+    /// these `count` indices synchronously at build time or only once the
+    /// registration op actually runs. Advancing eagerly is the safe
+    /// direction either way -- it can only ever waste indices by advancing
+    /// too early, never collide two registrations on the same index by
+    /// advancing too late, which is the failure mode that would actually
+    /// corrupt a later registration's base index.
+    pub(crate) fn reserve_registered_files(&mut self, count: u32) {
+        self.registered_files = self.registered_files.saturating_add(count);
+    }
+
+    /// As [`IoRing::reserve_registered_files`], for registered buffers.
+    pub(crate) fn reserve_registered_buffers(&mut self, count: u32) {
+        self.registered_buffers = self.registered_buffers.saturating_add(count);
     }
 
     /// How many operations this ring believes are still outstanding: minted

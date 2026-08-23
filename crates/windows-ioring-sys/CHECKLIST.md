@@ -105,14 +105,14 @@ Completed milestones are archived in COMPLETED-CHECKLIST.md once there are any.
 
 ## M5 -- Registration
 
-- [ ] **M5.1** -- Registered file handles: a typestate carrying the registered index, so a `read` against
+- [x] **M5.1** -- Registered file handles: a typestate carrying the registered index, so a `read` against
   a registered file cannot be written against an unregistered one by mistake.
 
-- [ ] **M5.2** -- Registered buffers, with the ownership rule that registration outlives any single
+- [x] **M5.2** -- Registered buffers, with the ownership rule that registration outlives any single
   operation (M2.1) and the pinning cost documented, because it is the axis that punishes over-sharding
   (D-8).
 
-- [ ] **M5.3** -- Integration test: a read addressing both a registered file index and a registered buffer
+- [x] **M5.3** -- Integration test: a read addressing both a registered file index and a registered buffer
   index round-trips; a registration outliving many operations stays valid; dropping the registration while
   operations are in flight is refused rather than permitted.
 

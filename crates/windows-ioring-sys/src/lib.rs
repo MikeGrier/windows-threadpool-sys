@@ -54,7 +54,10 @@ mod ring;
 mod token;
 
 #[cfg(windows)]
-pub use batch::{Batch, PushOptions};
+pub use batch::{
+    Batch, FileRef, PendingBufferRegistration, PendingFileRegistration, PushOptions,
+    RegisteredBuffers, RegisteredFile, RegisteredFiles, RegisteredSpan, RegisteredUse,
+};
 #[cfg(windows)]
 pub use buf::{IoBuf, IoBufMut};
 #[cfg(windows)]
