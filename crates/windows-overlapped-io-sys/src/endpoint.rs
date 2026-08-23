@@ -191,12 +191,12 @@ impl UnassociatedEndpoint {
     /// association exists the flag is simply inert, which is why setting it
     /// first is safe.
     ///
-    /// Sockets set their modes elsewhere, on
-    /// [`AssociatedSocket::set_notification_modes`](crate::AssociatedSocket::set_notification_modes):
-    /// they have no unassociated stage to hang provenance on, and Win32
-    /// additionally restricts skip-on-success to Layered Service Providers that
-    /// return IFS handles, so that setter probes the socket's own provider
-    /// rather than setting the flag blind.
+    /// Sockets set their modes elsewhere, on `AssociatedSocket::set_notification_modes`
+    /// (behind the `socket` feature, so not always linkable here): they have no
+    /// unassociated stage to hang provenance on, and Win32 additionally
+    /// restricts skip-on-success to Layered Service Providers that return IFS
+    /// handles, so that setter probes the socket's own provider rather than
+    /// setting the flag blind.
     ///
     /// # Errors
     ///
