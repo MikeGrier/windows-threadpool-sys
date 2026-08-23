@@ -38,6 +38,25 @@ Append-only record of completed checklist groups. Design decisions are in
 - [x] Add the gated `windows-sys` feature layout for file, socket, and device operation families, keeping the
 	published crate's default feature set minimal. See [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
+## Moved 2026-08-23 — `AssociatedEndpoint` drop-while-outstanding (M1)
+
+Found while designing `windows-ioring-sys`'s M8 (a PR #20 review response): `AssociatedEndpoint` owned its
+`handle: OwnedHandle` directly and had no `Drop` impl, so a caller could drop one (closing its handle via
+`OwnedHandle`'s own drop) while an operation was still outstanding against it specifically.
+`CompletionPort::run_down` was the wrong scope to catch this -- it blocks on the *port's* whole outstanding
+count, not any one endpoint's. See [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "Per-endpoint outstanding tracking
+and blocking `Drop` (M1)".
+
+### M1 -- `AssociatedEndpoint` drop-while-outstanding
+
+- [x] Track each `AssociatedEndpoint`'s own outstanding count and give `AssociatedEndpoint` a `Drop` that
+  blocks until it reaches zero, mirroring `CompletionPort::run_down`'s own drop behavior.
+- [x] Integration test: drop an `AssociatedEndpoint` with a real operation still outstanding against it and
+  assert the drop blocks until that operation's completion is observed, rather than closing the handle out
+  from under a live kernel operation. Added
+  `dropping_an_endpoint_drains_its_own_outstanding_operation_before_closing` in
+  [tests/overlapped_cancellation.rs](tests/overlapped_cancellation.rs).
+
 - [x] Integration test: a safe-created endpoint runs a real operation on both the IOCP and blocking backends.
 
 ## Moved 2026-08-16 — Behavioral-matrix hardening and shared-port drain semantics (M6)

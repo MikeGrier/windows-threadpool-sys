@@ -87,7 +87,7 @@ fn submit_pending_then_claim_recovers_the_operation() {
     // completion for that pointer, so a packet will arrive.
     let submitted = unsafe {
         endpoint.submit(operation, |_handle, overlapped| {
-            port.post_raw(7, 3, overlapped)?;
+            port.post_raw(0, 3, overlapped)?;
             Ok(Issued::Pending)
         })
     };
@@ -219,7 +219,7 @@ fn dropping_the_port_while_a_completion_is_held_does_not_hang() {
         // pointer; here it simulates a device that queues its completion.
         let submitted = unsafe {
             endpoint.submit(operation, |_handle, overlapped| {
-                port.post_raw(1, 1, overlapped)?;
+                port.post_raw(0, 1, overlapped)?;
                 Ok(Issued::Pending)
             })
         };

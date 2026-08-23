@@ -158,3 +158,73 @@ fn run_down_drains_a_cancelled_operation() {
     port.run_down().expect("run_down");
     assert_eq!(port.outstanding(), 0);
 }
+
+/// M1 (PR #20 review response): dropping an `AssociatedEndpoint` must not
+/// close its handle out from under a still-outstanding operation. Unlike
+/// `run_down_drains_a_cancelled_operation` above, this asserts the drain
+/// happens *inside* `drop(endpoint)` itself, with no separate `run_down`
+/// call at all.
+#[test]
+fn dropping_an_endpoint_drains_its_own_outstanding_operation_before_closing() {
+    let name = format!(
+        r"\\.\pipe\windows-overlapped-io-sys-endpoint-drop-{}",
+        std::process::id()
+    );
+    let wide_name = wide(&name);
+
+    // SAFETY: standard creation of an overlapped named-pipe server instance.
+    let raw = unsafe {
+        CreateNamedPipeW(
+            wide_name.as_ptr(),
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+            PIPE_TYPE_BYTE | PIPE_WAIT,
+            1,
+            4096,
+            4096,
+            0,
+            std::ptr::null(),
+        )
+    };
+    assert_ne!(
+        raw,
+        INVALID_HANDLE_VALUE,
+        "CreateNamedPipeW failed: {}",
+        io::Error::last_os_error()
+    );
+    // SAFETY: CreateNamedPipeW returned a fresh, exclusively owned handle.
+    let owned = unsafe { OwnedHandle::from_raw_handle(raw) };
+
+    let port = CompletionPort::new(0).expect("create port");
+    // SAFETY: fresh overlapped pipe, unassociated, unique, moved in exclusively.
+    let unassociated = unsafe { UnassociatedEndpoint::assume_overlapped(owned) };
+    let endpoint = port.associate(unassociated, 1).expect("associate");
+
+    // SAFETY: the closure issues exactly one overlapped ConnectNamedPipe using
+    // the provided OVERLAPPED pointer and classifies its outcome.
+    let submitted = unsafe {
+        endpoint.submit(Operation::new(()), |handle, overlapped| {
+            let ok = ConnectNamedPipe(handle.as_raw_handle(), overlapped);
+            if ok != 0 {
+                return Ok(Issued::Pending);
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+                Ok(Issued::Pending)
+            } else {
+                Err(error)
+            }
+        })
+    };
+    assert!(matches!(submitted, Submitted::Pending(_)));
+    assert_eq!(endpoint.outstanding(), 1);
+
+    // The whole point under test: this must neither hang nor close the
+    // handle while ConnectNamedPipe is still pending against it. A test
+    // timeout (not a hang detector) is the only thing that would catch a
+    // regression here, since a wedged drop blocks the whole test binary.
+    drop(endpoint);
+
+    // The drop above drained its own operation internally, with no explicit
+    // run_down call anywhere in this test.
+    assert_eq!(port.outstanding(), 0);
+}

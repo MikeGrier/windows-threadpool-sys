@@ -397,12 +397,15 @@ One `CompletionPort` may serve many endpoints, and its completion stream may be 
 once. The decisions that make that safe:
 
 - The port -- not the endpoint -- owns the completion stream and is the single drain authority. Outstanding
-	operations are counted once per port (a shared atomic), not per endpoint, so `run_down` drains *every*
-	endpoint's outstanding operations in one pass; there is deliberately no per-endpoint rundown. An endpoint's
-	own teardown only cancels its in-flight operations -- closing its handle issues an implicit
-	`CancelIoEx(handle, null)` -- and defers reclamation to the port's drain. The lifetime binding (each
-	`AssociatedEndpoint` borrows its port) enforces the order: all endpoints drop first, cancelling their
-	operations, and the port's `run_down` or blocking `Drop` then observes and frees every resulting completion.
+	operations are counted once per port (a shared atomic) for `run_down`'s own purposes, which drains *every*
+	endpoint's outstanding operations in one pass.
+	**Superseded in part by [Per-endpoint outstanding tracking and blocking `Drop`](#per-endpoint-outstanding-tracking-and-blocking-drop):**
+	an endpoint's own teardown is no longer merely "cancel and defer reclamation to the port's drain" -- each
+	`AssociatedEndpoint` now also tracks its own outstanding count (keyed by its completion key) and its `Drop`
+	blocks, draining via the port, until that count reaches zero, so a caller can no longer close one endpoint's
+	handle while an operation is still outstanding against it specifically, without waiting on every other
+	endpoint's operations too. The port-wide atomic and `run_down` are unchanged and remain the authority for
+	whole-port rundown; the per-endpoint count is additional, narrower-scoped bookkeeping alongside it.
 - Completions are attributed on two independent axes. The completion *key* identifies which endpoint a packet
 	came from (each association fixes its key); the `OVERLAPPED` address identifies which operation, and `claim`
 	recovers its typed storage. Neither axis depends on which thread dequeued the packet, so a shared port with a
@@ -424,6 +427,38 @@ Behavioral matrix every backend must be exercised against:
 - completion identity under many simultaneous operations;
 - endpoint shutdown with operations still outstanding; and
 - results and payloads retained after native endpoint shutdown.
+
+### Per-endpoint outstanding tracking and blocking `Drop` (M1)
+
+Found while designing `windows-ioring-sys`'s M8 (a PR #20 review response): `AssociatedEndpoint` had no
+`Drop`, so closing one (dropping its `OwnedHandle`) while an operation was still outstanding against it
+specifically was memory-unsafe -- the kernel could still write into the operation's storage after the caller
+believed it was free to reclaim. `CompletionPort::run_down` was the wrong scope to catch this: it blocks on the
+*port's* whole outstanding count, not any one endpoint's, so a program with several endpoints on one port could
+not close a single misbehaving or finished endpoint without either running down the whole port (destroying every
+other endpoint's in-flight work too) or accepting the unsafety.
+
+`AssociatedEndpoint` has exactly one owner (`!Clone`), so the fix reuses the same shape `CompletionPort` already
+applies to itself (see "Voluntary rundown and `Drop`" above), rather than `windows-ioring-sys`'s `Arc`-based
+`SharedFile` (that mechanism is for genuine multi-owner sharing, which this endpoint does not have and should
+not pay for):
+
+- `PortState` gained a `Mutex<HashMap<usize, Arc<AtomicUsize>>>` keyed by completion key, one entry per live
+	association, holding that endpoint's own outstanding count.
+- `submit` increments its endpoint's counter before issuing the operation (to avoid a cross-thread underflow
+	race against a concurrent dequeue) and decrements it back out if the issue did not actually pend.
+- `deregister_dequeued` -- already the single place a real dequeue is attributed to an operation -- additionally
+	decrements the dequeued packet's key's counter. This is sound only because a genuine Windows completion
+	packet always carries the key fixed at that handle's `CreateIoCompletionPort` association; there is no
+	per-operation override for real device I/O, so keying this map by completion key is safe for production
+	traffic. It is fragile against synthetic test packets from `CompletionPort::post`/`post_raw`, which accept an
+	arbitrary, disconnected key -- test helpers that post a key not matching the endpoint under test will corrupt
+	an unrelated (or nonexistent) counter.
+- `AssociatedEndpoint::drop` explicitly cancels its own outstanding operations first (while its handle is still
+	open -- `self.handle`'s own `Drop` does not run until *after* the custom `Drop::drop` body returns, so
+	relying on close-cancels-pending-I/O here would deadlock waiting on a cancellation nothing had requested yet),
+	then polls the port (bounded waits, rechecked, mirroring `run_down`) until its own counter reaches zero,
+	then removes its entry from the port's map. Only then does the automatic field drop close the handle.
 
 ## `windows-sys` feature layout
 
