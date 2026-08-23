@@ -289,8 +289,8 @@ impl IoRing {
     /// How many file handles are registered on this ring so far, across
     /// every `BuildIoRingRegisterFileHandles` this crate has successfully
     /// queued (M5.1). This is the base index the next registration will
-    /// start from -- see [`IoRing::reserve_registered_files`] for why it
-    /// advances eagerly rather than waiting for a completion (D-14).
+    /// start from -- see `reserve_registered_files` for why it advances
+    /// eagerly rather than waiting for a completion (D-14).
     #[must_use]
     pub fn registered_file_count(&self) -> u32 {
         self.registered_files
@@ -324,15 +324,15 @@ impl IoRing {
     }
 
     /// How many operations this ring believes are still outstanding: minted
-    /// (via [`IoRing::reserve_user_data`]) but not yet observed to have
-    /// completed (via [`IoRing::record_completion`]).
+    /// (via `reserve_user_data`) but not yet observed to have completed (via
+    /// `record_completion`).
     #[must_use]
     pub fn outstanding(&self) -> usize {
         self.outstanding
     }
 
     /// Mint a fresh `UserData` identity for a new operation, and account for
-    /// it as outstanding until [`IoRing::record_completion`] is called for it.
+    /// it as outstanding until `record_completion` is called for it.
     ///
     /// The identity is the whole of what a [`crate::Token`] needs to validate
     /// a completion (D-4): unlike `windows-overlapped-io-sys`'s
@@ -421,7 +421,7 @@ impl IoRing {
     ///
     /// Waits in short, rechecked steps via `SubmitIoRing`'s own wait -- with
     /// zero new entries queued, its only effect is to block for up to
-    /// [`RUN_DOWN_POLL_MS`] and reap whatever is already outstanding -- rather
+    /// `RUN_DOWN_POLL_MS` and reap whatever is already outstanding -- rather
     /// than one unbounded call. This does not interpret what it pops; M3/M4
     /// add the typed completion path `Token` consumes. Idempotent: calling it
     /// again once `outstanding() == 0` is a no-op.
@@ -453,7 +453,7 @@ impl IoRing {
     /// Pop one completion if the queue has one ready, without blocking
     /// (M3.7).
     ///
-    /// Every popped completion is recorded via [`IoRing::record_completion`]
+    /// Every popped completion is recorded via `record_completion`
     /// regardless of whether the caller still holds a [`crate::Token`] for
     /// it (D-4): accounting is driven by observing a real `IORING_CQE`,
     /// never by a token being dropped.

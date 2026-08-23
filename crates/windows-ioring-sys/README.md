@@ -54,12 +54,43 @@ in [DESIGN-NOTES.md](DESIGN-NOTES.md), including why the NUMA node is the wrong
 key for partitioning rings and why buffer placement likely matters more than
 thread placement.
 
-In brief: a shared queue with the system load-balancing across a thread pool is
-convenient and quiesces to no threads at all, while shared-nothing execution
-domains -- one pinned thread per domain owning its ring, its node-local buffer
-pool, and its shard of the work -- is what the ring's API is actually shaped for.
-This crate intends to support both as first-class, because most real applications
-want the second on the data path and the first everywhere else.
+**Model A -- shared queue, kernel load-balances.** `EventDelivery` wires the
+ring's completion event to a `ThreadpoolWait` from `windows-threadpool-sys`, so
+no thread of yours ever blocks on I/O. Start here; see
+[examples/model_a_delivery.rs](examples/model_a_delivery.rs) for a full worked
+example that submits without waiting and receives every completion on a pool
+thread.
+
+**Model B -- shared-nothing execution domains.** One pinned thread per domain,
+owning its ring, its buffer pool, and its shard of the work, parked directly in
+`Batch::submit_and_wait` -- the fused submit-and-wait *is* the event loop. This
+is the shape `IoRing`'s own API is built for.
+
+Most real applications want Model B on the hot data path and Model A everywhere
+else -- the control plane, background work, cold paths -- where the thread
+pool's quiescence is worth more than locality. This crate supports both as
+first-class; neither is a degraded form of the other.
+
+## Topology guidance
+
+This crate does not partition anything for you (D-8): it makes a ring cheap and
+correct, makes its affinity explicit, and leaves sizing a Model B execution
+domain to the caller.
+
+- **Size a domain by last-level (L3) cache, not by NUMA node.** Node count is a
+  firmware setting a process cannot see, and most real deployments are
+  virtualized, where NUMA topology is often invisible entirely. See
+  [examples/l3_domains.rs](examples/l3_domains.rs) for a runnable enumeration,
+  built on the safe `GetLogicalProcessorInformationEx` wrapper in
+  [`windows-topology-sys`](../windows-topology-sys/README.md).
+- **Processor groups are a hard floor.** A thread's affinity is a
+  `GROUP_AFFINITY` and a ring's waiter lives in exactly one group, so above 64
+  logical processors the partition is forced whether or not it is wanted.
+- **Buffer placement likely dominates thread placement.** `VirtualAllocExNuma`
+  on the node closest to the device, registered once into that domain's ring
+  via `Batch::register_buffers`, is very likely the highest-leverage locality
+  decision available -- independent of everything above about completion
+  routing.
 
 ## License
 

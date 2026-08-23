@@ -30,6 +30,62 @@
 //! feature the thread-pool delivery path depends on is available at all. All
 //! three are answerable without creating a ring.
 //!
+//! # Choosing a delivery architecture
+//!
+//! There are two coherent high-performance shapes for consuming completions,
+//! and picking the wrong one costs more than any API detail in this crate.
+//!
+//! **Model A -- shared queue, kernel load-balances.** A pool of threads waits;
+//! work is handed to whichever thread the system picks next. This is
+//! [`EventDelivery`]: the ring's completion event wired to a thread-pool wait,
+//! so no thread of yours ever blocks on I/O. Load balancing is automatic and
+//! locality is incidental -- start here. See
+//! `examples/model_a_delivery.rs` for a full worked example (M6.2).
+//!
+//! **Model B -- shared-nothing execution domains.** One pinned thread per
+//! domain, owning its ring, its buffer pool, and its shard of the
+//! application's state, with no cross-thread synchronization on the data
+//! path -- a pinned thread parked directly in [`Batch::submit_and_wait`] *is*
+//! the event loop. This is what `IoRing`'s own API is shaped for: the
+//! submission queue is not thread-safe, registration is per-ring, and there is
+//! exactly one completion event per ring, none of which are limitations to
+//! work around.
+//!
+//! Most real applications want Model B on the hot data path and Model A
+//! everywhere else -- the control plane, background work, cold paths -- where
+//! the thread pool's quiescence is worth more than locality. Both are
+//! first-class here; neither is a degraded form of the other. The full
+//! trade-off -- including why the NUMA node is the wrong key for sizing a
+//! Model B execution domain, and why buffer placement likely dominates thread
+//! placement -- is in "Two delivery architectures" in `DESIGN-NOTES.md`.
+//!
+//! # Topology guidance
+//!
+//! This crate does not partition anything for you (D-8 in `DESIGN-NOTES.md`):
+//! it makes a ring cheap and correct, makes its affinity explicit, and leaves
+//! sizing a Model B execution domain to the caller. Three pointers, not a
+//! partitioning policy:
+//!
+//! - **Size a domain by last-level (L3) cache, not by NUMA node.** Node count
+//!   is a firmware setting a process cannot see (AMD NPS, Intel Sub-NUMA
+//!   Clustering), and most real deployments are virtualized, where NUMA
+//!   topology is often invisible entirely. `GetLogicalProcessorInformationEx`
+//!   filtered to `RelationCache` / `CacheLevel == 3` degrades sanely instead:
+//!   one reported domain on a VM is correct. See `examples/l3_domains.rs` for
+//!   a runnable enumeration (M6.3), built on the safe wrapper in
+//!   [`windows-topology-sys`](https://docs.rs/windows-topology-sys).
+//! - **Processor groups are a hard floor.** A thread's affinity is a
+//!   `GROUP_AFFINITY` and a ring's waiter lives in exactly one group, so above
+//!   64 logical processors the partition is forced whether or not it is
+//!   wanted.
+//! - **Buffer placement likely dominates thread placement.** A registered
+//!   buffer on a node remote from the device means every byte crosses the
+//!   interconnect, on every operation, forever; where the completion callback
+//!   happens to run is a one-time cache-warmth question by comparison.
+//!   `VirtualAllocExNuma`, on the node closest to the device, registered once
+//!   into that domain's ring (see [`Batch::register_buffers`]), is very
+//!   likely the highest-leverage locality decision available.
+//!
 //! # Status
 //!
 //! Under construction. The design, including the delivery-architecture guidance

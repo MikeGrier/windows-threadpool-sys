@@ -163,6 +163,7 @@ version = "0.1.0"
 dependencies = [
  "windows-sys",
  "windows-threadpool-sys",
+ "windows-topology-sys",
 ]
 
 [[package]]

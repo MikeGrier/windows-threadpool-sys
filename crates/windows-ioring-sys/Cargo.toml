@@ -40,3 +40,8 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 # The Model A delivery path (M4): a `ThreadpoolWait` on the ring's completion
 # event.
 windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys" }
+
+[dev-dependencies]
+# M6.3's topology-guidance example enumerates L3 cache domains with this
+# crate rather than raw `GetLogicalProcessorInformationEx` calls.
+windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
