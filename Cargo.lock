@@ -216,6 +216,8 @@ dependencies = [
 name = "windows-topology-sys"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "windows-sys",
 ]
 

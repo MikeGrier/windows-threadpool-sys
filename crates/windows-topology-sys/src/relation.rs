@@ -47,7 +47,14 @@ pub struct PackageRelation {
 }
 
 /// What a [`CacheRelation`] holds.
+///
+/// With the `serde` feature, a well-known variant serializes as its lowercase
+/// name (`"unified"`, `"instruction"`, `"data"`, `"trace"`); `Other` serializes
+/// as `{"other": <raw value>}`, so an unrecognised `PROCESSOR_CACHE_TYPE`
+/// still round-trips rather than losing its value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 #[non_exhaustive]
 pub enum CacheKind {
     /// A unified instruction-and-data cache.

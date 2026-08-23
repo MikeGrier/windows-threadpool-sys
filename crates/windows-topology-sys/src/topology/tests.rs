@@ -160,3 +160,93 @@ fn discover_reports_a_processor_entry_for_every_slot_up_to_each_groups_maximum()
         .sum();
     assert_eq!(topo.processors.len(), expected);
 }
+
+// --- serde (M3.3) ---
+
+#[cfg(feature = "serde")]
+mod serde_tests {
+    use super::super::*;
+
+    #[test]
+    fn a_discovered_topology_round_trips_through_json_unchanged() {
+        let topology = Topology::discover().expect("discover");
+        let json = serde_json::to_string(&topology).expect("serialize");
+        let back: Topology = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(topology, back);
+    }
+
+    #[test]
+    fn a_hand_written_synthetic_topology_parses() {
+        let json = r#"{
+            "processors": [
+                {"id": {"group": 0, "number": 0}, "online": true, "capacity": 10},
+                {"id": {"group": 0, "number": 1}, "online": true, "capacity": 10}
+            ],
+            "domains": [
+                {"kind": "group", "id": 0, "processors": [{"group":0,"number":0},{"group":0,"number":1}]},
+                {"kind": "memory", "id": 0, "processors": [], "memory_bytes": 68719476736}
+            ],
+            "distances": null
+        }"#;
+        let topology: Topology = serde_json::from_str(json).expect("parse");
+        assert_eq!(topology.processors.len(), 2);
+        assert_eq!(topology.groups().count(), 1);
+        let memory: Vec<_> = topology.memory_domains().collect();
+        assert_eq!(memory.len(), 1);
+        assert!(memory[0].processors.is_empty());
+    }
+
+    /// A description shaped like what a Linux system would produce: a
+    /// single processor group (Linux has no group concept), a memory-only
+    /// node, and a populated scalar distance matrix -- all things Windows
+    /// itself never reports through this crate's own discovery, but that a
+    /// fed-in description can legitimately carry (D-10).
+    #[test]
+    fn a_linux_shaped_description_with_a_memory_only_node_and_distances_parses() {
+        let json = r#"{
+            "processors": [
+                {"id": {"group": 0, "number": 0}, "online": true, "capacity": 1024},
+                {"id": {"group": 0, "number": 1}, "online": true, "capacity": 1024}
+            ],
+            "domains": [
+                {"kind": "group", "id": 0, "processors": [{"group":0,"number":0},{"group":0,"number":1}]},
+                {"kind": "memory", "id": 0, "processors": [{"group":0,"number":0},{"group":0,"number":1}],
+                 "memory_bytes": 17179869184},
+                {"kind": "memory", "id": 1, "processors": [], "memory_bytes": 549755813888}
+            ],
+            "distances": {"over": "memory", "matrix": [[10, 40], [40, 10]]}
+        }"#;
+        let topology: Topology = serde_json::from_str(json).expect("parse");
+        assert_eq!(topology.memory_domains().count(), 2);
+        assert!(
+            topology.memory_domains().any(|d| d.processors.is_empty()),
+            "the CXL-shaped node must survive"
+        );
+        let distances = topology.distances.expect("distances present");
+        assert_eq!(distances.over, "memory");
+        assert_eq!(distances.matrix, vec![vec![10, 40], vec![40, 10]]);
+    }
+
+    /// The other half of D-10: a single "group" holding more than 64
+    /// processors -- ordinary on Linux, where there is no group concept at
+    /// all -- cannot be materialised into this crate's `ProcessorSet`, whose
+    /// mask is one machine word because a real `GROUP_AFFINITY` is. The
+    /// documented, sanctioned response is to reject rather than silently
+    /// drop processors 64 and up.
+    #[test]
+    fn a_description_claiming_more_than_64_processors_in_one_group_is_rejected() {
+        let json = r#"{
+            "processors": [],
+            "domains": [
+                {"kind": "group", "id": 0, "processors": [{"group": 0, "number": 100}]}
+            ],
+            "distances": null
+        }"#;
+        let error = serde_json::from_str::<Topology>(json)
+            .expect_err("processor number 100 is out of range");
+        assert!(
+            error.to_string().contains("100"),
+            "error should name the offending number: {error}"
+        );
+    }
+}

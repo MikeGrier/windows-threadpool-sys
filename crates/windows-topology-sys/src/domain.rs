@@ -20,6 +20,7 @@ use crate::processor_set::ProcessorSet;
 /// thread's affinity is a `GROUP_AFFINITY`, one group and a bitmask within
 /// it, so the group is a hard boundary a flattened index would lose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ProcessorId {
     /// The processor group.
     pub group: u16,
@@ -29,6 +30,7 @@ pub struct ProcessorId {
 
 /// One logical processor.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Processor {
     /// This processor's identity.
     pub id: ProcessorId,
@@ -136,6 +138,20 @@ pub enum AttributeValue {
 /// contains a node or that a node contains a cache -- chiplets and CXL
 /// already violate assumptions like that, and Linux's own levels do not form
 /// a strict hierarchy either.
+///
+/// With the `serde` feature, serializes as `{"kind": <string>, "id": <u32>,
+/// "processors": [...], ...fields specific to that kind}` -- an internally
+/// tagged shape, implemented by hand rather than derived, because `kind` is
+/// open (D-4) and an unrecognised one must still round-trip its attributes.
+///
+/// **This JSON shape is explicitly not covered by this crate's semver
+/// contract (D-8 in `DESIGN-NOTES.md`).** The Rust API above (`Domain`,
+/// `DomainKind`, and friends) is covered by semver as always; the wire shape
+/// they produce and accept is allowed to change in a minor release. This is
+/// what makes D-9's deferrals (an HMAT-style attributed-relation model,
+/// devices as topology participants) safe to defer rather than merely
+/// convenient: adding them later is a schema evolution, not a breaking
+/// change to a promise this crate never made.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Domain {
     /// What this domain represents.
@@ -159,17 +175,316 @@ pub struct Domain {
 /// populates this; it exists for a fed-in description sourced from a system
 /// that does report it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Distances {
     /// Which domain kind the matrix's rows and columns index. Kept as a
-    /// plain string, naming a [`DomainKind`] the way its JSON `kind` tag will
-    /// read once this crate's `serde` feature exists (M3), because domain
-    /// kinds are themselves open (D-4).
+    /// plain string, naming a [`DomainKind`] the way its JSON `kind` tag
+    /// reads (with the `serde` feature), because domain kinds are themselves
+    /// open (D-4).
     pub over: String,
     /// The distance matrix, in the order those domains appear in
     /// [`crate::Topology::domains`] filtered to `over`. Square;
     /// `matrix[i][i]` is conventionally `10`, Windows's and ACPI SLIT's own
     /// "local" value.
     pub matrix: Vec<Vec<u32>>,
+}
+
+/// Manual `Serialize`/`Deserialize` for the open-kinded types.
+///
+/// `AttributeValue` and `Domain` cannot be `#[derive(Serialize, Deserialize)]`:
+/// `AttributeValue` is a self-describing value (its own shape is not known
+/// until read), and `Domain`'s wire shape is internally tagged on `kind` with
+/// the kind-specific fields flattened alongside `id`/`processors` -- and an
+/// unrecognised `kind` must still capture whatever fields came with it (D-4).
+/// Both are read by buffering the whole object into a
+/// `BTreeMap<String, AttributeValue>` first, since which fields are expected
+/// is only known once `kind` itself has been read, and a hand-written or
+/// fed-in description cannot be relied on to place `kind` first.
+#[cfg(feature = "serde")]
+mod serde_impl {
+    use std::collections::BTreeMap;
+    use std::fmt;
+
+    use serde::de::{Error, MapAccess, SeqAccess, Visitor};
+    use serde::ser::SerializeMap;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{AttributeValue, Domain, DomainKind};
+    use crate::CacheKind;
+    use crate::processor_set::ProcessorSet;
+
+    impl Serialize for AttributeValue {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            match self {
+                AttributeValue::Null => serializer.serialize_unit(),
+                AttributeValue::Bool(b) => serializer.serialize_bool(*b),
+                AttributeValue::Number(n) => serializer.serialize_f64(*n),
+                AttributeValue::String(s) => serializer.serialize_str(s),
+                AttributeValue::Array(items) => items.serialize(serializer),
+                AttributeValue::Object(map) => map.serialize(serializer),
+            }
+        }
+    }
+
+    impl<'de> Deserialize<'de> for AttributeValue {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct ValueVisitor;
+
+            impl<'de> Visitor<'de> for ValueVisitor {
+                type Value = AttributeValue;
+
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("a JSON-like value")
+                }
+                fn visit_unit<E: Error>(self) -> Result<Self::Value, E> {
+                    Ok(AttributeValue::Null)
+                }
+                fn visit_none<E: Error>(self) -> Result<Self::Value, E> {
+                    Ok(AttributeValue::Null)
+                }
+                fn visit_bool<E: Error>(self, v: bool) -> Result<Self::Value, E> {
+                    Ok(AttributeValue::Bool(v))
+                }
+                fn visit_i64<E: Error>(self, v: i64) -> Result<Self::Value, E> {
+                    Ok(AttributeValue::Number(v as f64))
+                }
+                fn visit_u64<E: Error>(self, v: u64) -> Result<Self::Value, E> {
+                    Ok(AttributeValue::Number(v as f64))
+                }
+                fn visit_f64<E: Error>(self, v: f64) -> Result<Self::Value, E> {
+                    Ok(AttributeValue::Number(v))
+                }
+                fn visit_str<E: Error>(self, v: &str) -> Result<Self::Value, E> {
+                    Ok(AttributeValue::String(v.to_string()))
+                }
+                fn visit_string<E: Error>(self, v: String) -> Result<Self::Value, E> {
+                    Ok(AttributeValue::String(v))
+                }
+                fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                    let mut items = Vec::new();
+                    while let Some(item) = seq.next_element()? {
+                        items.push(item);
+                    }
+                    Ok(AttributeValue::Array(items))
+                }
+                fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                    let mut object = BTreeMap::new();
+                    while let Some((k, v)) = map.next_entry()? {
+                        object.insert(k, v);
+                    }
+                    Ok(AttributeValue::Object(object))
+                }
+            }
+
+            deserializer.deserialize_any(ValueVisitor)
+        }
+    }
+
+    fn as_bool<E: Error>(value: AttributeValue) -> Result<bool, E> {
+        match value {
+            AttributeValue::Bool(b) => Ok(b),
+            _ => Err(E::custom("expected a boolean")),
+        }
+    }
+
+    /// A number stored as `f64` loses precision above 2^53 (~9 PB, well
+    /// beyond any real machine's processor/cache counts or memory size for
+    /// the foreseeable future -- the same ceiling D-11 already accepts for
+    /// `memory_bytes`).
+    fn as_u64<E: Error>(value: AttributeValue) -> Result<u64, E> {
+        match value {
+            AttributeValue::Number(n)
+                if n.fract() == 0.0 && (0.0..=u64::MAX as f64).contains(&n) =>
+            {
+                Ok(n as u64)
+            }
+            AttributeValue::Number(_) => Err(E::custom("expected a non-negative whole number")),
+            _ => Err(E::custom("expected a number")),
+        }
+    }
+
+    fn as_u32<E: Error>(value: AttributeValue) -> Result<u32, E> {
+        u32::try_from(as_u64(value)?).map_err(|_| E::custom("number is too large for this field"))
+    }
+
+    fn as_u16<E: Error>(value: AttributeValue) -> Result<u16, E> {
+        u16::try_from(as_u64(value)?).map_err(|_| E::custom("number is too large for this field"))
+    }
+
+    fn as_u8<E: Error>(value: AttributeValue) -> Result<u8, E> {
+        u8::try_from(as_u64(value)?).map_err(|_| E::custom("number is too large for this field"))
+    }
+
+    /// `CacheKind`'s own derived `Serialize` produces a bare string for a
+    /// unit variant and `{"other": <number>}` for `Other`; decoded here by
+    /// hand against the already-buffered value rather than by re-entering
+    /// serde's enum machinery, which expects a real `Deserializer` rather
+    /// than a value already read into an [`AttributeValue`].
+    fn cache_kind_from_value<E: Error>(value: AttributeValue) -> Result<CacheKind, E> {
+        match value {
+            AttributeValue::String(s) => match s.as_str() {
+                "unified" => Ok(CacheKind::Unified),
+                "instruction" => Ok(CacheKind::Instruction),
+                "data" => Ok(CacheKind::Data),
+                "trace" => Ok(CacheKind::Trace),
+                other => Err(E::custom(format!("unrecognised cache_type \"{other}\""))),
+            },
+            AttributeValue::Object(mut map) if map.len() == 1 => match map.remove("other") {
+                Some(raw) => Ok(CacheKind::Other(as_u32(raw)? as i32)),
+                None => Err(E::custom("cache_type object must have an \"other\" key")),
+            },
+            _ => Err(E::custom(
+                "cache_type must be a string or {\"other\": <number>}",
+            )),
+        }
+    }
+
+    /// Convert a buffered `"processors"` value (a JSON array of
+    /// `{"group":_,"number":_}` objects) into a [`ProcessorSet`], without
+    /// going through `ProcessorSet`'s own `Deserialize` impl: that impl
+    /// expects a real `Deserializer`, and this value has already been
+    /// buffered into an [`AttributeValue`].
+    fn processors_from_value<E: Error>(value: AttributeValue) -> Result<ProcessorSet, E> {
+        let AttributeValue::Array(items) = value else {
+            return Err(E::custom("domain \"processors\" must be an array"));
+        };
+        let mut set = ProcessorSet::empty();
+        for item in items {
+            let AttributeValue::Object(mut object) = item else {
+                return Err(E::custom(
+                    "each processor must be an object with \"group\" and \"number\"",
+                ));
+            };
+            let group = as_u16(take(&mut object, "group")?)?;
+            let number = as_u8(take(&mut object, "number")?)?;
+            if number >= 64 {
+                // A real Windows GROUP_AFFINITY.Mask is one machine word, so
+                // a group genuinely cannot hold this processor: reject rather
+                // than silently truncate (D-10 in `DESIGN-NOTES.md`).
+                return Err(E::custom(format!(
+                    "processor number {number} is out of range: a processor group has at most 64 \
+                     processors on this platform"
+                )));
+            }
+            set.insert(group, number);
+        }
+        Ok(set)
+    }
+
+    fn take<E: Error>(
+        fields: &mut BTreeMap<String, AttributeValue>,
+        key: &str,
+    ) -> Result<AttributeValue, E> {
+        fields
+            .remove(key)
+            .ok_or_else(|| E::custom(format!("domain is missing required field \"{key}\"")))
+    }
+
+    impl Serialize for Domain {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let mut map = serializer.serialize_map(None)?;
+            let kind_name: &str = match &self.kind {
+                DomainKind::Group => "group",
+                DomainKind::Package => "package",
+                DomainKind::Die => "die",
+                DomainKind::Module => "module",
+                DomainKind::Core { .. } => "core",
+                DomainKind::Cache { .. } => "cache",
+                DomainKind::Memory { .. } => "memory",
+                DomainKind::Other { name, .. } => name.as_str(),
+            };
+            map.serialize_entry("kind", kind_name)?;
+            map.serialize_entry("id", &self.id)?;
+            map.serialize_entry("processors", &self.processors)?;
+            match &self.kind {
+                DomainKind::Core {
+                    simultaneous_multithreading,
+                    efficiency_class,
+                } => {
+                    map.serialize_entry(
+                        "simultaneous_multithreading",
+                        simultaneous_multithreading,
+                    )?;
+                    map.serialize_entry("efficiency_class", efficiency_class)?;
+                }
+                DomainKind::Cache {
+                    level,
+                    associativity,
+                    line_size,
+                    size_bytes,
+                    cache_type,
+                } => {
+                    map.serialize_entry("level", level)?;
+                    map.serialize_entry("associativity", associativity)?;
+                    map.serialize_entry("line_size", line_size)?;
+                    map.serialize_entry("size_bytes", size_bytes)?;
+                    map.serialize_entry("cache_type", cache_type)?;
+                }
+                DomainKind::Memory { memory_bytes } => {
+                    if let Some(bytes) = memory_bytes {
+                        map.serialize_entry("memory_bytes", bytes)?;
+                    }
+                }
+                DomainKind::Other { attributes, .. } => {
+                    for (key, value) in attributes {
+                        map.serialize_entry(key, value)?;
+                    }
+                }
+                DomainKind::Group | DomainKind::Package | DomainKind::Die | DomainKind::Module => {}
+            }
+            map.end()
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Domain {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let mut fields = BTreeMap::<String, AttributeValue>::deserialize(deserializer)?;
+
+            let kind_name = match take::<D::Error>(&mut fields, "kind")? {
+                AttributeValue::String(s) => s,
+                _ => return Err(D::Error::custom("domain \"kind\" must be a string")),
+            };
+            let id = as_u32(take::<D::Error>(&mut fields, "id")?)?;
+            let processors = processors_from_value(take::<D::Error>(&mut fields, "processors")?)?;
+
+            let kind = match kind_name.as_str() {
+                "group" => DomainKind::Group,
+                "package" => DomainKind::Package,
+                "die" => DomainKind::Die,
+                "module" => DomainKind::Module,
+                "core" => DomainKind::Core {
+                    simultaneous_multithreading: as_bool(take(
+                        &mut fields,
+                        "simultaneous_multithreading",
+                    )?)?,
+                    efficiency_class: as_u8(take(&mut fields, "efficiency_class")?)?,
+                },
+                "cache" => DomainKind::Cache {
+                    level: as_u8(take(&mut fields, "level")?)?,
+                    associativity: as_u8(take(&mut fields, "associativity")?)?,
+                    line_size: as_u16(take(&mut fields, "line_size")?)?,
+                    size_bytes: as_u32(take(&mut fields, "size_bytes")?)?,
+                    cache_type: cache_kind_from_value(take(&mut fields, "cache_type")?)?,
+                },
+                "memory" => DomainKind::Memory {
+                    memory_bytes: match fields.remove("memory_bytes") {
+                        None | Some(AttributeValue::Null) => None,
+                        Some(value) => Some(as_u64(value)?),
+                    },
+                },
+                other => DomainKind::Other {
+                    name: other.to_string(),
+                    attributes: fields,
+                },
+            };
+
+            Ok(Domain {
+                kind,
+                id,
+                processors,
+            })
+        }
+    }
 }
 
 #[cfg(test)]

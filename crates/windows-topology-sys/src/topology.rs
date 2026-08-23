@@ -9,10 +9,14 @@ use crate::relation::{self, Relations};
 /// A processor, cache, and memory topology: a set of processors and the
 /// domains that relate them.
 ///
-/// Built either by [`Topology::discover`] from the running system, or by hand
-/// -- or by deserializing a fed-in description, once the `serde` feature
-/// exists (M3).
+/// Built either by [`Topology::discover`] from the running system, by hand,
+/// or (with the `serde` feature) by deserializing a fed-in description.
+///
+/// The JSON shape this produces and accepts is explicitly not covered by this
+/// crate's semver contract -- see [`Domain`]'s documentation and D-8 in
+/// `DESIGN-NOTES.md`.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Topology {
     /// Every logical processor, including one for each inactive slot up to a
     /// group's maximum processor count.

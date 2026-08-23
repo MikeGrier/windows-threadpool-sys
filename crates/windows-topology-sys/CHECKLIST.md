@@ -48,16 +48,28 @@ Design decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md); the session that pro
 
 ## M3 -- Serialization
 
-- [ ] **M3.1** -- `serde` behind a default-off optional feature, following `windows-file-watcher`'s D-72
+- [x] **M3.1** -- `serde` behind a default-off optional feature, following `windows-file-watcher`'s D-72
   precedent, so an ordinary consumer never links it.
 
-- [ ] **M3.2** -- Record in DESIGN-NOTES that the schema is not semver-covered (D-8), and state it in the
+- [x] **M3.2** -- Record in DESIGN-NOTES that the schema is not semver-covered (D-8), and state it in the
   rustdoc where a consumer will actually see it -- it is load-bearing for D-9's deferrals, not a footnote.
 
-- [ ] **M3.3** -- Round-trip tests: discovered topology serializes and deserializes unchanged; a
+- [x] **M3.3** -- Round-trip tests: discovered topology serializes and deserializes unchanged; a
   hand-written synthetic description parses; a description carrying an unknown domain kind survives a
-  round trip; a Linux-shaped description (one group, more than 64 processors, populated distances,
-  memory-only nodes) parses without loss (D-10).
+  round trip; a Linux-shaped description (single group, memory-only node, populated distances) parses
+  without loss.
+
+  **Re-plan:** the original wording also asked for "more than 64 processors [in one group]... without
+  loss," which execution showed cannot be literally true: `ProcessorSet`'s per-group mask is one machine
+  word because a real `GROUP_AFFINITY.Mask` is, so a group holding a processor number >= 64 cannot be
+  materialised without either silently truncating (real data loss) or widening `ProcessorSet` itself
+  into a non-Windows-native shape (a bigger change than this milestone scoped, and arguably wrong for a
+  Windows-only crate to carry). D-10 already prescribes the resolution -- "a Windows planner... must
+  reject or split... rather than silently emitting an affinity mask that cannot exist" -- so the test
+  suite proves rejection instead: a description whose group holds a processor number >= 64 fails
+  deserialization with a clear, well-formed error naming the offending number, never a panic and never a
+  silent drop. The single-group/memory-only-node/distances shape, which carries no Windows-specific
+  limit, parses and round-trips exactly as originally asked.
 
 ## M4 -- Documentation
 

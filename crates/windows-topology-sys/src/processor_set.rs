@@ -140,5 +140,53 @@ impl FromIterator<(u16, u8)> for ProcessorSet {
     }
 }
 
+/// The wire shape of one member of a [`ProcessorSet`]: `{"group":_,"number":_}`.
+///
+/// Deliberately duplicated from `domain::ProcessorId` rather than reused: this
+/// module sits below `domain.rs` (D-2 in `DESIGN-NOTES.md` -- durable
+/// enumeration below, interpretation above), and importing a type from the
+/// higher layer purely to save two fields would invert that direction for a
+/// serialization convenience.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WireProcessor {
+    group: u16,
+    number: u8,
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for ProcessorSet {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(self.len()))?;
+        for (group, number) in self.iter() {
+            seq.serialize_element(&WireProcessor { group, number })?;
+        }
+        seq.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for ProcessorSet {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = Vec::<WireProcessor>::deserialize(deserializer)?;
+        let mut set = Self::empty();
+        for entry in wire {
+            if entry.number >= 64 {
+                // A real Windows GROUP_AFFINITY.Mask is one machine word, so a
+                // group genuinely cannot hold this processor: reject rather
+                // than silently truncate (D-10 in `DESIGN-NOTES.md`).
+                return Err(serde::de::Error::custom(format!(
+                    "processor number {} is out of range: a processor group has at most 64 \
+                     processors on this platform",
+                    entry.number
+                )));
+            }
+            set.insert(entry.group, entry.number);
+        }
+        Ok(set)
+    }
+}
+
 #[cfg(test)]
 mod tests;

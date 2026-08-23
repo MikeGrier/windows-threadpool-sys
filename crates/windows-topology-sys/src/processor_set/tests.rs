@@ -129,3 +129,49 @@ fn clone_and_equality_agree() {
     let set = ProcessorSet::from_group_mask(0, 0b101);
     assert_eq!(set, set.clone());
 }
+
+// --- serde (M3) ---
+
+#[cfg(feature = "serde")]
+#[test]
+fn a_multi_group_set_round_trips_through_json() {
+    let mut set = ProcessorSet::empty();
+    set.insert(0, 0);
+    set.insert(0, 5);
+    set.insert(2, 1);
+    let json = serde_json::to_string(&set).expect("serialize");
+    let back: ProcessorSet = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(set, back);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn an_empty_set_serializes_as_an_empty_array() {
+    let json = serde_json::to_string(&ProcessorSet::empty()).expect("serialize");
+    assert_eq!(json, "[]");
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn deserializing_a_processor_number_at_the_word_boundary_errors_rather_than_panics() {
+    // The Rust-level insert() panics on an out-of-range number; the
+    // deserialize boundary must not inherit that panic for untrusted input
+    // (D-10 in DESIGN-NOTES.md).
+    let json = r#"[{"group":0,"number":64}]"#;
+    let error = serde_json::from_str::<ProcessorSet>(json).expect_err("64 is out of range");
+    assert!(
+        error.to_string().contains("64"),
+        "error should name the offending number: {error}"
+    );
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn deserializing_a_well_formed_description_produces_the_expected_set() {
+    let json = r#"[{"group":0,"number":0},{"group":0,"number":3},{"group":1,"number":0}]"#;
+    let set: ProcessorSet = serde_json::from_str(json).expect("deserialize");
+    assert!(set.contains(0, 0));
+    assert!(set.contains(0, 3));
+    assert!(set.contains(1, 0));
+    assert_eq!(set.len(), 3);
+}
