@@ -12,14 +12,16 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::ERROR_NOT_SUPPORTED;
 
-use super::{ArmGate, DirectoryWatcher, ReadBuffer};
-use crate::directory::{DirectoryHandle, FailureCode, FaultDetail, OpenFailure, classify_detail};
+use super::{ArmGate, DirectoryWatcher, ReadBuffer, lock};
+use crate::directory::{
+    DirectoryHandle, FailureCode, FaultDetail, OpenFailure, VolumeIdentity, classify_detail,
+};
 use crate::notify::{ChangeKind, DesyncCause};
 use crate::queue::{Notification, Receiver, Sender, WatchId, channel, channel_with_bound};
 use crate::retry::{FaultOperation, WatchMode};
 use crate::route::{Route, RouteScope};
 use crate::testing::TempDir;
-use crate::watch::RetryMode;
+use crate::watch::{RetryMode, VolumeChangeDecision, VolumeChangePolicy};
 
 /// Upper bound for waiting on a notification the kernel really should deliver.
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -39,6 +41,7 @@ fn plain_route(watch: WatchId, scope: RouteScope, sink: Sender) -> Route {
         sink,
         retry: RetryMode::Defaults,
         report_liveness: false,
+        on_volume_change: VolumeChangePolicy::AutoContinue,
         fault_slot: None,
     }
 }
@@ -82,7 +85,8 @@ impl Drained {
                 | Notification::Suspended { .. }
                 | Notification::Resumed { .. }
                 | Notification::Established { .. }
-                | Notification::RetryQuestion { .. } => None,
+                | Notification::RetryQuestion { .. }
+                | Notification::VolumeChanged { .. } => None,
             })
             .flatten()
             .map(|change| {
@@ -104,7 +108,8 @@ impl Drained {
                 | Notification::Suspended { .. }
                 | Notification::Resumed { .. }
                 | Notification::Established { .. }
-                | Notification::RetryQuestion { .. } => None,
+                | Notification::RetryQuestion { .. }
+                | Notification::VolumeChanged { .. } => None,
             })
             .collect()
     }
@@ -1055,6 +1060,7 @@ fn interactive_route(watch: WatchId, sink: Sender, report_liveness: bool) -> Rou
         sink,
         retry: RetryMode::Interactive,
         report_liveness,
+        on_volume_change: VolumeChangePolicy::AutoContinue,
         fault_slot: Some(fault_slot),
     }
 }
@@ -1230,6 +1236,7 @@ fn a_resolved_fault_reports_reestablished_and_the_opt_in_liveness_brackets() {
         sink: sender,
         retry: RetryMode::Interactive,
         report_liveness: true,
+        on_volume_change: VolumeChangePolicy::AutoContinue,
         fault_slot: None,
     };
     // Interactive with no fault_slot: never asked (there is nowhere to ask), so
@@ -1341,6 +1348,7 @@ fn a_recovered_fault_in_forced_coarse_mode_reports_established_coarse() {
         sink: sender,
         retry: RetryMode::Defaults,
         report_liveness: true,
+        on_volume_change: VolumeChangePolicy::AutoContinue,
         fault_slot: None,
     };
     let watcher = DirectoryWatcher::start_forcing_coarse(handle, dir.path().to_path_buf(), route)
@@ -1400,5 +1408,140 @@ fn teardown_of_a_forced_coarse_watch_is_prompt() {
         started.elapsed() < Duration::from_secs(5),
         "coarse teardown did not converge promptly"
     );
+    dir.cleanup();
+}
+
+// --- volume-change confirmation (D-78, M12) ---
+
+/// A route that has opted in to confirming a volume change (M12.1), with its
+/// standing question reservation taken from `sink`.
+fn confirm_route(watch: WatchId, sink: Sender) -> Route {
+    let fault_slot = sink
+        .reserve_standing()
+        .expect("room for the standing question slot");
+    Route {
+        watch,
+        scope: RouteScope::Directory { subtree: false },
+        sink,
+        retry: RetryMode::Defaults,
+        report_liveness: false,
+        on_volume_change: VolumeChangePolicy::Confirm,
+        fault_slot: Some(fault_slot),
+    }
+}
+
+#[test]
+fn only_the_confirm_route_is_asked_and_continuing_keeps_both_routes() {
+    let dir = TempDir::new("volume-change-continue");
+    let (sender_a, receiver_a) = channel();
+    let (sender_b, receiver_b) = channel();
+    let watch_a = WatchId::from_raw(20);
+    let watch_b = WatchId::from_raw(21);
+
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let route_a = confirm_route(watch_a, sender_a);
+    let watcher =
+        DirectoryWatcher::start(handle, dir.path().to_path_buf(), route_a).expect("start");
+    let fresh_handle = DirectoryHandle::open(dir.path()).expect("open again to coalesce");
+    watcher.add_route(
+        plain_route(watch_b, RouteScope::Directory { subtree: false }, sender_b),
+        fresh_handle,
+    );
+
+    // Rig the recorded baseline so the *real* current volume identity this
+    // watcher reads fresh below is guaranteed to differ from it -- a real
+    // removable-media swap is not otherwise reproducible in an automated test.
+    *lock(&watcher.inner.volume_identity) =
+        Some(VolumeIdentity::synthetic("FAKE-FS", "FAKE-LABEL"));
+    watcher.inner.retry_reestablish();
+
+    assert_eq!(watcher.gate(), ArmGate::VolumeChangePending);
+
+    let collected_a = Drained::start(receiver_a);
+    collected_a.wait_until("the volume-change question", |d| {
+        d.notifications()
+            .iter()
+            .any(|n| matches!(n, Notification::VolumeChanged { watch, .. } if *watch == watch_a))
+    });
+    assert!(
+        receiver_b.try_recv().is_none(),
+        "an AutoContinue route must never be asked"
+    );
+
+    let remaining = watcher
+        .answer_volume_change(watch_a, VolumeChangeDecision::Continue)
+        .expect("this answer resolves the question");
+    assert_eq!(remaining, 2, "continuing keeps both routes");
+
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    while watcher.gate() == ArmGate::VolumeChangePending {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the watcher never resumed arming after the volume change was confirmed"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(watcher.gate(), ArmGate::Open);
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn stopping_a_volume_change_removes_only_that_route() {
+    let dir = TempDir::new("volume-change-stop");
+    let (sender_a, receiver_a) = channel();
+    let (sender_b, receiver_b) = channel();
+    let watch_a = WatchId::from_raw(22);
+    let watch_b = WatchId::from_raw(23);
+
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let route_a = confirm_route(watch_a, sender_a);
+    let watcher =
+        DirectoryWatcher::start(handle, dir.path().to_path_buf(), route_a).expect("start");
+    let fresh_handle = DirectoryHandle::open(dir.path()).expect("open again to coalesce");
+    watcher.add_route(
+        plain_route(watch_b, RouteScope::Directory { subtree: false }, sender_b),
+        fresh_handle,
+    );
+
+    *lock(&watcher.inner.volume_identity) =
+        Some(VolumeIdentity::synthetic("FAKE-FS", "FAKE-LABEL"));
+    watcher.inner.retry_reestablish();
+    assert_eq!(watcher.gate(), ArmGate::VolumeChangePending);
+
+    let collected_a = Drained::start(receiver_a);
+    collected_a.wait_until("the volume-change question", |d| {
+        d.notifications()
+            .iter()
+            .any(|n| matches!(n, Notification::VolumeChanged { watch, .. } if *watch == watch_a))
+    });
+
+    let remaining = watcher
+        .answer_volume_change(watch_a, VolumeChangeDecision::Stop)
+        .expect("this answer resolves the question");
+    assert_eq!(remaining, 1, "only the declining route is removed");
+
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    while watcher.gate() == ArmGate::VolumeChangePending {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the watcher never resumed arming after the volume change resolved"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(watcher.gate(), ArmGate::Open);
+
+    // The remaining (AutoContinue) route is still served: a real change still
+    // reaches it.
+    let collected_b = Drained::start(receiver_b);
+    std::fs::write(dir.path().join("after.txt"), b"x").expect("create a file");
+    collected_b.wait_until("a change after the volume-change resolved", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Added && name == "after.txt")
+    });
+
+    drop(watcher);
     dir.cleanup();
 }

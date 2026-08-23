@@ -26,7 +26,7 @@ use wtf_string::Wtf16String;
 
 use crate::notify::Change;
 use crate::queue::{Sender, StandingSlot, WatchId};
-use crate::watch::RetryMode;
+use crate::watch::{RetryMode, VolumeChangePolicy};
 
 /// The backslash that separates path components in a relative name.
 const SEPARATOR: u16 = b'\\' as u16;
@@ -106,11 +106,15 @@ pub(crate) struct Route {
     /// Whether this subscription wants `Suspended`/`Resumed`/`Established`
     /// (D-13).
     pub(crate) report_liveness: bool,
-    /// The standing reservation for this subscription's fault question
-    /// (D-27/D-28), present iff it can ever be asked one (`retry ==
-    /// Interactive`). `report_liveness` alone never creates one:
-    /// `Suspended`/`Resumed`/`Established` all ride the ordinary best-effort
-    /// queue like any other observation (D-57).
+    /// Whether this subscription wants to confirm a volume change on reopen
+    /// (D-78/M12).
+    pub(crate) on_volume_change: VolumeChangePolicy,
+    /// The standing reservation for this subscription's fault question or
+    /// volume-change question (D-27/D-28/M12), present iff it can ever need
+    /// one (`retry == Interactive` or `on_volume_change == Confirm`).
+    /// `report_liveness` alone never creates one: `Suspended`/`Resumed`/
+    /// `Established` all ride the ordinary best-effort queue like any other
+    /// observation (D-57).
     pub(crate) fault_slot: Option<StandingSlot>,
 }
 

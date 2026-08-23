@@ -2,6 +2,51 @@
 
 Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIST.md).
 
+## Moved 2026-08-23 -- M12: per-subscription volume-change confirmation (D-78)
+
+- [x] **M12.1** -- `VolumeChangeDecision` (`Continue`/`Stop`) and `VolumeChangePolicy` (`AutoContinue`
+  default, `Confirm`) types; `WatchOptions::on_volume_change` setter. -> `directory::VolumeIdentity` made
+  `pub` (with lossy `filesystem_name()`/`volume_label()` accessors) so it can be carried on
+  `Notification::VolumeChanged` (M12.3).
+
+- [x] **M12.2** -- New `ArmGate::VolumeChangePending` variant, entered when a path-based fallback reopen's
+  `VolumeIdentity` differs from a route's stored baseline and that route opted into `Confirm`; resolves
+  back to `Open` once every asked route on that directory has answered (D-47-style re-check under the gate
+  lock). -> `WatcherInner::on_path_based_reopen` detects the change and defers installing the already-open
+  candidate handle (held in the new `VolumeChangeState`/`self.volume_change`) until
+  `WatcherInner::resolve_volume_change` runs.
+
+- [x] **M12.3** -- `Notification::VolumeChanged { watch, previous, current }` and
+  `Session::answer_volume_change(watch, VolumeChangeDecision)`, mirroring `RetryQuestion`/`Session::answer`.
+  -> Reuses the same standing `fault_slot` reservation `RetryQuestion` does (widened at registration to
+  cover `retry == Interactive || on_volume_change == Confirm`); the two questions are never outstanding at
+  once for one subscription.
+
+- [x] **M12.4** -- Wire the per-route resolution: `Stop` removes just that subscription via the existing
+  `remove_route` path; `Continue` updates that route's own baseline `VolumeIdentity` to the one just
+  confirmed; `AutoContinue` routes are never asked and are unaffected either way; the directory tears down
+  normally through the pre-existing zero-routes path if this leaves none. -> `Continue`'s baseline update
+  is the shared `WatcherInner::volume_identity` field (M11.3), advanced by `install()` itself once the
+  deferred candidate handle is finally installed -- not duplicated per route, since every route on one
+  coalesced directory necessarily shares one arm/volume history (D-6).
+
+- [x] **M12.5** -- Cancellation-mid-question handling, mirroring D-27/M5.5's "leaving counts as declining"
+  rule: a route removed while its volume-change question is outstanding resolves as `Stop` for that route,
+  rather than wedging the awaiting set forever. -> `WatcherInner::remove_route_from_volume_change`, called
+  from `DirectoryWatcher::remove_route`.
+
+- [x] **M12.6** -- Integration test: two subscriptions on one coalesced directory, one `Confirm` one
+  `AutoContinue`; force a `VolumeIdentity` change (a real removable-media swap where available, or a new
+  test seam -- M11.2's fast reopen path is disabled, so there is no `ReOpenFile`-based seam to reuse here)
+  and assert the `Confirm` route receives `VolumeChanged`, declines, and is removed, while the
+  `AutoContinue` route keeps receiving batches uninterrupted. -> Implemented as two `watcher::tests` (a
+  real end-to-end `Monitor`/`Session` integration test cannot force a volume change without real removable
+  media): `VolumeIdentity::synthetic` (`#[cfg(test)]`) rigs a baseline guaranteed to differ from the real
+  directory's actual volume, so a genuine `WatcherInner::retry_reestablish()` drives the real detection,
+  question, and resolution paths. `only_the_confirm_route_is_asked_and_continuing_keeps_both_routes` and
+  `stopping_a_volume_change_removes_only_that_route` cover `Continue` and `Stop` respectively, the latter
+  also confirming the surviving `AutoContinue` route keeps receiving real batches afterward.
+
 ## Moved 2026-08-19 -- M1: crate scaffold and notification decode
 
 - [x] **M1.1** -- Scaffold `crates/windows-file-watcher`: [Cargo.toml](Cargo.toml) with a `cfg(windows)`-gated `lib`,

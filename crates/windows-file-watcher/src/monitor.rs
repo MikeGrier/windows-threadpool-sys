@@ -45,7 +45,7 @@ use crate::retry::{FaultOperation, clamp};
 use crate::route::{Route, RouteScope};
 use crate::servicing::{Rejected, Servicer};
 use crate::session::Session;
-use crate::watch::{RetryMode, WatchOptions};
+use crate::watch::{RetryMode, VolumeChangeDecision, WatchOptions};
 use crate::watcher::DirectoryWatcher;
 
 /// A message on the monitor's request queue.
@@ -105,6 +105,17 @@ pub(crate) enum Request {
         /// operation's default).
         delay: Option<Duration>,
     },
+    /// A client's answer to a volume-change question (D-78/M12), submitted
+    /// through
+    /// [`Session::answer_volume_change`](crate::session::Session::answer_volume_change).
+    /// Carries no completion, for the same reason `Answer` does not; ignored
+    /// if `watch` is not currently awaiting one.
+    AnswerVolumeChange {
+        /// The subscription answering.
+        watch: WatchId,
+        /// Whether to keep this subscription running against the new volume.
+        decision: VolumeChangeDecision,
+    },
 }
 
 impl std::fmt::Debug for Request {
@@ -130,6 +141,11 @@ impl std::fmt::Debug for Request {
                 .debug_struct("Answer")
                 .field("watch", watch)
                 .field("delay", delay)
+                .finish(),
+            Request::AnswerVolumeChange { watch, decision } => f
+                .debug_struct("AnswerVolumeChange")
+                .field("watch", watch)
+                .field("decision", decision)
                 .finish(),
         }
     }
@@ -560,6 +576,9 @@ fn service(
         }
         Request::Retry { watch } => retry_pending(resident, resident_weak, core_ref, watch),
         Request::Answer { watch, delay } => answer(resident, watch, delay),
+        Request::AnswerVolumeChange { watch, decision } => {
+            answer_volume_change(resident, watch, decision);
+        }
     }
 }
 
@@ -592,6 +611,41 @@ fn answer(resident: &Mutex<Resident>, watch: WatchId, delay: Option<Duration>) {
     {
         watcher.answer(watch, delay);
     }
+}
+
+/// Resolve a client's answer to a volume-change question (D-78/M12),
+/// wherever it currently lives -- always a routed subscription's coalesced
+/// watcher, since a volume-change question is only ever raised by a
+/// path-based reopen of an already-established watcher. A no-op if `watch`
+/// is not currently awaiting one (already resolved, already cancelled, or
+/// never asked).
+fn answer_volume_change(
+    resident: &Mutex<Resident>,
+    watch: WatchId,
+    decision: VolumeChangeDecision,
+) {
+    // Removed under the lock, dropped outside it, mirroring `Request::Cancel`:
+    // dropping tears the watcher down, which blocks on its callbacks.
+    let torn_down = {
+        let mut state = lock(resident);
+        let Some(Subscription::Routed { directory, .. }) = state.subscriptions.get(&watch) else {
+            return;
+        };
+        let directory = *directory;
+        let Some(remaining) = state
+            .directories
+            .get(&directory)
+            .and_then(|watcher| watcher.answer_volume_change(watch, decision))
+        else {
+            return;
+        };
+        if remaining == 0 {
+            state.directories.remove(&directory)
+        } else {
+            None
+        }
+    };
+    drop(torn_down);
 }
 
 /// What opening a subscription's target found, and how it should route within
@@ -782,6 +836,7 @@ fn route_established(
         sink: sink.clone(),
         retry: options.retry,
         report_liveness: options.report_liveness,
+        on_volume_change: options.on_volume_change,
         fault_slot,
     };
     let mut state = lock(resident);

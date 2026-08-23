@@ -563,6 +563,8 @@ pub struct HarnessOutcome {
     pub completions: u64,
     /// How many [`Notification::RetryQuestion`]s arrived.
     pub retry_questions: u64,
+    /// How many [`Notification::VolumeChanged`]s arrived.
+    pub volume_changes: u64,
 }
 
 impl HarnessOutcome {
@@ -579,6 +581,7 @@ impl HarnessOutcome {
             Notification::Established { .. } => self.establishments += 1,
             Notification::Completion { .. } => self.completions += 1,
             Notification::RetryQuestion { .. } => self.retry_questions += 1,
+            Notification::VolumeChanged { .. } => self.volume_changes += 1,
         }
     }
 

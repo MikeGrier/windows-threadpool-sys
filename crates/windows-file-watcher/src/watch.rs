@@ -61,6 +61,36 @@ pub enum RetryMode {
     Interactive,
 }
 
+/// A subscription's answer to a [`crate::Notification::VolumeChanged`] question
+/// (D-78/M12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VolumeChangeDecision {
+    /// Keep this subscription running against the new volume.
+    Continue,
+    /// Remove this subscription.
+    Stop,
+}
+
+/// Whether a subscription wants to be told, and asked to decide, when a reopen
+/// lands on a different volume than the one it started on (D-78).
+///
+/// A reopen is by *path*, and nothing guarantees the path still names the same
+/// volume it did before -- removable media can be ejected and replaced with
+/// different media mounted at the same path. `AutoContinue` (the default)
+/// matches every prior release's behavior for a subscription that does not
+/// ask: the watch keeps running against whatever is at the path now. `Confirm`
+/// is opt-in for a subscription that wants to decide instead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum VolumeChangePolicy {
+    /// Keep going without being asked. The default.
+    #[default]
+    AutoContinue,
+    /// On a volume change, ask via [`crate::Notification::VolumeChanged`] and
+    /// wait for an answer (through
+    /// [`crate::Session::answer_volume_change`]) before arming continues.
+    Confirm,
+}
+
 /// What a client states when it registers a subscription.
 ///
 /// Non-exhaustive so that a future additive option is not a breaking change:
@@ -87,6 +117,9 @@ pub struct WatchOptions {
     /// default: a subscription that only wants change data need not think about
     /// the fault machine's liveness brackets at all.
     pub report_liveness: bool,
+    /// Whether to be asked before continuing when a reopen lands on a
+    /// different volume than this subscription started on (D-78).
+    pub on_volume_change: VolumeChangePolicy,
 }
 
 impl WatchOptions {
@@ -114,6 +147,14 @@ impl WatchOptions {
     #[must_use]
     pub fn report_liveness(mut self, report_liveness: bool) -> Self {
         self.report_liveness = report_liveness;
+        self
+    }
+
+    /// Choose whether a volume change on reopen needs this subscription's
+    /// confirmation (D-78).
+    #[must_use]
+    pub fn on_volume_change(mut self, policy: VolumeChangePolicy) -> Self {
+        self.on_volume_change = policy;
         self
     }
 }
@@ -207,11 +248,17 @@ pub(crate) fn subscribe(
 
     // A standing fault-question slot (D-27/D-28), taken once here rather than
     // per fault, so asking never competes with the queue's best-effort traffic.
-    // Only an `Interactive` subscription can ever be asked (D-57): `Suspended`/
-    // `Resumed`/`Established` ride the ordinary best-effort queue like any other
-    // observation, so a `report_liveness`-only subscription reserves nothing
-    // extra.
-    let fault_slot = if options.retry == RetryMode::Interactive {
+    // Reused for `VolumeChanged` (D-78/M12): the two questions are never
+    // outstanding at once for one subscription (a volume-change question is
+    // only ever raised by a path-based reopen that already succeeded, which
+    // only happens after any current fault question was already answered), so
+    // one standing reservation safely serves both. Only `Interactive` or
+    // `Confirm` needs one at all (D-57): `Suspended`/`Resumed`/`Established`
+    // ride the ordinary best-effort queue like any other observation, so a
+    // `report_liveness`-only subscription with neither reserves nothing extra.
+    let fault_slot = if options.retry == RetryMode::Interactive
+        || options.on_volume_change == VolumeChangePolicy::Confirm
+    {
         Some(session.sink().reserve_standing().ok_or_else(saturated)?)
     } else {
         None

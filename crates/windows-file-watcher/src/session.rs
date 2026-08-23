@@ -38,7 +38,7 @@ use std::time::Duration;
 use crate::monitor::{Core, Request};
 use crate::queue::{Sender, WatchId};
 use crate::servicing::Rejected;
-use crate::watch::{Watch, WatchOptions};
+use crate::watch::{VolumeChangeDecision, Watch, WatchOptions};
 
 /// A client's connection to a monitor.
 ///
@@ -89,6 +89,16 @@ impl Session {
     /// an answer (already resolved, already cancelled, or never asked).
     pub fn answer(&self, watch: WatchId, delay: Option<Duration>) {
         let _ = self.submit(Request::Answer { watch, delay });
+    }
+
+    /// Answer a subscription's [`Notification::VolumeChanged`](crate::Notification::VolumeChanged)
+    /// question (D-78/M12): [`VolumeChangeDecision::Continue`] keeps the
+    /// subscription running against the new volume,
+    /// [`VolumeChangeDecision::Stop`] removes it. Not itself a request with a
+    /// lifecycle, so it carries no completion and simply does nothing if
+    /// `watch` is not currently awaiting an answer.
+    pub fn answer_volume_change(&self, watch: WatchId, decision: VolumeChangeDecision) {
+        let _ = self.submit(Request::AnswerVolumeChange { watch, decision });
     }
 
     /// Submit a request to the monitor.

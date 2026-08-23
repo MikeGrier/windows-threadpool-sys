@@ -14,7 +14,7 @@ use std::env;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use windows_file_watcher::{Monitor, Notification, RetryMode, WatchOptions};
+use windows_file_watcher::{Monitor, Notification, RetryMode, VolumeChangeDecision, WatchOptions};
 
 /// The delay this example always answers with, regardless of which operation
 /// faulted or how many times. A real client might inspect `operation` and
@@ -67,6 +67,16 @@ fn main() -> ExitCode {
             }
             Notification::Completion { outcome, .. } => {
                 println!("registration: {outcome:?}");
+            }
+            Notification::VolumeChanged {
+                previous, current, ..
+            } => {
+                println!(
+                    "reopened on a different volume ({:?} -> {:?}); continuing",
+                    previous.volume_label(),
+                    current.volume_label()
+                );
+                session.answer_volume_change(watch.id(), VolumeChangeDecision::Continue);
             }
         }
     }

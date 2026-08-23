@@ -95,7 +95,7 @@ use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, ResetEvent, SetEvent,
 };
 
-use crate::directory::FaultDetail;
+use crate::directory::{FaultDetail, VolumeIdentity};
 use crate::notify::{Change, DesyncCause};
 use crate::retry::{FaultOperation, WatchMode};
 
@@ -240,6 +240,22 @@ pub enum Notification {
         /// The classification and raw code behind the failure (D-79).
         detail: FaultDetail,
     },
+    /// A path-based reopen landed on a different volume than this
+    /// subscription started on, and it opted into
+    /// [`crate::VolumeChangePolicy::Confirm`] (D-78/M12). Answer through
+    /// [`crate::session::Session::answer_volume_change`];
+    /// [`crate::VolumeChangeDecision::Stop`] removes just this subscription,
+    /// [`crate::VolumeChangeDecision::Continue`] keeps it running against the
+    /// new volume. Rides the same standing reservation `RetryQuestion` does
+    /// (never outstanding at the same time for one subscription, D-28).
+    VolumeChanged {
+        /// The subscription being asked.
+        watch: WatchId,
+        /// The volume this subscription was previously confirmed on.
+        previous: VolumeIdentity,
+        /// The volume the reopen just landed on.
+        current: VolumeIdentity,
+    },
 }
 
 impl Notification {
@@ -253,7 +269,8 @@ impl Notification {
             | Notification::Suspended { watch }
             | Notification::Resumed { watch }
             | Notification::Established { watch, .. }
-            | Notification::RetryQuestion { watch, .. } => *watch,
+            | Notification::RetryQuestion { watch, .. }
+            | Notification::VolumeChanged { watch, .. } => *watch,
         }
     }
 }

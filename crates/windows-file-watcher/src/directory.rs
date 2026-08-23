@@ -500,11 +500,41 @@ impl std::fmt::Debug for DirectoryHandle {
 /// tracked there). Compared only when a path-based reopen fallback succeeds
 /// (M11.3) -- a `ReOpenFile` success is structurally guaranteed to still be on
 /// the same volume -- to notice removable media swapped for different media
-/// mounted at the same path.
+/// mounted at the same path. Surfaced to a client (M12) via
+/// [`crate::Notification::VolumeChanged`], so it is `pub` even though nothing
+/// in this crate constructs one outside `volume_identity` below.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct VolumeIdentity {
+pub struct VolumeIdentity {
     filesystem_name: Wtf16String,
     volume_label: Wtf16String,
+}
+
+impl VolumeIdentity {
+    /// The volume's filesystem name (e.g. `"NTFS"`, `"FAT32"`, `"ReFS"`),
+    /// lossily -- for display and logging, not for round-tripping.
+    #[must_use]
+    pub fn filesystem_name(&self) -> String {
+        self.filesystem_name.to_string_lossy()
+    }
+
+    /// The volume's label, lossily -- for display and logging, not for
+    /// round-tripping.
+    #[must_use]
+    pub fn volume_label(&self) -> String {
+        self.volume_label.to_string_lossy()
+    }
+
+    /// Build a synthetic identity that cannot match any real volume this
+    /// crate would ever read (M12.6's test seam: rigging a mismatch a real
+    /// removable-media swap is not otherwise reproducible in an automated
+    /// test).
+    #[cfg(test)]
+    pub(crate) fn synthetic(filesystem_name: &str, volume_label: &str) -> Self {
+        Self {
+            filesystem_name: Wtf16String::from_os_str(std::ffi::OsStr::new(filesystem_name)),
+            volume_label: Wtf16String::from_os_str(std::ffi::OsStr::new(volume_label)),
+        }
+    }
 }
 
 /// Read a handle's volume-level identity via `GetVolumeInformationByHandleW`.

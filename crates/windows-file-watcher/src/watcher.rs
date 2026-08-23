@@ -57,7 +57,7 @@ use crate::notify::{DecodedBatch, DesyncCause, decode_batch};
 use crate::queue::{Notification, Resume, WatchId};
 use crate::retry::{FaultOperation, WatchMode, clamp};
 use crate::route::Route;
-use crate::watch::RetryMode;
+use crate::watch::{RetryMode, VolumeChangeDecision, VolumeChangePolicy};
 
 /// The completion-buffer size used unless a caller chooses otherwise.
 ///
@@ -156,6 +156,12 @@ pub enum ArmGate {
     /// failure (D-22) is the one edge that does not return here -- see
     /// `WatcherInner::stopped`.
     Faulted,
+    /// Transiently closed while a path-based reopen's candidate handle sits
+    /// unresolved, waiting for every `Confirm`-opted route to answer whether
+    /// it landed on a different volume than before (D-78/M12). Self-resolving:
+    /// it becomes `Open` (via a normal reopen) once every asked route has
+    /// answered, or `TornDown` if teardown wins the race.
+    VolumeChangePending,
     /// Torn down. Permanent: a watcher never re-opens.
     TornDown,
 }
@@ -177,6 +183,21 @@ struct FaultState {
     /// The classification and raw code behind the failure that opened this
     /// fault (D-79).
     detail: FaultDetail,
+}
+
+/// Held while asking `Confirm`-opted routes about a volume change a
+/// path-based reopen found, between detection and every asked route
+/// answering (D-78/M12).
+struct VolumeChangeState {
+    /// The already-opened candidate handle, not yet installed -- installing
+    /// it is deferred until this resolves, so a client that wants to decide
+    /// gets to before arming continues.
+    handle: DirectoryHandle,
+    /// `Confirm`-opted routes that have not yet answered.
+    awaiting: HashSet<WatchId>,
+    /// Each route's answer, as it arrives. Applied when `awaiting` empties:
+    /// `Stop` removes that route, `Continue` leaves it running (M12.4).
+    decisions: HashMap<WatchId, VolumeChangeDecision>,
 }
 
 /// Which tier is servicing a directory's watch (D-17): the preferred detailed
@@ -277,6 +298,9 @@ struct WatcherInner {
     /// construction (M11.4) -- unset for a watcher built directly by a unit
     /// test, which has no real `Resident` to re-key and simply skips it.
     resident: OnceLock<Weak<Mutex<Resident>>>,
+    /// Held while asking about a volume change found by a path-based reopen;
+    /// absent otherwise (D-78/M12). See [`VolumeChangeState`].
+    volume_change: Mutex<Option<VolumeChangeState>>,
 }
 
 impl WatcherInner {
@@ -645,23 +669,11 @@ impl WatcherInner {
             return;
         }
         if let Some(handle) = self.reopen_via_existing_handle() {
-            match self.install(handle) {
-                Ok(()) => self.resolve_fault_success(),
-                Err(error) => self.enter_fault(classify_detail(&error), FaultOperation::Arm),
-            }
+            self.finish_reopen(handle);
             return;
         }
         match DirectoryHandle::open(&self.path) {
-            Ok(handle) => {
-                // Only this path can legitimately land on a different
-                // directory or volume than before (M11.3/M11.4) -- compared
-                // and re-keyed here, before `install` overwrites the record.
-                self.on_path_based_reopen(&handle);
-                match self.install(handle) {
-                    Ok(()) => self.resolve_fault_success(),
-                    Err(error) => self.enter_fault(classify_detail(&error), FaultOperation::Arm),
-                }
-            }
+            Ok(handle) => self.on_path_based_reopen(handle),
             Err(open_error) => {
                 if open_error.failure().is_retryable() {
                     self.enter_fault(open_error.detail(), FaultOperation::Open);
@@ -669,6 +681,15 @@ impl WatcherInner {
                     self.record_stop(io::Error::other(open_error));
                 }
             }
+        }
+    }
+
+    /// Install `handle` and resolve the fault it was reopening for, entering
+    /// a fresh arm-class fault if installing or arming itself fails.
+    fn finish_reopen(self: &Arc<Self>, handle: DirectoryHandle) {
+        match self.install(handle) {
+            Ok(()) => self.resolve_fault_success(),
+            Err(error) => self.enter_fault(classify_detail(&error), FaultOperation::Arm),
         }
     }
 
@@ -714,12 +735,14 @@ impl WatcherInner {
         (current_path == expected_path).then_some(candidate)
     }
 
-    /// Compare `handle`'s identity and volume identity against what this
-    /// watcher is currently known by, re-keying `Resident.directories` if the
-    /// directory changed (M11.4) and logging if the volume did (M11.3, D-78
-    /// groundwork -- M12 replaces this diagnostic with the opt-in
-    /// per-subscription confirmation protocol).
-    fn on_path_based_reopen(&self, handle: &DirectoryHandle) {
+    /// Only a path-based reopen can legitimately land on a different
+    /// directory or volume than before (M11.3/M11.4/M12) -- an `OpenFileById`
+    /// success cannot. Re-keys `Resident.directories` immediately if the
+    /// directory changed (identity is never subject to confirmation), then
+    /// either installs `handle` straight away (no volume change, or nobody
+    /// asked) or asks every `Confirm`-opted route and defers installing until
+    /// they have all answered (M12.2).
+    fn on_path_based_reopen(self: &Arc<Self>, handle: DirectoryHandle) {
         let new_id = handle.identity();
         let old_id = std::mem::replace(&mut *lock(&self.directory_id), new_id);
         if new_id != old_id
@@ -728,17 +751,131 @@ impl WatcherInner {
             rekey(&resident, old_id, new_id);
         }
 
-        let Ok(current_volume) = handle.volume_identity() else {
+        let previous_volume = lock(&self.volume_identity).clone();
+        let current_volume = handle.volume_identity().ok();
+        let changed = matches!(
+            (&previous_volume, &current_volume),
+            (Some(previous), Some(current)) if previous != current
+        );
+        if !changed {
+            self.finish_reopen(handle);
             return;
-        };
-        if let Some(previous) = lock(&self.volume_identity).as_ref()
-            && *previous != current_volume
-        {
+        }
+        // Both are `Some` whenever `changed` is true.
+        let previous_volume = previous_volume.expect("checked above");
+        let current_volume = current_volume.expect("checked above");
+
+        let routes = lock(&self.routes);
+        let awaiting: HashSet<WatchId> = routes
+            .values()
+            .filter(|route| {
+                route.on_volume_change == VolumeChangePolicy::Confirm && route.fault_slot.is_some()
+            })
+            .map(|route| route.watch)
+            .collect();
+        if awaiting.is_empty() {
+            drop(routes);
             log::warn!(
                 "windows-file-watcher: {:?} reopened on a different volume than before",
                 self.path
             );
+            self.finish_reopen(handle);
+            return;
         }
+
+        {
+            let mut gate = lock(&self.gate);
+            if *gate == ArmGate::TornDown {
+                return;
+            }
+            *gate = ArmGate::VolumeChangePending;
+        }
+        for route in routes.values() {
+            if awaiting.contains(&route.watch)
+                && let Some(slot) = &route.fault_slot
+            {
+                slot.send(Notification::VolumeChanged {
+                    watch: route.watch,
+                    previous: previous_volume.clone(),
+                    current: current_volume.clone(),
+                });
+            }
+        }
+        drop(routes);
+
+        *lock(&self.volume_change) = Some(VolumeChangeState {
+            handle,
+            awaiting,
+            decisions: HashMap::new(),
+        });
+    }
+
+    /// Record a route's answer to the current volume-change question
+    /// (D-78/M12.3), if there is one outstanding for it. `None` otherwise: the
+    /// question may already have resolved, or `watch` may never have been
+    /// asked. `Some(remaining route count)` once every asked route has
+    /// answered and the resolution below has run.
+    fn answer_volume_change(
+        self: &Arc<Self>,
+        watch: WatchId,
+        decision: VolumeChangeDecision,
+    ) -> Option<usize> {
+        let ready = {
+            let mut state = lock(&self.volume_change);
+            let pending = state.as_mut()?;
+            if !pending.awaiting.remove(&watch) {
+                return None;
+            }
+            pending.decisions.insert(watch, decision);
+            pending.awaiting.is_empty()
+        };
+        ready.then(|| self.resolve_volume_change())
+    }
+
+    /// M12.5: a route removed while its volume-change question is
+    /// outstanding resolves as if it had left without answering -- it is
+    /// simply no longer counted, mirroring D-27/M5.5's "leaving counts as
+    /// declining" treatment of a fault question. `Some(remaining route
+    /// count)` if this was the last needed answer (the caller's own,
+    /// already-computed remaining count is now stale and must be replaced
+    /// with this one); `None` otherwise.
+    fn remove_route_from_volume_change(self: &Arc<Self>, watch: WatchId) -> Option<usize> {
+        let ready = {
+            let mut state = lock(&self.volume_change);
+            let pending = state.as_mut()?;
+            if !pending.awaiting.remove(&watch) {
+                return None;
+            }
+            pending.awaiting.is_empty()
+        };
+        ready.then(|| self.resolve_volume_change())
+    }
+
+    /// Apply every collected decision (`Stop` removes that route, `Continue`
+    /// leaves it running, M12.4), then either install the pending candidate
+    /// handle -- updating the recorded volume identity, since `install`
+    /// itself does that from whatever handle it is given -- or, if this left
+    /// no routes, drop it and report zero so the caller tears this watcher
+    /// down through the ordinary zero-routes path.
+    fn resolve_volume_change(self: &Arc<Self>) -> usize {
+        let pending = lock(&self.volume_change)
+            .take()
+            .expect("called only once awaiting has just emptied, with state present");
+        {
+            let mut routes = lock(&self.routes);
+            for (watch, decision) in &pending.decisions {
+                if *decision == VolumeChangeDecision::Stop {
+                    routes.remove(watch);
+                }
+            }
+        }
+        let remaining = lock(&self.routes).len();
+        if remaining == 0 {
+            drop(pending.handle);
+            return 0;
+        }
+        self.finish_reopen(pending.handle);
+        remaining
     }
 
     /// Clear fault state after a successful re-establishment and tell every
@@ -1071,6 +1208,7 @@ impl DirectoryWatcher {
             volume_identity: Mutex::new(None),
             canonical_path: Mutex::new(None),
             resident: OnceLock::new(),
+            volume_change: Mutex::new(None),
         });
 
         // Pulls this constructor's one route back out of `inner.routes` so a
@@ -1227,6 +1365,9 @@ impl DirectoryWatcher {
         if let Some(delay) = resolved {
             self.inner.resolve_and_schedule(delay);
         }
+        if let Some(remaining) = self.inner.remove_route_from_volume_change(watch) {
+            return remaining;
+        }
         remaining
     }
 
@@ -1234,6 +1375,19 @@ impl DirectoryWatcher {
     /// (D-27/M5.3), if one is outstanding. A no-op otherwise.
     pub(crate) fn answer(&self, watch: WatchId, delay: Option<Duration>) {
         self.inner.answer(watch, delay);
+    }
+
+    /// Answer this watcher's current volume-change question on behalf of
+    /// `watch` (D-78/M12.3), if one is outstanding. `None` if not (already
+    /// resolved, or never asked); `Some(remaining route count)` if this
+    /// answer was the one that resolved it, in which case the caller (M12.4)
+    /// must tear the watcher down if that count is zero.
+    pub(crate) fn answer_volume_change(
+        &self,
+        watch: WatchId,
+        decision: VolumeChangeDecision,
+    ) -> Option<usize> {
+        self.inner.answer_volume_change(watch, decision)
     }
 
     /// The failure that stopped this watcher re-arming, if any. Only ever set

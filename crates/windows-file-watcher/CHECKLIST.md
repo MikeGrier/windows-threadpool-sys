@@ -15,9 +15,9 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M12.1.** M1 through M9+, M10, and M11 are archived/done. M12 (below) is the last
-> piece of the PR #20 review response: an opt-in per-subscription confirmation when a reopen lands on a
-> different volume than before. Only the parked, ungated M-inf horizon items are not a current obligation.
+> **NEXT ACTIONABLE ITEM: none.** M1 through M9+, M10, M11, and M12 are archived/done -- the full PR #20
+> review response is complete. Only the parked, ungated M-inf horizon items remain, and none is a current
+> obligation.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -119,34 +119,7 @@ after a reopen lands on a different directory. Independent of M10 above; M12 bel
 
 ## M12 -- Per-subscription volume-change confirmation (D-78)
 
-Depends on M11. Adds the opt-in client-facing protocol: a route may ask to be told, and to decide for
-itself, when a reopen lands on a different volume than the one it started on.
-
-- [ ] **M12.1** -- `VolumeChangeDecision` (`Continue`/`Stop`) and `VolumeChangePolicy` (`AutoContinue`
-  default, `Confirm`) types; `WatchOptions::on_volume_change` setter.
-
-- [ ] **M12.2** -- New `ArmGate::VolumeChangePending` variant, entered when a path-based fallback reopen's
-  `VolumeIdentity` differs from a route's stored baseline and that route opted into `Confirm`; resolves
-  back to `Open` once every asked route on that directory has answered (D-47-style re-check under the gate
-  lock).
-
-- [ ] **M12.3** -- `Notification::VolumeChanged { watch, previous, current }` and
-  `Session::answer_volume_change(watch, VolumeChangeDecision)`, mirroring `RetryQuestion`/`Session::answer`.
-
-- [ ] **M12.4** -- Wire the per-route resolution: `Stop` removes just that subscription via the existing
-  `remove_route` path; `Continue` updates that route's own baseline `VolumeIdentity` to the one just
-  confirmed; `AutoContinue` routes are never asked and are unaffected either way; the directory tears down
-  normally through the pre-existing zero-routes path if this leaves none.
-
-- [ ] **M12.5** -- Cancellation-mid-question handling, mirroring D-27/M5.5's "leaving counts as declining"
-  rule: a route removed while its volume-change question is outstanding resolves as `Stop` for that route,
-  rather than wedging the awaiting set forever.
-
-- [ ] **M12.6** -- Integration test: two subscriptions on one coalesced directory, one `Confirm` one
-  `AutoContinue`; force a `VolumeIdentity` change (a real removable-media swap where available, or a new
-  test seam -- M11.2's fast reopen path is disabled, so there is no `ReOpenFile`-based seam to reuse here)
-  and assert the `Confirm` route receives `VolumeChanged`, declines, and is removed, while the
-  `AutoContinue` route keeps receiving batches uninterrupted.
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-23----m12-per-subscription-volume-change-confirmation-d-78).
 
 ## M-inf -- Horizon (ungated, post-v1)
 

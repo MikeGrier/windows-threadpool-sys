@@ -131,7 +131,7 @@ mod watch;
 mod watcher;
 
 #[cfg(windows)]
-pub use directory::{FailureCode, FaultDetail, OpenFailure};
+pub use directory::{FailureCode, FaultDetail, OpenFailure, VolumeIdentity};
 #[cfg(windows)]
 pub use monitor::Monitor;
 #[cfg(windows)]
@@ -143,4 +143,4 @@ pub use retry::{FaultOperation, WatchMode};
 #[cfg(windows)]
 pub use session::Session;
 #[cfg(windows)]
-pub use watch::{RetryMode, Watch, WatchOptions};
+pub use watch::{RetryMode, VolumeChangeDecision, VolumeChangePolicy, Watch, WatchOptions};

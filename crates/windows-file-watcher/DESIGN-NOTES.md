@@ -255,6 +255,27 @@ resolving back to `Open` once the awaiting set empties (decliners already
 removed by then). If that leaves zero routes, the watcher tears down through
 the pre-existing zero-routes path -- no special case is needed there.
 
+`WatcherInner::on_path_based_reopen` detects the mismatch and, rather than
+installing the already-open candidate handle immediately, parks it in a new
+`VolumeChangeState { handle, awaiting, decisions }` held in
+`WatcherInner::volume_change` and sends `Notification::VolumeChanged` only to
+the awaiting routes' `fault_slot`s. This is the same standing-slot
+reservation `RetryQuestion` uses (widened at `subscribe()` time to cover
+`retry == Interactive || on_volume_change == Confirm`), which is sound
+because the two questions are provably never concurrently outstanding for one
+route: a volume-change question can only arise from inside
+`retry_reestablish`, which only runs once any prior fault-question for that
+route has already been fully answered. `Session::answer_volume_change`
+submits `Request::AnswerVolumeChange`, resolved by
+`WatcherInner::answer_volume_change`/`resolve_volume_change` -- deliberately
+*not* performed synchronously inside the timer/IOCP callback that detected
+the mismatch, because those run on a different OS thread than the monitor's
+single servicer, and tearing down a now-empty watcher is only safe from the
+servicer thread (the same self-deadlock hazard `Request::Cancel` already
+avoids). `remove_route_from_volume_change` mirrors D-27's "leaving counts as
+declining": a route removed while its question is outstanding resolves as
+`Stop` for that route rather than wedging the awaiting set forever.
+
 A reopen tries `OpenFileById` against the file reference `DirectoryId` already
 computes, using whichever handle is currently installed only as the volume
 hint (`hVolumeHint`) `OpenFileById` requires -- not itself the object being

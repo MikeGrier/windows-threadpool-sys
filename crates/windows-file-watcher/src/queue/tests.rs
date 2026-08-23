@@ -67,7 +67,8 @@ fn names(notification: &Notification) -> Vec<String> {
         | Notification::Suspended { .. }
         | Notification::Resumed { .. }
         | Notification::Established { .. }
-        | Notification::RetryQuestion { .. } => Vec::new(),
+        | Notification::RetryQuestion { .. }
+        | Notification::VolumeChanged { .. } => Vec::new(),
     }
 }
 
