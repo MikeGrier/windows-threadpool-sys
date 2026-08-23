@@ -92,6 +92,14 @@ domain to the caller.
   decision available -- independent of everything above about completion
   routing.
 
+`examples/ring_copy` is where these three points become runnable policy: it
+copies one file to another through per-domain rings, sized by a named
+`ByL3`/`ByNode`/`ByPackage`/`ByCore`/`Single` policy, with buffers placed via
+`VirtualAllocExNuma` and a `--placement local|remote` switch to make the
+placement effect measurable. It is a **sample**, not library surface -- this
+crate itself depends on no partitioning policy and does not depend on
+`windows-topology-sys`; only the sample does.
+
 ## License
 
 MIT. Copyright (c) Mike Grier.

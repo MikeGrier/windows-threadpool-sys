@@ -136,6 +136,11 @@ a smaller number of domains that can still share cache-resident state cheaply --
 sixty-four on a 64-core EPYC. Fewer domains balance load better and duplicate registered buffers less; more
 isolate better. That is a workload call, and this crate does not make it.
 
+`examples/ring_copy` (M7) is where that workload call actually gets made, for exactly one workload: it
+implements the `ByL3`/`ByNode`/`ByPackage`/`ByCore`/`Single` policies above as runnable code, over a real
+file copy, so the guidance here has something executable behind it rather than staying prose. The policy
+lives in the sample, not the library (D-8); the library still makes none of these choices for a caller.
+
 ## What the spike established
 
 A throwaway spike (see the design session) probed a current machine directly. Findings that the design

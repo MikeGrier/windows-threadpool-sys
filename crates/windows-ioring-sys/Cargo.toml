@@ -43,5 +43,18 @@ windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys"
 
 [dev-dependencies]
 # M6.3's topology-guidance example enumerates L3 cache domains with this
-# crate rather than raw `GetLogicalProcessorInformationEx` calls.
-windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
+# crate rather than raw `GetLogicalProcessorInformationEx` calls. M7's
+# ring-copy sample additionally needs the `serde` feature, to load a fed-in
+# topology description (D-10 in windows-topology-sys's DESIGN-NOTES.md).
+windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys", features = [
+	"serde",
+] }
+# M7's ring-copy sample deserializes a fed-in topology description (--topology).
+serde_json = "1.0"
+# M7's ring-copy sample additionally needs `VirtualAllocExNuma` (buffer
+# placement) and `GROUP_AFFINITY` (pinned-thread affinity); the library
+# itself needs neither.
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_System_Memory",
+	"Win32_System_SystemInformation",
+] }

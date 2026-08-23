@@ -1,0 +1,226 @@
+// Copyright (c) 2026 Mike Grier
+//! `ring-copy` (M7): a topology-aligned sample copying one file to another
+//! through per-domain `IoRing`s, pinned threads, and NUMA-placed registered
+//! buffers.
+//!
+//! This is a **sample**, not library surface: `windows-ioring-sys` owns no
+//! partitioning policy (D-8 in its `DESIGN-NOTES.md`), so the policy lives
+//! here instead, giving M6's guidance something executable behind it.
+
+mod buffer;
+mod engine;
+mod plan;
+mod policy;
+
+use std::io;
+use std::os::windows::io::AsRawHandle;
+use std::path::PathBuf;
+
+use policy::Policy;
+use windows_sys::Win32::Foundation::HANDLE;
+use windows_topology_sys::Topology;
+
+const DEFAULT_CHUNK_LEN: usize = 1024 * 1024;
+
+/// A raw handle the sample hands to more than one pinned thread.
+///
+/// Each domain thread only ever reads or writes its own, disjoint byte
+/// range, through `IoRing`'s own explicit-offset ops -- never through a
+/// shared file position -- so concurrent use of the same handle is sound;
+/// this wrapper exists purely to assert that to the compiler, since a raw
+/// pointer is not `Send` on its own.
+#[derive(Clone, Copy)]
+struct SendHandle(HANDLE);
+
+// SAFETY: see the type's own doc comment.
+unsafe impl Send for SendHandle {}
+
+struct Args {
+    source: PathBuf,
+    destination: PathBuf,
+    policy: Policy,
+    remote_placement: bool,
+    topology_path: Option<PathBuf>,
+    chunk_len: usize,
+}
+
+fn parse_args() -> Result<Args, String> {
+    let mut positional = Vec::new();
+    let mut policy = Policy::ByL3;
+    let mut remote_placement = false;
+    let mut topology_path = None;
+    let mut chunk_len = DEFAULT_CHUNK_LEN;
+
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--policy" => {
+                let value = args.next().ok_or("--policy needs a value")?;
+                policy =
+                    Policy::parse(&value).ok_or_else(|| format!("unknown policy {value:?}"))?;
+            }
+            "--placement" => {
+                let value = args.next().ok_or("--placement needs a value")?;
+                remote_placement = match value.as_str() {
+                    "local" => false,
+                    "remote" => true,
+                    other => {
+                        return Err(format!(
+                            "unknown placement {other:?} (expected local or remote)"
+                        ));
+                    }
+                };
+            }
+            "--topology" => {
+                topology_path = Some(PathBuf::from(
+                    args.next().ok_or("--topology needs a value")?,
+                ));
+            }
+            "--chunk-size" => {
+                let value = args.next().ok_or("--chunk-size needs a value")?;
+                chunk_len = value
+                    .parse()
+                    .map_err(|_| format!("invalid --chunk-size {value:?}"))?;
+            }
+            other => positional.push(other.to_string()),
+        }
+    }
+
+    let mut positional = positional.into_iter();
+    let source = positional.next().ok_or(
+        "usage: ring_copy <source> <destination> [--policy NAME] [--placement local|remote] \
+         [--topology PATH] [--chunk-size BYTES]",
+    )?;
+    let destination = positional.next().ok_or("missing <destination>")?;
+
+    Ok(Args {
+        source: source.into(),
+        destination: destination.into(),
+        policy,
+        remote_placement,
+        topology_path,
+        chunk_len,
+    })
+}
+
+fn load_topology(path: Option<&PathBuf>) -> io::Result<Topology> {
+    match path {
+        Some(path) => {
+            let file = std::fs::File::open(path)?;
+            serde_json::from_reader(file).map_err(io::Error::other)
+        }
+        None => Topology::discover(),
+    }
+}
+
+fn main() -> io::Result<()> {
+    let args = match parse_args() {
+        Ok(args) => args,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
+
+    let topology = load_topology(args.topology_path.as_ref())?;
+    let (domains, degraded) = args.policy.select(&topology);
+    if degraded {
+        println!(
+            "note: {:?} found nothing to select on this topology; falling back to one whole-machine domain",
+            args.policy
+        );
+    }
+
+    let plans = plan::build_plan(&topology, &domains)?;
+    println!("{} domain(s) selected:", plans.len());
+    for domain_plan in &plans {
+        println!(
+            "  {} -- group {} mask {:#x}, local NUMA node {:?}",
+            domain_plan.label, domain_plan.group, domain_plan.mask, domain_plan.local_numa_node
+        );
+    }
+
+    let source_file = std::fs::File::open(&args.source)?;
+    let source_len = source_file.metadata()?.len();
+    let destination_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&args.destination)?;
+    destination_file.set_len(source_len)?;
+
+    let source_handle = SendHandle(source_file.as_raw_handle());
+    let destination_handle = SendHandle(destination_file.as_raw_handle());
+
+    let domain_count = plans.len() as u64;
+    let per_domain = source_len.div_ceil(domain_count.max(1));
+
+    let reports: Vec<io::Result<engine::DomainReport>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = plans
+            .iter()
+            .enumerate()
+            .map(|(index, domain_plan)| {
+                let start = per_domain * index as u64;
+                let end = (start + per_domain).min(source_len);
+                let numa_node = if args.remote_placement {
+                    plan::remote_numa_node(&topology, domain_plan.local_numa_node)
+                        .or(domain_plan.local_numa_node)
+                } else {
+                    domain_plan.local_numa_node
+                };
+                let chunk_len = args.chunk_len;
+                scope.spawn(move || {
+                    let source_handle = source_handle;
+                    let destination_handle = destination_handle;
+                    engine::copy_domain(
+                        domain_plan,
+                        source_handle.0,
+                        destination_handle.0,
+                        start..end,
+                        chunk_len,
+                        numa_node,
+                    )
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("domain thread panicked"))
+            .collect()
+    });
+
+    let mut failed = false;
+    println!();
+    println!("results:");
+    for report in reports {
+        match report {
+            Ok(report) => {
+                let seconds = report.elapsed.as_secs_f64().max(f64::EPSILON);
+                let mib_per_sec = (report.bytes_copied as f64 / (1024.0 * 1024.0)) / seconds;
+                println!(
+                    "  {}: {} bytes in {:?} ({mib_per_sec:.1} MiB/s)",
+                    report.label, report.bytes_copied, report.elapsed
+                );
+            }
+            Err(error) => {
+                failed = true;
+                eprintln!("  domain failed: {error}");
+            }
+        }
+    }
+
+    if plans.len() == 1 {
+        println!();
+        println!(
+            "note: only one domain ran, so this cannot show a difference between policies or \
+             buffer placements -- a single-domain or single-node machine produces noise here, \
+             not a benchmark result (M7.5)."
+        );
+    }
+
+    if failed {
+        return Err(io::Error::other("one or more domains failed"));
+    }
+    Ok(())
+}

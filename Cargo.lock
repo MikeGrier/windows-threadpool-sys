@@ -161,6 +161,7 @@ dependencies = [
 name = "windows-ioring-sys"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "windows-sys",
  "windows-threadpool-sys",
  "windows-topology-sys",

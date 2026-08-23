@@ -130,3 +130,25 @@ Append-only. See [CHECKLIST.md](CHECKLIST.md) for pending and in-progress work.
 - [x] **M6.3** -- Topology guidance as documentation rather than as API (D-8): how to enumerate L3 domains
   with `GetLogicalProcessorInformationEx`, why processor groups are a hard floor, and how to allocate a
   node-local pool with `VirtualAllocExNuma`. Pointers, not a partitioning policy.
+
+## Moved 2026-08-23 -- M7: `ring-copy`, a topology-aligned sample
+
+- [x] **M7.1** -- The `Topology -> Policy -> RingPlan` pipeline, with `Policy` as named code (`ByL3`,
+  `ByNode`, `ByPackage`, `ByCore`, `Single`) rather than data. A plan names, per domain, the ring to
+  create, the processors to affinitize to, and where its buffer pool should be allocated.
+
+- [x] **M7.2** -- Reject a plan the platform cannot express, rather than emitting an impossible affinity
+  mask: a fed-in description may carry one group with more than 64 processors, which is legal in the
+  description and unrepresentable on Windows (topology D-10).
+
+- [x] **M7.3** -- The copy engine itself: read and write through per-domain rings, buffers allocated with
+  `VirtualAllocExNuma` and registered once per ring.
+
+- [x] **M7.4** -- Switches for topology source (discovered, or a JSON file), policy, and **buffer
+  placement** (node-local versus deliberately remote). Buffer placement is the variable most likely to
+  show a real effect, because the device DMAs into the registered buffer on every operation, whereas
+  callback placement is a one-time cache-warmth question.
+
+- [x] **M7.5** -- Report per-domain throughput, and **say plainly when the host cannot show a
+  difference** -- a single-node or virtualized machine will produce noise, and a benchmark that reports
+  noise as a result is worse than no benchmark. The machine this was designed on reported zero NUMA nodes.
