@@ -213,6 +213,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-topology-sys"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "wtf-string"
 version = "0.2.0"
 dependencies = [

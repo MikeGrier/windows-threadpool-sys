@@ -1,0 +1,31 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-topology-sys"
+version = "0.1.0" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/windows-topology-sys"
+description = "Safe enumeration of Windows processor, cache, and memory topology, with a JSON-describable schema for discovered or synthetic topologies."
+readme = "README.md"
+keywords = ["windows", "numa", "topology", "affinity", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "hardware-support"]
+
+[lib]
+path = "src/lib.rs"
+
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+[dependencies]
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_System_SystemInformation",
+] }

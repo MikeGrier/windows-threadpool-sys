@@ -5,25 +5,25 @@ Design decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md); the session that pro
 
 ## M1 -- Safe enumeration
 
-- [ ] **M1.1** -- Crate skeleton: `Cargo.toml`, `src/lib.rs`, README, workspace member, release-please
+- [x] **M1.1** -- Crate skeleton: `Cargo.toml`, `src/lib.rs`, README, workspace member, release-please
   registration. `windows-sys` features are `Win32_Foundation` and `Win32_System_SystemInformation`.
   Everything behind `cfg(windows)`.
 
-- [ ] **M1.2** -- `ProcessorSet`: a `(group, mask)` set that spans groups, with iteration, membership, and
+- [x] **M1.2** -- `ProcessorSet`: a `(group, mask)` set that spans groups, with iteration, membership, and
   set operations (D-3). This is the crate's one abstraction above faithful records, and it is what prevents
   the recurring group-related bugs, so it lands before anything consumes it.
 
-- [ ] **M1.3** -- The safe `GetLogicalProcessorInformationEx` walk (D-1): two-call sizing against
+- [x] **M1.3** -- The safe `GetLogicalProcessorInformationEx` walk (D-1): two-call sizing against
   `ERROR_INSUFFICIENT_BUFFER`, advance by each record's own `Size` rather than by indexing, discriminate
   the union on `Relationship`, and read each trailing `GroupMask` array to its true `GroupCount` length
   rather than to the `[GROUP_AFFINITY; 1]` the type claims. Every one of those is a way to get this wrong
   silently; the walk is the crate's reason to exist.
 
-- [ ] **M1.4** -- Owned, faithful records for each relation: processor core (with SMT flag and efficiency
+- [x] **M1.4** -- Owned, faithful records for each relation: processor core (with SMT flag and efficiency
   class), package, cache (level, size, type), NUMA node, and group. Faithful means the record says what
   Win32 said, with a `ProcessorSet` in place of a raw mask and no interpretation layered on (D-2).
 
-- [ ] **M1.5** -- Tests: the walk survives a buffer whose records are of differing sizes; a
+- [x] **M1.5** -- Tests: the walk survives a buffer whose records are of differing sizes; a
   multi-group `ProcessorSet` round-trips; enumeration on the host is self-consistent (every processor
   named by a domain exists in some group, and group processor counts agree with the group relation).
 

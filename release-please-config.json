@@ -32,6 +32,13 @@
                 "Cargo.toml"
             ]
         },
+        "crates/windows-topology-sys": {
+            "package-name": "windows-topology-sys",
+            "component": "windows-topology-sys",
+            "extra-files": [
+                "Cargo.toml"
+            ]
+        },
         "crates/wtf-string": {
             "package-name": "wtf-string",
             "component": "wtf-string",
