@@ -840,7 +840,11 @@ fn route_established(
         fault_slot,
     };
     let mut state = lock(resident);
-    if let Some(watcher) = state.directories.get(&id) {
+    if let Some(watcher) = state
+        .directories
+        .get(&id)
+        .filter(|watcher| watcher.stop_reason().is_none())
+    {
         // Coalesce (D-6): this directory already has a watcher. `handle` is
         // handed to it too, in case this route needs to widen the reach to
         // recursive (M4.4) -- reopening is what that takes, and this handle is
@@ -861,6 +865,18 @@ fn route_established(
         return Routed::Live;
     }
 
+    // Either nothing is watching this directory yet, or what remains there
+    // stopped permanently (D-22) and can never arm again -- discard it before
+    // starting fresh from this route's own handle, rather than silently
+    // reporting a live subscription against a watcher that will never
+    // deliver. Removed under the lock, dropped outside it: `Drop` blocks on
+    // rundown (D-20), and holding the resident lock across that wait would
+    // serialise every other reader against a stopped watcher for no reason
+    // (the same ordering `Request::Cancel` already uses).
+    let stale = state.directories.remove(&id);
+    drop(state);
+    drop(stale);
+
     match DirectoryWatcher::start(handle, opened_path, route) {
         Ok(watcher) => {
             // M11.4: so this watcher's own background reopen can re-key its
@@ -868,6 +884,7 @@ fn route_established(
             // lands on a different directory.
             watcher.bind_resident(Weak::clone(resident_weak));
             let mode = watcher.mode();
+            let mut state = lock(resident);
             state.directories.insert(id, watcher);
             state.subscriptions.insert(
                 watch,
@@ -889,7 +906,6 @@ fn route_established(
             // reservation (if any) is reused here rather than silently
             // downgrading an `Interactive` subscription to default retries.
             let detail = classify_detail(&error);
-            drop(state);
             match park_pending(
                 resident,
                 core_ref,

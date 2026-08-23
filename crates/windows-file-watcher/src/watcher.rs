@@ -1086,7 +1086,7 @@ impl WatcherInner {
             *stopped = Some(error);
             drop(stopped);
             *lock(&self.fault) = None;
-            self.publish(DecodedBatch::Desync(DesyncCause::Overflow));
+            self.publish(DecodedBatch::Desync(DesyncCause::Stopped));
         }
     }
 }

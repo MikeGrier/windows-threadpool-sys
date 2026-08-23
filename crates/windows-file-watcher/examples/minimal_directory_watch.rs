@@ -10,9 +10,35 @@ use std::process::ExitCode;
 
 use windows_file_watcher::{Monitor, Notification, WatchOptions};
 
+/// Where this example's diagnostics and change reports go, kept as one seam
+/// (the repo's architectural pre-step) rather than scattering
+/// `eprintln!`/`println!` across the file.
+struct Output<E, O> {
+    stderr: E,
+    stdout: O,
+}
+
+impl<E: std::io::Write, O: std::io::Write> Output<E, O> {
+    fn diagnostic(&mut self, message: &str) {
+        let _ = writeln!(self.stderr, "{message}");
+    }
+
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.stdout, "{message}");
+    }
+}
+
+fn stdio() -> Output<std::io::Stderr, std::io::Stdout> {
+    Output {
+        stderr: std::io::stderr(),
+        stdout: std::io::stdout(),
+    }
+}
+
 fn main() -> ExitCode {
+    let mut output = stdio();
     let Some(path) = env::args().nth(1) else {
-        eprintln!("usage: minimal_directory_watch <directory>");
+        output.diagnostic("usage: minimal_directory_watch <directory>");
         return ExitCode::FAILURE;
     };
 
@@ -22,20 +48,26 @@ fn main() -> ExitCode {
         .subscribe(&path, WatchOptions::new().subtree(true))
         .expect("register the subscription");
 
-    println!("watching {path} (recursively); press Ctrl+C to stop");
+    output.report(&format!(
+        "watching {path} (recursively); press Ctrl+C to stop"
+    ));
 
     while let Some(notification) = receiver.recv() {
         match notification {
             Notification::Batch { changes, .. } => {
                 for change in changes {
-                    println!("{:?} {}", change.kind, change.name.to_path_buf().display());
+                    output.report(&format!(
+                        "{:?} {}",
+                        change.kind,
+                        change.name.to_path_buf().display()
+                    ));
                 }
             }
             Notification::Desync { cause, .. } => {
-                println!("desync ({cause:?}): re-scan the directory");
+                output.report(&format!("desync ({cause:?}): re-scan the directory"));
             }
             Notification::Completion { outcome, .. } => {
-                println!("registration: {outcome:?}");
+                output.report(&format!("registration: {outcome:?}"));
             }
             _ => {}
         }

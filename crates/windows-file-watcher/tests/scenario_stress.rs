@@ -489,36 +489,64 @@ fn a_held_open_file_blocks_a_concurrent_delete_with_a_real_sharing_violation() {
     if !stress_enabled() {
         return;
     }
-    let scenario = Scenario::new("spoiler-blocks-delete")
-        .then(Operation::CreateFile {
-            path: PathBuf::from("spoiled.txt"),
-        })
-        .then(Operation::Concurrent {
-            branches: vec![
-                vec![Operation::HoldOpen {
-                    path: PathBuf::from("spoiled.txt"),
-                    duration: Duration::from_millis(300),
-                }],
-                vec![
-                    Operation::Wait {
-                        duration: Duration::from_millis(50),
-                    },
-                    Operation::RemoveFile {
-                        path: PathBuf::from("spoiled.txt"),
-                    },
-                ],
-            ],
-        });
-    let (outcome, dir) = run_scenario_keep_dir(&scenario, seed(), &HarnessParams::default());
+    let scenario = Scenario::new("spoiler-blocks-delete").then(Operation::CreateFile {
+        path: PathBuf::from("spoiled.txt"),
+    });
+    let (_outcome, dir) = run_scenario_keep_dir(&scenario, seed(), &HarnessParams::default());
+    let target = dir.path().join("spoiled.txt");
 
-    // The held-open handle has no FILE_SHARE_DELETE, so the concurrent
-    // RemoveFile must fail with a real sharing violation while the hold is
-    // still active -- the file is still here, not merely "probably" spoiled.
+    // A fixed sleep before attempting the delete only *probably* wins the race
+    // against the hold's own open call -- on a loaded runner the delete branch
+    // can go first and this fixture would then fail nondeterministically
+    // despite correct sharing behavior. A real handshake removes the guess: the
+    // delete thread blocks on a condition variable that this thread signals
+    // only once the handle is genuinely open, so the delete is never attempted
+    // before there is something to be blocked by.
+    let opened = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let deleter = {
+        let target = target.clone();
+        let opened = std::sync::Arc::clone(&opened);
+        std::thread::spawn(move || {
+            let (lock, ready) = &*opened;
+            let mut guard = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            while !*guard {
+                guard = ready
+                    .wait(guard)
+                    .unwrap_or_else(|poison| poison.into_inner());
+            }
+            drop(guard);
+            std::fs::remove_file(&target)
+        })
+    };
+
+    // The same non-share-delete open `Operation::HoldOpen` uses (M9+.2), just
+    // held open by this thread directly so it can control exactly when the
+    // deleter is released.
+    use std::os::windows::fs::OpenOptionsExt;
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x0000_0001 | 0x0000_0002) // FILE_SHARE_READ | FILE_SHARE_WRITE, no DELETE
+        .open(&target)
+        .expect("open the file to hold");
+    {
+        let (lock, ready) = &*opened;
+        *lock.lock().unwrap_or_else(|poison| poison.into_inner()) = true;
+        ready.notify_one();
+    }
+    // A real window for the now-unblocked delete thread to actually attempt
+    // (and fail) the removal before the handle closes.
+    std::thread::sleep(Duration::from_millis(100));
+    drop(handle);
+
+    let delete_result = deleter.join().expect("the delete thread panicked");
     assert!(
-        dir.path().join("spoiled.txt").exists(),
+        delete_result.is_err(),
+        "the concurrent delete succeeded while the handle was still open"
+    );
+    assert!(
+        target.exists(),
         "the spoiler should have blocked the concurrent delete"
     );
-    assert!(outcome.batches > 0, "expected at least the create batch");
 
     dir.cleanup();
 }

@@ -21,9 +21,35 @@ use windows_file_watcher::{Monitor, Notification, RetryMode, VolumeChangeDecisio
 /// track how many consecutive faults this subscription has seen instead.
 const OUR_RETRY_DELAY: Duration = Duration::from_millis(200);
 
+/// Where this example's diagnostics and event reports go, kept as one seam
+/// (the repo's architectural pre-step) rather than scattering
+/// `eprintln!`/`println!` across the file.
+struct Output<E, O> {
+    stderr: E,
+    stdout: O,
+}
+
+impl<E: std::io::Write, O: std::io::Write> Output<E, O> {
+    fn diagnostic(&mut self, message: &str) {
+        let _ = writeln!(self.stderr, "{message}");
+    }
+
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.stdout, "{message}");
+    }
+}
+
+fn stdio() -> Output<std::io::Stderr, std::io::Stdout> {
+    Output {
+        stderr: std::io::stderr(),
+        stdout: std::io::stdout(),
+    }
+}
+
 fn main() -> ExitCode {
+    let mut output = stdio();
     let Some(path) = env::args().nth(1) else {
-        eprintln!("usage: fault_recovery <directory>");
+        output.diagnostic("usage: fault_recovery <directory>");
         return ExitCode::FAILURE;
     };
 
@@ -38,44 +64,44 @@ fn main() -> ExitCode {
         )
         .expect("register the subscription");
 
-    println!("watching {path}; press Ctrl+C to stop");
+    output.report(&format!("watching {path}; press Ctrl+C to stop"));
 
     while let Some(notification) = receiver.recv() {
         match notification {
             Notification::Batch { changes, .. } => {
-                println!("{} change(s)", changes.len());
+                output.report(&format!("{} change(s)", changes.len()));
             }
             Notification::Desync { cause, .. } => {
-                println!("desync ({cause:?}): re-scan the directory");
+                output.report(&format!("desync ({cause:?}): re-scan the directory"));
             }
             Notification::Suspended { .. } => {
-                println!("suspended: the monitor is working to re-establish the watch");
+                output.report("suspended: the monitor is working to re-establish the watch");
             }
             Notification::Resumed { .. } => {
-                println!("resumed: delivering again");
+                output.report("resumed: delivering again");
             }
             Notification::Established { mode, .. } => {
-                println!("established in {mode:?} mode");
+                output.report(&format!("established in {mode:?} mode"));
             }
             Notification::RetryQuestion {
                 operation, detail, ..
             } => {
-                println!(
+                output.report(&format!(
                     "asked how long to wait after a failed {operation:?} ({detail:?}); answering {OUR_RETRY_DELAY:?}"
-                );
+                ));
                 session.answer(watch.id(), Some(OUR_RETRY_DELAY));
             }
             Notification::Completion { outcome, .. } => {
-                println!("registration: {outcome:?}");
+                output.report(&format!("registration: {outcome:?}"));
             }
             Notification::VolumeChanged {
                 previous, current, ..
             } => {
-                println!(
+                output.report(&format!(
                     "reopened on a different volume ({:?} -> {:?}); continuing",
                     previous.volume_label(),
                     current.volume_label()
-                );
+                ));
                 session.answer_volume_change(watch.id(), VolumeChangeDecision::Continue);
             }
         }

@@ -78,14 +78,30 @@ impl Rng {
         if span == 0 {
             return self.next_u64();
         }
-        low + self.next_u64() % span
+        // Plain `% span` is biased toward the low end whenever `span` does not
+        // evenly divide `2^64` -- rejecting draws past the last full multiple
+        // of `span` (`limit`) restores a uniform distribution. Expected extra
+        // draws are bounded (worst case span just over `u64::MAX / 2`, still
+        // under one retry on average).
+        let limit = u64::MAX - (u64::MAX % span);
+        loop {
+            let draw = self.next_u64();
+            if draw < limit {
+                return low + draw % span;
+            }
+        }
     }
 
     /// A uniform [`Duration`] in `[low, high]` inclusive, at microsecond
     /// resolution.
     pub fn duration_range(&mut self, low: Duration, high: Duration) -> Duration {
-        let lo = low.as_micros() as u64;
-        let hi = high.as_micros() as u64;
+        // Saturating rather than truncating: a `Duration` beyond `u64::MAX`
+        // microseconds (~584,942 years) is already absurd for a scenario
+        // bound, but truncating it via `as u64` would wrap to something far
+        // *smaller* -- silently defeating the caller's timeout/backpressure
+        // intent rather than merely clamping it.
+        let lo = u64::try_from(low.as_micros()).unwrap_or(u64::MAX);
+        let hi = u64::try_from(high.as_micros()).unwrap_or(u64::MAX);
         Duration::from_micros(self.range(lo, hi))
     }
 }
@@ -126,7 +142,17 @@ mod millis {
         duration: &Duration,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        (duration.as_millis() as u64).serialize(serializer)
+        // A checked conversion rather than `as u64`: silently truncating a
+        // duration that does not fit would persist a *different*, shorter
+        // duration than the one the caller actually has, rather than failing
+        // loudly on input this schema cannot represent.
+        u64::try_from(duration.as_millis())
+            .map_err(|_| {
+                serde::ser::Error::custom(
+                    "duration exceeds u64::MAX milliseconds and cannot be persisted as JSON",
+                )
+            })?
+            .serialize(serializer)
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(

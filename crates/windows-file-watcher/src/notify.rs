@@ -366,6 +366,11 @@ pub enum DesyncCause {
     /// The watch was re-established after an outage; changes during the gap were
     /// lost. Produced by the fault-recovery path.
     Reestablished,
+    /// The watch stopped *permanently* (D-22's non-retryable pair, discovered on a
+    /// later re-establish attempt): nothing further will ever arrive for it. Unlike
+    /// every other cause, a re-scan will not resynchronize this watch -- the client
+    /// should treat it as ended and consult `Monitor::stop_reason` for why.
+    Stopped,
 }
 
 /// The result of decoding one `ReadDirectoryChangesW` completion.
