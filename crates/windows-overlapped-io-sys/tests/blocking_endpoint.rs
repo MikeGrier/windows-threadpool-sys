@@ -29,7 +29,8 @@ fn reads_a_file_synchronously_via_get_overlapped_result() {
         .expect("open overlapped");
     let owned = OwnedHandle::from(file);
     // SAFETY: opened with FILE_FLAG_OVERLAPPED, unassociated, unique, exclusive.
-    let endpoint = BlockingEndpoint::new(unsafe { UnassociatedEndpoint::assume_overlapped(owned) });
+    let endpoint = BlockingEndpoint::new(unsafe { UnassociatedEndpoint::assume_overlapped(owned) })
+        .expect("no incompatible notification mode");
 
     let mut operation = Operation::new(());
     operation.set_offset(0);

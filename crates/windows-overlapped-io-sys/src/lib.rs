@@ -74,7 +74,7 @@ mod socket;
 mod started;
 
 #[cfg(windows)]
-pub use blocking::BlockingEndpoint;
+pub use blocking::{BlockingEndpoint, TryFromEndpointError};
 
 #[cfg(windows)]
 pub use buf::{IoBuf, IoBufMut};

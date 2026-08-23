@@ -46,7 +46,8 @@ fn blocking_backend_queries_compression() {
     let path = temp_file("blocking");
     let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
-    );
+    )
+    .expect("no incompatible notification mode");
 
     // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- empty input, and it
     // writes only the owned output buffer, embedding no pointers.

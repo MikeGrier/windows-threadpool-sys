@@ -20,7 +20,7 @@ The blocking backend (no completion port, one operation at a time), with the
 use windows_overlapped_io_sys::{BlockingEndpoint, UnassociatedEndpoint};
 
 let endpoint = UnassociatedEndpoint::open(r"C:\some\file.bin", true, false, 0)?;
-let mut endpoint = BlockingEndpoint::new(endpoint);
+let mut endpoint = BlockingEndpoint::new(endpoint).expect("no incompatible notification mode");
 
 let mut buffer = [0_u8; 64];
 let bytes_read = endpoint.read(&mut buffer, 0)?;

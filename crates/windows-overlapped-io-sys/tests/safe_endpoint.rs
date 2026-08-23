@@ -33,7 +33,8 @@ fn safe_created_endpoint_reads_on_the_blocking_backend() {
 
     let endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
-    );
+    )
+    .expect("no incompatible notification mode");
 
     let mut operation = Operation::new(());
     operation.set_offset(0);

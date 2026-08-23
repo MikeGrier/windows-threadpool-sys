@@ -22,7 +22,8 @@ fn blocking_backend_round_trips_a_file() {
     let path = empty_temp_file("blocking");
     let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, true, 0).expect("open endpoint"),
-    );
+    )
+    .expect("no incompatible notification mode");
 
     let data = b"blocking safe adapter round trip";
     let written = endpoint.write(data, 0).expect("write");

@@ -19,7 +19,8 @@ fn blocking_ioctl_get_compression() {
     let path = temp_file("blocking");
     let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
-    );
+    )
+    .expect("no incompatible notification mode");
 
     // FSCTL_GET_COMPRESSION returns a USHORT compression state (2 bytes).
     // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- its input is empty and

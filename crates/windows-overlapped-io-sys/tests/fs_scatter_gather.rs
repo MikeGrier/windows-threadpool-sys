@@ -36,7 +36,8 @@ fn blocking_backend_scatter_gather_round_trips() {
     let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, true, FILE_FLAG_NO_BUFFERING)
             .expect("open endpoint"),
-    );
+    )
+    .expect("no incompatible notification mode");
 
     let src = filled_pages(PAGES);
     let written = endpoint.write_gather(&src, 0).expect("write_gather");

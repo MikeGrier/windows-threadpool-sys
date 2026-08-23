@@ -15,7 +15,8 @@ fn blocking_write_then_read_round_trips() {
 
     let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, true, 0).expect("open endpoint"),
-    );
+    )
+    .expect("no incompatible notification mode");
 
     let data = b"safe file adapter round trip";
     let written = endpoint.write(data, 0).expect("write");
@@ -133,7 +134,8 @@ fn blocking_scatter_gather_round_trips() {
     let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, true, FILE_FLAG_NO_BUFFERING)
             .expect("open endpoint"),
-    );
+    )
+    .expect("no incompatible notification mode");
 
     let mut src = PageBuffers::new(2);
     for (i, byte) in src.as_bytes_mut().iter_mut().enumerate() {
