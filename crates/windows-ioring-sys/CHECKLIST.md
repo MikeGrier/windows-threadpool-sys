@@ -32,4 +32,19 @@ with the plan scoped now so the shape is not lost. This is **not** a fallback fo
 
 - [ ] **M6+.6** -- Decide `IoBuf`: extract to a shared crate, re-export from
   `windows-overlapped-io-sys`, or leave duplicated (D-1). The merge-or-delete decision that duplicate-then-decide
+
+## M8 -- `FileRef::Raw(HANDLE)` lifetime safety (PR #20 review finding)
+
+Not yet scoped. A caller can close or reuse the raw `HANDLE` passed to `Batch::read`/`write`/`flush`/
+`cancel`/`register_files` before the kernel finishes with it: unlike a buffer (owned by a `Token` until
+claimed), `FileRef::Raw` carries no lifetime and nothing in this crate borrow-checks a handle across the
+async gap between push and completion.
+
+- [ ] **M8.1** -- Decide the ownership model before implementing anything: options include (a) borrowing
+  `FileRef::Raw` for the pushing `Batch`'s own lifetime (does not by itself solve the completion-outlives-
+  the-push-call problem `Token` exists to handle for buffers), (b) requiring a ref-counted or duplicated
+  handle wrapper the crate can hold until claimed, or (c) leaving raw-`HANDLE` use governed by an explicit
+  caller contract (matching how `IoRing::push_raw` already documents its own unsafe obligations) rather than
+  redesigning `Batch`'s ownership model. Any of (a)/(b) is a breaking change across `Batch`'s whole public
+  surface, so raise the chosen direction with the engineer before starting M8.2.
   defers to the point where the new path is proven -- which is here, not earlier.

@@ -72,7 +72,7 @@ threads of its own.
 | D-51 | **Made permanent by D-77 -- the "future milestone" this decision anticipated will never arrive, so the constant is the final answer, not a placeholder.** **The filter union is a constant, not a computed union, because there is nothing to union.** M4.1's item asked to "union the `FILE_NOTIFY_CHANGE_*` filters... across a directory's subscriptions", but [`WatchOptions`](../windows-file-watcher/src/watch.rs) has no filter-selection field -- every subscription implicitly wants [`ALL_NOTIFY_FILTERS`](../windows-file-watcher/src/watcher.rs), so the union over any set of subscriptions is trivially that same constant. The *reach* union (subtree) is real and is computed fresh at every arm from the live route set; the filter union has nothing to compute, and D-77 settles that it never will: no subscription will ever be given a filter to select, so this stays a constant permanently rather than becoming a real reduction later. |
 | <a id="d-52"></a>D-52 | **Widening a coalesced watcher's reach to recursive reopens the directory; it does not cancel and resubmit on the same handle.** The obvious implementation -- cancel the live read, then resubmit with `bWatchSubtree=TRUE` on the same handle -- was tried first, matching M4.4's original wording. It does not work: measured directly, the kernel kept reporting only the directory's direct children after the resubmit; nothing nested was ever reported, no matter how long a test waited or how many further changes it made. A fresh `CreateFileW` does not have this problem. So [`WatcherInner::io`](../windows-file-watcher/src/watcher.rs) moved from a set-once `OnceLock` to a replaceable `Mutex<Option<ThreadpoolIo>>`: reopening tears the old endpoint down completely (cancel, then `run_down` -- the same ordering [D-23](#d-23) already established), builds a fresh one bound to a newly opened handle, and arms it, all under a new transient [`ArmGate::Reopening`](#d-34) that resolves to `Open` or, if teardown wins the race, is simply abandoned. The handle a reopen needs is the one the caller already opened to discover the directory's identity for coalescing (D-50) -- so `DirectoryWatcher::add_route` takes it as a parameter and there is no second open. A failure to reopen stops the whole watcher (D-15's rearm-and-retry classification) and is reported to every route it currently serves, not only the one that triggered the widen, since they now share one endpoint. |
 | D-53 | **The establish/re-establish state machine reuses `ArmGate` rather than introducing a separately named `Opening -> ArmingDetailed -> WatchingDetailed` machine.** `ArmGate` already answered exactly the question a fault needs answered -- "may this watcher submit a read right now, and if not, why" -- for backpressure (D-29/D-34) and widening (D-52); a fault is a third reason of the same shape, so it is a fourth variant, `ArmGate::Faulted`, rather than a parallel state type. A watcher's directory-level path (an outstanding read failing, or a widen/re-establish reopen failing) and a still-`Pending` subscription's own open-retry path (M5.1, monitor-level, before any `DirectoryWatcher` exists) are two different owners of the same protocol, not one shared object -- see D-59. |
-| D-54 | **A fault's `FaultState` does not retain the triggering error, only which operation faulted.** The raw `io::Error`/`OpenError` is surfaced once, at the moment the fault begins, through the `log` diagnostic (D-58), and is not needed again: every subsequent decision (who to ask, what the default is, whether an answer resolves it) depends only on [`FaultOperation`](../windows-file-watcher/src/retry.rs) and the accumulating earliest-answer reduction. Keeping the error alive past that point would be state with no reader. |
+| D-54 | **Superseded by [D-79](#d-79).** A fault's `FaultState` does not retain the triggering error, only which operation faulted. The raw `io::Error`/`OpenError` is surfaced once, at the moment the fault begins, through the `log` diagnostic (D-58), and is not needed again: every subsequent decision (who to ask, what the default is, whether an answer resolves it) depends only on [`FaultOperation`](../windows-file-watcher/src/retry.rs) and the accumulating earliest-answer reduction. Keeping the error alive past that point would be state with no reader. |
 | D-55 | **The interactive fault question is delivered through a standing per-subscription reservation ([`StandingSlot`](../windows-file-watcher/src/queue.rs)), taken once at registration, not the resident coalescing latch D-28 first sketched.** D-28's "one error code plus one bit, allocated with the watcher" described resident *state*; what M5.3 actually needed to deliver reliably is a *message* -- the `WatchId`, the failing operation, D-27's negotiation -- which the ordinary reserve-then-send `Reservation` cannot do more than once. `StandingSlot` is the reusable generalisation: it carves out its capacity permanently rather than releasing it after one send, which is sound *only* because a watcher cannot fault twice concurrently (D-28's own justification) -- so at most one question per subscription is ever outstanding, and one slot is provably always enough regardless of how many faults a long-lived subscription lives through. |
 | D-56 | **The retry protocol ships fixed per-operation defaults only -- no growth multiplier, cap, jitter, or per-error-kind override.** The "Fault model" prose below describes a hypothetical soonest-recovering *reduction* over several such knobs, written before D-27 replaced D-16; but `RetryMode` carries only `Defaults`/`Interactive`; `WatchOptions` has no field for any of those numbers. Implementing them now would be inventing behaviour nobody can configure. What ships is D-27's literal text: [`FaultOperation::default_delay`](../windows-file-watcher/src/retry.rs) (500 ms for both Open and Arm), asked of every interactive route, resolved to the earliest answer, clamped to the [`FLOOR`](../windows-file-watcher/src/retry.rs) (50 ms). Extending this is a scope decision for whoever gives `WatchOptions` those fields, not an omission here. |
 | D-57 | **`Suspended`/`Resumed`/`Established` (D-13) ride the ordinary best-effort observation queue, like `Desync`; only `RetryQuestion` gets a standing reservation.** The distinction D-28/D-33 draws is about *guarantee*, not about which notifications are "fault-related": a lost liveness bracket is not a liveness bug (the client still eventually resumes seeing batches, or observes the disconnect), where a lost `RetryQuestion` on an interactive subscription would silently wedge that subscription's own recovery. So only the question needs D-55's permanent slot; the brackets share fate with every other observation-tier notification, including being subject to the same `Delivery::Latched` best-effort outcome under saturation. |
@@ -96,6 +96,8 @@ threads of its own.
 | D-75 | **M9+.2's `Operation::HoldOpen` is a genuine Win32 spoiler, not a simulated one: it opens the target file with `share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)`, deliberately omitting `FILE_SHARE_DELETE`, via `std::os::windows::fs::OpenOptionsExt` (no new dependency; `std`'s own Windows extension trait already exposes it).** A concurrent `Rename`/`RemoveFile`/`RemoveDir` targeting the same path while the handle is held fails with a real sharing violation rather than a scenario merely hoping for a race window -- verified in the harness test (`a_held_open_file_blocks_a_concurrent_delete_with_a_real_sharing_violation`) by asserting the file is still present on disk afterward, not just by inspecting notification counts. The two flag values are named constants (`share_mode::READ_WRITE_NO_DELETE`), per the repo's no-bare-manifest-numeric-constants rule. |
 | D-76 | **M9+.4's `Operation::OpenSessionBounded` reuses `Monitor::session_with_bound` (already part of the crate's public API) rather than adding a new queue-capacity knob anywhere.** A scenario that wants to deliberately overwhelm the crate's documented backpressure behavior (a full queue stops the producer rather than dropping data, D-11) opens a session with a small bound and then applies far more churn than that bound can hold before the harness ever drains it (draining only happens once per top-level operation, so a single large `Repeat` genuinely saturates a tiny bound). The check this buys is structural, not a specific assertion: the harness's own overall deadline (already asserted by `run_scenario`) is what would fail if backpressure ever became a wedge instead of a stall: `a_deliberately_tiny_queue_bound_never_wedges_under_overwhelming_load` deliberately does not assert on desync counts, only that the run completes and delivers at least one batch. |
 | D-77 | **The per-subscription change-type filter that M4 reserved space for is *withdrawn*, not deferred: it is not faithfully implementable under D-6 coalescing, and the one shape of it that looks implementable (namespace-only) is actively harmful to the workload it appears to serve.** The kernel filter is expressed in *change classes* (`FILE_NOTIFY_CHANGE_SIZE`, `_LAST_WRITE`, `_ATTRIBUTES`, `_LAST_ACCESS`, `_SECURITY`, `_FILE_NAME`, `_DIR_NAME`) but records arrive as *action codes* (`FILE_ACTION_*`), and that mapping is lossy in exactly the wrong direction: all five non-namespace classes collapse into the single `ChangeKind::Modified` action. Because a directory has exactly one watcher armed with the *union* of its subscriptions' masks (D-6), a route asking for size-only changes receives `Modified` records it cannot attribute to a class, and must therefore either over-deliver (defeating the filter) or under-deliver (dropping changes it asked for). Restricting the feature to the namespace classes -- which *are* recoverable from the action code -- fails for a different reason: a name appearing is not a file being complete, its content streams in afterward as `Modified`, and the only workable completeness test on Windows is a quiescence heuristic (openable, parses, then quiet for N ms) built on precisely the `Modified` traffic such a filter discards. Filtering is therefore not a neutral reduction in volume; it destroys the crate's only evidence of ongoing work. The contract this crate keeps instead is *completeness*: a change notification is positive evidence that a file was **not** finished, never evidence that it was, and a client can only reason about quiescence if it sees every change. This also makes D-12's unfilterable `Desync` load-bearing rather than incidental -- a gap in the event set must invalidate any in-flight settling window, which is only sound while `Desync` cannot be filtered out. **This decision schedules no work**: there is deliberately no checklist item anywhere for a change-type filter, and the absence is intentional rather than an oversight. If a future need arises, the only implementable shape is a client-side predicate over the already-decoded `ChangeKind` (which cannot narrow the kernel mask and so buys no kernel-side efficiency), not a `FILE_NOTIFY_CHANGE_*` mask on `WatchOptions`; that shape is recorded here and remains unscheduled. Rationale and the full design discussion: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> D-77. |
+| <a id="d-78"></a>D-78 | **A reopen that lands on a different volume than before is a per-subscription confirmation, not a silent continuation or a directory-wide veto.** `WatcherInner::reopen` reopens by path and never checked whether the result is still the same volume, so removable media swapped for different media at the same path (the classic case: NTFS media replaced by FAT32) was silently absorbed, with the client learning about it, if at all, only as an ordinary `Established { Coarse }` should the new volume happen to need the fallback tier. See [Volume identity confirmation on reopen](#volume-identity-confirmation-on-reopen). |
+| <a id="d-79"></a>D-79 | **Supersedes [D-54](#d-54): every fault/failure message now carries a `FaultDetail` (this crate's `OpenFailure` classification plus a `FailureCode`), not just which operation faulted.** A client asked to choose a retry delay, or told a subscription failed permanently, previously had no way to know *why* -- `FaultOperation` says only `Open` or `Arm`, and the raw error was logged (D-58) and discarded. `FailureCode` is `Win32(u32)` or `HResult(i32)` rather than one currency: every source in this crate today is a classic last-error API, so `Win32` is the only variant anything currently produces, but a value is kept in the currency it actually arrived in rather than converted through `HRESULT_FROM_WIN32`/`HRESULT_CODE` to force a single shape. See [Failure detail on every fault report](#failure-detail-on-every-fault-report). |
 
 
 ### Queue mediation
@@ -221,3 +223,85 @@ error uses the reopen loop instead (D-60/D-61). The coarse handle is closed with
 default `OwnedHandle` path would close it with `CloseHandle`, it reaches the pool
 through the **custom-close waitable owner** `windows-threadpool-sys` provides
 (M17), which drains the wait before invoking `FindCloseChangeNotification`. (D-17)
+
+### Volume identity confirmation on reopen
+
+A reopen (`WatcherInner::reopen`, driven by `retry_reestablish`, `add_route`'s
+widen, and the very first establish) reopens by *path*, and Windows gives no
+guarantee that the path still names the same volume it did before -- removable
+media can be ejected and replaced with different media mounted at the same
+drive letter or path, most commonly NTFS media swapped for something coarser
+like FAT32. Before D-78 this was invisible: the watcher silently kept running
+under the same `WatchId`s against what is, physically, a different filesystem.
+
+The fix is a per-subscription confirmation, not a directory-wide gate: a
+reopen that lands on a different `VolumeIdentity` (filesystem name and volume
+label; the volume serial number is already tracked by `DirectoryId`, D-50)
+asks only the routes on that directory whose `WatchOptions` opted into
+`VolumeChangePolicy::Confirm` (default remains `AutoContinue`, matching every
+prior release's behavior for a client that does not ask). Each route's answer
+(`VolumeChangeDecision::Continue` or `::Stop`, an enum rather than a bool so a
+future third option is additive) affects only that route -- `Stop` removes
+just that subscription through the existing `remove_route` path, `Continue`
+leaves it and updates its baseline `VolumeIdentity` to the one just
+confirmed, so the *next* reopen compares against the volume the client just
+accepted rather than the original one. `AutoContinue` routes are never asked.
+
+Arming is a single, shared operation per coalesced directory (D-6), so it
+cannot proceed until every asked route has answered: a new `ArmGate` variant,
+`VolumeChangePending`, blocks the shared arm exactly the way `Faulted` does,
+resolving back to `Open` once the awaiting set empties (decliners already
+removed by then). If that leaves zero routes, the watcher tears down through
+the pre-existing zero-routes path -- no special case is needed there.
+
+A reopen tries `ReOpenFile` against the watcher's own *previous* handle before
+falling back to a fresh path-based `CreateFileW`: `WatcherInner` keeps the old
+endpoint alive until `reopen`'s own `teardown_endpoint` call, which runs after
+the new handle already exists, so at the moment a reopen begins the old handle
+is still live. `ReOpenFile` reopens relative to the handle itself, not the
+path, so it is structurally incapable of landing on a different filesystem
+object than the one that handle already named -- when it succeeds, the volume
+is provably unchanged and no `VolumeIdentity` comparison is needed at all. It
+fails only when the original object is genuinely gone (deleted, or its media
+was ejected), which is exactly when the path-based fallback is needed -- and
+only that fallback path can legitimately land on a different `DirectoryId`, so
+only it re-keys `Resident.directories` (previously fixed at first insertion,
+never updated -- a second latent bug this closes: a stale key would have made
+a later new subscription to the same path fail to coalesce onto the existing
+watcher and spin up a redundant second one).
+
+### Failure detail on every fault report
+
+Before D-79, `Notification::RetryQuestion` carried only
+[`FaultOperation`](../windows-file-watcher/src/retry.rs) (`Open` or `Arm`) and
+`Outcome::Failed` carried only the coarse `OpenFailure` classification --
+neither told a client *why*, only *what kind of thing failed*. D-54's
+reasoning (no subsequent decision reads the raw error, so do not keep it) was
+sound for the machinery that existed then, but it also meant a client with no
+way to explain a failure to a user, log it usefully, or decide anything more
+specific than a wait duration. A client facing a fault it does not understand
+-- for example a transient resource exhaustion that happens to classify as
+`Unsupported` without any real filesystem change -- can now at least see the
+real code and decide for itself; retrying with a client-chosen delay (D-27,
+unchanged) remains the whole answer when nothing more specific can be done.
+
+`FailureCode` is `Win32(u32)` or `HResult(i32)`, not a single converted
+currency: every failure source in this crate (`CreateFileW`,
+`ReadDirectoryChangesW`, `FindFirstChangeNotificationW`,
+`GetVolumeInformationByHandleW`, `ReOpenFile`) is a classic last-error API, so
+only `Win32` is produced today, but a code is kept in whichever currency it
+actually arrived in rather than run through `HRESULT_FROM_WIN32`/
+`HRESULT_CODE` to force one shape -- either direction of that conversion is
+lossy and this crate has no present need to blend the two. `FaultDetail`
+bundles a `FailureCode` with the existing `OpenFailure` classification (D-22,
+already reused for both Open- and Arm-class faults per D-61), and both
+`Notification::RetryQuestion` and `Outcome::Failed` carry one.
+
+Getting the raw code into `FaultDetail` fixed a second bug along the way:
+`WatcherInner::retry_reestablish`'s open-class fault path already had a fully
+classified `OpenError` (real classification, real code) but reached
+`enter_fault` via `io::Error::other(open_error)` -- wrapping a classified
+error in an opaque boxed one erases both the classification and
+`raw_os_error()` before `enter_fault` ever saw them. `enter_fault` now takes
+`(OpenFailure, FailureCode)` directly, so every call site must classify at the
+source instead of laundering a real error through a generic one.
