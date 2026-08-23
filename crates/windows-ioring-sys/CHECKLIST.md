@@ -83,3 +83,44 @@ between push and completion.
   `read`/`write`/`flush`/`cancel`/`read_registered`/`write_registered` -- since the safe path is the one
   this crate wants to steer callers toward. `register_files` keeps its plain name unsafe, since it has no
   safe counterpart to make way for.
+
+## M9 -- Cross-ring identity and registration-drop safety (PR #20 review findings)
+
+`UserData`, `RegisteredFile`, and `RegisteredBuffers` indices are each meaningful only against the
+specific ring that minted them, but nothing enforced that when more than one `IoRing` exists in the same
+process.
+
+- [x] **M9.1** -- Added `RingId` (`ring.rs`): a monotonic, process-lifetime-unique `AtomicU64` counter,
+  never the ring's own `HANDLE` (which Windows can reuse for the next object after a ring closes). Every
+  `IoRing` gets one at construction; every popped `Completion` now carries the id of the ring that
+  produced it (D-17).
+
+- [x] **M9.2** -- `Token::claim_if` now requires both the `UserData` identity and the `RingId` to match,
+  closing the gap where two different rings' own zero-based `UserData` counters could coincide. Added
+  `claim_if_rejects_a_matching_user_data_from_a_different_ring` (`src/token/tests.rs`).
+
+- [x] **M9.3** -- `RegisteredFile`/`RegisteredFiles`/`PendingFileRegistration` and
+  `RegisteredBuffers`/`PendingBufferRegistration` now carry the minting ring's `RingId`; `handle_ref`
+  (fallible now) and a new `Batch::check_registration_ring` reject a `FileRef::Registered`/
+  `RegisteredBuffers` argument from a different ring with `io::ErrorKind::InvalidInput`, checked before any
+  `Build*` call runs. Added `a_registered_file_from_a_different_ring_is_rejected` and
+  `a_registered_buffers_from_a_different_ring_is_rejected` (`tests/registration.rs`).
+
+- [x] **M9.4** -- `PendingBufferRegistration` now leaks its buffers (via `ManuallyDrop` plus a
+  deliberately empty `Drop`) if dropped without a matching `claim_if`, mirroring `Token`/
+  `RegisteredBuffers` (D-18) -- previously it dropped `Vec<B>` normally, freeing memory the kernel might
+  still reference from an already-queued `BuildIoRingRegisterBuffers` call. Added
+  `dropping_an_unclaimed_pending_buffer_registration_leaks_rather_than_frees` (`tests/registration.rs`).
+
+- [x] **M9.5** -- `Batch::do_submit` now marks itself attempted (`self.submitted = true`) *before*
+  propagating `SubmitIoRing`'s `HRESULT`, not after: `submit_and_wait` takes `self` by value, so a failed
+  call still runs `Drop` once its caller's `self` goes out of scope, and the old ordering left `Drop` free
+  to silently retry an already-attempted submit -- which could succeed on the retry without the original
+  caller's `Err` ever saying so.
+
+- [x] **M9.6** -- Output-abstraction cleanup in the two examples the review flagged
+  (`examples/model_a_delivery.rs`, `examples/l3_domains.rs`): routed through a single writer seam per the
+  repository's architectural pre-step, matching `src/bin/run_scenario.rs` (in `windows-file-watcher`) and
+  `examples/ring_copy/main.rs`'s existing pattern. `PLANS.md`'s bare `COMPLETED-PLANS.md`/
+  `COMPLETED-CHECKLIST.md` references were also made clickable relative links.
+

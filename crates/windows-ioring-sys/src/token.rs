@@ -3,7 +3,7 @@
 
 use std::mem::ManuallyDrop;
 
-use crate::ring::Completion;
+use crate::ring::{Completion, RingId};
 
 /// An owned value, plus the identity of the operation the kernel may still
 /// be reading or writing through it.
@@ -24,6 +24,7 @@ use crate::ring::Completion;
 /// [`Token`]'s `Drop` impl.
 pub struct Token<T: Send + 'static> {
     id: usize,
+    ring_id: RingId,
     value: ManuallyDrop<T>,
 }
 
@@ -38,6 +39,7 @@ impl<T: Send + 'static> Token<T> {
         let id = ring.reserve_user_data()?;
         Ok(Self {
             id,
+            ring_id: ring.ring_id(),
             value: ManuallyDrop::new(value),
         })
     }
@@ -74,12 +76,15 @@ impl<T: Send + 'static> Token<T> {
     /// drop, freeing) a buffer the kernel might still be reading or writing,
     /// which is exactly the use-after-free this type exists to prevent.
     /// Unlike `windows-overlapped-io-sys`'s `OperationId`, there is no
-    /// storage address to also check, because `UserData` is a value this
-    /// crate chose, so a stale token's `id` can never coincidentally match a
-    /// different, later operation's completion the way a reused memory
-    /// address could.
+    /// storage address to also check on its own -- `UserData` is a value
+    /// this crate chose -- but two different rings each hand out `UserData`
+    /// from their own counter starting at zero, so the same value can
+    /// legitimately occur on both. Requiring `completion`'s ring identity to
+    /// match this token's own (PR #20 review response) is what rules that
+    /// out: a token can only ever be claimed by a completion popped from the
+    /// exact ring that minted it.
     pub fn claim_if(self, completion: &Completion) -> Result<T, Self> {
-        if self.id == completion.user_data() {
+        if self.id == completion.user_data() && self.ring_id == completion.ring_id() {
             Ok(self.claim())
         } else {
             Err(self)

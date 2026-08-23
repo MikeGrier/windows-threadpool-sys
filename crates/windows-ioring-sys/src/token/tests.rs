@@ -85,7 +85,7 @@ fn claiming_a_token_returns_the_buffer_for_normal_disposal() {
     let token = Token::new(&mut ring, buffer).expect("mint token");
     let id = token.id();
 
-    let completion = Completion::synthetic(id, 0);
+    let completion = Completion::synthetic(id, 0, ring.ring_id());
     let claimed = token.claim_if(&completion).expect("id matches itself");
     assert!(
         !dropped.load(Ordering::SeqCst),
@@ -108,7 +108,7 @@ fn claim_if_rejects_a_mismatched_user_data_and_returns_the_token_unchanged() {
     let token = Token::new(&mut ring, buffer).expect("mint token");
     let real_id = token.id();
 
-    let mismatched = Completion::synthetic(real_id.wrapping_add(1), 0);
+    let mismatched = Completion::synthetic(real_id.wrapping_add(1), 0, ring.ring_id());
     let token = token
         .claim_if(&mismatched)
         .expect_err("a stale id must not claim this token");
@@ -120,7 +120,7 @@ fn claim_if_rejects_a_mismatched_user_data_and_returns_the_token_unchanged() {
     assert!(!dropped.load(Ordering::SeqCst));
 
     // It can still be claimed correctly afterwards.
-    let matching = Completion::synthetic(real_id, 0);
+    let matching = Completion::synthetic(real_id, 0, ring.ring_id());
     let claimed = token.claim_if(&matching).expect("the real id still works");
     drop(claimed);
     assert!(dropped.load(Ordering::SeqCst));
@@ -162,4 +162,33 @@ fn minting_a_token_increments_the_rings_outstanding_count() {
 
     ring.record_completion();
     assert_eq!(ring.outstanding(), 0);
+}
+
+#[test]
+fn claim_if_rejects_a_matching_user_data_from_a_different_ring() {
+    let mut ring_a = IoRing::new(64, 128).expect("create ring a");
+    let mut ring_b = IoRing::new(64, 128).expect("create ring b");
+    let (buffer, dropped) = tracked_buffer();
+    let token = Token::new(&mut ring_a, buffer).expect("mint token on ring a");
+    let id = token.id();
+
+    // Both rings mint `UserData` from their own counter starting at zero, so
+    // this is a real coincidence a naive `id`-only check would miss (PR #20
+    // review response): the completion carries the *same* `UserData` value
+    // as `token`, but from `ring_b`, not `ring_a`.
+    let wrong_ring = Completion::synthetic(id, 0, ring_b.ring_id());
+    let token = token
+        .claim_if(&wrong_ring)
+        .expect_err("a completion from a different ring must not claim this token");
+    assert!(!dropped.load(Ordering::SeqCst));
+
+    let right_ring = Completion::synthetic(id, 0, ring_a.ring_id());
+    let claimed = token
+        .claim_if(&right_ring)
+        .expect("the same ring's completion still claims it");
+    drop(claimed);
+    assert!(dropped.load(Ordering::SeqCst));
+
+    settle(&mut ring_a);
+    settle(&mut ring_b);
 }

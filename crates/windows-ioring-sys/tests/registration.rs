@@ -284,3 +284,155 @@ fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees()
         .expect("run down the outstanding registered read");
     drop(token);
 }
+
+#[test]
+fn a_registered_file_from_a_different_ring_is_rejected() {
+    let path = temp_file("cross-ring-file");
+    std::fs::write(&path, b"content").expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring_a = IoRing::new(8, 8).expect("create ring a");
+    let mut ring_b = IoRing::new(8, 8).expect("create ring b");
+
+    let mut batch = Batch::new(&mut ring_a);
+    // SAFETY: `handle` stays open for the whole test.
+    let files_pending =
+        unsafe { batch.register_files(&[handle]) }.expect("queue file registration on ring a");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring_a
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let registered_files = files_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("file registration succeeded");
+    let registered_file = registered_files.get(0).expect("index 0 exists");
+
+    // `registered_file`'s index is only meaningful against ring a's own
+    // file table; pushing it through ring b must be refused rather than
+    // silently addressing whatever (or nothing) sits at that index there.
+    let mut batch = Batch::new(&mut ring_b);
+    let buffer = vec![0_u8; 8];
+    // SAFETY: never actually queued -- the ring-identity check rejects this
+    // before any `Build*` call runs.
+    let error = unsafe { batch.read_raw(registered_file, buffer, 0, PushOptions::new()) }
+        .expect_err("a RegisteredFile from a different ring must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn a_registered_buffers_from_a_different_ring_is_rejected() {
+    let path = temp_file("cross-ring-buffers");
+    let content = vec![9_u8; 32];
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring_a = IoRing::new(8, 8).expect("create ring a");
+    let mut ring_b = IoRing::new(8, 8).expect("create ring b");
+
+    let mut batch = Batch::new(&mut ring_a);
+    let buffers_pending = batch
+        .register_buffers(vec![vec![0_u8; 32]])
+        .expect("queue buffer registration on ring a");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring_a
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let registered_buffers = buffers_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("buffer registration succeeded");
+
+    // `registered_buffers`'s index space is only meaningful against ring
+    // a's own buffer table; addressing it through ring b must be refused.
+    let mut batch = Batch::new(&mut ring_b);
+    let span = RegisteredSpan {
+        buffer_index: 0,
+        offset: 0,
+        len: 32,
+    };
+    // SAFETY: never actually queued -- the ring-identity check rejects this
+    // before any `Build*` call runs.
+    let error = unsafe {
+        batch.read_registered_raw(handle, &registered_buffers, span, 0, PushOptions::new())
+    }
+    .expect_err("a RegisteredBuffers from a different ring must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+    drop(registered_buffers);
+}
+
+#[test]
+fn dropping_an_unclaimed_pending_buffer_registration_leaks_rather_than_frees() {
+    /// As `dropping_a_registration_with_an_operation_in_flight_...`'s own
+    /// helper: distinguishes "leaked (forgotten)" from "dropped (freed)".
+    struct DropTracking {
+        data: Vec<u8>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for DropTracking {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    // SAFETY: the bytes live in `data`'s heap allocation, independent of
+    // where this wrapper struct sits; the length is fixed once constructed.
+    unsafe impl IoBuf for DropTracking {
+        fn stable_ptr(&self) -> *const u8 {
+            self.data.as_ptr()
+        }
+
+        fn bytes_len(&self) -> usize {
+            self.data.len()
+        }
+    }
+
+    // SAFETY: `&mut self` proves exclusive access; same allocation as
+    // `stable_ptr`.
+    unsafe impl IoBufMut for DropTracking {
+        fn stable_mut_ptr(&mut self) -> *mut u8 {
+            self.data.as_mut_ptr()
+        }
+    }
+
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let dropped = Arc::new(AtomicBool::new(false));
+    let buffer = DropTracking {
+        data: vec![0_u8; 64],
+        dropped: Arc::clone(&dropped),
+    };
+
+    let mut batch = Batch::new(&mut ring);
+    let buffers_pending = batch
+        .register_buffers(vec![buffer])
+        .expect("queue buffer registration");
+    batch.submit_and_wait(0, 0).expect("submit without waiting");
+    // Deliberately dropped without ever calling `claim_if`: the registration
+    // is already queued via `BuildIoRingRegisterBuffers`, so nothing here
+    // proves the kernel is done deciding whether to retain these addresses.
+    drop(buffers_pending);
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "an unclaimed PendingBufferRegistration must leak its buffers, not free them"
+    );
+
+    // Let the real, still-outstanding registration finish before the ring
+    // itself tears down, so `IoRing::drop`'s own rundown does not have to.
+    ring.run_down()
+        .expect("run down the outstanding registration");
+    // The leak is permanent: nothing later runs the destructor either,
+    // including the ring's own teardown.
+    assert!(!dropped.load(Ordering::SeqCst));
+}

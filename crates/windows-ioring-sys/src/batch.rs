@@ -20,7 +20,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use crate::buf::{IoBuf, IoBufMut};
 use crate::error::check;
-use crate::ring::{Completion, IoRing, Op};
+use crate::ring::{Completion, IoRing, Op, RingId};
 use crate::token::Token;
 
 /// Per-push options shared across every op builder (M3.2).
@@ -54,18 +54,32 @@ impl PushOptions {
     }
 }
 
-fn handle_ref(file: FileRef) -> IORING_HANDLE_REF {
+/// Build the raw handle reference for `file`, refusing a [`RegisteredFile`]
+/// that did not come from `ring_id`'s own ring (PR #20 review response): the
+/// index alone names a slot in *some* ring's file table, and a slot from a
+/// different ring can legitimately hold an entirely different file, so
+/// crossing rings must be an explicit, reported error rather than silently
+/// addressing the wrong handle.
+fn handle_ref(file: FileRef, ring_id: RingId) -> io::Result<IORING_HANDLE_REF> {
     match file {
-        FileRef::Raw(handle) => IORING_HANDLE_REF {
+        FileRef::Raw(handle) => Ok(IORING_HANDLE_REF {
             Kind: IORING_REF_RAW,
             Handle: IORING_HANDLE_REF_0 { Handle: handle },
-        },
-        FileRef::Registered(file) => IORING_HANDLE_REF {
-            Kind: IORING_REF_REGISTERED,
-            Handle: IORING_HANDLE_REF_0 {
-                Index: file.index(),
-            },
-        },
+        }),
+        FileRef::Registered(file) => {
+            if file.ring_id != ring_id {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "this RegisteredFile was registered on a different IoRing",
+                ));
+            }
+            Ok(IORING_HANDLE_REF {
+                Kind: IORING_REF_REGISTERED,
+                Handle: IORING_HANDLE_REF_0 {
+                    Index: file.index(),
+                },
+            })
+        }
     }
 }
 
@@ -162,13 +176,16 @@ impl From<OwnedHandle> for SharedFile {
 
 /// One index a [`Batch::register_files`] registration assigned (M5.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RegisteredFile(u32);
+pub struct RegisteredFile {
+    index: u32,
+    ring_id: RingId,
+}
 
 impl RegisteredFile {
     /// The raw registered-file index.
     #[must_use]
     pub fn index(self) -> u32 {
-        self.0
+        self.index
     }
 }
 
@@ -178,6 +195,7 @@ impl RegisteredFile {
 pub struct RegisteredFiles {
     base_index: u32,
     count: u32,
+    ring_id: RingId,
 }
 
 impl RegisteredFiles {
@@ -197,7 +215,10 @@ impl RegisteredFiles {
     /// [`Batch::register_files`], or `None` if `i` is out of range.
     #[must_use]
     pub fn get(&self, i: u32) -> Option<RegisteredFile> {
-        (i < self.count).then(|| RegisteredFile(self.base_index + i))
+        (i < self.count).then(|| RegisteredFile {
+            index: self.base_index + i,
+            ring_id: self.ring_id,
+        })
     }
 }
 
@@ -207,6 +228,7 @@ pub struct PendingFileRegistration {
     user_data: usize,
     base_index: u32,
     count: u32,
+    ring_id: RingId,
 }
 
 impl PendingFileRegistration {
@@ -227,12 +249,13 @@ impl PendingFileRegistration {
     /// nothing is lost, since no owned resource was ever handed over for
     /// this op (M5.1, unlike [`Token`]).
     pub fn claim_if(self, completion: &Completion) -> Result<io::Result<RegisteredFiles>, Self> {
-        if completion.user_data() != self.user_data {
+        if completion.user_data() != self.user_data || completion.ring_id() != self.ring_id {
             return Err(self);
         }
         Ok(completion.result().map(|_| RegisteredFiles {
             base_index: self.base_index,
             count: self.count,
+            ring_id: self.ring_id,
         }))
     }
 }
@@ -267,6 +290,7 @@ pub struct RegisteredBuffers<B: IoBufMut> {
     buffers: ManuallyDrop<Vec<B>>,
     base_index: u32,
     outstanding: Arc<AtomicUsize>,
+    ring_id: RingId,
 }
 
 impl<B: IoBufMut> RegisteredBuffers<B> {
@@ -366,10 +390,21 @@ pub struct RegisteredSpan {
 }
 
 /// A [`Batch::register_buffers`] push not yet matched to its completion.
+///
+/// `buffers` is `ManuallyDrop` and this type's own `Drop` is deliberately
+/// empty, mirroring [`Token`] (PR #20 review response): the registration is
+/// already queued via `BuildIoRingRegisterBuffers` the instant
+/// [`Batch::register_buffers`] returns, before any completion is observed,
+/// so a caller that drops this without ever matching a completion has no
+/// proof the kernel is done deciding whether to retain these addresses.
+/// Freeing them here anyway would risk handing memory the kernel still
+/// references back to the allocator; leaking is the safe failure mode, the
+/// same choice `Token` and [`RegisteredBuffers`] both already make.
 pub struct PendingBufferRegistration<B: IoBufMut> {
     user_data: usize,
     base_index: u32,
-    buffers: Vec<B>,
+    buffers: ManuallyDrop<Vec<B>>,
+    ring_id: RingId,
 }
 
 impl<B: IoBufMut> PendingBufferRegistration<B> {
@@ -388,19 +423,33 @@ impl<B: IoBufMut> PendingBufferRegistration<B> {
     ///
     /// The inner `Result` is `Err` if the registration itself failed; the
     /// buffers are dropped normally in that case, exactly as if they had
-    /// never been registered.
+    /// never been registered -- a matched completion, success or failure, is
+    /// exactly the proof this type's `Drop` is waiting for.
     pub fn claim_if(
-        self,
+        mut self,
         completion: &Completion,
     ) -> Result<io::Result<RegisteredBuffers<B>>, Self> {
-        if completion.user_data() != self.user_data {
+        if completion.user_data() != self.user_data || completion.ring_id() != self.ring_id {
             return Err(self);
         }
-        Ok(completion.result().map(|_| RegisteredBuffers {
-            buffers: ManuallyDrop::new(self.buffers),
-            base_index: self.base_index,
+        // SAFETY: `completion` names this exact registration, so the kernel
+        // has already decided whether to retain these addresses -- the
+        // condition this type's `Drop` would otherwise wait forever for.
+        let buffers = unsafe { ManuallyDrop::take(&mut self.buffers) };
+        let base_index = self.base_index;
+        let ring_id = self.ring_id;
+        Ok(completion.result().map(move |_| RegisteredBuffers {
+            buffers: ManuallyDrop::new(buffers),
+            base_index,
             outstanding: Arc::new(AtomicUsize::new(0)),
+            ring_id,
         }))
+    }
+}
+
+impl<B: IoBufMut> Drop for PendingBufferRegistration<B> {
+    fn drop(&mut self) {
+        // Deliberately empty; see this type's own doc comment.
     }
 }
 
@@ -481,6 +530,7 @@ impl<'ring> Batch<'ring> {
         self.require(Op::Read)?;
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_mut_ptr().cast::<c_void>();
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
         let token = Token::new(self.ring, buffer)?;
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
@@ -490,7 +540,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingReadFile(
                 self.ring.raw_handle(),
-                handle_ref(file.into()),
+                target,
                 raw_buffer_ref(address),
                 len,
                 offset,
@@ -520,6 +570,7 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_mut_ptr().cast::<c_void>();
         let raw = file.raw_handle();
+        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
         let token = Token::new(self.ring, (buffer, file.clone()))?;
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
@@ -529,7 +580,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingReadFile(
                 self.ring.raw_handle(),
-                handle_ref(FileRef::Raw(raw)),
+                target,
                 raw_buffer_ref(address),
                 len,
                 offset,
@@ -562,6 +613,7 @@ impl<'ring> Batch<'ring> {
         self.require(Op::Write)?;
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
         let token = Token::new(self.ring, buffer)?;
         let user_data = token.id();
         // SAFETY: `address` is `IoBuf`'s promised stable pointer, valid for
@@ -571,7 +623,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingWriteFile(
                 self.ring.raw_handle(),
-                handle_ref(file.into()),
+                target,
                 raw_buffer_ref(address),
                 len,
                 offset,
@@ -601,6 +653,7 @@ impl<'ring> Batch<'ring> {
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
         let raw = file.raw_handle();
+        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
         let token = Token::new(self.ring, (buffer, file.clone()))?;
         let user_data = token.id();
         // SAFETY: as `write_raw`'s; `raw` stays valid at least as long as
@@ -608,7 +661,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingWriteFile(
                 self.ring.raw_handle(),
-                handle_ref(FileRef::Raw(raw)),
+                target,
                 raw_buffer_ref(address),
                 len,
                 offset,
@@ -618,6 +671,24 @@ impl<'ring> Batch<'ring> {
             )
         };
         self.finish_push(hr, token)
+    }
+
+    /// Refuse a [`RegisteredBuffers`] that did not come from this batch's own
+    /// ring (PR #20 review response): its index space is only meaningful
+    /// against the ring that registered it, and a different ring may have an
+    /// entirely unrelated (or already-freed) buffer at the same index.
+    fn check_registration_ring<B: IoBufMut>(
+        &self,
+        registration: &RegisteredBuffers<B>,
+    ) -> io::Result<()> {
+        if registration.ring_id == self.ring.ring_id() {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "this RegisteredBuffers was registered on a different IoRing",
+            ))
+        }
     }
 
     /// Reclaim `token`'s value and release its reservation if `hr` failed,
@@ -667,6 +738,7 @@ impl<'ring> Batch<'ring> {
         options: PushOptions,
     ) -> io::Result<usize> {
         self.require(Op::Flush)?;
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
         let user_data = self.ring.reserve_user_data()?;
         // SAFETY: `self.ring`'s handle is live; `file` is the caller's to
         // keep alive, forwarded from this function's own contract; there is
@@ -674,7 +746,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingFlushFile(
                 self.ring.raw_handle(),
-                handle_ref(file.into()),
+                target,
                 FILE_FLUSH_DEFAULT,
                 user_data,
                 options.sqe_flags(),
@@ -701,6 +773,7 @@ impl<'ring> Batch<'ring> {
     ) -> io::Result<Token<SharedFile>> {
         self.require(Op::Flush)?;
         let raw = file.raw_handle();
+        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
         let token = Token::new(self.ring, file.clone())?;
         let user_data = token.id();
         // SAFETY: `raw` stays valid at least as long as `token`'s own clone
@@ -708,7 +781,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingFlushFile(
                 self.ring.raw_handle(),
-                handle_ref(FileRef::Raw(raw)),
+                target,
                 FILE_FLUSH_DEFAULT,
                 user_data,
                 options.sqe_flags(),
@@ -744,18 +817,13 @@ impl<'ring> Batch<'ring> {
         target: usize,
     ) -> io::Result<usize> {
         self.require(Op::Cancel)?;
+        let handle = handle_ref(file.into(), self.ring.ring_id())?;
         let user_data = self.ring.reserve_user_data()?;
         // SAFETY: `self.ring`'s handle is live; `file` is the caller's to
         // keep alive, forwarded from this function's own contract;
         // `BuildIoRingCancelRequest` takes no SQE-flags parameter.
-        let hr = unsafe {
-            BuildIoRingCancelRequest(
-                self.ring.raw_handle(),
-                handle_ref(file.into()),
-                target,
-                user_data,
-            )
-        };
+        let hr =
+            unsafe { BuildIoRingCancelRequest(self.ring.raw_handle(), handle, target, user_data) };
         if let Err(error) = check(hr) {
             self.ring.cancel_reservation();
             return Err(error);
@@ -773,19 +841,14 @@ impl<'ring> Batch<'ring> {
     pub fn cancel(&mut self, file: &SharedFile, target: usize) -> io::Result<Token<SharedFile>> {
         self.require(Op::Cancel)?;
         let raw = file.raw_handle();
+        let handle = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
         let token = Token::new(self.ring, file.clone())?;
         let user_data = token.id();
         // SAFETY: `raw` stays valid at least as long as `token`'s own clone
         // of `file`'s `Arc` does; `BuildIoRingCancelRequest` takes no
         // SQE-flags parameter.
-        let hr = unsafe {
-            BuildIoRingCancelRequest(
-                self.ring.raw_handle(),
-                handle_ref(FileRef::Raw(raw)),
-                target,
-                user_data,
-            )
-        };
+        let hr =
+            unsafe { BuildIoRingCancelRequest(self.ring.raw_handle(), handle, target, user_data) };
         self.finish_push(hr, token)
     }
 
@@ -863,6 +926,7 @@ impl<'ring> Batch<'ring> {
             user_data,
             base_index,
             count,
+            ring_id: self.ring.ring_id(),
         })
     }
 
@@ -924,7 +988,8 @@ impl<'ring> Batch<'ring> {
         Ok(PendingBufferRegistration {
             user_data,
             base_index,
-            buffers,
+            buffers: ManuallyDrop::new(buffers),
+            ring_id: self.ring.ring_id(),
         })
     }
 
@@ -957,6 +1022,8 @@ impl<'ring> Batch<'ring> {
         options: PushOptions,
     ) -> io::Result<Token<RegisteredUse>> {
         self.require(Op::Read)?;
+        self.check_registration_ring(registration)?;
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         registration.outstanding.fetch_add(1, Ordering::SeqCst);
         let token = Token::new(
@@ -971,7 +1038,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingReadFile(
                 self.ring.raw_handle(),
-                handle_ref(file.into()),
+                target,
                 registered_buffer_ref(index, span.offset),
                 span.len,
                 file_offset,
@@ -998,9 +1065,11 @@ impl<'ring> Batch<'ring> {
         options: PushOptions,
     ) -> io::Result<Token<(RegisteredUse, SharedFile)>> {
         self.require(Op::Read)?;
+        self.check_registration_ring(registration)?;
+        let raw = file.raw_handle();
+        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         registration.outstanding.fetch_add(1, Ordering::SeqCst);
-        let raw = file.raw_handle();
         let token = Token::new(
             self.ring,
             (
@@ -1015,7 +1084,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingReadFile(
                 self.ring.raw_handle(),
-                handle_ref(FileRef::Raw(raw)),
+                target,
                 registered_buffer_ref(index, span.offset),
                 span.len,
                 file_offset,
@@ -1050,6 +1119,8 @@ impl<'ring> Batch<'ring> {
         options: PushOptions,
     ) -> io::Result<Token<RegisteredUse>> {
         self.require(Op::Write)?;
+        self.check_registration_ring(registration)?;
+        let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         registration.outstanding.fetch_add(1, Ordering::SeqCst);
         let token = Token::new(
@@ -1062,7 +1133,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingWriteFile(
                 self.ring.raw_handle(),
-                handle_ref(file.into()),
+                target,
                 registered_buffer_ref(index, span.offset),
                 span.len,
                 file_offset,
@@ -1090,9 +1161,11 @@ impl<'ring> Batch<'ring> {
         options: PushOptions,
     ) -> io::Result<Token<(RegisteredUse, SharedFile)>> {
         self.require(Op::Write)?;
+        self.check_registration_ring(registration)?;
+        let raw = file.raw_handle();
+        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         registration.outstanding.fetch_add(1, Ordering::SeqCst);
-        let raw = file.raw_handle();
         let token = Token::new(
             self.ring,
             (
@@ -1106,7 +1179,7 @@ impl<'ring> Batch<'ring> {
         let hr = unsafe {
             BuildIoRingWriteFile(
                 self.ring.raw_handle(),
-                handle_ref(FileRef::Raw(raw)),
+                target,
                 registered_buffer_ref(index, span.offset),
                 span.len,
                 file_offset,
@@ -1151,8 +1224,15 @@ impl<'ring> Batch<'ring> {
                 &raw mut submitted,
             )
         };
-        check(hr)?;
+        // Marked attempted *before* propagating a failure (PR #20 review
+        // response): `submit_and_wait` takes `self` by value, so this call
+        // failing still runs `Drop` once its caller's `self` goes out of
+        // scope. Setting this first is what stops `Drop` from silently
+        // retrying an explicit submit that already ran -- which could
+        // succeed on the retry, submitting operations the caller's `Err`
+        // never told them about.
         self.submitted = true;
+        check(hr)?;
         Ok(submitted)
     }
 }

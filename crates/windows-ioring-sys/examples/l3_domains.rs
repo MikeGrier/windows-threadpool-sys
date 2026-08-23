@@ -6,7 +6,13 @@
 //! crate deliberately leaves to the caller (see `windows-topology-sys` for a
 //! safe `GetLogicalProcessorInformationEx` wrapper).
 
+use std::io::Write;
+
 fn main() -> std::io::Result<()> {
+    // The single sink every line of this sample's output goes through
+    // (repository "Architectural pre-steps" rule: never call `println!`
+    // from more than one call site).
+    let mut out = std::io::stdout();
     let relations = windows_topology_sys::discover()?;
     let l3_domains: Vec<_> = relations
         .caches
@@ -14,9 +20,10 @@ fn main() -> std::io::Result<()> {
         .filter(|cache| cache.level == 3)
         .collect();
 
-    println!("{} last-level cache (L3) domain(s):", l3_domains.len());
+    let _ = writeln!(out, "{} last-level cache (L3) domain(s):", l3_domains.len());
     for (index, domain) in l3_domains.iter().enumerate() {
-        println!(
+        let _ = writeln!(
+            out,
             "  domain {index}: {} bytes shared by {:?}",
             domain.cache_size, domain.processors
         );
@@ -26,7 +33,7 @@ fn main() -> std::io::Result<()> {
     // logical processors, a thread's affinity and a ring's waiter are each
     // confined to one GROUP_AFFINITY, whether or not that partition is
     // wanted.
-    println!("{} processor group(s)", relations.groups.len());
+    let _ = writeln!(out, "{} processor group(s)", relations.groups.len());
 
     Ok(())
 }

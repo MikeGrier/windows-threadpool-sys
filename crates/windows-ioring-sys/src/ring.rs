@@ -3,6 +3,7 @@
 
 use std::ffi::c_void;
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows_sys::Win32::Storage::FileSystem::{
     CloseIoRing, CreateIoRing, GetIoRingInfo, IORING_CQE, IORING_CREATE_ADVISORY_FLAGS_NONE,
@@ -14,6 +15,29 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use crate::capability::{RingVersion, capabilities};
 use crate::error::check;
+
+/// A ring's identity, unique for the process's lifetime (PR #20 review
+/// response): every value a ring hands out that later gets checked back
+/// against it -- a [`crate::Token`], a [`crate::RegisteredFile`], a
+/// [`crate::RegisteredBuffers`] -- carries the id of the ring that minted
+/// it, and every [`Completion`] carries the id of the ring that popped it.
+///
+/// A monotonic counter rather than the ring's own `HANDLE`: a `HANDLE` is
+/// only unique while the object it names is still open, and Windows is free
+/// to hand a closed ring's numeric value to the *next* object created --
+/// which would let a stale identity from a closed ring collide with a
+/// brand-new one. This counter never repeats within one process run
+/// (`u64` overflow is not a practical concern), so a mismatch always means
+/// a genuine cross-ring mixup, never a false negative from handle reuse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct RingId(u64);
+
+impl RingId {
+    fn next() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 /// One `IoRing` operation.
 ///
@@ -119,6 +143,7 @@ pub struct Completion {
     user_data: usize,
     result_code: windows_sys::core::HRESULT,
     information: usize,
+    ring_id: RingId,
 }
 
 impl Completion {
@@ -127,6 +152,17 @@ impl Completion {
     #[must_use]
     pub fn user_data(&self) -> usize {
         self.user_data
+    }
+
+    /// The identity of the ring that popped this completion (PR #20 review
+    /// response): a [`crate::Token`]/registration only ever matches a
+    /// `Completion` whose `ring_id` is also its own, so a `UserData` value
+    /// that happens to coincide across two different rings (every ring's
+    /// own counter starts at the same value) can never be confused for a
+    /// match.
+    #[must_use]
+    pub(crate) fn ring_id(&self) -> RingId {
+        self.ring_id
     }
 
     /// This op's result: the transferred byte count (read/write) or other
@@ -151,11 +187,16 @@ impl Completion {
     /// whole safety argument depends on every `Completion` in existence
     /// tracing back to a real `IORING_CQE` `IoRing::try_pop` observed.
     #[cfg(test)]
-    pub(crate) fn synthetic(user_data: usize, result_code: windows_sys::core::HRESULT) -> Self {
+    pub(crate) fn synthetic(
+        user_data: usize,
+        result_code: windows_sys::core::HRESULT,
+        ring_id: RingId,
+    ) -> Self {
         Self {
             user_data,
             result_code,
             information: 0,
+            ring_id,
         }
     }
 }
@@ -185,6 +226,8 @@ pub struct IoRing {
     handle: *mut c_void,
     version: RingVersion,
     supported_ops: OpSupport,
+    /// This ring's own identity (PR #20 review response); see [`RingId`].
+    ring_id: RingId,
     /// The next `UserData` value [`IoRing::reserve_user_data`] will hand out.
     next_user_data: usize,
     /// Operations minted but not yet observed to have completed (M2.4).
@@ -253,6 +296,7 @@ impl IoRing {
             handle,
             version,
             supported_ops,
+            ring_id: RingId::next(),
             next_user_data: 0,
             outstanding: 0,
             registered_files: 0,
@@ -394,6 +438,13 @@ impl IoRing {
         self.handle
     }
 
+    /// This ring's own identity, for stamping onto every [`crate::Token`]/
+    /// registration it mints and checking against on use (PR #20 review
+    /// response); see [`RingId`].
+    pub(crate) fn ring_id(&self) -> RingId {
+        self.ring_id
+    }
+
     /// Queue a raw, not-yet-wrapped SQE via a caller-supplied `Build*` call
     /// (M3.5, D-7).
     ///
@@ -495,6 +546,7 @@ impl IoRing {
             user_data: cqe.UserData,
             result_code: cqe.ResultCode,
             information: cqe.Information,
+            ring_id: self.ring_id,
         }))
     }
 }

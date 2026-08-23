@@ -20,7 +20,19 @@ use windows_ioring_sys::{Batch, EventDelivery, IoRing, PushOptions, Token};
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 4096;
 
+/// Where this example's progress reports go, kept as one seam (the repo's
+/// architectural pre-step) rather than scattering `println!` across the
+/// file.
+struct Output<O>(O);
+
+impl<O: std::io::Write> Output<O> {
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.0, "{message}");
+    }
+}
+
 fn main() -> std::io::Result<()> {
+    let mut output = Output(std::io::stdout());
     let path = std::env::temp_dir().join(format!(
         "windows-ioring-sys-model-a-example-{}.tmp",
         std::process::id()
@@ -78,15 +90,17 @@ fn main() -> std::io::Result<()> {
             .claim_if(&completion)
             .expect("token claims its own completion");
         assert_eq!(transferred, CHUNK_LEN);
-        println!(
+        output.report(&format!(
             "chunk at user_data {} verified, first byte {}",
             completion.user_data(),
             buffer[0]
-        );
+        ));
         verified += 1;
     }
 
-    println!("all {CHUNKS} chunks delivered on pool threads; this thread never waited for one");
+    output.report(&format!(
+        "all {CHUNKS} chunks delivered on pool threads; this thread never waited for one"
+    ));
     drop(delivery);
     let _ = std::fs::remove_file(&path);
     Ok(())
