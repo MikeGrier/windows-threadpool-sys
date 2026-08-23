@@ -124,6 +124,36 @@ Completed milestones are archived in COMPLETED-CHECKLIST.md once there are any.
   with `GetLogicalProcessorInformationEx`, why processor groups are a hard floor, and how to allocate a
   node-local pool with `VirtualAllocExNuma`. Pointers, not a partitioning policy.
 
+## M7 -- `ring-copy`: a topology-aligned sample
+
+> **-> CROSS-COMPONENT PREREQUISITE:** blocked on component `crates/windows-topology-sys` ->
+> `M4` (safe enumeration, the description, and its serialization). See
+> [../windows-topology-sys/CHECKLIST.md](../windows-topology-sys/CHECKLIST.md).
+
+This is a **sample**, not library surface. The library still owns no partitioning policy (D-8); the sample
+is where a policy lives, so that the guidance in M6 has something executable behind it.
+`windows-ioring-sys` itself does **not** depend on `windows-topology-sys` -- only the sample does.
+
+- [ ] **M7.1** -- The `Topology -> Policy -> RingPlan` pipeline, with `Policy` as named code (`ByL3`,
+  `ByNode`, `ByPackage`, `ByCore`, `Single`) rather than data. A plan names, per domain, the ring to
+  create, the processors to affinitize to, and where its buffer pool should be allocated.
+
+- [ ] **M7.2** -- Reject a plan the platform cannot express, rather than emitting an impossible affinity
+  mask: a fed-in description may carry one group with more than 64 processors, which is legal in the
+  description and unrepresentable on Windows (topology D-10).
+
+- [ ] **M7.3** -- The copy engine itself: read and write through per-domain rings, buffers allocated with
+  `VirtualAllocExNuma` and registered once per ring.
+
+- [ ] **M7.4** -- Switches for topology source (discovered, or a JSON file), policy, and **buffer
+  placement** (node-local versus deliberately remote). Buffer placement is the variable most likely to
+  show a real effect, because the device DMAs into the registered buffer on every operation, whereas
+  callback placement is a one-time cache-warmth question.
+
+- [ ] **M7.5** -- Report per-domain throughput, and **say plainly when the host cannot show a
+  difference** -- a single-node or virtualized machine will produce noise, and a benchmark that reports
+  noise as a result is worse than no benchmark. The machine this was designed on reported zero NUMA nodes.
+
 ## M6+ -- Model B: explicit-thread delivery and affinity
 
 Parked, not pending. Deferred by the engineer's explicit direction during the 2026-08-22 design session,
