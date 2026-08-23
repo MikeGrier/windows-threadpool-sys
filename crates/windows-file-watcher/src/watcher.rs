@@ -301,6 +301,12 @@ struct WatcherInner {
     /// Held while asking about a volume change found by a path-based reopen;
     /// absent otherwise (D-78/M12). See [`VolumeChangeState`].
     volume_change: Mutex<Option<VolumeChangeState>>,
+    /// Whether this directory is case-sensitive (PR #20 review response),
+    /// queried fresh from the handle every time `install` installs one --
+    /// read by [`WatcherInner::publish`] to select exact-ordinal or
+    /// case-folding leaf-name matching per [`Route::select`]. Almost always
+    /// `false`; see [`DirectoryHandle::is_case_sensitive`].
+    case_sensitive: AtomicBool,
 }
 
 impl WatcherInner {
@@ -308,8 +314,43 @@ impl WatcherInner {
     ///
     /// The buffer travels as the operation's payload, so it lives exactly as
     /// long as the operation the kernel owns.
+    ///
+    /// A no-op, like [`ArmGate::TornDown`], while [`ArmGate::Reopening`] is in
+    /// progress (PR #20 review response): `install` tears the old endpoint
+    /// down (dropping `self.endpoint` to `None`) before installing the new
+    /// one, and a completion callback for the *old* endpoint can still be
+    /// draining concurrently -- `teardown_endpoint`'s `run_down`/
+    /// `stop_and_drain` blocks for it to finish, it does not prevent it from
+    /// running. Without this check, that draining callback's own
+    /// re-arm-before-decode step would find no endpoint installed, treat the
+    /// transient gap as an arm failure, and spuriously enter the fault loop
+    /// even though the reopen it raced against was about to succeed. `install`
+    /// arms fresh itself once the replacement endpoint is ready, strictly
+    /// after every old callback has drained, so skipping the arm here loses
+    /// nothing.
     fn arm(self: &Arc<Self>) -> Result<(), io::Error> {
         // Held for the whole submission; see the field's documentation.
+        let mut gate = self
+            .gate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if matches!(*gate, ArmGate::TornDown | ArmGate::Reopening) {
+            return Ok(());
+        }
+        self.arm_locked(&mut gate)
+    }
+
+    /// Arm the freshly (re-)established endpoint from inside [`install`],
+    /// transitioning the gate out of [`ArmGate::Reopening`] itself rather
+    /// than going through the callback-facing [`arm`](Self::arm) above, which
+    /// deliberately no-ops while `Reopening` is set. Otherwise `install`'s own
+    /// legitimate first arm of the replacement endpoint would be swallowed by
+    /// that same no-op. A no-op only for [`ArmGate::TornDown`] (teardown won
+    /// the race against this reopen); `install` may call this a second time
+    /// after a detailed-unsupported downgrade to coarse, by which point the
+    /// gate is already `Open` from the first call, not `Reopening` -- both
+    /// are accepted here.
+    fn arm_after_install(self: &Arc<Self>) -> Result<(), io::Error> {
         let mut gate = self
             .gate
             .lock()
@@ -523,11 +564,12 @@ impl WatcherInner {
     /// directory", which is equally true for every subscription within it.
     fn publish(&self, batch: DecodedBatch) {
         let routes = lock(&self.routes);
+        let case_sensitive = self.case_sensitive.load(Ordering::Relaxed);
         match batch {
             DecodedBatch::Changes(changes) if changes.is_empty() => {}
             DecodedBatch::Changes(changes) => {
                 for route in routes.values() {
-                    let matched = route.select(&changes);
+                    let matched = route.select(&changes, case_sensitive);
                     if matched.is_empty() {
                         continue;
                     }
@@ -1054,8 +1096,10 @@ impl WatcherInner {
                 *lock(&self.volume_identity) = Some(identity);
             }
             *lock(&self.canonical_path) = handle.canonical_path().ok();
+            self.case_sensitive
+                .store(handle.is_case_sensitive(), Ordering::Relaxed);
             self.establish_detailed(handle)?;
-            match self.arm() {
+            match self.arm_after_install() {
                 Ok(()) => return Ok(()),
                 Err(error) if classify(&error) == OpenFailure::Unsupported => {
                     log::warn!(
@@ -1068,7 +1112,7 @@ impl WatcherInner {
         }
 
         self.establish_coarse()?;
-        self.arm()
+        self.arm_after_install()
     }
 
     /// Record the *permanent* failure that stopped this watcher for good, and
@@ -1209,6 +1253,9 @@ impl DirectoryWatcher {
             canonical_path: Mutex::new(None),
             resident: OnceLock::new(),
             volume_change: Mutex::new(None),
+            // Overwritten by `install` below, from the real handle, before
+            // this watcher ever arms; the initial value is never observed.
+            case_sensitive: AtomicBool::new(false),
         });
 
         // Pulls this constructor's one route back out of `inner.routes` so a

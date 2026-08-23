@@ -853,6 +853,9 @@ fn route_established(
         // exactly what a reopen needs, so nothing further is opened for it.
         watcher.add_route(route, handle);
         let mode = watcher.mode();
+        // Read before `state.subscriptions.insert` below, which needs `state`
+        // mutably while `watcher` still borrows it immutably.
+        let is_faulted = watcher.is_faulted();
         state.subscriptions.insert(
             watch,
             Subscription::Routed {
@@ -861,7 +864,18 @@ fn route_established(
             },
         );
         drop(state);
-        if options.report_liveness {
+        // Suppressed while the watcher is faulted (PR #20 review response):
+        // either it was already recovering before this route joined, or
+        // `add_route`'s own widen-to-recursive reopen just failed and entered
+        // the fault loop -- either way there is no settled tier to report
+        // right now, and asserting one would contradict `Established`'s
+        // documented contract ("whichever tier the directory actually
+        // settled on"). This route is still added to `routes` either way, so
+        // it already received (or is about to receive) the ordinary
+        // `Suspended`/`RetryQuestion` fault notifications, and will get its
+        // own `Resumed`/`Established` from `resolve_fault_success` once (if)
+        // the watcher recovers.
+        if options.report_liveness && !is_faulted {
             let _ = sink.send(Notification::Established { watch, mode });
         }
         return Routed::Live;

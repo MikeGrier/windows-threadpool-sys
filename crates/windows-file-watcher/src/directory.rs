@@ -40,10 +40,11 @@ use windows_sys::Win32::Foundation::{
     ERROR_NOT_SUPPORTED, ERROR_PATH_NOT_FOUND, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OVERLAPPED, FILE_ID_DESCRIPTOR, FILE_ID_DESCRIPTOR_0, FILE_LIST_DIRECTORY,
-    FILE_NAME_NORMALIZED, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdType,
-    GetFileInformationByHandle, GetFinalPathNameByHandleW, GetVolumeInformationByHandleW,
+    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_CASE_SENSITIVE_INFO,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_ID_DESCRIPTOR, FILE_ID_DESCRIPTOR_0,
+    FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FileCaseSensitiveInfo, FileIdType, GetFileInformationByHandle,
+    GetFileInformationByHandleEx, GetFinalPathNameByHandleW, GetVolumeInformationByHandleW,
     OPEN_EXISTING, OpenFileById, VOLUME_NAME_DOS,
 };
 
@@ -327,6 +328,34 @@ fn identify(handle: HANDLE) -> Result<DirectoryId, OpenError> {
     })
 }
 
+/// The `FILE_CASE_SENSITIVE_INFO::Flags` bit meaning "this directory is
+/// case-sensitive" (`FILE_CS_FLAG_CASE_SENSITIVE_DIR`). Not exported by
+/// `windows-sys`, so named here per the repo's no-bare-manifest-numeric rule.
+const FILE_CS_FLAG_CASE_SENSITIVE_DIR: u32 = 0x0000_0001;
+
+/// Query whether `handle` (a live, open directory handle) is a case-sensitive
+/// directory, via `GetFileInformationByHandleEx`'s `FileCaseSensitiveInfo`
+/// class. `false` (case-insensitive, the overwhelmingly common case and this
+/// crate's behavior before this query existed) on any failure -- an older OS
+/// that predates the class (pre-Windows 10 1803), or a filesystem that does
+/// not implement it -- rather than propagating an error for a query that is
+/// advisory, not load-bearing for opening the directory at all.
+fn is_case_sensitive_dir(handle: HANDLE) -> bool {
+    let mut info = FILE_CASE_SENSITIVE_INFO { Flags: 0 };
+    // SAFETY: `handle` is live for the duration of this call; `info` is a
+    // valid, correctly-sized writable destination for `FileCaseSensitiveInfo`.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileCaseSensitiveInfo,
+            std::ptr::from_mut(&mut info).cast(),
+            u32::try_from(std::mem::size_of::<FILE_CASE_SENSITIVE_INFO>())
+                .expect("this fixed, small struct's size always fits a u32"),
+        )
+    };
+    ok != 0 && info.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR != 0
+}
+
 /// A directory opened for change notification, owned for the life of the watch.
 ///
 /// Closing is the `OwnedHandle`'s job, so a `DirectoryHandle` cannot outlive its
@@ -334,6 +363,7 @@ fn identify(handle: HANDLE) -> Result<DirectoryId, OpenError> {
 pub struct DirectoryHandle {
     handle: OwnedHandle,
     identity: DirectoryId,
+    case_sensitive: bool,
 }
 
 impl DirectoryHandle {
@@ -370,7 +400,12 @@ impl DirectoryHandle {
         // Computed on the owned handle, so an early return here closes it rather
         // than leaking.
         let identity = identify(handle.as_raw_handle())?;
-        Ok(Self { handle, identity })
+        let case_sensitive = is_case_sensitive_dir(handle.as_raw_handle());
+        Ok(Self {
+            handle,
+            identity,
+            case_sensitive,
+        })
     }
 
     /// Reopen the directory identified by `file_id` on the same volume as
@@ -430,15 +465,39 @@ impl DirectoryHandle {
         // exclusively owns.
         let owned = unsafe { OwnedHandle::from_raw_handle(raw) };
         let identity = identify(owned.as_raw_handle())?;
+        let case_sensitive = is_case_sensitive_dir(owned.as_raw_handle());
         Ok(Self {
             handle: owned,
             identity,
+            case_sensitive,
         })
     }
 
     /// This directory's stable identity (D-6).
     pub(crate) fn identity(&self) -> DirectoryId {
         self.identity
+    }
+
+    /// Whether this directory enforces case-sensitive name matching, queried
+    /// once at open time via `GetFileInformationByHandleEx`'s
+    /// `FileCaseSensitiveInfo` class (PR #20 review response).
+    ///
+    /// Case-sensitive directories are a per-directory opt-in NTFS feature
+    /// (`fsutil file setCaseSensitiveInfo`), off by default; almost every
+    /// directory is the ordinary case-insensitive-but-case-preserving kind
+    /// this crate has always assumed. Route matching (`route.rs`) must not
+    /// fold case on the rare directory that *is* case-sensitive: on such a
+    /// directory `A.txt` and `a.txt` genuinely name different files, and
+    /// folding them together would route one file's changes to a route
+    /// subscribed to the other.
+    ///
+    /// The class is only supported from Windows 10 version 1803 onward; a
+    /// failure (older OS, or a filesystem that does not implement it) is
+    /// treated as case-insensitive, matching this crate's behavior before
+    /// this method existed and every filesystem's overwhelmingly common
+    /// case.
+    pub(crate) fn is_case_sensitive(&self) -> bool {
+        self.case_sensitive
     }
 
     /// This directory's volume-level identity (D-78): the filesystem name and

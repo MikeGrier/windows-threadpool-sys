@@ -11,13 +11,17 @@
 //!   actually opened.
 //! - **Name**: a directory subscription matches every name within its reach; a
 //!   file subscription (D-7) matches only its own leaf name. The comparison
-//!   is on raw UTF-16 units, case-insensitively via `CompareStringOrdinal`'s
-//!   ordinal case folding: the default Windows filesystem is case-insensitive
-//!   but case-preserving, so `CreateFileW` accepts a target whose casing
-//!   differs from the stored name, while a decoded notification always
-//!   carries the name as actually stored -- an exact match would silently
-//!   drop every one of those events, and an ASCII-only fold would still drop
-//!   one whenever the differing case falls outside ASCII (PR #20 review
+//!   is on raw UTF-16 units via `CompareStringOrdinal`, folding case only when
+//!   the directory itself is case-insensitive: the default Windows filesystem
+//!   is case-insensitive but case-preserving, so `CreateFileW` accepts a
+//!   target whose casing differs from the stored name, while a decoded
+//!   notification always carries the name as actually stored -- an exact
+//!   match would silently drop every one of those events, and an ASCII-only
+//!   fold would still drop one whenever the differing case falls outside
+//!   ASCII. On the rare directory that opts into per-directory case
+//!   sensitivity (`fsutil file setCaseSensitiveInfo`), folding at all would be
+//!   wrong the other way -- `A.txt` and `a.txt` genuinely name different
+//!   files there, so the comparison is exact instead (PR #20 review
 //!   response).
 //!
 //! A desync is never filtered by scope: it means "you may have missed something
@@ -61,13 +65,17 @@ impl RouteScope {
     }
 
     /// Whether `name` -- raw UTF-16 units, exactly as the kernel reported them --
-    /// belongs to this scope.
-    fn matches(&self, name: &[u16]) -> bool {
+    /// belongs to this scope. `case_sensitive` is this directory's own
+    /// case-sensitivity (PR #20 review response, [`crate::directory::DirectoryHandle::is_case_sensitive`]):
+    /// a leaf-name match must fold case only when the directory itself is
+    /// case-insensitive, or a genuinely distinct file on a case-sensitive
+    /// directory would be matched to the wrong route.
+    fn matches(&self, name: &[u16], case_sensitive: bool) -> bool {
         match self {
             RouteScope::Directory { subtree: true } => true,
             RouteScope::Directory { subtree: false } => is_direct_child(name),
             RouteScope::File { leaf } => {
-                is_direct_child(name) && names_match_case_insensitively(name, leaf.as_units())
+                is_direct_child(name) && names_match(name, leaf.as_units(), case_sensitive)
             }
         }
     }
@@ -79,28 +87,31 @@ fn is_direct_child(name: &[u16]) -> bool {
     !name.contains(&SEPARATOR)
 }
 
-/// Whether `a` and `b` are the same name under Windows' default
-/// case-insensitive (but case-preserving) filesystem semantics
-/// (`is_direct_child` above establishes reach; this decides identity within
-/// it, for [`RouteScope::File`]).
+/// Whether `a` and `b` are the same name (`is_direct_child` above establishes
+/// reach; this decides identity within it, for [`RouteScope::File`]).
 ///
-/// Uses `CompareStringOrdinal` with `bIgnoreCase = TRUE` -- the OS's own
-/// ordinal (per-UTF-16-unit) case folding -- rather than an ASCII-only fold:
-/// an ASCII fold silently drops a match whenever a subscription's leaf name
-/// and the kernel's stored spelling differ only in a non-ASCII letter's case
-/// (e.g. a stored `E9.txt` opened through a subscription spelling `C9.txt`),
-/// which is exactly the kind of event this crate's completeness contract
-/// (D-77) promises never to drop.
-fn names_match_case_insensitively(a: &[u16], b: &[u16]) -> bool {
-    use windows_sys::Win32::Foundation::TRUE;
+/// `case_sensitive` selects exact ordinal comparison (a case-sensitive
+/// directory, a per-directory NTFS opt-in feature, e.g. via `fsutil file
+/// setCaseSensitiveInfo`, where `A.txt` and `a.txt` genuinely name different
+/// files) or `CompareStringOrdinal` with `bIgnoreCase = TRUE` -- the OS's own
+/// ordinal (per-UTF-16-unit) case folding -- for the overwhelmingly common
+/// case-insensitive-but-case-preserving directory. Either way this is never
+/// an ASCII-only fold: that silently drops a match whenever a subscription's
+/// leaf name and the kernel's stored spelling differ only in a non-ASCII
+/// letter's case (e.g. a stored `E9.txt` opened through a subscription
+/// spelling `C9.txt`), which is exactly the kind of event this crate's
+/// completeness contract (D-77) promises never to drop.
+fn names_match(a: &[u16], b: &[u16], case_sensitive: bool) -> bool {
+    use windows_sys::Win32::Foundation::{FALSE, TRUE};
     use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
 
     let a_len = i32::try_from(a.len()).unwrap_or(i32::MAX);
     let b_len = i32::try_from(b.len()).unwrap_or(i32::MAX);
+    let ignore_case = if case_sensitive { FALSE } else { TRUE };
     // SAFETY: `a`/`b` are valid `u16` slices with lengths that fit the `i32`
     // counts just computed; `CompareStringOrdinal` only reads the first
     // `a_len`/`b_len` units of each and returns a plain `i32` result code.
-    let result = unsafe { CompareStringOrdinal(a.as_ptr(), a_len, b.as_ptr(), b_len, TRUE) };
+    let result = unsafe { CompareStringOrdinal(a.as_ptr(), a_len, b.as_ptr(), b_len, ignore_case) };
     // A truncated length (from a name longer than `i32::MAX` units,
     // unreachable in practice) would only ever make an equal pair look
     // unequal, never the reverse, so the fallback direction is safe.
@@ -139,11 +150,13 @@ impl Route {
     /// Cloned rather than referenced: more than one route can match an
     /// overlapping subset (a subtree route and a file route both watching the
     /// same directory, say), so no single route may claim exclusive ownership of
-    /// the decoded batch.
-    pub(crate) fn select(&self, changes: &[Change]) -> Vec<Change> {
+    /// the decoded batch. `case_sensitive` is the directory's own
+    /// case-sensitivity (PR #20 review response); see
+    /// [`RouteScope::matches`].
+    pub(crate) fn select(&self, changes: &[Change], case_sensitive: bool) -> Vec<Change> {
         changes
             .iter()
-            .filter(|change| self.scope.matches(change.name.as_wide()))
+            .filter(|change| self.scope.matches(change.name.as_wide(), case_sensitive))
             .cloned()
             .collect()
     }

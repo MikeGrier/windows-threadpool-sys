@@ -33,9 +33,13 @@ fn route(scope: RouteScope) -> Route {
 }
 
 fn selected(route: &Route, names: &[&str]) -> Vec<String> {
+    selected_with(route, names, false)
+}
+
+fn selected_with(route: &Route, names: &[&str], case_sensitive: bool) -> Vec<String> {
     let changes: Vec<Change> = names.iter().map(|n| change(n)).collect();
     route
-        .select(&changes)
+        .select(&changes, case_sensitive)
         .into_iter()
         .map(|c| c.name.to_os_string().to_string_lossy().into_owned())
         .collect()
@@ -120,6 +124,21 @@ fn a_file_route_comparison_is_case_insensitive_over_non_ascii_letters() {
 }
 
 #[test]
+fn a_file_route_comparison_is_exact_on_a_case_sensitive_directory() {
+    // PR #20 review response: on a directory that opted into per-directory
+    // case sensitivity (`fsutil file setCaseSensitiveInfo`), `A.txt` and
+    // `a.txt` genuinely name different files -- folding case there would
+    // route a different file's changes to this route.
+    let route = route(RouteScope::File {
+        leaf: Wtf16String::from_units(&"Target.txt".encode_utf16().collect::<Vec<u16>>()),
+    });
+    assert_eq!(
+        selected_with(&route, &["target.txt", "TARGET.TXT", "Target.txt"], true),
+        vec!["Target.txt"]
+    );
+}
+
+#[test]
 fn a_file_route_comparison_still_requires_the_same_length() {
     let route = route(RouteScope::File {
         leaf: Wtf16String::from_units(&"target.txt".encode_utf16().collect::<Vec<u16>>()),
@@ -145,7 +164,7 @@ fn only_a_recursive_directory_route_needs_kernel_subtree() {
 #[test]
 fn selecting_from_an_empty_batch_yields_nothing() {
     let route = route(RouteScope::Directory { subtree: true });
-    assert!(route.select(&[]).is_empty());
+    assert!(route.select(&[], false).is_empty());
 }
 
 #[test]
