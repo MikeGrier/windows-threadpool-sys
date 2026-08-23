@@ -312,22 +312,51 @@ pub(crate) trait Resume: Send + Sync {
 /// outstanding) or has already transferred it to a queued entry that has not
 /// been drained yet.
 struct Entry {
-    notification: Notification,
+    notification: EntryNotification,
     _standing_hold: Option<StandingHold>,
+}
+
+/// A plain entry's notification is fixed at push time; a standing entry's
+/// lives in its paired [`StandingHold`]'s [`StandingState::queued`] instead,
+/// so a second [`StandingSlot::send`] while this entry is still undrained can
+/// coalesce into it in place (PR #20 review response) rather than pushing a
+/// second entry and double-spending the slot's single unit of `reserved`.
+enum EntryNotification {
+    Plain(Notification),
+    Standing,
 }
 
 impl Entry {
     fn plain(notification: Notification) -> Self {
         Self {
-            notification,
+            notification: EntryNotification::Plain(notification),
             _standing_hold: None,
         }
     }
 
-    fn standing(notification: Notification, hold: StandingHold) -> Self {
+    fn standing(hold: StandingHold) -> Self {
         Self {
-            notification,
+            notification: EntryNotification::Standing,
             _standing_hold: Some(hold),
+        }
+    }
+
+    /// The notification this entry carries, reading a standing entry's
+    /// current (possibly coalesced) value from its `StandingHold` before the
+    /// hold itself drops and releases the reservation.
+    fn into_notification(self) -> Notification {
+        match self.notification {
+            EntryNotification::Plain(notification) => notification,
+            EntryNotification::Standing => {
+                let hold = self
+                    ._standing_hold
+                    .as_ref()
+                    .expect("a Standing entry always carries a StandingHold");
+                lock(&hold.state)
+                    .queued
+                    .clone()
+                    .expect("a Standing entry's queued value is set for as long as it is undrained")
+            }
         }
     }
 }
@@ -510,6 +539,7 @@ impl Sender {
             state: Arc::new(Mutex::new(StandingState {
                 slot_alive: true,
                 in_flight: false,
+                queued: None,
             })),
         })
     }
@@ -602,6 +632,13 @@ struct StandingState {
     /// the unit of `reserved` capacity this slot carved out is currently
     /// manifested as that queued entry rather than sitting in `reserved`.
     in_flight: bool,
+    /// The queued entry's current notification value while `in_flight` is
+    /// true (PR #20 review response); `None` otherwise. A second `send`
+    /// while `in_flight` overwrites this in place -- reachable when an
+    /// interactive watch is answered before its queued question is drained
+    /// and the retry fails again -- rather than decrementing `reserved` a
+    /// second time for a slot that only ever carves out one unit.
+    queued: Option<Notification>,
 }
 
 /// A permanent slot in the notification queue, reserved once and reused for as
@@ -619,51 +656,69 @@ pub(crate) struct StandingSlot {
 impl StandingSlot {
     /// Deliver the notification. Cannot fail: the slot was carved out of
     /// capacity at registration and is never returned while this is held.
+    ///
+    /// Coalesces in place with a previous send whose entry is still queued
+    /// (undrained) rather than pushing a second entry (PR #20 review
+    /// response): the slot's single carved-out unit of `reserved` capacity
+    /// must never be double-spent, and it is exactly this second-send-while-
+    /// undrained case that would otherwise underflow it.
+    ///
+    /// Lock order: `items`, then this slot's own `standing` state -- the
+    /// same order [`take`] and [`StandingSlot::drop`] use, so none of the
+    /// three can ever deadlock waiting on each other.
     pub(crate) fn send(&self, notification: Notification) {
         {
-            let mut standing = lock(&self.state);
-            standing.in_flight = true;
             let mut state = lock(&self.sender.shared.items);
-            state.flush_latched();
-            // The permanent reservation transfers into the queued entry
-            // (`Entry::standing`) for as long as it sits there, rather than
-            // staying counted in `reserved` on top of the entry's own
-            // `queue.len()` slot -- the entry's `StandingHold` hands it back
-            // once drained, wherever that happens to be by then.
-            state.reserved -= 1;
-            let hold = StandingHold {
-                shared: Arc::clone(&self.sender.shared),
-                state: Arc::clone(&self.state),
-            };
-            state.queue.push_back(Entry::standing(notification, hold));
-            refresh_doorbell(&self.sender.shared, &state);
+            let mut standing = lock(&self.state);
+            if standing.in_flight {
+                standing.queued = Some(notification);
+            } else {
+                standing.in_flight = true;
+                standing.queued = Some(notification);
+                drop(standing);
+                state.flush_latched();
+                // The permanent reservation transfers into the queued entry
+                // (`Entry::standing`) for as long as it sits there, rather
+                // than staying counted in `reserved` on top of the entry's
+                // own `queue.len()` slot -- `take` restores it atomically
+                // with the pop when the entry is eventually drained.
+                state.reserved -= 1;
+                let hold = StandingHold {
+                    shared: Arc::clone(&self.sender.shared),
+                    state: Arc::clone(&self.state),
+                    resolved: false,
+                };
+                state.queue.push_back(Entry::standing(hold));
+                refresh_doorbell(&self.sender.shared, &state);
+            }
         }
         self.sender.shared.arrived.notify_all();
     }
 }
 
 impl Drop for StandingSlot {
+    /// Lock order: `items`, then `standing` -- matching [`StandingSlot::send`]
+    /// and [`take`] (PR #20 review response), so this can never deadlock
+    /// against either.
     fn drop(&mut self) {
+        let mut state = lock(&self.sender.shared.items);
         let mut standing = lock(&self.state);
         standing.slot_alive = false;
         if standing.in_flight {
-            // The outstanding hold owns releasing this reservation once its
-            // message drains (`StandingHold::drop`); it will find the slot
-            // already gone and let the capacity go free rather than handing
-            // it back here, so this slot has nothing left to release itself.
+            // The outstanding hold -- or `take`, inline with the pop -- owns
+            // releasing this reservation once its message drains; finding
+            // the slot already gone, it lets the capacity go free rather
+            // than handing it back here, so this slot has nothing left to
+            // release itself.
             return;
         }
+        drop(standing);
         // As for `Reservation`'s drop: releasing this permanent slot frees
         // capacity without any item being drained, so a paused producer must
-        // still be prodded on the same zero-to-one transition. `standing`
-        // stays locked across this so a concurrent `StandingHold::drop` for
-        // this same slot cannot interleave with the check above and this
-        // mutation.
-        let resumers = {
-            let mut state = lock(&self.sender.shared.items);
-            state.reserved -= 1;
-            freed_resumers(&mut state, true)
-        };
+        // still be prodded on the same zero-to-one transition.
+        state.reserved -= 1;
+        let resumers = freed_resumers(&mut state, true);
+        drop(state);
         prod(resumers);
     }
 }
@@ -677,33 +732,47 @@ impl std::fmt::Debug for StandingSlot {
 /// The reservation-release obligation a [`StandingSlot::send`] transfers into
 /// its queued entry.
 ///
-/// `Drop` -- rather than only [`take`] -- is what performs the release, so it
-/// happens exactly once no matter how the entry is finally discarded (normal
-/// drain, or the queue itself going away). Whether that release hands the
-/// unit back to the slot (still alive, so it can send again) or simply lets
-/// it go free (the slot is already gone) is decided by [`StandingState`],
-/// read and mutated under its own lock so this can never race
-/// [`StandingSlot::drop`] for the same slot.
+/// `Drop` -- rather than only [`take`] -- is what performs the release on any
+/// path other than an ordinary pop, so it happens exactly once no matter how
+/// the entry is finally discarded (normal drain, or the queue itself going
+/// away). `take` is the common case and the one path where the pop and the
+/// release must be one atomic accounting transition (PR #20 review
+/// response): popping a standing entry exposes its queue slot before its
+/// reservation was restored under the old design, and a producer woken in
+/// that gap could overcommit capacity. `take` therefore performs the release
+/// itself, inline with the pop, under the same `items` lock, and marks
+/// `resolved` so this `Drop` becomes a no-op for that path; `Drop` remains
+/// the fallback for every other discard.
 struct StandingHold {
     shared: Arc<Shared>,
     state: Arc<Mutex<StandingState>>,
+    /// Set once this hold's release has already been performed inline by
+    /// `take`, so `Drop` does not perform it a second time.
+    resolved: bool,
 }
 
 impl Drop for StandingHold {
+    /// Lock order: `items`, then `standing` -- matching [`StandingSlot::send`]
+    /// and [`take`].
     fn drop(&mut self) {
+        if self.resolved {
+            return;
+        }
+        let mut state = lock(&self.shared.items);
         let mut standing = lock(&self.state);
         standing.in_flight = false;
-        let resumers = if standing.slot_alive {
-            let mut state = lock(&self.shared.items);
-            state.reserved += 1;
-            freed_resumers(&mut state, true)
-        } else {
+        standing.queued = None;
+        if !standing.slot_alive {
             // Nothing will ever reserve this unit again: `queue.len()`
             // already accounted for its release when this entry left the
             // queue, so there is nothing further to do here beyond
             // recording that no hold remains outstanding.
-            Vec::new()
-        };
+            return;
+        }
+        drop(standing);
+        state.reserved += 1;
+        let resumers = freed_resumers(&mut state, true);
+        drop(state);
         prod(resumers);
     }
 }
@@ -761,7 +830,7 @@ impl Receiver {
         // `Drop` re-locks the same mutex to restore its reservation, which
         // would deadlock if it ran while that lock was still held.
         prod(resumers);
-        entry.map(|entry| entry.notification)
+        entry.map(Entry::into_notification)
     }
 
     /// Block until a notification is available, or every sender is gone.
@@ -780,7 +849,7 @@ impl Receiver {
                 prod(resumers);
                 // As in `try_recv`: `entry` is dropped only after the lock
                 // above is released.
-                return Some(entry.notification);
+                return Some(entry.into_notification());
             }
             if state.senders == 0 {
                 return None;
@@ -809,7 +878,7 @@ impl Receiver {
                 prod(resumers);
                 // As in `try_recv`: `entry` is dropped only after the lock
                 // above is released.
-                return Some(entry.notification);
+                return Some(entry.into_notification());
             }
             if state.senders == 0 {
                 return None;
@@ -932,12 +1001,37 @@ impl Receiver {
 /// desync early would claim the hole is older than it is and break the ordering
 /// D-12 promises.
 ///
-/// Returns the whole [`Entry`], not just its notification, so a caller can
-/// defer dropping any [`StandingHold`] it carries until after the queue lock
-/// `state` borrows from is released -- the hold's own `Drop` re-locks that
-/// same mutex.
+/// A standing entry's reservation is restored right here, inline with the pop,
+/// under the same `items` lock `state` already holds (PR #20 review response):
+/// popping the entry first and restoring the reservation later (in the
+/// `StandingHold`'s own deferred `Drop`) left a window where `queue.len()` had
+/// already dropped but `reserved` had not yet gone back up, so `free()`
+/// over-reported room by one and a producer woken in that gap could overcommit
+/// capacity. The returned `Entry` still carries its (now inert) `StandingHold`
+/// so a caller may defer *dropping* it until after the queue lock is released
+/// -- the hold's own `Drop` is a no-op here, since `resolved` is already set --
+/// but the reservation itself is never left outstanding past this call.
 fn take(state: &mut State) -> Option<Entry> {
-    if let Some(entry) = state.queue.pop_front() {
+    if let Some(mut entry) = state.queue.pop_front() {
+        if matches!(entry.notification, EntryNotification::Standing) {
+            let hold = entry
+                ._standing_hold
+                .as_mut()
+                .expect("a Standing entry always carries a StandingHold");
+            let notification = {
+                let mut standing = lock(&hold.state);
+                standing.in_flight = false;
+                let notification = standing.queued.take().expect(
+                    "a Standing entry's queued value is set for as long as it is undrained",
+                );
+                if standing.slot_alive {
+                    state.reserved += 1;
+                }
+                notification
+            };
+            hold.resolved = true;
+            entry.notification = EntryNotification::Plain(notification);
+        }
         return Some(entry);
     }
     state.latched.pop_front().map(|watch| {

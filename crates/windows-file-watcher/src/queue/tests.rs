@@ -828,6 +828,77 @@ fn dropping_an_unused_standing_slot_returns_its_capacity() {
 }
 
 #[test]
+fn a_second_standing_send_while_the_first_is_still_queued_coalesces_in_place() {
+    // PR #20 review response: reachable when an interactive watch is answered
+    // before its queued question is drained and the retry fails again. Before
+    // the fix, a second send while the first was still undrained set
+    // `in_flight` back to `true` and decremented `reserved` a second time --
+    // double-spending the slot's single carved-out unit and underflowing it.
+    let (sender, receiver) = bounded(1);
+    let slot = sender.reserve_standing().expect("a slot");
+    let watch = WatchId::from_raw(1);
+    slot.send(Notification::RetryQuestion {
+        watch,
+        operation: crate::retry::FaultOperation::Open,
+        detail: test_detail(),
+    });
+    // The first message is still queued, undrained, when the second arrives.
+    slot.send(Notification::RetryQuestion {
+        watch,
+        operation: crate::retry::FaultOperation::Arm,
+        detail: test_detail(),
+    });
+
+    assert_eq!(receiver.len(), 1, "the two sends coalesced into one entry");
+    let Some(Notification::RetryQuestion { operation, .. }) = receiver.try_recv() else {
+        panic!("expected the coalesced RetryQuestion");
+    };
+    assert_eq!(
+        operation,
+        crate::retry::FaultOperation::Arm,
+        "the coalesced entry carries the later send's content"
+    );
+    assert!(
+        sender.reserve().is_none(),
+        "the slot's one carved-out unit is still its own, not double-spent"
+    );
+}
+
+#[test]
+fn draining_a_standing_send_frees_no_extra_capacity_for_a_racing_producer() {
+    // PR #20 review response: popping a standing entry used to expose its
+    // queue slot before the entry's StandingHold restored the permanent
+    // reservation, so `free()` briefly over-reported room by one. `take` now
+    // restores the reservation atomically with the pop, so draining a
+    // standing send never creates capacity a concurrent producer could
+    // overcommit -- immediately after drain, the queue must still show
+    // exactly the same "no free capacity" state it did before the send.
+    let (sender, receiver) = bounded(1);
+    let slot = sender.reserve_standing().expect("a slot");
+    let watch = WatchId::from_raw(1);
+    assert!(
+        sender.reserve().is_none(),
+        "before the send: the slot's carve-out is the only capacity"
+    );
+
+    slot.send(Notification::RetryQuestion {
+        watch,
+        operation: crate::retry::FaultOperation::Open,
+        detail: test_detail(),
+    });
+    assert!(
+        sender.reserve().is_none(),
+        "while queued: the reservation lives in the queue slot instead"
+    );
+
+    assert!(receiver.try_recv().is_some(), "the message drains");
+    assert!(
+        sender.reserve().is_none(),
+        "after drain: the reservation is restored, not freed to the general pool"
+    );
+}
+
+#[test]
 fn a_bound_of_one_still_reports_its_own_saturation() {
     // The smallest legal queue is the sharpest test of the guarantee: with a
     // single slot, the desync announcing a loss cannot share the queue with the
