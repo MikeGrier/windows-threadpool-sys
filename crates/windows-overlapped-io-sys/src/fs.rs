@@ -175,26 +175,32 @@ impl AssociatedEndpoint<'_> {
     /// Returns [`io::ErrorKind::InvalidInput`] if the buffer is longer than
     /// `u32::MAX`, or any immediate failure from issuing the read.
     #[track_caller]
-    pub fn read<B: IoBufMut>(&self, buffer: B, offset: u64) -> io::Result<Started<FileIo<B>, B>> {
+    pub fn read<B: IoBufMut>(
+        &self,
+        mut buffer: B,
+        offset: u64,
+    ) -> io::Result<Started<FileIo<B>, B>> {
         let buf_len = checked_len(buffer.bytes_len(), "read buffer")?;
         let skip = self.notification_modes().skip_completion_port_on_success;
+        // Captured before submission, like `buf_len` above, rather than calling
+        // this safe trait method inside the registered closure (PR #20 review
+        // response): `IoBufMut::stable_mut_ptr` is implementable by a caller's
+        // own buffer type, and `submit`'s safety contract forbids the closure
+        // unwinding -- a panic here, before the operation is registered, is
+        // merely an ordinary panic, where one from inside the closure would
+        // leave the operation permanently outstanding.
+        let buf_ptr = buffer.stable_mut_ptr();
         let mut operation = Operation::new(buffer);
         operation.set_offset(offset);
         // SAFETY: issues exactly one ReadFile into the operation's own payload
-        // buffer, reached through the pinned OVERLAPPED; `IoBufMut` promises that
-        // address is stable and exclusively owned, and the payload and byte-count
-        // cell live until the completion is claimed.
+        // buffer at `buf_ptr` (captured above, and identical to what the pinned
+        // payload would report, per `IoBufMut`'s address-stability contract);
+        // `IoBufMut` promises that address is stable and exclusively owned, and
+        // the byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
-                let payload = payload_ptr_from_overlapped::<B>(overlapped);
                 let bytes = sync_bytes_ptr_from_overlapped(overlapped);
-                let ok = ReadFile(
-                    handle.as_raw_handle(),
-                    (*payload).stable_mut_ptr(),
-                    buf_len,
-                    bytes,
-                    overlapped,
-                );
+                let ok = ReadFile(handle.as_raw_handle(), buf_ptr, buf_len, bytes, overlapped);
                 classify_issued(ok, skip, bytes)
             })
         };
@@ -220,19 +226,22 @@ impl AssociatedEndpoint<'_> {
     pub fn write<B: IoBuf>(&self, buffer: B, offset: u64) -> io::Result<Started<FileIo<B>, B>> {
         let data_len = checked_len(buffer.bytes_len(), "write buffer")?;
         let skip = self.notification_modes().skip_completion_port_on_success;
+        // Captured before submission; see `read`'s matching comment above for
+        // why (PR #20 review response).
+        let data_ptr = buffer.stable_ptr();
         let mut operation = Operation::new(buffer);
         operation.set_offset(offset);
         // SAFETY: issues exactly one WriteFile from the operation's own payload
-        // buffer, reached through the pinned OVERLAPPED; `IoBuf` promises that
-        // address is stable and its bytes unmodified, and the payload and
-        // byte-count cell live until the completion is claimed.
+        // buffer at `data_ptr` (captured above; identical to what the pinned
+        // payload would report, per `IoBuf`'s address-stability contract);
+        // `IoBuf` promises that address is stable and its bytes unmodified, and
+        // the byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
-                let payload = payload_ptr_from_overlapped::<B>(overlapped);
                 let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = WriteFile(
                     handle.as_raw_handle(),
-                    (*payload).stable_ptr(),
+                    data_ptr,
                     data_len,
                     bytes,
                     overlapped,

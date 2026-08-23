@@ -22,7 +22,7 @@ use std::os::windows::io::AsRawHandle;
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-use crate::operation::{payload_ptr_from_overlapped, sync_bytes_ptr_from_overlapped};
+use crate::operation::sync_bytes_ptr_from_overlapped;
 use crate::{
     AssociatedEndpoint, BlockingEndpoint, Completion, IoBuf, IoBufMut, Issued, Operation,
     OperationId, Started, Submitted,
@@ -145,6 +145,13 @@ fn checked_len(len: usize, which: &str) -> io::Result<u32> {
 /// The pinned payload for an in-flight device-control operation: the input and
 /// output buffers, both of which must outlive the async call.
 struct DeviceIoPayload<I, O> {
+    /// Kept alive (pinned, via this struct) for as long as the operation is
+    /// outstanding -- the driver reads it for the whole call -- but never
+    /// read back through this field: `ioctl` captures its stable pointer
+    /// before submission (PR #20 review response) and `claim`/`finish_device`
+    /// drop it unread once the operation completes (the common case only
+    /// wants `output` back).
+    #[allow(dead_code)]
     input: I,
     output: O,
 }
@@ -190,7 +197,7 @@ impl AssociatedEndpoint<'_> {
         &self,
         code: u32,
         input: I,
-        output: O,
+        mut output: O,
     ) -> io::Result<Started<DeviceIoControlIo<I, O>, O>> {
         // The lengths are captured here rather than measured inside the
         // submission closure, which runs at the FFI boundary and cannot report
@@ -198,16 +205,23 @@ impl AssociatedEndpoint<'_> {
         let in_len = checked_len(input.bytes_len(), "input")?;
         let out_len = checked_len(output.bytes_len(), "output")?;
         let skip = self.notification_modes().skip_completion_port_on_success;
+        // Captured before submission too, alongside the lengths above (PR #20
+        // review response): `IoBuf`/`IoBufMut` are safe trait methods a
+        // caller's own buffer type implements, and `submit`'s safety contract
+        // forbids the closure unwinding -- a panic here, before the operation
+        // is registered, is merely an ordinary panic, where one from inside
+        // the closure would leave the operation permanently outstanding.
+        let in_ptr = in_ptr(input.stable_ptr(), in_len);
+        let out_ptr = out_ptr(output.stable_mut_ptr(), out_len);
 
         let operation = Operation::new(DeviceIoPayload { input, output });
-        // SAFETY: issues exactly one DeviceIoControl reading the payload's input
-        // and writing its output, both reached through the pinned OVERLAPPED;
-        // they and the byte-count cell live until the completion is claimed.
+        // SAFETY: issues exactly one DeviceIoControl reading from `in_ptr` and
+        // writing into `out_ptr` (captured above; identical to what the
+        // pinned payload would report, per `IoBuf`/`IoBufMut`'s
+        // address-stability contract); they and the byte-count cell live
+        // until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
-                let payload = payload_ptr_from_overlapped::<DeviceIoPayload<I, O>>(overlapped);
-                let in_ptr = in_ptr((*payload).input.stable_ptr(), in_len);
-                let out_ptr = out_ptr((*payload).output.stable_mut_ptr(), out_len);
                 let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = DeviceIoControl(
                     handle.as_raw_handle(),
