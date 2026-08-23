@@ -581,8 +581,16 @@ impl<'ring> Batch<'ring> {
         Ok(user_data)
     }
 
-    /// Queue registration of `handles` as the next `handles.len()` registered
-    /// file indices (M5.1), starting at [`IoRing::registered_file_count`].
+    /// Queue registration of `handles` as a ring's file-handle table (M5.1).
+    ///
+    /// `BuildIoRingRegisterFileHandles` *replaces* the ring's entire
+    /// file-handle table rather than appending to it (Win32 docs: "If a
+    /// previous registration exists, this replaces the previous
+    /// registration completely"), which would silently invalidate every
+    /// [`RegisteredFile`] index a prior registration handed out. Rather than
+    /// track and resubmit that whole prior table transparently, this method
+    /// refuses a second registration outright: a ring accepts at most one
+    /// [`Batch::register_files`] call in its lifetime.
     ///
     /// `handles` only needs to stay valid for this call, unlike a data
     /// buffer referenced through an `IORING_HANDLE_REF`/`IORING_BUFFER_REF`:
@@ -594,7 +602,9 @@ impl<'ring> Batch<'ring> {
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::Unsupported`] if the ring was not probed as
+    /// [`io::ErrorKind::AlreadyExists`] if this ring already has a
+    /// file-handle registration (see above); [`io::ErrorKind::Unsupported`]
+    /// if the ring was not probed as
     /// supporting [`Op::RegisterFiles`](crate::Op::RegisterFiles);
     /// [`io::ErrorKind::InvalidInput`] if `handles` has more than
     /// `u32::MAX` entries; an [`crate::IoRingError`] wrapping
@@ -602,6 +612,14 @@ impl<'ring> Batch<'ring> {
     /// other error from `BuildIoRingRegisterFileHandles`.
     pub fn register_files(&mut self, handles: &[HANDLE]) -> io::Result<PendingFileRegistration> {
         self.require(Op::RegisterFiles)?;
+        if self.ring.registered_file_count() > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "this ring already has a file-handle registration; BuildIoRingRegisterFileHandles \
+                 replaces the whole table, so a second call would invalidate every RegisteredFile \
+                 index already handed out",
+            ));
+        }
         let count = checked_len(handles.len())?;
         let base_index = self.ring.registered_file_count();
         let user_data = self.ring.reserve_user_data()?;
@@ -627,8 +645,13 @@ impl<'ring> Batch<'ring> {
         })
     }
 
-    /// Queue registration of `buffers` as the next `buffers.len()` registered
-    /// buffer indices (M5.2), starting at [`IoRing::registered_buffer_count`].
+    /// Queue registration of `buffers` as a ring's registered-buffer table
+    /// (M5.2).
+    ///
+    /// As [`Batch::register_files`]: `BuildIoRingRegisterBuffers` replaces
+    /// the ring's entire buffer table rather than appending to it, so this
+    /// method refuses a second registration outright -- a ring accepts at
+    /// most one [`Batch::register_buffers`] call in its lifetime.
     ///
     /// Unlike [`Batch::register_files`], what must outlive this call is not
     /// the array `BuildIoRingRegisterBuffers` reads (also synchronous, also
@@ -646,6 +669,14 @@ impl<'ring> Batch<'ring> {
         mut buffers: Vec<B>,
     ) -> io::Result<PendingBufferRegistration<B>> {
         self.require(Op::RegisterBuffers)?;
+        if self.ring.registered_buffer_count() > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "this ring already has a buffer registration; BuildIoRingRegisterBuffers \
+                 replaces the whole table, so a second call would invalidate every buffer \
+                 index already handed out",
+            ));
+        }
         let count = checked_len(buffers.len())?;
         let base_index = self.ring.registered_buffer_count();
         let mut infos = Vec::with_capacity(buffers.len());

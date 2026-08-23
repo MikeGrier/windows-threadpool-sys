@@ -122,6 +122,68 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
 }
 
 #[test]
+fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
+    // BuildIoRingRegisterFileHandles/BuildIoRingRegisterBuffers replace the
+    // whole table rather than appending to it, so a second registration
+    // would silently invalidate every index the first one handed out.
+    // `Batch::register_files`/`register_buffers` refuse it outright instead.
+    let path = temp_file("second-registration-refused");
+    std::fs::write(&path, b"content").expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+
+    let mut batch = Batch::new(&mut ring);
+    let files_pending = batch
+        .register_files(&[handle])
+        .expect("queue first file registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let _registered_files = files_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("file registration succeeded");
+
+    let mut batch = Batch::new(&mut ring);
+    let error = batch
+        .register_files(&[handle])
+        .expect_err("a second file registration must be refused");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    drop(batch);
+
+    let buffer = vec![0_u8; 8];
+    let mut batch = Batch::new(&mut ring);
+    let buffers_pending = batch
+        .register_buffers(vec![buffer])
+        .expect("queue first buffer registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let registered_buffers = buffers_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("buffer registration succeeded");
+
+    let mut batch = Batch::new(&mut ring);
+    let error = batch
+        .register_buffers(vec![vec![0_u8; 8]])
+        .expect_err("a second buffer registration must be refused");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    drop(batch);
+
+    drop(registered_buffers);
+}
+
+#[test]
 fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees() {
     /// A buffer that records whether its destructor ran, so the test can
     /// distinguish "leaked (forgotten)" from "dropped (freed)" -- the exact

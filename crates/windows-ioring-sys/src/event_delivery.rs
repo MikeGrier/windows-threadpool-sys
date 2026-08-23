@@ -15,12 +15,20 @@ use crate::error::check;
 use crate::ring::{Completion, IoRing};
 
 /// Pop every completion currently available and hand each to `on_completion`.
+///
+/// Each pop is its own short lock: `on_completion` always runs with the
+/// mutex released, so a slow callback does not block a submitter, and a
+/// callback that calls [`EventDelivery::ring`] and locks it itself cannot
+/// deadlock against this loop.
 fn drain(ring: &Mutex<IoRing>, on_completion: &(dyn Fn(Completion) + Send + Sync)) {
-    let mut ring = ring
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     loop {
-        match ring.try_pop() {
+        let popped = {
+            let mut ring = ring
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            ring.try_pop()
+        };
+        match popped {
             Ok(Some(completion)) => on_completion(completion),
             Ok(None) => break,
             Err(error) => {
