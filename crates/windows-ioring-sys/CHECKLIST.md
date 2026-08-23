@@ -84,22 +84,22 @@ Completed milestones are archived in COMPLETED-CHECKLIST.md once there are any.
 
 ## M4 -- Model A delivery: completion event and the thread pool
 
-- [ ] **M4.1** -- Refuse to construct the event-driven path when `SET_COMPLETION_EVENT` is absent, with
+- [x] **M4.1** -- Refuse to construct the event-driven path when `SET_COMPLETION_EVENT` is absent, with
   `io::ErrorKind::Unsupported`, rather than silently degrading into a thread-based loop. Behavior is owned,
   not inherited: a consumer who asked for threadless delivery and got a thread has been told something
   false. The threaded path is a separate, explicit choice (M6+).
 
-- [ ] **M4.2** -- Wire `SetIoRingCompletionEvent` to a `ThreadpoolWait` from `windows-threadpool-sys`,
+- [x] **M4.2** -- Wire `SetIoRingCompletionEvent` to a `ThreadpoolWait` from `windows-threadpool-sys`,
   using an auto-reset `WaitableHandle::event`. The drain discipline is drain-to-`S_FALSE`, re-arm, drain
   again: the spike showed the event is set when completions land and auto-resets on wait, so the worst case
   is a harmless spurious callback, but the ordering is what makes a completion arriving between the last
   pop and the re-arm impossible to lose.
 
-- [ ] **M4.3** -- Teardown: quiesce the wait, run down outstanding operations, then close the ring, in that
+- [x] **M4.3** -- Teardown: quiesce the wait, run down outstanding operations, then close the ring, in that
   order. Interaction with `CleanupGroup` documented, since a consumer will reasonably expect to put this
   in one.
 
-- [ ] **M4.4** -- Integration test: submit with `wait_operations = 0` and assert completions are delivered
+- [x] **M4.4** -- Integration test: submit with `wait_operations = 0` and assert completions are delivered
   on pool threads without the submitting thread ever waiting; assert teardown with operations in flight
   neither hangs nor closes the ring early.
 

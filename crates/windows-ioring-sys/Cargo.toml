@@ -37,3 +37,6 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_System_IO",
 	"Win32_System_Threading",
 ] }
+# The Model A delivery path (M4): a `ThreadpoolWait` on the ring's completion
+# event.
+windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys" }

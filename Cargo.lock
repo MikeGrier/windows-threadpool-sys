@@ -162,6 +162,7 @@ name = "windows-ioring-sys"
 version = "0.1.0"
 dependencies = [
  "windows-sys",
+ "windows-threadpool-sys",
 ]
 
 [[package]]

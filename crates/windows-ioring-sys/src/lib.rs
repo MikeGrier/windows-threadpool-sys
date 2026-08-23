@@ -47,6 +47,8 @@ mod capability;
 #[cfg(windows)]
 mod error;
 #[cfg(windows)]
+mod event_delivery;
+#[cfg(windows)]
 mod ring;
 #[cfg(windows)]
 mod token;
@@ -59,6 +61,8 @@ pub use buf::{IoBuf, IoBufMut};
 pub use capability::{Capabilities, RingVersion, capabilities};
 #[cfg(windows)]
 pub use error::IoRingError;
+#[cfg(windows)]
+pub use event_delivery::EventDelivery;
 #[cfg(windows)]
 pub use ring::{Completion, IoRing, Op, RingInfo};
 #[cfg(windows)]
