@@ -31,7 +31,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
@@ -292,6 +292,29 @@ pub enum Operation {
         /// JSON.
         #[serde(with = "millis")]
         duration: Duration,
+        /// A named [`Operation::Barrier`] to rendezvous on the instant the
+        /// handle is open, before sleeping (PR #20 review response): a
+        /// concurrent antagonist naming the same barrier is then guaranteed
+        /// to run *after* the handle is genuinely open, rather than guessing
+        /// a fixed delay is enough of a head start. `#[serde(default)]` so
+        /// existing persisted scenarios that predate this field still parse.
+        #[serde(default)]
+        ready_barrier: Option<String>,
+    },
+    /// Rendezvous with exactly one other operation naming the same `name`
+    /// (PR #20 review response): blocks until both have reached this point.
+    /// The deterministic way to sequence a `Concurrent` branch against
+    /// another -- for example, waiting for [`Operation::HoldOpen`]'s
+    /// `ready_barrier` -- instead of guessing a fixed delay is enough of a
+    /// head start. Each name must be used by exactly two operations across
+    /// the whole scenario (including a `HoldOpen.ready_barrier` using the
+    /// same name); a third use blocks forever waiting for a rendezvous that
+    /// already happened, which the harness's own deadline eventually reports
+    /// as a wedge rather than hanging silently.
+    Barrier {
+        /// The rendezvous point's name, shared with exactly one other
+        /// operation.
+        name: String,
     },
     /// Run every operation list in `branches` concurrently, each on its own
     /// thread, waiting for all branches to finish before the next top-level
@@ -471,6 +494,11 @@ pub struct Fleet<'m> {
     monitor: &'m Monitor,
     sessions: HashMap<String, (Session, Receiver)>,
     watches: HashMap<String, (String, Watch)>,
+    /// Named two-party rendezvous points (PR #20 review response), shared
+    /// between [`Operation::HoldOpen`]'s `ready_barrier` and
+    /// [`Operation::Barrier`], created lazily so a scenario never has to
+    /// declare its barriers up front.
+    barriers: HashMap<String, Arc<std::sync::Barrier>>,
 }
 
 impl<'m> Fleet<'m> {
@@ -480,7 +508,23 @@ impl<'m> Fleet<'m> {
             monitor,
             sessions: HashMap::new(),
             watches: HashMap::new(),
+            barriers: HashMap::new(),
         }
+    }
+
+    /// The two-party barrier named `name`, creating it on its first use.
+    ///
+    /// Returns the `Arc` rather than waiting on it directly: a caller must
+    /// drop this fleet's lock before calling `Barrier::wait` on the result,
+    /// or a concurrent branch that also needs the fleet (to reach its own
+    /// side of the same rendezvous, or for an unrelated session/watch
+    /// operation) would deadlock against this one.
+    fn barrier(&mut self, name: &str) -> Arc<std::sync::Barrier> {
+        Arc::clone(
+            self.barriers
+                .entry(name.to_string())
+                .or_insert_with(|| Arc::new(std::sync::Barrier::new(2))),
+        )
     }
 
     /// Opens a new session named `name`. Panics if `name` is already open.
@@ -733,16 +777,28 @@ pub fn apply_operation(
             .unwrap()
             .subscribe(session, watch, &root.join(path), *subtree),
         Operation::CancelWatch { watch } => fleet.lock().unwrap().cancel_watch(watch),
-        Operation::HoldOpen { path, duration } => {
+        Operation::HoldOpen {
+            path,
+            duration,
+            ready_barrier,
+        } => {
             use std::os::windows::fs::OpenOptionsExt;
             let file = std::fs::OpenOptions::new()
                 .read(true)
                 .share_mode(share_mode::READ_WRITE_NO_DELETE)
                 .open(root.join(path))
                 .expect("open file to hold");
+            if let Some(name) = ready_barrier {
+                let barrier = fleet.lock().unwrap().barrier(name);
+                barrier.wait();
+            }
             check_bounded_sleep(*duration, deadline, "HoldOpen");
             std::thread::sleep(*duration);
             drop(file);
+        }
+        Operation::Barrier { name } => {
+            let barrier = fleet.lock().unwrap().barrier(name);
+            barrier.wait();
         }
         Operation::Concurrent { branches } => {
             // Draw each branch's seed on the calling thread, before
@@ -811,6 +867,7 @@ fn validate_paths(operations: &[Operation]) -> Result<(), String> {
             | Operation::OpenSession { .. }
             | Operation::OpenSessionBounded { .. }
             | Operation::CloseSession { .. }
+            | Operation::Barrier { .. }
             | Operation::CancelWatch { .. } => {}
             Operation::Repeat { pattern, .. } => validate_paths(pattern)?,
             Operation::Concurrent { branches } => {

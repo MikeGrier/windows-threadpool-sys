@@ -84,6 +84,7 @@ fn subscribe_and_hold_open_paths_are_validated() {
     let hold_open = Operation::HoldOpen {
         path: PathBuf::from(r"C:\escaped.txt"),
         duration: std::time::Duration::from_millis(1),
+        ready_barrier: None,
     };
     assert!(validate_paths(std::slice::from_ref(&hold_open)).is_err());
 }
