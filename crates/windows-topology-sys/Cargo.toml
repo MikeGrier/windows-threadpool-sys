@@ -18,6 +18,14 @@ categories = ["api-bindings", "os::windows-apis", "hardware-support"]
 [lib]
 path = "src/lib.rs"
 
+# Prints the host's topology as JSON (M4.2). Needs `serde` for `Topology`'s
+# Serialize impl; `serde_json` itself comes from [dev-dependencies], which
+# examples -- unlike [[bin]] targets -- can draw on.
+[[example]]
+name = "print_topology"
+path = "examples/print_topology.rs"
+required-features = ["serde"]
+
 # The crate is Windows-only, so docs.rs must build on a Windows target or it
 # would render an almost-empty crate.
 [package.metadata.docs.rs]

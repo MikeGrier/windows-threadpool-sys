@@ -126,9 +126,10 @@ Completed milestones are archived in COMPLETED-CHECKLIST.md once there are any.
 
 ## M7 -- `ring-copy`: a topology-aligned sample
 
-> **-> CROSS-COMPONENT PREREQUISITE:** blocked on component `crates/windows-topology-sys` ->
-> `M4` (safe enumeration, the description, and its serialization). See
-> [../windows-topology-sys/CHECKLIST.md](../windows-topology-sys/CHECKLIST.md).
+> **-> CROSS-COMPONENT PREREQUISITE (satisfied):** was blocked on component
+> `crates/windows-topology-sys` -> `M4` (safe enumeration, the description, and its
+> serialization), completed 2026-08-22. See
+> [../windows-topology-sys/COMPLETED-CHECKLIST.md](../windows-topology-sys/COMPLETED-CHECKLIST.md#moved-2026-08-22----m1-through-m4-safe-enumeration-the-description-serialization-and-documentation).
 
 This is a **sample**, not library surface. The library still owns no partitioning policy (D-8); the sample
 is where a policy lives, so that the guidance in M6 has something executable behind it.

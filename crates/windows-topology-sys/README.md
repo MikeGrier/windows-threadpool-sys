@@ -22,11 +22,31 @@ This crate does that walk once, safely, and hands back owned records.
 
 ## Scope
 
-Safe enumeration, not an opinionated topology model. See
-[DESIGN-NOTES.md](DESIGN-NOTES.md) for the full reasoning, including a
-cross-check against Linux's topology model and an explicit list of what this
-crate deliberately does not attempt (devices, HMAT-style attributed
-distances, queue affinity).
+**What this is:** safe enumeration ([`Topology::discover`]), plus a plain-data
+description ([`Topology`], [`Domain`]) that needs no Windows API to construct
+-- build one by hand, or (with the `serde` feature) deserialize one from JSON
+written for a machine you do not have.
+
+**What this is not:** an opinionated topology model. It does not decide what
+counts as a "locality domain worth partitioning by" -- by NUMA node, by
+last-level cache, by package -- that is the consumer's call, because the
+right answer depends on the workload. It is also not a partitioning policy,
+and not a device topology: no NVMe controller, NIC, or GPU is a topology
+participant here, and there is no HMAT-style attributed-distance model. Both
+were considered and declined for now.
+
+See [DESIGN-NOTES.md](DESIGN-NOTES.md) for the full reasoning, including a
+cross-check against Linux's topology model, D-9's full list of what was
+declined and why, and D-8's note that the JSON schema is not covered by this
+crate's semver contract.
+
+Run `cargo run --example print_topology --features serde` to see the host's
+own topology as JSON -- the shape a hand-written or synthetic description
+takes.
+
+[`Topology::discover`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Topology.html#method.discover
+[`Topology`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Topology.html
+[`Domain`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Domain.html
 
 ## License
 
