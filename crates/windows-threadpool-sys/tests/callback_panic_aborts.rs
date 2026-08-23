@@ -20,7 +20,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use windows_threadpool_sys::io::{IoCompletion, ThreadpoolIo};
-use windows_threadpool_sys::timer::ThreadpoolTimer;
+use windows_threadpool_sys::timer::{ThreadpoolPeriodicTimer, ThreadpoolTimer};
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 use windows_threadpool_sys::work::ThreadpoolWork;
 
@@ -202,6 +202,26 @@ fn child_io_panics() -> ! {
     std::process::exit(0);
 }
 
+/// Panic from a periodic timer callback.
+///
+/// `periodic_trampoline` is a distinct trampoline from `ThreadpoolTimer`'s
+/// one-shot callback (`child_timer_panics` above), so it needs its own proof:
+/// nothing else in this suite exercises `CreateThreadpoolTimer`'s periodic
+/// callback path.
+fn child_periodic_panics() -> ! {
+    let timer = ThreadpoolPeriodicTimer::new(
+        Duration::from_millis(1),
+        |_tick| panic!("periodic timer callback panics on purpose"),
+        None,
+    )
+    .expect("create periodic timer");
+    timer.start();
+    // Not a join: outliving the first tick is what makes the abort the outcome
+    // under test, exactly as for the one-shot timer and wait scenarios above.
+    std::thread::sleep(CHILD_LINGER);
+    std::process::exit(0);
+}
+
 /// Dispatch to a child scenario when this binary was spawned as one.
 ///
 /// libtest runs every `#[test]` in the binary, so the dispatch has to happen from
@@ -227,6 +247,7 @@ fn dispatch_if_child() {
         "timer" => child_timer_panics(),
         "wait" => child_wait_panics(),
         "io" => child_io_panics(),
+        "periodic" => child_periodic_panics(),
         other => panic!("unknown child scenario {other}"),
     });
     if caught.is_err() {
@@ -258,4 +279,10 @@ fn a_panicking_wait_callback_aborts_the_process() {
 fn a_panicking_io_callback_aborts_the_process() {
     dispatch_if_child();
     assert_child_aborts("io");
+}
+
+#[test]
+fn a_panicking_periodic_timer_callback_aborts_the_process() {
+    dispatch_if_child();
+    assert_child_aborts("periodic");
 }
