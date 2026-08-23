@@ -54,6 +54,21 @@ fn range_stays_within_bounds_and_seed_env_var_parses() {
 }
 
 #[test]
+fn range_handles_the_full_width_span_without_overflowing() {
+    // `0..=u64::MAX`'s inclusive span is `2^64`, which does not fit in a
+    // `u64` -- `high - low + 1` would overflow (panicking in debug, wrapping
+    // to 0 and then panicking on `% 0` in release) if not special-cased.
+    let mut rng = Rng::new(seed());
+    for _ in 0..1_000 {
+        let _ = rng.range(0, u64::MAX);
+    }
+    // A span of exactly one is the other edge this arithmetic must not choke
+    // on (`high - low + 1 == 1`, already representable, no special case
+    // needed, but worth asserting the result is exact).
+    assert_eq!(rng.range(42, 42), 42);
+}
+
+#[test]
 fn a_scenario_is_built_as_a_plain_ordered_operation_list() {
     let scenario = Scenario::new("smoke")
         .then(Operation::CreateFile {
