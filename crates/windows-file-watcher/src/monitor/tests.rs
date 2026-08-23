@@ -462,3 +462,74 @@ fn an_interactive_subscription_is_asked_and_its_answer_speeds_up_establishment()
     drop(monitor);
     dir.cleanup();
 }
+
+// --- reopen identity and re-keying (D-78/M11) ---
+
+#[test]
+fn a_path_based_reopen_that_lands_on_a_new_directory_rekeys_so_a_later_subscription_still_coalesces()
+ {
+    let dir = TempDir::new("coalesce-rekey");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(dir.path(), WatchOptions::new().report_liveness(true))
+        .expect("register");
+    monitor.quiesce();
+    assert_eq!(monitor.directory_count(), 1);
+
+    // Delete and recreate the watched directory: the fast, file-reference-based
+    // reopen path is currently disabled (D-80), so re-establishment always
+    // falls back to a path-based open here, which lands on a genuinely
+    // different `DirectoryId` than the one this watcher started under.
+    std::fs::remove_dir_all(dir.path()).expect("delete the watched directory");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(Instant::now() < deadline, "the outage was never observed");
+        if let Some(notification) = receiver.try_recv()
+            && matches!(notification, Notification::Suspended { watch: tag } if tag == watch.id())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    std::fs::create_dir_all(dir.path()).expect("recreate the watched directory");
+
+    // `is_watching` alone would not do here: it only tracks a *permanent*
+    // stop, not a transient fault, so it would already read `true` throughout
+    // the recovery above. `Resumed` (opt-in, sent only after re-establishment
+    // actually succeeds) is the real signal this watcher is done reopening.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the watcher never reestablished against the recreated directory"
+        );
+        if let Some(notification) = receiver.try_recv()
+            && matches!(notification, Notification::Resumed { watch: tag } if tag == watch.id())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // If the reopen fallback's new `DirectoryId` was never re-keyed into
+    // `Resident.directories` (M11.4), this second subscription to the same,
+    // now-recreated path would fail to find the existing watcher -- still
+    // keyed under the old, gone identity -- and spin up a redundant second
+    // one.
+    let second = session
+        .subscribe(dir.path(), WatchOptions::new())
+        .expect("register a second subscription to the same, recreated path");
+    monitor.quiesce();
+
+    assert_eq!(
+        monitor.directory_count(),
+        1,
+        "the recreated directory's watcher must be re-keyed, not duplicated"
+    );
+
+    drop((watch, second));
+    drop(monitor);
+    dir.cleanup();
+}

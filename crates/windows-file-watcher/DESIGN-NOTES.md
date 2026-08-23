@@ -98,6 +98,7 @@ threads of its own.
 | D-77 | **The per-subscription change-type filter that M4 reserved space for is *withdrawn*, not deferred: it is not faithfully implementable under D-6 coalescing, and the one shape of it that looks implementable (namespace-only) is actively harmful to the workload it appears to serve.** The kernel filter is expressed in *change classes* (`FILE_NOTIFY_CHANGE_SIZE`, `_LAST_WRITE`, `_ATTRIBUTES`, `_LAST_ACCESS`, `_SECURITY`, `_FILE_NAME`, `_DIR_NAME`) but records arrive as *action codes* (`FILE_ACTION_*`), and that mapping is lossy in exactly the wrong direction: all five non-namespace classes collapse into the single `ChangeKind::Modified` action. Because a directory has exactly one watcher armed with the *union* of its subscriptions' masks (D-6), a route asking for size-only changes receives `Modified` records it cannot attribute to a class, and must therefore either over-deliver (defeating the filter) or under-deliver (dropping changes it asked for). Restricting the feature to the namespace classes -- which *are* recoverable from the action code -- fails for a different reason: a name appearing is not a file being complete, its content streams in afterward as `Modified`, and the only workable completeness test on Windows is a quiescence heuristic (openable, parses, then quiet for N ms) built on precisely the `Modified` traffic such a filter discards. Filtering is therefore not a neutral reduction in volume; it destroys the crate's only evidence of ongoing work. The contract this crate keeps instead is *completeness*: a change notification is positive evidence that a file was **not** finished, never evidence that it was, and a client can only reason about quiescence if it sees every change. This also makes D-12's unfilterable `Desync` load-bearing rather than incidental -- a gap in the event set must invalidate any in-flight settling window, which is only sound while `Desync` cannot be filtered out. **This decision schedules no work**: there is deliberately no checklist item anywhere for a change-type filter, and the absence is intentional rather than an oversight. If a future need arises, the only implementable shape is a client-side predicate over the already-decoded `ChangeKind` (which cannot narrow the kernel mask and so buys no kernel-side efficiency), not a `FILE_NOTIFY_CHANGE_*` mask on `WatchOptions`; that shape is recorded here and remains unscheduled. Rationale and the full design discussion: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> D-77. |
 | <a id="d-78"></a>D-78 | **A reopen that lands on a different volume than before is a per-subscription confirmation, not a silent continuation or a directory-wide veto.** `WatcherInner::reopen` reopens by path and never checked whether the result is still the same volume, so removable media swapped for different media at the same path (the classic case: NTFS media replaced by FAT32) was silently absorbed, with the client learning about it, if at all, only as an ordinary `Established { Coarse }` should the new volume happen to need the fallback tier. See [Volume identity confirmation on reopen](#volume-identity-confirmation-on-reopen). |
 | <a id="d-79"></a>D-79 | **Supersedes [D-54](#d-54): every fault/failure message now carries a `FaultDetail` (this crate's `OpenFailure` classification plus a `FailureCode`), not just which operation faulted.** A client asked to choose a retry delay, or told a subscription failed permanently, previously had no way to know *why* -- `FaultOperation` says only `Open` or `Arm`, and the raw error was logged (D-58) and discarded. `FailureCode` is `Win32(u32)` or `HResult(i32)` rather than one currency: every source in this crate today is a classic last-error API, so `Win32` is the only variant anything currently produces, but a value is kept in the currency it actually arrived in rather than converted through `HRESULT_FROM_WIN32`/`HRESULT_CODE` to force a single shape. See [Failure detail on every fault report](#failure-detail-on-every-fault-report). |
+| <a id="d-80"></a>D-80 | **M11.2's fast reopen path is disabled (returns `None` unconditionally), and reopens by `OpenFileById` (file reference), not `ReOpenFile` (handle), when re-enabled.** Both were measured against the actual OS (D-52's precedent) rather than assumed: `ReOpenFile` against a directory handle fails outright with `ERROR_ACCESS_DENIED` for an ordinary, unprivileged process (it needs `SeBackupPrivilege` *enabled*, which `FILE_FLAG_BACKUP_SEMANTICS` does not grant); `OpenFileById` reopens correctly by identity (confirmed delete-pending-safe and recreate-safe) but is path-independent, which is its own hazard (it would silently keep following a moved/renamed directory away from the path a client subscribed to -- caught by comparing `GetFinalPathNameByHandleW` before trusting it); and, independently of both, a handle obtained via `OpenFileById` hangs or (once) crashes with `STATUS_STACK_BUFFER_OVERRUN` once associated with the thread pool's `ThreadpoolIo`/IOCP and armed, for a reason not yet root-caused. See [Reopening by file reference, and why the fast path is off](#reopening-by-file-reference-and-why-the-fast-path-is-off). |
 
 
 ### Queue mediation
@@ -254,21 +255,74 @@ resolving back to `Open` once the awaiting set empties (decliners already
 removed by then). If that leaves zero routes, the watcher tears down through
 the pre-existing zero-routes path -- no special case is needed there.
 
-A reopen tries `ReOpenFile` against the watcher's own *previous* handle before
-falling back to a fresh path-based `CreateFileW`: `WatcherInner` keeps the old
-endpoint alive until `reopen`'s own `teardown_endpoint` call, which runs after
-the new handle already exists, so at the moment a reopen begins the old handle
-is still live. `ReOpenFile` reopens relative to the handle itself, not the
-path, so it is structurally incapable of landing on a different filesystem
-object than the one that handle already named -- when it succeeds, the volume
-is provably unchanged and no `VolumeIdentity` comparison is needed at all. It
-fails only when the original object is genuinely gone (deleted, or its media
-was ejected), which is exactly when the path-based fallback is needed -- and
-only that fallback path can legitimately land on a different `DirectoryId`, so
-only it re-keys `Resident.directories` (previously fixed at first insertion,
-never updated -- a second latent bug this closes: a stale key would have made
-a later new subscription to the same path fail to coalesce onto the existing
-watcher and spin up a redundant second one).
+A reopen tries `OpenFileById` against the file reference `DirectoryId` already
+computes, using whichever handle is currently installed only as the volume
+hint (`hVolumeHint`) `OpenFileById` requires -- not itself the object being
+reopened, so it stays valid even once that object is gone. Reopening by file
+reference rather than by handle (`ReOpenFile`) or by path (`CreateFileW`) is
+structurally incapable of landing on a different filesystem object than the
+one the reference already names, so when it succeeds the volume is provably
+unchanged and no `VolumeIdentity` comparison is needed for *that* purpose at
+all. It fails only when the original object is genuinely gone (deleted, or its
+media was ejected), which is exactly when the path-based fallback is needed --
+and only that fallback path can legitimately land on a different `DirectoryId`,
+so only it re-keys `Resident.directories` (previously fixed at first
+insertion, never updated -- a second latent bug this closes: a stale key would
+have made a later new subscription to the same path fail to coalesce onto the
+existing watcher and spin up a redundant second one).
+
+### Reopening by file reference, and why the fast path is off
+
+D-80: two rounds of measurement (D-52's precedent -- verify empirically,
+never assume) replaced the reopen mechanism above's original design and then
+suspended it entirely.
+
+**Round 1 -- `ReOpenFile` does not work here.** The original design tried
+`ReOpenFile` against the watcher's still-live previous handle. Measured
+against a real directory handle, this consistently failed with
+`ERROR_ACCESS_DENIED`, independent of the requested access mask or whether
+`FILE_FLAG_BACKUP_SEMANTICS` was included. This matches documented Windows
+behavior: reopening a directory this way needs `SeBackupPrivilege` *enabled*
+on the caller's token, a privilege `FILE_FLAG_BACKUP_SEMANTICS` only exempts
+at a *fresh* `CreateFileW`, not at `ReOpenFile`. An ordinary process (not an
+admin or backup-operator tool) does not have this privilege, so the mechanism
+is not viable for this crate's general audience.
+
+**Round 2 -- `OpenFileById` works for identity, but exposes a path hazard and
+an unexplained IOCP defect.** `OpenFileById` opens by file reference number
+(exactly what `DirectoryId` already carries) plus a volume-hint handle, and
+needs no special privilege. Measured correct on every identity question: it
+reopens the same object while delete-pending, ignores an unrelated object
+later recreated at the same path, and (unlike `ReOpenFile`) *does* keep
+following the original object if it is renamed or moved elsewhere in the
+namespace -- confirmed by `directory::tests`. That last property is also
+exactly the hazard it introduces: a client subscribed to a path expects to
+watch *that path*, not wherever the object ends up, so a candidate obtained
+this way must have its current path (`GetFinalPathNameByHandleW`) checked
+against this watcher's own recorded canonical path before being trusted --
+this is what `WatcherInner`'s `canonical_path` field and
+`reopen_via_existing_handle`'s comparison exist for.
+
+Even with that guarded, a further, independent defect was found: a handle
+obtained via `OpenFileById`, once handed into this crate's ordinary
+establish path (`UnassociatedEndpoint::assume_overlapped` ->
+`ThreadpoolIo::new` -> armed with `ReadDirectoryChangesW`), reliably fails to
+resolve the fault it was reopening for -- the read never completes -- and on
+one run crashed the process with `STATUS_STACK_BUFFER_OVERRUN`. Bisection
+(temporarily short-circuiting `reopen_via_existing_handle` to return early)
+localized this to the `OpenFileById` handle's interaction with IOCP
+association/arming specifically: `DirectoryHandle::reopen_by_id` and
+`canonical_path` are each independently correct per their own unit tests, and
+the defect reproduces with the path check never reached. The cause is not
+yet understood.
+
+**Current state:** `WatcherInner::reopen_via_existing_handle` returns `None`
+unconditionally, so every reopen uses the path-based fallback -- the
+DirectoryId/VolumeIdentity comparison and `Resident.directories` re-keying
+described above, which do not depend on the fast path and are unaffected. The
+`OpenFileById`/`canonical_path` machinery is kept, verified, and ready; only
+the wiring that would hand its result into IOCP association is disabled,
+pending whoever root-causes that interaction.
 
 ### Failure detail on every fault report
 

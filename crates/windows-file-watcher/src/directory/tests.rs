@@ -263,3 +263,151 @@ fn every_failure_class_agrees_with_its_retry_policy() {
     assert!(!OpenFailure::NotADirectory.is_retryable());
     assert!(!OpenFailure::InvalidPath.is_retryable());
 }
+
+// --- M11: measuring `OpenFileById` against a live directory handle
+// empirically, per D-52's precedent of measuring rather than assuming Win32
+// behavior. (`ReOpenFile` was tried first and consistently failed with
+// `ERROR_ACCESS_DENIED` against a directory on an ordinary, unprivileged
+// process -- it needs `SeBackupPrivilege` *enabled*, which
+// `FILE_FLAG_BACKUP_SEMANTICS` alone does not grant.) ---
+
+#[test]
+fn reopen_by_id_preserves_identity_while_the_original_stays_open() {
+    let dir = TempDir::new("reopen-same-identity");
+    let original = DirectoryHandle::open(dir.path()).expect("open");
+    let original_identity = original.identity();
+
+    // SAFETY: `original`'s handle is live for the whole body of this test.
+    let hint = unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(original.as_raw()) };
+    let reopened = DirectoryHandle::reopen_by_id(hint, original_identity.file_reference())
+        .expect("OpenFileById against a live handle's own file reference");
+
+    assert_eq!(
+        reopened.identity(),
+        original_identity,
+        "OpenFileById must reopen the same object its file reference already names"
+    );
+    // The original handle is untouched by reopening it: a second, independent
+    // syscall against it still agrees.
+    assert_eq!(original.identity(), original_identity);
+
+    drop(reopened);
+    drop(original);
+    dir.cleanup();
+}
+
+#[test]
+fn reopen_by_id_survives_the_directory_being_deleted_from_under_it() {
+    // Measured, not assumed (D-52): a directory handle opened with
+    // `FILE_SHARE_DELETE` (this crate's own share mode) keeps its underlying
+    // object alive -- "delete pending" -- for as long as the handle stays
+    // open, even after every directory-entry reference to it is gone. This is
+    // exactly the state `WatcherInner::reopen_via_existing_handle` reopens
+    // against, so this measures precisely that, not a hypothetical.
+    let dir = TempDir::new("reopen-deleted");
+    let original = DirectoryHandle::open(dir.path()).expect("open");
+    let original_identity = original.identity();
+
+    std::fs::remove_dir(dir.path()).expect("unlink the directory while the handle is still open");
+
+    // SAFETY: `original`'s handle is still open -- only its directory entry
+    // was removed, not the handle itself -- and serves only as the volume
+    // hint here, not as the object being reopened.
+    let hint = unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(original.as_raw()) };
+    let reopened = DirectoryHandle::reopen_by_id(hint, original_identity.file_reference())
+        .expect("OpenFileById against a delete-pending object's own file reference");
+
+    assert_eq!(
+        reopened.identity(),
+        original_identity,
+        "OpenFileById reopens the same (delete-pending) object its file reference names, \
+         never a different one that happens to appear at the original path later"
+    );
+
+    drop(reopened);
+    drop(original);
+    // Nothing left on disk to clean up: the directory was already unlinked.
+}
+
+#[test]
+fn reopen_by_id_ignores_a_new_directory_recreated_at_the_same_path() {
+    // The critical measurement M11.2's design depends on: once a *new*
+    // directory exists at the original path, `OpenFileById` against the old
+    // file reference must keep reopening the *old* (delete-pending) object,
+    // never silently pick up the new one that happens to share the path.
+    let dir = TempDir::new("reopen-recreated");
+    let original = DirectoryHandle::open(dir.path()).expect("open");
+    let original_identity = original.identity();
+
+    std::fs::remove_dir(dir.path()).expect("unlink the directory while the handle is still open");
+    std::fs::create_dir(dir.path()).expect("recreate a new directory at the same path");
+    let fresh_identity = DirectoryHandle::open(dir.path())
+        .expect("open the recreated directory")
+        .identity();
+    assert_ne!(
+        original_identity, fresh_identity,
+        "a recreated directory must have a genuinely different identity for this test to mean anything"
+    );
+
+    // SAFETY: `original`'s handle is still open throughout, used only as the
+    // volume hint.
+    let hint = unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(original.as_raw()) };
+    let reopened = DirectoryHandle::reopen_by_id(hint, original_identity.file_reference())
+        .expect("OpenFileById against a live file reference");
+
+    assert_eq!(
+        reopened.identity(),
+        original_identity,
+        "OpenFileById must never silently switch to a different object recreated at the same path"
+    );
+
+    drop(reopened);
+    drop(original);
+    dir.cleanup();
+}
+
+#[test]
+fn reopen_by_id_follows_the_directory_if_it_is_renamed_and_canonical_path_detects_it() {
+    // The other side of `OpenFileById`'s path independence (M11.2): unlike a
+    // recreated-at-the-same-path object (a *different* file the reopen must
+    // ignore), a renamed *same* object is exactly what OpenFileById is
+    // supposed to keep following -- but `WatcherInner::reopen_via_existing_handle`
+    // must still notice the path no longer matches what this watcher was
+    // subscribed to, via `canonical_path`, rather than silently watching the
+    // directory at its new location under the old subscription.
+    let parent = TempDir::new("reopen-rename-parent");
+    let original_path = parent.path().join("original");
+    std::fs::create_dir(&original_path).expect("create the directory to be renamed");
+    let original = DirectoryHandle::open(&original_path).expect("open");
+    let original_identity = original.identity();
+    let path_before = original
+        .canonical_path()
+        .expect("query the path before the rename");
+
+    let renamed_path = parent.path().join("renamed");
+    std::fs::rename(&original_path, &renamed_path).expect("rename while the handle is open");
+
+    // SAFETY: `original`'s handle is still open throughout, used only as the
+    // volume hint.
+    let hint = unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(original.as_raw()) };
+    let reopened = DirectoryHandle::reopen_by_id(hint, original_identity.file_reference())
+        .expect("OpenFileById against a live file reference");
+
+    assert_eq!(
+        reopened.identity(),
+        original_identity,
+        "a rename does not change the object's own identity"
+    );
+    let path_after = reopened
+        .canonical_path()
+        .expect("query the path after the rename");
+    assert_ne!(
+        path_before, path_after,
+        "OpenFileById follows the object to its new location, so the canonical path must \
+         change -- this is exactly what `reopen_via_existing_handle` must detect and refuse"
+    );
+
+    drop(reopened);
+    drop(original);
+    parent.cleanup();
+}

@@ -32,7 +32,7 @@ use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
 
 use windows_overlapped_io_sys::{Issued, Operation, Submitted, UnassociatedEndpoint};
@@ -48,7 +48,11 @@ use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 use windows_threadpool_sys::work::ThreadpoolWork;
 
 use crate::coarse::CoarseHandle;
-use crate::directory::{DirectoryHandle, FaultDetail, OpenFailure, classify, classify_detail};
+use crate::directory::{
+    DirectoryHandle, DirectoryId, FaultDetail, OpenFailure, VolumeIdentity, classify,
+    classify_detail,
+};
+use crate::monitor::{Resident, rekey};
 use crate::notify::{DecodedBatch, DesyncCause, decode_batch};
 use crate::queue::{Notification, Resume, WatchId};
 use crate::retry::{FaultOperation, WatchMode, clamp};
@@ -247,6 +251,32 @@ struct WatcherInner {
     /// `#[cfg(test)]`-gated (one bool costs nothing and never leaves the
     /// crate), but never set outside a test.
     force_coarse: AtomicBool,
+    /// The `DirectoryId` this watcher is currently known by -- i.e. the key
+    /// `Resident.directories` holds it under. Only a path-based reopen
+    /// fallback (M11.2) can legitimately change this; an `OpenFileById`
+    /// success is structurally incapable of landing on a different
+    /// filesystem object (D-78).
+    directory_id: Mutex<DirectoryId>,
+    /// The last volume identity recorded from an installed handle (M11.3,
+    /// D-78 groundwork), compared against on the next path-based reopen
+    /// fallback. `None` only if `GetVolumeInformationByHandleW` itself failed
+    /// when this watcher was last installed.
+    volume_identity: Mutex<Option<VolumeIdentity>>,
+    /// This watcher's own canonical path (M11.2), recorded from the handle
+    /// installed each time, via `GetFinalPathNameByHandleW` rather than
+    /// `self.path` (a client-supplied string, possibly not even fully
+    /// resolved). `OpenFileById` is path-independent -- it keeps finding the
+    /// same object even after it is moved or renamed elsewhere -- so this is
+    /// what lets a fast reopen notice that and refuse to trust it, since a
+    /// client subscribed to a path expects to watch that path, not wherever
+    /// the object ends up. `None` only if the query itself failed when this
+    /// watcher was last installed.
+    canonical_path: Mutex<Option<PathBuf>>,
+    /// The resident-state map this watcher's directory entry lives in, bound
+    /// once by [`DirectoryWatcher::bind_resident`] immediately after
+    /// construction (M11.4) -- unset for a watcher built directly by a unit
+    /// test, which has no real `Resident` to re-key and simply skips it.
+    resident: OnceLock<Weak<Mutex<Resident>>>,
 }
 
 impl WatcherInner {
@@ -600,21 +630,38 @@ impl WatcherInner {
 
     /// `retry_timer`'s callback: attempt one re-establishment.
     ///
-    /// Reopens the directory from its original path (a live handle cannot be
-    /// recovered once its target is gone, but the path can still be retried),
-    /// then arms a read on it. An open failure that is retryable (D-22)
-    /// re-enters the fault loop as an open-class fault; a permanent one is the
-    /// one edge that does not (`stopped`). An arm failure after a successful
-    /// open re-enters the fault loop as an arm-class fault.
+    /// Tries `OpenFileById` against the file reference this watcher is
+    /// currently known by first (M11.2/D-78): structurally incapable of
+    /// landing on a different filesystem object, so no volume-identity
+    /// comparison or `DirectoryId` re-key is ever needed when it succeeds.
+    /// Falls back to the path-based `DirectoryHandle::open` only when that
+    /// fails -- most often because the original object is genuinely gone
+    /// (deleted, or its media was ejected). An open failure that is retryable
+    /// (D-22) re-enters the fault loop as an open-class fault; a permanent one
+    /// is the one edge that does not (`stopped`). An arm failure after a
+    /// successful open re-enters the fault loop as an arm-class fault.
     fn retry_reestablish(self: &Arc<Self>) {
         if *lock(&self.gate) == ArmGate::TornDown {
             return;
         }
-        match DirectoryHandle::open(&self.path) {
-            Ok(handle) => match self.reopen(handle) {
+        if let Some(handle) = self.reopen_via_existing_handle() {
+            match self.install(handle) {
                 Ok(()) => self.resolve_fault_success(),
                 Err(error) => self.enter_fault(classify_detail(&error), FaultOperation::Arm),
-            },
+            }
+            return;
+        }
+        match DirectoryHandle::open(&self.path) {
+            Ok(handle) => {
+                // Only this path can legitimately land on a different
+                // directory or volume than before (M11.3/M11.4) -- compared
+                // and re-keyed here, before `install` overwrites the record.
+                self.on_path_based_reopen(&handle);
+                match self.install(handle) {
+                    Ok(()) => self.resolve_fault_success(),
+                    Err(error) => self.enter_fault(classify_detail(&error), FaultOperation::Arm),
+                }
+            }
             Err(open_error) => {
                 if open_error.failure().is_retryable() {
                     self.enter_fault(open_error.detail(), FaultOperation::Open);
@@ -622,6 +669,75 @@ impl WatcherInner {
                     self.record_stop(io::Error::other(open_error));
                 }
             }
+        }
+    }
+
+    /// Try `OpenFileById` against the file reference this watcher is
+    /// currently known by, using the installed detailed endpoint's handle
+    /// only as the volume hint (M11.2). `None` if there is no detailed handle
+    /// installed (coarse mode, or nothing installed yet), if `OpenFileById`
+    /// itself failed, or if the reopened object's current path no longer
+    /// matches this watcher's own recorded canonical path -- `OpenFileById`
+    /// is path-independent, so it would otherwise silently keep following the
+    /// object after a move or rename elsewhere in the namespace, which a
+    /// client subscribed to a specific path does not expect. Either way, the
+    /// caller falls back to a path-based open.
+    ///
+    /// **Disabled for now (returns `None` unconditionally):** measured
+    /// (real-OS test, D-52's precedent) to hang or, once, crash with
+    /// `STATUS_STACK_BUFFER_OVERRUN` once a handle obtained this way is
+    /// associated with the thread pool's I/O completion port and armed --
+    /// reproduced with `OpenFileById` alone, with `canonical_path`'s
+    /// comparison never reached. The cause is not yet understood; every
+    /// piece below (`DirectoryHandle::reopen_by_id`, `canonical_path`) is
+    /// independently verified correct by `directory::tests`, so the defect is
+    /// specifically in the IOCP-association/arm path against such a handle,
+    /// not in identity or path computation. Path-based reopen (this
+    /// function's caller's fallback) is unaffected and remains the only
+    /// active mechanism until this is root-caused.
+    fn reopen_via_existing_handle(&self) -> Option<DirectoryHandle> {
+        return None;
+        #[expect(
+            unreachable_code,
+            reason = "kept ready for when the hang/crash above is root-caused"
+        )]
+        let candidate = {
+            let endpoint = lock(&self.endpoint);
+            let Some(Endpoint::Detailed(io)) = endpoint.as_ref() else {
+                return None;
+            };
+            let file_id = lock(&self.directory_id).file_reference();
+            DirectoryHandle::reopen_by_id(io.handle(), file_id).ok()?
+        };
+        let current_path = candidate.canonical_path().ok()?;
+        let expected_path = lock(&self.canonical_path).clone()?;
+        (current_path == expected_path).then_some(candidate)
+    }
+
+    /// Compare `handle`'s identity and volume identity against what this
+    /// watcher is currently known by, re-keying `Resident.directories` if the
+    /// directory changed (M11.4) and logging if the volume did (M11.3, D-78
+    /// groundwork -- M12 replaces this diagnostic with the opt-in
+    /// per-subscription confirmation protocol).
+    fn on_path_based_reopen(&self, handle: &DirectoryHandle) {
+        let new_id = handle.identity();
+        let old_id = std::mem::replace(&mut *lock(&self.directory_id), new_id);
+        if new_id != old_id
+            && let Some(resident) = self.resident.get().and_then(Weak::upgrade)
+        {
+            rekey(&resident, old_id, new_id);
+        }
+
+        let Ok(current_volume) = handle.volume_identity() else {
+            return;
+        };
+        if let Some(previous) = lock(&self.volume_identity).as_ref()
+            && *previous != current_volume
+        {
+            log::warn!(
+                "windows-file-watcher: {:?} reopened on a different volume than before",
+                self.path
+            );
         }
     }
 
@@ -753,15 +869,16 @@ impl WatcherInner {
 
     /// (Re-)establish, choosing between detailed and coarse (D-17/M6.3).
     ///
-    /// Reopens the directory rather than cancelling and resubmitting on the
-    /// same handle -- widening (M4.4) was the first thing this served, and
-    /// re-establishment (M5.1) and a tier downgrade (M6.3) reuse the same
+    /// Installs `handle` rather than cancelling and resubmitting on the same
+    /// one already there -- widening (M4.4) was the first thing this served,
+    /// and re-establishment (M5.1) and a tier downgrade (M6.3) reuse the same
     /// mechanism: tear down whatever is installed, install something new.
     /// Detailed reads on the same handle were measured not to pick up a
-    /// widened `bWatchSubtree`; a fresh `CreateFileW` does not have that
-    /// problem, and a coarse handle cannot be reconfigured at all (its
-    /// `bWatchSubtree` is fixed at open) so it needs exactly the same
-    /// treatment.
+    /// widened `bWatchSubtree`; a fresh handle does not have that problem, and
+    /// a coarse handle cannot be reconfigured at all (its `bWatchSubtree` is
+    /// fixed at open) so it needs exactly the same treatment. `handle`'s
+    /// volume identity (M11.3) is recorded before it is consumed, for the
+    /// next path-based reopen fallback to compare against.
     ///
     /// Mode is re-resolved on every call: detailed is attempted first (unless
     /// `force_coarse`, M6.4's test seam, says to skip it), and only an
@@ -780,7 +897,7 @@ impl WatcherInner {
     ///
     /// Returns the error from establishing or arming whichever tier was
     /// settled on.
-    fn reopen(self: &Arc<Self>, handle: DirectoryHandle) -> io::Result<()> {
+    fn install(self: &Arc<Self>, handle: DirectoryHandle) -> io::Result<()> {
         {
             let mut gate = lock(&self.gate);
             if *gate == ArmGate::TornDown {
@@ -796,6 +913,10 @@ impl WatcherInner {
         if self.force_coarse.load(Ordering::Relaxed) {
             drop(handle);
         } else {
+            if let Ok(identity) = handle.volume_identity() {
+                *lock(&self.volume_identity) = Some(identity);
+            }
+            *lock(&self.canonical_path) = handle.canonical_path().ok();
             self.establish_detailed(handle)?;
             match self.arm() {
                 Ok(()) => return Ok(()),
@@ -932,6 +1053,7 @@ impl DirectoryWatcher {
         let initial_sink = route.sink.clone();
         let mut routes = HashMap::new();
         routes.insert(watch, route);
+        let initial_id = directory.identity();
 
         let inner = Arc::new(WatcherInner {
             path,
@@ -945,6 +1067,10 @@ impl DirectoryWatcher {
             fault: Mutex::new(None),
             stopped: Mutex::new(None),
             force_coarse: AtomicBool::new(force_coarse),
+            directory_id: Mutex::new(initial_id),
+            volume_identity: Mutex::new(None),
+            canonical_path: Mutex::new(None),
+            resident: OnceLock::new(),
         });
 
         // Pulls this constructor's one route back out of `inner.routes` so a
@@ -1002,7 +1128,7 @@ impl DirectoryWatcher {
         // from the outset is still prodded when the client drains.
         initial_sink.register_resume(&inner);
 
-        if let Err(error) = inner.reopen(directory) {
+        if let Err(error) = inner.install(directory) {
             return Err((error, reclaim_route(&inner)));
         }
         Ok(Self { inner })
@@ -1058,7 +1184,7 @@ impl DirectoryWatcher {
         if widen
             && !already_recursive
             && self.gate() == ArmGate::Open
-            && let Err(error) = self.inner.reopen(fresh_handle)
+            && let Err(error) = self.inner.install(fresh_handle)
         {
             self.inner
                 .enter_fault(classify_detail(&error), FaultOperation::Arm);
@@ -1153,6 +1279,16 @@ impl DirectoryWatcher {
     #[must_use]
     pub(crate) fn mode(&self) -> WatchMode {
         self.inner.mode()
+    }
+
+    /// Bind the resident-state map this watcher's directory entry lives in
+    /// (M11.4), so a background path-based reopen fallback that lands on a
+    /// different `DirectoryId` can re-key its own entry. Called exactly once,
+    /// by `route_established`, immediately after construction; a watcher
+    /// built directly (as every unit test in this module does) is simply
+    /// never bound, and skips re-keying for lack of a real `Resident`.
+    pub(crate) fn bind_resident(&self, resident: Weak<Mutex<Resident>>) {
+        let _ = self.inner.resident.set(resident);
     }
 
     /// The current arm gate.

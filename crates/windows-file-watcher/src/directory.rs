@@ -29,8 +29,9 @@
 //! (`GetFileInformationByHandle`'s volume serial number plus file index), which
 //! is stable for as long as the file exists regardless of how it was reached.
 
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::Path;
+use std::os::windows::ffi::OsStringExt;
+use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::path::{Path, PathBuf};
 
 use wtf_string::Wtf16String;
 
@@ -40,8 +41,10 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING,
+    FILE_FLAG_OVERLAPPED, FILE_ID_DESCRIPTOR, FILE_ID_DESCRIPTOR_0, FILE_LIST_DIRECTORY,
+    FILE_NAME_NORMALIZED, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdType,
+    GetFileInformationByHandle, GetFinalPathNameByHandleW, GetVolumeInformationByHandleW,
+    OPEN_EXISTING, OpenFileById, VOLUME_NAME_DOS,
 };
 
 /// What a failed open means for the retry policy.
@@ -283,6 +286,16 @@ pub(crate) struct DirectoryId {
     file_index: u64,
 }
 
+impl DirectoryId {
+    /// The NTFS file reference number, in the exact form `OpenFileById`'s
+    /// `FILE_ID_DESCRIPTOR` needs (M11.2/D-78) -- this is the same value
+    /// `identify` already read via `GetFileInformationByHandle`, not a fresh
+    /// syscall.
+    pub(crate) fn file_reference(self) -> u64 {
+        self.file_index
+    }
+}
+
 /// Read a directory's identity from a live handle, rejecting one that turns out
 /// not to be a directory.
 ///
@@ -360,9 +373,104 @@ impl DirectoryHandle {
         Ok(Self { handle, identity })
     }
 
+    /// Reopen the directory identified by `file_id` on the same volume as
+    /// `volume_hint` (D-78/M11), rather than by path: `OpenFileById` opens by
+    /// file reference number, so it is structurally incapable of landing on a
+    /// different filesystem object than the one `file_id` already names --
+    /// unlike a fresh `CreateFileW` against the original path, which cannot
+    /// tell a recreated directory from the one this watcher started on.
+    ///
+    /// Measured empirically in preference to `ReOpenFile` (D-52's precedent):
+    /// `ReOpenFile` against a directory handle consistently failed with
+    /// `ERROR_ACCESS_DENIED` on an ordinary, unprivileged process (it needs
+    /// `SeBackupPrivilege` *enabled*, not merely `FILE_FLAG_BACKUP_SEMANTICS`,
+    /// which only exempts the check on a fresh `CreateFileW`). `OpenFileById`
+    /// carries no such requirement here.
+    ///
+    /// `volume_hint` only needs to name *some* still-open handle on the same
+    /// volume as `file_id` -- it is never itself the object being reopened,
+    /// so it stays valid even once `file_id`'s own object is gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified [`OpenError`] if `OpenFileById` fails -- most
+    /// often because the original object no longer exists (deleted, or its
+    /// volume was ejected). That is exactly when the path-based fallback is
+    /// needed.
+    pub(crate) fn reopen_by_id(
+        volume_hint: BorrowedHandle<'_>,
+        file_id: u64,
+    ) -> Result<Self, OpenError> {
+        let descriptor = FILE_ID_DESCRIPTOR {
+            dwSize: u32::try_from(std::mem::size_of::<FILE_ID_DESCRIPTOR>())
+                .expect("this fixed, small struct's size always fits a u32"),
+            Type: FileIdType,
+            Anonymous: FILE_ID_DESCRIPTOR_0 {
+                FileId: file_id.cast_signed(),
+            },
+        };
+        // SAFETY: `volume_hint` is borrowed and live for the duration of this
+        // call; `descriptor` is a fully initialized, valid `FILE_ID_DESCRIPTOR`
+        // the callee only reads.
+        let raw = unsafe {
+            OpenFileById(
+                volume_hint.as_raw_handle(),
+                &descriptor,
+                FILE_LIST_DIRECTORY,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                std::ptr::null(),
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
+            )
+        };
+        if raw == INVALID_HANDLE_VALUE {
+            let source = std::io::Error::last_os_error();
+            return Err(OpenError::new(classify(&source), source));
+        }
+        // SAFETY: `OpenFileById` returned a live handle that this call
+        // exclusively owns.
+        let owned = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let identity = identify(owned.as_raw_handle())?;
+        Ok(Self {
+            handle: owned,
+            identity,
+        })
+    }
+
     /// This directory's stable identity (D-6).
     pub(crate) fn identity(&self) -> DirectoryId {
         self.identity
+    }
+
+    /// This directory's volume-level identity (D-78): the filesystem name and
+    /// volume label, for detecting removable media swapped for different
+    /// media mounted at the same path.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified [`OpenError`] if `GetVolumeInformationByHandleW`
+    /// fails.
+    pub(crate) fn volume_identity(&self) -> Result<VolumeIdentity, OpenError> {
+        volume_identity(self.as_raw())
+    }
+
+    /// This directory's current path, as the filesystem sees it right now,
+    /// queried fresh via `GetFinalPathNameByHandleW` rather than cached from
+    /// whatever string originally opened it (M11.2/D-78).
+    ///
+    /// `OpenFileById` reopens by file reference, which is path-independent:
+    /// it keeps finding the same object even after it is moved or renamed
+    /// elsewhere in the namespace. A client subscribed to a path expects to
+    /// watch *that path*, not "wherever this object ends up" -- so a fast
+    /// `OpenFileById` reopen must confirm the object is still where this
+    /// watcher's own canonical path last recorded it before trusting it, or
+    /// fall back to a path-based reopen instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified [`OpenError`] if `GetFinalPathNameByHandleW`
+    /// fails.
+    pub(crate) fn canonical_path(&self) -> Result<PathBuf, OpenError> {
+        canonical_path(self.as_raw())
     }
 
     /// Consume the wrapper and surrender the handle.
@@ -384,6 +492,94 @@ impl std::fmt::Debug for DirectoryHandle {
         f.debug_struct("DirectoryHandle")
             .field("handle", &self.as_raw())
             .finish()
+    }
+}
+
+/// A directory's volume-level identity (D-78): the filesystem name and volume
+/// label, distinct from [`DirectoryId`]'s volume serial number (already
+/// tracked there). Compared only when a path-based reopen fallback succeeds
+/// (M11.3) -- a `ReOpenFile` success is structurally guaranteed to still be on
+/// the same volume -- to notice removable media swapped for different media
+/// mounted at the same path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VolumeIdentity {
+    filesystem_name: Wtf16String,
+    volume_label: Wtf16String,
+}
+
+/// Read a handle's volume-level identity via `GetVolumeInformationByHandleW`.
+fn volume_identity(handle: HANDLE) -> Result<VolumeIdentity, OpenError> {
+    /// `MAX_PATH + 1`, ample for either output buffer: a volume label is
+    /// capped at 32 UTF-16 units by every filesystem this crate targets, and a
+    /// filesystem name ("NTFS", "FAT32", "ReFS", ...) is far shorter still.
+    const BUFFER_UNITS: usize = 261;
+    let mut volume_label = [0u16; BUFFER_UNITS];
+    let mut filesystem_name = [0u16; BUFFER_UNITS];
+    // SAFETY: both buffers are valid, correctly sized, writable destinations;
+    // `handle` is live for the duration of this call. The serial-number and
+    // max-component-length out-params are not needed here -- `DirectoryId`
+    // already carries the serial -- so both are null.
+    let ok = unsafe {
+        GetVolumeInformationByHandleW(
+            handle,
+            volume_label.as_mut_ptr(),
+            u32::try_from(volume_label.len()).expect("a fixed small buffer size fits a u32"),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            filesystem_name.as_mut_ptr(),
+            u32::try_from(filesystem_name.len()).expect("a fixed small buffer size fits a u32"),
+        )
+    };
+    if ok == 0 {
+        let source = std::io::Error::last_os_error();
+        return Err(OpenError::new(classify(&source), source));
+    }
+    Ok(VolumeIdentity {
+        filesystem_name: Wtf16String::from_units(trim_nul(&filesystem_name)),
+        volume_label: Wtf16String::from_units(trim_nul(&volume_label)),
+    })
+}
+
+/// The units up to (excluding) the first NUL, or the whole slice if there is
+/// none -- what a fixed-size Win32 output buffer needs trimmed off before it
+/// is a real string.
+fn trim_nul(units: &[u16]) -> &[u16] {
+    units
+        .iter()
+        .position(|&unit| unit == 0)
+        .map_or(units, |end| &units[..end])
+}
+
+/// Read a handle's current path via `GetFinalPathNameByHandleW`, growing the
+/// buffer and retrying if the path is longer than the first guess -- the
+/// documented two-call convention for this API.
+fn canonical_path(handle: HANDLE) -> Result<PathBuf, OpenError> {
+    let mut buffer = vec![0u16; 512];
+    loop {
+        // SAFETY: `buffer` is a valid, writable destination of the length
+        // passed; `handle` is live for the duration of this call.
+        let written = unsafe {
+            GetFinalPathNameByHandleW(
+                handle,
+                buffer.as_mut_ptr(),
+                u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+                VOLUME_NAME_DOS | FILE_NAME_NORMALIZED,
+            )
+        };
+        if written == 0 {
+            let source = std::io::Error::last_os_error();
+            return Err(OpenError::new(classify(&source), source));
+        }
+        let written = written as usize;
+        if written < buffer.len() {
+            buffer.truncate(written);
+            return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
+        }
+        // `written` is the required length, including the NUL this call
+        // would otherwise have appended; the path did not fit, so retry once
+        // sized to hold it.
+        buffer.resize(written, 0);
     }
 }
 

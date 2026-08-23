@@ -2,12 +2,12 @@
 
 Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
 [design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
-The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-79** -- later
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-80** -- later
 decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-50...D-52 from M4,
 D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66...D-76 from M9.1...M9+.4, D-25/D-27...D-31
 plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md)
-(which **overturned D-16**), and D-78/D-79 from the PR #20 review response, D-79 superseding D-54) are
-added there as milestones complete.
+(which **overturned D-16**), and D-78/D-79/D-80 from the PR #20 review response and M11's own execution,
+D-79 superseding D-54, D-80 revising M11.2's own reopen mechanism) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
 end-of-milestone gate (default **and** `--all-features` build/test/clippy/doc clean, encoding check, sync
@@ -15,9 +15,9 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M11.1.** M1 through M9+ and M10 are archived/done. M11 and M12 (below) address
-> the other half of the PR #20 review response: a reopen notice when it lands on a different volume than
-> before. Only the parked, ungated M-inf horizon items are not a current obligation.
+> **NEXT ACTIONABLE ITEM: M12.1.** M1 through M9+, M10, and M11 are archived/done. M12 (below) is the last
+> piece of the PR #20 review response: an opt-in per-subscription confirmation when a reopen lands on a
+> different volume than before. Only the parked, ungated M-inf horizon items are not a current obligation.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -75,34 +75,47 @@ classification. Independent of M11/M12 below.
   file target, D-7, against its real parent, which succeeds) -- see
   [tests/fault_detail.rs](tests/fault_detail.rs).
 
-## M11 -- Reopen identity: `ReOpenFile` first, and volume-identity tracking (D-78 groundwork)
+## M11 -- Reopen identity: file-reference-based reopen, and volume-identity tracking (D-78 groundwork)
 
 Closes two related bugs found while designing D-78: `WatcherInner::reopen` always re-resolves by path even
 when its previous handle is still live, and `Resident.directories`'s `DirectoryId` key is never updated
 after a reopen lands on a different directory. Independent of M10 above; M12 below depends on this.
 
-- [ ] **M11.1** -- Add `directory::VolumeIdentity` (filesystem name + volume label via
+- [x] **M11.1** -- Add `directory::VolumeIdentity` (filesystem name + volume label via
   `GetVolumeInformationByHandleW`, reusing the volume serial `DirectoryId` already computes) and a
-  `DirectoryHandle` method wrapping `ReOpenFile`.
+  `DirectoryHandle` method wrapping `ReOpenFile`. -> `ReOpenFile` measured (D-52) to fail outright
+  (`ERROR_ACCESS_DENIED`, needs `SeBackupPrivilege`); replaced with `DirectoryHandle::reopen_by_id`
+  (`OpenFileById`, reopens by the file reference `DirectoryId` already carries) plus
+  `DirectoryHandle::canonical_path` (`GetFinalPathNameByHandleW`, needed because `OpenFileById` is
+  path-independent and would otherwise silently follow a moved/renamed directory). See D-80 and
+  [Reopening by file reference, and why the fast path is off](DESIGN-NOTES.md#reopening-by-file-reference-and-why-the-fast-path-is-off).
 
-- [ ] **M11.2** -- `WatcherInner::reopen` tries `ReOpenFile` against its still-live previous handle first
+- [x] **M11.2** -- `WatcherInner::reopen` tries `ReOpenFile` against its still-live previous handle first
   (the old endpoint is not torn down until after this succeeds or fails), falling back to the existing
   path-based `DirectoryHandle::open` only when that fails. Verify empirically (real-OS test, per this
   crate's D-52 precedent of measuring rather than assuming Win32 behavior) that `ReOpenFile` behaves as
-  documented for a `FILE_FLAG_BACKUP_SEMANTICS` directory handle.
+  documented for a `FILE_FLAG_BACKUP_SEMANTICS` directory handle. -> `WatcherInner::reopen_via_existing_handle`
+  implements the `OpenFileById`-plus-`canonical_path` mechanism above, but returns `None` unconditionally:
+  measured to hang or (once) crash the process with `STATUS_STACK_BUFFER_OVERRUN` once a handle obtained
+  this way is associated with the thread pool's IOCP and armed, for a reason not yet root-caused. Every
+  reopen therefore uses the path-based fallback only, which is fully implemented and tested (M11.3/M11.4
+  below do not depend on the fast path). See D-80.
 
-- [ ] **M11.3** -- Track each `DirectoryWatcher`'s current `VolumeIdentity`, recorded (no comparison) at
+- [x] **M11.3** -- Track each `DirectoryWatcher`'s current `VolumeIdentity`, recorded (no comparison) at
   first establish, compared only on the path-based fallback path -- a `ReOpenFile` success needs no
   comparison at all (D-78).
 
-- [ ] **M11.4** -- Fix the stale-`DirectoryId`-key bug: when the path-based fallback produces a
+- [x] **M11.4** -- Fix the stale-`DirectoryId`-key bug: when the path-based fallback produces a
   `DirectoryId` different from the one `Resident.directories` currently keys this watcher under, re-key
-  the map entry.
+  the map entry. -> `monitor::rekey`, called from `WatcherInner::on_path_based_reopen`.
 
-- [ ] **M11.5** -- Integration test: a manufactured reopen through `ReOpenFile` returns a handle to the same
+- [x] **M11.5** -- Integration test: a manufactured reopen through `ReOpenFile` returns a handle to the same
   file (`DirectoryId` unchanged) while the original handle stays open; a deleted-and-recreated directory
   falls back to the path-based open and picks up its (possibly different) new identity, re-keying
-  `Resident.directories` correctly.
+  `Resident.directories` correctly. -> `directory::tests` covers the file-reference-reopen identity claims
+  (`reopen_by_id_*`, including the rename hazard the fast path's disablement is about); `monitor::tests`'s
+  `a_path_based_reopen_that_lands_on_a_new_directory_rekeys_so_a_later_subscription_still_coalesces` covers
+  the re-keying claim end to end.
 
 ## M12 -- Per-subscription volume-change confirmation (D-78)
 
@@ -130,9 +143,10 @@ itself, when a reopen lands on a different volume than the one it started on.
   rather than wedging the awaiting set forever.
 
 - [ ] **M12.6** -- Integration test: two subscriptions on one coalesced directory, one `Confirm` one
-  `AutoContinue`; force a `VolumeIdentity` change (via the M11.2 test seam or a real removable-media swap
-  where available) and assert the `Confirm` route receives `VolumeChanged`, declines, and is removed, while
-  the `AutoContinue` route keeps receiving batches uninterrupted.
+  `AutoContinue`; force a `VolumeIdentity` change (a real removable-media swap where available, or a new
+  test seam -- M11.2's fast reopen path is disabled, so there is no `ReOpenFile`-based seam to reuse here)
+  and assert the `Confirm` route receives `VolumeChanged`, declines, and is removed, while the
+  `AutoContinue` route keeps receiving batches uninterrupted.
 
 ## M-inf -- Horizon (ungated, post-v1)
 
@@ -154,3 +168,12 @@ when a post-v1 line of work takes one up. None is an open obligation of any curr
 
 - [ ] **M-inf.3** -- Per-volume capability cache: remember detailed-vs-coarse (and extended-record) support per
   volume so establish/re-establish need not re-probe each time (D-17/D-19).
+
+- [ ] **M-inf.4** -- Root-cause and, if fixed, re-enable M11.2's fast reopen path
+  (`WatcherInner::reopen_via_existing_handle`, currently hard-coded to return `None`): a handle obtained via
+  `OpenFileById` hangs, or once crashed the process with `STATUS_STACK_BUFFER_OVERRUN`, once associated
+  with the thread pool's IOCP and armed (D-80). `DirectoryHandle::reopen_by_id`/`canonical_path` are each
+  independently correct per `directory::tests`; the defect is specifically in the IOCP-association/arm
+  path against such a handle. Deferred because it needs dedicated low-level debugging (likely a minimal
+  repro outside this crate) rather than blocking M11/M12 on it -- the path-based-only reopen it falls back
+  to is fully correct, just without the optimization.

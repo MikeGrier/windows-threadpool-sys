@@ -195,15 +195,46 @@ impl Subscription {
 /// reaches it too, from whichever thread dropped the monitor. The lock is
 /// uncontended in the steady state -- the drain is the only writer, by
 /// construction -- so it costs nothing and removes any question of what happens
-/// when teardown races a drain.
+/// when teardown races a drain. `pub(crate)` (rather than private) only so a
+/// coalesced watcher's own background reopen can name `Weak<Mutex<Resident>>`
+/// as a field type and call [`rekey`] (M11.4); its fields stay private, so
+/// only this module ever mutates them.
 #[derive(Default)]
-struct Resident {
+pub(crate) struct Resident {
     /// Every subscription, keyed by the identifier that tags its notifications.
     subscriptions: HashMap<WatchId, Subscription>,
     /// Every live coalesced watcher, keyed by directory identity (D-6): a
     /// directory is watched once regardless of how many subscriptions target
     /// entries within it.
     directories: HashMap<DirectoryId, DirectoryWatcher>,
+}
+
+/// Re-key a coalesced watcher's entry after a path-based reopen fallback
+/// landed on a different `DirectoryId` than before (M11.4) -- previously
+/// fixed at first insertion and never updated, which would leave a later new
+/// subscription to the same path unable to find this watcher (it would look
+/// up the new id, find nothing, and spin up a redundant second watcher) and
+/// every existing subscription's own stored `directory` stale (breaking
+/// `Cancel`/`answer`'s own lookup by that id). A no-op if `old` is no longer
+/// present (the watcher was torn down and removed between the reopen and this
+/// call) or if `old == new` (a `ReOpenFile` success never reaches here at
+/// all, since it cannot change identity -- see `WatcherInner::retry_reestablish`).
+pub(crate) fn rekey(resident: &Mutex<Resident>, old: DirectoryId, new: DirectoryId) {
+    if old == new {
+        return;
+    }
+    let mut state = lock(resident);
+    let Some(watcher) = state.directories.remove(&old) else {
+        return;
+    };
+    state.directories.insert(new, watcher);
+    for subscription in state.subscriptions.values_mut() {
+        if let Subscription::Routed { directory, .. } = subscription
+            && *directory == old
+        {
+            *directory = new;
+        }
+    }
 }
 
 /// What a [`Session`] holds of its monitor.
@@ -266,10 +297,16 @@ impl Monitor {
         // The handler captures the resident state directly rather than reaching
         // back through the monitor, which keeps "only the drain mutates resident
         // state" visible in the types and avoids the cycle a handler holding its
-        // own servicer would create.
+        // own servicer would create. `resident_weak` is handed to every newly
+        // constructed coalesced watcher (M11.4), so its own background reopen
+        // can re-key its `Resident.directories` entry without a strong cycle
+        // back to the map it lives in.
         let state = Arc::clone(&resident);
+        let resident_weak = Arc::downgrade(&resident);
         let core_ref = Arc::clone(&core_cell);
-        let servicer = Servicer::new(move |request: Request| service(&state, &core_ref, request))?;
+        let servicer = Servicer::new(move |request: Request| {
+            service(&state, &resident_weak, &core_ref, request)
+        })?;
 
         let core = Arc::new(Core {
             servicer,
@@ -464,7 +501,12 @@ impl Monitor {
 ///
 /// Runs on the servicing path, one call at a time, so nothing here needs to
 /// consider a concurrent mutation (D-2).
-fn service(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>>, request: Request) {
+fn service(
+    resident: &Mutex<Resident>,
+    resident_weak: &Weak<Mutex<Resident>>,
+    core_ref: &Arc<OnceLock<Weak<Core>>>,
+    request: Request,
+) {
     match request {
         Request::Subscribe {
             watch,
@@ -474,7 +516,16 @@ fn service(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>>, req
             completion,
             fault_slot,
         } => {
-            let outcome = subscribe(resident, core_ref, watch, path, options, sink, fault_slot);
+            let outcome = subscribe(
+                resident,
+                resident_weak,
+                core_ref,
+                watch,
+                path,
+                options,
+                sink,
+                fault_slot,
+            );
             completion.send(Notification::Completion { watch, outcome });
         }
         Request::Cancel { watch, completion } => {
@@ -507,7 +558,7 @@ fn service(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>>, req
                 outcome: Outcome::Cancelled,
             });
         }
-        Request::Retry { watch } => retry_pending(resident, core_ref, watch),
+        Request::Retry { watch } => retry_pending(resident, resident_weak, core_ref, watch),
         Request::Answer { watch, delay } => answer(resident, watch, delay),
     }
 }
@@ -713,6 +764,7 @@ fn park_pending(
 /// one for the same directory (D-6) or starting a new [`DirectoryWatcher`].
 fn route_established(
     resident: &Mutex<Resident>,
+    resident_weak: &Weak<Mutex<Resident>>,
     core_ref: &Arc<OnceLock<Weak<Core>>>,
     watch: WatchId,
     original_path: PathBuf,
@@ -756,6 +808,10 @@ fn route_established(
 
     match DirectoryWatcher::start(handle, opened_path, route) {
         Ok(watcher) => {
+            // M11.4: so this watcher's own background reopen can re-key its
+            // `Resident.directories` entry if a path-based fallback ever
+            // lands on a different directory.
+            watcher.bind_resident(Weak::clone(resident_weak));
             let mode = watcher.mode();
             state.directories.insert(id, watcher);
             state.subscriptions.insert(
@@ -814,7 +870,12 @@ enum Routed {
 /// Re-attempt establishing a still-`Pending` subscription (M5.1), after its
 /// retry timer fired. A no-op if the subscription is no longer `Pending`
 /// (already routed by some other path, or already cancelled).
-fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>>, watch: WatchId) {
+fn retry_pending(
+    resident: &Mutex<Resident>,
+    resident_weak: &Weak<Mutex<Resident>>,
+    core_ref: &Arc<OnceLock<Weak<Core>>>,
+    watch: WatchId,
+) {
     let taken = {
         let mut state = lock(resident);
         match state.subscriptions.remove(&watch) {
@@ -903,6 +964,7 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
             let outcome_sink = sink.clone();
             match route_established(
                 resident,
+                resident_weak,
                 core_ref,
                 watch,
                 path,
@@ -926,8 +988,10 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
 }
 
 /// Register one subscription, reporting what became of it.
+#[allow(clippy::too_many_arguments)]
 fn subscribe(
     resident: &Mutex<Resident>,
+    resident_weak: &Weak<Mutex<Resident>>,
     core_ref: &Arc<OnceLock<Weak<Core>>>,
     watch: WatchId,
     path: PathBuf,
@@ -960,6 +1024,7 @@ fn subscribe(
             // registration simply failed.
             match route_established(
                 resident,
+                resident_weak,
                 core_ref,
                 watch,
                 path,
