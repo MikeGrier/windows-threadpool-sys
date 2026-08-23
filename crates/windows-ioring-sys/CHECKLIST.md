@@ -31,20 +31,20 @@ Completed milestones are archived in COMPLETED-CHECKLIST.md once there are any.
 
 ## M2 -- Operation identity, buffer ownership, and rundown
 
-- [ ] **M2.1** -- Duplicate `IoBuf`/`IoBufMut` from `windows-overlapped-io-sys` (D-1), with the contract
+- [x] **M2.1** -- Duplicate `IoBuf`/`IoBufMut` from `windows-overlapped-io-sys` (D-1), with the contract
   extended to cover registration outliving a single operation. Record the extension in DESIGN-NOTES; do
   **not** extract a shared crate yet -- that decision is M6+.
 
-- [ ] **M2.2** -- `Token<B>` owning its buffer, with a generation-stamped `usize` as the `UserData` carried
+- [x] **M2.2** -- `Token<B>` owning its buffer, with a generation-stamped `usize` as the `UserData` carried
   through the SQE and returned in the CQE (D-4). Validation on completion rejects a token that does not
   match the generation, so a stale token cannot claim a later operation's completion -- the same guarantee
   `OperationId` makes in `windows-overlapped-io-sys`, but cheaper here because `UserData` is ours to choose
   rather than being an address we have to stamp separately.
 
-- [ ] **M2.3** -- `Drop` on an uncompleted token forgets its buffer rather than freeing it (D-4). Test that
+- [x] **M2.3** -- `Drop` on an uncompleted token forgets its buffer rather than freeing it (D-4). Test that
   the leak happens and that nothing is freed, because a use-after-free here would be silent and remote.
 
-- [ ] **M2.4** -- In-flight accounting and rundown: `CloseIoRing` must not run with operations outstanding.
+- [x] **M2.4** -- In-flight accounting and rundown: `CloseIoRing` must not run with operations outstanding.
   Mirror the rundown discipline `windows-overlapped-io-sys` already uses, including its bounded, rechecked
   wait rather than an unbounded one.
 

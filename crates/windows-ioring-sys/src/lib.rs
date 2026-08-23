@@ -39,15 +39,23 @@
 #![warn(missing_docs)]
 
 #[cfg(windows)]
+mod buf;
+#[cfg(windows)]
 mod capability;
 #[cfg(windows)]
 mod error;
 #[cfg(windows)]
 mod ring;
+#[cfg(windows)]
+mod token;
 
+#[cfg(windows)]
+pub use buf::{IoBuf, IoBufMut};
 #[cfg(windows)]
 pub use capability::{Capabilities, RingVersion, capabilities};
 #[cfg(windows)]
 pub use error::IoRingError;
 #[cfg(windows)]
 pub use ring::{IoRing, Op, RingInfo};
+#[cfg(windows)]
+pub use token::Token;
