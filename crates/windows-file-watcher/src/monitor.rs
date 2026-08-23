@@ -18,11 +18,6 @@
 //! delegates to it, so a monitor that goes out of scope blocks until every read is
 //! cancelled and every callback has finished (D-20).
 
-// M3.5's request path has landed; the request-shape comment below is stale and
-// removed. `Monitor::directory_count` is test-only until M4.5's integration
-// tests need to assert coalescing directly.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroUsize;
@@ -358,11 +353,6 @@ impl Monitor {
     pub fn session_with_bound(&self, bound: NonZeroUsize) -> (Session, Receiver) {
         let (sender, receiver) = channel_with_bound(bound);
         (Session::new(Arc::clone(&self.core), sender), receiver)
-    }
-
-    /// Enqueue a request for the servicing path.
-    pub(crate) fn submit(&self, request: Request) -> Result<(), Rejected<Request>> {
-        self.core.submit(request)
     }
 
     /// Block until every request submitted so far has been serviced.
