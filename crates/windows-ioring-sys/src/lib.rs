@@ -37,3 +37,17 @@
 //! source; the build-out is tracked in `CHECKLIST.md`.
 
 #![warn(missing_docs)]
+
+#[cfg(windows)]
+mod capability;
+#[cfg(windows)]
+mod error;
+#[cfg(windows)]
+mod ring;
+
+#[cfg(windows)]
+pub use capability::{Capabilities, RingVersion, capabilities};
+#[cfg(windows)]
+pub use error::IoRingError;
+#[cfg(windows)]
+pub use ring::{IoRing, Op, RingInfo};

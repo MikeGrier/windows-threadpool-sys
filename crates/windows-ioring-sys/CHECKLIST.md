@@ -11,21 +11,21 @@ Completed milestones are archived in COMPLETED-CHECKLIST.md once there are any.
   `Win32_Storage_FileSystem` (which is where the IoRing bindings live). Everything is behind
   `cfg(windows)`, as elsewhere in this repository.
 
-- [ ] **M1.2** -- A typed owner for `HIORING` whose destructor is `CloseIoRing`, per the repository rule
+- [x] **M1.2** -- A typed owner for `HIORING` whose destructor is `CloseIoRing`, per the repository rule
   that a resource with a specialized destructor gets its own owner rather than a generic handle wrapper.
   Not `Clone`.
 
-- [ ] **M1.3** -- Capability query and version negotiation (D-6). `QueryIoRingCapabilities` needs no ring,
+- [x] **M1.3** -- Capability query and version negotiation (D-6). `QueryIoRingCapabilities` needs no ring,
   so expose it as a free function for consumers deciding whether to use the crate at all. Ring creation
   negotiates `min(highest we understand, caps.MaxVersion)`, stores it, and exposes it. Surface
   `UM_EMULATION` rather than hiding it: a consumer reaching for this crate to maximize throughput needs to
   know the ring is emulated.
 
-- [ ] **M1.4** -- Probe every op once at construction into a cached capability set, plus
+- [x] **M1.4** -- Probe every op once at construction into a cached capability set, plus
   `supports_raw(op_code)` for ops the OS has and this crate has not wrapped (D-7). The public op enum is
   `#[non_exhaustive]`.
 
-- [ ] **M1.5** -- Integration test: create and close rings at each version the machine supports, assert
+- [x] **M1.5** -- Integration test: create and close rings at each version the machine supports, assert
   capability reporting is self-consistent (a ring never claims an op its capability set denies), and assert
   a ring created at a negotiated version reports that version back through `GetIoRingInfo`.
 
