@@ -1012,6 +1012,54 @@ fn a_recursive_route_added_to_a_shallow_watcher_widens_its_reach() {
 }
 
 #[test]
+fn a_concurrent_widen_and_retry_reestablish_do_not_corrupt_the_watcher() {
+    // PR #20 review response: `install`'s ArmGate::Reopening marks state but
+    // did not serialize the reopen transaction. A widening `add_route` and
+    // the retry timer's `retry_reestablish` could both pass the "not
+    // TornDown" gate check and run their own teardown/establish/arm sequence
+    // concurrently, each capable of tearing down or replacing the endpoint
+    // the other had just installed. Driving both at once here, repeatedly,
+    // is the regression test for `WatcherInner::reopen_lock` serializing
+    // them: whichever ordering the scheduler picks, the watcher must end up
+    // functional rather than wedged or panicking.
+    let dir = TempDir::new("route-widen-concurrent-reopen");
+    let (watcher, sink, collected) = watch_with_sink(dir.path(), false);
+    let watcher = std::sync::Arc::new(watcher);
+
+    let nested = dir.path().join("nested");
+    std::fs::create_dir(&nested).expect("create the nested directory");
+
+    let retrying = {
+        let watcher = std::sync::Arc::clone(&watcher);
+        std::thread::spawn(move || {
+            for _ in 0..20 {
+                watcher.inner.retry_reestablish();
+            }
+        })
+    };
+    watcher.add_route(
+        plain_route(
+            WatchId::from_raw(2),
+            RouteScope::Directory { subtree: true },
+            sink,
+        ),
+        DirectoryHandle::open(dir.path()).expect("open a second handle"),
+    );
+    retrying.join().expect("the retry thread panicked");
+
+    assert_ne!(
+        watcher.gate(),
+        ArmGate::TornDown,
+        "the watcher must still be functional after the race"
+    );
+    std::fs::write(nested.join("after-race.txt"), b"z").expect("create a nested file");
+    collected.wait_for_name("nested\\after-race.txt");
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
 fn removing_the_only_recursive_route_leaves_the_watcher_functional() {
     // Contraction is never forced (see `DirectoryWatcher::add_route`'s docs): the
     // remaining shallow route just gets an over-broad read filtered back down,

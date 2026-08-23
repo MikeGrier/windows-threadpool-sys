@@ -307,6 +307,18 @@ struct WatcherInner {
     /// case-folding leaf-name matching per [`Route::select`]. Almost always
     /// `false`; see [`DirectoryHandle::is_case_sensitive`].
     case_sensitive: AtomicBool,
+    /// Serializes the whole `install` transaction (PR #20 review response):
+    /// `ArmGate::Reopening` marks that a reopen is in progress, but marking
+    /// state is not mutual exclusion, and both the retry timer's callback
+    /// (`retry_reestablish`) and a widening `add_route` can call `install`
+    /// around the same time. Without this, a second caller's own
+    /// `teardown_endpoint`/establish/arm sequence could interleave with the
+    /// first's -- tearing down or replacing the endpoint the other just
+    /// installed, or submitting a duplicate read. Held for `install`'s
+    /// entire body, so a second caller simply waits for the first to finish
+    /// (and then re-reads the gate fresh, which by then reflects what the
+    /// first caller left it as) rather than proceeding concurrently.
+    reopen_lock: Mutex<()>,
 }
 
 impl WatcherInner {
@@ -1077,6 +1089,14 @@ impl WatcherInner {
     /// Returns the error from establishing or arming whichever tier was
     /// settled on.
     fn install(self: &Arc<Self>, handle: DirectoryHandle) -> io::Result<()> {
+        // Held for the whole transaction (PR #20 review response): see the
+        // field's own doc for why marking `ArmGate::Reopening` alone is not
+        // enough to keep a second concurrent caller from interleaving with
+        // this one.
+        let _reopen_guard = self
+            .reopen_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         {
             let mut gate = lock(&self.gate);
             if *gate == ArmGate::TornDown {
@@ -1256,6 +1276,7 @@ impl DirectoryWatcher {
             // Overwritten by `install` below, from the real handle, before
             // this watcher ever arms; the initial value is never observed.
             case_sensitive: AtomicBool::new(false),
+            reopen_lock: Mutex::new(()),
         });
 
         // Pulls this constructor's one route back out of `inner.routes` so a
