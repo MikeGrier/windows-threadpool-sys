@@ -8,8 +8,10 @@
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
+use windows_sys::Win32::Foundation::ERROR_INVALID_NAME;
+
 use super::{RetryMode, WatchOptions};
-use crate::directory::OpenFailure;
+use crate::directory::{FailureCode, FaultDetail, OpenFailure};
 use crate::monitor::Monitor;
 use crate::notify::ChangeKind;
 use crate::queue::{Notification, Outcome, Receiver, WatchId};
@@ -397,7 +399,10 @@ fn an_interior_nul_is_reported_as_a_permanent_failure() {
     assert_eq!(
         await_completion(&receiver, watch.id()),
         Outcome::Failed {
-            failure: OpenFailure::InvalidPath
+            detail: FaultDetail {
+                failure: OpenFailure::InvalidPath,
+                code: FailureCode::Win32(ERROR_INVALID_NAME),
+            }
         }
     );
 

@@ -33,9 +33,10 @@ use std::time::Duration;
 
 use wtf_string::Wtf16String;
 
+use windows_sys::Win32::Foundation::ERROR_DIRECTORY;
 use windows_threadpool_sys::timer::ThreadpoolTimer;
 
-use crate::directory::{DirectoryHandle, DirectoryId, OpenFailure};
+use crate::directory::{DirectoryHandle, DirectoryId, FaultDetail, OpenFailure, classify_detail};
 use crate::queue::{
     DEFAULT_BOUND, Notification, Outcome, Receiver, Reservation, Sender, StandingSlot, WatchId,
     channel_with_bound,
@@ -402,6 +403,24 @@ impl Monitor {
         }
     }
 
+    /// The classification and raw code behind a subscription's current fault,
+    /// if any (D-79) -- the same detail an interactive route was, or would
+    /// have been, asked about. `None` if the subscription is not registered,
+    /// still `Pending` (D-22's initial open retry loop tracks no persistent
+    /// detail of its own), or not currently faulted.
+    #[must_use]
+    pub fn fault_detail(&self, watch: WatchId) -> Option<FaultDetail> {
+        let resident = lock(&self.resident);
+        let Some(Subscription::Routed { directory, .. }) = resident.subscriptions.get(&watch)
+        else {
+            return None;
+        };
+        resident
+            .directories
+            .get(directory)
+            .and_then(DirectoryWatcher::fault_detail)
+    }
+
     /// Whether the monitor is still accepting requests.
     #[must_use]
     pub fn is_running(&self) -> bool {
@@ -536,9 +555,9 @@ enum Opened {
         opened_path: PathBuf,
     },
     /// Retryable (D-22): nothing to watch yet.
-    Pending,
+    Pending(FaultDetail),
     /// Permanent (D-22): nothing can ever be watched here.
-    Failed(OpenFailure),
+    Failed(FaultDetail),
 }
 
 /// Try to open a subscription's target, resolving a file target to its parent
@@ -557,8 +576,8 @@ fn open_target(path: &std::path::Path, subtree: bool) -> Opened {
             opened_path: path.to_path_buf(),
         },
         Err(error) if error.failure() == OpenFailure::NotADirectory => open_file_target(path),
-        Err(error) if error.failure().is_retryable() => Opened::Pending,
-        Err(error) => Opened::Failed(error.failure()),
+        Err(error) if error.failure().is_retryable() => Opened::Pending(error.detail()),
+        Err(error) => Opened::Failed(error.detail()),
     }
 }
 
@@ -570,7 +589,10 @@ fn open_file_target(path: &std::path::Path) -> Opened {
     let (Some(parent), Some(leaf)) = (path.parent(), path.file_name()) else {
         // A path with no parent (a bare volume root) or no final component
         // cannot be a file target; report the failure that led here.
-        return Opened::Failed(OpenFailure::NotADirectory);
+        return Opened::Failed(FaultDetail::synthetic(
+            OpenFailure::NotADirectory,
+            ERROR_DIRECTORY,
+        ));
     };
     // A bare relative leaf (`target.txt`) has an empty `parent()`, which
     // `CreateFileW` rejects outright -- normalize it to `.` (the current
@@ -590,8 +612,8 @@ fn open_file_target(path: &std::path::Path) -> Opened {
             },
             opened_path: parent.to_path_buf(),
         },
-        Err(error) if error.failure().is_retryable() => Opened::Pending,
-        Err(error) => Opened::Failed(error.failure()),
+        Err(error) if error.failure().is_retryable() => Opened::Pending(error.detail()),
+        Err(error) => Opened::Failed(error.detail()),
     }
 }
 
@@ -617,7 +639,9 @@ fn make_retry_timer(
 /// Park a subscription as `Pending` after a retryable open failure (D-22),
 /// asking its interactive question (D-27) or arming the default-delay retry.
 /// Used both for a subscription's very first attempt and for every later one
-/// that is still retryable.
+/// that is still retryable. `detail` is the classified failure that made this
+/// attempt retryable (D-79), carried through to the interactive question.
+#[allow(clippy::too_many_arguments)]
 fn park_pending(
     resident: &Mutex<Resident>,
     core_ref: &Arc<OnceLock<Weak<Core>>>,
@@ -626,6 +650,7 @@ fn park_pending(
     options: WatchOptions,
     sink: Sender,
     fault_slot: Option<StandingSlot>,
+    detail: FaultDetail,
 ) -> io::Result<()> {
     let retry_timer = make_retry_timer(core_ref, watch)?;
     // Best-effort: if the queue has no room to spare right now, this
@@ -659,6 +684,7 @@ fn park_pending(
                 slot.send(Notification::RetryQuestion {
                     watch,
                     operation: FaultOperation::Open,
+                    detail,
                 });
             }
         } else {
@@ -745,12 +771,13 @@ fn route_established(
             }
             Routed::Live
         }
-        Err((_error, route)) => {
+        Err((error, route)) => {
             // Arming failed against a directory that just opened -- D-15's
             // rearm-and-retry classification, not fatal. `start` hands the
             // route back on failure, so its standing fault-question
             // reservation (if any) is reused here rather than silently
             // downgrading an `Interactive` subscription to default retries.
+            let detail = classify_detail(&error);
             drop(state);
             match park_pending(
                 resident,
@@ -760,9 +787,10 @@ fn route_established(
                 options,
                 sink,
                 route.fault_slot,
+                detail,
             ) {
                 Ok(()) => Routed::Parked,
-                Err(_) => Routed::ParkFailed,
+                Err(error) => Routed::ParkFailed(FaultDetail::retry_unavailable(&error)),
             }
         }
     }
@@ -780,7 +808,7 @@ enum Routed {
     /// Even the fallback park could not be set up (its retry timer failed to
     /// be created -- vanishingly rare resource exhaustion); nothing was
     /// registered for this subscription.
-    ParkFailed,
+    ParkFailed(FaultDetail),
 }
 
 /// Re-attempt establishing a still-`Pending` subscription (M5.1), after its
@@ -811,7 +839,7 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
     };
 
     match open_target(&path, options.subtree) {
-        Opened::Pending => {
+        Opened::Pending(detail) => {
             let awaiting_answer = options.retry == RetryMode::Interactive && fault_slot.is_some();
             let mut state = lock(resident);
             state.subscriptions.insert(
@@ -837,6 +865,7 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
                         slot.send(Notification::RetryQuestion {
                             watch,
                             operation: FaultOperation::Open,
+                            detail,
                         });
                     }
                 } else {
@@ -844,7 +873,7 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
                 }
             }
         }
-        Opened::Failed(failure) => {
+        Opened::Failed(detail) => {
             // Permanent, discovered only on a later retry rather than at
             // registration: genuinely rare (the target existed retryably, then
             // became permanently unwatchable), but still a terminal outcome the
@@ -853,7 +882,7 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
             // carve one out, falling back to best-effort only if it could not.
             // `retry_timer` and `fault_slot` are dropped here along with the
             // subscription, which is already removed from `resident`.
-            let outcome = Outcome::Failed { failure };
+            let outcome = Outcome::Failed { detail };
             match terminal {
                 Some(reservation) => reservation.send(Notification::Completion { watch, outcome }),
                 None => {
@@ -885,12 +914,10 @@ fn retry_pending(resident: &Mutex<Resident>, core_ref: &Arc<OnceLock<Weak<Core>>
                 fault_slot,
             ) {
                 Routed::Live | Routed::Parked => {}
-                Routed::ParkFailed => {
+                Routed::ParkFailed(detail) => {
                     let _ = outcome_sink.send(Notification::Completion {
                         watch,
-                        outcome: Outcome::Failed {
-                            failure: OpenFailure::RetryUnavailable,
-                        },
+                        outcome: Outcome::Failed { detail },
                     });
                 }
             }
@@ -909,15 +936,17 @@ fn subscribe(
     fault_slot: Option<StandingSlot>,
 ) -> Outcome {
     match open_target(&path, options.subtree) {
-        Opened::Pending => {
-            match park_pending(resident, core_ref, watch, path, options, sink, fault_slot) {
+        Opened::Pending(detail) => {
+            match park_pending(
+                resident, core_ref, watch, path, options, sink, fault_slot, detail,
+            ) {
                 Ok(()) => Outcome::Establishing,
-                Err(_) => Outcome::Failed {
-                    failure: OpenFailure::RetryUnavailable,
+                Err(error) => Outcome::Failed {
+                    detail: FaultDetail::retry_unavailable(&error),
                 },
             }
         }
-        Opened::Failed(failure) => Outcome::Failed { failure },
+        Opened::Failed(detail) => Outcome::Failed { detail },
         Opened::Handle {
             handle,
             scope,
@@ -943,9 +972,7 @@ fn subscribe(
             ) {
                 Routed::Live => Outcome::Subscribed,
                 Routed::Parked => Outcome::Establishing,
-                Routed::ParkFailed => Outcome::Failed {
-                    failure: OpenFailure::RetryUnavailable,
-                },
+                Routed::ParkFailed(detail) => Outcome::Failed { detail },
             }
         }
     }

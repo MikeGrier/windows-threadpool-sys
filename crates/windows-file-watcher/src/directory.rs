@@ -129,6 +129,20 @@ impl OpenError {
     pub fn failure(&self) -> OpenFailure {
         self.failure
     }
+
+    /// The raw code behind this failure (D-79), for a client that wants more
+    /// than the classification.
+    pub fn code(&self) -> FailureCode {
+        win32_code(&self.source)
+    }
+
+    /// This failure's classification and raw code together (D-79).
+    pub(crate) fn detail(&self) -> FaultDetail {
+        FaultDetail {
+            failure: self.failure,
+            code: self.code(),
+        }
+    }
 }
 
 impl std::fmt::Display for OpenError {
@@ -140,6 +154,76 @@ impl std::fmt::Display for OpenError {
 impl std::error::Error for OpenError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+/// A Win32 error code or an HRESULT, kept in the currency it actually arrived in
+/// (D-79).
+///
+/// Every failure source in this crate today (`CreateFileW`,
+/// `ReadDirectoryChangesW`, `FindFirstChangeNotificationW`,
+/// `GetVolumeInformationByHandleW`, `ReOpenFile`) is a classic last-error API, so
+/// only [`Win32`](Self::Win32) is produced today -- but a code is kept in
+/// whichever currency it actually arrived in rather than forced through
+/// `HRESULT_FROM_WIN32`/`HRESULT_CODE` into a single shape, either direction of
+/// which is lossy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FailureCode {
+    /// A `WIN32_ERROR` from a classic last-error API.
+    Win32(u32),
+    /// An `HRESULT` from a COM-style API. Nothing in this crate produces one
+    /// today; the variant exists so a future source does not need a breaking
+    /// change to be represented.
+    HResult(i32),
+}
+
+/// [`OpenFailure`]'s classification plus the raw code behind it (D-79), carried
+/// by every fault report and permanent failure so a client can act on more than
+/// which kind of thing failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FaultDetail {
+    /// How this failure should be treated by the retry policy.
+    pub failure: OpenFailure,
+    /// The raw code behind it.
+    pub code: FailureCode,
+}
+
+impl FaultDetail {
+    /// Build a detail for a condition detected before or independently of the
+    /// syscall, giving it the OS error code that describes it.
+    pub(crate) fn synthetic(failure: OpenFailure, code: u32) -> Self {
+        Self {
+            failure,
+            code: FailureCode::Win32(code),
+        }
+    }
+
+    /// Build a detail for [`OpenFailure::RetryUnavailable`] from the error that
+    /// actually caused it (a failure to create this crate's own retry timer),
+    /// rather than reporting the fixed classification with no code at all.
+    pub(crate) fn retry_unavailable(error: &std::io::Error) -> Self {
+        Self {
+            failure: OpenFailure::RetryUnavailable,
+            code: win32_code(error),
+        }
+    }
+}
+
+/// The raw Win32 code behind an OS error, or `0` if it did not carry one (a
+/// last-error API always sets one; this covers only a caller-fabricated
+/// `io::Error` with no OS error backing it).
+pub(crate) fn win32_code(error: &std::io::Error) -> FailureCode {
+    let code = error.raw_os_error().unwrap_or(0);
+    FailureCode::Win32(u32::try_from(code).unwrap_or(0))
+}
+
+/// Classify an OS error from an open attempt into its full [`FaultDetail`]
+/// (D-79): the [`OpenFailure`] classification plus the raw code behind it.
+pub(crate) fn classify_detail(error: &std::io::Error) -> FaultDetail {
+    FaultDetail {
+        failure: classify(error),
+        code: win32_code(error),
     }
 }
 

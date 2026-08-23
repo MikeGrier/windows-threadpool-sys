@@ -95,7 +95,7 @@ use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, ResetEvent, SetEvent,
 };
 
-use crate::directory::OpenFailure;
+use crate::directory::FaultDetail;
 use crate::notify::{Change, DesyncCause};
 use crate::retry::{FaultOperation, WatchMode};
 
@@ -157,8 +157,8 @@ pub enum Outcome {
     /// wrong in the environment. Retrying would spin forever against input that
     /// will never become valid.
     Failed {
-        /// Which permanent failure it was.
-        failure: OpenFailure,
+        /// The classification and raw code behind the permanent failure (D-79).
+        detail: FaultDetail,
     },
     /// The subscription has ended and its watcher is released.
     ///
@@ -237,6 +237,8 @@ pub enum Notification {
         watch: WatchId,
         /// Which operation faulted.
         operation: FaultOperation,
+        /// The classification and raw code behind the failure (D-79).
+        detail: FaultDetail,
     },
 }
 

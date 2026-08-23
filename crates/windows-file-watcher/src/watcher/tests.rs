@@ -10,8 +10,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use windows_sys::Win32::Foundation::ERROR_NOT_SUPPORTED;
+
 use super::{ArmGate, DirectoryWatcher, ReadBuffer};
-use crate::directory::DirectoryHandle;
+use crate::directory::{DirectoryHandle, FailureCode, FaultDetail, OpenFailure, classify_detail};
 use crate::notify::{ChangeKind, DesyncCause};
 use crate::queue::{Notification, Receiver, Sender, WatchId, channel, channel_with_bound};
 use crate::retry::{FaultOperation, WatchMode};
@@ -1067,13 +1069,37 @@ fn a_fresh_watcher_reports_not_faulted() {
 }
 
 #[test]
+fn the_current_fault_reports_its_classification_and_code() {
+    let dir = TempDir::new("fault-detail");
+    let (watcher, _collected) = watch(dir.path(), false);
+    assert_eq!(watcher.fault_detail(), None);
+
+    let error = std::io::Error::from_raw_os_error(ERROR_NOT_SUPPORTED as i32);
+    watcher
+        .inner
+        .enter_fault(classify_detail(&error), FaultOperation::Arm);
+
+    assert_eq!(
+        watcher.fault_detail(),
+        Some(FaultDetail {
+            failure: OpenFailure::Unsupported,
+            code: FailureCode::Win32(ERROR_NOT_SUPPORTED),
+        })
+    );
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
 fn a_fault_with_only_default_routes_closes_the_gate_until_the_timer_resolves_it() {
     let dir = TempDir::new("fault-default");
     let (watcher, _collected) = watch(dir.path(), false);
 
-    watcher
-        .inner
-        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    watcher.inner.enter_fault(
+        classify_detail(&std::io::Error::other("synthetic")),
+        FaultOperation::Arm,
+    );
 
     assert!(watcher.is_faulted());
     assert_eq!(watcher.gate(), ArmGate::Faulted);
@@ -1095,9 +1121,10 @@ fn an_interactive_route_is_asked_and_its_answer_resolves_the_fault() {
     let watcher = DirectoryWatcher::start(handle, dir.path().to_path_buf(), route).expect("start");
     let collected = Drained::start(receiver);
 
-    watcher
-        .inner
-        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    watcher.inner.enter_fault(
+        classify_detail(&std::io::Error::other("synthetic")),
+        FaultOperation::Arm,
+    );
     assert!(watcher.is_faulted());
     collected.wait_until("the retry question", |d| {
         d.notifications().iter().any(
@@ -1135,9 +1162,10 @@ fn the_earliest_of_several_answers_wins_and_a_decliner_counts_at_the_default() {
     let fresh = DirectoryHandle::open(dir.path()).expect("a second handle");
     watcher.add_route(interactive_route(watch_b, sender_b, false), fresh);
 
-    watcher
-        .inner
-        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    watcher.inner.enter_fault(
+        classify_detail(&std::io::Error::other("synthetic")),
+        FaultOperation::Arm,
+    );
     assert!(watcher.is_faulted());
 
     // `watch_a` declines (counted at the 500ms default); `watch_b` names the
@@ -1166,9 +1194,10 @@ fn removing_the_only_awaited_route_resolves_the_fault_rather_than_wedging_it() {
     let route = interactive_route(test_watch(), sender, false);
     let watcher = DirectoryWatcher::start(handle, dir.path().to_path_buf(), route).expect("start");
 
-    watcher
-        .inner
-        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    watcher.inner.enter_fault(
+        classify_detail(&std::io::Error::other("synthetic")),
+        FaultOperation::Arm,
+    );
     assert!(watcher.is_faulted());
 
     assert_eq!(
@@ -1208,9 +1237,10 @@ fn a_resolved_fault_reports_reestablished_and_the_opt_in_liveness_brackets() {
     let watcher = DirectoryWatcher::start(handle, dir.path().to_path_buf(), route).expect("start");
     let collected = Drained::start(receiver);
 
-    watcher
-        .inner
-        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    watcher.inner.enter_fault(
+        classify_detail(&std::io::Error::other("synthetic")),
+        FaultOperation::Arm,
+    );
     collected.wait_until("suspended", |d| {
         d.notifications()
             .iter()
@@ -1317,9 +1347,10 @@ fn a_recovered_fault_in_forced_coarse_mode_reports_established_coarse() {
         .expect("start in forced-coarse mode");
     let collected = Drained::start(receiver);
 
-    watcher
-        .inner
-        .enter_fault(std::io::Error::other("synthetic"), FaultOperation::Arm);
+    watcher.inner.enter_fault(
+        classify_detail(&std::io::Error::other("synthetic")),
+        FaultOperation::Arm,
+    );
 
     collected.wait_until("resumed, established coarse, and reestablished", |d| {
         let seen = d.notifications();

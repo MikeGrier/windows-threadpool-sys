@@ -48,7 +48,7 @@ use windows_threadpool_sys::wait::{ThreadpoolWait, WaitActivation};
 use windows_threadpool_sys::work::ThreadpoolWork;
 
 use crate::coarse::CoarseHandle;
-use crate::directory::{DirectoryHandle, OpenFailure, classify};
+use crate::directory::{DirectoryHandle, FaultDetail, OpenFailure, classify, classify_detail};
 use crate::notify::{DecodedBatch, DesyncCause, decode_batch};
 use crate::queue::{Notification, Resume, WatchId};
 use crate::retry::{FaultOperation, WatchMode, clamp};
@@ -170,6 +170,9 @@ struct FaultState {
     /// The soonest delay any answer has named so far, seeded at the
     /// operation's default (D-27) and only ever lowered.
     earliest: Duration,
+    /// The classification and raw code behind the failure that opened this
+    /// fault (D-79).
+    detail: FaultDetail,
 }
 
 /// Which tier is servicing a directory's watch (D-17): the preferred detailed
@@ -279,7 +282,7 @@ impl WatcherInner {
         if let Err(error) = self.arm_locked(&mut gate) {
             drop(gate);
             // An arm failure is always retry-class (D-15), never terminal.
-            self.enter_fault(error, FaultOperation::Arm);
+            self.enter_fault(classify_detail(&error), FaultOperation::Arm);
         }
     }
 
@@ -406,7 +409,7 @@ impl WatcherInner {
             // (D-14). `stopped` is reserved for the one edge that genuinely
             // cannot recover -- a permanent open failure discovered while
             // re-establishing.
-            self.enter_fault(error, FaultOperation::Arm);
+            self.enter_fault(classify_detail(&error), FaultOperation::Arm);
             return;
         }
 
@@ -414,7 +417,7 @@ impl WatcherInner {
         // until the next read is outstanding, so that window is minimised by
         // doing the re-arm first. Decoding touches only this completed buffer.
         if let Err(error) = self.arm() {
-            self.enter_fault(error, FaultOperation::Arm);
+            self.enter_fault(classify_detail(&error), FaultOperation::Arm);
         }
 
         let transferred = completion.bytes_transferred();
@@ -440,11 +443,14 @@ impl WatcherInner {
             // re-arming on top of it could wedge (repeated callbacks) or wait
             // on a handle that will never signal again -- treat it exactly
             // like any other arm-class fault (D-15) rather than proceeding.
-            self.enter_fault(io::Error::last_os_error(), FaultOperation::Arm);
+            self.enter_fault(
+                classify_detail(&io::Error::last_os_error()),
+                FaultOperation::Arm,
+            );
             return;
         }
         if let Err(error) = self.arm() {
-            self.enter_fault(error, FaultOperation::Arm);
+            self.enter_fault(classify_detail(&error), FaultOperation::Arm);
             return;
         }
         self.publish(DecodedBatch::Desync(DesyncCause::Coarse));
@@ -506,7 +512,7 @@ impl WatcherInner {
     /// counting a non-interactive route at the operation's default from the
     /// start. Once every asked route has answered (immediately, if none are
     /// interactive), the resolved delay is scheduled on `retry_timer`.
-    fn enter_fault(self: &Arc<Self>, error: io::Error, operation: FaultOperation) {
+    fn enter_fault(self: &Arc<Self>, detail: FaultDetail, operation: FaultOperation) {
         {
             let mut gate = lock(&self.gate);
             if *gate == ArmGate::TornDown {
@@ -515,7 +521,7 @@ impl WatcherInner {
             *gate = ArmGate::Faulted;
         }
 
-        log::warn!("windows-file-watcher: {operation:?} failed, recovering: {error}");
+        log::warn!("windows-file-watcher: {operation:?} failed, recovering: {detail:?}");
 
         // `routes` stays locked across installing `self.fault` and sending
         // every `RetryQuestion`: an answer arriving between those two steps
@@ -541,6 +547,7 @@ impl WatcherInner {
             operation,
             awaiting,
             earliest: operation.default_delay(),
+            detail,
         });
 
         for route in routes.values() {
@@ -550,6 +557,7 @@ impl WatcherInner {
                 slot.send(Notification::RetryQuestion {
                     watch: route.watch,
                     operation,
+                    detail,
                 });
             }
         }
@@ -605,11 +613,11 @@ impl WatcherInner {
         match DirectoryHandle::open(&self.path) {
             Ok(handle) => match self.reopen(handle) {
                 Ok(()) => self.resolve_fault_success(),
-                Err(error) => self.enter_fault(error, FaultOperation::Arm),
+                Err(error) => self.enter_fault(classify_detail(&error), FaultOperation::Arm),
             },
             Err(open_error) => {
                 if open_error.failure().is_retryable() {
-                    self.enter_fault(io::Error::other(open_error), FaultOperation::Open);
+                    self.enter_fault(open_error.detail(), FaultOperation::Open);
                 } else {
                     self.record_stop(io::Error::other(open_error));
                 }
@@ -1052,7 +1060,8 @@ impl DirectoryWatcher {
             && self.gate() == ArmGate::Open
             && let Err(error) = self.inner.reopen(fresh_handle)
         {
-            self.inner.enter_fault(error, FaultOperation::Arm);
+            self.inner
+                .enter_fault(classify_detail(&error), FaultOperation::Arm);
         }
     }
 
@@ -1130,6 +1139,14 @@ impl DirectoryWatcher {
     #[must_use]
     pub fn is_faulted(&self) -> bool {
         lock(&self.inner.fault).is_some()
+    }
+
+    /// The classification and raw code behind the current fault, if any
+    /// (D-79) -- the same detail an interactive route was, or would have
+    /// been, asked about.
+    #[must_use]
+    pub fn fault_detail(&self) -> Option<FaultDetail> {
+        lock(&self.inner.fault).as_ref().map(|state| state.detail)
     }
 
     /// Which tier is currently servicing this directory (D-13/D-17).

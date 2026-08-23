@@ -305,3 +305,17 @@ error in an opaque boxed one erases both the classification and
 `raw_os_error()` before `enter_fault` ever saw them. `enter_fault` now takes
 `(OpenFailure, FailureCode)` directly, so every call site must classify at the
 source instead of laundering a real error through a generic one.
+
+`OpenFailure::NotADirectory` turns out to be unreachable through `subscribe`
+in current practice, discovered while writing M10.5's integration test:
+`open_target` redirects any top-level `NotADirectory` into `open_file_target`
+(D-7's file-target fallback), and that fallback's own `DirectoryHandle::open`
+call is against the target's *real, already-existing* parent directory --
+which, whenever the top-level classification was genuinely `NotADirectory`
+(the target exists and is a file), necessarily succeeds. The permanent-failure
+integration test uses `InvalidPath` (an interior NUL) instead, which `wide_path`
+rejects before any syscall and so is reachable deterministically. This is a
+pre-existing property of D-7's design, not something M10 changed; `stopped`'s
+own permanent-stop path (`WatcherInner::record_stop`) can still classify a
+later re-establish's `NotADirectory` the same way `subscribe` does, and is
+equally hard to hit for the same structural reason.

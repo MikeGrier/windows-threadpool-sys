@@ -16,6 +16,7 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 
 use super::{Delivery, Notification, WatchId, channel};
+use crate::directory::{FailureCode, FaultDetail, OpenFailure};
 use crate::notify::{Change, ChangeKind, DesyncCause, RelativeName};
 
 /// Send, asserting the queue had room.
@@ -43,6 +44,15 @@ fn batch(watch: WatchId, names: &[&str]) -> Notification {
     Notification::Batch {
         watch,
         changes: names.iter().map(|name| change(name)).collect(),
+    }
+}
+
+/// An arbitrary detail for tests that only need `RetryQuestion` to carry one,
+/// not to assert on its contents.
+fn test_detail() -> FaultDetail {
+    FaultDetail {
+        failure: OpenFailure::Retryable,
+        code: FailureCode::Win32(0),
     }
 }
 
@@ -732,6 +742,7 @@ fn a_standing_slot_can_send_repeatedly_without_ever_failing() {
         slot.send(Notification::RetryQuestion {
             watch,
             operation: crate::retry::FaultOperation::Open,
+            detail: test_detail(),
         });
         assert!(receiver.try_recv().is_some(), "each send is delivered");
     }
@@ -758,6 +769,7 @@ fn a_standing_send_does_not_overflow_capacity_while_the_queue_is_otherwise_full(
     slot.send(Notification::RetryQuestion {
         watch,
         operation: crate::retry::FaultOperation::Open,
+        detail: test_detail(),
     });
 
     assert_eq!(receiver.len(), 2, "the standing send still landed");
@@ -774,6 +786,7 @@ fn dropping_a_standing_slot_while_its_message_is_still_queued_releases_capacity_
     slot.send(Notification::RetryQuestion {
         watch,
         operation: crate::retry::FaultOperation::Open,
+        detail: test_detail(),
     });
 
     // Dropped while its last-sent message is still sitting in the queue,

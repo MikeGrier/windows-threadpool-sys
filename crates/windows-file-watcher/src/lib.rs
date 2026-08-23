@@ -131,7 +131,7 @@ mod watch;
 mod watcher;
 
 #[cfg(windows)]
-pub use directory::OpenFailure;
+pub use directory::{FailureCode, FaultDetail, OpenFailure};
 #[cfg(windows)]
 pub use monitor::Monitor;
 #[cfg(windows)]

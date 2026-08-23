@@ -77,7 +77,8 @@ timed:
 - **`RetryMode::Defaults`** (the default): the monitor retries autonomously, at
   a fixed 500ms delay per attempt.
 - **`RetryMode::Interactive`**: on fault, the monitor asks -- a
-  `Notification::RetryQuestion` names the failing operation, and
+  `Notification::RetryQuestion` names the failing operation and carries the
+  real `FaultDetail` behind it, and
   [`Session::answer`] supplies the next delay (clamped to a 50ms floor); an
   explicit `answer(watch, None)` declines, which is what counts at the
   default -- never answering at all leaves the question outstanding

@@ -57,9 +57,11 @@ fn main() -> ExitCode {
             Notification::Established { mode, .. } => {
                 println!("established in {mode:?} mode");
             }
-            Notification::RetryQuestion { operation, .. } => {
+            Notification::RetryQuestion {
+                operation, detail, ..
+            } => {
                 println!(
-                    "asked how long to wait after a failed {operation:?}; answering {OUR_RETRY_DELAY:?}"
+                    "asked how long to wait after a failed {operation:?} ({detail:?}); answering {OUR_RETRY_DELAY:?}"
                 );
                 session.answer(watch.id(), Some(OUR_RETRY_DELAY));
             }

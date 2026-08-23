@@ -15,10 +15,9 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: M10.1.** M1 through M9+ are archived/done. M10, M11, and M12 (below) address a
-> PR #20 review response: M10 gives a client the real failure detail behind a fault instead of only which
-> operation faulted; M11/M12 make a reopen notice when it lands on a different volume than before. Only
-> the parked, ungated M-inf horizon items are not a current obligation.
+> **NEXT ACTIONABLE ITEM: M11.1.** M1 through M9+ and M10 are archived/done. M11 and M12 (below) address
+> the other half of the PR #20 review response: a reopen notice when it lands on a different volume than
+> before. Only the parked, ungated M-inf horizon items are not a current obligation.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -54,24 +53,27 @@ Fixes the review's core complaint directly: a client had no way to know *why* an
 that it did (`FaultOperation::Open`/`Arm`), or, for a permanent stop, only the coarse `OpenFailure`
 classification. Independent of M11/M12 below.
 
-- [ ] **M10.1** -- Add `FailureCode` (`Win32(u32)` / `HResult(i32)`, `#[non_exhaustive]`) and `FaultDetail`
+- [x] **M10.1** -- Add `FailureCode` (`Win32(u32)` / `HResult(i32)`, `#[non_exhaustive]`) and `FaultDetail`
   (`{ failure: OpenFailure, code: FailureCode }`) to `directory.rs`; add `OpenError::code() -> FailureCode`.
 
-- [ ] **M10.2** -- Change `WatcherInner::enter_fault` to take `(OpenFailure, FailureCode)` instead of a bare
+- [x] **M10.2** -- Change `WatcherInner::enter_fault` to take `(OpenFailure, FailureCode)` instead of a bare
   `io::Error`, storing both in `FaultState` (supersedes D-54). Fix every call site to classify at the
   source instead of re-wrapping through `io::Error::other` (the `retry_reestablish` open-class path
   currently does this, silently discarding its already-classified `OpenError`).
 
-- [ ] **M10.3** -- `Notification::RetryQuestion` and `Outcome::Failed` carry `detail: FaultDetail` instead
+- [x] **M10.3** -- `Notification::RetryQuestion` and `Outcome::Failed` carry `detail: FaultDetail` instead
   of (nothing) / `failure: OpenFailure` respectively. Breaking change to already-published API
   (`Outcome::Failed`'s field), commit as `feat(file-watcher)!`.
 
-- [ ] **M10.4** -- Update the `log::warn!` diagnostics (D-58) to include the new detail, and every existing
+- [x] **M10.4** -- Update the `log::warn!` diagnostics (D-58) to include the new detail, and every existing
   test that matches on `Outcome::Failed`/`RetryQuestion`.
 
-- [ ] **M10.5** -- Integration test: a permanent open failure (`NotADirectory`) reports its real
+- [x] **M10.5** -- Integration test: a permanent open failure (`NotADirectory`) reports its real
   `FailureCode` through `Outcome::Failed`; an interactive subscription's `RetryQuestion` for a retryable
-  open failure reports a real `FailureCode` too.
+  open failure reports a real `FailureCode` too. -> implemented with `InvalidPath` instead: `NotADirectory`
+  turns out to be unreachable through `subscribe` in practice (a non-directory leaf is always retried as a
+  file target, D-7, against its real parent, which succeeds) -- see
+  [tests/fault_detail.rs](tests/fault_detail.rs).
 
 ## M11 -- Reopen identity: `ReOpenFile` first, and volume-identity tracking (D-78 groundwork)
 
