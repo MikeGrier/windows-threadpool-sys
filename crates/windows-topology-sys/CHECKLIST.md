@@ -29,20 +29,20 @@ Design decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md); the session that pro
 
 ## M2 -- The description
 
-- [ ] **M2.1** -- `Processor { id: (group, number), online, capacity }` and the open-kinded
+- [x] **M2.1** -- `Processor { id: (group, number), online, capacity }` and the open-kinded
   `Domain { kind, id, processors, ..attributes }` (D-4, D-6, D-7). Well-known kinds are `group`,
   `package`, `core`, `cache`, and `memory`; unknown kinds parse and round-trip rather than failing, which
   is the whole point of leaving the set open.
 
-- [ ] **M2.2** -- A memory domain carries `memory_bytes` and may contain **no** processors (D-5). Assert
+- [x] **M2.2** -- A memory domain carries `memory_bytes` and may contain **no** processors (D-5). Assert
   that shape in a test with a hand-written CXL-style description, because the case is unreachable on
   most hardware and would otherwise go unexercised.
 
-- [ ] **M2.3** -- Optional scalar `distances`, absent on Windows and populatable by a fed-in description.
+- [x] **M2.3** -- Optional scalar `distances`, absent on Windows and populatable by a fed-in description.
   Document that this is deliberately not the HMAT attributed-relation model, with a pointer to D-9 so a
   reader finds the reasoning rather than assuming an oversight.
 
-- [ ] **M2.4** -- Assemble a `Topology` from the M1 records, plus typed accessors over the open
+- [x] **M2.4** -- Assemble a `Topology` from the M1 records, plus typed accessors over the open
   representation (`caches_at_level(3)`, `memory_domains()`) so the ergonomic cost of open kinds stays
   confined to the JSON (D-4).
 

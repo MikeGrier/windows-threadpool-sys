@@ -20,12 +20,18 @@
 #![warn(missing_docs)]
 
 #[cfg(windows)]
+mod domain;
+#[cfg(windows)]
 mod processor_set;
 #[cfg(windows)]
 mod relation;
 #[cfg(windows)]
+mod topology;
+#[cfg(windows)]
 mod walk;
 
+#[cfg(windows)]
+pub use domain::{AttributeValue, Distances, Domain, DomainKind, Processor, ProcessorId};
 #[cfg(windows)]
 pub use processor_set::ProcessorSet;
 #[cfg(windows)]
@@ -33,3 +39,5 @@ pub use relation::{
     CacheKind, CacheRelation, CoreRelation, GroupRelation, NumaNodeRelation, PackageRelation,
     Relations, discover,
 };
+#[cfg(windows)]
+pub use topology::Topology;
