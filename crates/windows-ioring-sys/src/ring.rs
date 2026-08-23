@@ -112,6 +112,38 @@ pub struct RingInfo {
     pub completion_queue_size: u32,
 }
 
+/// One popped completion (M3.7): the operation's identity, from
+/// `IORING_CQE::UserData`, and its result.
+#[derive(Clone, Copy, Debug)]
+pub struct Completion {
+    user_data: usize,
+    result_code: windows_sys::core::HRESULT,
+    information: usize,
+}
+
+impl Completion {
+    /// The `UserData` identity this completion reports -- match it against
+    /// a held [`crate::Token`] via [`crate::Token::claim_if`].
+    #[must_use]
+    pub fn user_data(&self) -> usize {
+        self.user_data
+    }
+
+    /// This op's result: the transferred byte count (read/write) or other
+    /// op-specific value in `IORING_CQE::Information`, once `ResultCode`
+    /// says success.
+    ///
+    /// # Errors
+    ///
+    /// Returns the wrapped [`crate::IoRingError`] if `ResultCode` is a
+    /// failure -- for example `ERROR_NOT_FOUND` when a cancel target was not
+    /// actually outstanding.
+    pub fn result(&self) -> io::Result<usize> {
+        check(self.result_code)?;
+        Ok(self.information)
+    }
+}
+
 /// How `S_FALSE` reads as a raw `HRESULT`: `PopIoRingCompletion`'s documented
 /// "the completion queue is empty" result. Not a failure (`FAILED(hr)` is
 /// false for it), so [`check`](crate::error::check) alone cannot distinguish
@@ -138,9 +170,6 @@ pub struct IoRing {
     version: RingVersion,
     supported_ops: OpSupport,
     /// The next `UserData` value [`IoRing::reserve_user_data`] will hand out.
-    // M3's submission API is what will actually call `reserve_user_data`;
-    // until then this field is only exercised from `#[cfg(test)]` code.
-    #[allow(dead_code)]
     next_user_data: usize,
     /// Operations minted but not yet observed to have completed (M2.4).
     outstanding: usize,
@@ -271,9 +300,6 @@ impl IoRing {
     /// Returns an error rather than reusing an identity if the `usize` space
     /// is ever exhausted, mirroring `windows-threadpool-sys`'s own
     /// "exhausting the generation sequence fails rather than wraps."
-    // M3's submission API is the intended caller; until then this is only
-    // exercised from `#[cfg(test)]` code.
-    #[allow(dead_code)]
     pub(crate) fn reserve_user_data(&mut self) -> io::Result<usize> {
         let id = self.next_user_data;
         self.next_user_data = id
@@ -288,6 +314,60 @@ impl IoRing {
     /// [`crate::Token`] was still around to claim it.
     pub(crate) fn record_completion(&mut self) {
         self.outstanding = self.outstanding.saturating_sub(1);
+    }
+
+    /// Release a reservation for an operation that was never actually
+    /// queued -- a `Build*` call failed synchronously, after
+    /// [`IoRing::reserve_user_data`] had already minted its identity.
+    ///
+    /// Distinct from [`IoRing::record_completion`]: that marks a real
+    /// `IORING_CQE` observed; this marks one that will never arrive because
+    /// the op never entered the queue, so it must not count against
+    /// [`IoRing::run_down`] either.
+    pub(crate) fn cancel_reservation(&mut self) {
+        self.outstanding = self.outstanding.saturating_sub(1);
+    }
+
+    /// This ring's native handle, for `batch.rs`'s `Build*`/`Submit` calls.
+    pub(crate) fn raw_handle(&self) -> *mut c_void {
+        self.handle
+    }
+
+    /// Queue a raw, not-yet-wrapped SQE via a caller-supplied `Build*` call
+    /// (M3.5, D-7).
+    ///
+    /// `build` receives this ring's native handle and a freshly reserved
+    /// `UserData` value, and must call exactly one `BuildIoRing*` function
+    /// with them, returning its `HRESULT`. On success the `UserData` is
+    /// returned so the caller can match it against a later [`Completion`]
+    /// popped by [`IoRing::try_pop`]; on failure the reservation is
+    /// released, since the op was never actually queued.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error `build`'s `HRESULT` reports.
+    ///
+    /// # Safety
+    ///
+    /// `build` must queue an SQE for a *self-contained* op: everything the
+    /// kernel reads or writes for it must stay valid until the
+    /// corresponding completion is observed, and this crate cannot verify
+    /// what `build` does with the handle it is given. This is the same
+    /// framing as `windows-overlapped-io-sys`'s raw `ioctl` seam
+    /// (`device.rs`): the mechanics of building an SQE need nothing unsafe,
+    /// but this crate cannot audit an arbitrary `Build*` call, so the seam
+    /// itself is unsafe.
+    pub unsafe fn push_raw(
+        &mut self,
+        build: impl FnOnce(*mut c_void, usize) -> windows_sys::core::HRESULT,
+    ) -> io::Result<usize> {
+        let user_data = self.reserve_user_data()?;
+        let hr = build(self.handle, user_data);
+        if let Err(error) = check(hr) {
+            self.cancel_reservation();
+            return Err(error);
+        }
+        Ok(user_data)
     }
 
     /// Block until every outstanding operation has completed, so
@@ -321,20 +401,40 @@ impl IoRing {
     /// interpreting it, since rundown only needs to know a completion
     /// happened, not what it was.
     fn drain_for_rundown(&mut self) -> io::Result<()> {
-        loop {
-            let mut cqe = IORING_CQE {
-                UserData: 0,
-                ResultCode: 0,
-                Information: 0,
-            };
-            // SAFETY: `self.handle` is a live ring; valid out-pointer.
-            let hr = unsafe { PopIoRingCompletion(self.handle, &raw mut cqe) };
-            if hr == S_FALSE {
-                return Ok(());
-            }
-            check(hr)?;
-            self.record_completion();
+        while self.try_pop()?.is_some() {}
+        Ok(())
+    }
+
+    /// Pop one completion if the queue has one ready, without blocking
+    /// (M3.7).
+    ///
+    /// Every popped completion is recorded via [`IoRing::record_completion`]
+    /// regardless of whether the caller still holds a [`crate::Token`] for
+    /// it (D-4): accounting is driven by observing a real `IORING_CQE`,
+    /// never by a token being dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from `PopIoRingCompletion` other than its
+    /// documented empty-queue result.
+    pub fn try_pop(&mut self) -> io::Result<Option<Completion>> {
+        let mut cqe = IORING_CQE {
+            UserData: 0,
+            ResultCode: 0,
+            Information: 0,
+        };
+        // SAFETY: `self.handle` is a live ring; valid out-pointer.
+        let hr = unsafe { PopIoRingCompletion(self.handle, &raw mut cqe) };
+        if hr == S_FALSE {
+            return Ok(None);
         }
+        check(hr)?;
+        self.record_completion();
+        Ok(Some(Completion {
+            user_data: cqe.UserData,
+            result_code: cqe.ResultCode,
+            information: cqe.Information,
+        }))
     }
 }
 

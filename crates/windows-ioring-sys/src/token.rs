@@ -18,9 +18,6 @@ use crate::buf::IoBuf;
 /// [`Token`]'s `Drop` impl.
 pub struct Token<B: IoBuf> {
     id: usize,
-    // M3's completion path is the intended reader (via `claim`/`claim_if`);
-    // until then this is only exercised from `#[cfg(test)]` code.
-    #[allow(dead_code)]
     buffer: ManuallyDrop<B>,
 }
 
@@ -31,9 +28,6 @@ impl<B: IoBuf> Token<B> {
     ///
     /// Returns any error from [`crate::IoRing::reserve_user_data`] (in
     /// practice, only if the identity space is exhausted).
-    // M3's submission API is the intended caller of this whole impl block;
-    // until then it is only exercised from `#[cfg(test)]` code.
-    #[allow(dead_code)]
     pub(crate) fn new(ring: &mut crate::IoRing, buffer: B) -> std::io::Result<Self> {
         let id = ring.reserve_user_data()?;
         Ok(Self {
@@ -43,8 +37,8 @@ impl<B: IoBuf> Token<B> {
     }
 
     /// This token's `UserData` identity.
-    #[allow(dead_code)]
-    pub(crate) fn id(&self) -> usize {
+    #[must_use]
+    pub fn id(&self) -> usize {
         self.id
     }
 
@@ -54,7 +48,6 @@ impl<B: IoBuf> Token<B> {
     /// example, [`Token::claim_if`] on a match). Not `pub`: calling this
     /// without that knowledge is exactly the use-after-free this type exists
     /// to prevent.
-    #[allow(dead_code)]
     fn claim(mut self) -> B {
         // SAFETY: `self` is not used again after this -- it is dropped
         // normally by the caller's scope immediately after, and `Token`'s own
@@ -72,8 +65,7 @@ impl<B: IoBuf> Token<B> {
     /// a value this crate chose, so a stale token's `id` can never
     /// coincidentally match a different, later operation's completion the
     /// way a reused memory address could.
-    #[allow(dead_code)]
-    pub(crate) fn claim_if(self, user_data: usize) -> Result<B, Self> {
+    pub fn claim_if(self, user_data: usize) -> Result<B, Self> {
         if self.id == user_data {
             Ok(self.claim())
         } else {

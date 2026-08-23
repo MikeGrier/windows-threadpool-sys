@@ -50,30 +50,37 @@ Completed milestones are archived in COMPLETED-CHECKLIST.md once there are any.
 
 ## M3 -- The submission builder
 
-- [ ] **M3.1** -- `Batch` holding `&mut IoRing`, submitting on drop, with `submit()` consuming it and
+- [x] **M3.1** -- `Batch` holding `&mut IoRing`, submitting on drop, with `submit()` consuming it and
   returning the submitted count (D-5). Document loudly that the submission queue is ring state, so a
   dropped batch still submits -- the alternative would strand SQEs whose buffers a later unrelated submit
   would hand to the kernel.
 
-- [ ] **M3.2** -- Per-op builders reached from the batch, each returning a token from `push()`:
+- [x] **M3.2** -- Per-op builders reached from the batch, each returning a token from `push()`:
   `read`, `write`, `flush`, `cancel`. Options chain (`offset`, `drain_preceding` for
   `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`) so the common case stays short and the barrier stays discoverable.
   Every method checks its op's capability bit from M1.4.
 
-- [ ] **M3.3** -- Submission-queue backpressure: `push()` surfaces `IORING_E_SUBMISSION_QUEUE_FULL`
+- [x] **M3.3** -- Submission-queue backpressure: `push()` surfaces `IORING_E_SUBMISSION_QUEUE_FULL`
   (`0x80460002`, observed at exactly entry 64 on a 64-entry queue) as a distinguishable error rather than
   auto-flushing. Auto-flush would silently change submission ordering and timing.
 
-- [ ] **M3.4** -- `submit_and_wait(n, timeout)` exposing the fused form, which is the primitive Model B is
+- [x] **M3.4** -- `submit_and_wait(n, timeout)` exposing the fused form, which is the primitive Model B is
   built on (D-3) and not merely a convenience.
 
-- [ ] **M3.5** -- The narrow unsafe raw-SQE seam (D-7), documented with the same framing as the `device`
+- [x] **M3.5** -- The narrow unsafe raw-SQE seam (D-7), documented with the same framing as the `device`
   family's unsafe `ioctl`: it exists so a consumer is not blocked on us wrapping a new op.
 
-- [ ] **M3.6** -- Integration tests: a batch of many reads round-trips with every `UserData` preserved and
+- [x] **M3.6** -- Integration tests: a batch of many reads round-trips with every `UserData` preserved and
   every buffer returned; a deliberately overfilled queue reports backpressure at the right entry and stays
   usable afterwards; a dropped batch still submits; a cancel of a target that is not outstanding reports
   `ERROR_NOT_FOUND` through the completion rather than at build time.
+
+- [x] **M3.7** -- *(added during execution -- see below)* Completion retrieval: `IoRing::try_pop` popping
+  one `Completion` (identity plus result) without blocking, so a caller matches it against a held `Token`
+  via `claim_if`. **Re-plan:** M3's original items assumed `Token::claim_if` alone was enough to exercise
+  the M3.6 round-trip, but nothing in M1/M2 exposed a way to actually pop a *typed* completion outside of
+  `IoRing`'s internal, untyped rundown drain -- M3.6 cannot be tested without this. Added and implemented
+  in the same pass as M3.1-M3.6 rather than deferred, per the re-planning discipline.
 
 ## M4 -- Model A delivery: completion event and the thread pool
 
