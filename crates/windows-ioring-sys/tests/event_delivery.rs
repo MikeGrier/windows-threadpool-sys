@@ -71,7 +71,7 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let _token = unsafe { batch.read(handle, buffer, offset, PushOptions::new()) }
+            let _token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
                 .expect("queue read");
         }
         // `wait_operations = 0`: this thread submits and returns immediately,
@@ -126,8 +126,8 @@ fn teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early() 
         let mut batch = Batch::new(&mut ring);
         for _ in 0..8 {
             let buffer = vec![0_u8; content.len()];
-            let _token =
-                unsafe { batch.read(handle, buffer, 0, PushOptions::new()) }.expect("queue read");
+            let _token = unsafe { batch.read_raw(handle, buffer, 0, PushOptions::new()) }
+                .expect("queue read");
         }
         batch.submit_and_wait(0, 0).expect("submit without waiting");
         // Deliberately do not wait for any of these to complete: teardown

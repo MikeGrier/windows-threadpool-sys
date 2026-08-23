@@ -45,7 +45,7 @@ fn main() -> std::io::Result<()> {
     )?;
 
     // Hold each chunk's token until its completion arrives, keyed by the
-    // `UserData` identity `Batch::read` minted for it.
+    // `UserData` identity `Batch::read_raw` minted for it.
     let tokens: Mutex<HashMap<usize, Token<Vec<u8>>>> = Mutex::new(HashMap::new());
     {
         let mut ring = delivery.ring().lock().expect("lock ring");
@@ -55,7 +55,7 @@ fn main() -> std::io::Result<()> {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
             // SAFETY: `handle` stays open for this whole example.
-            let token = unsafe { batch.read(handle, buffer, offset, PushOptions::new()) }?;
+            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }?;
             tokens.insert(token.id(), token);
         }
         // `wait_operations = 0`: submit and return immediately. This thread

@@ -69,7 +69,7 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         len: 256,
     };
     let token = unsafe {
-        batch.read_registered(
+        batch.read_registered_raw(
             registered_file,
             &registered_buffers,
             span,
@@ -100,7 +100,7 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
     for _ in 0..4 {
         let mut batch = Batch::new(&mut ring);
         let token = unsafe {
-            batch.read_registered(
+            batch.read_registered_raw(
                 registered_file,
                 &registered_buffers,
                 span,
@@ -257,9 +257,10 @@ fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees()
         offset: 0,
         len: 64,
     };
-    let token =
-        unsafe { batch.read_registered(handle, &registered_buffers, span, 0, PushOptions::new()) }
-            .expect("queue registered read");
+    let token = unsafe {
+        batch.read_registered_raw(handle, &registered_buffers, span, 0, PushOptions::new())
+    }
+    .expect("queue registered read");
     batch.submit_and_wait(0, 0).expect("submit without waiting");
     // Deliberately do not observe this read's completion, so
     // `registered_buffers`'s outstanding count is still 1 when dropped below.

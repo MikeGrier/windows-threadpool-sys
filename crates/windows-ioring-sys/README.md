@@ -25,7 +25,7 @@ let mut ring = IoRing::new(8, 8)?;
 
 let token = {
     let mut batch = Batch::new(&mut ring);
-    let token = batch.read_shared(&shared, vec![0_u8; 4096], 0, Default::default())?;
+    let token = batch.read(&shared, vec![0_u8; 4096], 0, Default::default())?;
     batch.submit_and_wait(1, 5_000)?;
     token
 };

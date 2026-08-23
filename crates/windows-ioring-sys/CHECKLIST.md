@@ -76,3 +76,10 @@ between push and completion.
   `tests/submission_lifecycle.rs`): drop the caller's own `SharedFile` clone (its only external reference)
   while a push against it is still outstanding; the read still completes correctly against a live handle,
   proving the `Arc` clone inside the token -- not the caller's copy -- is what kept it open.
+
+- [x] **M8.6** -- Renamed the API so the safe path gets the plain names: the raw/`unsafe` entry points
+  became `read_raw`/`write_raw`/`flush_raw`/`cancel_raw`/`read_registered_raw`/`write_registered_raw`, and
+  the safe `SharedFile`-taking overloads (previously `*_shared`) took over the plain names
+  `read`/`write`/`flush`/`cancel`/`read_registered`/`write_registered` -- since the safe path is the one
+  this crate wants to steer callers toward. `register_files` keeps its plain name unsafe, since it has no
+  safe counterpart to make way for.

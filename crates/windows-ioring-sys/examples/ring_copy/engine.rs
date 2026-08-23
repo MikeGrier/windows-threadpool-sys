@@ -67,7 +67,13 @@ pub fn copy_domain(
         let transferred = submit_one(&mut ring, |batch| {
             // SAFETY: `source` stays open for this domain's whole copy pass.
             unsafe {
-                batch.read_registered(source, &registration, read_span, offset, PushOptions::new())
+                batch.read_registered_raw(
+                    source,
+                    &registration,
+                    read_span,
+                    offset,
+                    PushOptions::new(),
+                )
             }
         })?;
         if transferred == 0 {
@@ -82,7 +88,7 @@ pub fn copy_domain(
         submit_one(&mut ring, |batch| {
             // SAFETY: `destination` stays open for this domain's whole copy pass.
             unsafe {
-                batch.write_registered(
+                batch.write_registered_raw(
                     destination,
                     &registration,
                     write_span,

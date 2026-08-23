@@ -62,7 +62,7 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
-            let token = unsafe { batch.read(handle, buffer, offset, PushOptions::new()) }
+            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
                 .expect("queue read");
             pending.insert(token.id(), (chunk_index, token));
         }
@@ -115,7 +115,7 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
         let mut batch = Batch::new(&mut ring);
         loop {
             // SAFETY: `handle` stays open for the whole test.
-            match unsafe { batch.flush(handle, PushOptions::new()) } {
+            match unsafe { batch.flush_raw(handle, PushOptions::new()) } {
                 Ok(_user_data) => {
                     queued += 1;
                     assert!(
@@ -150,7 +150,7 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
     // The ring stays usable: push and submit once more, cleanly.
     let mut batch = Batch::new(&mut ring);
     // SAFETY: `handle` stays open for the whole test.
-    let user_data = unsafe { batch.flush(handle, PushOptions::new()) }
+    let user_data = unsafe { batch.flush_raw(handle, PushOptions::new()) }
         .expect("ring still accepts pushes after backpressure");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
@@ -177,7 +177,7 @@ fn a_dropped_batch_still_submits_its_queued_operations() {
     let token = {
         let mut batch = Batch::new(&mut ring);
         // SAFETY: `handle` stays open for the whole test.
-        unsafe { batch.read(handle, buffer, 0, PushOptions::new()) }.expect("queue read")
+        unsafe { batch.read_raw(handle, buffer, 0, PushOptions::new()) }.expect("queue read")
         // `batch` drops here without an explicit `submit()` call (D-5).
     };
     let user_data = token.id();
@@ -216,7 +216,7 @@ fn cancelling_a_target_that_is_not_outstanding_reports_error_not_found_through_c
     let cancel_user_data = {
         let mut batch = Batch::new(&mut ring);
         // SAFETY: `handle` stays open for the whole test.
-        let user_data = unsafe { batch.cancel(handle, 999_999) }.expect("queue cancel");
+        let user_data = unsafe { batch.cancel_raw(handle, 999_999) }.expect("queue cancel");
         batch.submit_and_wait(1, 5_000).expect("submit and wait");
         user_data
     };
@@ -252,7 +252,7 @@ fn dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_
     let token = {
         let mut batch = Batch::new(&mut ring);
         let token = batch
-            .read_shared(&shared, buffer, 0, PushOptions::new())
+            .read(&shared, buffer, 0, PushOptions::new())
             .expect("queue shared read");
         batch.submit_and_wait(0, 0).expect("submit without waiting");
         token

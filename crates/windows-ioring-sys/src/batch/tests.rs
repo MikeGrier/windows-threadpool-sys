@@ -59,7 +59,7 @@ fn read_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
     let mut batch = Batch::new(&mut ring);
     // SAFETY: NULL_FILE is never dereferenced -- the oversized buffer is
     // rejected before the handle would be used.
-    let error = unsafe { batch.read(NULL_FILE, HugeBuffer, 0, PushOptions::new()) }
+    let error = unsafe { batch.read_raw(NULL_FILE, HugeBuffer, 0, PushOptions::new()) }
         .expect_err("an oversized buffer must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     drop(batch);
@@ -76,7 +76,7 @@ fn write_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
     let outstanding_before = ring.outstanding();
     let mut batch = Batch::new(&mut ring);
     // SAFETY: as above.
-    let error = unsafe { batch.write(NULL_FILE, HugeBuffer, 0, PushOptions::new()) }
+    let error = unsafe { batch.write_raw(NULL_FILE, HugeBuffer, 0, PushOptions::new()) }
         .expect_err("an oversized buffer must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     drop(batch);
