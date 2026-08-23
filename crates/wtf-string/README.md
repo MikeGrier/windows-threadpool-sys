@@ -84,4 +84,6 @@ checked no-interior-NUL companion type is a reserved seam for a future release.
 Status: the v1 surface is complete and publication-ready; not yet released. See
 [CHECKLIST.md](CHECKLIST.md) and [DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-Copyright (c) Mike Grier. Licensed under MIT.
+## License
+
+MIT. Copyright (c) Mike Grier.

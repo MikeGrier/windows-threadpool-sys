@@ -5,15 +5,41 @@ Memory-safe Rust over the Windows `IoRing` submission/completion ring.
 **Windows only.** Every item is behind `cfg(windows)`; the crate builds to an
 empty shell on other platforms.
 
-**Under construction.** The design is settled and recorded in
-[DESIGN-NOTES.md](DESIGN-NOTES.md); the build-out is tracked in
-[CHECKLIST.md](CHECKLIST.md).
-
 Windows 11 and Server 2022 added `IoRing`, a submission/completion ring for file
 I/O closer in shape to `io_uring` than to anything else Windows offers. This
 crate raises those primitives into safe Rust with the minimum additional CPU and
 memory cost: a completion hands the caller's buffer back without the crate having
 allocated anything to track it.
+
+## Example
+
+Submit a read, then pop its completion once it is ready:
+
+```rust,no_run
+use windows_ioring_sys::{Batch, IoRing};
+use std::os::windows::io::AsRawHandle;
+
+let file = std::fs::File::open(r"C:\some\file.bin")?;
+let mut ring = IoRing::new(8, 8)?;
+
+let token = {
+    let mut batch = Batch::new(&mut ring);
+    let token = batch.read(file.as_raw_handle(), vec![0_u8; 4096], 0, Default::default())?;
+    batch.submit_and_wait(1, 5_000)?;
+    token
+};
+
+let completion = ring.try_pop()?.expect("a completion is ready");
+completion.result()?;
+let buffer = token.claim_if(completion.user_data()).expect("token claims its own completion");
+println!("read {} bytes", buffer.len());
+# Ok::<(), std::io::Error>(())
+```
+
+[`EventDelivery`] wires completions to the thread pool instead, so no thread
+ever calls `try_pop` itself; see `examples/model_a_delivery.rs` for that shape,
+and the "Choosing a delivery architecture" section below for when to reach for
+each.
 
 ## Scope: a file data plane, not a general completion backend
 

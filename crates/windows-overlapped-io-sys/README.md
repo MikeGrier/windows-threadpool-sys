@@ -11,6 +11,27 @@ foundation beneath `windows-threadpool-sys`: raw I/O completion ports and the
 object-based thread pool share endpoint and operation storage while remaining
 distinct completion backends.
 
+## Example
+
+The blocking backend (no completion port, one operation at a time), with the
+`fs` feature:
+
+```rust,no_run
+use windows_overlapped_io_sys::{BlockingEndpoint, UnassociatedEndpoint};
+
+let endpoint = UnassociatedEndpoint::open(r"C:\some\file.bin", true, false, 0)?;
+let mut endpoint = BlockingEndpoint::new(endpoint);
+
+let mut buffer = [0_u8; 64];
+let bytes_read = endpoint.read(&mut buffer, 0)?;
+println!("read {bytes_read} bytes");
+# Ok::<(), std::io::Error>(())
+```
+
+An endpoint associated with a `CompletionPort` instead returns a `Started`
+token per submission, claimed from its completion; see the
+[API documentation](https://docs.rs/windows-overlapped-io-sys) for that shape.
+
 ## Operation-family adapters
 
 Endpoints are opened safely with `UnassociatedEndpoint::open`, and each operation
@@ -70,3 +91,7 @@ because cancellation is a safe operation racing a completion it cannot observe:
 
 The result is that holding an identity too long is harmless, and a late cancel
 fails rather than silently cancelling an unrelated operation.
+
+## License
+
+MIT. Copyright (c) Mike Grier.

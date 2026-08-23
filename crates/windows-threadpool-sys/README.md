@@ -170,3 +170,7 @@ a raw seam for foreign cleanup groups; use `CleanupGroup` for a safe one.
 This crate is Windows-only. Every item is behind `cfg(windows)`, so the crate
 builds to an empty one on other targets rather than failing to compile, and
 CI builds, tests, and lints exclusively on Windows.
+
+## License
+
+MIT. Copyright (c) Mike Grier.

@@ -114,3 +114,7 @@ same data-driven stress model the test suite uses; see
 gated behind the `scenario-tool` feature (`serde`/`serde_json` are optional
 dependencies), so it never affects an ordinary build of this crate.
 
+## License
+
+MIT. Copyright (c) Mike Grier.
+

@@ -5,6 +5,24 @@ Safe enumeration of Windows processor, cache, and memory topology.
 **Windows only.** Every item is behind `cfg(windows)`; the crate builds to an
 empty shell on other platforms.
 
+## Example
+
+```rust,no_run
+use windows_topology_sys::Topology;
+
+let topology = Topology::discover()?;
+println!(
+    "{} logical processor(s), {} domain(s)",
+    topology.processors.len(),
+    topology.domains.len()
+);
+# Ok::<(), std::io::Error>(())
+```
+
+[`examples/print_topology.rs`](examples/print_topology.rs) prints the host's
+full topology as JSON (`cargo run --example print_topology --features serde`),
+in the same shape a hand-written or fed-in description takes.
+
 ## Why this crate exists
 
 `GetLogicalProcessorInformationEx` is the Win32 entry point for topology, and
