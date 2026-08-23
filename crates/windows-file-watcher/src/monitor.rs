@@ -73,7 +73,9 @@ pub(crate) enum Request {
         completion: Reservation,
         /// The standing fault-question reservation (D-27/D-28), present iff
         /// this subscription can ever need one (`retry == Interactive` or
-        /// `report_liveness`).
+        /// `on_volume_change == Confirm`). `report_liveness` alone never
+        /// creates one: `Suspended`/`Resumed`/`Established` use best-effort
+        /// sends and reserve nothing.
         fault_slot: Option<StandingSlot>,
     },
     /// Stop watching, and release the watcher.

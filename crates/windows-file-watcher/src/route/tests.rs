@@ -104,6 +104,22 @@ fn a_file_route_comparison_is_case_insensitive_over_ascii() {
 }
 
 #[test]
+fn a_file_route_comparison_is_case_insensitive_over_non_ascii_letters() {
+    // PR #20 review response: an ASCII-only fold silently dropped a match
+    // whenever the differing case fell outside ASCII, e.g. a stored `E.txt`
+    // opened through a subscription spelling `e.txt` -- exactly the kind of
+    // event this crate's completeness contract (D-77) promises never to
+    // drop. `CompareStringOrdinal`'s ordinal case folding matches both.
+    let route = route(RouteScope::File {
+        leaf: Wtf16String::from_units(&"\u{c9}.txt".encode_utf16().collect::<Vec<u16>>()),
+    });
+    assert_eq!(
+        selected(&route, &["\u{e9}.txt", "\u{c9}.txt"]),
+        vec!["\u{e9}.txt", "\u{c9}.txt"]
+    );
+}
+
+#[test]
 fn a_file_route_comparison_still_requires_the_same_length() {
     let route = route(RouteScope::File {
         leaf: Wtf16String::from_units(&"target.txt".encode_utf16().collect::<Vec<u16>>()),

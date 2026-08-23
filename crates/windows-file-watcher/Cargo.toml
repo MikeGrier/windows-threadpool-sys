@@ -102,6 +102,10 @@ windows-sys = {
 		# wait for notifications on its own thread pool rather than dedicating a
 		# thread to a blocking recv.
 		"Win32_System_Threading",
+		# CompareStringOrdinal (a single-file route's case-insensitive leaf-name
+		# match, PR #20 review response) -- the OS's own ordinal case folding,
+		# not an ASCII-only approximation.
+		"Win32_Globalization",
 	],
 }
 

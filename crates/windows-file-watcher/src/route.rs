@@ -11,13 +11,14 @@
 //!   actually opened.
 //! - **Name**: a directory subscription matches every name within its reach; a
 //!   file subscription (D-7) matches only its own leaf name. The comparison
-//!   is on raw UTF-16 units and case-insensitive over the ASCII range: the
-//!   default Windows filesystem is case-insensitive but case-preserving, so
-//!   `CreateFileW` accepts a target whose casing differs from the stored
-//!   name, while a decoded notification always carries the name as actually
-//!   stored -- an exact match would silently drop every one of those events.
-//!   Units outside the ASCII range are compared exactly rather than folded,
-//!   since replicating NTFS's own upcase table is out of scope here.
+//!   is on raw UTF-16 units, case-insensitively via `CompareStringOrdinal`'s
+//!   ordinal case folding: the default Windows filesystem is case-insensitive
+//!   but case-preserving, so `CreateFileW` accepts a target whose casing
+//!   differs from the stored name, while a decoded notification always
+//!   carries the name as actually stored -- an exact match would silently
+//!   drop every one of those events, and an ASCII-only fold would still drop
+//!   one whenever the differing case falls outside ASCII (PR #20 review
+//!   response).
 //!
 //! A desync is never filtered by scope: it means "you may have missed something
 //! in this directory," which is equally true for every subscription within it.
@@ -79,17 +80,31 @@ fn is_direct_child(name: &[u16]) -> bool {
 }
 
 /// Whether `a` and `b` are the same name under Windows' default
-/// case-insensitive (but case-preserving) filesystem semantics, folding only
-/// the ASCII range (`is_direct_child` above establishes reach; this decides
-/// identity within it, for [`RouteScope::File`]).
+/// case-insensitive (but case-preserving) filesystem semantics
+/// (`is_direct_child` above establishes reach; this decides identity within
+/// it, for [`RouteScope::File`]).
+///
+/// Uses `CompareStringOrdinal` with `bIgnoreCase = TRUE` -- the OS's own
+/// ordinal (per-UTF-16-unit) case folding -- rather than an ASCII-only fold:
+/// an ASCII fold silently drops a match whenever a subscription's leaf name
+/// and the kernel's stored spelling differ only in a non-ASCII letter's case
+/// (e.g. a stored `E9.txt` opened through a subscription spelling `C9.txt`),
+/// which is exactly the kind of event this crate's completeness contract
+/// (D-77) promises never to drop.
 fn names_match_case_insensitively(a: &[u16], b: &[u16]) -> bool {
-    fn fold(unit: u16) -> u16 {
-        match unit {
-            0x41..=0x5A => unit + 0x20, // 'A'..='Z' -> 'a'..='z'
-            _ => unit,
-        }
-    }
-    a.len() == b.len() && a.iter().zip(b).all(|(&x, &y)| fold(x) == fold(y))
+    use windows_sys::Win32::Foundation::TRUE;
+    use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+
+    let a_len = i32::try_from(a.len()).unwrap_or(i32::MAX);
+    let b_len = i32::try_from(b.len()).unwrap_or(i32::MAX);
+    // SAFETY: `a`/`b` are valid `u16` slices with lengths that fit the `i32`
+    // counts just computed; `CompareStringOrdinal` only reads the first
+    // `a_len`/`b_len` units of each and returns a plain `i32` result code.
+    let result = unsafe { CompareStringOrdinal(a.as_ptr(), a_len, b.as_ptr(), b_len, TRUE) };
+    // A truncated length (from a name longer than `i32::MAX` units,
+    // unreachable in practice) would only ever make an equal pair look
+    // unequal, never the reverse, so the fallback direction is safe.
+    result == CSTR_EQUAL
 }
 
 /// One subscription's place within a coalesced directory watcher: what it wants
