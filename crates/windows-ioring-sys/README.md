@@ -31,7 +31,7 @@ let token = {
 
 let completion = ring.try_pop()?.expect("a completion is ready");
 completion.result()?;
-let buffer = token.claim_if(completion.user_data()).expect("token claims its own completion");
+let buffer = token.claim_if(&completion).expect("token claims its own completion");
 println!("read {} bytes", buffer.len());
 # Ok::<(), std::io::Error>(())
 ```

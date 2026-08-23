@@ -265,6 +265,33 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
             ))
         }
     }
+
+    /// As [`RegisteredBuffers::checked_index`], plus checking that
+    /// `span.offset .. span.offset + span.len` actually fits inside that
+    /// buffer -- validating only the index and handing an unchecked range to
+    /// the kernel would let it read or write outside the registered
+    /// allocation.
+    fn checked_span(&self, span: RegisteredSpan) -> io::Result<u32> {
+        let index = self.checked_index(span.buffer_index)?;
+        let buffer = self
+            .buffers
+            .get(span.buffer_index as usize)
+            .expect("checked_index just validated this index");
+        let bytes_len = buffer.bytes_len();
+        let fits = u64::from(span.offset)
+            .checked_add(u64::from(span.len))
+            .is_some_and(|end| end <= bytes_len as u64);
+        if !fits {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "span offset {} + len {} does not fit inside buffer {} ({bytes_len} bytes)",
+                    span.offset, span.len, span.buffer_index
+                ),
+            ));
+        }
+        Ok(index)
+    }
 }
 
 impl<B: IoBufMut> Drop for RegisteredBuffers<B> {
@@ -422,7 +449,7 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token, user_data)
+        self.finish_push(hr, token)
     }
 
     /// Queue a write of `buffer.bytes_len()` bytes to `file` at `offset`.
@@ -458,7 +485,7 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token, user_data)
+        self.finish_push(hr, token)
     }
 
     /// Reclaim `token`'s value and release its reservation if `hr` failed,
@@ -468,16 +495,17 @@ impl<'ring> Batch<'ring> {
         &mut self,
         hr: windows_sys::core::HRESULT,
         token: Token<T>,
-        user_data: usize,
     ) -> io::Result<Token<T>> {
         match check(hr) {
             Ok(()) => Ok(token),
             Err(error) => {
                 // The SQE was never queued: reclaim and drop the value
-                // normally instead of leaking it (claiming a token by its
-                // own id always succeeds), and release the reservation so
-                // it does not count against rundown.
-                let _ = token.claim_if(user_data);
+                // normally instead of leaking it (this crate's own code
+                // knows the op never reached the kernel, so an unconditional
+                // `claim` is sound here -- unlike `claim_if`, which requires
+                // a real popped `Completion`), and release the reservation
+                // so it does not count against rundown.
+                let _ = token.claim();
                 self.ring.cancel_reservation();
                 Err(error)
             }
@@ -672,7 +700,7 @@ impl<'ring> Batch<'ring> {
         options: PushOptions,
     ) -> io::Result<Token<RegisteredUse>> {
         self.require(Op::Read)?;
-        let index = registration.checked_index(span.buffer_index)?;
+        let index = registration.checked_span(span)?;
         registration.outstanding.fetch_add(1, Ordering::SeqCst);
         let token = Token::new(
             self.ring,
@@ -693,7 +721,7 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token, user_data)
+        self.finish_push(hr, token)
     }
 
     /// Queue a write of `span.len` bytes to `file` at `file_offset`, from
@@ -714,7 +742,7 @@ impl<'ring> Batch<'ring> {
         options: PushOptions,
     ) -> io::Result<Token<RegisteredUse>> {
         self.require(Op::Write)?;
-        let index = registration.checked_index(span.buffer_index)?;
+        let index = registration.checked_span(span)?;
         registration.outstanding.fetch_add(1, Ordering::SeqCst);
         let token = Token::new(
             self.ring,
@@ -735,7 +763,7 @@ impl<'ring> Batch<'ring> {
                 options.sqe_flags(),
             )
         };
-        self.finish_push(hr, token, user_data)
+        self.finish_push(hr, token)
     }
 
     /// Submit everything queued so far, returning the number of entries the

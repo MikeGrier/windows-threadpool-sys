@@ -142,6 +142,22 @@ impl Completion {
         check(self.result_code)?;
         Ok(self.information)
     }
+
+    /// Build a `Completion` without popping a real one, for tests that
+    /// exercise [`crate::Token::claim_if`] without real I/O.
+    ///
+    /// Not available outside `#[cfg(test)]`: production code has no
+    /// legitimate reason to fabricate a completion, since `Token::claim_if`'s
+    /// whole safety argument depends on every `Completion` in existence
+    /// tracing back to a real `IORING_CQE` `IoRing::try_pop` observed.
+    #[cfg(test)]
+    pub(crate) fn synthetic(user_data: usize, result_code: windows_sys::core::HRESULT) -> Self {
+        Self {
+            user_data,
+            result_code,
+            information: 0,
+        }
+    }
 }
 
 /// How `S_FALSE` reads as a raw `HRESULT`: `PopIoRingCompletion`'s documented

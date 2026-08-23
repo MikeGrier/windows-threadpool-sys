@@ -88,7 +88,7 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
             .remove(&user_data)
             .expect("completion matches a held token");
         let buffer = token
-            .claim_if(user_data)
+            .claim_if(&completion)
             .expect("a token claims its own completion");
         assert_eq!(transferred, CHUNK_LEN);
         assert_eq!(
@@ -197,7 +197,7 @@ fn a_dropped_batch_still_submits_its_queued_operations() {
     assert_eq!(completion.user_data(), user_data);
     assert_eq!(completion.result().expect("read succeeded"), content.len());
     let buffer = token
-        .claim_if(user_data)
+        .claim_if(&completion)
         .expect("a token claims its own completion");
     assert_eq!(buffer, content);
 }

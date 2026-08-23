@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::Token;
 use crate::IoRing;
 use crate::buf::IoBuf;
+use crate::ring::Completion;
 
 /// A buffer that records whether its destructor ran, to distinguish "leaked
 /// (forgotten)" from "dropped (freed)" -- the exact distinction M2.3 exists to
@@ -84,7 +85,8 @@ fn claiming_a_token_returns_the_buffer_for_normal_disposal() {
     let token = Token::new(&mut ring, buffer).expect("mint token");
     let id = token.id();
 
-    let claimed = token.claim_if(id).expect("id matches itself");
+    let completion = Completion::synthetic(id, 0);
+    let claimed = token.claim_if(&completion).expect("id matches itself");
     assert!(
         !dropped.load(Ordering::SeqCst),
         "claiming must not itself drop the buffer"
@@ -106,8 +108,9 @@ fn claim_if_rejects_a_mismatched_user_data_and_returns_the_token_unchanged() {
     let token = Token::new(&mut ring, buffer).expect("mint token");
     let real_id = token.id();
 
+    let mismatched = Completion::synthetic(real_id.wrapping_add(1), 0);
     let token = token
-        .claim_if(real_id.wrapping_add(1))
+        .claim_if(&mismatched)
         .expect_err("a stale id must not claim this token");
     assert_eq!(
         token.id(),
@@ -117,7 +120,8 @@ fn claim_if_rejects_a_mismatched_user_data_and_returns_the_token_unchanged() {
     assert!(!dropped.load(Ordering::SeqCst));
 
     // It can still be claimed correctly afterwards.
-    let claimed = token.claim_if(real_id).expect("the real id still works");
+    let matching = Completion::synthetic(real_id, 0);
+    let claimed = token.claim_if(&matching).expect("the real id still works");
     drop(claimed);
     assert!(dropped.load(Ordering::SeqCst));
 

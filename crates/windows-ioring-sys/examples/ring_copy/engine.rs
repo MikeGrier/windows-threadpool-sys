@@ -53,23 +53,41 @@ pub fn copy_domain(
     let mut offset = byte_range.start;
     let mut bytes_copied = 0_u64;
     while offset < byte_range.end {
-        let len = u32::try_from((byte_range.end - offset).min(chunk_len as u64))
+        let requested = u32::try_from((byte_range.end - offset).min(chunk_len as u64))
             .expect("chunk_len fits in u32");
-        let span = RegisteredSpan {
+        let read_span = RegisteredSpan {
             buffer_index: 0,
             offset: 0,
-            len,
+            len: requested,
         };
 
-        submit_one(&mut ring, |batch| {
-            batch.read_registered(source, &registration, span, offset, PushOptions::new())
+        // A short read is real, not an error: stop at whatever the source
+        // actually had rather than writing uninitialized tail bytes or
+        // spinning forever on an offset that never advances.
+        let transferred = submit_one(&mut ring, |batch| {
+            batch.read_registered(source, &registration, read_span, offset, PushOptions::new())
         })?;
+        if transferred == 0 {
+            break;
+        }
+
+        let write_span = RegisteredSpan {
+            buffer_index: 0,
+            offset: 0,
+            len: transferred,
+        };
         submit_one(&mut ring, |batch| {
-            batch.write_registered(destination, &registration, span, offset, PushOptions::new())
+            batch.write_registered(
+                destination,
+                &registration,
+                write_span,
+                offset,
+                PushOptions::new(),
+            )
         })?;
 
-        offset += u64::from(len);
-        bytes_copied += u64::from(len);
+        offset += u64::from(transferred);
+        bytes_copied += u64::from(transferred);
     }
 
     drop(registration);
@@ -125,8 +143,9 @@ fn register_buffer(
     }
 }
 
-/// Push one op via `push`, submit and wait for it, then claim its completion.
-fn submit_one<F>(ring: &mut IoRing, push: F) -> io::Result<()>
+/// Push one op via `push`, submit and wait for it, then claim its completion,
+/// returning the transferred byte count.
+fn submit_one<F>(ring: &mut IoRing, push: F) -> io::Result<u32>
 where
     F: FnOnce(&mut Batch<'_>) -> io::Result<Token<windows_ioring_sys::RegisteredUse>>,
 {
@@ -142,9 +161,10 @@ where
             "no completion after submit_and_wait",
         )
     })?;
-    completion.result()?;
+    let transferred = completion.result()?;
     token
-        .claim_if(completion.user_data())
+        .claim_if(&completion)
         .map_err(|_| io::Error::other("completion did not match the token this call submitted"))?;
-    Ok(())
+    u32::try_from(transferred)
+        .map_err(|_| io::Error::other("transferred byte count does not fit in u32"))
 }

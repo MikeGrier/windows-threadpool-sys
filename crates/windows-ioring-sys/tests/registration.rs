@@ -86,7 +86,7 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
     let transferred = completion.result().expect("registered read succeeded");
     assert_eq!(transferred, 256);
     let _ = token
-        .claim_if(completion.user_data())
+        .claim_if(&completion)
         .expect("token claims its own completion");
 
     assert_eq!(
@@ -114,7 +114,7 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
             .expect("a completion is ready");
         completion.result().expect("registered read succeeded");
         let _ = token
-            .claim_if(completion.user_data())
+            .claim_if(&completion)
             .expect("token claims its own completion");
     }
 

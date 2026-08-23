@@ -74,7 +74,7 @@ fn main() -> std::io::Result<()> {
             .remove(&completion.user_data())
             .expect("completion matches a held token");
         let buffer = token
-            .claim_if(completion.user_data())
+            .claim_if(&completion)
             .expect("token claims its own completion");
         assert_eq!(transferred, CHUNK_LEN);
         println!(

@@ -22,6 +22,34 @@ use windows_topology_sys::Topology;
 
 const DEFAULT_CHUNK_LEN: usize = 1024 * 1024;
 
+/// The single sink every line of this sample's output goes through
+/// (repository "Architectural pre-steps" rule: never call `println!`/
+/// `eprintln!` from more than one call site -- introduce an abstraction at
+/// the first occurrence instead). `out` carries ordinary progress and
+/// results; `err` carries failures. Both are plain `Write` streams so a
+/// future caller could redirect either without touching any call site
+/// below.
+struct Report<O, E> {
+    out: O,
+    err: E,
+}
+
+impl<O: io::Write, E: io::Write> Report<O, E> {
+    fn new(out: O, err: E) -> Self {
+        Self { out, err }
+    }
+
+    /// Write one line of ordinary output.
+    fn line(&mut self, args: std::fmt::Arguments<'_>) {
+        let _ = writeln!(self.out, "{args}");
+    }
+
+    /// Write one line of error output.
+    fn error_line(&mut self, args: std::fmt::Arguments<'_>) {
+        let _ = writeln!(self.err, "{args}");
+    }
+}
+
 /// A raw handle the sample hands to more than one pinned thread.
 ///
 /// Each domain thread only ever reads or writes its own, disjoint byte
@@ -78,9 +106,16 @@ fn parse_args() -> Result<Args, String> {
             }
             "--chunk-size" => {
                 let value = args.next().ok_or("--chunk-size needs a value")?;
-                chunk_len = value
+                let parsed: usize = value
                     .parse()
                     .map_err(|_| format!("invalid --chunk-size {value:?}"))?;
+                if parsed == 0 || parsed > u32::MAX as usize {
+                    return Err(format!(
+                        "--chunk-size {parsed} must be between 1 and {} bytes",
+                        u32::MAX
+                    ));
+                }
+                chunk_len = parsed;
             }
             other => positional.push(other.to_string()),
         }
@@ -114,10 +149,12 @@ fn load_topology(path: Option<&PathBuf>) -> io::Result<Topology> {
 }
 
 fn main() -> io::Result<()> {
+    let mut report = Report::new(io::stdout(), io::stderr());
+
     let args = match parse_args() {
         Ok(args) => args,
         Err(message) => {
-            eprintln!("{message}");
+            report.error_line(format_args!("{message}"));
             std::process::exit(2);
         }
     };
@@ -125,19 +162,19 @@ fn main() -> io::Result<()> {
     let topology = load_topology(args.topology_path.as_ref())?;
     let (domains, degraded) = args.policy.select(&topology);
     if degraded {
-        println!(
+        report.line(format_args!(
             "note: {:?} found nothing to select on this topology; falling back to one whole-machine domain",
             args.policy
-        );
+        ));
     }
 
     let plans = plan::build_plan(&topology, &domains)?;
-    println!("{} domain(s) selected:", plans.len());
+    report.line(format_args!("{} domain(s) selected:", plans.len()));
     for domain_plan in &plans {
-        println!(
+        report.line(format_args!(
             "  {} -- group {} mask {:#x}, local NUMA node {:?}",
             domain_plan.label, domain_plan.group, domain_plan.mask, domain_plan.local_numa_node
-        );
+        ));
     }
 
     let source_file = std::fs::File::open(&args.source)?;
@@ -191,32 +228,32 @@ fn main() -> io::Result<()> {
     });
 
     let mut failed = false;
-    println!();
-    println!("results:");
-    for report in reports {
-        match report {
-            Ok(report) => {
-                let seconds = report.elapsed.as_secs_f64().max(f64::EPSILON);
-                let mib_per_sec = (report.bytes_copied as f64 / (1024.0 * 1024.0)) / seconds;
-                println!(
+    report.line(format_args!(""));
+    report.line(format_args!("results:"));
+    for report_result in reports {
+        match report_result {
+            Ok(domain_report) => {
+                let seconds = domain_report.elapsed.as_secs_f64().max(f64::EPSILON);
+                let mib_per_sec = (domain_report.bytes_copied as f64 / (1024.0 * 1024.0)) / seconds;
+                report.line(format_args!(
                     "  {}: {} bytes in {:?} ({mib_per_sec:.1} MiB/s)",
-                    report.label, report.bytes_copied, report.elapsed
-                );
+                    domain_report.label, domain_report.bytes_copied, domain_report.elapsed
+                ));
             }
             Err(error) => {
                 failed = true;
-                eprintln!("  domain failed: {error}");
+                report.error_line(format_args!("  domain failed: {error}"));
             }
         }
     }
 
     if plans.len() == 1 {
-        println!();
-        println!(
+        report.line(format_args!(""));
+        report.line(format_args!(
             "note: only one domain ran, so this cannot show a difference between policies or \
              buffer placements -- a single-domain or single-node machine produces noise here, \
              not a benchmark result (M7.5)."
-        );
+        ));
     }
 
     if failed {

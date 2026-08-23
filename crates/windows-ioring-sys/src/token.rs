@@ -3,6 +3,8 @@
 
 use std::mem::ManuallyDrop;
 
+use crate::ring::Completion;
+
 /// An owned value, plus the identity of the operation the kernel may still
 /// be reading or writing through it.
 ///
@@ -48,11 +50,12 @@ impl<T: Send + 'static> Token<T> {
 
     /// Consume this token and recover its value unconditionally.
     ///
-    /// Only for a caller who already knows the operation completed (for
-    /// example, [`Token::claim_if`] on a match). Not `pub`: calling this
-    /// without that knowledge is exactly the use-after-free this type exists
-    /// to prevent.
-    fn claim(mut self) -> T {
+    /// Only for a caller who already knows the operation completed --
+    /// [`Token::claim_if`] on a match, or the crate's own abort path for a
+    /// push that never queued at all (`Batch::finish_push`). Not `pub`:
+    /// calling this without that knowledge is exactly the use-after-free
+    /// this type exists to prevent.
+    pub(crate) fn claim(mut self) -> T {
         // SAFETY: `self` is not used again after this -- it is dropped
         // normally by the caller's scope immediately after, and `Token`'s own
         // `Drop` never reads `value` (see that impl), so taking it here
@@ -60,17 +63,23 @@ impl<T: Send + 'static> Token<T> {
         unsafe { ManuallyDrop::take(&mut self.value) }
     }
 
-    /// Claim this token's value if `user_data` names it, or hand it back
+    /// Claim this token's value if `completion` names it, or hand it back
     /// unchanged otherwise (D-4).
     ///
-    /// This is the whole validation a completion needs here: unlike
-    /// `windows-overlapped-io-sys`'s `OperationId`, there is no storage
-    /// address to also check, because `UserData` is not an address -- it is
-    /// a value this crate chose, so a stale token's `id` can never
-    /// coincidentally match a different, later operation's completion the
-    /// way a reused memory address could.
-    pub fn claim_if(self, user_data: usize) -> Result<T, Self> {
-        if self.id == user_data {
+    /// Takes a popped [`Completion`], not a bare `usize`: `Completion` has no
+    /// public constructor, so the only way to produce one is
+    /// [`crate::IoRing::try_pop`] actually observing a real `IORING_CQE`.
+    /// Accepting a caller-supplied integer here instead -- for example
+    /// `token.claim_if(token.id())` -- would let safe code reclaim (and then
+    /// drop, freeing) a buffer the kernel might still be reading or writing,
+    /// which is exactly the use-after-free this type exists to prevent.
+    /// Unlike `windows-overlapped-io-sys`'s `OperationId`, there is no
+    /// storage address to also check, because `UserData` is a value this
+    /// crate chose, so a stale token's `id` can never coincidentally match a
+    /// different, later operation's completion the way a reused memory
+    /// address could.
+    pub fn claim_if(self, completion: &Completion) -> Result<T, Self> {
+        if self.id == completion.user_data() {
             Ok(self.claim())
         } else {
             Err(self)
