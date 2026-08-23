@@ -1035,8 +1035,21 @@ impl DirectoryWatcher {
         // need the resume prod later, on its own account, if its sink saturates
         // while this watcher is paused for some other route.
         sink.register_resume(&self.inner);
+        // Only attempted while the gate is `Open`: reopen()/enter_fault() are
+        // otherwise reached exclusively through the fault/backoff protocol
+        // (`retry_reestablish`/`resolve_fault_success`), and calling them here
+        // while already `Faulted`/`Reopening`/etc. would bypass and corrupt
+        // that single-owner state machine -- clobbering `self.fault`'s
+        // `awaiting` set, orphaning routes still awaiting an answer to the
+        // current fault, or leaving a stale, already-armed retry timer racing
+        // a reopen this call performed outside its knowledge. Skipping it here
+        // costs nothing: the route was already inserted above, so whichever
+        // transition is in flight recomputes the reach union fresh from the
+        // live route set the next time it arms (D-51), picking up the widened
+        // reach on its own.
         if widen
             && !already_recursive
+            && self.gate() == ArmGate::Open
             && let Err(error) = self.inner.reopen(fresh_handle)
         {
             self.inner.enter_fault(error, FaultOperation::Arm);
