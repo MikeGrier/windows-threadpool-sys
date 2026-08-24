@@ -393,8 +393,8 @@ fn several_subscriptions_share_one_receiver_and_stay_distinguishable() {
         WatchOptions::new(),
     );
 
-    // Interleaved, so a per-subscription order that survives is genuinely being
-    // demultiplexed rather than happening to arrive in blocks.
+    // Interleaved, so demultiplexing by subscription is genuinely being
+    // exercised rather than changes happening to arrive in blocks.
     for index in 0..50 {
         std::fs::write(first.path().join(format!("a-{index}.txt")), b"a").expect("create");
         std::fs::write(second.path().join(format!("b-{index}.txt")), b"b").expect("create");
@@ -408,17 +408,27 @@ fn several_subscriptions_share_one_receiver_and_stay_distinguishable() {
             && seen.has(c.id(), ChangeKind::Added, &last('c'))
     });
 
-    // In-order within a subscription, and nothing from one leaking into another.
+    // Every expected name arrives exactly once, and nothing from one
+    // subscription leaks into another. Not asserted: creation-time order.
+    // Windows's directory change notifications do not guarantee that changes
+    // occurring in rapid succession are reported in the order they occurred
+    // (this crate faithfully preserves whatever order the kernel hands it --
+    // see D-12 in DESIGN-NOTES.md -- but the kernel itself makes no such
+    // promise); an earlier version of this test asserted exact sequence
+    // equality and flaked in CI when two adjacent creates were reported
+    // transposed.
     for (watch, prefix) in [(&a, 'a'), (&b, 'b'), (&c, 'c')] {
-        let creates: Vec<String> = drained
+        let mut creates: Vec<String> = drained
             .changes(watch.id())
             .into_iter()
             .filter(|(kind, _)| *kind == ChangeKind::Added)
             .map(|(_, name)| name)
             .collect();
-        let expected: Vec<String> = (0..50)
+        creates.sort();
+        let mut expected: Vec<String> = (0..50)
             .map(|index| format!("{prefix}-{index}.txt"))
             .collect();
+        expected.sort();
         assert_eq!(creates, expected, "subscription {prefix}");
     }
 
