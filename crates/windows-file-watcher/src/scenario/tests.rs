@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use super::{Operation, validate_confined, validate_paths};
+use super::{HarnessOutcome, Operation, validate_barriers, validate_confined, validate_paths};
 
 #[test]
 fn a_plain_relative_path_is_confined() {
@@ -103,4 +103,73 @@ fn operations_without_paths_are_always_valid() {
         },
     ];
     assert!(validate_paths(&operations).is_ok());
+}
+
+#[test]
+fn harness_outcome_total_changes_whenever_any_tally_does() {
+    // PR #20 review response: `total` previously omitted `volume_changes`,
+    // so a lone `VolumeChanged` notification looked like no activity at all
+    // to the harness's quiet-period loop, which could declare the stream
+    // settled before the scenario actually was.
+    let mut outcome = HarnessOutcome::default();
+    assert_eq!(outcome.total(), 0);
+    outcome.volume_changes = 1;
+    assert_eq!(outcome.total(), 1);
+}
+
+#[test]
+fn a_barrier_used_once_is_rejected() {
+    let operations = vec![Operation::Barrier {
+        name: "lonely".to_string(),
+    }];
+    assert!(validate_barriers(&operations).is_err());
+}
+
+#[test]
+fn a_barrier_used_three_times_is_rejected() {
+    let operations = vec![
+        Operation::Barrier {
+            name: "crowded".to_string(),
+        },
+        Operation::Barrier {
+            name: "crowded".to_string(),
+        },
+        Operation::Barrier {
+            name: "crowded".to_string(),
+        },
+    ];
+    assert!(validate_barriers(&operations).is_err());
+}
+
+#[test]
+fn a_barrier_used_exactly_twice_is_accepted() {
+    let operations = vec![
+        Operation::Barrier {
+            name: "paired".to_string(),
+        },
+        Operation::HoldOpen {
+            path: PathBuf::from("f.txt"),
+            duration: std::time::Duration::from_millis(1),
+            ready_barrier: Some("paired".to_string()),
+        },
+    ];
+    assert!(validate_barriers(&operations).is_ok());
+}
+
+#[test]
+fn a_barrier_pair_nested_inside_repeat_and_concurrent_is_still_counted() {
+    let operations = vec![Operation::Repeat {
+        count: 1,
+        pattern: vec![Operation::Concurrent {
+            branches: vec![
+                vec![Operation::Barrier {
+                    name: "nested".to_string(),
+                }],
+                vec![Operation::Barrier {
+                    name: "nested".to_string(),
+                }],
+            ],
+        }],
+    }];
+    assert!(validate_barriers(&operations).is_ok());
 }

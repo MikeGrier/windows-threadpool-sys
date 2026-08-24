@@ -667,6 +667,7 @@ impl HarnessOutcome {
             + self.establishments
             + self.completions
             + self.retry_questions
+            + self.volume_changes
     }
 }
 
@@ -880,6 +881,57 @@ fn validate_paths(operations: &[Operation]) -> Result<(), String> {
     Ok(())
 }
 
+/// Counts every use of each named [`Operation::Barrier`] rendezvous point --
+/// both a bare `Barrier` and a `HoldOpen.ready_barrier` count as one use of
+/// that name -- recursing through `Repeat` and `Concurrent` exactly like
+/// [`validate_paths`].
+fn count_barrier_uses(operations: &[Operation], counts: &mut HashMap<String, u64>) {
+    for operation in operations {
+        match operation {
+            Operation::Barrier { name } => *counts.entry(name.clone()).or_insert(0) += 1,
+            Operation::HoldOpen {
+                ready_barrier: Some(name),
+                ..
+            } => *counts.entry(name.clone()).or_insert(0) += 1,
+            Operation::Repeat { pattern, .. } => count_barrier_uses(pattern, counts),
+            Operation::Concurrent { branches } => {
+                for branch in branches {
+                    count_barrier_uses(branch, counts);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Rejects a scenario whose named [`Operation::Barrier`] rendezvous points do
+/// not each have exactly two participants (PR #20 review response).
+/// `std::sync::Barrier::wait` has no timeout, so a barrier used once (nobody
+/// to rendezvous with) or three-plus times (the third arrival waits forever
+/// for a rendezvous the first two already completed) blocks its thread
+/// forever; because that thread is inside the `std::thread::scope` a
+/// `Concurrent` operation spawned it from, the calling thread never returns
+/// to perform the harness's own deadline check either, so a malformed
+/// scenario wedges the runner instead of failing loudly. Checking the count
+/// up front, before anything runs, turns that into an ordinary
+/// scenario-authoring-bug panic (matching every other named-reference misuse
+/// in this module, e.g. `Fleet`'s own name-not-found panics) rather than a
+/// hang discovered only by a caller's own external timeout.
+fn validate_barriers(operations: &[Operation]) -> Result<(), String> {
+    let mut counts = HashMap::new();
+    count_barrier_uses(operations, &mut counts);
+    for (name, count) in counts {
+        if count != 2 {
+            return Err(format!(
+                "barrier '{name}' is used {count} time(s), but a rendezvous needs exactly 2 \
+                 (a Barrier/HoldOpen.ready_barrier used once would wait forever with no partner; \
+                 used three or more times, the extra participant waits forever too)"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Executes `scenario` against a real temp directory and a live
 /// [`Monitor`], checking only the invariants this harness itself knows
 /// about: the run completes within `params.timeout` (a wedge, not a slow
@@ -906,13 +958,20 @@ pub fn run_scenario(scenario: &Scenario, seed: u64, params: &HarnessParams) -> H
 /// or a `Concurrent` branch) is not confined to the scenario root -- every
 /// path is rejected if absolute or containing a `..` component -- *before*
 /// creating the temp directory or applying anything, so an unconfined path
-/// never reaches a real filesystem call.
+/// never reaches a real filesystem call. Also panics if any named
+/// `Operation::Barrier` rendezvous point does not have exactly two
+/// participants (see [`validate_barriers`]), for the same reason: a
+/// malformed barrier would otherwise hang the runner instead of failing
+/// loudly.
 pub fn run_scenario_keep_dir(
     scenario: &Scenario,
     seed: u64,
     params: &HarnessParams,
 ) -> (HarnessOutcome, TempDir) {
     if let Err(reason) = validate_paths(&scenario.operations) {
+        panic!("scenario '{}' is unsafe to run: {reason}", scenario.label);
+    }
+    if let Err(reason) = validate_barriers(&scenario.operations) {
         panic!("scenario '{}' is unsafe to run: {reason}", scenario.label);
     }
 
