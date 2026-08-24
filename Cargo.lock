@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "windows-file-watcher"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "serde",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "windows-ioring-sys"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde_json",
  "windows-sys",
@@ -175,7 +175,7 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-overlapped-io-sys"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "windows-sys",
 ]
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "windows-threadpool-sys"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "windows-overlapped-io-sys",
  "windows-sys",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "windows-topology-sys"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
