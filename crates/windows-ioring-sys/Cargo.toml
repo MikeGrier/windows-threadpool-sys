@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-ioring-sys"
-version = "1.0.1" # x-release-please-version
+version = "0.1.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -39,14 +39,14 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 ] }
 # The Model A delivery path (M4): a `ThreadpoolWait` on the ring's completion
 # event.
-windows-threadpool-sys = { version = "1.0.2", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { version = "0.1.1", path = "../windows-threadpool-sys" }
 
 [dev-dependencies]
 # M6.3's topology-guidance example enumerates L3 cache domains with this
 # crate rather than raw `GetLogicalProcessorInformationEx` calls. M7's
 # ring-copy sample additionally needs the `serde` feature, to load a fed-in
 # topology description (D-10 in windows-topology-sys's DESIGN-NOTES.md).
-windows-topology-sys = { version = "0.2.1", path = "../windows-topology-sys", features = [
+windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys", features = [
 	"serde",
 ] }
 # M7's ring-copy sample deserializes a fed-in topology description (--topology).
