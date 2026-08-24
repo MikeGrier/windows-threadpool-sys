@@ -122,8 +122,17 @@ pub enum AttributeValue {
     Null,
     /// A JSON boolean.
     Bool(bool),
-    /// A JSON number, represented as `f64` regardless of source precision.
-    Number(f64),
+    /// A JSON number that decoded as a non-negative integer, preserved
+    /// exactly (PR #20 review response). Collapsing every number to `f64`
+    /// loses precision above 2^53 (~9 PB), silently corrupting both the
+    /// documented lossless round-trip for an unknown attribute and known
+    /// numeric field decoding (e.g. `memory_bytes`).
+    UnsignedInteger(u64),
+    /// A JSON number that decoded as a negative integer, preserved exactly.
+    SignedInteger(i64),
+    /// A JSON number with a fractional part (or one too large for either
+    /// integer variant), represented as `f64`.
+    Float(f64),
     /// A JSON string.
     String(String),
     /// A JSON array.
@@ -220,7 +229,9 @@ mod serde_impl {
             match self {
                 AttributeValue::Null => serializer.serialize_unit(),
                 AttributeValue::Bool(b) => serializer.serialize_bool(*b),
-                AttributeValue::Number(n) => serializer.serialize_f64(*n),
+                AttributeValue::UnsignedInteger(n) => serializer.serialize_u64(*n),
+                AttributeValue::SignedInteger(n) => serializer.serialize_i64(*n),
+                AttributeValue::Float(n) => serializer.serialize_f64(*n),
                 AttributeValue::String(s) => serializer.serialize_str(s),
                 AttributeValue::Array(items) => items.serialize(serializer),
                 AttributeValue::Object(map) => map.serialize(serializer),
@@ -248,13 +259,13 @@ mod serde_impl {
                     Ok(AttributeValue::Bool(v))
                 }
                 fn visit_i64<E: Error>(self, v: i64) -> Result<Self::Value, E> {
-                    Ok(AttributeValue::Number(v as f64))
+                    Ok(AttributeValue::SignedInteger(v))
                 }
                 fn visit_u64<E: Error>(self, v: u64) -> Result<Self::Value, E> {
-                    Ok(AttributeValue::Number(v as f64))
+                    Ok(AttributeValue::UnsignedInteger(v))
                 }
                 fn visit_f64<E: Error>(self, v: f64) -> Result<Self::Value, E> {
-                    Ok(AttributeValue::Number(v))
+                    Ok(AttributeValue::Float(v))
                 }
                 fn visit_str<E: Error>(self, v: &str) -> Result<Self::Value, E> {
                     Ok(AttributeValue::String(v.to_string()))
@@ -289,19 +300,25 @@ mod serde_impl {
         }
     }
 
-    /// A number stored as `f64` loses precision above 2^53 (~9 PB, well
-    /// beyond any real machine's processor/cache counts or memory size for
-    /// the foreseeable future -- the same ceiling D-11 already accepts for
-    /// `memory_bytes`).
+    /// A number is preserved exactly when it decoded as an integer variant;
+    /// only a [`AttributeValue::Float`] (a fractional source, or one too
+    /// large for `i64`/`u64`) is converted, and even then only when it is a
+    /// non-negative whole number representable in `f64` (PR #20 review
+    /// response: the same ~9 PB ceiling D-11 already accepts for
+    /// `memory_bytes`, not the silent precision loss the old
+    /// `f64`-for-everything encoding had).
     fn as_u64<E: Error>(value: AttributeValue) -> Result<u64, E> {
         match value {
-            AttributeValue::Number(n)
+            AttributeValue::UnsignedInteger(n) => Ok(n),
+            AttributeValue::SignedInteger(n) => {
+                u64::try_from(n).map_err(|_| E::custom("expected a non-negative whole number"))
+            }
+            AttributeValue::Float(n)
                 if n.fract() == 0.0 && (0.0..=u64::MAX as f64).contains(&n) =>
             {
                 Ok(n as u64)
             }
-            AttributeValue::Number(_) => Err(E::custom("expected a non-negative whole number")),
-            _ => Err(E::custom("expected a number")),
+            _ => Err(E::custom("expected a non-negative whole number")),
         }
     }
 
@@ -311,16 +328,21 @@ mod serde_impl {
 
     /// As [`as_u64`], but over the signed range: `CacheKind::Other` carries a
     /// raw `PROCESSOR_CACHE_TYPE`, a C enum backed by `i32`, which is not
-    /// guaranteed non-negative.
+    /// guaranteed non-negative. Preserved exactly for either integer variant;
+    /// only a [`AttributeValue::Float`] is converted, subject to the same
+    /// fractional/range check as before.
     fn as_i64<E: Error>(value: AttributeValue) -> Result<i64, E> {
         match value {
-            AttributeValue::Number(n)
+            AttributeValue::SignedInteger(n) => Ok(n),
+            AttributeValue::UnsignedInteger(n) => {
+                i64::try_from(n).map_err(|_| E::custom("expected a whole number"))
+            }
+            AttributeValue::Float(n)
                 if n.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&n) =>
             {
                 Ok(n as i64)
             }
-            AttributeValue::Number(_) => Err(E::custom("expected a whole number")),
-            _ => Err(E::custom("expected a number")),
+            _ => Err(E::custom("expected a whole number")),
         }
     }
 

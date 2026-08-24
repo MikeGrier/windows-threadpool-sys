@@ -56,7 +56,7 @@ fn a_discovered_memory_domain_has_no_known_size() {
 #[test]
 fn an_unrecognised_domain_kind_carries_its_attributes() {
     let mut attributes = BTreeMap::new();
-    attributes.insert("watts".to_string(), AttributeValue::Number(15.5));
+    attributes.insert("watts".to_string(), AttributeValue::Float(15.5));
     let domain = Domain {
         kind: DomainKind::Other {
             name: "power".to_string(),
@@ -234,7 +234,7 @@ mod serde_tests {
     #[test]
     fn an_unrecognised_domain_kind_round_trips_its_attributes_losslessly() {
         let mut attributes = BTreeMap::new();
-        attributes.insert("watts".to_string(), AttributeValue::Number(15.5));
+        attributes.insert("watts".to_string(), AttributeValue::Float(15.5));
         attributes.insert("throttled".to_string(), AttributeValue::Bool(false));
         let domain = Domain {
             kind: DomainKind::Other {
@@ -248,10 +248,71 @@ mod serde_tests {
     }
 
     #[test]
+    fn an_integer_attribute_beyond_f64s_precision_round_trips_exactly() {
+        // PR #20 review response: 9,007,199,254,740,993 (2^53 + 1) is the
+        // smallest positive integer an f64 cannot represent exactly -- it
+        // would decode as 9,007,199,254,740,992 if this ever routed through
+        // `f64` again. Also covers a large negative integer, which only the
+        // signed variant can hold.
+        let large_unsigned: u64 = (1u64 << 53) + 1;
+        let large_signed: i64 = -((1i64 << 53) + 1);
+        let mut attributes = BTreeMap::new();
+        attributes.insert(
+            "large_unsigned".to_string(),
+            AttributeValue::UnsignedInteger(large_unsigned),
+        );
+        attributes.insert(
+            "large_signed".to_string(),
+            AttributeValue::SignedInteger(large_signed),
+        );
+        let domain = Domain {
+            kind: DomainKind::Other {
+                name: "precision".to_string(),
+                attributes,
+            },
+            id: 3,
+            processors: ProcessorSet::empty(),
+        };
+        let restored = round_trip(&domain);
+        assert_eq!(restored, domain);
+        let DomainKind::Other { attributes, .. } = &restored.kind else {
+            panic!("expected Other")
+        };
+        assert_eq!(
+            attributes.get("large_unsigned"),
+            Some(&AttributeValue::UnsignedInteger(large_unsigned))
+        );
+        assert_eq!(
+            attributes.get("large_signed"),
+            Some(&AttributeValue::SignedInteger(large_signed))
+        );
+    }
+
+    #[test]
+    fn a_memory_bytes_value_beyond_f64s_precision_decodes_exactly() {
+        // PR #20 review response: `memory_bytes` is decoded through the same
+        // `as_u64` helper as any other unsigned attribute, so it must
+        // preserve the same precision beyond 2^53.
+        let precise: u64 = (1u64 << 53) + 1;
+        let domain = Domain {
+            kind: DomainKind::Memory {
+                memory_bytes: Some(precise),
+            },
+            id: 4,
+            processors: ProcessorSet::empty(),
+        };
+        let restored = round_trip(&domain);
+        let DomainKind::Memory { memory_bytes } = restored.kind else {
+            panic!("expected Memory")
+        };
+        assert_eq!(memory_bytes, Some(precise));
+    }
+
+    #[test]
     fn an_unrecognised_domain_kinds_attribute_colliding_with_a_reserved_field_name_is_refused() {
         for reserved in ["kind", "id", "processors"] {
             let mut attributes = BTreeMap::new();
-            attributes.insert(reserved.to_string(), AttributeValue::Number(1.0));
+            attributes.insert(reserved.to_string(), AttributeValue::UnsignedInteger(1));
             let domain = Domain {
                 kind: DomainKind::Other {
                     name: "power".to_string(),
