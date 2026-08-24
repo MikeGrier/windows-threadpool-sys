@@ -3,7 +3,9 @@
     "release-type": "simple",
     "include-component-in-tag": true,
     "separate-pull-requests": true,
+    "release-search-depth": 100,
     "commit-search-depth": 100,
+    "commit-batch-size": 5,
     "packages": {
         "crates/windows-file-watcher": {
             "package-name": "windows-file-watcher",
