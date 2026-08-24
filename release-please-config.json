@@ -1,83 +1,37 @@
 {
     "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-    "release-type": "simple",
+    "release-type": "rust",
     "include-component-in-tag": true,
-    "separate-pull-requests": true,
     "release-search-depth": 100,
     "commit-search-depth": 100,
     "commit-batch-size": 5,
+    "plugins": [
+        "cargo-workspace"
+    ],
     "packages": {
         "crates/windows-file-watcher": {
             "package-name": "windows-file-watcher",
-            "component": "windows-file-watcher",
-            "extra-files": [
-                "Cargo.toml"
-            ]
+            "component": "windows-file-watcher"
         },
         "crates/windows-ioring-sys": {
             "package-name": "windows-ioring-sys",
-            "component": "windows-ioring-sys",
-            "extra-files": [
-                "Cargo.toml"
-            ]
+            "component": "windows-ioring-sys"
         },
         "crates/windows-overlapped-io-sys": {
             "package-name": "windows-overlapped-io-sys",
-            "component": "windows-overlapped-io-sys",
-            "extra-files": [
-                "Cargo.toml",
-                {
-                    "type": "toml",
-                    "path": "crates/windows-threadpool-sys/Cargo.toml",
-                    "jsonpath": "$.dependencies['windows-overlapped-io-sys'].version"
-                },
-                {
-                    "type": "toml",
-                    "path": "crates/windows-file-watcher/Cargo.toml",
-                    "jsonpath": "$.dependencies['windows-overlapped-io-sys'].version"
-                }
-            ]
+            "component": "windows-overlapped-io-sys"
         },
         "crates/windows-threadpool-sys": {
             "package-name": "windows-threadpool-sys",
-            "component": "windows-threadpool-sys",
-            "extra-files": [
-                "Cargo.toml",
-                {
-                    "type": "toml",
-                    "path": "crates/windows-ioring-sys/Cargo.toml",
-                    "jsonpath": "$.dependencies['windows-threadpool-sys'].version"
-                },
-                {
-                    "type": "toml",
-                    "path": "crates/windows-file-watcher/Cargo.toml",
-                    "jsonpath": "$.dependencies['windows-threadpool-sys'].version"
-                }
-            ]
+            "component": "windows-threadpool-sys"
         },
         "crates/windows-topology-sys": {
             "package-name": "windows-topology-sys",
-            "component": "windows-topology-sys",
-            "extra-files": [
-                "Cargo.toml",
-                {
-                    "type": "toml",
-                    "path": "crates/windows-ioring-sys/Cargo.toml",
-                    "jsonpath": "$['dev-dependencies']['windows-topology-sys'].version"
-                }
-            ]
+            "component": "windows-topology-sys"
         },
         "crates/wtf-string": {
             "package-name": "wtf-string",
-            "component": "wtf-string",
-            "extra-files": [
-                "Cargo.toml",
-                {
-                    "type": "toml",
-                    "path": "crates/windows-file-watcher/Cargo.toml",
-                    "jsonpath": "$.dependencies['wtf-string'].version"
-                }
-            ]
+            "component": "wtf-string"
         }
     }
 }

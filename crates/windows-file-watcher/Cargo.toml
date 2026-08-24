@@ -57,13 +57,13 @@ scenario-tool = ["dep:serde", "dep:serde_json"]
 # completion from being misattributed to the next read that reuses the same
 # `OVERLAPPED` across a re-arm. No features are enabled; only the core completion
 # machinery is needed.
-windows-overlapped-io-sys = { version = "2.0.0", path = "../windows-overlapped-io-sys", default-features = false }
+windows-overlapped-io-sys = { version = "2.0.1", path = "../windows-overlapped-io-sys", default-features = false }
 
 # The thread pool the monitor runs on: `ThreadpoolIo` services detailed reads,
 # `ThreadpoolWait` the coarse fallback, `ThreadpoolTimer` the retry backoff, and
 # `ThreadpoolWork` drains the request queue. The monitor owns no threads of its
 # own.
-windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { version = "1.0.2", path = "../windows-threadpool-sys" }
 
 # Relative names decoded from `ReadDirectoryChangesW` are native `u16`, and are
 # handed back to Windows APIs as `u16`. Storing them as `Wtf16String` keeps them
