@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v1.0.1...windows-threadpool-sys-v1.0.2) (2026-08-24)
+
+
+### Bug Fixes
+
+* sync windows-overlapped-io-sys to 2.0.0 across all dependents and lock file ([234fdcc](https://github.com/MikeGrier/windows-threadpool-sys/commit/234fdcc66b285c7928127c17cb327ad022f8e6c8))
+
 ## [1.0.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v1.0.0...windows-threadpool-sys-v1.0.1) (2026-08-24)
 
 
