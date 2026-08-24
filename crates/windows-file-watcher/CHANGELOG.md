@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v1.0.0...windows-file-watcher-v1.0.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **file-watcher:** stop asserting creation-time order in the multi-subscription test ([b478b67](https://github.com/MikeGrier/windows-threadpool-sys/commit/b478b679b889bdfc3a5738b2f5d5945efccf5a8a))
+
 ## [1.0.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.1.0...windows-file-watcher-v1.0.0) (2026-08-24)
 
 
