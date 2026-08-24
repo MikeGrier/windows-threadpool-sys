@@ -84,6 +84,7 @@ jobs:
             fi
           fi
           echo "CRATE_NAME=${crate}" >> "$GITHUB_ENV"
+          echo "CRATE_VERSION=${actual}" >> "$GITHUB_ENV"
       # Some crates depend on sibling workspace crates by version as well as by
       # path, so `cargo publish`'s build verification resolves those dependencies
       # from crates.io, not the workspace checkout. One release PR bumps every
@@ -153,7 +154,36 @@ jobs:
               exit 1
             fi
           done <<< "$deps"
+      # Publishing is idempotent: a version already on crates.io is a success,
+      # not a failure. `cargo publish` errors out on a duplicate, which would
+      # make re-running a partly-failed release, or tagging a version that was
+      # published by hand, look broken when nothing is wrong. Same sparse-index
+      # probe as the sibling wait above, for the same reason: the index is what
+      # `--locked` resolution actually reads.
+      - name: Skip if this version is already published
+        shell: bash
+        run: |
+          name_len=${#CRATE_NAME}
+          if [ "$name_len" -le 2 ]; then
+            prefix="$name_len"
+          elif [ "$name_len" -eq 3 ]; then
+            prefix="3/$(printf '%s' "$CRATE_NAME" | cut -c1)"
+          else
+            prefix="$(printf '%s' "$CRATE_NAME" | cut -c1-2)/$(printf '%s' "$CRATE_NAME" | cut -c3-4)"
+          fi
+          if body="$(curl -s --fail --connect-timeout 10 --max-time 20 \
+                "https://index.crates.io/${prefix}/${CRATE_NAME}")" \
+            && printf '%s' "$body" | jq -e --arg v "$CRATE_VERSION" \
+                 'select(.vers == $v)' >/dev/null 2>&1; then
+            echo "${CRATE_NAME} ${CRATE_VERSION} is already on crates.io; nothing to do"
+            echo "ALREADY_PUBLISHED=1" >> "$GITHUB_ENV"
+          else
+            echo "${CRATE_NAME} ${CRATE_VERSION} is not published yet"
+            echo "ALREADY_PUBLISHED=0" >> "$GITHUB_ENV"
+          fi
+
       - name: cargo publish
+        if: ${{ env.ALREADY_PUBLISHED != '1' }}
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
