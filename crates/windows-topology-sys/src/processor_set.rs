@@ -44,7 +44,7 @@ impl ProcessorSet {
     ///
     /// # Panics
     ///
-    /// Panics if `number` is [`MAX_PROCESSORS_PER_GROUP`] or greater: a
+    /// Panics if `number` is `MAX_PROCESSORS_PER_GROUP` or greater: a
     /// processor group cannot hold more processors than a mask has bits.
     pub fn insert(&mut self, group: u16, number: u8) {
         assert!(

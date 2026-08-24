@@ -24,7 +24,7 @@ use crate::processor_set::ProcessorSet;
 pub struct ProcessorId {
     /// The processor group.
     pub group: u16,
-    /// The processor's number within that group (0..[`MAX_PROCESSORS_PER_GROUP`],
+    /// The processor's number within that group (0..`MAX_PROCESSORS_PER_GROUP`,
     /// i.e. 0..`usize::BITS`).
     pub number: u8,
 }
