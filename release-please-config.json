@@ -7,7 +7,6 @@
     "release-search-depth": 100,
     "commit-search-depth": 100,
     "commit-batch-size": 5,
-    "last-release-sha": "329972496de015ca3dfb73b5f8547b2db1250e89",
     "plugins": [
         "cargo-workspace"
     ],
