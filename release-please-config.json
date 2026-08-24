@@ -28,12 +28,12 @@
                 "Cargo.toml",
                 {
                     "type": "toml",
-                    "path": "../windows-threadpool-sys/Cargo.toml",
+                    "path": "crates/windows-threadpool-sys/Cargo.toml",
                     "jsonpath": "$.dependencies['windows-overlapped-io-sys'].version"
                 },
                 {
                     "type": "toml",
-                    "path": "../windows-file-watcher/Cargo.toml",
+                    "path": "crates/windows-file-watcher/Cargo.toml",
                     "jsonpath": "$.dependencies['windows-overlapped-io-sys'].version"
                 }
             ]
@@ -45,12 +45,12 @@
                 "Cargo.toml",
                 {
                     "type": "toml",
-                    "path": "../windows-ioring-sys/Cargo.toml",
+                    "path": "crates/windows-ioring-sys/Cargo.toml",
                     "jsonpath": "$.dependencies['windows-threadpool-sys'].version"
                 },
                 {
                     "type": "toml",
-                    "path": "../windows-file-watcher/Cargo.toml",
+                    "path": "crates/windows-file-watcher/Cargo.toml",
                     "jsonpath": "$.dependencies['windows-threadpool-sys'].version"
                 }
             ]
@@ -62,7 +62,7 @@
                 "Cargo.toml",
                 {
                     "type": "toml",
-                    "path": "../windows-ioring-sys/Cargo.toml",
+                    "path": "crates/windows-ioring-sys/Cargo.toml",
                     "jsonpath": "$['dev-dependencies']['windows-topology-sys'].version"
                 }
             ]
@@ -74,7 +74,7 @@
                 "Cargo.toml",
                 {
                     "type": "toml",
-                    "path": "../windows-file-watcher/Cargo.toml",
+                    "path": "crates/windows-file-watcher/Cargo.toml",
                     "jsonpath": "$.dependencies['wtf-string'].version"
                 }
             ]
