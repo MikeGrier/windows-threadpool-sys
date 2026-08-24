@@ -1,0 +1,22 @@
+{
+  "label": "queue-overwhelm",
+  "operations": [
+    { "OpenSessionBounded": { "name": "tiny", "bound": 2 } },
+    {
+      "Subscribe": {
+        "session": "tiny",
+        "watch": "tiny-watch",
+        "path": "",
+        "subtree": true
+      }
+    },
+    {
+      "Repeat": {
+        "count": 3000,
+        "pattern": [{ "CreateFile": { "path": "overwhelmed.txt" } }]
+      }
+    },
+    { "CancelWatch": { "watch": "tiny-watch" } },
+    { "CloseSession": { "name": "tiny" } }
+  ]
+}

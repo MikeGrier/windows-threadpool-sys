@@ -1,0 +1,25 @@
+{
+  "label": "spoiler-blocks-delete",
+  "operations": [
+    { "CreateFile": { "path": "spoiled.txt" } },
+    {
+      "Concurrent": {
+        "branches": [
+          [
+            {
+              "HoldOpen": {
+                "path": "spoiled.txt",
+                "duration": 300,
+                "ready_barrier": "spoiler-open"
+              }
+            }
+          ],
+          [
+            { "Barrier": { "name": "spoiler-open" } },
+            { "RemoveFile": { "path": "spoiled.txt" } }
+          ]
+        ]
+      }
+    }
+  ]
+}

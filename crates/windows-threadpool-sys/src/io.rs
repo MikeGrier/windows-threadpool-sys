@@ -25,7 +25,6 @@ use std::cell::Cell;
 use std::fmt;
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 use std::sync::Arc;
 
@@ -79,21 +78,18 @@ unsafe extern "system" fn io_trampoline(
     // from here on. The invariant is that an address is **never registered while
     // it is available for reuse** -- otherwise a concurrent submission handed
     // that address would collide with the entry still sitting in the registry.
-    // Doing it unconditionally before `catch_unwind` also keeps the accounting
-    // exact when the callback panics.
     let id = ctx.live.remove(overlapped);
 
-    // A panic must never unwind across the FFI boundary into the pool's frame.
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        let completion = IoCompletion {
-            overlapped,
-            id,
-            io_result,
-            bytes_transferred,
-            claimed: Cell::new(false),
-        };
-        (ctx.callback)(&completion);
-    }));
+    // Not contained: the callback contract requires that it not unwind, and a
+    // callback that breaks it aborts here rather than being silently forgiven.
+    let completion = IoCompletion {
+        overlapped,
+        id,
+        io_result,
+        bytes_transferred,
+        claimed: Cell::new(false),
+    };
+    (ctx.callback)(&completion);
 }
 
 /// An owned thread-pool I/O object bound to one overlapped endpoint.
@@ -207,9 +203,8 @@ impl ThreadpoolIo {
     ///
     /// The callback runs on a shared, process-managed pool thread. It must
     /// restore any thread state it changes, must not terminate its thread, and
-    /// must not block waiting on this object's rundown. A panic inside it is
-    /// caught at the FFI boundary rather than unwinding into the pool, and the
-    /// operation's storage is still reclaimed.
+    /// must not block waiting on this object's rundown. It must not panic: a
+    /// panic unwinds to the `extern "system"` trampoline and aborts the process.
     ///
     /// # Errors
     ///
@@ -326,9 +321,13 @@ impl ThreadpoolIo {
     /// starting the I/O is indistinguishable from one after -- rundown could then
     /// wait forever for a callback that will never arrive. A closure that might
     /// panic must catch it and return `Err` instead.
+    ///
+    /// `P: 'static` because submitting leaks the operation's storage, to be
+    /// freed later through a thunk carrying no lifetime -- see
+    /// [`Operation::into_overlapped`].
     pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
-        P: Send,
+        P: Send + 'static,
         F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<Issued>,
     {
         // Transfer the operation's storage out; the kernel owns it until it is

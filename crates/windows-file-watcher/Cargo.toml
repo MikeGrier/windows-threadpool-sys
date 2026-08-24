@@ -10,18 +10,46 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/windows-file-watcher"
-description = "Memory-safe ReadDirectoryChangesW notification decoding for a Windows path-change watcher (in development)."
+description = "Memory-safe, queue-mediated Windows path-change watching over ReadDirectoryChangesW, with a coarse fallback."
+readme = "README.md"
 keywords = ["windows", "filesystem", "notify", "watcher", "ffi"]
 categories = ["api-bindings", "os::windows-apis", "filesystem"]
 
 [lib]
 path = "src/lib.rs"
 
+# `run-scenario` (M9.5): a CLI that replays a persisted JSON scenario file
+# through the same model/harness the stress test suite uses. Gated behind the
+# `scenario-tool` feature (see `[features]`/optional deps below) so an ordinary
+# consumer of this crate never pays for `serde`/`serde_json` -- `[[bin]]`
+# targets, unlike `tests`/`examples`, are built by plain `cargo build` and so
+# cannot draw on `[dev-dependencies]` the way the test suite does.
+[[bin]]
+name = "run-scenario"
+path = "src/bin/run_scenario.rs"
+required-features = ["scenario-tool"]
+
+# The scenario_stress suite (M9) is built on `src/scenario.rs`, so it needs
+# the same feature the binary above does; without it, plain `cargo test`
+# skips this target entirely rather than failing to find `serde`.
+[[test]]
+name = "scenario_stress"
+path = "tests/scenario_stress.rs"
+required-features = ["scenario-tool"]
+
 # The crate is Windows-only, so docs.rs must build it on a Windows target or it
 # would resolve to an empty crate and document nothing.
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
+
+[features]
+# Enables `src/scenario.rs` (the data-driven stress model/harness, shared by
+# the `run-scenario` binary and the `scenario_stress` integration test) and its
+# JSON (de)serialization. Off by default: see `src/scenario.rs`'s module docs
+# for why the JSON schema this enables is deliberately **not** part of this
+# crate's semver contract.
+scenario-tool = ["dep:serde", "dep:serde_json"]
 
 [dependencies]
 # The owned overlapped-I/O foundation. Directory reads are issued through its
@@ -37,13 +65,47 @@ windows-overlapped-io-sys = { version = "1.0.0", path = "../windows-overlapped-i
 # own.
 windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys" }
 
+# Relative names decoded from `ReadDirectoryChangesW` are native `u16`, and are
+# handed back to Windows APIs as `u16`. Storing them as `Wtf16String` keeps them
+# in that representation end to end, so neither direction pays the WTF-8
+# re-encode an `OsString` would impose. Default features are kept: the `std`
+# feature is what supplies the lossless `OsStr` interop the public surface
+# promises (D-8).
+wtf-string = { version = "0.2.0", path = "../wtf-string" }
+
+# The observable-stall diagnostic transport (D-31/M5.6): a library emitting
+# output is a dependency decision, and `log` is the near-zero-cost facade that
+# does not commit a client to any particular logger -- nothing is emitted
+# unless one is installed.
+log = { version = "0.4.22", default-features = false }
+
+# Both optional, enabled only by the `scenario-tool` feature (D-72): the
+# `run-scenario` binary's JSON scenario format is a testing/ops input, not
+# part of this crate's watching behavior, so an ordinary consumer never links
+# either of these.
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+
 windows-sys = {
 	version = "0.61.2",
 	default-features = false,
+	# Win32_Security is needed only for the SECURITY_ATTRIBUTES parameter named in
+	# the CreateFileW signature used to open a watched directory; the crate always
+	# passes a null pointer for it.
 	features = [
 		"Win32_Foundation",
+		"Win32_Security",
 		"Win32_Storage_FileSystem",
 		"Win32_System_IO",
+		# The notification queue's doorbell is a manual-reset event
+		# (CreateEventW / SetEvent / ResetEvent), handed to a client so it can
+		# wait for notifications on its own thread pool rather than dedicating a
+		# thread to a blocking recv.
+		"Win32_System_Threading",
+		# CompareStringOrdinal (a single-file route's case-insensitive leaf-name
+		# match, PR #20 review response) -- the OS's own ordinal case folding,
+		# not an ASCII-only approximation.
+		"Win32_Globalization",
 	],
 }
 

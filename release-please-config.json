@@ -4,6 +4,20 @@
     "include-component-in-tag": true,
     "separate-pull-requests": true,
     "packages": {
+        "crates/windows-file-watcher": {
+            "package-name": "windows-file-watcher",
+            "component": "windows-file-watcher",
+            "extra-files": [
+                "Cargo.toml"
+            ]
+        },
+        "crates/windows-ioring-sys": {
+            "package-name": "windows-ioring-sys",
+            "component": "windows-ioring-sys",
+            "extra-files": [
+                "Cargo.toml"
+            ]
+        },
         "crates/windows-overlapped-io-sys": {
             "package-name": "windows-overlapped-io-sys",
             "component": "windows-overlapped-io-sys",
@@ -14,6 +28,13 @@
         "crates/windows-threadpool-sys": {
             "package-name": "windows-threadpool-sys",
             "component": "windows-threadpool-sys",
+            "extra-files": [
+                "Cargo.toml"
+            ]
+        },
+        "crates/windows-topology-sys": {
+            "package-name": "windows-topology-sys",
+            "component": "windows-topology-sys",
             "extra-files": [
                 "Cargo.toml"
             ]

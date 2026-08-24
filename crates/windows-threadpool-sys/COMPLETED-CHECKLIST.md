@@ -227,6 +227,46 @@ group drop, group release with `cancel_pending`, a repeated release, and a group
 members together. The ordering tests assert that teardown actually blocked, so they cannot pass vacuously
 when a callback happens to finish first. Recorded in [DESIGN-NOTES.md](../../DESIGN-NOTES.md).
 
-> **-> CROSS-COMPONENT HANDOFF:** M17 is complete, which unblocks component `crates/windows-file-watcher`
-> -> M6 -> M6.1 (the coarse `FindFirstChangeNotification` watcher). See
-> [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md).
+> **-> CROSS-COMPONENT HANDOFF:** M17 is complete, which clears the *external* prerequisite for component
+> `crates/windows-file-watcher` -> M6 -> M6.1 (the coarse `FindFirstChangeNotification` watcher). See
+> [../windows-file-watcher/CHECKLIST.md](../windows-file-watcher/CHECKLIST.md). It does **not** make M6.1
+> startable: that item remains gated behind M2 through M5 of its own crate, whose next actionable item is
+> M2.1. Corrected 2026-08-21 -- the original wording said "unblocks", which was read as "is now next".
+
+## Moved 2026-08-21 -- M18: stop containing callback panics
+
+- [x] **M18.1** -- Remove `catch_unwind` from all five trampolines (`io.rs`, `timer.rs`,
+  `timer/periodic.rs`, `wait.rs`, `work.rs`), keeping the bookkeeping that precedes it.
+
+- [x] **M18.2** -- Delete the six tests that assert the removed guarantee.
+
+- [x] **M18.3** -- Replace them with subprocess tests that prove the new behaviour.
+
+- [x] **M18.4** -- Update every statement of the removed guarantee.
+
+The four items landed as one commit: removing the containment breaks the tests that assert it and falsifies
+the docs that advertise it in the same instant, so no intermediate state compiles-and-passes. Splitting them
+would have produced commits that fail their own gate.
+
+Why it was removed: the callback contract already said a callback **must not unwind across the FFI
+boundary**, so unwinding was a documented violation -- and the `catch_unwind` then quietly forgave it. A
+guarantee that rescues callers from breaking a stated rule makes the rule unenforceable. The containment had
+never been reviewed or approved.
+
+Removing it costs no diagnosability, which was the point most likely to be misjudged: `catch_unwind` discards
+the panic *payload*, not the message, and the panic hook runs before unwinding begins, so the message and
+location already reached stderr. Containment bought process survival only. The abort itself is Rust's, not
+this crate's -- since 1.81 an unwind escaping an `extern "C"`-family function aborts -- so removing the catch
+stops intercepting a path the language already defines rather than adding one.
+
+Testing it needed a subprocess harness, since an in-process test would kill its own runner:
+[tests/callback_panic_aborts.rs](tests/callback_panic_aborts.rs) re-executes the test binary as a child
+selected by an environment variable and asserts the child died abnormally. Writing it exposed a trap worth
+recording -- `WaitForThreadpoolTimerCallbacks` and `WaitForThreadpoolWaitCallbacks` wait only for callbacks
+already *executing*, so the timer and wait children returned from `wait()` before their callback started and
+exited cleanly. The first run caught this as two genuine failures. Those children outlive the firing instead;
+the work and I/O children need no such treatment, because `WaitForThreadpoolWorkCallbacks` covers pending
+submissions and `run_down` waits for the completion.
+
+Recorded in the workspace-root [DESIGN-NOTES.md](../../DESIGN-NOTES.md). Breaking change: a callback that
+panics now ends the process instead of being absorbed.

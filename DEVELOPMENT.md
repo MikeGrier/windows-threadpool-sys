@@ -63,15 +63,20 @@ verifying that the tag matches that crate's package version.
 Some crates depend on workspace siblings by version as well as by path, so
 `cargo publish`'s build verification resolves those dependencies from crates.io
 rather than the workspace checkout: `windows-threadpool-sys` depends on
-`windows-overlapped-io-sys`, and `windows-file-watcher` depends on **both** of
-those. Because `release-please` opens a separate pull request per crate, sibling
+`windows-overlapped-io-sys`; `windows-file-watcher` depends on both of those
+plus `wtf-string`; `windows-ioring-sys` depends on `windows-threadpool-sys`, and
+also declares `windows-topology-sys` as a dev-dependency (its examples enumerate
+topology rather than calling `GetLogicalProcessorInformationEx` directly). The
+publish workflow does not filter by dependency kind, so it waits for that
+dev-dependency too, exactly as it would for an ordinary one. Because
+`release-please` opens a separate pull request per crate, sibling
 tags can be pushed in any order, so
 [.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml)
 blocks each publish until *every* workspace-sibling dependency the crate
 declares is live on crates.io at the required version. The effective publish
 order is therefore always dependency-first regardless of tag timing, and the
 check is a no-op for a crate with no workspace-sibling dependencies
-(`windows-overlapped-io-sys`, `wtf-string`).
+(`windows-overlapped-io-sys`, `windows-topology-sys`, `wtf-string`).
 
 Publishing requires these repository secrets:
 

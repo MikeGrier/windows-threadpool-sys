@@ -13,8 +13,9 @@
 //! alignment of the caller's buffer is assumed.
 
 use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
+
+use wtf_string::{Wtf16Str, Wtf16String};
 
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ACTION_ADDED, FILE_ACTION_MODIFIED, FILE_ACTION_REMOVED, FILE_ACTION_RENAMED_NEW_NAME,
@@ -54,28 +55,62 @@ mod field {
 ///
 /// The kernel delivers names as UTF-16 that need not be well-formed Unicode
 /// (unpaired surrogates are possible on NTFS) and that are not NUL-terminated.
+/// Storage is a [`Wtf16String`]: the same `u16` the kernel produced and the same
+/// `u16` a wide (`*W`) Win32 API consumes, so a name can be reported and then
+/// handed back to Windows without ever being re-encoded. Deref exposes the
+/// borrowed [`Wtf16Str`] surface (`as_units`, `len`, `as_ptr`, `to_string_lossy`,
+/// `has_interior_nul`).
+///
 /// [`RelativeName::as_wide`] exposes the raw units as the ground truth;
-/// [`RelativeName::to_os_string`] and [`RelativeName::to_path_buf`] round-trip
-/// them losslessly through the platform's WTF-8 `OsString` -- the standard
-/// library guarantees `from_wide` followed by `encode_wide` returns the original
-/// code units even for ill-formed UTF-16, so no fidelity is lost. (`OsStr::to_str`
-/// and `to_string_lossy` remain lossy *views*, for display only.)
+/// [`RelativeName::to_os_string`] and [`RelativeName::to_path_buf`] convert at the
+/// boundary for callers wanting the platform types, losslessly in both directions
+/// including for unpaired surrogates (D-8). (`OsStr::to_str` and `to_string_lossy`
+/// remain lossy *views*, for display only.)
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct RelativeName {
-    units: Box<[u16]>,
+    name: Wtf16String,
+}
+
+impl std::ops::Deref for RelativeName {
+    type Target = Wtf16Str;
+
+    fn deref(&self) -> &Wtf16Str {
+        &self.name
+    }
 }
 
 impl RelativeName {
+    /// Build a name from raw UTF-16 units.
+    ///
+    /// Crate-internal: the kernel is the only source of real names in
+    /// production, but the queue and monitor construct them in tests.
+    pub(crate) fn from_units(units: Vec<u16>) -> Self {
+        Self {
+            name: Wtf16String::from_units(&units),
+        }
+    }
+
     /// The raw UTF-16 code units, exactly as the kernel reported them.
     #[must_use]
     pub fn as_wide(&self) -> &[u16] {
-        &self.units
+        self.name.as_units()
     }
 
-    /// The name as an `OsString`, round-tripping the raw UTF-16 losslessly.
+    /// The name as native WTF-16, for handing straight to a wide Win32 API.
+    ///
+    /// The owned form is what carries the always-present terminator, so this is
+    /// what an `LPCWSTR` parameter needs (`as_terminated_ptr`); the borrowed
+    /// [`Deref`](std::ops::Deref) surface covers the counted `as_ptr` + `len`
+    /// convention.
+    #[must_use]
+    pub fn as_wtf16(&self) -> &Wtf16String {
+        &self.name
+    }
+
+    /// The name as an `OsString`, converting at the boundary losslessly.
     #[must_use]
     pub fn to_os_string(&self) -> OsString {
-        OsString::from_wide(&self.units)
+        self.name.to_os_string()
     }
 
     /// The name as a `PathBuf` (relative to the watched directory).
@@ -87,9 +122,10 @@ impl RelativeName {
 
 impl std::fmt::Debug for RelativeName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Lossy rendering is for diagnostics only; the lossless forms are the
-        // `as_wide` / `to_os_string` accessors.
-        std::fmt::Debug::fmt(&self.to_os_string().to_string_lossy(), f)
+        // Wtf16Str's Debug escapes a lone surrogate as `\u{d800}` rather than
+        // collapsing it to U+FFFD, so a malformed name stays legible and
+        // distinguishable in diagnostics.
+        std::fmt::Debug::fmt(&self.name, f)
     }
 }
 
@@ -251,13 +287,13 @@ fn read_u32(rec: &[u8], offset: usize) -> u32 {
 /// byte length as malformed before calling this, so `as_chunks` never has a
 /// remainder to drop.
 fn decode_utf16(bytes: &[u8]) -> RelativeName {
-    let units: Box<[u16]> = bytes
+    let units: Vec<u16> = bytes
         .as_chunks::<UNIT_LEN>()
         .0
         .iter()
         .map(|pair| u16::from_le_bytes(*pair))
         .collect();
-    RelativeName { units }
+    RelativeName::from_units(units)
 }
 
 /// The kind of change a `FILE_ACTION_*` code names.
@@ -330,6 +366,11 @@ pub enum DesyncCause {
     /// The watch was re-established after an outage; changes during the gap were
     /// lost. Produced by the fault-recovery path.
     Reestablished,
+    /// The watch stopped *permanently* (D-22's non-retryable pair, discovered on a
+    /// later re-establish attempt): nothing further will ever arrive for it. Unlike
+    /// every other cause, a re-scan will not resynchronize this watch -- the client
+    /// should treat it as ended and consult `Monitor::stop_reason` for why.
+    Stopped,
 }
 
 /// The result of decoding one `ReadDirectoryChangesW` completion.

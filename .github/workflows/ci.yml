@@ -61,6 +61,40 @@ jobs:
           RUST_LIB_BACKTRACE: 1
         run: cargo test --workspace --locked --no-fail-fast
 
+  feature-matrix:
+    name: windows-overlapped-io-sys (${{ matrix.feature }} only)
+    runs-on: windows-latest
+    # `--all-features` and default (empty) are both covered by build-test above,
+    # but neither exercises a single operation family in isolation. That gap let
+    # a family-specific cfg gate on a *core* item (M13.1: the notification-mode
+    # setter was gated on `fs` alone, so a `device`-only consumer could not
+    # reach it even though `device.rs` already depended on it) go unbuilt by CI
+    # until it was reported by hand. This job builds, lints, and tests each
+    # family alone -- and the bare core with no family at all -- so the next
+    # family addition gets the same guarantee without anyone remembering to ask
+    # for it.
+    strategy:
+      fail-fast: false
+      matrix:
+        feature: ["", fs, socket, device]
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check
+        run: cargo check -p windows-overlapped-io-sys --all-targets --no-default-features --features "${{ matrix.feature }}" --locked
+      - name: cargo clippy
+        run: cargo clippy -p windows-overlapped-io-sys --all-targets --no-default-features --features "${{ matrix.feature }}" --locked -- -D warnings
+      - name: cargo test
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-overlapped-io-sys --no-default-features --features "${{ matrix.feature }}" --locked --no-fail-fast
+
   fmt:
     name: rustfmt
     runs-on: windows-latest

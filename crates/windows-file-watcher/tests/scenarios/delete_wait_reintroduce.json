@@ -1,0 +1,17 @@
+{
+  "label": "delete-wait-reintroduce",
+  "operations": [
+    { "CreateFile": { "path": "marker.txt" } },
+    {
+      "Repeat": {
+        "count": 10,
+        "pattern": [
+          { "RemoveFile": { "path": "marker.txt" } },
+          { "WaitRandom": { "low": 25, "high": 250 } },
+          { "CreateFile": { "path": "marker.txt" } },
+          { "WaitRandom": { "low": 25, "high": 250 } }
+        ]
+      }
+    }
+  ]
+}

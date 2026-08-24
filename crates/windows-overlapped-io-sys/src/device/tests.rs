@@ -19,14 +19,15 @@ fn blocking_ioctl_get_compression() {
     let path = temp_file("blocking");
     let mut endpoint = BlockingEndpoint::new(
         UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
-    );
+    )
+    .expect("no incompatible notification mode");
 
     // FSCTL_GET_COMPRESSION returns a USHORT compression state (2 bytes).
     // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- its input is empty and
     // it writes only the owned output buffer, embedding no pointers.
-    let (output, returned) =
-        unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, &[], COMPRESSION_STATE_LEN) }
-            .expect("ioctl");
+    let mut output = vec![0_u8; COMPRESSION_STATE_LEN];
+    let returned =
+        unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, &[], &mut output) }.expect("ioctl");
     assert_eq!(returned, COMPRESSION_STATE_LEN);
     assert_eq!(output.len(), COMPRESSION_STATE_LEN);
 
@@ -47,8 +48,15 @@ fn iocp_ioctl_get_compression() {
 
     // SAFETY: FSCTL_GET_COMPRESSION is self-contained -- its input is empty and
     // it writes only the owned output buffer, embedding no pointers.
-    let token = unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, Vec::new(), COMPRESSION_STATE_LEN) }
-        .expect("submit ioctl");
+    let token = unsafe {
+        endpoint.ioctl(
+            FSCTL_GET_COMPRESSION,
+            Vec::new(),
+            vec![0_u8; COMPRESSION_STATE_LEN],
+        )
+    }
+    .expect("submit ioctl")
+    .expect_pending("this endpoint is not in skip-on-success mode");
     let completion = port.get(5_000).expect("get").expect("a completion");
     let (output, result) = match token.claim(&completion) {
         Ok(pair) => pair,
@@ -96,30 +104,6 @@ fn checked_len_rejects_lengths_beyond_u32() {
     }
 }
 
-/// The output length is checked before the buffer is allocated, so an
-/// unrepresentable request costs nothing -- which is also what makes this test
-/// affordable: it never allocates the 4GiB it asks for.
-#[cfg(target_pointer_width = "64")]
-#[test]
-fn blocking_ioctl_rejects_an_oversized_output_buffer() {
-    let path = temp_file("oversized-output");
-    let mut endpoint = BlockingEndpoint::new(
-        UnassociatedEndpoint::open(&path, true, false, 0).expect("open endpoint"),
-    );
-
-    // SAFETY: FSCTL_GET_COMPRESSION is self-contained; the oversized output
-    // length is rejected before any native call, so this never reaches a driver.
-    let error = unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, &[], u32::MAX as usize + 1) }
-        .expect_err("an unrepresentable output length must be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(
-        error.raw_os_error().is_none(),
-        "the request should be rejected before reaching the kernel: {error}"
-    );
-
-    let _ = std::fs::remove_file(&path);
-}
-
 /// The same check on the submitting path, which measures the lengths before
 /// building the operation because its submission closure runs at the FFI
 /// boundary and has no way to report an error.
@@ -137,8 +121,14 @@ fn submitted_ioctl_rejects_an_oversized_output_buffer() {
 
     // SAFETY: FSCTL_GET_COMPRESSION is self-contained; the oversized output
     // length is rejected before any native call, so this never reaches a driver.
-    let error = unsafe { endpoint.ioctl(FSCTL_GET_COMPRESSION, Vec::new(), u32::MAX as usize + 1) }
-        .expect_err("an unrepresentable output length must be rejected");
+    let error = unsafe {
+        endpoint.ioctl(
+            FSCTL_GET_COMPRESSION,
+            Vec::new(),
+            crate::buf::OversizedBuffer,
+        )
+    }
+    .expect_err("an unrepresentable output length must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(
         error.raw_os_error().is_none(),

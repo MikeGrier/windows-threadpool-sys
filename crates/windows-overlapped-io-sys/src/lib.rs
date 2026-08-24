@@ -46,6 +46,9 @@ mod blocking;
 #[cfg(windows)]
 mod config;
 
+#[cfg(windows)]
+mod buf;
+
 #[cfg(all(windows, feature = "device"))]
 mod device;
 
@@ -68,7 +71,13 @@ mod operation;
 mod socket;
 
 #[cfg(windows)]
-pub use blocking::BlockingEndpoint;
+mod started;
+
+#[cfg(windows)]
+pub use blocking::{BlockingEndpoint, TryFromEndpointError};
+
+#[cfg(windows)]
+pub use buf::{IoBuf, IoBufMut};
 
 #[cfg(windows)]
 pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_enabled};
@@ -77,7 +86,7 @@ pub use config::{SourceTrackingAlreadySet, set_source_tracking, source_tracking_
 pub use device::DeviceIoControlIo;
 
 #[cfg(windows)]
-pub use endpoint::UnassociatedEndpoint;
+pub use endpoint::{NotificationModes, UnassociatedEndpoint};
 
 #[cfg(all(windows, feature = "fs"))]
 pub use fs::{FILE_FLAG_NO_BUFFERING, FileIo, PAGE_SIZE, PageBuffers, ScatterGatherIo};
@@ -93,3 +102,6 @@ pub use operation::{Operation, OperationState, reclaim_overlapped};
 
 #[cfg(all(windows, feature = "socket"))]
 pub use socket::{AssociatedSocket, BlockingSocket, SocketIo};
+
+#[cfg(windows)]
+pub use started::Started;

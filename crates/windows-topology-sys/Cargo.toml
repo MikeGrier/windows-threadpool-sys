@@ -1,0 +1,54 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-topology-sys"
+version = "0.1.0" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/windows-topology-sys"
+description = "Safe enumeration of Windows processor, cache, and memory topology, with a JSON-describable schema for discovered or synthetic topologies."
+readme = "README.md"
+keywords = ["windows", "numa", "topology", "affinity", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "hardware-support"]
+
+[lib]
+path = "src/lib.rs"
+
+# Prints the host's topology as JSON (M4.2). Needs `serde` for `Topology`'s
+# Serialize impl; `serde_json` itself comes from [dev-dependencies], which
+# examples -- unlike [[bin]] targets -- can draw on.
+[[example]]
+name = "print_topology"
+path = "examples/print_topology.rs"
+required-features = ["serde"]
+
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+# `serde` is optional and depended on only for its derive traits, never for a
+# format crate: this crate's own `AttributeValue` stands in for
+# `serde_json::Value` so a consumer picks their own serializer (D-72-style
+# precedent from `windows-file-watcher`, though that crate's `serde_json` was
+# needed by a binary that parses real files -- this crate ships no such
+# binary, so `serde_json` is a dev-only dependency, used solely to exercise
+# JSON round-trips in tests).
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_System_SystemInformation",
+] }
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json = "1.0"

@@ -3,8 +3,10 @@
 [workspace]
 members = [
 	"crates/windows-file-watcher",
+	"crates/windows-ioring-sys",
 	"crates/windows-overlapped-io-sys",
 	"crates/windows-threadpool-sys",
+	"crates/windows-topology-sys",
 	"crates/wtf-string",
 ]
 resolver = "2"

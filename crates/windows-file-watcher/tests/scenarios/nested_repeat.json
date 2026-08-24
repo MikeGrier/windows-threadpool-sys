@@ -1,0 +1,18 @@
+{
+  "label": "nested-repeat",
+  "operations": [
+    {
+      "Repeat": {
+        "count": 5,
+        "pattern": [
+          {
+            "Repeat": {
+              "count": 20,
+              "pattern": [{ "CreateFile": { "path": "nested.txt" } }]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

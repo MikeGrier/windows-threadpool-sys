@@ -37,7 +37,8 @@ pub enum OperationState {
 // `repr(C)` with `overlapped` first keeps the operation pointer identical to its
 // `OVERLAPPED` pointer, so a completion can recover the operation from it. The
 // `reclaim` thunk sits before `payload`, so its offset is the same for every `P`
-// and can be read from the `OVERLAPPED` pointer alone during rundown.
+// and can be read from the `OVERLAPPED` pointer alone during rundown, and
+// `sync_bytes` sits before `payload` for the same reason.
 #[derive(Debug)]
 #[repr(C)]
 pub struct Operation<P> {
@@ -46,11 +47,25 @@ pub struct Operation<P> {
     #[allow(dead_code)]
     reclaim: Option<unsafe fn(*mut OVERLAPPED)>,
     state: OperationState,
+    // The `lpNumberOfBytesTransferred` / `lpBytesReturned` out-parameter an
+    // adapter hands to its native call. It lives here, in the pinned operation,
+    // rather than on the submitting stack frame because the kernel may write it
+    // *after* that call returns: `DeviceIoControl` documents the count as
+    // "meaningless until the overlapped operation has completed" when
+    // `lpOverlapped` is non-null, so a stack local would be a dangling write
+    // for any operation that goes asynchronous. Only read on the synchronous
+    // path, where the value is already there before the call returns.
+    sync_bytes: UnsafeCell<u32>,
     payload: P,
 }
 
 /// Offset of the `reclaim` field, identical for every `P`.
 const RECLAIM_OFFSET: usize = core::mem::offset_of!(Operation<()>, reclaim);
+
+/// Offset of the `sync_bytes` cell, identical for every `P` because it sits
+/// before `payload`.
+#[cfg(any(feature = "fs", feature = "socket", feature = "device"))]
+const SYNC_BYTES_OFFSET: usize = core::mem::offset_of!(Operation<()>, sync_bytes);
 
 /// Drop a leaked `Box<Operation<P>>` given its `OVERLAPPED` pointer.
 ///
@@ -92,10 +107,31 @@ pub(crate) unsafe fn reclaim_from_overlapped(overlapped: *mut OVERLAPPED) {
 /// `overlapped` must be the identity pointer of a live `Operation<P>` of this
 /// exact type, and the returned pointer must be used only while that operation's
 /// storage stays put and nothing else accesses the payload concurrently.
-#[cfg(any(feature = "fs", feature = "socket", feature = "device"))]
+#[cfg(any(feature = "fs", feature = "socket"))]
 pub(crate) unsafe fn payload_ptr_from_overlapped<P>(overlapped: *mut OVERLAPPED) -> *mut P {
     let offset = core::mem::offset_of!(Operation<P>, payload);
     unsafe { overlapped.cast::<u8>().add(offset).cast::<P>() }
+}
+
+/// Recover a pointer to the synchronous byte-count cell of an operation from its
+/// `OVERLAPPED` identity.
+///
+/// This is the `lpNumberOfBytesTransferred` / `lpBytesReturned` out-parameter an
+/// adapter passes to its native call. Unlike the payload's, this offset does not
+/// depend on `P` -- the cell sits before `payload` precisely so it does not --
+/// so an adapter reaches it without naming the payload type.
+///
+/// Read the value only when the native call reported immediate success, which is
+/// the one moment it is guaranteed to be populated and no longer subject to a
+/// later kernel write.
+///
+/// # Safety
+///
+/// `overlapped` must be the identity pointer of a live `Operation<P>`, and the
+/// returned pointer must be used only while that operation's storage stays put.
+#[cfg(any(feature = "fs", feature = "socket", feature = "device"))]
+pub(crate) unsafe fn sync_bytes_ptr_from_overlapped(overlapped: *mut OVERLAPPED) -> *mut u32 {
+    unsafe { overlapped.cast::<u8>().add(SYNC_BYTES_OFFSET).cast::<u32>() }
 }
 
 /// Reclaim and drop an operation from its `OVERLAPPED` identity without knowing
@@ -130,6 +166,7 @@ impl<P> Operation<P> {
             overlapped: UnsafeCell::new(overlapped),
             reclaim: None,
             state: OperationState::Idle,
+            sync_bytes: UnsafeCell::new(0),
             payload,
         }
     }
@@ -159,8 +196,47 @@ impl<P> Operation<P> {
     /// completion), or with [`reclaim_overlapped`] when it is not (as during
     /// rundown). This is the submission seam shared by the completion-port and
     /// thread-pool backends.
+    ///
+    /// `P: 'static` because this is the moment the storage is leaked. The box is
+    /// freed later through a type-erased thunk that carries no lifetime, by
+    /// whichever path reclaims it -- a completion, or rundown -- and nothing at
+    /// that point can prove a borrow inside `P` is still live. A payload holding
+    /// a `&'a T` would compile without this bound and could then have its `Drop`
+    /// run after `'a` ended. The bound sits here, rather than on `Operation`
+    /// itself, because it is the leak that requires it: the blocking backend
+    /// drives an operation through `&mut` without ever leaking it, and correctly
+    /// needs neither this nor `Send`.
+    ///
+    /// # Examples
+    ///
+    /// An owned payload submits fine:
+    ///
+    /// ```
+    /// use windows_overlapped_io_sys::Operation;
+    ///
+    /// let operation = Operation::new(vec![0_u8; 32]);
+    /// let overlapped = operation.into_overlapped();
+    /// // SAFETY: nothing was submitted against it, so this reclaims the
+    /// // storage exactly once and no completion can be outstanding.
+    /// unsafe { windows_overlapped_io_sys::reclaim_overlapped(overlapped) };
+    /// ```
+    ///
+    /// A payload borrowing from the caller's frame is rejected, rather than
+    /// having its `Drop` run later against an expired borrow:
+    ///
+    /// ```compile_fail
+    /// use windows_overlapped_io_sys::Operation;
+    ///
+    /// fn leak_a_borrow(bytes: &[u8]) -> *mut std::ffi::c_void {
+    ///     let operation = Operation::new(bytes);
+    ///     operation.into_overlapped().cast()
+    /// }
+    /// ```
     #[must_use]
-    pub fn into_overlapped(mut self) -> *mut OVERLAPPED {
+    pub fn into_overlapped(mut self) -> *mut OVERLAPPED
+    where
+        P: 'static,
+    {
         self.arm();
         self.state = OperationState::Pending;
         let boxed = Box::new(self);

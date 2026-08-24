@@ -346,3 +346,93 @@ fn raw_records_expose_the_unmapped_action() {
     assert_eq!(recs[0].action, FILE_ACTION_MODIFIED);
     assert_eq!(recs[0].name.as_wide(), w("x").as_slice());
 }
+
+// --- native WTF-16 storage (M8.1) ---
+
+// A real kernel32 wide entry point, declared inline: it counts code units up to
+// the terminator, so it proves the pointer we hand over really is a valid
+// `LPCWSTR` rather than merely being typed as one.
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn lstrlenW(lpstring: *const u16) -> i32;
+}
+
+#[test]
+fn a_decoded_name_feeds_a_wide_win32_call_with_no_conversion() {
+    // The point of storing names as `Wtf16String`: the units the kernel gave us
+    // go straight back to Windows, with no re-encode and no allocation. An
+    // `OsString` would have had to be converted at this boundary.
+    let buf = record(0, FILE_ACTION_ADDED, &w("report.txt"));
+    let c = changes(&buf);
+    let name = &c[0].name;
+
+    assert!(
+        !name.has_interior_nul(),
+        "a valid C string needs no NUL inside"
+    );
+    // SAFETY: `as_terminated_ptr` is NUL-terminated (the owned string always
+    // carries a terminator) and has no interior NUL, which is exactly what
+    // `lstrlenW` requires; it reads only as far as that terminator.
+    let counted = unsafe { lstrlenW(name.as_wtf16().as_terminated_ptr()) };
+    assert_eq!(counted as usize, name.len());
+    assert_eq!(name.len(), "report.txt".len());
+}
+
+#[test]
+fn the_deref_surface_exposes_the_borrowed_units() {
+    let buf = record(0, FILE_ACTION_ADDED, &w("caf\u{e9}.txt"));
+    let c = changes(&buf);
+    let name = &c[0].name;
+
+    // Deref to `Wtf16Str`: counted FFI, length, and lossy display for free.
+    assert_eq!(name.as_units(), name.as_wide());
+    assert_eq!(name.len(), name.as_wide().len());
+    assert_eq!(name.to_string_lossy(), "caf\u{e9}.txt");
+    assert!(!name.as_ptr().is_null());
+}
+
+#[test]
+fn debug_escapes_a_lone_surrogate_rather_than_replacing_it() {
+    // The previous `OsString`-backed Debug rendered through `to_string_lossy`,
+    // collapsing an unpaired surrogate to U+FFFD and making two different
+    // malformed names print identically. WTF-16's Debug escapes it instead, so
+    // the value stays distinguishable in a diagnostic.
+    let high = record(0, FILE_ACTION_ADDED, &[0x61, 0xD800, 0x62]);
+    let low = record(0, FILE_ACTION_ADDED, &[0x61, 0xDC00, 0x62]);
+
+    let high_debug = format!("{:?}", changes(&high)[0].name);
+    let low_debug = format!("{:?}", changes(&low)[0].name);
+
+    assert!(
+        high_debug.contains("d800"),
+        "expected an escape, got {high_debug}"
+    );
+    assert!(
+        low_debug.contains("dc00"),
+        "expected an escape, got {low_debug}"
+    );
+    assert_ne!(
+        high_debug, low_debug,
+        "two distinct malformed names must not render identically"
+    );
+    assert!(
+        !high_debug.contains('\u{fffd}'),
+        "a lone surrogate must not be replaced"
+    );
+}
+
+#[test]
+fn an_interior_nul_in_a_name_is_preserved_and_reported() {
+    // The kernel is not expected to produce one, but the storage is lossless and
+    // the crate must not silently truncate. Content keeps it; the type says so.
+    let buf = record(0, FILE_ACTION_ADDED, &[0x61, 0x0000, 0x62]);
+    let c = changes(&buf);
+    let name = &c[0].name;
+
+    assert_eq!(name.as_wide(), &[0x61, 0x0000, 0x62]);
+    assert_eq!(name.len(), 3, "the NUL is content, not a terminator");
+    assert!(
+        name.has_interior_nul(),
+        "the terminated pointer would be truncated here, and the type reports it"
+    );
+}

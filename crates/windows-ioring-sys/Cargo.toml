@@ -1,0 +1,60 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-ioring-sys"
+version = "0.1.0" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/windows-ioring-sys"
+description = "Memory-safe Rust over the Windows IoRing submission/completion ring, with zero-allocation buffer handoff."
+readme = "README.md"
+keywords = ["windows", "ioring", "io-uring", "async", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "filesystem"]
+
+[lib]
+path = "src/lib.rs"
+
+# The crate is Windows-only, so docs.rs must build on a Windows target or it
+# would render an almost-empty crate.
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+[dependencies]
+# The IoRing entry points and types live under `Win32_Storage_FileSystem`, not
+# under `Win32_System_IO` as their subject matter might suggest.
+# `Win32_System_Threading` supplies the event primitives the Model A delivery
+# path (M4) waits on.
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_Storage_FileSystem",
+	"Win32_System_IO",
+	"Win32_System_Threading",
+] }
+# The Model A delivery path (M4): a `ThreadpoolWait` on the ring's completion
+# event.
+windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys" }
+
+[dev-dependencies]
+# M6.3's topology-guidance example enumerates L3 cache domains with this
+# crate rather than raw `GetLogicalProcessorInformationEx` calls. M7's
+# ring-copy sample additionally needs the `serde` feature, to load a fed-in
+# topology description (D-10 in windows-topology-sys's DESIGN-NOTES.md).
+windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys", features = [
+	"serde",
+] }
+# M7's ring-copy sample deserializes a fed-in topology description (--topology).
+serde_json = "1.0"
+# M7's ring-copy sample additionally needs `VirtualAllocExNuma` (buffer
+# placement) and `GROUP_AFFINITY` (pinned-thread affinity); the library
+# itself needs neither.
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_System_Memory",
+	"Win32_System_SystemInformation",
+] }

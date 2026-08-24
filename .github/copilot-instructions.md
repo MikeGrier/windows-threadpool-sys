@@ -391,8 +391,43 @@ When executing checklist items (CHECKLIST.md files):
 - **Re-plan when execution reveals planning was wrong.** A checklist is a hopeful projection, not a contract. When execution surfaces information that invalidates the plan — items that turn out to be coupled, an item that decomposes into work the original plan didn't anticipate, an item that turns out to already be done, an item whose scope expands or contracts based on what you now know — **stop and update the checklist before continuing.** Restructuring a checklist mid-execution is normal and expected; pretending the original plan was correct and silently working around it is not. The restructure itself is a commit (with a message explaining what new information forced the change), and then the revised plan governs.
 - **If items must be done together, say so and do it; don't tease apart.** Once you have decided (and recorded in the checklist if the structure is wrong) that two items must land together, commit them together in one commit citing both IDs. Do **not** try to "unthread" a coupled implementation into per-item commits after the fact — that is fiction, not history.
 - **Commit immediately after each item.** In mode b (implementing forward), the commit must happen before moving to the next item. In mode a (recording already-finished work), a single commit citing all the item IDs satisfies this.
-- **Commit message format:** `Completed item: <item-id>: <full item text>` (e.g. `Completed item: SF-1: Add extensible FunctionCall variant to FilterExpr`). When one commit records several already-finished items together (mode a), use one `Completed item:` line per item ID, e.g.:
+- **Commit message format: a Conventional Commits subject line, with the checklist trailer in the body.**
+  `release-please` (see "Release process" in [DEVELOPMENT.md](DEVELOPMENT.md)) drives every crate's version
+  bump and CHANGELOG **only** from Conventional Commits subject lines (`type(scope)!: summary`); a subject
+  that doesn't match that grammar is invisible to it, no matter how much checklist work the commit records.
+  The mandatory `Completed item:` provenance is therefore never the subject line — it moves to the body, and
+  the subject line carries the Conventional Commits header instead. Every checklist commit has this shape:
+
   ```
+  <type>(<scope>)[!]: <short summary of what changed>
+
+  Completed item: <item-id>: <full item text>
+  ```
+
+  - **`<type>`** — pick the type that matches the change's nature, same as any Conventional Commit:
+    `feat` (new capability), `fix` (bug fix), `docs`, `test`, `refactor`, `perf`, `chore`, `build`, `ci`.
+    Checklist bookkeeping that is not itself a code change (re-planning, archiving a milestone, recording a
+    design decision) is normally `docs:` or `chore:`, matching this repo's existing history (e.g.
+    `docs: archive M8, the fifth review round`).
+  - **`<scope>`** — the crate the commit's diff lives under, using this repo's established short names:
+    `threadpool` (`windows-threadpool-sys`), `overlapped-io` (`windows-overlapped-io-sys`), `wtf-string`
+    (`wtf-string`), `file-watcher` (`windows-file-watcher`), `ioring` (`windows-ioring-sys`), `topology`
+    (`windows-topology-sys`). Omit the scope for a commit with no single
+    crate home (root-level docs, workspace-wide chores). A commit that touches more than one crate's `src/`
+    should be split so each Conventional Commit scope stays accurate — release-please attributes a bump by
+    which package path changed, and a misleading scope only confuses human readers, but a commit spanning
+    two crates' actual code still needs its own subject per crate if both are meant to receive a bump.
+  - **`!` after `<type>`/`<scope>`** — required whenever the commit is a breaking change (removes or changes
+    an existing guarantee, contract, or public API in a way existing callers must react to). This is what
+    tells release-please to cut a **major** bump instead of minor/patch; do not rely on prose alone to
+    signal a breaking change.
+  - **The `Completed item:` body lines are unchanged in content and purpose** — they are what checklist
+    hygiene and future archaeology depend on, and are never dropped just because the subject line now
+    carries the Conventional Commits grammar. When one commit records several already-finished items
+    together (mode a), use one `Completed item:` line per item ID, e.g.:
+  ```
+  feat(file-watcher): add FunctionCall support to the filter expression grammar
+
   Completed items: SF-1, SF-2, SF-3
 
   Completed item: SF-1: Add extensible FunctionCall variant to FilterExpr

@@ -14,29 +14,33 @@ use std::os::windows::io::AsRawHandle;
 use std::ptr::NonNull;
 use std::slice;
 
-use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
+use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, FALSE};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_SEGMENT_ELEMENT, ReadFile, ReadFileScatter, WriteFile, WriteFileGather,
 };
+use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 
-use crate::operation::payload_ptr_from_overlapped;
+use crate::operation::{payload_ptr_from_overlapped, sync_bytes_ptr_from_overlapped};
 use crate::{
-    AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Submitted,
+    AssociatedEndpoint, BlockingEndpoint, Completion, IoBuf, IoBufMut, Issued, Operation,
+    OperationId, Started, Submitted,
 };
 
 impl BlockingEndpoint {
-    /// Read up to `len` bytes starting at `offset`, blocking until the read
-    /// completes.
+    /// Read into `buffer` starting at `offset`, blocking until the read
+    /// completes, and return the number of bytes read.
     ///
-    /// Returns the buffer truncated to the bytes actually read, together with
-    /// that count. The whole operation finishes within this call, so no
-    /// `OVERLAPPED` or `unsafe` reaches the caller.
+    /// Takes a plain `&mut [u8]` rather than an owned buffer, and allocates
+    /// nothing: this call does not return until the operation is over, so an
+    /// ordinary borrow provably covers the whole time the kernel is writing.
+    /// That is the difference from [`AssociatedEndpoint::read`], which must take
+    /// ownership because its operation outlives the call.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`,
-    /// which the read's byte count cannot express, or any error from issuing or
-    /// completing the read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `buffer` is longer than
+    /// `u32::MAX`, which the read's byte count cannot express, or any error from
+    /// issuing or completing the read.
     ///
     /// # Examples
     ///
@@ -46,8 +50,9 @@ impl BlockingEndpoint {
     /// use windows_overlapped_io_sys::BlockingEndpoint;
     ///
     /// fn read_twice(endpoint: &mut BlockingEndpoint) -> std::io::Result<()> {
-    ///     let (_first, _) = endpoint.read(64, 0)?;
-    ///     let (_second, _) = endpoint.read(64, 64)?;
+    ///     let mut buffer = [0_u8; 64];
+    ///     let _first = endpoint.read(&mut buffer, 0)?;
+    ///     let _second = endpoint.read(&mut buffer, 64)?;
     ///     Ok(())
     /// }
     /// ```
@@ -63,21 +68,19 @@ impl BlockingEndpoint {
     /// fn read_from_two_threads(endpoint: BlockingEndpoint) {
     ///     let shared = Arc::new(endpoint);
     ///     let other = Arc::clone(&shared);
-    ///     std::thread::spawn(move || other.read(64, 0));
-    ///     let _ = shared.read(64, 64);
+    ///     std::thread::spawn(move || other.read(&mut [0_u8; 64], 0));
+    ///     let _ = shared.read(&mut [0_u8; 64], 64);
     /// }
     /// ```
-    pub fn read(&mut self, len: usize, offset: u64) -> io::Result<(Vec<u8>, usize)> {
-        // Checked before allocating, so an unusable request costs nothing.
-        let buf_len = checked_len(len, "read buffer")?;
-        let mut buffer = vec![0_u8; len];
+    pub fn read(&mut self, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+        let buf_len = checked_len(buffer.len(), "read buffer")?;
         let buf_ptr = buffer.as_mut_ptr();
 
         let mut operation = Operation::new(());
         operation.set_offset(offset);
         // SAFETY: issues exactly one overlapped ReadFile into `buffer`, which
         // outlives this blocking call; no other operation is outstanding.
-        let read = unsafe {
+        unsafe {
             self.run(&mut operation, |handle, overlapped| {
                 let ok = ReadFile(
                     handle.as_raw_handle(),
@@ -88,10 +91,7 @@ impl BlockingEndpoint {
                 );
                 classify(ok)
             })
-        }?;
-
-        buffer.truncate(read);
-        Ok((buffer, read))
+        }
     }
 
     /// Write `data` starting at `offset`, blocking until the write completes, and
@@ -141,34 +141,6 @@ fn classify(ok: i32) -> io::Result<()> {
     }
 }
 
-/// The byte total for `pages` pages, or an error if it cannot be expressed.
-///
-/// A zero page count is rejected as well: the scatter adapters call
-/// [`PageBuffers::new`] with `pages`, which panics on zero, so validating here
-/// keeps those safe, fallible APIs returning `InvalidInput` instead of panicking
-/// on an invalid request.
-///
-/// The multiplication is checked rather than saturating. Saturating defeats the
-/// validation on 32-bit Windows, where `usize::MAX` *is* `u32::MAX`: an
-/// overflowing page count would saturate to a value [`checked_len`] accepts, and
-/// `PageBuffers::new` would then panic on its own checked multiplication instead
-/// of the adapter returning the documented `InvalidInput`.
-fn scatter_gather_len(pages: usize) -> io::Result<u32> {
-    if pages == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a scatter/gather request must name at least one page",
-        ));
-    }
-    let bytes = pages.checked_mul(PAGE_SIZE).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{pages} pages of {PAGE_SIZE} bytes overflows a byte count"),
-        )
-    })?;
-    checked_len(bytes, "scatter/gather buffer set")
-}
-
 /// Convert a buffer length to the `u32` byte count the Win32 calls take.
 ///
 /// Rejects rather than caps, for the same reason as the device-control helper:
@@ -184,80 +156,137 @@ fn checked_len(len: usize, which: &str) -> io::Result<u32> {
 }
 
 impl AssociatedEndpoint<'_> {
-    /// Submit an overlapped read of up to `len` bytes starting at `offset`,
-    /// returning a [`FileIo`] token that recovers the buffer and byte count from
-    /// the operation's completion.
+    /// Submit an overlapped read into `buffer`, starting at `offset`.
     ///
-    /// The endpoint must not be in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode;
-    /// this adapter always expects a completion packet to arrive.
+    /// The buffer is any owned [`IoBufMut`] -- a `Vec<u8>`, a `Box<[u8]>`, a
+    /// [`PageBuffers`], or a caller's own pooled or aligned type -- handed over
+    /// for the operation's life and returned when it completes. Nothing is
+    /// copied and nothing is allocated here: a caller that wants a fresh `Vec`
+    /// writes `vec![0; n]` at the call site, where the allocation is visible.
+    ///
+    /// Returns [`Started::Pending`] with a [`FileIo`] token that recovers the
+    /// buffer and byte count from the operation's completion, or -- only on an
+    /// endpoint in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode, where a
+    /// synchronous success queues no packet -- [`Started::Completed`] with the
+    /// buffer already in hand.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `len` exceeds `u32::MAX`, or
-    /// any immediate failure from issuing the read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if the buffer is longer than
+    /// `u32::MAX`, or any immediate failure from issuing the read.
     #[track_caller]
-    pub fn read(&self, len: usize, offset: u64) -> io::Result<FileIo> {
-        let buf_len = checked_len(len, "read buffer")?;
-        let mut operation = Operation::new(vec![0_u8; len]);
+    pub fn read<B: IoBufMut>(
+        &self,
+        mut buffer: B,
+        offset: u64,
+    ) -> io::Result<Started<FileIo<B>, B>> {
+        let buf_len = checked_len(buffer.bytes_len(), "read buffer")?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
+        // Captured before submission, like `buf_len` above, rather than calling
+        // this safe trait method inside the registered closure (PR #20 review
+        // response): `IoBufMut::stable_mut_ptr` is implementable by a caller's
+        // own buffer type, and `submit`'s safety contract forbids the closure
+        // unwinding -- a panic here, before the operation is registered, is
+        // merely an ordinary panic, where one from inside the closure would
+        // leave the operation permanently outstanding.
+        let buf_ptr = buffer.stable_mut_ptr();
+        let mut operation = Operation::new(buffer);
         operation.set_offset(offset);
         // SAFETY: issues exactly one ReadFile into the operation's own payload
-        // buffer, reached through the pinned OVERLAPPED; the payload lives until
-        // the completion is claimed.
+        // buffer at `buf_ptr` (captured above, and identical to what the pinned
+        // payload would report, per `IoBufMut`'s address-stability contract);
+        // `IoBufMut` promises that address is stable and exclusively owned, and
+        // the byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
-                let payload = payload_ptr_from_overlapped::<Vec<u8>>(overlapped);
-                let ok = ReadFile(
-                    handle.as_raw_handle(),
-                    (*payload).as_mut_ptr(),
-                    buf_len,
-                    std::ptr::null_mut(),
-                    overlapped,
-                );
-                classify_issued(ok)
+                let bytes = sync_bytes_ptr_from_overlapped(overlapped);
+                let ok = ReadFile(handle.as_raw_handle(), buf_ptr, buf_len, bytes, overlapped);
+                classify_issued(ok, skip, bytes)
             })
         };
         finish(submitted)
     }
 
-    /// Submit an overlapped write of `data` starting at `offset`, returning a
-    /// [`FileIo`] token that recovers the buffer and byte count from the
-    /// operation's completion.
+    /// Submit an overlapped write of `buffer`, starting at `offset`.
     ///
-    /// The endpoint must not be in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    /// The buffer is any owned [`IoBuf`] -- including a shared `Arc<[u8]>` or a
+    /// `&'static [u8]`, neither of which can be a read destination -- handed over
+    /// for the operation's life and returned when it completes. Nothing is
+    /// copied.
+    ///
+    /// Returns [`Started::Pending`] with a [`FileIo`] token, or
+    /// [`Started::Completed`] with the buffer already in hand when the endpoint
+    /// is in skip-on-success mode and the write completed synchronously.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `data` is longer than
+    /// Returns [`io::ErrorKind::InvalidInput`] if the buffer is longer than
     /// `u32::MAX`, or any immediate failure from issuing the write.
     #[track_caller]
-    pub fn write(&self, data: Vec<u8>, offset: u64) -> io::Result<FileIo> {
-        let data_len = checked_len(data.len(), "write buffer")?;
-        let mut operation = Operation::new(data);
+    pub fn write<B: IoBuf>(&self, buffer: B, offset: u64) -> io::Result<Started<FileIo<B>, B>> {
+        let data_len = checked_len(buffer.bytes_len(), "write buffer")?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
+        // Captured before submission; see `read`'s matching comment above for
+        // why (PR #20 review response).
+        let data_ptr = buffer.stable_ptr();
+        let mut operation = Operation::new(buffer);
         operation.set_offset(offset);
         // SAFETY: issues exactly one WriteFile from the operation's own payload
-        // buffer, reached through the pinned OVERLAPPED; the payload lives until
-        // the completion is claimed.
+        // buffer at `data_ptr` (captured above; identical to what the pinned
+        // payload would report, per `IoBuf`'s address-stability contract);
+        // `IoBuf` promises that address is stable and its bytes unmodified, and
+        // the byte-count cell live until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
-                let payload = payload_ptr_from_overlapped::<Vec<u8>>(overlapped);
+                let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = WriteFile(
                     handle.as_raw_handle(),
-                    (*payload).as_ptr(),
+                    data_ptr,
                     data_len,
-                    std::ptr::null_mut(),
+                    bytes,
                     overlapped,
                 );
-                classify_issued(ok)
+                classify_issued(ok, skip, bytes)
             })
         };
         finish(submitted)
     }
 }
 
-/// Map a native `BOOL` into the IOCP submission contract, expecting a completion
-/// packet on success because the adapter never enables skip-on-success mode.
-fn classify_issued(ok: i32) -> io::Result<Issued> {
+/// Map a native `BOOL` into the IOCP submission contract.
+///
+/// # Why an immediate `TRUE` is usually `Pending`
+///
+/// [`Issued`] does not record whether the call finished synchronously. It
+/// records whether a **completion packet will arrive**, and for an IOCP-bound
+/// overlapped handle those are different facts: the I/O Manager queues a packet
+/// for every request it completes, *including* one that succeeded immediately
+/// without returning `ERROR_IO_PENDING`. See [`Issued::Pending`].
+///
+/// The single exception is `skip_on_success`, which is why this needs to know
+/// it: on an endpoint in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode no packet
+/// is queued for an immediate success, so that -- and only that -- is an
+/// [`Issued::Completed`]. Getting this backwards in either direction is a bug
+/// with teeth: claiming `Completed` when a packet is coming frees the operation
+/// under a live `OVERLAPPED`, and claiming `Pending` when none is coming leaves
+/// the operation outstanding forever and wedges rundown.
+///
+/// # Safety
+///
+/// `sync_bytes` must be the byte-count cell of the operation being submitted,
+/// which is live for the whole call.
+unsafe fn classify_issued(
+    ok: i32,
+    skip_on_success: bool,
+    sync_bytes: *mut u32,
+) -> io::Result<Issued> {
     if ok != 0 {
+        if skip_on_success {
+            // SAFETY: the call reported immediate success, so the kernel has
+            // already written the count and will not write it again.
+            let bytes_transferred = unsafe { *sync_bytes };
+            return Ok(Issued::Completed { bytes_transferred });
+        }
         return Ok(Issued::Pending);
     }
     let error = io::Error::last_os_error();
@@ -268,14 +297,63 @@ fn classify_issued(ok: i32) -> io::Result<Issued> {
     }
 }
 
-/// Turn a submission outcome into a [`FileIo`] token or an immediate error.
-fn finish(submitted: Submitted<Vec<u8>>) -> io::Result<FileIo> {
+/// As [`classify_issued`], for the scatter/gather calls.
+///
+/// `ReadFileScatter` and `WriteFileGather` take no byte-count out-parameter --
+/// the slot in that position is `lpReserved` and must be null -- so on the
+/// skip-on-success path the count comes from `GetOverlappedResult` instead.
+/// That is the sanctioned way to read it (`Internal`/`InternalHigh` are never
+/// touched directly), and it cannot block here: it is called only after the
+/// call reported immediate success, so the operation is already complete and
+/// `bWait` is `FALSE`.
+///
+/// # Safety
+///
+/// `handle` must be the endpoint's live handle and `overlapped` the identity of
+/// the operation just submitted through it.
+unsafe fn classify_scatter(
+    ok: i32,
+    skip_on_success: bool,
+    handle: std::os::windows::io::RawHandle,
+    overlapped: *mut OVERLAPPED,
+) -> io::Result<Issued> {
+    if ok != 0 {
+        if skip_on_success {
+            let mut bytes_transferred = 0_u32;
+            // SAFETY: a live handle and the completed operation's own
+            // OVERLAPPED; `bWait` is FALSE, so this only reads what is already
+            // recorded.
+            let got =
+                unsafe { GetOverlappedResult(handle, overlapped, &mut bytes_transferred, FALSE) };
+            if got == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            return Ok(Issued::Completed { bytes_transferred });
+        }
+        return Ok(Issued::Pending);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+        Ok(Issued::Pending)
+    } else {
+        Err(error)
+    }
+}
+
+/// Turn a submission outcome into the adapter's two-state outcome.
+fn finish<B: IoBuf>(submitted: Submitted<B>) -> io::Result<Started<FileIo<B>, B>> {
     match submitted {
-        Submitted::Pending(id) => Ok(FileIo { id }),
-        Submitted::Completed { .. } => Err(io::Error::other(
-            "file adapter observed a synchronous completion; the endpoint must not be in \
-             FILE_SKIP_COMPLETION_PORT_ON_SUCCESS mode",
-        )),
+        Submitted::Pending(id) => Ok(Started::Pending(FileIo {
+            id,
+            buffer: std::marker::PhantomData,
+        })),
+        Submitted::Completed {
+            operation,
+            bytes_transferred,
+        } => Ok(Started::Completed {
+            payload: operation.into_payload(),
+            bytes_transferred: bytes_transferred as usize,
+        }),
         Submitted::Failed { error, .. } => Err(error),
     }
 }
@@ -283,15 +361,18 @@ fn finish(submitted: Submitted<Vec<u8>>) -> io::Result<FileIo> {
 /// A pending file operation submitted through [`AssociatedEndpoint::read`] or
 /// [`AssociatedEndpoint::write`].
 ///
-/// The token carries the operation's identity and its `Vec<u8>` payload type, so
-/// [`FileIo::claim`] recovers the buffer and byte count safely once the matching
-/// completion is dequeued.
+/// The token carries the operation's identity and remembers the buffer type it
+/// was submitted with, so [`FileIo::claim`] hands back the caller's own buffer
+/// -- the same value, not a copy -- once the matching completion is dequeued.
 #[derive(Debug)]
-pub struct FileIo {
+pub struct FileIo<B> {
     id: OperationId,
+    /// The buffer itself is in the pinned operation, not here; this only keeps
+    /// the token's type tied to it so `claim` cannot be handed the wrong one.
+    buffer: std::marker::PhantomData<fn() -> B>,
 }
 
-impl FileIo {
+impl<B: IoBuf> FileIo<B> {
     /// The identity of the in-flight operation, for cancellation or matching.
     #[must_use]
     pub fn id(&self) -> OperationId {
@@ -300,20 +381,21 @@ impl FileIo {
 
     /// Claim this operation's result from `completion`.
     ///
-    /// On a match returns `Ok((buffer, result))`: `buffer` is the payload -- the
-    /// bytes read, or the data written -- and `result` is the byte count or the
-    /// operation's error. Returns `Err(self)` when `completion` belongs to a
-    /// different operation, so the caller can try the token against another one.
-    pub fn claim(self, completion: &Completion) -> Result<(Vec<u8>, io::Result<usize>), Self> {
+    /// On a match returns `Ok((buffer, result))`: `buffer` is the one the caller
+    /// handed over -- the bytes read, or the data written -- and `result` is the
+    /// byte count or the operation's error. Returns `Err(self)` when
+    /// `completion` belongs to a different operation, so the caller can try the
+    /// token against another one.
+    pub fn claim(self, completion: &Completion) -> Result<(B, io::Result<usize>), Self> {
         if completion.id() != Some(self.id) {
             return Err(self);
         }
         // SAFETY: the full identity -- address *and* generation -- matches, which
         // an address alone would not: a recycled address can belong to a later
         // operation of a different payload type. The match therefore proves this
-        // completion is the
-        // Operation<Vec<u8>> this token submitted; claim it exactly once.
-        let operation = unsafe { completion.claim::<Vec<u8>>() };
+        // completion is the Operation<B> this token submitted, and the token's
+        // own type parameter names that B; claim it exactly once.
+        let operation = unsafe { completion.claim::<B>() };
         let buffer = operation.into_payload();
         let result = match completion.error() {
             Some(error) => Err(io::Error::from_raw_os_error(
@@ -441,24 +523,42 @@ impl Drop for PageBuffers {
     }
 }
 
+// SAFETY: the bytes live in a page-aligned heap allocation `PageBuffers` owns
+// outright, so moving the value moves the pointer and not the bytes, and the
+// page count is fixed at construction. `alloc_zeroed` initializes all of them.
+unsafe impl crate::IoBuf for PageBuffers {
+    fn stable_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
+    }
+
+    fn bytes_len(&self) -> usize {
+        self.len()
+    }
+}
+
+// SAFETY: as above; `PageBuffers` is a unique owner, so `&mut self` is exclusive
+// access to the same allocation `stable_ptr` reports.
+unsafe impl crate::IoBufMut for PageBuffers {
+    fn stable_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
+}
+
 impl BlockingEndpoint {
-    /// Scatter-read `pages` pages starting at `offset` into a fresh page-aligned
-    /// buffer, blocking until the read completes.
+    /// Scatter-read into `buffers` starting at `offset`, blocking until the read
+    /// completes, and return the number of bytes read.
     ///
-    /// Returns the buffer and the number of bytes read. The endpoint must be
-    /// opened with [`FILE_FLAG_NO_BUFFERING`]; otherwise the native call fails.
+    /// Takes the caller's pages by `&mut` and allocates nothing, matching
+    /// [`BlockingEndpoint::write_gather`]; the endpoint must be opened with
+    /// [`FILE_FLAG_NO_BUFFERING`], or the native call fails.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or the pages
-    /// total more than `u32::MAX` bytes, or any error from issuing or completing
-    /// the scatter-read.
-    pub fn read_scatter(&mut self, pages: usize, offset: u64) -> io::Result<(PageBuffers, usize)> {
-        // Checked before allocating, so an unusable request costs nothing. This
-        // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
-        // page count into an ordinary error.
-        let total = scatter_gather_len(pages)?;
-        let buffers = PageBuffers::new(pages);
+    /// Returns [`io::ErrorKind::InvalidInput`] if the pages total more than
+    /// `u32::MAX` bytes, or any error from issuing or completing the
+    /// scatter-read.
+    pub fn read_scatter(&mut self, buffers: &mut PageBuffers, offset: u64) -> io::Result<usize> {
+        let total = checked_len(buffers.len(), "scatter/gather buffer set")?;
         let segments = buffers.segment_array();
         let seg_ptr = segments.as_ptr();
 
@@ -467,7 +567,7 @@ impl BlockingEndpoint {
         // SAFETY: issues exactly one ReadFileScatter into `buffers` via
         // `segments`; both outlive this blocking call and no other operation is
         // outstanding.
-        let read = unsafe {
+        unsafe {
             self.run(&mut operation, |handle, overlapped| {
                 let ok = ReadFileScatter(
                     handle.as_raw_handle(),
@@ -478,9 +578,7 @@ impl BlockingEndpoint {
                 );
                 classify(ok)
             })
-        }?;
-
-        Ok((buffers, read))
+        }
     }
 
     /// Gather-write `buffers` starting at `offset`, blocking until the write
@@ -534,24 +632,29 @@ struct ScatterPayload {
 unsafe impl Send for ScatterPayload {}
 
 impl AssociatedEndpoint<'_> {
-    /// Submit an overlapped scatter-read of `pages` pages starting at `offset`
-    /// into a fresh page-aligned buffer, returning a [`ScatterGatherIo`] token.
+    /// Submit an overlapped scatter-read into `buffers`, starting at `offset`.
     ///
-    /// The endpoint must be opened with [`FILE_FLAG_NO_BUFFERING`] and must not be
-    /// in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    /// Takes the caller's pages rather than allocating fresh ones, so a pooled
+    /// or reused [`PageBuffers`] costs nothing to submit. The endpoint must be
+    /// opened with [`FILE_FLAG_NO_BUFFERING`].
+    ///
+    /// Returns [`Started::Pending`] with a [`ScatterGatherIo`] token, or
+    /// [`Started::Completed`] with the [`PageBuffers`] already in hand when the
+    /// endpoint is in skip-on-success mode and the read completed synchronously.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] if `pages` is zero or the pages
-    /// total more than `u32::MAX` bytes, or any immediate failure from issuing
-    /// the scatter-read.
+    /// Returns [`io::ErrorKind::InvalidInput`] if the pages total more than
+    /// `u32::MAX` bytes, or any immediate failure from issuing the
+    /// scatter-read.
     #[track_caller]
-    pub fn read_scatter(&self, pages: usize, offset: u64) -> io::Result<ScatterGatherIo> {
-        // Checked before allocating, so an unusable request costs nothing. This
-        // also turns what would be `PageBuffers::new`'s panic for a zero or absurd
-        // page count into an ordinary error.
-        let total = scatter_gather_len(pages)?;
-        let buffers = PageBuffers::new(pages);
+    pub fn read_scatter(
+        &self,
+        buffers: PageBuffers,
+        offset: u64,
+    ) -> io::Result<Started<ScatterGatherIo, PageBuffers>> {
+        let total = checked_len(buffers.len(), "scatter/gather buffer set")?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
         let segments = buffers.segment_array();
         let mut operation = Operation::new(ScatterPayload { buffers, segments });
         operation.set_offset(offset);
@@ -561,32 +664,40 @@ impl AssociatedEndpoint<'_> {
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
                 let payload = payload_ptr_from_overlapped::<ScatterPayload>(overlapped);
+                let raw = handle.as_raw_handle();
                 let ok = ReadFileScatter(
-                    handle.as_raw_handle(),
+                    raw,
                     (*payload).segments.as_ptr(),
                     total,
                     std::ptr::null(),
                     overlapped,
                 );
-                classify_issued(ok)
+                classify_scatter(ok, skip, raw, overlapped)
             })
         };
         finish_scatter(submitted)
     }
 
-    /// Submit an overlapped gather-write of `buffers` starting at `offset`,
-    /// returning a [`ScatterGatherIo`] token.
+    /// Submit an overlapped gather-write of `buffers` starting at `offset`.
     ///
-    /// The endpoint must be opened with [`FILE_FLAG_NO_BUFFERING`] and must not be
-    /// in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    /// Returns [`Started::Pending`] with a [`ScatterGatherIo`] token, or
+    /// [`Started::Completed`] with the [`PageBuffers`] already in hand when the
+    /// endpoint is in skip-on-success mode and the write completed
+    /// synchronously. The endpoint must be opened with
+    /// [`FILE_FLAG_NO_BUFFERING`].
     ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::InvalidInput`] if the buffers total more than
     /// `u32::MAX` bytes, or any immediate failure from issuing the gather-write.
     #[track_caller]
-    pub fn write_gather(&self, buffers: PageBuffers, offset: u64) -> io::Result<ScatterGatherIo> {
+    pub fn write_gather(
+        &self,
+        buffers: PageBuffers,
+        offset: u64,
+    ) -> io::Result<Started<ScatterGatherIo, PageBuffers>> {
         let total = checked_len(buffers.len(), "scatter/gather buffer set")?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
         let segments = buffers.segment_array();
         let mut operation = Operation::new(ScatterPayload { buffers, segments });
         operation.set_offset(offset);
@@ -596,28 +707,35 @@ impl AssociatedEndpoint<'_> {
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
                 let payload = payload_ptr_from_overlapped::<ScatterPayload>(overlapped);
+                let raw = handle.as_raw_handle();
                 let ok = WriteFileGather(
-                    handle.as_raw_handle(),
+                    raw,
                     (*payload).segments.as_ptr(),
                     total,
                     std::ptr::null(),
                     overlapped,
                 );
-                classify_issued(ok)
+                classify_scatter(ok, skip, raw, overlapped)
             })
         };
         finish_scatter(submitted)
     }
 }
 
-/// Turn a scatter/gather submission outcome into a token or an immediate error.
-fn finish_scatter(submitted: Submitted<ScatterPayload>) -> io::Result<ScatterGatherIo> {
+/// Turn a scatter/gather submission outcome into the adapter's two-state
+/// outcome.
+fn finish_scatter(
+    submitted: Submitted<ScatterPayload>,
+) -> io::Result<Started<ScatterGatherIo, PageBuffers>> {
     match submitted {
-        Submitted::Pending(id) => Ok(ScatterGatherIo { id }),
-        Submitted::Completed { .. } => Err(io::Error::other(
-            "scatter/gather adapter observed a synchronous completion; the endpoint must not be in \
-             FILE_SKIP_COMPLETION_PORT_ON_SUCCESS mode",
-        )),
+        Submitted::Pending(id) => Ok(Started::Pending(ScatterGatherIo { id })),
+        Submitted::Completed {
+            operation,
+            bytes_transferred,
+        } => Ok(Started::Completed {
+            payload: operation.into_payload().buffers,
+            bytes_transferred: bytes_transferred as usize,
+        }),
         Submitted::Failed { error, .. } => Err(error),
     }
 }

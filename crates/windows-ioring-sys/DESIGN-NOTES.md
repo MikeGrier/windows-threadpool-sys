@@ -1,0 +1,166 @@
+# Design notes: windows-ioring-sys (Tier 1)
+
+This crate does not exist yet as compiled code. This file, the checklist beside it, and the design session
+it references are the design record that precedes it. Creating the Cargo skeleton is M1.1 in
+[CHECKLIST.md](CHECKLIST.md).
+
+## Intent
+
+Windows 11 / Server 2022 added `IoRing`: a submission/completion ring for file I/O, closer in shape to
+`io_uring` than to anything else Windows offers. This crate raises those primitives into memory-safe Rust
+with the minimum additional CPU and memory cost, in the same spirit as the rest of this repository.
+
+The goal is **not** to solve every consumer's I/O architecture for them. It is to provide a safe toolkit
+they can build their own answer with, plus honest guidance on the patterns that actually matter -- how to
+construct rings, how to give them the right affinities, and what the trade-offs are. Consumers of these
+crates are trying to maximize I/O throughput; the information in "Two delivery architectures" below is
+written for them, not only for this crate's maintainers.
+
+Where a choice would impose a policy on the consumer (how many rings, how to partition them, which thread
+runs a continuation), this crate exposes the mechanism and documents the trade-off rather than picking.
+
+## Decision index
+
+| ID | Decision |
+|---|---|
+| <a id="d-1"></a>D-1 | **IoRing lives in its own crate, not as a third backend inside `windows-overlapped-io-sys`.** Duplicate-then-decide, per the repository's PLATFORM INTEGRITY rule: the ring path is speculative, and building it beside the working IOCP path keeps that path stable. The genuinely shared surface turned out to be small (see D-2), which strengthens rather than weakens the separation. `IoBuf`/`IoBufMut` are duplicated initially; the extract-or-share decision is deferred until the ring path is proven, and tracked as M6+ rather than left implicit. |
+| <a id="d-2"></a>D-2 | **IoRing is a file data plane, not a general completion backend, and the division is forced by the kernel rather than chosen by us.** The op table is fixed: `NOP`, `READ`, `WRITE`, `FLUSH`, `REGISTER_FILES`, `REGISTER_BUFFERS`, `CANCEL`. Verified by spike against `IsIoRingOpSupported` on a fully current machine (`MaxVersion` 400). There is no ioctl op, no socket op, and no directory-change op, and unlike Linux's `io_uring` -- which grew to roughly fifty opcodes including full socket support -- Windows IoRing has not grown beyond file I/O. So `windows-overlapped-io-sys` remains the crate for arbitrary I/O (any handle, any operation), and this crate covers a strict subset of one of its three families. Neither can subsume the other. |
+| <a id="d-3"></a>D-3 | **There are two delivery architectures, both first-class; neither is a degraded form of the other.** See the detail section below. This supersedes an earlier framing in which the thread-pool path was "primary" and the pinned-thread path was a "fallback" for a missing capability. That framing was wrong twice over: the pinned-thread path is the high-performance architecture, and the capability fallback is only its least interesting justification. |
+| <a id="d-4"></a>D-4 | **Completion allocates nothing: the token owns the buffer, and the caller supplies the type.** `push()` returns a `Token<B>` that owns the `B` it was given; the ring stores only a generation counter and an in-flight count for rundown. No slab entry, no box, no type erasure -- the caller already knows `B`, so making it say so is free. Dropping a token whose operation is still in flight `mem::forget`s the buffer: leaking is safe, use-after-free is not, and this is the same leak-and-reclaim discipline `windows-overlapped-io-sys`'s `Operation` uses with the leak as the failure mode rather than the normal path. The ergonomic, allocating variant is layered on top of this, never underneath it. |
+| <a id="d-5"></a>D-5 | **The submission queue is ring state, not batch state, so buffers are owned from `Build*` and not from `Submit`.** Once `BuildIoRingReadFile` returns, the SQE is queued and there is no rewind. If a batch could be abandoned and its buffers freed, a later unrelated `submit()` would hand the kernel freed memory. A `Batch` therefore submits on drop, and holds `&mut IoRing` so that two concurrent batches do not compile -- which turns Win32's "you must serialize submission" footnote into a compiler-enforced guarantee. |
+| <a id="d-6"></a>D-6 | **Capability is negotiated and cached, never assumed.** The ring version is `min(highest we understand, caps.MaxVersion)`, stored and exposed, because the spike found an OS reporting `MaxVersion = 400` while `windows-sys` 0.61.2 names only up to `IORING_VERSION_3 = 300`; hardcoding a version would cap us permanently. `IsIoRingOpSupported` is probed once per op at construction into a capability set, so per-call cost is a bit test. `QueryIoRingCapabilities` needs no ring at all, so capability inspection is free and side-effect-free. |
+| <a id="d-7"></a>D-7 | **The op set will grow, and the API is shaped so that growth is additive.** The public op enum is `#[non_exhaustive]` so a consumer cannot write an exhaustive `match` that a new op would break; new ops arrive as new builder methods; `supports_raw(op_code)` answers for ops the OS has but this crate has not wrapped; and a narrow unsafe raw-SQE seam lets a consumer use such an op before we wrap it -- the same shape, and the same justification, as the `device` family's unsafe arbitrary-control-code `ioctl` in `windows-overlapped-io-sys`. Honest limit: this covers new ops that reuse existing parameter types. An op needing genuinely new structs still requires a `windows-sys` bump, and no API shape avoids that. |
+| <a id="d-8"></a>D-8 | **Locality is the consumer's decision. This crate makes a ring cheap and correct, makes its affinity explicit, and documents the trade-offs -- it does not partition anything.** Baking "one ring per NUMA node" into the layer would be policy in a primitive, and would also be wrong: see "Why the NUMA node is the wrong key" below. A `RingFleet`-style abstraction may come later, once there is evidence about what sharding actually helps; it is deliberately not in the initial plan. |
+| <a id="d-9"></a>D-9 | **An IoRing cannot feed an I/O completion port, and no amount of userspace bridging recovers what is lost.** The only completion hook in the entire API is `SetIoRingCompletionEvent`, which takes an event; there is no port variant, and the CQ is a userspace ring the consumer pops. More decisively: the device-to-CPU association is lost inside the kernel, before any userspace code runs. By the time a wait callback could call `PostQueuedCompletionStatus`, the packet enters the port from an already-arbitrary processor, so the port routes on where the post came from rather than where the device completed. A bridge is therefore not merely two kernel transitions for nothing -- it is structurally incapable of delivering the associativity that would motivate it. No such bridge is provided, and no example demonstrates one. |
+| <a id="d-10"></a>D-10 | **Recorded as an explicitly unverified assumption: we do not believe IOCP performs NUMA-local completion dispatch either.** Its documented and relied-upon property is LIFO thread wakeup for cache warmth, which is a different thing. The indirect evidence is that the standard high-performance IOCP pattern is one port per node with threads explicitly affinitized -- which nobody would build by hand if the kernel did it for them. This is belief, not measurement: settling it needs a multi-node machine, a device whose interrupts are affinitized to a known node, and instrumentation correlating the completing node with the callback's processor. It is recorded rather than resolved because **the design consequence is the same either way** -- a consumer who needs guaranteed locality affinitizes their own threads (Model B below). No work is scheduled against this decision. |
+| <a id="d-11"></a>D-11 | **`IoBuf`/`IoBufMut`'s safety contract is extended, at duplication time, to also cover a buffer registered for many operations, not only one in flight.** `windows-overlapped-io-sys`'s original contract only had to hold for the lifetime of a single operation, because that crate has no registration concept. This crate's M5 (`RegisterIoRingBuffers`) will hand the kernel a buffer's address for the life of the *registration*, which can span many submissions. Rather than silently reinterpreting the inherited contract when M5 lands, M2.1 states the wider requirement up front in `buf.rs`'s doc comments: a `stable_ptr`/`stable_mut_ptr` implementation must not move for as long as *any* outstanding use exists, whether that use is one `Token` or a standing registration. This is D-1's "duplicate-then-decide" playing out concretely: the duplicate is not a frozen copy, it is free to diverge the moment this crate's actual needs diverge from the original's. |
+| <a id="d-12"></a>D-12 | **Completion retrieval is one primitive, `IoRing::try_pop`, used by both delivery architectures rather than each growing its own.** It pops one `Completion` (an identity plus a `Result` over `ResultCode`/`Information`) without blocking, added during M3 once M3.6's own tests showed nothing exposed a *typed* completion outside the untyped rundown drain (a re-plan, not an omission -- see M3.7 in `CHECKLIST.md`). Model B's pinned thread calls it in a loop after `submit_and_wait`; Model A's event callback (M4) will call it in the same drain-to-empty pattern. Neither needs its own popping logic. The matching raw-SQE seam, `IoRing::push_raw` (M3.5), follows the same shape as `windows-overlapped-io-sys`'s unsafe `ioctl`: the mechanics of building an SQE need nothing unsafe, but this crate cannot audit an arbitrary caller-supplied `Build*` call, so the seam itself is `unsafe`, and a failed `push_raw`/`Batch` push releases its reservation immediately rather than waiting for a rundown to notice an operation that never queued. |
+| <a id="d-13"></a>D-13 | **`EventDelivery`'s quiesce-then-close teardown (M4.3) is Rust's own struct-field-drop order, not a hand-written `Drop` impl.** Its `wait: ThreadpoolWait` field is declared before its `ring: Arc<Mutex<IoRing>>` field; fields drop top-to-bottom, so `ThreadpoolWait`'s own `Drop` (disarm, suppress re-arming, drain any in-flight callback, close, then free its context -- releasing its captured `Arc` clone) always finishes before `ring`'s last strong reference drops and runs `IoRing`'s own `run_down` then `CloseIoRing`. No callback can be touching the ring when it closes, and no new `Drop` logic had to be written to guarantee it. This is also why `EventDelivery` cannot be placed in a `CleanupGroup`: a group only knows how to bulk-release objects it created itself, and `EventDelivery` owns a ring with its own teardown obligation a group's `CloseThreadpoolCleanupGroupMembers` has no way to run -- the same reasoning `windows-threadpool-sys` already applies to exclude `ThreadpoolIo`. |
+| <a id="d-14"></a>D-14 | **Recorded as an explicitly unverified assumption (mirroring D-10): registration bookkeeping (`IoRing::registered_file_count`/`registered_buffer_count`) advances the instant a `BuildIoRingRegisterFileHandles`/`BuildIoRingRegisterBuffers` call successfully queues, not once its completion is observed.** Neither function takes an `IORING_SQE_FLAGS` parameter, so this crate cannot force a drain barrier around them the way `Batch`'s other pushes can. Whether the kernel actually claims the assigned indices synchronously at build time or only when the op later runs is not documented anywhere this crate could verify. Advancing eagerly is the safe direction regardless: it can only ever waste indices (skip ahead too far), never collide two registrations onto the same index (the only failure mode that would actually corrupt a later registration's base index). No work is scheduled against this decision; like D-10, the design consequence -- eager, monotonic advancement -- is the same whichever way the truth turns out. |
+| <a id="d-15"></a>D-15 | **`Token<B: IoBuf>` was generalized to `Token<T: Send + 'static>` to build M5's registration types on the exact same forget-unless-claimed mechanism, rather than a parallel one.** Nothing inside `Token` ever called an `IoBuf` method; the bound only ever documented intent. `Batch::register_files`/`register_buffers` return plain data (`PendingFileRegistration`/`PendingBufferRegistration<B>`) with their own `claim_if`, because there is no buffer to forget-or-free for a registration *push* itself. `Batch::read_registered`/`write_registered` reuse `Token<RegisteredUse>` for the *use* of an already-registered buffer: `RegisteredUse`'s own `Drop` decrements `RegisteredBuffers`'s outstanding-use count, so it fires only when a completion is actually observed and claimed (D-4's rule -- an unclaimed, dropped token forgets its value) -- never merely because a caller gave up on the token. `RegisteredBuffers` itself extends the same "leak is safe, use-after-free is not" philosophy one level up: since Win32's `IoRing` has no unregister call at all, `RegisteredBuffers::drop` refuses to free its `ManuallyDrop`-held buffers while that count is nonzero (loud via `debug_assert!` in debug builds, a silent permanent leak in release) rather than freeing memory a still-outstanding `IORING_BUFFER_REF` might address. |
+| <a id="d-16"></a>D-16 | **`FileRef::Raw(HANDLE)`'s lifetime hole (PR #20 review finding, M8) is closed by making the raw-handle-taking pushes `unsafe fn`, paired with a safe, `Arc<OwnedHandle>`-backed `SharedFile` wrapper for the common case -- not by forcing every raw handle through an owning wrapper the way `windows-overlapped-io-sys`'s endpoints do.** A bare `HANDLE` carries no lifetime, so nothing stopped a caller from closing or reusing it before the kernel finished with it; the existing `SAFETY` comments already said "the caller's to keep alive" on functions with no `unsafe` keyword, the textbook shape of an unsound safe API. `windows-overlapped-io-sys` never has this hazard because every endpoint owns its handle -- but forcing that shape here would eliminate `FileRef::Raw`'s reason to exist: zero-setup addressing for a handle used across many concurrent pushes, which an owning-endpoint model cannot express without wrapping every file first. `SharedFile` instead shares by reference count: each `*_shared` push clones the `Arc` into the same `Token` that already tracks the operation's own payload (bundled as a tuple with the buffer for `read`/`write`-shaped pushes, or as `Token<SharedFile>` alone for `flush`/`cancel`, which have no buffer of their own), so the underlying handle survives until that token is claimed or leaked regardless of what the caller does with its own clone -- the same discipline `Token`/`RegisteredBuffers` already apply, adapted for a resource with multiple simultaneous holders instead of one. `register_files` gets no `_shared` counterpart: its handles must stay valid for the ring's remaining life, a lifetime no single push's `Token` can express. |
+| <a id="d-17"></a>D-17 | **Every `Token`, `RegisteredFile`, and `RegisteredBuffers` now carries the identity of the ring that minted it (PR #20 review finding), and every popped `Completion` carries the identity of the ring that produced it, so a value from one ring can never be mistaken for one from another.** `UserData` is a plain counter this crate assigns starting at zero per ring, so two different rings routinely hand out the same value -- a `Token`'s `id == completion.user_data()` check alone cannot tell those apart, and a `RegisteredFile`/`RegisteredBuffers` index is only meaningful against the specific table it was assigned in. `RingId` is a monotonic, process-lifetime-unique counter (`AtomicU64`, starting at 1) rather than the ring's own `HANDLE`: Windows is free to hand a closed ring's numeric handle value to the next object it creates, which would let a stale identity collide with a genuinely new ring. `Token::claim_if` now requires both identities to match; `Batch`'s pushes reject a `FileRef::Registered`/`RegisteredBuffers` argument whose `RingId` differs from `self.ring`'s own with an `InvalidInput` error, checked before any `Build*` call runs (so a rejected push never reserves `UserData` or counts against rundown). |
+| <a id="d-18"></a>D-18 | **`PendingBufferRegistration` now leaks its buffers on an unclaimed drop instead of freeing them, mirroring `Token`/`RegisteredBuffers` (PR #20 review finding).** `Batch::register_buffers` queues `BuildIoRingRegisterBuffers` -- and hands the buffer addresses to the kernel -- the instant it returns, before any completion is ever observed; a caller that drops the returned `PendingBufferRegistration` without matching a completion to it (via `claim_if`) has no proof the kernel is done deciding whether to retain those addresses. Freeing them anyway would risk handing memory the kernel still references back to the allocator, so `buffers` moved behind a `ManuallyDrop` and `PendingBufferRegistration`'s own `Drop` is now deliberately empty, exactly like `Token`'s. `claim_if` explicitly takes the buffers back out of the `ManuallyDrop` once a *matching* completion proves the kernel has decided one way or the other -- success or failure -- so the previously-documented "dropped normally on a failed registration" behavior is unchanged; only the never-observed-a-completion case changed, from an unsound free to a safe leak. |
+
+## Two delivery architectures
+
+This is the section written for consumers rather than for maintainers, and the reason it sits in a design
+note rather than only in a commit message.
+
+There are two coherent high-performance shapes, and they are mutually exclusive on the hot path.
+
+**Model A -- shared queue, kernel load-balances.** A pool of threads waits; work is handed to whichever
+thread the system picks. Load balancing is automatic, locality is incidental. Classic Windows IOCP is this,
+and the Win32 thread pool *is* this, architecturally. In this crate, Model A is
+`SetIoRingCompletionEvent` plus a `ThreadpoolWait` from `windows-threadpool-sys`: the ring signals an
+event, the pool wakes a thread, the callback drains the completion queue.
+
+**Model B -- shared-nothing execution domains.** One pinned thread per domain, owning its ring, its buffer
+pool, and its shard of the application's state, with no cross-thread synchronization on the data path.
+This is SPDK, Seastar, and essentially every serious `io_uring` deployment. In this crate, Model B is a
+pinned thread parked directly in `SubmitIoRing(ring, wait_n, timeout, &submitted)` -- the fused
+submit-and-wait *is* the event loop. No event, no wait object, no wakeup indirection, and no drain/re-arm
+race, because there is nothing to re-arm.
+
+**IoRing is shaped for Model B.** The submission queue not being thread-safe, registration being per-ring,
+and there being exactly one completion event per ring are not limitations to work around; they are the API
+assuming a shared-nothing consumer.
+
+### Why the three-way tension dissolves in Model B
+
+A ring is three things at once, and in Model A they want different granularities:
+
+| Role | Wants |
+|---|---|
+| Serialization domain (submission is not thread-safe) | finest possible -- per submitting thread |
+| Dispatch domain (one completion event, one waiter set) | whatever is being affinitized |
+| Registration domain (registered buffers and files are per-ring) | coarsest -- registration pins pages |
+
+Registration is the axis that punishes over-sharding, and it is easy to miss: registering one buffer pool
+into sixteen rings means sixteen separate pinnings of that memory, or sixteen pools each a sixteenth the
+size. There is no partition that is optimal on all three axes -- which is a further argument for D-8.
+
+In Model B all three coincide, because one thread per domain means per-thread and per-domain are the same
+partition, and the buffer pool is per-domain anyway. The tension is an artifact of trying to share
+something.
+
+So the unit is not "a NUMA node." It is an **execution domain**: one pinned thread, its ring, its
+node-local registered buffer pool, and its shard of the work.
+
+### Why the NUMA node is the wrong key
+
+Node count is a firmware setting, not a hardware property. AMD's NPS (Nodes Per Socket) presents the same
+EPYC silicon as one node or four; Intel's Sub-NUMA Clustering does the same. A design keyed on node gets a
+different partition on identical hardware depending on a BIOS option no process can see. On an NPS1 EPYC,
+sharding "per node" puts 64 cores in one ring and calls it NUMA-aware.
+
+It is worse in virtualized deployments, which is where most of this code will run: the machine this was
+investigated on reported **zero** `Win32_NumaNode` instances. Any strategy keyed on node must degrade to
+"one ring" when the answer is unknowable, which is the common case.
+
+A better default heuristic is the **last-level cache domain**: `GetLogicalProcessorInformationEx` with
+`RelationCache` filtered to `CacheLevel == 3`. On EPYC that is the CCX/CCD boundary, which has a real
+latency cliff even inside a single NPS1 node, because crossing it goes out to the IO die over Infinity
+Fabric. It is meaningful on Intel and ARM too, where the NUMA node often is not, and it degrades sanely: a
+VM reporting one L3 domain yields one ring, which is correct.
+
+**Processor groups are a hard floor.** A thread's affinity is a `GROUP_AFFINITY` and a ring's waiter lives
+in exactly one group, so above 64 logical processors the partition is forced whether or not it is wanted.
+
+### Buffer placement probably dominates thread placement
+
+For a storage workload the device DMAs directly into the registered buffer. A buffer on a node remote from
+the device means **every byte crosses the interconnect, on every operation, forever**. Where the completion
+callback happens to run is a one-time cache-warmth question by comparison.
+
+So `VirtualAllocExNuma` for the pool, on the node closest to the device, registered once into that domain's
+ring, is very likely the highest-leverage locality decision available -- and it is independent of
+everything above about completion routing.
+
+### What is not reachable
+
+Mapping a **file handle to the NUMA node of the device backing it** has no clean user-mode path. It means
+walking volume to disk to device instance and reading `DEVPKEY_Device_Numa_Node`, with real failure modes
+(spanned volumes, Storage Spaces, network paths, VHDs) where the question may have no answer. This crate
+will not offer an automatic "put this file's I/O on the right ring." It offers "bind a ring to a domain and
+submit from there," and leaves the mapping to whoever knows their storage layout.
+
+### The practical shape
+
+Almost nobody runs pure Model B. What works is hybrid: Model B on the hot data path (pinned threads,
+per-domain rings, node-local registered pools, run-to-completion continuations, cross-domain work by
+explicit message passing rather than shared state), and Model A for the control plane, background, and cold
+paths, where the thread pool's quiescence is worth more than locality.
+
+Both paths are therefore first-class in this crate, which is what D-3 records.
+
+On sizing: one domain per physical core (not per SMT sibling) maximizes isolation; one per L3 domain gives
+a smaller number of domains that can still share cache-resident state cheaply -- eight rather than
+sixty-four on a 64-core EPYC. Fewer domains balance load better and duplicate registered buffers less; more
+isolate better. That is a workload call, and this crate does not make it.
+
+`examples/ring_copy` (M7) is where that workload call actually gets made, for exactly one workload: it
+implements the `ByL3`/`ByNode`/`ByPackage`/`ByCore`/`Single` policies above as runnable code, over a real
+file copy, so the guidance here has something executable behind it rather than staying prose. The policy
+lives in the sample, not the library (D-8); the library still makes none of these choices for a caller.
+
+## What the spike established
+
+A throwaway spike (see the design session) probed a current machine directly. Findings that the design
+above depends on:
+
+- `QueryIoRingCapabilities` succeeds with no ring; `MaxVersion` 400, max SQ 65536, max CQ 131072.
+- `FeatureFlags` reported `SET_COMPLETION_EVENT` present and `UM_EMULATION` absent -- a real kernel ring
+  rather than user-mode emulation.
+- All seven ops supported, and only those seven.
+- `PopIoRingCompletion` returns `S_FALSE` on an empty queue.
+- **A file handle does not need `FILE_FLAG_OVERLAPPED`.** Reads succeed on an ordinary handle, which means
+  `UnassociatedEndpoint` is not the required input type and this crate need not depend on that model.
+- The completion event signals correctly and auto-resets.
+- Registered file handles and registered buffers both work, including a read addressing both by index.
+- A batch of eight reads submitted in one call reports `submittedEntries = 8` with all `UserData`
+  preserved.
+- Overflowing a 64-entry submission queue fails at entry 64 with `0x80460002` -- clean build-time
+  backpressure, which is what D-5's design leans on.
+- Cancelling a target that is not outstanding succeeds at build time and reports `0x80070490`
+  (`ERROR_NOT_FOUND`) in the completion, not at build time.

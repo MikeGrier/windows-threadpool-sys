@@ -1,8 +1,13 @@
 # Checklist: windows-file-watcher
 
-Memory-safe Windows path-change watcher. Design and decisions (D-1...D-20) are recorded in
-[design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md);
-Tier-1 decisions are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md), extended as later milestones complete.
+Memory-safe Windows path-change watcher. The design session that opened the crate recorded D-1...D-20 in
+[design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md](design-sessions/DESIGN-SESSION-2026-08-18-windows-file-watcher.md).
+The authoritative Tier-1 set is [DESIGN-NOTES.md](DESIGN-NOTES.md), which now runs to **D-80** -- later
+decisions (D-21 from M1 review, D-22...D-26 and D-34/D-35 from M2, D-36...D-49 from M3, D-50...D-52 from M4,
+D-53...D-59 from M5, D-60...D-65 from M6, D-32 from M8.1, D-66...D-76 from M9.1...M9+.4, D-25/D-27...D-31
+plus D-33 from the [2026-08-21 fault-protocol session](design-sessions/DESIGN-SESSION-2026-08-21-fault-protocol-and-doorbells.md)
+(which **overturned D-16**), and D-78/D-79/D-80 from the PR #20 review response and M11's own execution,
+D-79 superseding D-54, D-80 revising M11.2's own reopen mechanism) are added there as milestones complete.
 
 Work items are dependency-ordered. Each milestone ends with integration tests. The implicit
 end-of-milestone gate (default **and** `--all-features` build/test/clippy/doc clean, encoding check, sync
@@ -10,148 +15,111 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-## M2 -- Detailed single-directory watcher
-
-- [ ] **M2.1** -- Owned directory handle: `CreateFileW(FILE_LIST_DIRECTORY, FILE_SHARE_READ|WRITE|DELETE,
-  OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED)`; classify open errors (retryable vs
-  not-found vs unsupported).
-
-- [ ] **M2.2** -- Arm and complete: issue `ReadDirectoryChangesW` through `windows-threadpool-sys`
-  `ThreadpoolIo` (the overlapped seam with the generation-stamped identity, D-3/D-4); decode the completion
-  into a batch (M1) and re-arm around processing to minimise the inherent loss window.
-
-- [ ] **M2.3** -- Deliver batches into a crate-owned queue endpoint (the interim, entirely in-crate delivery
-  target for this milestone; the session/receiver split lands in M3, D-11) so no client code runs on the pool
-  thread at any milestone; tag records with a `WatchId`; emit `Desync { Overflow }` on a zero-byte completion.
-
-- [ ] **M2.4** -- Teardown: cancel the outstanding read, drain the pool I/O, and free the context via
-  owned-object `Drop` (D-20), with re-arm suppression inherited from `ThreadpoolIo` rundown.
-
-- [ ] **M2.5** -- Integration: create/modify/delete/rename in a temp directory and assert raw actions and
-  relative names; force a burst overflow and assert `Desync { Overflow }`; assert clean teardown with an
-  operation outstanding.
-
-## M3 -- Monitor, session, request queue, watch handle
-
-- [ ] **M3.1** -- `Monitor`: owns the servicing path; the request queue is drained by a `ThreadpoolWork`
-  that serialises resident-state mutations (D-2); `Monitor::Drop` blocks on full rundown (D-20).
-
-- [ ] **M3.2** -- `Session` obtained from the monitor: bundles a request-submission handle (MPSC producers)
-  and the crate-owned notification sender (D-2/D-11); provide `monitor.session()` returning the session plus
-  the client-side receiver, and a variant accepting a caller-supplied bound.
-
-- [ ] **M3.3** -- Finalise the notification queue (D-11): a crate-owned, `Send + Sync`, multi-producer
-  bounded sender whose enqueue is non-blocking and infallible, paired with the client-side receiver the
-  session hands back. On overflow it drops the batch and latches a per-`WatchId` `Desync { QueueFull }` as
-  control state *outside* the bounded queue (coalesced, idempotent), guaranteed to reach the receiver before
-  the next batch (D-12); reject a zero bound at construction. No client code runs on a pool thread.
-
-- [ ] **M3.4** -- Affine `Watch` (D-5): `#[must_use]`, `Drop` enqueues cancellation, explicit `cancel()`,
-  and a `Copy` `WatchId`; subscribe/unsubscribe requests plumbed through the serialised request queue.
-
-- [ ] **M3.5** -- Integration: several subscriptions through one session delivering to one receiver; cancel via
-  `Drop` and via `cancel()`; assert no delivery after cancellation completes and in-order delivery within a
-  subscription; saturate the queue and assert the dropped batch surfaces as `Desync { QueueFull }` for each
-  affected `WatchId` and that delivery recovers once the receiver drains.
+> **NEXT ACTIONABLE ITEM: none.** M1 through M9+, M10, M11, and M12 are archived/done -- the full PR #20
+> review response is complete. Only the parked, ungated M-inf horizon items remain, and none is a current
+> obligation.
 
 ## M4 -- Coalescing by directory and file targets
 
-- [ ] **M4.1** -- Coalesce watchers by directory (D-6): union the `FILE_NOTIFY_CHANGE_*` filters and take the
-  maximum subtree flag across a directory's subscriptions; issue one read per directory.
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----m4-coalescing-by-directory-and-file-targets).
 
-- [ ] **M4.2** -- De-multiplex on decode: route each record to the subset of subscriptions whose target and
-  filter match (per-subscription filtering, D-6).
+## M5 -- Fault model and the retry protocol
 
-- [ ] **M4.3** -- File (path) targets (D-7): watch the parent directory non-recursively and filter the leaf
-  name; directory targets optionally recursive.
-
-- [ ] **M4.4** -- Add/remove a subscription to/from an existing coalesced directory watcher without
-  disturbing the others' cadence (re-issue with the updated union only when it actually changes).
-
-- [ ] **M4.5** -- Integration: several file-watches plus a recursive directory watch within one tree; assert
-  each subscription receives exactly its matching events and nothing else.
-
-## M5 -- Fault model and resident retry policy
-
-- [ ] **M5.1** -- Establish/re-establish state machine (D-14/D-15): `Opening -> ArmingDetailed ->
-  WatchingDetailed` plus `Cancelling/Closed`; classify every error into reopen-retry, rearm-retry, or (M6)
-  downgrade; no terminal state.
-
-- [ ] **M5.2** -- Resident retry-policy data (D-16): a backoff value (initial/multiplier/cap/jitter and
-  per-error-kind overrides), a monitor default overridable per subscription and reduced to a coalesced
-  directory watcher's effective policy by the deterministic soonest-recovering rule (min of each field
-  across the directory's subscriptions, D-6), mutated only through serialised request-queue items and
-  scheduled with `ThreadpoolTimer` -- no reactive callback, race-free.
-
-- [ ] **M5.3** -- Recovery notifications: `Desync { Reestablished }` for the post-outage gap, and the opt-in
-  `Suspended` / `Resumed` brackets (D-13).
-
-- [ ] **M5.4** -- Cancellation from any intermediate state -- establishing, backing off, or faulted (D-14) --
-  quiescing timers and any outstanding operation without racing a re-arm.
-
-- [ ] **M5.5** -- Integration: delete then recreate the watched directory; assert the `Suspended` ... `Resumed`
-  bracket with `Desync { Reestablished }` and that watching resumes; assert cancellation while faulted; verify
-  recovery never wedges.
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----m5-fault-model-and-the-retry-protocol).
 
 ## M6 -- Coarse fallback
 
-- [ ] **M6.1** -- Coarse handle: `FindFirstChangeNotification`, owned and closed with
-  `FindCloseChangeNotification` (not `CloseHandle`), reaching `ThreadpoolWait` through the custom-close
-  waitable owner (D-17) -- a std `OwnedHandle` would be closed with `CloseHandle` by the pool on teardown,
-  which is the wrong routine for a change-notification handle.
-
-  > **CROSS-COMPONENT PREREQUISITE -- SATISFIED 2026-08-21:** required component
-  > `crates/windows-threadpool-sys` -> M17 (custom-close owner for non-`CloseHandle` wait targets, across
-  > both the direct and `CleanupGroup` teardown paths), which has landed. See
-  > [../windows-threadpool-sys/COMPLETED-CHECKLIST.md](../windows-threadpool-sys/COMPLETED-CHECKLIST.md).
-  > The seam to use is `WaitableHandle::assume_waitable_with(raw, FindCloseChangeNotification)`, which works
-  > with both `ThreadpoolWait::new` and `CleanupGroup::create_wait`.
-
-- [ ] **M6.2** -- Coarse watcher: `ThreadpoolWait` per activation -> emit `Desync { Coarse }` to the
-  directory's subscriptions -> `FindNextChangeNotification` re-arm, under the same fault/backoff discipline
-  (D-15/D-17).
-
-- [ ] **M6.3** -- Downgrade edge in establish (D-17): an unsupported-class error (`ERROR_INVALID_FUNCTION` /
-  `ERROR_NOT_SUPPORTED`) transitions to coarse establishment; the mode is re-resolved on each
-  establish/re-establish; retryable errors still use the reopen loop.
-
-- [ ] **M6.4** -- `Established { mode }` opt-in report (D-13), plus a test seam to force coarse mode
-  regardless of the underlying volume.
-
-- [ ] **M6.5** -- Integration: force coarse via the seam -> assert `Established { Coarse }` and that mutations
-  surface as `Desync { Coarse }`; assert coarse teardown closes the notification handle correctly.
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----m6-coarse-fallback).
 
 ## M7 -- Documentation, examples, stress
 
-- [ ] **M7.1** -- A crate README and the [lib.rs](src/lib.rs) top-level docs: the monitor/session/watch model, the
-  fidelity-and-limitation contract, and the `Desync` primitive.
-
-- [ ] **M7.2** -- Runnable examples: a minimal directory watch, a single-file watch, and a fault-recovery
-  demonstration.
-
-- [ ] **M7.3** -- Finalise Tier-1 [DESIGN-NOTES.md](DESIGN-NOTES.md) / Tier-2 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) from the session, with
-  every shipped decision cross-referenced.
-
-- [ ] **M7.4** -- Opt-in, env-gated stress suite: change churn, fault storms (repeated delete/recreate),
-  teardown races, and coalesced multi-subscription load.
-
-- [ ] **M7.5** -- Publication readiness: crate metadata, changelog, and a final review pass over the public
-  surface for the v1 scope (D-18) and the deferred seams (D-19).
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----m7-documentation-examples-stress).
 
 ## M8 -- Adopt wtf-string for relative names
 
-- [ ] **M8.1** -- Migrate `RelativeName` from its hand-rolled `Box<[u16]>` to [wtf-string](../wtf-string/README.md)'s
-  `Wtf16Str` / `Wtf16String`, so decoded names carry the native-`u16`, conversion-free representation and feed
-  Windows APIs without re-encoding. Preserve the lossless `OsString`/`Path` and raw-`&[u16]` surface (D-8).
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----m8-adopt-wtf-string-for-relative-names).
 
-  > **CROSS-COMPONENT PREREQUISITE:** requires component `crates/wtf-string` -> M5 (Windows `OsStr`/`OsString`
-  > interop), now completed and archived in
-  > [../wtf-string/COMPLETED-CHECKLIST.md](../wtf-string/COMPLETED-CHECKLIST.md).
+## M9 -- Data-driven scenario stress
 
-- [ ] **M8.2** -- Integration test: after adoption, decode a real completion buffer and assert the relative
-  name's raw `&[u16]` units, its lossless `OsString`/`Path` conversion (including an unpaired surrogate), and
-  a direct wide-pointer (`as_ptr()`) hand-off to a Windows API, verifying the representation change preserves
-  the public lossless-conversion contract (D-8).
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-21----m9-data-driven-scenario-stress).
+
+## M9+ -- Concurrent modifiers, spoilers, nesting, and queue overwhelm
+
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-22----m9-concurrent-modifiers-spoilers-nesting-and-queue-overwhelm).
+
+## M10 -- Failure detail on every fault report (D-79, PR #20 review response)
+
+Fixes the review's core complaint directly: a client had no way to know *why* an open or arm failed, only
+that it did (`FaultOperation::Open`/`Arm`), or, for a permanent stop, only the coarse `OpenFailure`
+classification. Independent of M11/M12 below.
+
+- [x] **M10.1** -- Add `FailureCode` (`Win32(u32)` / `HResult(i32)`, `#[non_exhaustive]`) and `FaultDetail`
+  (`{ failure: OpenFailure, code: FailureCode }`) to `directory.rs`; add `OpenError::code() -> FailureCode`.
+
+- [x] **M10.2** -- Change `WatcherInner::enter_fault` to take `(OpenFailure, FailureCode)` instead of a bare
+  `io::Error`, storing both in `FaultState` (supersedes D-54). Fix every call site to classify at the
+  source instead of re-wrapping through `io::Error::other` (the `retry_reestablish` open-class path
+  currently does this, silently discarding its already-classified `OpenError`).
+
+- [x] **M10.3** -- `Notification::RetryQuestion` and `Outcome::Failed` carry `detail: FaultDetail` instead
+  of (nothing) / `failure: OpenFailure` respectively. Breaking change to already-published API
+  (`Outcome::Failed`'s field), commit as `feat(file-watcher)!`.
+
+- [x] **M10.4** -- Update the `log::warn!` diagnostics (D-58) to include the new detail, and every existing
+  test that matches on `Outcome::Failed`/`RetryQuestion`.
+
+- [x] **M10.5** -- Integration test: a permanent open failure (`NotADirectory`) reports its real
+  `FailureCode` through `Outcome::Failed`; an interactive subscription's `RetryQuestion` for a retryable
+  open failure reports a real `FailureCode` too. -> implemented with `InvalidPath` instead: `NotADirectory`
+  turns out to be unreachable through `subscribe` in practice (a non-directory leaf is always retried as a
+  file target, D-7, against its real parent, which succeeds) -- see
+  [tests/fault_detail.rs](tests/fault_detail.rs).
+
+## M11 -- Reopen identity: file-reference-based reopen, and volume-identity tracking (D-78 groundwork)
+
+Closes two related bugs found while designing D-78: `WatcherInner::reopen` always re-resolves by path even
+when its previous handle is still live, and `Resident.directories`'s `DirectoryId` key is never updated
+after a reopen lands on a different directory. Independent of M10 above; M12 below depends on this.
+
+- [x] **M11.1** -- Add `directory::VolumeIdentity` (filesystem name + volume label via
+  `GetVolumeInformationByHandleW`, reusing the volume serial `DirectoryId` already computes) and a
+  `DirectoryHandle` method wrapping `ReOpenFile`. -> `ReOpenFile` measured (D-52) to fail outright
+  (`ERROR_ACCESS_DENIED`, needs `SeBackupPrivilege`); replaced with `DirectoryHandle::reopen_by_id`
+  (`OpenFileById`, reopens by the file reference `DirectoryId` already carries) plus
+  `DirectoryHandle::canonical_path` (`GetFinalPathNameByHandleW`, needed because `OpenFileById` is
+  path-independent and would otherwise silently follow a moved/renamed directory). See D-80 and
+  [Reopening by file reference, and why the fast path is off](DESIGN-NOTES.md#reopening-by-file-reference-and-why-the-fast-path-is-off).
+
+- [x] **M11.2** -- `WatcherInner::reopen` tries `ReOpenFile` against its still-live previous handle first
+  (the old endpoint is not torn down until after this succeeds or fails), falling back to the existing
+  path-based `DirectoryHandle::open` only when that fails. Verify empirically (real-OS test, per this
+  crate's D-52 precedent of measuring rather than assuming Win32 behavior) that `ReOpenFile` behaves as
+  documented for a `FILE_FLAG_BACKUP_SEMANTICS` directory handle. -> `WatcherInner::reopen_via_existing_handle`
+  implements the `OpenFileById`-plus-`canonical_path` mechanism above, but returns `None` unconditionally:
+  measured to hang or (once) crash the process with `STATUS_STACK_BUFFER_OVERRUN` once a handle obtained
+  this way is associated with the thread pool's IOCP and armed, for a reason not yet root-caused. Every
+  reopen therefore uses the path-based fallback only, which is fully implemented and tested (M11.3/M11.4
+  below do not depend on the fast path). See D-80.
+
+- [x] **M11.3** -- Track each `DirectoryWatcher`'s current `VolumeIdentity`, recorded (no comparison) at
+  first establish, compared only on the path-based fallback path -- a `ReOpenFile` success needs no
+  comparison at all (D-78).
+
+- [x] **M11.4** -- Fix the stale-`DirectoryId`-key bug: when the path-based fallback produces a
+  `DirectoryId` different from the one `Resident.directories` currently keys this watcher under, re-key
+  the map entry. -> `monitor::rekey`, called from `WatcherInner::on_path_based_reopen`.
+
+- [x] **M11.5** -- Integration test: a manufactured reopen through `ReOpenFile` returns a handle to the same
+  file (`DirectoryId` unchanged) while the original handle stays open; a deleted-and-recreated directory
+  falls back to the path-based open and picks up its (possibly different) new identity, re-keying
+  `Resident.directories` correctly. -> `directory::tests` covers the file-reference-reopen identity claims
+  (`reopen_by_id_*`, including the rename hazard the fast path's disablement is about); `monitor::tests`'s
+  `a_path_based_reopen_that_lands_on_a_new_directory_rekeys_so_a_later_subscription_still_coalesces` covers
+  the re-keying claim end to end.
+
+## M12 -- Per-subscription volume-change confirmation (D-78)
+
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-23----m12-per-subscription-volume-change-confirmation-d-78).
 
 ## M-inf -- Horizon (ungated, post-v1)
 
@@ -173,3 +141,12 @@ when a post-v1 line of work takes one up. None is an open obligation of any curr
 
 - [ ] **M-inf.3** -- Per-volume capability cache: remember detailed-vs-coarse (and extended-record) support per
   volume so establish/re-establish need not re-probe each time (D-17/D-19).
+
+- [ ] **M-inf.4** -- Root-cause and, if fixed, re-enable M11.2's fast reopen path
+  (`WatcherInner::reopen_via_existing_handle`, currently hard-coded to return `None`): a handle obtained via
+  `OpenFileById` hangs, or once crashed the process with `STATUS_STACK_BUFFER_OVERRUN`, once associated
+  with the thread pool's IOCP and armed (D-80). `DirectoryHandle::reopen_by_id`/`canonical_path` are each
+  independently correct per `directory::tests`; the defect is specifically in the IOCP-association/arm
+  path against such a handle. Deferred because it needs dedicated low-level debugging (likely a minimal
+  repro outside this crate) rather than blocking M11/M12 on it -- the path-based-only reopen it falls back
+  to is fully correct, just without the optimization.

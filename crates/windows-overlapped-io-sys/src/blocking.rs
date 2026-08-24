@@ -15,6 +15,9 @@ use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 
 use crate::{Operation, OperationState, UnassociatedEndpoint};
 
+#[cfg(test)]
+mod tests;
+
 /// An overlapped endpoint that completes operations synchronously, one at a
 /// time, via `GetOverlappedResult`.
 ///
@@ -43,11 +46,28 @@ pub struct BlockingEndpoint {
 
 impl BlockingEndpoint {
     /// Take ownership of an overlapped endpoint for synchronous completion.
-    #[must_use]
-    pub fn new(endpoint: UnassociatedEndpoint) -> Self {
-        Self {
-            handle: endpoint.into_handle(),
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryFromEndpointError`], recoverable back into `endpoint` via
+    /// [`TryFromEndpointError::into_endpoint`], if `endpoint` has
+    /// [`NotificationModes::skip_set_event_on_handle`](crate::NotificationModes::skip_set_event_on_handle)
+    /// set (PR #20 review response). `run` below waits on the handle's own
+    /// internal event via `GetOverlappedResult`, which is exactly the
+    /// notification that mode suppresses -- constructing a `BlockingEndpoint`
+    /// from such an endpoint would have no wakeup source for a genuinely
+    /// pending (`ERROR_IO_PENDING`) operation and could block forever. Win32
+    /// offers no way to clear the mode once set (see
+    /// [`UnassociatedEndpoint::into_handle`]), so this is the one place the
+    /// incompatibility can be caught, and it is checked here rather than left
+    /// as a documentation-only warning.
+    pub fn new(endpoint: UnassociatedEndpoint) -> Result<Self, TryFromEndpointError> {
+        if endpoint.notification_modes().skip_set_event_on_handle {
+            return Err(TryFromEndpointError { endpoint });
         }
+        Ok(Self {
+            handle: endpoint.into_handle(),
+        })
     }
 
     /// Borrow the underlying handle for issuing native operations.
@@ -96,5 +116,41 @@ impl BlockingEndpoint {
 
     fn raw_handle(&self) -> HANDLE {
         self.handle.as_raw_handle()
+    }
+}
+
+/// [`BlockingEndpoint::new`]'s rejection: `endpoint` has
+/// [`crate::NotificationModes::skip_set_event_on_handle`] set, which is
+/// incompatible with the blocking backend (see `new`'s docs). Carries the
+/// endpoint back so a caller that constructed it in error loses nothing.
+#[derive(Debug)]
+pub struct TryFromEndpointError {
+    endpoint: UnassociatedEndpoint,
+}
+
+impl TryFromEndpointError {
+    /// Recover the endpoint this rejection carries.
+    #[must_use]
+    pub fn into_endpoint(self) -> UnassociatedEndpoint {
+        self.endpoint
+    }
+}
+
+impl std::fmt::Display for TryFromEndpointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cannot construct a BlockingEndpoint from an endpoint with \
+             skip_set_event_on_handle set: GetOverlappedResult's wait relies \
+             on exactly the notification that mode suppresses"
+        )
+    }
+}
+
+impl std::error::Error for TryFromEndpointError {}
+
+impl From<TryFromEndpointError> for io::Error {
+    fn from(error: TryFromEndpointError) -> Self {
+        io::Error::new(io::ErrorKind::InvalidInput, error)
     }
 }

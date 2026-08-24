@@ -15,6 +15,7 @@ use std::fmt;
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::panic::Location;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
@@ -61,6 +62,14 @@ struct Track {
 struct PortState {
     live: OperationRegistry,
     tracked: Mutex<HashMap<usize, Track>>,
+    /// Each associated endpoint's own outstanding-operation count, keyed by
+    /// its completion key (M1, PR #20 review response via `windows-ioring-sys`'s
+    /// M8). `live` above answers "is a packet still coming for this address",
+    /// port-wide; this answers the same question scoped to one endpoint, which
+    /// is what `AssociatedEndpoint`'s own `Drop` needs -- `CompletionPort::run_down`
+    /// is the wrong scope for it, since it blocks on every endpoint's operations,
+    /// not just one's.
+    endpoint_outstanding: Mutex<HashMap<usize, Arc<AtomicUsize>>>,
 }
 
 impl PortState {
@@ -68,6 +77,7 @@ impl PortState {
         Self {
             live: OperationRegistry::new(),
             tracked: Mutex::new(HashMap::new()),
+            endpoint_outstanding: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -109,22 +119,63 @@ impl CompletionPort {
     /// Completions for operations issued on the endpoint are delivered to this
     /// port and tagged with `key`. The association is permanent for the life of
     /// the handle, so the returned endpoint borrows the port.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] if `key` is already associated
+    /// with a live endpoint on this port (PR #20 review response): a
+    /// completion key is a caller-defined tag, not a unique endpoint identity,
+    /// and `deregister_dequeued` finds an endpoint's outstanding-operation
+    /// counter by looking it up under `key` alone. Associating a second
+    /// endpoint under a key already in use would silently replace the first
+    /// endpoint's counter in `endpoint_outstanding`; completions for the
+    /// first endpoint would then decrement the second's counter (which can
+    /// underflow) while the first's own counter never reaches zero, blocking
+    /// its `Drop` forever. Rejecting the duplicate before native association
+    /// keeps every key's counter unambiguous instead. Also returns the error
+    /// from `CreateIoCompletionPort`.
     pub fn associate(
         &self,
         endpoint: UnassociatedEndpoint,
         key: usize,
     ) -> io::Result<AssociatedEndpoint<'_>> {
+        // Read before the handle is taken out, so the mode travels with the
+        // endpoint into association rather than being lost at the boundary.
+        let modes = endpoint.notification_modes();
         let handle = endpoint.into_handle();
+        let outstanding = Arc::new(AtomicUsize::new(0));
+        {
+            // Checked and reserved under one lock acquisition, so no other
+            // `associate` call can race into the same key between the check
+            // and the insert.
+            let mut endpoint_outstanding = lock(&self.state.endpoint_outstanding);
+            if endpoint_outstanding.contains_key(&key) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "windows-overlapped-io-sys: completion key {key} is already \
+                         associated with a live endpoint on this port; each endpoint must \
+                         use a distinct key"
+                    ),
+                ));
+            }
+            endpoint_outstanding.insert(key, Arc::clone(&outstanding));
+        }
         // SAFETY: associating a valid handle with a valid port; the concurrency
         // argument is ignored when an existing port is supplied.
         let result = unsafe { CreateIoCompletionPort(handle.as_raw_handle(), self.raw(), key, 0) };
         if result.is_null() {
+            // Roll back the reservation above; nothing else can have used it,
+            // since the endpoint was never associated to receive completions.
+            lock(&self.state.endpoint_outstanding).remove(&key);
             return Err(io::Error::last_os_error());
         }
         Ok(AssociatedEndpoint {
             port: self,
             handle,
             key,
+            modes,
+            outstanding,
         })
     }
 
@@ -189,7 +240,7 @@ impl CompletionPort {
                 error: None,
                 // Deregister as the packet leaves the queue, recovering the
                 // identity in the same step. See `deregister_dequeued`.
-                id: self.deregister_dequeued(overlapped),
+                id: self.deregister_dequeued(key, overlapped),
                 claimed: Cell::new(false),
             }));
         }
@@ -207,7 +258,7 @@ impl CompletionPort {
             bytes_transferred,
             overlapped,
             error: Some(error),
-            id: self.deregister_dequeued(overlapped),
+            id: self.deregister_dequeued(key, overlapped),
             claimed: Cell::new(false),
         }))
     }
@@ -230,11 +281,21 @@ impl CompletionPort {
     /// no longer expressed through the registry.
     ///
     /// A null pointer (a user packet) and an address this port never registered
-    /// both return `None`, since `remove` reports only what it held.
-    fn deregister_dequeued(&self, overlapped: *mut OVERLAPPED) -> Option<OperationId> {
+    /// both return `None`, since `remove` reports only what it held. Also
+    /// decrements `key`'s endpoint-scoped outstanding count, but only when a
+    /// real registered operation was actually removed -- a user-posted packet
+    /// (`CompletionPort::post`) never incremented one, so it must not decrement
+    /// one either, even if it happens to carry a key that collides with a live
+    /// endpoint's.
+    fn deregister_dequeued(&self, key: usize, overlapped: *mut OVERLAPPED) -> Option<OperationId> {
         let id = self.state.live.remove(overlapped);
-        if id.is_some() && crate::source_tracking_enabled() {
-            lock(&self.state.tracked).remove(&(overlapped as usize));
+        if id.is_some() {
+            if crate::source_tracking_enabled() {
+                lock(&self.state.tracked).remove(&(overlapped as usize));
+            }
+            if let Some(outstanding) = lock(&self.state.endpoint_outstanding).get(&key) {
+                outstanding.fetch_sub(1, Ordering::SeqCst);
+            }
         }
         id
     }
@@ -321,7 +382,7 @@ impl CompletionPort {
     #[track_caller]
     pub(crate) unsafe fn submit_with<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
-        P: Send,
+        P: Send + 'static,
         F: FnOnce(*mut OVERLAPPED) -> io::Result<Issued>,
     {
         // Transfer the operation's storage out; the caller (kernel) owns it until
@@ -438,6 +499,13 @@ pub struct AssociatedEndpoint<'port> {
     port: &'port CompletionPort,
     handle: OwnedHandle,
     key: usize,
+    modes: crate::NotificationModes,
+    /// This endpoint's own outstanding-operation count (M1, PR #20 review
+    /// response), incremented in `submit` and decremented in
+    /// `CompletionPort::deregister_dequeued`. Shared with the port's
+    /// `endpoint_outstanding` map under this endpoint's key, so `Drop` can
+    /// block on it without needing the port to know about endpoints at all.
+    outstanding: Arc<AtomicUsize>,
 }
 
 impl<'port> AssociatedEndpoint<'port> {
@@ -453,10 +521,32 @@ impl<'port> AssociatedEndpoint<'port> {
         self.key
     }
 
+    /// The completion-notification modes this endpoint carries, as declared
+    /// before it was associated.
+    ///
+    /// The adapters read this to classify a synchronous native success: with
+    /// [`crate::NotificationModes::skip_completion_port_on_success`] set, no
+    /// packet will arrive for one, so it is an [`Issued::Completed`] rather than
+    /// an [`Issued::Pending`].
+    #[must_use]
+    pub fn notification_modes(&self) -> crate::NotificationModes {
+        self.modes
+    }
+
     /// The completion port this endpoint is associated with.
     #[must_use]
     pub fn port(&self) -> &'port CompletionPort {
         self.port
+    }
+
+    /// How many operations submitted on this endpoint have not yet had their
+    /// completion packet dequeued.
+    ///
+    /// Unlike [`CompletionPort::outstanding`], this is scoped to this endpoint
+    /// alone -- what [`AssociatedEndpoint`]'s own blocking `Drop` waits on.
+    #[must_use]
+    pub fn outstanding(&self) -> usize {
+        self.outstanding.load(Ordering::SeqCst)
     }
 
     /// Submit an owned operation on this endpoint.
@@ -495,19 +585,34 @@ impl<'port> AssociatedEndpoint<'port> {
     /// `issue` must not unwind: a panic out of it can leave an operation
     /// registered with no completion coming, which makes rundown wait forever. A
     /// closure that might panic must catch it and return `Err`.
+    ///
+    /// `P: 'static` because submitting leaks the operation's storage, to be
+    /// freed later through a thunk carrying no lifetime -- see
+    /// [`Operation::into_overlapped`].
     #[track_caller]
     pub unsafe fn submit<P, F>(&self, operation: Operation<P>, issue: F) -> Submitted<P>
     where
-        P: Send,
+        P: Send + 'static,
         F: FnOnce(BorrowedHandle<'_>, *mut OVERLAPPED) -> io::Result<Issued>,
     {
         let handle = self.handle();
+        // Incremented before the native call, not after `Submitted::Pending` is
+        // observed: `CompletionPort::get` can run on another thread and dequeue
+        // this same operation's packet before this thread would otherwise have
+        // recorded it, which would underflow the count on decrement. Reversed
+        // below on every path that turns out not to be pending, mirroring
+        // `submit_with`'s own register-before-issue discipline.
+        self.outstanding.fetch_add(1, Ordering::SeqCst);
         // SAFETY: `issue`'s safety contract (restated on this method) is exactly
         // what the shared core requires; the endpoint only supplies its handle.
-        unsafe {
+        let result = unsafe {
             self.port
                 .submit_with(operation, move |overlapped| issue(handle, overlapped))
+        };
+        if !matches!(result, Submitted::Pending(_)) {
+            self.outstanding.fetch_sub(1, Ordering::SeqCst);
         }
+        result
     }
 
     /// Request cancellation of a single outstanding operation.
@@ -556,22 +661,88 @@ impl<'port> AssociatedEndpoint<'port> {
     }
 }
 
+impl Drop for AssociatedEndpoint<'_> {
+    fn drop(&mut self) {
+        // `self.handle` is not actually closed until *after* this function
+        // returns (Rust drops struct fields in declaration order once the
+        // custom `Drop::drop` body finishes), so relying on close-cancels-
+        // pending-I/O would deadlock here: nothing has told the kernel to
+        // finish anything yet. Cancel explicitly first, while the handle is
+        // still open and the call is valid.
+        if self.outstanding() > 0 {
+            let _ = self.cancel_all();
+        }
+        // Mirrors `CompletionPort::run_down`: bounded waits, rechecking the
+        // live count after each, because a concurrent consumer can dequeue
+        // this endpoint's last packet between the check and the wait. Every
+        // packet dequeued here is for *some* endpoint on this port, not
+        // necessarily this one; whichever it is for still updates that
+        // endpoint's own count via `deregister_dequeued`; only this loop's own
+        // exit condition cares which one just reached zero.
+        while self.outstanding() > 0 {
+            let _ = self.port.get(RUN_DOWN_POLL_MS);
+        }
+        // Safe to drop the shared counter's port-side entry only now: nothing
+        // will ever decrement it again, since no packet can still be coming
+        // for an operation this endpoint submitted.
+        lock(&self.port.state.endpoint_outstanding).remove(&self.key);
+    }
+}
+
 /// How the native call in [`AssociatedEndpoint::submit`] accepted an operation.
 ///
 /// `issue` returns this to tell the backend whether a completion packet will be
 /// delivered, so the port's outstanding-operation accounting stays correct.
+///
+/// This asks **"will a completion packet arrive?"**, *not* "did the native call
+/// finish synchronously?". Those come apart precisely because Windows queues a
+/// packet for a synchronously-successful overlapped request too -- see
+/// [`Issued::Pending`], which is where that distinction is spelled out.
 #[derive(Debug, Clone, Copy)]
 pub enum Issued {
     /// A completion packet will be delivered to the port; the operation's
     /// storage stays with the kernel until [`Completion::claim`] recovers it.
-    /// This covers both native success that queues a packet and
-    /// `ERROR_IO_PENDING`.
+    ///
+    /// This covers **both** of the native call's success shapes, and it is the
+    /// right answer for both for the same reason -- a packet is coming either
+    /// way:
+    ///
+    /// - `ERROR_IO_PENDING`: the request has not finished; its packet is queued
+    ///   when it does.
+    /// - **Native success returned immediately** (`TRUE`, or `0` from Winsock):
+    ///   the request has *already* finished, and its packet is *already*
+    ///   queued.
+    ///
+    /// The second is the counter-intuitive one, so it is worth stating why it
+    /// holds. For a handle opened for asynchronous I/O and associated with a
+    /// completion port, the I/O Manager queues a completion packet for every
+    /// request it completes, including one that succeeds immediately without
+    /// returning `ERROR_IO_PENDING`. The single documented exception is
+    /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`, and that flag's own definition
+    /// is what establishes the general rule: it says the I/O Manager "does not
+    /// queue a completion entry to the port, *when it would ordinarily do so*"
+    /// for a request that "returns success immediately without returning
+    /// ERROR_PENDING". Ordinarily -- that is, without the flag -- it does.
+    ///
+    /// So an immediate `TRUE` tells a caller that the *I/O* is done. It says
+    /// nothing about whether the *packet* is still coming, which is the only
+    /// thing this enum is about.
     Pending,
     /// The operation finished synchronously and no completion packet will
     /// arrive -- the outcome a handle in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`
     /// mode reports on synchronous success. `bytes_transferred` is the count the
     /// native call reported; the operation's storage is reclaimed inline and
     /// returned through [`Submitted::Completed`].
+    ///
+    /// Reporting this when a packet *will* in fact arrive is a memory-safety
+    /// bug, not a bookkeeping one: `submit_with` treats it as license to drop
+    /// the operation from the port's outstanding set and reclaim its boxed
+    /// storage inline. The packet that was nevertheless queued then arrives
+    /// carrying a dangling `OVERLAPPED`, and claiming it frees that box a
+    /// second time -- while [`CompletionPort::run_down`] has already been told
+    /// there is nothing left to wait for. This is why every adapter that does
+    /// not enable skip-on-success mode reports [`Issued::Pending`] on immediate
+    /// native success.
     Completed {
         /// The number of bytes the synchronous call transferred.
         bytes_transferred: u32,

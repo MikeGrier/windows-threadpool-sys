@@ -1,0 +1,25 @@
+{
+  "label": "concurrent-file-churn",
+  "operations": [
+    {
+      "Concurrent": {
+        "branches": [
+          [
+            { "CreateFile": { "path": "branch-a-1.txt" } },
+            { "CreateFile": { "path": "branch-a-2.txt" } },
+            { "CreateFile": { "path": "branch-a-3.txt" } }
+          ],
+          [
+            { "CreateFile": { "path": "branch-b-1.txt" } },
+            { "CreateFile": { "path": "branch-b-2.txt" } },
+            { "CreateFile": { "path": "branch-b-3.txt" } }
+          ],
+          [
+            { "CreateDir": { "path": "branch-c" } },
+            { "CreateFile": { "path": "branch-c/inside.txt" } }
+          ]
+        ]
+      }
+    }
+  ]
+}

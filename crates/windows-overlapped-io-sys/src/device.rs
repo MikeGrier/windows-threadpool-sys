@@ -22,9 +22,10 @@ use std::os::windows::io::AsRawHandle;
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-use crate::operation::payload_ptr_from_overlapped;
+use crate::operation::sync_bytes_ptr_from_overlapped;
 use crate::{
-    AssociatedEndpoint, BlockingEndpoint, Completion, Issued, Operation, OperationId, Submitted,
+    AssociatedEndpoint, BlockingEndpoint, Completion, IoBuf, IoBufMut, Issued, Operation,
+    OperationId, Started, Submitted,
 };
 
 impl BlockingEndpoint {
@@ -32,8 +33,10 @@ impl BlockingEndpoint {
     /// until it completes.
     ///
     /// `input` is the input buffer (empty for control codes that take none) and
-    /// `output_len` sizes the output buffer. Returns the output truncated to the
-    /// bytes returned and that count.
+    /// `output` is the buffer the device writes into; the return value is how
+    /// many bytes it wrote. Takes plain slices and allocates nothing: this call
+    /// does not return until the operation is over, so an ordinary borrow
+    /// provably covers the whole time the driver is using them.
     ///
     /// # Errors
     ///
@@ -57,21 +60,19 @@ impl BlockingEndpoint {
         &mut self,
         code: u32,
         input: &[u8],
-        output_len: usize,
-    ) -> io::Result<(Vec<u8>, usize)> {
-        // Checked before allocating, so an unusable request costs nothing.
+        output: &mut [u8],
+    ) -> io::Result<usize> {
         let in_len = checked_len(input.len(), "input")?;
-        let out_len = checked_len(output_len, "output")?;
+        let out_len = checked_len(output.len(), "output")?;
 
-        let mut output = vec![0_u8; output_len];
-        let in_ptr = in_ptr(input);
-        let out_ptr = out_ptr(&mut output);
+        let in_ptr = in_ptr(input.as_ptr(), in_len);
+        let out_ptr = out_ptr(output.as_mut_ptr(), out_len);
 
         let mut operation = Operation::new(());
         // SAFETY: issues exactly one DeviceIoControl reading `input` and writing
         // `output`, both valid for the whole blocking call; no other operation is
         // outstanding.
-        let returned = unsafe {
+        unsafe {
             self.run(&mut operation, |handle, overlapped| {
                 let ok = DeviceIoControl(
                     handle.as_raw_handle(),
@@ -85,28 +86,29 @@ impl BlockingEndpoint {
                 );
                 classify(ok)
             })
-        }?;
-
-        output.truncate(returned);
-        Ok((output, returned))
+        }
     }
 }
 
 /// The input buffer pointer, `NULL` for an empty buffer.
-fn in_ptr(input: &[u8]) -> *const c_void {
-    if input.is_empty() {
+///
+/// A control code that takes no input must be given `NULL` rather than a
+/// dangling-but-nonnull pointer, which is what an empty buffer's `stable_ptr`
+/// legitimately is.
+fn in_ptr(ptr: *const u8, len: u32) -> *const c_void {
+    if len == 0 {
         std::ptr::null()
     } else {
-        input.as_ptr().cast()
+        ptr.cast()
     }
 }
 
 /// The output buffer pointer, `NULL` for an empty buffer.
-fn out_ptr(output: &mut [u8]) -> *mut c_void {
-    if output.is_empty() {
+fn out_ptr(ptr: *mut u8, len: u32) -> *mut c_void {
+    if len == 0 {
         std::ptr::null_mut()
     } else {
-        output.as_mut_ptr().cast()
+        ptr.cast()
     }
 }
 
@@ -142,19 +144,33 @@ fn checked_len(len: usize, which: &str) -> io::Result<u32> {
 
 /// The pinned payload for an in-flight device-control operation: the input and
 /// output buffers, both of which must outlive the async call.
-struct DeviceIoPayload {
-    input: Vec<u8>,
-    output: Vec<u8>,
+struct DeviceIoPayload<I, O> {
+    /// Kept alive (pinned, via this struct) for as long as the operation is
+    /// outstanding -- the driver reads it for the whole call -- but never
+    /// read back through this field: `ioctl` captures its stable pointer
+    /// before submission (PR #20 review response) and `claim`/`finish_device`
+    /// drop it unread once the operation completes (the common case only
+    /// wants `output` back).
+    #[allow(dead_code)]
+    input: I,
+    output: O,
 }
 
 impl AssociatedEndpoint<'_> {
-    /// Submit an overlapped `DeviceIoControl` with control code `code`, returning
-    /// a [`DeviceIoControlIo`] token that recovers the output buffer and byte
-    /// count from the operation's completion.
+    /// Submit an overlapped `DeviceIoControl` with control code `code`.
+    ///
+    /// Returns [`Started::Pending`] with a [`DeviceIoControlIo`] token that
+    /// recovers the output buffer and byte count from the operation's
+    /// completion, or -- only on an endpoint in
+    /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode, where a synchronous success
+    /// queues no packet -- [`Started::Completed`] with the output buffer already
+    /// in hand.
     ///
     /// `input` is the input buffer (empty for control codes that take none) and
-    /// `output_len` sizes the output buffer. The endpoint must not be in
-    /// `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode.
+    /// `output` is the buffer the device writes its result into. Both are owned
+    /// buffers of the caller's choosing, handed over for the operation's life
+    /// and returned when it completes: nothing is copied and nothing is
+    /// allocated here.
     ///
     /// # Errors
     ///
@@ -177,30 +193,36 @@ impl AssociatedEndpoint<'_> {
     /// self-contained code (an `FSCTL` query, say) needs nothing more than owned
     /// buffers.
     #[track_caller]
-    pub unsafe fn ioctl(
+    pub unsafe fn ioctl<I: IoBuf, O: IoBufMut>(
         &self,
         code: u32,
-        input: Vec<u8>,
-        output_len: usize,
-    ) -> io::Result<DeviceIoControlIo> {
-        // Checked before allocating, so an unusable request costs nothing. The
-        // lengths are captured here rather than measured inside the submission
-        // closure, which runs at the FFI boundary and cannot report an error.
-        let in_len = checked_len(input.len(), "input")?;
-        let out_len = checked_len(output_len, "output")?;
+        input: I,
+        mut output: O,
+    ) -> io::Result<Started<DeviceIoControlIo<I, O>, O>> {
+        // The lengths are captured here rather than measured inside the
+        // submission closure, which runs at the FFI boundary and cannot report
+        // an error.
+        let in_len = checked_len(input.bytes_len(), "input")?;
+        let out_len = checked_len(output.bytes_len(), "output")?;
+        let skip = self.notification_modes().skip_completion_port_on_success;
+        // Captured before submission too, alongside the lengths above (PR #20
+        // review response): `IoBuf`/`IoBufMut` are safe trait methods a
+        // caller's own buffer type implements, and `submit`'s safety contract
+        // forbids the closure unwinding -- a panic here, before the operation
+        // is registered, is merely an ordinary panic, where one from inside
+        // the closure would leave the operation permanently outstanding.
+        let in_ptr = in_ptr(input.stable_ptr(), in_len);
+        let out_ptr = out_ptr(output.stable_mut_ptr(), out_len);
 
-        let operation = Operation::new(DeviceIoPayload {
-            input,
-            output: vec![0_u8; output_len],
-        });
-        // SAFETY: issues exactly one DeviceIoControl reading the payload's input
-        // and writing its output, both reached through the pinned OVERLAPPED;
-        // they live until the completion is claimed.
+        let operation = Operation::new(DeviceIoPayload { input, output });
+        // SAFETY: issues exactly one DeviceIoControl reading from `in_ptr` and
+        // writing into `out_ptr` (captured above; identical to what the
+        // pinned payload would report, per `IoBuf`/`IoBufMut`'s
+        // address-stability contract); they and the byte-count cell live
+        // until the completion is claimed.
         let submitted = unsafe {
             self.submit(operation, |handle, overlapped| {
-                let payload = payload_ptr_from_overlapped::<DeviceIoPayload>(overlapped);
-                let in_ptr = in_ptr(&(*payload).input);
-                let out_ptr = out_ptr(&mut (*payload).output);
+                let bytes = sync_bytes_ptr_from_overlapped(overlapped);
                 let ok = DeviceIoControl(
                     handle.as_raw_handle(),
                     code,
@@ -208,20 +230,54 @@ impl AssociatedEndpoint<'_> {
                     in_len,
                     out_ptr,
                     out_len,
-                    std::ptr::null_mut(),
+                    bytes,
                     overlapped,
                 );
-                classify_issued(ok)
+                classify_issued(ok, skip, bytes)
             })
         };
         finish_device(submitted)
     }
 }
 
-/// Map a native `BOOL` into the IOCP submission contract, expecting a completion
-/// packet on success because the adapter never enables skip-on-success mode.
-fn classify_issued(ok: i32) -> io::Result<Issued> {
+/// Map a native `BOOL` into the IOCP submission contract.
+///
+/// # Why an immediate `TRUE` is usually `Pending`
+///
+/// [`Issued`] does not record whether `DeviceIoControl` finished synchronously.
+/// It records whether a **completion packet will arrive on the port**, and for
+/// an overlapped handle bound to an IOCP those are different facts: the I/O
+/// Manager queues a packet for every request it completes, *including* one that
+/// succeeds immediately without returning `ERROR_IO_PENDING`. See
+/// [`Issued::Pending`] for the full statement of that rule.
+///
+/// The single exception is `skip_on_success`, which is why this needs to know
+/// it: on an endpoint in `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode no packet
+/// is queued for an immediate success, so that -- and only that -- is an
+/// [`Issued::Completed`]. Both directions of getting this wrong are serious.
+/// Answering `Completed` when a packet is coming tells the port to reclaim the
+/// operation's storage inline, and the packet then arrives carrying a dangling
+/// `OVERLAPPED` -- a use-after-free on claim. Answering `Pending` when none is
+/// coming leaves the operation counted as outstanding forever, so
+/// [`crate::CompletionPort::run_down`] spins waiting for a packet that will
+/// never be queued.
+///
+/// # Safety
+///
+/// `sync_bytes` must be the byte-count cell of the operation being submitted,
+/// which is live for the whole call.
+unsafe fn classify_issued(
+    ok: i32,
+    skip_on_success: bool,
+    sync_bytes: *mut u32,
+) -> io::Result<Issued> {
     if ok != 0 {
+        if skip_on_success {
+            // SAFETY: the call reported immediate success, so the kernel has
+            // already written the count and will not write it again.
+            let bytes_transferred = unsafe { *sync_bytes };
+            return Ok(Issued::Completed { bytes_transferred });
+        }
         return Ok(Issued::Pending);
     }
     let error = io::Error::last_os_error();
@@ -232,15 +288,22 @@ fn classify_issued(ok: i32) -> io::Result<Issued> {
     }
 }
 
-/// Turn a device submission outcome into a [`DeviceIoControlIo`] token or an
-/// immediate error.
-fn finish_device(submitted: Submitted<DeviceIoPayload>) -> io::Result<DeviceIoControlIo> {
+/// Turn a device submission outcome into the adapter's two-state outcome.
+fn finish_device<I: IoBuf, O: IoBufMut>(
+    submitted: Submitted<DeviceIoPayload<I, O>>,
+) -> io::Result<Started<DeviceIoControlIo<I, O>, O>> {
     match submitted {
-        Submitted::Pending(id) => Ok(DeviceIoControlIo { id }),
-        Submitted::Completed { .. } => Err(io::Error::other(
-            "device adapter observed a synchronous completion; the endpoint must not be in \
-             FILE_SKIP_COMPLETION_PORT_ON_SUCCESS mode",
-        )),
+        Submitted::Pending(id) => Ok(Started::Pending(DeviceIoControlIo {
+            id,
+            buffers: std::marker::PhantomData,
+        })),
+        Submitted::Completed {
+            operation,
+            bytes_transferred,
+        } => Ok(Started::Completed {
+            payload: operation.into_payload().output,
+            bytes_transferred: bytes_transferred as usize,
+        }),
         Submitted::Failed { error, .. } => Err(error),
     }
 }
@@ -248,15 +311,20 @@ fn finish_device(submitted: Submitted<DeviceIoPayload>) -> io::Result<DeviceIoCo
 /// A pending device-control operation submitted through
 /// [`AssociatedEndpoint::ioctl`].
 ///
-/// The token carries the operation's identity and its payload type, so
-/// [`DeviceIoControlIo::claim`] recovers the output buffer and byte count safely
-/// once the matching completion is dequeued.
+/// The token carries the operation's identity and remembers both buffer types it
+/// was submitted with, so [`DeviceIoControlIo::claim`] hands back the caller's
+/// own output buffer -- the same value, not a copy -- once the matching
+/// completion is dequeued. The input type is carried too, because it is part of
+/// the payload type the claim must name.
 #[derive(Debug)]
-pub struct DeviceIoControlIo {
+pub struct DeviceIoControlIo<I, O> {
     id: OperationId,
+    /// The buffers live in the pinned operation, not here; this only keeps the
+    /// token's type tied to them so `claim` cannot be handed the wrong payload.
+    buffers: std::marker::PhantomData<fn() -> (I, O)>,
 }
 
-impl DeviceIoControlIo {
+impl<I: IoBuf, O: IoBufMut> DeviceIoControlIo<I, O> {
     /// The identity of the in-flight operation, for cancellation or matching.
     #[must_use]
     pub fn id(&self) -> OperationId {
@@ -265,20 +333,24 @@ impl DeviceIoControlIo {
 
     /// Claim this operation's result from `completion`.
     ///
-    /// On a match returns `Ok((output, result))`: `output` is the output buffer
-    /// (valid up to the byte count) and `result` is the byte count or the
-    /// operation's error. Returns `Err(self)` when `completion` belongs to a
-    /// different operation.
-    pub fn claim(self, completion: &Completion) -> Result<(Vec<u8>, io::Result<usize>), Self> {
+    /// On a match returns `Ok((output, result))`: `output` is the buffer the
+    /// caller handed over (valid up to the byte count) and `result` is the byte
+    /// count or the operation's error. Returns `Err(self)` when `completion`
+    /// belongs to a different operation.
+    ///
+    /// The input buffer is dropped here: the driver is done reading it, and
+    /// returning both would make the common case pay for the rare one.
+    pub fn claim(self, completion: &Completion) -> Result<(O, io::Result<usize>), Self> {
         if completion.id() != Some(self.id) {
             return Err(self);
         }
         // SAFETY: the full identity -- address *and* generation -- matches, which
         // an address alone would not: a recycled address can belong to a later
         // operation of a different payload type. The match therefore proves this
-        // completion is the
-        // Operation<DeviceIoPayload> this token submitted; claim it exactly once.
-        let operation = unsafe { completion.claim::<DeviceIoPayload>() };
+        // completion is the Operation<DeviceIoPayload<I, O>> this token
+        // submitted, and the token's own type parameters name that payload;
+        // claim it exactly once.
+        let operation = unsafe { completion.claim::<DeviceIoPayload<I, O>>() };
         let output = operation.into_payload().output;
         let result = match completion.error() {
             Some(error) => Err(io::Error::from_raw_os_error(

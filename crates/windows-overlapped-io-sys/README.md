@@ -11,6 +11,27 @@ foundation beneath `windows-threadpool-sys`: raw I/O completion ports and the
 object-based thread pool share endpoint and operation storage while remaining
 distinct completion backends.
 
+## Example
+
+The blocking backend (no completion port, one operation at a time), with the
+`fs` feature:
+
+```rust,no_run
+use windows_overlapped_io_sys::{BlockingEndpoint, UnassociatedEndpoint};
+
+let endpoint = UnassociatedEndpoint::open(r"C:\some\file.bin", true, false, 0)?;
+let mut endpoint = BlockingEndpoint::new(endpoint).expect("no incompatible notification mode");
+
+let mut buffer = [0_u8; 64];
+let bytes_read = endpoint.read(&mut buffer, 0)?;
+println!("read {bytes_read} bytes");
+# Ok::<(), std::io::Error>(())
+```
+
+An endpoint associated with a `CompletionPort` instead returns a `Started`
+token per submission, claimed from its completion; see the
+[API documentation](https://docs.rs/windows-overlapped-io-sys) for that shape.
+
 ## Operation-family adapters
 
 Endpoints are opened safely with `UnassociatedEndpoint::open`, and each operation
@@ -23,6 +44,26 @@ adapters are fully safe; the `device` adapter owns its buffers but its `ioctl` i
 | `fs` | file read/write and scatter/gather, on the blocking and IOCP backends | yes |
 | `socket` | socket send/receive, on the blocking and IOCP backends | yes |
 | `device` | `DeviceIoControl`, on the blocking and IOCP backends | no — buffer-owning `unsafe` raw-code seam |
+
+Adapters never copy or allocate a caller's buffer. On the IOCP backend they take
+an owned buffer -- `Vec<u8>`, `Box<[u8]>`, `Arc<[u8]>`, `&'static [u8]`,
+`PageBuffers`, or a caller's own pooled or alignment-constrained type
+implementing `IoBuf`/`IoBufMut` -- and hand that same value back on completion.
+Ownership is what a slice cannot express here: the kernel touches the memory
+after the submitting call returns, so the buffer is transferred for the
+operation's life and returned when it ends. The blocking backend takes plain
+slices instead, because it does not return until the operation is over, so an
+ordinary borrow covers it.
+
+On the IOCP backend an adapter submission returns `Started`, not a bare token:
+`Started::Pending(token)` when a completion will arrive and the result is claimed
+from it, or `Started::Completed { payload, bytes_transferred }` when the
+operation finished with no completion to come. The second arm exists only for an
+endpoint put into `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` mode with
+`UnassociatedEndpoint::set_notification_modes`, which drops the packet, dequeue,
+and worker wakeup for every synchronously-completing operation. A caller that
+never enables it cannot reach that arm and can say so with
+`Started::expect_pending`.
 
 The default feature set is empty, keeping the core completion machinery (raw IOCP
 and blocking backends, owned endpoints, pinned operations) minimal. A narrow
@@ -50,3 +91,7 @@ because cancellation is a safe operation racing a completion it cannot observe:
 
 The result is that holding an identity too long is harmless, and a late cancel
 fails rather than silently cancelling an unrelated operation.
+
+## License
+
+MIT. Copyright (c) Mike Grier.

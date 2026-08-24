@@ -1,0 +1,8 @@
+{
+  "label": "churn",
+  "operations": [
+    { "Repeat": { "count": 2000, "pattern": [{ "CreateFile": { "path": "churn-0.txt" } }] } },
+    { "Repeat": { "count": 2000, "pattern": [{ "CreateFile": { "path": "churn-1.txt" } }] } },
+    { "Repeat": { "count": 2000, "pattern": [{ "CreateFile": { "path": "churn-2.txt" } }] } }
+  ]
+}

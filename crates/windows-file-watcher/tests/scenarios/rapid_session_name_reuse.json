@@ -1,0 +1,24 @@
+{
+  "label": "rapid-session-name-reuse",
+  "operations": [
+    {
+      "Repeat": {
+        "count": 5,
+        "pattern": [
+          { "OpenSession": { "name": "reused" } },
+          {
+            "Subscribe": {
+              "session": "reused",
+              "watch": "reused-watch",
+              "path": "",
+              "subtree": true
+            }
+          },
+          { "CreateFile": { "path": "touched.txt" } },
+          { "CancelWatch": { "watch": "reused-watch" } },
+          { "CloseSession": { "name": "reused" } }
+        ]
+      }
+    }
+  ]
+}

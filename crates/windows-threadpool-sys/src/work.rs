@@ -31,13 +31,9 @@ unsafe extern "system" fn work_trampoline(
 ) {
     // SAFETY: context is a valid *mut WorkContext for the full callback duration (see Drop).
     let ctx = unsafe { &*(context as *const WorkContext) };
-    // A panic must never unwind across the FFI boundary into the pool's frame.
-    // Without this, a panicking work callback unwinds out of an `extern "system"`
-    // function, which aborts the process rather than being contained as the
-    // crate's callback contract promises.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        (ctx.f)();
-    }));
+    // Not contained: the callback contract requires that it not unwind, and a
+    // callback that breaks it aborts here rather than being silently forgiven.
+    (ctx.f)();
 }
 
 /// An owned thread-pool work object.

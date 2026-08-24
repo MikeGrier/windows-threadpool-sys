@@ -111,8 +111,10 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 - `SetFileCompletionNotificationModes` (`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`,
 	`FILE_SKIP_SET_EVENT_ON_HANDLE`) changes whether a completion packet arrives on synchronous success. It is
 	modeled as an opt-in endpoint provenance attribute, because it directly alters the "a packet will or will not
-	arrive" invariant that reclamation depends on. It lives behind a feature gate because it pulls in
-	`Win32_Storage_FileSystem`.
+	arrive" invariant that reclamation depends on. It is core rather than behind an operation-family feature gate
+	(M13.1): the endpoint owns this capability and does not know which family -- `fs`, `socket`, or `device` --
+	will end up using it, so no family gate can be the right one. `Win32_Storage_FileSystem` moved into the
+	always-on `windows-sys` dependency features accordingly.
 
 ## Operation storage and identity
 
@@ -143,6 +145,126 @@ Thread-pool I/O backend (implemented in `windows-threadpool-sys`):
 	leaves an operation counted as outstanding. Misclassifying a synchronous success as `Pending` would leave the
 	outstanding count permanently high and hang rundown, so the distinction is part of the seam's safety contract,
 	not an optimization.
+
+## Skip-on-success completion notification modes (M10)
+
+- **`Issued` answers "will a completion packet arrive", not "did the call finish synchronously".** Those come
+	apart precisely because an IOCP-associated overlapped handle receives a packet for *every* request it
+	completes, including one that returns success immediately without `ERROR_IO_PENDING`. The proof is in
+	`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`'s own definition, which says the I/O Manager "does not queue a
+	completion entry to the port, *when it would ordinarily do so*" -- ordinarily, it does. So an immediate
+	`TRUE` is `Issued::Pending` on a default endpoint and `Issued::Completed` on a skip-mode one, and the same
+	native return value means different things depending on the endpoint. This is the single most
+	misread part of the seam, so both `Issued` variants document it at length.
+- **The notification mode is tracked on the endpoint, not passed per call.** This is what
+	"opt-in endpoint provenance attribute" has to mean in practice. `set_notification_modes` records what it
+	established on `UnassociatedEndpoint`, `CompletionPort::associate` carries it into `AssociatedEndpoint`, and
+	the adapters read it to classify. A fire-and-forget setter that only called Win32 would leave every adapter
+	unable to answer the one question the seam requires, which is exactly the defect that made an ioctl on a
+	skip-mode endpoint hang rundown before M10.5. The mode is accumulated rather than replaced, because Win32
+	cannot clear one once set; `assume_overlapped` therefore requires a caller who set a mode on the raw handle
+	to re-declare it, so the endpoint's record agrees with the handle's reality.
+- **The setter is core, not gated on an operation family (M13.1).** It shipped gated on `fs` alongside M10,
+	which left every other part of the mechanism above ungated and only the setter itself family-restricted --
+	so a `device`-only consumer had a mode permanently `false` and no way to change it, even though
+	`device::classify_issued` already branched on it. Worse, `assume_overlapped`'s own safety contract requires
+	a caller to be able to re-declare a mode regardless of family; a `device`-only build could not discharge an
+	obligation the core type itself imposes. The fix removed the gate rather than widening it to
+	`any(fs, device)`, because the endpoint does not know its family and widening would only defer the same
+	defect to the next family. `Win32_Storage_FileSystem` is accordingly in the crate's always-on `windows-sys`
+	dependency features (see `windows-sys` feature layout below), and `fs`/`socket` no longer list it -- it is
+	no longer theirs to add.
+- **The mode is set before association, deliberately.** The flag is inert until the handle reaches a port, so
+	establishing it first means there is never a window in which an operation could be issued against a handle
+	whose notification behaviour is still undecided.
+- **The synchronous byte count lives in the operation header, not on the submitting stack frame.**
+	`Operation` carries a `sync_bytes` cell (before `payload`, so the reclaim thunk's offset stays identical for
+	every `P`) that adapters pass as `lpNumberOfBytesTransferred` / `lpBytesReturned`. A stack local would be a
+	dangling write: `DeviceIoControl` documents that with a non-null `lpOverlapped` the count "is meaningless
+	until the overlapped operation has completed", so the kernel may write it after the submitting call has
+	returned. Scatter/gather has no such out-parameter at all -- that argument slot is `lpReserved` -- so it
+	recovers the count from `GetOverlappedResult` with `bWait: FALSE`, which is the sanctioned reader and cannot
+	block because the operation is already complete.
+- **The buffer-owning adapters report a two-state outcome (`Started`) rather than hiding the synchronous case.**
+	An adapter owns the operation's buffers, so the two paths differ in *who owns the payload*, not merely in
+	timing: a caller that ignored the distinction would either wait forever for a packet that is not coming or
+	drop a result already delivered. `Started::Completed` reduces the operation to exactly the payload the
+	token's `claim` would have yielded, so both arms report the same shape, and `expect_pending` serves the
+	common case of a caller that never enables the mode.
+- **Sockets declare their modes on the *associated* socket, unlike handles.** Superseded M10's exclusion of
+	sockets (M12.2). The handle side sets modes before association because there the mode is part of an
+	endpoint's provenance; a socket has no unassociated stage to hang that on, and inventing an
+	`UnassociatedSocket` purely for symmetry would be churn for its own sake. Setting after association is
+	still sound: the flag is inert until I/O time, so `AssociatedSocket::set_notification_modes` takes
+	`&mut self` while `recv`/`send` keep taking `&self` -- a caller declares once and then submits freely.
+	The asymmetry is real and deliberate, not an inconsistency to be tidied away.
+- **The socket setter probes the provider rather than trusting the caller.** Win32 restricts socket
+	skip-on-success to Layered Service Providers that return IFS handles, and a socket wrongly put in that
+	mode reports `Pending` for an operation whose packet was suppressed -- rediscovering, on the socket side,
+	exactly the rundown wedge M10.5 fixed for handles. Trusting the caller would re-open a bug already paid
+	for once. The probe reads *this* socket's own `WSAPROTOCOL_INFOW` via
+	`getsockopt(SOL_SOCKET, SO_PROTOCOL_INFOW)` and requires `XP1_IFS_HANDLES` in `dwServiceFlags1`, which is
+	narrower and more accurate than the `WSAEnumProtocols` sweep the flag's own documentation suggests: it
+	asks about the provider that actually created this socket, not about every LSP installed on the machine.
+	Refusal is `io::ErrorKind::Unsupported`, deliberately not a Win32 error, because nothing failed -- the
+	question was asked and answered. Only `skip_completion_port_on_success` is probed; `FILE_SKIP_SET_EVENT_ON_HANDLE`
+	carries no such restriction.
+- **The IFS decision is a separate function from the `getsockopt` that feeds it**, purely for testability.
+	Every base Winsock provider on a stock Windows returns IFS handles, so the refusal arm is otherwise
+	unreachable without installing an LSP -- `require_ifs_handles(flags)` takes the word and returns the
+	answer, so both arms are covered by ordinary unit tests.
+- **`classify_socket` became mode-aware in the same change that made the mode reachable**, exactly as
+	`fs::classify_issued` and `device::classify_issued` did in M10.5. This was not a separable follow-up: a
+	setter without it would ship the wedge, and the count it needs comes from `WSARecv`/`WSASend`'s
+	`lpNumberOfBytesTransferred`, which the adapters had previously been passing as null.
+- **`FILE_SKIP_SET_EVENT_ON_HANDLE` is unsafe to combine with the blocking backend**, which waits on precisely
+	the handle event that flag suppresses. Recorded on the flag's own documentation rather than prevented,
+	because the two are independently useful and the endpoint does not know its future backend.
+
+## Caller-supplied owned buffers (M11)
+
+- **Completion-based I/O forces owned buffers, not slices.** The kernel touches the caller's memory
+	*after* the submitting call returns, so a `&[u8]` cannot describe an async operation: its borrow would
+	have to span the whole operation, and nothing in the API can make it. The submission tokens have no
+	`Drop` that cancels, and even one would be defeated by `mem::forget`, so a caller could always end the
+	borrow with the kernel still reading. A cancel-on-drop that *blocked* would be sound and would also
+	defeat the point of submitting asynchronously. The buffer is therefore handed over -- a protracted
+	borrow made out of ownership rather than a lifetime -- and returned on completion through `claim` or
+	`Started::Completed`.
+- **The blocking adapters may still take slices, and do.** `BlockingEndpoint::read`/`write`/
+	`read_scatter`/`write_gather`, `BlockingSocket::recv`/`send`, and the blocking `ioctl` all take plain
+	borrows and allocate nothing, because they do not return until the operation is over: an ordinary
+	borrow provably covers it. This is strictly cheaper than owning, so the two backends differ on purpose
+	rather than for want of a shared shape.
+- **`IoBuf`/`IoBufMut` are `unsafe` because the contract is a stable address.** A type whose accessor
+	returns a fresh address on each call, or that reallocates while an operation is in flight, is what makes
+	the kernel write into freed memory long after submission returned. That is unprovable by the compiler,
+	so implementing the traits is an assertion. `Send + 'static` come along because the leaked operation
+	storage is reclaimed on another thread through a thunk carrying no lifetime.
+- **The traits are split so a shared buffer can be a source but never a destination.** An `Arc<[u8]>` is a
+	fine thing to send *from* and can never be read *into*, since handing the kernel a writable pointer to
+	bytes other clones are reading would alias; `&'static [u8]` is read-only for the same reason. One
+	combined trait would have forced either excluding shared buffers from writes or admitting them as read
+	targets.
+- **Read buffers are fully initialized rather than init-tracked.** No `MaybeUninit`, no `set_init`-style
+	obligation. A caller-supplied pooled buffer is initialized once and reused for the life of the pool, so
+	the cost is per-pool rather than per-operation, and the API carries nothing for a caller to forget. The
+	trade is that a fresh one-shot read buffer is zeroed before use.
+- **No adapter allocates on the caller's behalf.** `read` takes the buffer to fill rather than a length,
+	and `ioctl` takes an output buffer rather than an output length, so an allocation is always visible at
+	the call site. A naive caller writing `vec![0; n]` there pays for it knowingly; a caller reusing a pool
+	pays nothing. Hiding it would put a cost on the exact path the crate exists to keep cheap.
+- **`scatter_gather_len` was removed with M11.** Both scatter paths now validate a `PageBuffers` that
+	already exists, so there is no caller-supplied page count left to overflow-check; `PageBuffers::new` is
+	where a degenerate count is rejected, at the caller's own call site.
+- **`&'static mut [u8]` implements *both* traits, and is the one reference type that does (M12.1).** The
+	split above is about aliasing, not about references: `Arc<[u8]>` and `&'static [u8]` are excluded from
+	`IoBufMut` because they are *shared*, so handing the kernel a writable pointer would alias bytes another
+	holder is reading. A `&'static mut` is exclusive by construction -- no other live reference to those bytes
+	can exist -- so it is a legitimate read destination, and excluding it would have been the arbitrary half
+	of the split rather than a safety measure. It is the natural handoff for a leaked or statically-allocated
+	pool, and satisfies the stable-address promise trivially: the referent is `'static` and never moves, so
+	moving the reference does not move the bytes.
 
 ## Cancellation and rundown
 
@@ -275,12 +397,15 @@ One `CompletionPort` may serve many endpoints, and its completion stream may be 
 once. The decisions that make that safe:
 
 - The port -- not the endpoint -- owns the completion stream and is the single drain authority. Outstanding
-	operations are counted once per port (a shared atomic), not per endpoint, so `run_down` drains *every*
-	endpoint's outstanding operations in one pass; there is deliberately no per-endpoint rundown. An endpoint's
-	own teardown only cancels its in-flight operations -- closing its handle issues an implicit
-	`CancelIoEx(handle, null)` -- and defers reclamation to the port's drain. The lifetime binding (each
-	`AssociatedEndpoint` borrows its port) enforces the order: all endpoints drop first, cancelling their
-	operations, and the port's `run_down` or blocking `Drop` then observes and frees every resulting completion.
+	operations are counted once per port (a shared atomic) for `run_down`'s own purposes, which drains *every*
+	endpoint's outstanding operations in one pass.
+	**Superseded in part by [Per-endpoint outstanding tracking and blocking `Drop`](#per-endpoint-outstanding-tracking-and-blocking-drop):**
+	an endpoint's own teardown is no longer merely "cancel and defer reclamation to the port's drain" -- each
+	`AssociatedEndpoint` now also tracks its own outstanding count (keyed by its completion key) and its `Drop`
+	blocks, draining via the port, until that count reaches zero, so a caller can no longer close one endpoint's
+	handle while an operation is still outstanding against it specifically, without waiting on every other
+	endpoint's operations too. The port-wide atomic and `run_down` are unchanged and remain the authority for
+	whole-port rundown; the per-endpoint count is additional, narrower-scoped bookkeeping alongside it.
 - Completions are attributed on two independent axes. The completion *key* identifies which endpoint a packet
 	came from (each association fixes its key); the `OVERLAPPED` address identifies which operation, and `claim`
 	recovers its typed storage. Neither axis depends on which thread dequeued the packet, so a shared port with a
@@ -303,6 +428,38 @@ Behavioral matrix every backend must be exercised against:
 - endpoint shutdown with operations still outstanding; and
 - results and payloads retained after native endpoint shutdown.
 
+### Per-endpoint outstanding tracking and blocking `Drop` (M1)
+
+Found while designing `windows-ioring-sys`'s M8 (a PR #20 review response): `AssociatedEndpoint` had no
+`Drop`, so closing one (dropping its `OwnedHandle`) while an operation was still outstanding against it
+specifically was memory-unsafe -- the kernel could still write into the operation's storage after the caller
+believed it was free to reclaim. `CompletionPort::run_down` was the wrong scope to catch this: it blocks on the
+*port's* whole outstanding count, not any one endpoint's, so a program with several endpoints on one port could
+not close a single misbehaving or finished endpoint without either running down the whole port (destroying every
+other endpoint's in-flight work too) or accepting the unsafety.
+
+`AssociatedEndpoint` has exactly one owner (`!Clone`), so the fix reuses the same shape `CompletionPort` already
+applies to itself (see "Voluntary rundown and `Drop`" above), rather than `windows-ioring-sys`'s `Arc`-based
+`SharedFile` (that mechanism is for genuine multi-owner sharing, which this endpoint does not have and should
+not pay for):
+
+- `PortState` gained a `Mutex<HashMap<usize, Arc<AtomicUsize>>>` keyed by completion key, one entry per live
+	association, holding that endpoint's own outstanding count.
+- `submit` increments its endpoint's counter before issuing the operation (to avoid a cross-thread underflow
+	race against a concurrent dequeue) and decrements it back out if the issue did not actually pend.
+- `deregister_dequeued` -- already the single place a real dequeue is attributed to an operation -- additionally
+	decrements the dequeued packet's key's counter. This is sound only because a genuine Windows completion
+	packet always carries the key fixed at that handle's `CreateIoCompletionPort` association; there is no
+	per-operation override for real device I/O, so keying this map by completion key is safe for production
+	traffic. It is fragile against synthetic test packets from `CompletionPort::post`/`post_raw`, which accept an
+	arbitrary, disconnected key -- test helpers that post a key not matching the endpoint under test will corrupt
+	an unrelated (or nonexistent) counter.
+- `AssociatedEndpoint::drop` explicitly cancels its own outstanding operations first (while its handle is still
+	open -- `self.handle`'s own `Drop` does not run until *after* the custom `Drop::drop` body returns, so
+	relying on close-cancels-pending-I/O here would deadlock waiting on a cancellation nothing had requested yet),
+	then polls the port (bounded waits, rechecked, mirroring `run_down`) until its own counter reaches zero,
+	then removes its entry from the port's map. Only then does the automatic field drop close the handle.
+
 ## `windows-sys` feature layout
 
 - Core (always on): `Win32_Foundation` and `Win32_System_IO`, which supply `OVERLAPPED`, `OVERLAPPED_ENTRY`,
@@ -312,18 +469,34 @@ Behavioral matrix every backend must be exercised against:
 - The published default feature set is empty (`default = []`): the safe endpoint creator
 	([`UnassociatedEndpoint::open`](src/endpoint.rs)) opens overlapped handles through `std::fs::OpenOptions`
 	(`custom_flags(FILE_FLAG_OVERLAPPED | …)`), so the core completion machinery needs no operation-family
-	`windows-sys` bindings at all.
-- Operation-family bindings are gated behind three additive Cargo features so the core stays minimal, one per the
-	families the checklist enumerates:
-	- `fs` → `Win32_Storage_FileSystem` — file read / write, scatter / gather, and
-		`SetFileCompletionNotificationModes` (`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`).
-	- `socket` → `Win32_Networking_WinSock` — overlapped socket operations.
+	`windows-sys` bindings for that -- but the core dependency features are `Win32_Foundation`,
+	`Win32_System_IO`, **and `Win32_Storage_FileSystem`** (not two), because
+	`UnassociatedEndpoint::set_notification_modes` (`SetFileCompletionNotificationModes`) is core, not
+	operation-family gated (M13.1; see "Endpoint ownership and provenance" above). A default build therefore
+	compiles one more `windows-sys` binding than the minimal completion machinery strictly reads, in exchange
+	for `assume_overlapped`'s safety contract being dischargeable in every configuration, including no family at
+	all.
+- Operation-family bindings beyond that are gated behind three additive Cargo features so the core stays
+	minimal, one per the families the checklist enumerates:
+	- `fs` → `Win32_Storage_FileSystem` for file read / write and scatter / gather. (That binding is already
+		core per the point above; the feature adds no `windows-sys` feature of its own, only gating this crate's
+		own `src/fs.rs` module.)
+	- `socket` → `Win32_Networking_WinSock` — overlapped socket operations, including
+		`AssociatedSocket::set_notification_modes` (M12.2), which needs no further `windows-sys` feature beyond
+		the core `Win32_Storage_FileSystem` either, for the same reason `fs` does not.
 	- `device` → `Win32_System_Ioctl` — device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
 		itself is already in the always-on core (`Win32_System_IO`); the feature only adds the control-code
 		constants a device family needs.
-	Enabling a family turns on only the `windows-sys` features that family needs and never changes the completion
-	machinery. Tests that issue real overlapped I/O pull the same bindings in through dev-dependencies, so the
-	families are not required to exercise a backend.
+	Enabling a family turns on only the `windows-sys` features that family needs beyond the core and never
+	changes the completion machinery. Tests that issue real overlapped I/O pull the same bindings in through
+	dev-dependencies, so the families are not required to exercise a backend.
+- **CI builds, lints, and tests each family in isolation, plus the bare core with no family (M13.3).**
+	`--all-features` and default were the only two configurations CI ever exercised, and `--all-features` hides
+	a missing family-specific `cfg` gate by construction -- it is exactly what let M13.1's defect (the
+	notification-mode setter unreachable without `fs`) go unbuilt until reported by hand. The `feature-matrix`
+	job in `ci.yml` runs `cargo check` / `clippy` / `test` for `""`, `fs`, `socket`, and `device` each alone;
+	adding a family to the matrix is a one-line change, so the guarantee is not something the next family has to
+	remember to ask for.
 - Minimum supported Windows version is the shared workspace baseline: the current public releases validated by
 	GitHub CI, namely Windows Server 2025 (`windows-latest`) and Windows 11. `CancelIoEx` and
 	`GetQueuedCompletionStatusEx` are available there without down-level gating; per-handle notification-mode
