@@ -107,7 +107,7 @@ pub(crate) unsafe fn reclaim_from_overlapped(overlapped: *mut OVERLAPPED) {
 /// `overlapped` must be the identity pointer of a live `Operation<P>` of this
 /// exact type, and the returned pointer must be used only while that operation's
 /// storage stays put and nothing else accesses the payload concurrently.
-#[cfg(any(feature = "fs", feature = "socket", feature = "device"))]
+#[cfg(any(feature = "fs", feature = "socket"))]
 pub(crate) unsafe fn payload_ptr_from_overlapped<P>(overlapped: *mut OVERLAPPED) -> *mut P {
     let offset = core::mem::offset_of!(Operation<P>, payload);
     unsafe { overlapped.cast::<u8>().add(offset).cast::<P>() }
