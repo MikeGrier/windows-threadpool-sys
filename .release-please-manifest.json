@@ -3,6 +3,6 @@
     "crates/windows-ioring-sys": "0.1.0",
     "crates/windows-overlapped-io-sys": "1.0.0",
     "crates/windows-threadpool-sys": "1.0.0",
-    "crates/windows-topology-sys": "0.1.0",
+    "crates/windows-topology-sys": "0.2.0",
     "crates/wtf-string": "0.2.0"
 }
