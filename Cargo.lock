@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "windows-file-watcher"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "log",
  "serde",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "windows-threadpool-sys"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "windows-overlapped-io-sys",
  "windows-sys",
