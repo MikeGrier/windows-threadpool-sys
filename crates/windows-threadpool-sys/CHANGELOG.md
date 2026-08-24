@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v1.0.0...windows-threadpool-sys-v1.0.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **overlapped-io:** require P: 'static to submit an operation ([00a5acf](https://github.com/MikeGrier/windows-threadpool-sys/commit/00a5acff5f2c2507f9f3dc02d365586b0ebd36fa))
+
 ## [1.0.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-threadpool-sys-v0.1.0...windows-threadpool-sys-v1.0.0) (2026-08-19)
 
 
