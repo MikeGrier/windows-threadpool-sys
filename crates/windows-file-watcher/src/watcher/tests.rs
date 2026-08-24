@@ -1499,8 +1499,11 @@ fn only_the_confirm_route_is_asked_and_continuing_keeps_both_routes() {
     // Rig the recorded baseline so the *real* current volume identity this
     // watcher reads fresh below is guaranteed to differ from it -- a real
     // removable-media swap is not otherwise reproducible in an automated test.
-    *lock(&watcher.inner.volume_identity) =
-        Some(VolumeIdentity::synthetic("FAKE-FS", "FAKE-LABEL"));
+    *lock(&watcher.inner.volume_identity) = Some(VolumeIdentity::synthetic(
+        0xDEAD_BEEF,
+        "FAKE-FS",
+        "FAKE-LABEL",
+    ));
     watcher.inner.retry_reestablish();
 
     assert_eq!(watcher.gate(), ArmGate::VolumeChangePending);
@@ -1553,8 +1556,11 @@ fn stopping_a_volume_change_removes_only_that_route() {
         fresh_handle,
     );
 
-    *lock(&watcher.inner.volume_identity) =
-        Some(VolumeIdentity::synthetic("FAKE-FS", "FAKE-LABEL"));
+    *lock(&watcher.inner.volume_identity) = Some(VolumeIdentity::synthetic(
+        0xDEAD_BEEF,
+        "FAKE-FS",
+        "FAKE-LABEL",
+    ));
     watcher.inner.retry_reestablish();
     assert_eq!(watcher.gate(), ArmGate::VolumeChangePending);
 

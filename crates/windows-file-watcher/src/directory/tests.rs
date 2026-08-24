@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{DirectoryHandle, OpenFailure};
+use super::{DirectoryHandle, OpenFailure, VolumeIdentity};
 
 /// A uniquely named temp directory, removed when the test passes.
 ///
@@ -410,4 +410,27 @@ fn reopen_by_id_follows_the_directory_if_it_is_renamed_and_canonical_path_detect
     drop(reopened);
     drop(original);
     parent.cleanup();
+}
+
+#[test]
+fn volume_identity_equality_is_on_the_serial_alone() {
+    // PR #20 review response: the filesystem name and volume label are both
+    // mutable (a rename, or different media sharing a label/filesystem
+    // type), so neither is a sound identity signal -- only the volume
+    // serial number is.
+    let a = VolumeIdentity::synthetic(1, "NTFS", "SAME-LABEL");
+    let b = VolumeIdentity::synthetic(1, "FAT32", "DIFFERENT-LABEL");
+    assert_eq!(
+        a, b,
+        "the same serial is the same volume, regardless of label/filesystem \
+         (a mere rename must not look like a media swap)"
+    );
+
+    let c = VolumeIdentity::synthetic(2, "NTFS", "SAME-LABEL");
+    assert_ne!(
+        a, c,
+        "a different serial is different media, even with an identical \
+         label/filesystem (media swapped for other media sharing a label \
+         must not go undetected)"
+    );
 }

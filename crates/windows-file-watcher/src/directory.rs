@@ -554,19 +554,37 @@ impl std::fmt::Debug for DirectoryHandle {
     }
 }
 
-/// A directory's volume-level identity (D-78): the filesystem name and volume
-/// label, distinct from [`DirectoryId`]'s volume serial number (already
-/// tracked there). Compared only when a path-based reopen fallback succeeds
-/// (M11.3) -- a `ReOpenFile` success is structurally guaranteed to still be on
-/// the same volume -- to notice removable media swapped for different media
-/// mounted at the same path. Surfaced to a client (M12) via
-/// [`crate::Notification::VolumeChanged`], so it is `pub` even though nothing
-/// in this crate constructs one outside `volume_identity` below.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A directory's volume-level identity (D-78): the volume serial number,
+/// plus the filesystem name and volume label kept only as descriptive data
+/// for [`crate::Notification::VolumeChanged`]. Compared only when a
+/// path-based reopen fallback succeeds (M11.3) -- a `ReOpenFile` success is
+/// structurally guaranteed to still be on the same volume -- to notice
+/// removable media swapped for different media mounted at the same path.
+///
+/// Equality (and therefore change detection) is on `volume_serial` alone
+/// (PR #20 review response): the filesystem name and volume label are both
+/// mutable (a volume can be relabeled without becoming different media, and
+/// two different volumes can share a label and filesystem type), so neither
+/// is a sound identity signal -- comparing them would miss a genuine media
+/// swap that happens to share the old label, and would falsely report a
+/// change on a mere rename. `DirectoryId`'s own volume serial is not reused
+/// here because it is read from a *directory* handle rather than this
+/// volume-level query, and keeping the two independent avoids coupling this
+/// type's meaning to `DirectoryId`'s.
+#[derive(Clone, Debug)]
 pub struct VolumeIdentity {
+    volume_serial: u32,
     filesystem_name: Wtf16String,
     volume_label: Wtf16String,
 }
+
+impl PartialEq for VolumeIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.volume_serial == other.volume_serial
+    }
+}
+
+impl Eq for VolumeIdentity {}
 
 impl VolumeIdentity {
     /// The volume's filesystem name (e.g. `"NTFS"`, `"FAT32"`, `"ReFS"`),
@@ -586,10 +604,13 @@ impl VolumeIdentity {
     /// Build a synthetic identity that cannot match any real volume this
     /// crate would ever read (M12.6's test seam: rigging a mismatch a real
     /// removable-media swap is not otherwise reproducible in an automated
-    /// test).
+    /// test). `volume_serial` is the only field that matters for the
+    /// mismatch this seam exists to rig; the descriptive fields are for
+    /// display only.
     #[cfg(test)]
-    pub(crate) fn synthetic(filesystem_name: &str, volume_label: &str) -> Self {
+    pub(crate) fn synthetic(volume_serial: u32, filesystem_name: &str, volume_label: &str) -> Self {
         Self {
+            volume_serial,
             filesystem_name: Wtf16String::from_os_str(std::ffi::OsStr::new(filesystem_name)),
             volume_label: Wtf16String::from_os_str(std::ffi::OsStr::new(volume_label)),
         }
@@ -604,16 +625,17 @@ fn volume_identity(handle: HANDLE) -> Result<VolumeIdentity, OpenError> {
     const BUFFER_UNITS: usize = 261;
     let mut volume_label = [0u16; BUFFER_UNITS];
     let mut filesystem_name = [0u16; BUFFER_UNITS];
+    let mut volume_serial = 0u32;
     // SAFETY: both buffers are valid, correctly sized, writable destinations;
-    // `handle` is live for the duration of this call. The serial-number and
-    // max-component-length out-params are not needed here -- `DirectoryId`
-    // already carries the serial -- so both are null.
+    // `volume_serial` is a valid writable `u32` destination; `handle` is live
+    // for the duration of this call. The max-component-length out-param is
+    // not needed here, so it alone is null.
     let ok = unsafe {
         GetVolumeInformationByHandleW(
             handle,
             volume_label.as_mut_ptr(),
             u32::try_from(volume_label.len()).expect("a fixed small buffer size fits a u32"),
-            std::ptr::null_mut(),
+            &mut volume_serial,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             filesystem_name.as_mut_ptr(),
@@ -625,6 +647,7 @@ fn volume_identity(handle: HANDLE) -> Result<VolumeIdentity, OpenError> {
         return Err(OpenError::new(classify(&source), source));
     }
     Ok(VolumeIdentity {
+        volume_serial,
         filesystem_name: Wtf16String::from_units(trim_nul(&filesystem_name)),
         volume_label: Wtf16String::from_units(trim_nul(&volume_label)),
     })
