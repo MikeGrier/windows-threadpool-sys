@@ -1044,9 +1044,9 @@ pub fn run_scenario(scenario: &Scenario, seed: u64, params: &HarnessParams) -> H
 /// creating the temp directory or applying anything, so an unconfined path
 /// never reaches a real filesystem call. Also panics upfront if any named
 /// `Operation::Barrier` is used an odd number of times (see
-/// [`validate_barriers`]); a barrier used an even number of times but never
+/// `validate_barriers`); a barrier used an even number of times but never
 /// actually reachable concurrently instead panics later, once
-/// [`DeadlineBarrier`] gives up at this call's own deadline -- either way, a
+/// `DeadlineBarrier` gives up at this call's own deadline -- either way, a
 /// malformed barrier fails loudly rather than hanging the runner.
 pub fn run_scenario_keep_dir(
     scenario: &Scenario,
