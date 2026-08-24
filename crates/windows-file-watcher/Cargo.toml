@@ -86,28 +86,27 @@ log = { version = "0.4.22", default-features = false }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 
-windows-sys = {
-	version = "0.61.2",
-	default-features = false,
-	# Win32_Security is needed only for the SECURITY_ATTRIBUTES parameter named in
-	# the CreateFileW signature used to open a watched directory; the crate always
-	# passes a null pointer for it.
-	features = [
-		"Win32_Foundation",
-		"Win32_Security",
-		"Win32_Storage_FileSystem",
-		"Win32_System_IO",
-		# The notification queue's doorbell is a manual-reset event
-		# (CreateEventW / SetEvent / ResetEvent), handed to a client so it can
-		# wait for notifications on its own thread pool rather than dedicating a
-		# thread to a blocking recv.
-		"Win32_System_Threading",
-		# CompareStringOrdinal (a single-file route's case-insensitive leaf-name
-		# match, PR #20 review response) -- the OS's own ordinal case folding,
-		# not an ASCII-only approximation.
-		"Win32_Globalization",
-	],
-}
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+# Win32_Security is needed only for the SECURITY_ATTRIBUTES parameter named in
+# the CreateFileW signature used to open a watched directory; the crate always
+# passes a null pointer for it.
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_Storage_FileSystem",
+	"Win32_System_IO",
+	# The notification queue's doorbell is a manual-reset event
+	# (CreateEventW / SetEvent / ResetEvent), handed to a client so it can
+	# wait for notifications on its own thread pool rather than dedicating a
+	# thread to a blocking recv.
+	"Win32_System_Threading",
+	# CompareStringOrdinal (a single-file route's case-insensitive leaf-name
+	# match, PR #20 review response) -- the OS's own ordinal case folding,
+	# not an ASCII-only approximation.
+	"Win32_Globalization",
+]
 
 # Integration tests exercise the decoder against a buffer produced by a real
 # overlapped ReadDirectoryChangesW call, which needs binding surface the

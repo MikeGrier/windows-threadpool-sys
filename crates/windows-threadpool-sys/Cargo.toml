@@ -33,31 +33,28 @@ targets = ["x86_64-pc-windows-msvc"]
 # the core completion machinery, not any operation-family adapter (fs, socket, device).
 windows-overlapped-io-sys = { version = "0.1.1", path = "../windows-overlapped-io-sys", default-features = false }
 
-windows-sys = {
-	version = "0.61.2",
-	default-features = false,
-	# Win32_Security is needed only for the SECURITY_ATTRIBUTES parameter of
-	# CreateEventW, which backs the safe WaitableHandle::event constructor.
-	features = [
-		"Win32_Foundation",
-		"Win32_Security",
-		"Win32_System_IO",
-		"Win32_System_Threading",
-	],
-}
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+# Win32_Security is needed only for the SECURITY_ATTRIBUTES parameter of
+# CreateEventW, which backs the safe WaitableHandle::event constructor.
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_System_IO",
+	"Win32_System_Threading",
+]
 
 # The TP_IO tests issue real overlapped I/O against a named pipe, which needs
 # binding surface the published crate itself does not use.
-[dev-dependencies]
-windows-sys = {
-	version = "0.61.2",
-	default-features = false,
-	features = [
-		"Win32_Foundation",
-		"Win32_System_IO",
-		"Win32_System_Threading",
-		"Win32_Security",
-		"Win32_Storage_FileSystem",
-		"Win32_System_Pipes",
-	],
-}
+[dev-dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+	"Win32_Foundation",
+	"Win32_System_IO",
+	"Win32_System_Threading",
+	"Win32_Security",
+	"Win32_Storage_FileSystem",
+	"Win32_System_Pipes",
+]
