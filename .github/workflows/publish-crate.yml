@@ -10,6 +10,25 @@ on:
       - 'windows-threadpool-sys-v*'
       - 'windows-topology-sys-v*'
       - 'wtf-string-v*'
+  # Manual escape hatch for a tag whose commit cannot publish. `cargo publish
+  # --locked` refuses when Cargo.lock disagrees with the manifests, and the
+  # pre-`cargo-workspace` release-please configuration left exactly that state
+  # at several release commits, so those tags can never publish no matter how
+  # often they are re-run. Dispatching publishes the crate at whatever version
+  # the *current* branch declares.
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: Crate to publish from the selected branch
+        required: true
+        type: choice
+        options:
+          - windows-file-watcher
+          - windows-ioring-sys
+          - windows-overlapped-io-sys
+          - windows-threadpool-sys
+          - windows-topology-sys
+          - wtf-string
 
 permissions:
   contents: read
@@ -33,21 +52,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Verify tag matches crate version
+      - name: Resolve the crate to publish
         shell: bash
         run: |
-          tag="${GITHUB_REF_NAME}"
-          crate="${tag%-v*}"
-          version="${tag##*-v}"
           metadata="$(cargo metadata --no-deps --format-version 1)"
-          actual="$(printf '%s' "$metadata" | jq -r --arg n "$crate" '.packages[] | select(.name == $n) | .version')"
-          if [ -z "$actual" ] || [ "$actual" = "null" ]; then
-            echo "::error::tag ${tag} references unknown crate ${crate}" >&2
-            exit 1
-          fi
-          if [ "$actual" != "$version" ]; then
-            echo "::error::tag ${tag} version ${version} does not match crate version ${actual}" >&2
-            exit 1
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            # No tag to cross-check against; the branch's own manifest decides
+            # the version, and `cargo publish` rejects one already on crates.io.
+            crate="${{ inputs.crate }}"
+            actual="$(printf '%s' "$metadata" | jq -r --arg n "$crate" '.packages[] | select(.name == $n) | .version')"
+            if [ -z "$actual" ] || [ "$actual" = "null" ]; then
+              echo "::error::unknown crate ${crate}" >&2
+              exit 1
+            fi
+            echo "publishing ${crate} ${actual} from ${GITHUB_REF_NAME}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            crate="${tag%-v*}"
+            version="${tag##*-v}"
+            actual="$(printf '%s' "$metadata" | jq -r --arg n "$crate" '.packages[] | select(.name == $n) | .version')"
+            if [ -z "$actual" ] || [ "$actual" = "null" ]; then
+              echo "::error::tag ${tag} references unknown crate ${crate}" >&2
+              exit 1
+            fi
+            if [ "$actual" != "$version" ]; then
+              echo "::error::tag ${tag} version ${version} does not match crate version ${actual}" >&2
+              exit 1
+            fi
           fi
           echo "CRATE_NAME=${crate}" >> "$GITHUB_ENV"
       # Some crates depend on sibling workspace crates by version as well as by
