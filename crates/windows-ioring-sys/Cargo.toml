@@ -46,7 +46,7 @@ windows-threadpool-sys = { version = "1.0.0", path = "../windows-threadpool-sys"
 # crate rather than raw `GetLogicalProcessorInformationEx` calls. M7's
 # ring-copy sample additionally needs the `serde` feature, to load a fed-in
 # topology description (D-10 in windows-topology-sys's DESIGN-NOTES.md).
-windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys", features = [
+windows-topology-sys = { version = "0.2.0", path = "../windows-topology-sys", features = [
 	"serde",
 ] }
 # M7's ring-copy sample deserializes a fed-in topology description (--topology).
