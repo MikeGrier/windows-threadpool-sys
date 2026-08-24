@@ -60,7 +60,7 @@ jobs:
             # No tag to cross-check against; the branch's own manifest decides
             # the version, and `cargo publish` rejects one already on crates.io.
             crate="${{ inputs.crate }}"
-            actual="$(printf '%s' "$metadata" | jq -r --arg n "$crate" '.packages[] | select(.name == $n) | .version')"
+            actual="$(printf '%s' "$metadata" | jq -r --arg n "$crate" '.packages[] | select(.name == $n) | .version' | tr -d '\r')"
             if [ -z "$actual" ] || [ "$actual" = "null" ]; then
               echo "::error::unknown crate ${crate}" >&2
               exit 1
@@ -70,7 +70,10 @@ jobs:
             tag="${GITHUB_REF_NAME}"
             crate="${tag%-v*}"
             version="${tag##*-v}"
-            actual="$(printf '%s' "$metadata" | jq -r --arg n "$crate" '.packages[] | select(.name == $n) | .version')"
+            # See the `tr -d '\r'` note in the sibling-wait step below: a
+            # trailing CR here would make this equality check fail against an
+            # otherwise-correct tag.
+            actual="$(printf '%s' "$metadata" | jq -r --arg n "$crate" '.packages[] | select(.name == $n) | .version' | tr -d '\r')"
             if [ -z "$actual" ] || [ "$actual" = "null" ]; then
               echo "::error::tag ${tag} references unknown crate ${crate}" >&2
               exit 1
@@ -95,8 +98,15 @@ jobs:
         run: |
           workspace_crates="windows-file-watcher windows-ioring-sys windows-overlapped-io-sys windows-threadpool-sys windows-topology-sys wtf-string"
           metadata="$(cargo metadata --no-deps --format-version 1)"
+          # `tr -d '\r'` is load-bearing on the Windows runner: jq.exe writes
+          # CRLF, and `read` splits on LF alone, so without this the last field
+          # on each line (`dep_req`) keeps a trailing CR. The version then
+          # compares as "0.1.1\r", never matches any `.vers` in the index, and
+          # the loop below burns all 60 attempts on a crate that published
+          # fine. Only crates with workspace siblings enter that loop, so this
+          # failed silently for every dependency-free crate.
           deps="$(printf '%s' "$metadata" | jq -r --arg n "$CRATE_NAME" \
-            '.packages[] | select(.name == $n) | .dependencies[] | "\(.name) \(.req)"')"
+            '.packages[] | select(.name == $n) | .dependencies[] | "\(.name) \(.req)"' | tr -d '\r')"
           while IFS=' ' read -r dep_name dep_req; do
             [ -z "$dep_name" ] && continue
             case " $workspace_crates " in
