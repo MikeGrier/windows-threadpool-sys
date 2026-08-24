@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-ioring-sys"
-version = "0.1.0" # x-release-please-version
+version = "0.1.1" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -39,7 +39,7 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 ] }
 # The Model A delivery path (M4): a `ThreadpoolWait` on the ring's completion
 # event.
-windows-threadpool-sys = { version = "0.1.1", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { version = "0.1.2", path = "../windows-threadpool-sys" }
 
 [dev-dependencies]
 # M6.3's topology-guidance example enumerates L3 cache domains with this
