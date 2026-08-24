@@ -18,6 +18,9 @@ use std::path::PathBuf;
 
 use policy::Policy;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Storage::FileSystem::{
+    BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+};
 use windows_topology_sys::Topology;
 
 const DEFAULT_CHUNK_LEN: usize = 1024 * 1024;
@@ -148,6 +151,30 @@ fn load_topology(path: Option<&PathBuf>) -> io::Result<Topology> {
     }
 }
 
+/// Whether `a` and `b` are open handles onto the same file (PR #20 review
+/// response), including two different paths that reach it via a hard link --
+/// a plain path comparison would miss that case entirely.
+///
+/// Identity is the volume serial number plus the 64-bit file index
+/// (`nFileIndexHigh`/`nFileIndexLow`), which Windows guarantees is unique per
+/// volume for the life of a file; comparing paths cannot detect a hard link
+/// to the same file under a different name.
+fn same_file(a: &std::fs::File, b: &std::fs::File) -> io::Result<bool> {
+    fn identity(file: &std::fs::File) -> io::Result<(u32, u64)> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `file`'s handle is live for the duration of this call, and
+        // `info` is a valid, exclusively-borrowed out-parameter of the exact
+        // type the API expects.
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+        Ok((info.dwVolumeSerialNumber, index))
+    }
+    Ok(identity(a)? == identity(b)?)
+}
+
 fn main() -> io::Result<()> {
     let mut report = Report::new(io::stdout(), io::stderr());
 
@@ -179,12 +206,28 @@ fn main() -> io::Result<()> {
 
     let source_file = std::fs::File::open(&args.source)?;
     let source_len = source_file.metadata()?.len();
+    // Opened without truncation (PR #20 review response): truncating via
+    // `OpenOptions::truncate` before checking identity would destroy the
+    // source's content the instant `source` and `destination` name the same
+    // file, including through a hard link -- the already-open source handle
+    // would then read back the zeroed tail this call just produced. Identity
+    // is compared below, on these untouched handles, and only once they are
+    // confirmed distinct does `set_len` resize the destination in place --
+    // which is also what makes omitting `truncate`/`append` deliberate here,
+    // not an oversight the lint below would otherwise (correctly) flag.
+    #[allow(clippy::suspicious_open_options)]
     let destination_file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
-        .truncate(true)
         .open(&args.destination)?;
+    if same_file(&source_file, &destination_file)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source and destination name the same file (directly or via a hard link); \
+             refusing to copy a file onto itself",
+        ));
+    }
     destination_file.set_len(source_len)?;
 
     let source_handle = SendHandle(source_file.as_raw_handle());
