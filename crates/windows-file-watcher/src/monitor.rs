@@ -245,7 +245,19 @@ pub(crate) struct Resident {
 /// -- never the other way around: `watcher` is the caller's own `self`,
 /// executing this from inside its own retry-timer callback, and dropping it
 /// here (via `DirectoryWatcher::stop`) would deadlock waiting on that same
-/// callback to finish.
+/// callback to finish. A route that cannot be migrated -- reopening the
+/// directory races with it disappearing -- is not silently dropped either
+/// (PR #20 review response): its subscription is torn down with a terminal
+/// `Completion { Failed }`, the same way any other asynchronously discovered
+/// permanent open failure is reported, rather than left pointing at a route
+/// that no watcher holds.
+///
+/// The discarded existing entry is dropped only after the resident lock is
+/// released (PR #20 review response): its `Drop` calls `stop_and_drain` on
+/// its retry timer, which blocks waiting for that timer's own callback to
+/// finish -- and that callback, if it is concurrently blocked trying to
+/// re-enter `rekey` (or anything else that needs this same resident lock),
+/// would then wait on this thread forever while this thread waited on it.
 pub(crate) fn rekey(resident: &Mutex<Resident>, old: DirectoryId, new: DirectoryId) {
     if old == new {
         return;
@@ -254,18 +266,38 @@ pub(crate) fn rekey(resident: &Mutex<Resident>, old: DirectoryId, new: Directory
     let Some(watcher) = state.directories.remove(&old) else {
         return;
     };
-    if let Some(existing) = state.directories.remove(&new) {
+    let existing = state.directories.remove(&new);
+    if let Some(existing) = &existing {
         for route in existing.take_routes() {
             match DirectoryHandle::open(watcher.path()) {
                 Ok(handle) => watcher.add_route(route, handle),
-                Err(error) => log::warn!(
-                    "windows-file-watcher: could not migrate a route from a redundant watcher \
-                     during identity-collision coalescing: {error}"
-                ),
+                Err(error) => {
+                    // A route that cannot be migrated must not be silently
+                    // dropped (PR #20 review response): its
+                    // `Subscription::Routed` entry would otherwise keep
+                    // reporting as registered while no watcher anywhere
+                    // holds its route, so it can never receive another
+                    // notification and a later `Cancel` would find nothing
+                    // to remove. Reported the same way any other
+                    // asynchronously discovered permanent open failure is
+                    // (see `Opened::Failed`'s handling above): a terminal
+                    // `Completion { Failed }`, best-effort since there is no
+                    // reservation carved out for it here, and the stale
+                    // subscription entry is removed so the client can
+                    // resubscribe cleanly if it wants to keep watching.
+                    log::warn!(
+                        "windows-file-watcher: could not migrate a route from a redundant \
+                         watcher during identity-collision coalescing: {error}"
+                    );
+                    let detail = error.detail();
+                    let _ = route.sink.send(Notification::Completion {
+                        watch: route.watch,
+                        outcome: Outcome::Failed { detail },
+                    });
+                    state.subscriptions.remove(&route.watch);
+                }
             }
         }
-        // `existing` drops here, tearing itself down: safe, since it is not
-        // the watcher executing this call.
     }
     state.directories.insert(new, watcher);
     for subscription in state.subscriptions.values_mut() {
@@ -275,6 +307,10 @@ pub(crate) fn rekey(resident: &Mutex<Resident>, old: DirectoryId, new: Directory
             *directory = new;
         }
     }
+    drop(state);
+    // Tears the redundant watcher down, if there was one: safe out here, but
+    // not under the resident lock above (see the doc comment).
+    drop(existing);
 }
 
 /// What a [`Session`] holds of its monitor.
@@ -573,11 +609,22 @@ fn service(
                 let mut torn_down = None;
                 if let Some(Subscription::Routed { directory, .. }) =
                     state.subscriptions.remove(&watch)
-                    && let std::collections::hash_map::Entry::Occupied(entry) =
-                        state.directories.entry(directory)
-                    && entry.get().remove_route(watch) == 0
+                    && let Some((remaining, stopped)) = state
+                        .directories
+                        .get(&directory)
+                        .map(|watcher| watcher.remove_route(watch))
                 {
-                    torn_down = Some(entry.remove());
+                    // A volume-change resolution this removal triggered may
+                    // have decided `Stop` for other routes on the same
+                    // watcher too (PR #20 review response); their
+                    // subscriptions are now just as stale as this one's,
+                    // already removed above.
+                    for extra in stopped {
+                        state.subscriptions.remove(&extra);
+                    }
+                    if remaining == 0 {
+                        torn_down = state.directories.remove(&directory);
+                    }
                 }
                 torn_down
             };
@@ -651,13 +698,21 @@ fn answer_volume_change(
             return;
         };
         let directory = *directory;
-        let Some(remaining) = state
+        let Some((remaining, stopped)) = state
             .directories
             .get(&directory)
             .and_then(|watcher| watcher.answer_volume_change(watch, decision))
         else {
             return;
         };
+        // Every watch that decided `Stop` -- including `watch` itself, if
+        // that was its own decision -- no longer has a route on this
+        // watcher, so its `Resident.subscriptions` entry is stale and would
+        // otherwise keep reporting as registered/routed forever (PR #20
+        // review response).
+        for stopped_watch in &stopped {
+            state.subscriptions.remove(stopped_watch);
+        }
         if remaining == 0 {
             state.directories.remove(&directory)
         } else {

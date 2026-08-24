@@ -872,13 +872,16 @@ impl WatcherInner {
     /// Record a route's answer to the current volume-change question
     /// (D-78/M12.3), if there is one outstanding for it. `None` otherwise: the
     /// question may already have resolved, or `watch` may never have been
-    /// asked. `Some(remaining route count)` once every asked route has
-    /// answered and the resolution below has run.
+    /// asked. `Some((remaining route count, watches that decided Stop))` once
+    /// every asked route has answered and the resolution below has run --
+    /// the caller must remove each stopped watch's own `Resident.subscriptions`
+    /// entry (PR #20 review response), since this only removes the route from
+    /// `self.routes` and has no access to that resident-level table.
     fn answer_volume_change(
         self: &Arc<Self>,
         watch: WatchId,
         decision: VolumeChangeDecision,
-    ) -> Option<usize> {
+    ) -> Option<(usize, Vec<WatchId>)> {
         let ready = {
             let mut state = lock(&self.volume_change);
             let pending = state.as_mut()?;
@@ -894,11 +897,16 @@ impl WatcherInner {
     /// M12.5: a route removed while its volume-change question is
     /// outstanding resolves as if it had left without answering -- it is
     /// simply no longer counted, mirroring D-27/M5.5's "leaving counts as
-    /// declining" treatment of a fault question. `Some(remaining route
-    /// count)` if this was the last needed answer (the caller's own,
-    /// already-computed remaining count is now stale and must be replaced
-    /// with this one); `None` otherwise.
-    fn remove_route_from_volume_change(self: &Arc<Self>, watch: WatchId) -> Option<usize> {
+    /// declining" treatment of a fault question. `Some((remaining route
+    /// count, watches that decided Stop))` if this was the last needed
+    /// answer (the caller's own, already-computed remaining count is now
+    /// stale and must be replaced with this one, and the stopped watches'
+    /// `Resident.subscriptions` entries must be removed -- PR #20 review
+    /// response); `None` otherwise.
+    fn remove_route_from_volume_change(
+        self: &Arc<Self>,
+        watch: WatchId,
+    ) -> Option<(usize, Vec<WatchId>)> {
         let ready = {
             let mut state = lock(&self.volume_change);
             let pending = state.as_mut()?;
@@ -915,26 +923,35 @@ impl WatcherInner {
     /// handle -- updating the recorded volume identity, since `install`
     /// itself does that from whatever handle it is given -- or, if this left
     /// no routes, drop it and report zero so the caller tears this watcher
-    /// down through the ordinary zero-routes path.
-    fn resolve_volume_change(self: &Arc<Self>) -> usize {
+    /// down through the ordinary zero-routes path. Also returns every watch
+    /// that decided `Stop`, so the caller can remove its now-stale
+    /// `Resident.subscriptions` entry (PR #20 review response): this method
+    /// only ever touches `self.routes`, which is not the table a stopped
+    /// watch's subscription is otherwise still recorded, registered, and
+    /// routable-looking in.
+    fn resolve_volume_change(self: &Arc<Self>) -> (usize, Vec<WatchId>) {
         let pending = lock(&self.volume_change)
             .take()
             .expect("called only once awaiting has just emptied, with state present");
+        let stopped: Vec<WatchId> = pending
+            .decisions
+            .iter()
+            .filter(|(_, decision)| **decision == VolumeChangeDecision::Stop)
+            .map(|(watch, _)| *watch)
+            .collect();
         {
             let mut routes = lock(&self.routes);
-            for (watch, decision) in &pending.decisions {
-                if *decision == VolumeChangeDecision::Stop {
-                    routes.remove(watch);
-                }
+            for watch in &stopped {
+                routes.remove(watch);
             }
         }
         let remaining = lock(&self.routes).len();
         if remaining == 0 {
             drop(pending.handle);
-            return 0;
+            return (0, stopped);
         }
         self.finish_reopen(pending.handle);
-        remaining
+        (remaining, stopped)
     }
 
     /// Clear fault state after a successful re-establishment and tell every
@@ -1402,10 +1419,14 @@ impl DirectoryWatcher {
         }
     }
 
-    /// Remove a subscription, returning how many routes remain.
+    /// Remove a subscription, returning how many routes remain, and every
+    /// *other* watch a volume-change resolution triggered by this removal
+    /// decided to `Stop` (PR #20 review response) -- the caller must remove
+    /// each returned watch's own `Resident.subscriptions` entry, in addition
+    /// to `watch`'s own, which it is already expected to remove itself.
     ///
-    /// The caller tears this watcher down entirely once this reaches zero;
-    /// removing the route itself never requires re-arming (see
+    /// The caller tears this watcher down entirely once the remaining count
+    /// reaches zero; removing the route itself never requires re-arming (see
     /// [`DirectoryWatcher::add_route`]).
     ///
     /// Cancellation from mid-fault (M5.5): a route awaiting an answer to the
@@ -1416,7 +1437,7 @@ impl DirectoryWatcher {
     /// one still awaited this resolves and schedules the retry immediately
     /// rather than leaving the watcher waiting on an answer that can now never
     /// arrive.
-    pub(crate) fn remove_route(&self, watch: WatchId) -> usize {
+    pub(crate) fn remove_route(&self, watch: WatchId) -> (usize, Vec<WatchId>) {
         let remaining = {
             let mut routes = lock(&self.inner.routes);
             routes.remove(&watch);
@@ -1438,10 +1459,10 @@ impl DirectoryWatcher {
         if let Some(delay) = resolved {
             self.inner.resolve_and_schedule(delay);
         }
-        if let Some(remaining) = self.inner.remove_route_from_volume_change(watch) {
-            return remaining;
+        if let Some((remaining, stopped)) = self.inner.remove_route_from_volume_change(watch) {
+            return (remaining, stopped);
         }
-        remaining
+        (remaining, Vec::new())
     }
 
     /// Answer this watcher's current fault question on behalf of `watch`
@@ -1455,11 +1476,19 @@ impl DirectoryWatcher {
     /// resolved, or never asked); `Some(remaining route count)` if this
     /// answer was the one that resolved it, in which case the caller (M12.4)
     /// must tear the watcher down if that count is zero.
+    /// Answer this watcher's current volume-change question on behalf of
+    /// `watch` (D-78/M12.3), if one is outstanding. `None` if not (already
+    /// resolved, or never asked); `Some((remaining route count, watches that
+    /// decided Stop))` if this answer was the one that resolved it, in which
+    /// case the caller (M12.4) must tear the watcher down if that count is
+    /// zero, and must remove each stopped watch's own `Resident.subscriptions`
+    /// entry (PR #20 review response) -- this layer only ever touches
+    /// `self.routes`, never the resident-level table those entries live in.
     pub(crate) fn answer_volume_change(
         &self,
         watch: WatchId,
         decision: VolumeChangeDecision,
-    ) -> Option<usize> {
+    ) -> Option<(usize, Vec<WatchId>)> {
         self.inner.answer_volume_change(watch, decision)
     }
 

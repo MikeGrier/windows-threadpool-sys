@@ -1075,7 +1075,7 @@ fn removing_the_only_recursive_route_leaves_the_watcher_functional() {
         ),
         DirectoryHandle::open(dir.path()).expect("open a second handle"),
     );
-    assert_eq!(watcher.remove_route(test_watch()), 1, "one route remains");
+    assert_eq!(watcher.remove_route(test_watch()).0, 1, "one route remains");
 
     std::fs::write(dir.path().join("a.txt"), b"x").expect("create");
     collected.wait_for_name("a.txt");
@@ -1088,7 +1088,7 @@ fn removing_the_only_recursive_route_leaves_the_watcher_functional() {
 fn removing_every_route_is_observed_by_the_caller() {
     let dir = TempDir::new("route-remove-all");
     let (watcher, collected) = watch(dir.path(), false);
-    assert_eq!(watcher.remove_route(test_watch()), 0);
+    assert_eq!(watcher.remove_route(test_watch()).0, 0);
     drop(collected);
     drop(watcher);
     dir.cleanup();
@@ -1255,7 +1255,7 @@ fn removing_the_only_awaited_route_resolves_the_fault_rather_than_wedging_it() {
     assert!(watcher.is_faulted());
 
     assert_eq!(
-        watcher.remove_route(test_watch()),
+        watcher.remove_route(test_watch()).0,
         0,
         "the only route is gone"
     );
@@ -1519,7 +1519,7 @@ fn only_the_confirm_route_is_asked_and_continuing_keeps_both_routes() {
         "an AutoContinue route must never be asked"
     );
 
-    let remaining = watcher
+    let (remaining, _stopped) = watcher
         .answer_volume_change(watch_a, VolumeChangeDecision::Continue)
         .expect("this answer resolves the question");
     assert_eq!(remaining, 2, "continuing keeps both routes");
@@ -1571,10 +1571,15 @@ fn stopping_a_volume_change_removes_only_that_route() {
             .any(|n| matches!(n, Notification::VolumeChanged { watch, .. } if *watch == watch_a))
     });
 
-    let remaining = watcher
+    let (remaining, stopped) = watcher
         .answer_volume_change(watch_a, VolumeChangeDecision::Stop)
         .expect("this answer resolves the question");
     assert_eq!(remaining, 1, "only the declining route is removed");
+    assert_eq!(
+        stopped,
+        vec![watch_a],
+        "the declining route is reported stopped"
+    );
 
     let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
     while watcher.gate() == ArmGate::VolumeChangePending {

@@ -617,7 +617,7 @@ impl Drop for Reservation {
 /// whether its last send is still queued -- are always read and mutated
 /// together with the `reserved` count they gate, never observed mid-way.
 ///
-/// Lock order is fixed as *this, then the queue's `items`* everywhere it is
+/// Lock order is fixed as *the queue's `items`, then this* everywhere it is
 /// taken (`send`, both `Drop` impls), which is what makes the combined
 /// transition atomic: whichever of `StandingSlot::drop` or
 /// `StandingHold::drop` runs first holds this lock for its entire mutation of

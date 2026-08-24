@@ -974,34 +974,42 @@ fn count_barrier_uses(operations: &[Operation], counts: &mut HashMap<String, u64
     }
 }
 
-/// Rejects a scenario whose named [`Operation::Barrier`] rendezvous points do
-/// not each have exactly two uses (PR #20 review response). A cheap, precise
-/// early rejection for the unambiguous mistakes -- zero or one use (nobody to
-/// rendezvous with) or three-plus (an extra participant with no partner of
-/// its own) -- checked up front, before anything runs, so those cases fail
-/// with a clear scenario-authoring-bug message immediately rather than only
-/// once something times out.
+/// Rejects a scenario whose named [`Operation::Barrier`] rendezvous points
+/// are used an odd number of times (PR #20 review response). A cheap,
+/// precise early rejection for the unambiguous mistake -- one use, or any
+/// odd count, always leaves at least one participant with no partner --
+/// checked up front, before anything runs, so that case fails with a clear
+/// scenario-authoring-bug message immediately rather than only once
+/// something times out.
 ///
-/// This is a **necessary but not sufficient** check: a count of exactly two
-/// does not prove the two uses can ever run concurrently (two top-level
-/// `Barrier` operations, or two uses within the same `Repeat` pattern, both
-/// pass this check yet only ever run on one thread, sequentially, so the
-/// first would still wait forever for a partner that can never arrive on the
-/// same thread). Proving genuine concurrency ahead of time would mean
-/// tracking which `Concurrent` branch each nested `Repeat`/`Concurrent`
-/// ultimately executes on -- so instead of attempting that, [`DeadlineBarrier`]
-/// itself is bounded by the harness's own deadline: a pair that passes this
-/// count check but can never actually rendezvous still fails, just later, as
-/// an ordinary "wedged" panic rather than a permanent hang.
+/// An **even** count is deliberately accepted rather than requiring exactly
+/// 2: [`DeadlineBarrier`] resets after each round, so the same name is
+/// legitimately reusable for several independent sequential rendezvous pairs
+/// (e.g. two unrelated `Barrier` operations later in the same scenario),
+/// which a stricter "exactly 2" check rejected even though nothing about it
+/// is malformed.
+///
+/// This is a **necessary but not sufficient** check: an even count does not
+/// prove the uses can ever be paired into genuinely concurrent rendezvous
+/// (two top-level `Barrier` operations, or two uses within the same `Repeat`
+/// pattern, both pass this check yet only ever run on one thread,
+/// sequentially, so the first would still wait forever for a partner that
+/// can never arrive on the same thread). Proving genuine concurrency ahead of
+/// time would mean tracking which `Concurrent` branch each nested
+/// `Repeat`/`Concurrent` ultimately executes on -- so instead of attempting
+/// that, [`DeadlineBarrier`] itself is bounded by the harness's own deadline:
+/// a pairing that passes this count check but can never actually rendezvous
+/// still fails, just later, as an ordinary "wedged" panic rather than a
+/// permanent hang.
 fn validate_barriers(operations: &[Operation]) -> Result<(), String> {
     let mut counts = HashMap::new();
     count_barrier_uses(operations, &mut counts);
     for (name, count) in counts {
-        if count != 2 {
+        if count % 2 != 0 {
             return Err(format!(
-                "barrier '{name}' is used {count} time(s), but a rendezvous needs exactly 2 \
-                 (a Barrier/HoldOpen.ready_barrier used once would wait forever with no partner; \
-                 used three or more times, the extra participant waits forever too)"
+                "barrier '{name}' is used {count} time(s), but each rendezvous round needs \
+                 exactly 2 uses; an odd count always leaves at least one \
+                 Barrier/HoldOpen.ready_barrier use with no partner, which would wait forever"
             ));
         }
     }
@@ -1035,9 +1043,9 @@ pub fn run_scenario(scenario: &Scenario, seed: u64, params: &HarnessParams) -> H
 /// path is rejected if absolute or containing a `..` component -- *before*
 /// creating the temp directory or applying anything, so an unconfined path
 /// never reaches a real filesystem call. Also panics upfront if any named
-/// `Operation::Barrier` is used a number of times other than two (see
-/// [`validate_barriers`]); a barrier used the right number of times but
-/// never actually reachable concurrently instead panics later, once
+/// `Operation::Barrier` is used an odd number of times (see
+/// [`validate_barriers`]); a barrier used an even number of times but never
+/// actually reachable concurrently instead panics later, once
 /// [`DeadlineBarrier`] gives up at this call's own deadline -- either way, a
 /// malformed barrier fails loudly rather than hanging the runner.
 pub fn run_scenario_keep_dir(

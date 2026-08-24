@@ -173,3 +173,26 @@ fn a_barrier_pair_nested_inside_repeat_and_concurrent_is_still_counted() {
     }];
     assert!(validate_barriers(&operations).is_ok());
 }
+
+#[test]
+fn a_barrier_name_reused_across_two_sequential_rounds_is_accepted() {
+    // PR #20 review response: `DeadlineBarrier` resets after each round, so
+    // reusing a name for a second, unrelated rendezvous pair later in the
+    // same scenario is legitimate -- four uses total, not an unpaired
+    // leftover -- and must not be rejected as if it were malformed.
+    let operations = vec![
+        Operation::Barrier {
+            name: "reused".to_string(),
+        },
+        Operation::Barrier {
+            name: "reused".to_string(),
+        },
+        Operation::Barrier {
+            name: "reused".to_string(),
+        },
+        Operation::Barrier {
+            name: "reused".to_string(),
+        },
+    ];
+    assert!(validate_barriers(&operations).is_ok());
+}
