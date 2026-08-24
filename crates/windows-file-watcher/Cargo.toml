@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-file-watcher"
-version = "0.1.1" # x-release-please-version
+version = "0.1.2" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -71,7 +71,7 @@ windows-threadpool-sys = { version = "0.1.2", path = "../windows-threadpool-sys"
 # re-encode an `OsString` would impose. Default features are kept: the `std`
 # feature is what supplies the lossless `OsStr` interop the public surface
 # promises (D-8).
-wtf-string = { version = "0.1.0", path = "../wtf-string" }
+wtf-string = { version = "0.2.0", path = "../wtf-string" }
 
 # The observable-stall diagnostic transport (D-31/M5.6): a library emitting
 # output is a dependency decision, and `log` is the near-zero-cost facade that

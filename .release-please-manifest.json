@@ -1,8 +1,8 @@
 {
-    "crates/windows-file-watcher": "0.1.1",
-    "crates/windows-ioring-sys": "0.1.1",
+    "crates/windows-file-watcher": "0.1.2",
+    "crates/windows-ioring-sys": "0.1.2",
     "crates/windows-overlapped-io-sys": "0.1.2",
     "crates/windows-threadpool-sys": "0.1.2",
-    "crates/windows-topology-sys": "0.1.0",
-    "crates/wtf-string": "0.1.0"
+    "crates/windows-topology-sys": "0.2.0",
+    "crates/wtf-string": "0.2.0"
 }
