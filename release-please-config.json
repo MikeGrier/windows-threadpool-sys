@@ -22,28 +22,58 @@
             "package-name": "windows-overlapped-io-sys",
             "component": "windows-overlapped-io-sys",
             "extra-files": [
-                "Cargo.toml"
+                "Cargo.toml",
+                {
+                    "type": "toml",
+                    "path": "../windows-threadpool-sys/Cargo.toml",
+                    "jsonpath": "$.dependencies['windows-overlapped-io-sys'].version"
+                },
+                {
+                    "type": "toml",
+                    "path": "../windows-file-watcher/Cargo.toml",
+                    "jsonpath": "$.dependencies['windows-overlapped-io-sys'].version"
+                }
             ]
         },
         "crates/windows-threadpool-sys": {
             "package-name": "windows-threadpool-sys",
             "component": "windows-threadpool-sys",
             "extra-files": [
-                "Cargo.toml"
+                "Cargo.toml",
+                {
+                    "type": "toml",
+                    "path": "../windows-ioring-sys/Cargo.toml",
+                    "jsonpath": "$.dependencies['windows-threadpool-sys'].version"
+                },
+                {
+                    "type": "toml",
+                    "path": "../windows-file-watcher/Cargo.toml",
+                    "jsonpath": "$.dependencies['windows-threadpool-sys'].version"
+                }
             ]
         },
         "crates/windows-topology-sys": {
             "package-name": "windows-topology-sys",
             "component": "windows-topology-sys",
             "extra-files": [
-                "Cargo.toml"
+                "Cargo.toml",
+                {
+                    "type": "toml",
+                    "path": "../windows-ioring-sys/Cargo.toml",
+                    "jsonpath": "$.dependencies['windows-topology-sys'].version"
+                }
             ]
         },
         "crates/wtf-string": {
             "package-name": "wtf-string",
             "component": "wtf-string",
             "extra-files": [
-                "Cargo.toml"
+                "Cargo.toml",
+                {
+                    "type": "toml",
+                    "path": "../windows-file-watcher/Cargo.toml",
+                    "jsonpath": "$.dependencies['wtf-string'].version"
+                }
             ]
         }
     }
