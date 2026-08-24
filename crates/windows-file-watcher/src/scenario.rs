@@ -476,6 +476,76 @@ impl HarnessParams {
     }
 }
 
+/// A two-party rendezvous point that gives up at a deadline instead of
+/// blocking forever (PR #20 review response).
+///
+/// `std::sync::Barrier::wait` has no timeout, so a malformed scenario --
+/// naming a barrier once with no partner, reusing one across a mismatched
+/// number of `Repeat` iterations on each side, or (subtler still) giving both
+/// uses to the same sequentially-executing thread instead of two genuinely
+/// concurrent branches -- would block that thread forever. Because that
+/// thread is inside the `std::thread::scope` an `Operation::Concurrent`
+/// spawned it from, the harness's own deadline check (run between top-level
+/// operations on the caller's thread) never gets a chance to run either, so
+/// the malformed scenario wedges the whole runner rather than failing loudly.
+/// Bounding every wait against the same `deadline` `apply_operation` already
+/// threads through everything else turns every one of those structural
+/// mistakes into an ordinary "wedged" panic instead, without needing to
+/// prove the two participants are concurrent ahead of time.
+struct DeadlineBarrier {
+    /// How many parties have arrived for the round currently forming. Reset
+    /// to `0` the instant it reaches `2`, so the same barrier can be reused
+    /// for a later round (e.g. a later `Repeat` iteration) without needing a
+    /// fresh object.
+    arrived: Mutex<usize>,
+    ready: std::sync::Condvar,
+}
+
+impl DeadlineBarrier {
+    fn new() -> Self {
+        Self {
+            arrived: Mutex::new(0),
+            ready: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Blocks until a second party calls `wait` on this same barrier, or
+    /// panics once `deadline` passes without one arriving.
+    fn wait(&self, deadline: Instant, label: &str) {
+        let mut arrived = self
+            .arrived
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *arrived += 1;
+        if *arrived >= 2 {
+            *arrived = 0;
+            self.ready.notify_all();
+            return;
+        }
+        loop {
+            let now = Instant::now();
+            assert!(
+                now < deadline,
+                "a Barrier operation named '{label}' wedged: no second participant \
+                 arrived before the harness's overall deadline -- check that the name \
+                 is used by exactly two operations on two genuinely concurrent branches"
+            );
+            let (guard, timeout) = self
+                .ready
+                .wait_timeout(arrived, deadline - now)
+                .unwrap_or_else(|poison| poison.into_inner());
+            arrived = guard;
+            if *arrived == 0 {
+                // The second party arrived, reset the round, and notified.
+                return;
+            }
+            if timeout.timed_out() {
+                continue; // Re-check against `deadline` directly above.
+            }
+        }
+    }
+}
+
 /// The name reserved for the one session/watch every scenario gets for free
 /// (matching M9.1-M9.3's original "a watch on the scenario root" behavior).
 /// `Operation::OpenSession`/`Subscribe` reject reusing it, so a scenario
@@ -498,7 +568,7 @@ pub struct Fleet<'m> {
     /// between [`Operation::HoldOpen`]'s `ready_barrier` and
     /// [`Operation::Barrier`], created lazily so a scenario never has to
     /// declare its barriers up front.
-    barriers: HashMap<String, Arc<std::sync::Barrier>>,
+    barriers: HashMap<String, Arc<DeadlineBarrier>>,
 }
 
 impl<'m> Fleet<'m> {
@@ -515,15 +585,15 @@ impl<'m> Fleet<'m> {
     /// The two-party barrier named `name`, creating it on its first use.
     ///
     /// Returns the `Arc` rather than waiting on it directly: a caller must
-    /// drop this fleet's lock before calling `Barrier::wait` on the result,
-    /// or a concurrent branch that also needs the fleet (to reach its own
-    /// side of the same rendezvous, or for an unrelated session/watch
+    /// drop this fleet's lock before calling `DeadlineBarrier::wait` on the
+    /// result, or a concurrent branch that also needs the fleet (to reach its
+    /// own side of the same rendezvous, or for an unrelated session/watch
     /// operation) would deadlock against this one.
-    fn barrier(&mut self, name: &str) -> Arc<std::sync::Barrier> {
+    fn barrier(&mut self, name: &str) -> Arc<DeadlineBarrier> {
         Arc::clone(
             self.barriers
                 .entry(name.to_string())
-                .or_insert_with(|| Arc::new(std::sync::Barrier::new(2))),
+                .or_insert_with(|| Arc::new(DeadlineBarrier::new())),
         )
     }
 
@@ -791,7 +861,7 @@ pub fn apply_operation(
                 .expect("open file to hold");
             if let Some(name) = ready_barrier {
                 let barrier = fleet.lock().unwrap().barrier(name);
-                barrier.wait();
+                barrier.wait(deadline, name);
             }
             check_bounded_sleep(*duration, deadline, "HoldOpen");
             std::thread::sleep(*duration);
@@ -799,7 +869,7 @@ pub fn apply_operation(
         }
         Operation::Barrier { name } => {
             let barrier = fleet.lock().unwrap().barrier(name);
-            barrier.wait();
+            barrier.wait(deadline, name);
         }
         Operation::Concurrent { branches } => {
             // Draw each branch's seed on the calling thread, before
@@ -905,18 +975,24 @@ fn count_barrier_uses(operations: &[Operation], counts: &mut HashMap<String, u64
 }
 
 /// Rejects a scenario whose named [`Operation::Barrier`] rendezvous points do
-/// not each have exactly two participants (PR #20 review response).
-/// `std::sync::Barrier::wait` has no timeout, so a barrier used once (nobody
-/// to rendezvous with) or three-plus times (the third arrival waits forever
-/// for a rendezvous the first two already completed) blocks its thread
-/// forever; because that thread is inside the `std::thread::scope` a
-/// `Concurrent` operation spawned it from, the calling thread never returns
-/// to perform the harness's own deadline check either, so a malformed
-/// scenario wedges the runner instead of failing loudly. Checking the count
-/// up front, before anything runs, turns that into an ordinary
-/// scenario-authoring-bug panic (matching every other named-reference misuse
-/// in this module, e.g. `Fleet`'s own name-not-found panics) rather than a
-/// hang discovered only by a caller's own external timeout.
+/// not each have exactly two uses (PR #20 review response). A cheap, precise
+/// early rejection for the unambiguous mistakes -- zero or one use (nobody to
+/// rendezvous with) or three-plus (an extra participant with no partner of
+/// its own) -- checked up front, before anything runs, so those cases fail
+/// with a clear scenario-authoring-bug message immediately rather than only
+/// once something times out.
+///
+/// This is a **necessary but not sufficient** check: a count of exactly two
+/// does not prove the two uses can ever run concurrently (two top-level
+/// `Barrier` operations, or two uses within the same `Repeat` pattern, both
+/// pass this check yet only ever run on one thread, sequentially, so the
+/// first would still wait forever for a partner that can never arrive on the
+/// same thread). Proving genuine concurrency ahead of time would mean
+/// tracking which `Concurrent` branch each nested `Repeat`/`Concurrent`
+/// ultimately executes on -- so instead of attempting that, [`DeadlineBarrier`]
+/// itself is bounded by the harness's own deadline: a pair that passes this
+/// count check but can never actually rendezvous still fails, just later, as
+/// an ordinary "wedged" panic rather than a permanent hang.
 fn validate_barriers(operations: &[Operation]) -> Result<(), String> {
     let mut counts = HashMap::new();
     count_barrier_uses(operations, &mut counts);
@@ -958,11 +1034,12 @@ pub fn run_scenario(scenario: &Scenario, seed: u64, params: &HarnessParams) -> H
 /// or a `Concurrent` branch) is not confined to the scenario root -- every
 /// path is rejected if absolute or containing a `..` component -- *before*
 /// creating the temp directory or applying anything, so an unconfined path
-/// never reaches a real filesystem call. Also panics if any named
-/// `Operation::Barrier` rendezvous point does not have exactly two
-/// participants (see [`validate_barriers`]), for the same reason: a
-/// malformed barrier would otherwise hang the runner instead of failing
-/// loudly.
+/// never reaches a real filesystem call. Also panics upfront if any named
+/// `Operation::Barrier` is used a number of times other than two (see
+/// [`validate_barriers`]); a barrier used the right number of times but
+/// never actually reachable concurrently instead panics later, once
+/// [`DeadlineBarrier`] gives up at this call's own deadline -- either way, a
+/// malformed barrier fails loudly rather than hanging the runner.
 pub fn run_scenario_keep_dir(
     scenario: &Scenario,
     seed: u64,

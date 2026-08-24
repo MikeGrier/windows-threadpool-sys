@@ -25,6 +25,33 @@ fn stress_enabled() -> bool {
 }
 
 #[test]
+fn a_barrier_pair_that_can_never_run_concurrently_fails_fast_instead_of_hanging() {
+    // PR #20 review response: passing `validate_barriers`'s exactly-two-uses
+    // check does not prove the two uses can ever run concurrently -- two
+    // top-level `Barrier` operations execute sequentially, on one thread, so
+    // the first would wait forever for a partner that can never arrive.
+    // `DeadlineBarrier` bounds that wait against the harness's own deadline
+    // (deliberately short here) instead, so a scenario shaped like this
+    // fails fast rather than wedging the runner.
+    let scenario = Scenario::new("sequential-barrier-deadlock")
+        .then(Operation::Barrier {
+            name: "stuck".to_string(),
+        })
+        .then(Operation::Barrier {
+            name: "stuck".to_string(),
+        });
+    let params = HarnessParams {
+        timeout: Duration::from_secs(2),
+        ..HarnessParams::default()
+    };
+    let result = std::panic::catch_unwind(|| run_scenario(&scenario, seed(), &params));
+    assert!(
+        result.is_err(),
+        "a barrier pair that can never rendezvous must panic, not hang"
+    );
+}
+
+#[test]
 fn the_prng_is_deterministic_for_a_fixed_seed() {
     let mut a = Rng::new(DEFAULT_SEED);
     let mut b = Rng::new(DEFAULT_SEED);
