@@ -196,3 +196,24 @@ fn a_barrier_name_reused_across_two_sequential_rounds_is_accepted() {
     ];
     assert!(validate_barriers(&operations).is_ok());
 }
+
+#[test]
+fn a_barrier_inside_a_repeat_is_counted_once_per_iteration() {
+    // PR #20 review response: the original recursion visited a `Repeat`'s
+    // pattern only once regardless of `count`, so one static use inside a
+    // `Repeat` of 2 (2 runtime uses) plus one more use elsewhere tallied as
+    // 1 + 1 = 2 (even, wrongly accepted) when the real runtime total is 3
+    // (odd, genuinely malformed -- the third use has no partner).
+    let operations = vec![
+        Operation::Repeat {
+            count: 2,
+            pattern: vec![Operation::Barrier {
+                name: "repeated".to_string(),
+            }],
+        },
+        Operation::Barrier {
+            name: "repeated".to_string(),
+        },
+    ];
+    assert!(validate_barriers(&operations).is_err());
+}

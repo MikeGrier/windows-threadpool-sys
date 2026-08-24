@@ -493,18 +493,37 @@ impl HarnessParams {
 /// mistakes into an ordinary "wedged" panic instead, without needing to
 /// prove the two participants are concurrent ahead of time.
 struct DeadlineBarrier {
-    /// How many parties have arrived for the round currently forming. Reset
-    /// to `0` the instant it reaches `2`, so the same barrier can be reused
-    /// for a later round (e.g. a later `Repeat` iteration) without needing a
-    /// fresh object.
-    arrived: Mutex<usize>,
+    state: Mutex<DeadlineBarrierState>,
     ready: std::sync::Condvar,
+}
+
+/// How many parties have arrived for the round currently forming, and which
+/// round that is.
+///
+/// Both fields are read and mutated together under [`DeadlineBarrier`]'s one
+/// lock (PR #20 review response): resetting `arrived` to `0` alone gives a
+/// waiter nothing to distinguish "my round just completed" from "a *later*
+/// round completed while I was re-acquiring the lock" -- a third (or
+/// concurrently-scheduled second) party can start and finish a whole new
+/// round in the gap between a waiter's `notify_all` waking it and that
+/// waiter re-locking to check `arrived`, leaving the original waiter
+/// waiting on a round that already came and went. `generation` closes that
+/// gap: it only ever advances when a round completes, so a waiter that
+/// captured its own round's generation before blocking recognizes any
+/// advance -- from this round or a dozen further ones -- as its own
+/// rendezvous having happened.
+struct DeadlineBarrierState {
+    arrived: usize,
+    generation: u64,
 }
 
 impl DeadlineBarrier {
     fn new() -> Self {
         Self {
-            arrived: Mutex::new(0),
+            state: Mutex::new(DeadlineBarrierState {
+                arrived: 0,
+                generation: 0,
+            }),
             ready: std::sync::Condvar::new(),
         }
     }
@@ -512,13 +531,15 @@ impl DeadlineBarrier {
     /// Blocks until a second party calls `wait` on this same barrier, or
     /// panics once `deadline` passes without one arriving.
     fn wait(&self, deadline: Instant, label: &str) {
-        let mut arrived = self
-            .arrived
+        let mut state = self
+            .state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        *arrived += 1;
-        if *arrived >= 2 {
-            *arrived = 0;
+        let my_generation = state.generation;
+        state.arrived += 1;
+        if state.arrived >= 2 {
+            state.arrived = 0;
+            state.generation = state.generation.wrapping_add(1);
             self.ready.notify_all();
             return;
         }
@@ -532,11 +553,14 @@ impl DeadlineBarrier {
             );
             let (guard, timeout) = self
                 .ready
-                .wait_timeout(arrived, deadline - now)
+                .wait_timeout(state, deadline - now)
                 .unwrap_or_else(|poison| poison.into_inner());
-            arrived = guard;
-            if *arrived == 0 {
-                // The second party arrived, reset the round, and notified.
+            state = guard;
+            if state.generation != my_generation {
+                // The generation only ever advances when a round completes,
+                // and this waiter is still counted in the round it captured
+                // `my_generation` for -- so any advance means its own round
+                // has resolved.
                 return;
             }
             if timeout.timed_out() {
@@ -954,7 +978,14 @@ fn validate_paths(operations: &[Operation]) -> Result<(), String> {
 /// Counts every use of each named [`Operation::Barrier`] rendezvous point --
 /// both a bare `Barrier` and a `HoldOpen.ready_barrier` count as one use of
 /// that name -- recursing through `Repeat` and `Concurrent` exactly like
-/// [`validate_paths`].
+/// [`validate_paths`], except that a `Repeat`'s uses are multiplied by its
+/// `count` (PR #20 review response): the original recursion visited a
+/// `Repeat`'s pattern only once, so a barrier used twice inside a `Repeat`
+/// of 3 was tallied as 2 static uses when the runtime behavior is 6 --
+/// undercounting in exactly the direction that lets a genuinely malformed
+/// (odd total) scenario slip past [`validate_barriers`]'s parity check.
+/// Saturating, since a persisted scenario's `Repeat` counts are untrusted
+/// input.
 fn count_barrier_uses(operations: &[Operation], counts: &mut HashMap<String, u64>) {
     for operation in operations {
         match operation {
@@ -963,7 +994,13 @@ fn count_barrier_uses(operations: &[Operation], counts: &mut HashMap<String, u64
                 ready_barrier: Some(name),
                 ..
             } => *counts.entry(name.clone()).or_insert(0) += 1,
-            Operation::Repeat { pattern, .. } => count_barrier_uses(pattern, counts),
+            Operation::Repeat { count, pattern } => {
+                let mut nested = HashMap::new();
+                count_barrier_uses(pattern, &mut nested);
+                for (name, uses) in nested {
+                    *counts.entry(name).or_insert(0) += uses.saturating_mul(*count);
+                }
+            }
             Operation::Concurrent { branches } => {
                 for branch in branches {
                     count_barrier_uses(branch, counts);

@@ -52,6 +52,35 @@ fn a_barrier_pair_that_can_never_run_concurrently_fails_fast_instead_of_hanging(
 }
 
 #[test]
+fn a_barrier_reused_across_many_rapid_rounds_never_wedges() {
+    // PR #20 review response: resetting a `DeadlineBarrier`'s `arrived`
+    // count alone (no generation) let a waiter miss its own round -- a
+    // third arrival (the next round starting immediately) could complete a
+    // whole new round in the gap between the `notify_all` that woke a
+    // waiter and that waiter re-locking to check `arrived`, leaving it
+    // waiting on a round that already came and went. Many back-to-back
+    // rounds on two concurrent branches, with no delay between them, gives
+    // that race its best chance to reproduce; a deliberately short overall
+    // deadline turns a reintroduced bug into a fast, clear failure instead
+    // of a hang.
+    let rounds = 500;
+    let branch = vec![Operation::Repeat {
+        count: rounds,
+        pattern: vec![Operation::Barrier {
+            name: "rapid".to_string(),
+        }],
+    }];
+    let scenario = Scenario::new("rapid-repeated-barrier").then(Operation::Concurrent {
+        branches: vec![branch.clone(), branch],
+    });
+    let params = HarnessParams {
+        timeout: Duration::from_secs(20),
+        ..HarnessParams::default()
+    };
+    run_scenario(&scenario, seed(), &params);
+}
+
+#[test]
 fn the_prng_is_deterministic_for_a_fixed_seed() {
     let mut a = Rng::new(DEFAULT_SEED);
     let mut b = Rng::new(DEFAULT_SEED);
