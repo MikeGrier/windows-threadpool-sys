@@ -60,7 +60,7 @@
                 {
                     "type": "toml",
                     "path": "../windows-ioring-sys/Cargo.toml",
-                    "jsonpath": "$.dependencies['windows-topology-sys'].version"
+                    "jsonpath": "$['dev-dependencies']['windows-topology-sys'].version"
                 }
             ]
         },
