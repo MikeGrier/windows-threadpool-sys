@@ -1,5 +1,40 @@
 # Changelog
 
+## [2.0.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v1.0.0...windows-overlapped-io-sys-v2.0.0) (2026-08-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **overlapped-io:** BlockingEndpoint::new returns Result<Self, TryFromEndpointError> instead of Self.
+* **overlapped-io:** make the notification-mode setter core, not fs-gated
+* **overlapped-io:** the socket and device adapters are now generic over the caller's buffer, the async scatter-read takes the caller's `PageBuffers`, and every blocking read-side adapter takes a slice to fill instead of allocating and returning a `Vec`.
+* **overlapped-io:** `AssociatedEndpoint::read` now takes the buffer to read into rather than a length it allocates, `write` accepts any `IoBuf` rather than a `Vec<u8>`, and `FileIo` is generic over the buffer type.
+* **overlapped-io:** `UnassociatedEndpoint::set_notification_modes` now takes `&mut self`, since the mode it establishes is recorded on the endpoint.
+* **overlapped-io:** every buffer-owning adapter now returns `io::Result<Started<Token, Payload>>` instead of `io::Result<Token>`.
+
+### Features
+
+* **overlapped-io:** add AssociatedSocket::set_notification_modes behind an IFS probe ([3a5d661](https://github.com/MikeGrier/windows-threadpool-sys/commit/3a5d6619b60e75499f4c8218f5ca873ddd2bf303))
+* **overlapped-io:** add the endpoint notification-mode setter ([4cb871d](https://github.com/MikeGrier/windows-threadpool-sys/commit/4cb871da8e9fc903367d29b3ec6fac31b140ce8b))
+* **overlapped-io:** add the IoBuf/IoBufMut owned-buffer traits ([b58d747](https://github.com/MikeGrier/windows-threadpool-sys/commit/b58d74768ea4ba1246a513d7e8f3f60bedf9d82c))
+* **overlapped-io:** add the Started adapter submission outcome ([e1bd740](https://github.com/MikeGrier/windows-threadpool-sys/commit/e1bd740c24ff953a3831328be4af1ed4943e4611))
+* **overlapped-io:** implement IoBuf and IoBufMut for &'static mut [u8] ([713f329](https://github.com/MikeGrier/windows-threadpool-sys/commit/713f329d9fad4b2ae3a5d87ebd8b3af69b308d69))
+* **overlapped-io:** make the file adapters take the caller's own buffer ([18bcd6b](https://github.com/MikeGrier/windows-threadpool-sys/commit/18bcd6bb4200e5d5545cfdf871efe0e53fef6fd4))
+* **overlapped-io:** report a synchronous completion from the adapters ([c378b8f](https://github.com/MikeGrier/windows-threadpool-sys/commit/c378b8fdfd4a6eafd260d8b121f8e1cd56c73bf1))
+* **overlapped-io:** take caller buffers across every adapter ([bc4b21d](https://github.com/MikeGrier/windows-threadpool-sys/commit/bc4b21d5d2a2d7bcde1cba07c8db56856f043bda))
+
+
+### Bug Fixes
+
+* **overlapped-io:** AssociatedEndpoint drop now blocks on its own outstanding operations ([653eb59](https://github.com/MikeGrier/windows-threadpool-sys/commit/653eb59c6a2f89633fdb371c66c1b2fc12f74b26))
+* **overlapped-io:** capture IoBuf pointers before submission, not inside the closure ([0dac470](https://github.com/MikeGrier/windows-threadpool-sys/commit/0dac470027a80a7d8dbf8000ef4a547fd4bd823f))
+* **overlapped-io:** gate payload_ptr_from_overlapped out of the device-only build ([ad75fc9](https://github.com/MikeGrier/windows-threadpool-sys/commit/ad75fc9c675118b332c9d427c5a6d0538680ad22))
+* **overlapped-io:** make the adapters classify against the endpoint's mode ([5d2aa8d](https://github.com/MikeGrier/windows-threadpool-sys/commit/5d2aa8d5fd42c502b09265aa40e6a0dc79f837fd))
+* **overlapped-io:** make the notification-mode setter core, not fs-gated ([0d0e8b2](https://github.com/MikeGrier/windows-threadpool-sys/commit/0d0e8b27766ea10de01e970e561eff52947aabbe))
+* **overlapped-io:** reject a blocking endpoint with skip_set_event_on_handle ([a12c0d4](https://github.com/MikeGrier/windows-threadpool-sys/commit/a12c0d4d4d5fbf31019d8d970a26bd3cc33a80a2))
+* **overlapped-io:** reject a completion key already in use by a live endpoint ([9502781](https://github.com/MikeGrier/windows-threadpool-sys/commit/95027818fa8d5acaa49c990ab93b2321b9dca7db))
+* **overlapped-io:** require P: 'static to submit an operation ([00a5acf](https://github.com/MikeGrier/windows-threadpool-sys/commit/00a5acff5f2c2507f9f3dc02d365586b0ebd36fa))
+
 ## [1.0.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v0.1.0...windows-overlapped-io-sys-v1.0.0) (2026-08-18)
 
 
