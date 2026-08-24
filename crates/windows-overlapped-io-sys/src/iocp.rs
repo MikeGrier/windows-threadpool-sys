@@ -119,6 +119,21 @@ impl CompletionPort {
     /// Completions for operations issued on the endpoint are delivered to this
     /// port and tagged with `key`. The association is permanent for the life of
     /// the handle, so the returned endpoint borrows the port.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] if `key` is already associated
+    /// with a live endpoint on this port (PR #20 review response): a
+    /// completion key is a caller-defined tag, not a unique endpoint identity,
+    /// and `deregister_dequeued` finds an endpoint's outstanding-operation
+    /// counter by looking it up under `key` alone. Associating a second
+    /// endpoint under a key already in use would silently replace the first
+    /// endpoint's counter in `endpoint_outstanding`; completions for the
+    /// first endpoint would then decrement the second's counter (which can
+    /// underflow) while the first's own counter never reaches zero, blocking
+    /// its `Drop` forever. Rejecting the duplicate before native association
+    /// keeps every key's counter unambiguous instead. Also returns the error
+    /// from `CreateIoCompletionPort`.
     pub fn associate(
         &self,
         endpoint: UnassociatedEndpoint,
@@ -128,14 +143,33 @@ impl CompletionPort {
         // endpoint into association rather than being lost at the boundary.
         let modes = endpoint.notification_modes();
         let handle = endpoint.into_handle();
+        let outstanding = Arc::new(AtomicUsize::new(0));
+        {
+            // Checked and reserved under one lock acquisition, so no other
+            // `associate` call can race into the same key between the check
+            // and the insert.
+            let mut endpoint_outstanding = lock(&self.state.endpoint_outstanding);
+            if endpoint_outstanding.contains_key(&key) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "windows-overlapped-io-sys: completion key {key} is already \
+                         associated with a live endpoint on this port; each endpoint must \
+                         use a distinct key"
+                    ),
+                ));
+            }
+            endpoint_outstanding.insert(key, Arc::clone(&outstanding));
+        }
         // SAFETY: associating a valid handle with a valid port; the concurrency
         // argument is ignored when an existing port is supplied.
         let result = unsafe { CreateIoCompletionPort(handle.as_raw_handle(), self.raw(), key, 0) };
         if result.is_null() {
+            // Roll back the reservation above; nothing else can have used it,
+            // since the endpoint was never associated to receive completions.
+            lock(&self.state.endpoint_outstanding).remove(&key);
             return Err(io::Error::last_os_error());
         }
-        let outstanding = Arc::new(AtomicUsize::new(0));
-        lock(&self.state.endpoint_outstanding).insert(key, Arc::clone(&outstanding));
         Ok(AssociatedEndpoint {
             port: self,
             handle,
