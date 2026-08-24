@@ -232,6 +232,20 @@ pub(crate) struct Resident {
 /// present (the watcher was torn down and removed between the reopen and this
 /// call) or if `old == new` (a `ReOpenFile` success never reaches here at
 /// all, since it cannot change identity -- see `WatcherInner::retry_reestablish`).
+///
+/// `new` may already be occupied -- a path-based reopen can land on an
+/// identity another watcher already owns (for example, the reopened path was
+/// replaced by a junction into an already-watched directory, PR #20 review
+/// response). Silently `insert`-ing over that entry would drop the existing
+/// watcher (and every route it still serves) with nothing to migrate them:
+/// `Cancel`/`answer` would still find their subscriptions' `directory`
+/// pointing at `new`, but the map entry there is now a different watcher that
+/// never received their routes. So the existing entry's routes are migrated
+/// onto the just-rekeyed watcher instead, and the existing entry is discarded
+/// -- never the other way around: `watcher` is the caller's own `self`,
+/// executing this from inside its own retry-timer callback, and dropping it
+/// here (via `DirectoryWatcher::stop`) would deadlock waiting on that same
+/// callback to finish.
 pub(crate) fn rekey(resident: &Mutex<Resident>, old: DirectoryId, new: DirectoryId) {
     if old == new {
         return;
@@ -240,6 +254,19 @@ pub(crate) fn rekey(resident: &Mutex<Resident>, old: DirectoryId, new: Directory
     let Some(watcher) = state.directories.remove(&old) else {
         return;
     };
+    if let Some(existing) = state.directories.remove(&new) {
+        for route in existing.take_routes() {
+            match DirectoryHandle::open(watcher.path()) {
+                Ok(handle) => watcher.add_route(route, handle),
+                Err(error) => log::warn!(
+                    "windows-file-watcher: could not migrate a route from a redundant watcher \
+                     during identity-collision coalescing: {error}"
+                ),
+            }
+        }
+        // `existing` drops here, tearing itself down: safe, since it is not
+        // the watcher executing this call.
+    }
     state.directories.insert(new, watcher);
     for subscription in state.subscriptions.values_mut() {
         if let Subscription::Routed { directory, .. } = subscription

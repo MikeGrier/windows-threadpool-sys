@@ -30,7 +30,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::windows::io::AsRawHandle;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
@@ -844,6 +844,17 @@ impl WatcherInner {
             }
             *gate = ArmGate::VolumeChangePending;
         }
+        // Installed *before* any `VolumeChanged` is sent (PR #20 review
+        // response): a fast client can receive the notification and answer
+        // before this call returns, and `answer_volume_change` treats a
+        // still-`None` `volume_change` as "not currently asking" and silently
+        // discards the answer -- leaving this watcher gated forever, waiting
+        // for a question whose answer already arrived.
+        *lock(&self.volume_change) = Some(VolumeChangeState {
+            handle,
+            awaiting: awaiting.clone(),
+            decisions: HashMap::new(),
+        });
         for route in routes.values() {
             if awaiting.contains(&route.watch)
                 && let Some(slot) = &route.fault_slot
@@ -856,12 +867,6 @@ impl WatcherInner {
             }
         }
         drop(routes);
-
-        *lock(&self.volume_change) = Some(VolumeChangeState {
-            handle,
-            awaiting,
-            decisions: HashMap::new(),
-        });
     }
 
     /// Record a route's answer to the current volume-change question
@@ -1511,6 +1516,25 @@ impl DirectoryWatcher {
     /// never bound, and skips re-keying for lack of a real `Resident`.
     pub(crate) fn bind_resident(&self, resident: Weak<Mutex<Resident>>) {
         let _ = self.inner.resident.set(resident);
+    }
+
+    /// The path this watcher was opened from (PR #20 review response): what
+    /// `monitor::rekey`'s identity-collision handling reopens a fresh handle
+    /// from to migrate a redundant watcher's routes onto this one.
+    pub(crate) fn path(&self) -> &Path {
+        &self.inner.path
+    }
+
+    /// Remove and return every route this watcher currently serves, without
+    /// tearing the watcher down itself (PR #20 review response): used only
+    /// when this watcher has just been found redundant -- coalesced onto by
+    /// `monitor::rekey` after a path-based reopen landed on an identity
+    /// another watcher already owns -- so its routes can be migrated onto the
+    /// survivor before this watcher is dropped.
+    pub(crate) fn take_routes(&self) -> Vec<Route> {
+        std::mem::take(&mut *lock(&self.inner.routes))
+            .into_values()
+            .collect()
     }
 
     /// The current arm gate.

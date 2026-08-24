@@ -533,3 +533,92 @@ fn a_path_based_reopen_that_lands_on_a_new_directory_rekeys_so_a_later_subscript
     drop(monitor);
     dir.cleanup();
 }
+
+#[test]
+fn a_path_based_reopen_that_collides_with_another_watched_directory_migrates_routes_instead_of_dropping_them()
+ {
+    // PR #20 review response: a path-based reopen can land on a `DirectoryId`
+    // another watcher already owns -- here, by replacing the reopened path
+    // with a junction into the other watched directory. Before the fix,
+    // `rekey` silently `insert`-ed over that entry, dropping the pre-existing
+    // watcher (and every route it served) with nothing to migrate them.
+    let dir_a = TempDir::new("collide-rekey-a");
+    let dir_b = TempDir::new("collide-rekey-b");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+
+    // Two independently-watched, genuinely distinct directories.
+    let watch_a = session
+        .subscribe(dir_a.path(), WatchOptions::new().report_liveness(true))
+        .expect("register the first subscription");
+    let watch_b = session
+        .subscribe(dir_b.path(), WatchOptions::new().report_liveness(true))
+        .expect("register the second subscription");
+    monitor.quiesce();
+    assert_eq!(monitor.directory_count(), 2);
+
+    // Replace dir_b's path with a junction into dir_a, so re-opening dir_b's
+    // original path resolves to dir_a's identity -- the same collision a
+    // real "reopened path was replaced by a junction" scenario produces.
+    std::fs::remove_dir_all(dir_b.path()).expect("delete dir_b");
+    let status = std::process::Command::new("cmd")
+        .args([
+            "/C",
+            "mklink",
+            "/J",
+            &dir_b.path().display().to_string(),
+            &dir_a.path().display().to_string(),
+        ])
+        .status()
+        .expect("run mklink");
+    assert!(status.success(), "mklink /J failed to create the junction");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "watch_b never reestablished against the junctioned path"
+        );
+        if let Some(notification) = receiver.try_recv()
+            && matches!(notification, Notification::Resumed { watch: tag } if tag == watch_b.id())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert_eq!(
+        monitor.directory_count(),
+        1,
+        "the two watchers must have coalesced onto one, not left as two \
+         (which would mean the collision was never detected) and not zero \
+         (which would mean one was dropped without migrating its route)"
+    );
+
+    // The proof that watch_b's route was migrated, not dropped: a change
+    // under dir_a's real path (which is also now watch_b's own, junctioned
+    // path) must still reach watch_b's sink.
+    std::fs::write(dir_a.path().join("after-collision.txt"), b"x").expect("create a file");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "watch_b's route was not migrated onto the surviving watcher"
+        );
+        if let Some(Notification::Batch { watch: tag, .. }) = receiver.try_recv()
+            && tag == watch_b.id()
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    drop((watch_a, watch_b));
+    drop(monitor);
+    dir_a.cleanup();
+    // `dir_b` is now a junction (a reparse point), not a real directory with
+    // its own content; removing the junction point itself is enough, and
+    // `TempDir::cleanup`'s `remove_dir_all` does exactly that without
+    // following it into `dir_a`.
+    dir_b.cleanup();
+}
