@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-topology-sys-v0.2.0...windows-topology-sys-v0.2.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* sync all workspace crate versions to match main (ioring 1.0.0, topology 0.2.0) ([a160260](https://github.com/MikeGrier/windows-threadpool-sys/commit/a1602600625bda7b4b0fa5cdcdfebf83728b71e5))
+
 ## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-topology-sys-v0.1.0...windows-topology-sys-v0.2.0) (2026-08-24)
 
 
