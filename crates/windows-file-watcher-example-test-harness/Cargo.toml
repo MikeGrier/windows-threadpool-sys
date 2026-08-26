@@ -1,0 +1,29 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-file-watcher-example-test-harness"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A published, deliberately-legible EXAMPLE test harness for file-change-notification handlers built on windows-file-watcher's test-util seam. Read it, cut-and-paste from it, adapt it -- an exemplar of technique, not a supported framework."
+readme = "README.md"
+keywords = ["windows", "filesystem", "testing", "example"]
+categories = ["development-tools::testing", "os::windows-apis"]
+
+[dependencies]
+# The crate under demonstration. `test-util` is a build-time requirement here
+# (this is a testing tool), so it is a regular dependency feature, not a dev one.
+windows-file-watcher = { version = "0.1", path = "../windows-file-watcher", features = [
+	"test-util",
+] }
+serde = { version = "1.0", features = ["derive"] }
+
+# Windows-only, like the crate it demonstrates; it resolves to an empty crate on
+# other targets, so docs.rs must build it on a Windows target.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
