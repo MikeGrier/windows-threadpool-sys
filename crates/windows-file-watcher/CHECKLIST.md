@@ -159,7 +159,7 @@ the seam tests the consumer's reactions, not whether the crate would ever emit t
   `Sender::send` as the injection seam; add a crate-level "Testing your consumer code" docs section
   covering the pattern and the D-83 fidelity limit.
 
-- [ ] **M13.5** -- Consumer-facing example `examples/test_your_handler.rs` (`required-features =
+- [x] **M13.5** -- Consumer-facing example `examples/test_your_handler.rs` (`required-features =
   ["test-util"]`): a small handler that reacts to notifications, driven by a scripted deterministic
   sequence pushed through `channel_with_bound`/`Sender::send` -- covering `Batch` (with a gap-filled
   `Change`), `Desync`, `Completion`, `RetryQuestion`, and `VolumeChanged` (with a gap-filled

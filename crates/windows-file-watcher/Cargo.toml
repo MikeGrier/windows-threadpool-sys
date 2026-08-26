@@ -37,6 +37,13 @@ name = "scenario_stress"
 path = "tests/scenario_stress.rs"
 required-features = ["scenario-tool"]
 
+# The consumer test-surface example (M13.5): builds and runs only with
+# `test-util`, since it uses the feed channel and the `for_test` boundary-type
+# builders.
+[[example]]
+name = "test_your_handler"
+required-features = ["test-util"]
+
 # The crate is Windows-only, so docs.rs must build it on a Windows target or it
 # would resolve to an empty crate and document nothing.
 [package.metadata.docs.rs]
