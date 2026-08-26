@@ -80,7 +80,7 @@ use windows_file_watcher::{
 /// milestones); either way it round-trips through JSON. See the [module
 /// docs](self) for the data and control-flow dependencies a legal schedule must
 /// respect.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Schedule {
     /// The notifications to deliver, in order.
     pub steps: Vec<NotificationSpec>,
@@ -119,7 +119,7 @@ impl Schedule {
 /// subscription across steps. Every arm maps one-to-one onto a `Notification`
 /// variant. The ordering rules between these -- what may follow what, per watch
 /// -- are the control-flow dependencies in the [module docs](self).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NotificationSpec {
     /// -> `Notification::Batch`.
     Batch {
@@ -180,6 +180,23 @@ pub enum NotificationSpec {
 }
 
 impl NotificationSpec {
+    /// The subscription id this notification is tagged with.
+    ///
+    /// Every variant carries a `watch`; this reads it without matching each arm.
+    #[must_use]
+    pub fn watch(&self) -> u64 {
+        match self {
+            NotificationSpec::Batch { watch, .. }
+            | NotificationSpec::Desync { watch, .. }
+            | NotificationSpec::Completion { watch, .. }
+            | NotificationSpec::Suspended { watch }
+            | NotificationSpec::Resumed { watch }
+            | NotificationSpec::Established { watch, .. }
+            | NotificationSpec::RetryQuestion { watch, .. }
+            | NotificationSpec::VolumeChanged { watch, .. } => *watch,
+        }
+    }
+
     /// Convert this description into a real `Notification` using file-watcher's
     /// `test-util` builders.
     #[must_use]
@@ -230,7 +247,7 @@ impl NotificationSpec {
 }
 
 /// -> `Change`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangeSpec {
     /// What kind of change.
     pub kind: ChangeKindSpec,
@@ -248,7 +265,7 @@ impl ChangeSpec {
 }
 
 /// -> `ChangeKind`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChangeKindSpec {
     /// Added.
     Added,
@@ -278,7 +295,7 @@ impl ChangeKindSpec {
 }
 
 /// -> `DesyncCause`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DesyncCauseSpec {
     /// Kernel buffer overflow or an unparseable completion.
     Overflow,
@@ -305,7 +322,7 @@ impl DesyncCauseSpec {
 }
 
 /// -> `Outcome`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutcomeSpec {
     /// Registered and watching.
     Subscribed,
@@ -334,7 +351,7 @@ impl OutcomeSpec {
 }
 
 /// -> `FaultDetail`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FaultDetailSpec {
     /// How the retry policy should treat this failure.
     pub failure: OpenFailureSpec,
@@ -352,7 +369,7 @@ impl FaultDetailSpec {
 }
 
 /// -> `OpenFailure`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpenFailureSpec {
     /// Nothing exists at the path (retryable).
     NotFound,
@@ -382,7 +399,7 @@ impl OpenFailureSpec {
 }
 
 /// -> `FailureCode`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureCodeSpec {
     /// A `WIN32_ERROR`.
     Win32(u32),
@@ -400,7 +417,7 @@ impl FailureCodeSpec {
 }
 
 /// -> `WatchMode`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WatchModeSpec {
     /// `ReadDirectoryChangesW`.
     Detailed,
@@ -418,7 +435,7 @@ impl WatchModeSpec {
 }
 
 /// -> `FaultOperation`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FaultOperationSpec {
     /// The open faulted.
     Open,
@@ -439,7 +456,7 @@ impl FaultOperationSpec {
 ///
 /// Volume identity compares by serial alone; the descriptive fields are for
 /// display.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VolumeSpec {
     /// The volume serial (the only field that affects identity equality).
     pub serial: u32,

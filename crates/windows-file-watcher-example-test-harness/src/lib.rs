@@ -15,11 +15,13 @@
 //!   drive time.
 //! - [`drive`] -- feed a real file-watcher `Receiver` with a schedule and
 //!   dispatch each notification to your handler.
+//! - [`generator`] -- a seeded generator of contract-legal schedules (chaos that
+//!   stays inside file-watcher's documented contract).
 //! - [`example_handler`] -- a small, realistic handler used by the tests (and,
 //!   in later milestones, the `capture`/`replay` bins).
 //!
-//! Later milestones add a contract-legal seeded generator, oracles, JSON
-//! record/replay, and `capture`/`replay` bin tools.
+//! Later milestones add oracles, JSON record/replay, and `capture`/`replay` bin
+//! tools.
 //!
 //! # Fidelity limit
 //!
@@ -34,6 +36,8 @@
 #[cfg(windows)]
 mod driver;
 #[cfg(windows)]
+pub mod generator;
+#[cfg(windows)]
 mod handler;
 #[cfg(windows)]
 pub mod schedule;
@@ -43,6 +47,8 @@ pub mod example_handler;
 
 #[cfg(windows)]
 pub use driver::drive;
+#[cfg(windows)]
+pub use generator::{Generator, GeneratorConfig, Rng};
 #[cfg(windows)]
 pub use handler::Handler;
 #[cfg(windows)]

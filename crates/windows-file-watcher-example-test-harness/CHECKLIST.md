@@ -29,13 +29,13 @@ in-scope crate, sync with origin) is standard procedure and not listed.
 
 ## M2 -- Contract-legal seeded generator
 
-- [ ] **M2.1** -- A splitmix64 `Rng` and a `Generator` producing legal `Schedule`s (D-5): sequences within
+- [x] **M2.1** -- A splitmix64 `Rng` and a `Generator` producing legal `Schedule`s (D-5): sequences within
   file-watcher's contract (D-12 ordering, D-29 loss as `Desync`), reproducible by seed.
 
-- [ ] **M2.2** -- Tunable shape (length, per-kind weights, watch count) with sane defaults; document the
+- [x] **M2.2** -- Tunable shape (length, per-kind weights, watch count) with sane defaults; document the
   legal-envelope constraints in prose so a reader can extend the generator safely.
 
-- [ ] **M2.3** -- Unit test: a fixed seed yields a byte-identical schedule run to run.
+- [x] **M2.3** -- Unit test: a fixed seed yields a byte-identical schedule run to run.
 
 ## M3 -- Oracles
 
