@@ -15,9 +15,8 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: none.** M1 through M9+, M10, M11, and M12 are archived/done -- the full PR #20
-> review response is complete. Only the parked, ungated M-inf horizon items remain, and none is a current
-> obligation.
+> **NEXT ACTIONABLE ITEM: M13.1.** M1 through M9+, M10, M11, and M12 are archived/done. M13 (consumer test
+> surface) is the active, post-v1 line of work. The parked, ungated M-inf horizon items remain deferred.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -120,6 +119,55 @@ after a reopen lands on a different directory. Independent of M10 above; M12 bel
 ## M12 -- Per-subscription volume-change confirmation (D-78)
 
 Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-23----m12-per-subscription-volume-change-confirmation-d-78).
+
+## M13 -- Consumer test surface (`test-util`)
+
+Let a downstream consumer drive *its own* notification-handling code with synthetic, deterministic
+notifications -- no real filesystem, no thread pool -- by feeding the real [`Receiver`]. This is the
+"go below" seam from the [testability design discussion](DESIGN-NOTES.md): the consumer substitutes the
+OS ingest while keeping the crate's delivery model (`Notification`/`Receiver`/queue semantics) intact.
+Because the consumer becomes the driver, their test is deterministic for free -- the crate ships no
+scheduler or virtual clock.
+
+An audit (this session) found the seam is **~90% already public**: `channel_with_bound() -> (Sender,
+Receiver)`, `Sender::send(Notification)`, `WatchId::from_raw`, and every boundary enum (`DesyncCause`,
+`Outcome`, `FaultDetail`/`OpenFailure`/`FailureCode`, `WatchMode`, `FaultOperation`, `ChangeKind`) are
+already constructible by a consumer. Only two boundary types -- `RelativeName` and `VolumeIdentity` --
+are not consumer-constructible, and the existing seam pieces are mis-documented as internal scaffolding.
+Records D-81 (bless the shipped seam rather than re-gate it), D-82 (gap-filler constructors gated behind
+an off-by-default `test-util` feature, not the unconditional public surface), and D-83 (fidelity limit:
+the seam tests the consumer's reactions, not whether the crate would ever emit that sequence).
+
+- [x] **M13.1** -- Add an off-by-default `test-util` Cargo feature (no new dependencies) and record the
+  three seam decisions. In [DESIGN-NOTES.md](DESIGN-NOTES.md) (Tier 1) add D-81/D-82/D-83; in
+  [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) (Tier 2) add the matching rationale -- why bless-not-re-gate
+  (re-gating shipped 0.1 API is a breaking change with no offsetting safety gain), and why feature-gate
+  the gap-fillers (production code must not be able to forge a `RelativeName`/`VolumeIdentity`).
+
+- [ ] **M13.2** -- Fill the `RelativeName` gap behind `test-util`: a valid-by-construction public
+  constructor building a name from a `&str`/`&OsStr` (and raw `u16` units), so a consumer can build a
+  `Change`. Unit test.
+
+- [ ] **M13.3** -- Fill the `VolumeIdentity` gap behind `test-util`: promote the `#[cfg(test)]`
+  `synthetic` builder to a `test-util`-gated public constructor (valid-by-construction), keeping the
+  crate's own `#[cfg(test)]` use working. Unit test.
+
+- [ ] **M13.4** -- Re-document the already-public seam as the supported consumer test surface (no
+  signature changes): rewrite `WatchId::from_raw`'s stale "M3.4 replaces this" doc, document
+  `channel_with_bound` + `Sender::send` as the injection seam, and add a crate-level "Testing your
+  consumer code" docs section covering the pattern and the D-83 fidelity limit.
+
+- [ ] **M13.5** -- Consumer-facing example `examples/test_your_handler.rs` (`required-features =
+  ["test-util"]`): a small handler that reacts to notifications, driven by a scripted deterministic
+  sequence pushed through `channel_with_bound`/`Sender::send` -- covering `Batch` (with a gap-filled
+  `Change`), `Desync`, `Completion`, `RetryQuestion`, and `VolumeChanged` (with a gap-filled
+  `VolumeIdentity`) -- asserting the handler's reactions, with no filesystem and no thread pool.
+
+- [ ] **M13.6** -- Integration test `tests/consumer_test_surface.rs` (`required-features = ["test-util"]`)
+  exercising the surface exactly as a downstream consumer would (public + `test-util` items only, no
+  `pub(crate)` access): drive a scripted sequence covering every `Notification` variant including both
+  gap-filled types, and assert deterministic receipt through `Receiver`. Milestone-closing integration
+  test.
 
 ## M-inf -- Horizon (ungated, post-v1)
 

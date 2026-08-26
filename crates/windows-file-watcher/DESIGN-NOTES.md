@@ -99,6 +99,9 @@ threads of its own.
 | <a id="d-78"></a>D-78 | **A reopen that lands on a different volume than before is a per-subscription confirmation, not a silent continuation or a directory-wide veto.** `WatcherInner::reopen` reopens by path and never checked whether the result is still the same volume, so removable media swapped for different media at the same path (the classic case: NTFS media replaced by FAT32) was silently absorbed, with the client learning about it, if at all, only as an ordinary `Established { Coarse }` should the new volume happen to need the fallback tier. See [Volume identity confirmation on reopen](#volume-identity-confirmation-on-reopen). |
 | <a id="d-79"></a>D-79 | **Supersedes [D-54](#d-54): every fault/failure message now carries a `FaultDetail` (this crate's `OpenFailure` classification plus a `FailureCode`), not just which operation faulted.** A client asked to choose a retry delay, or told a subscription failed permanently, previously had no way to know *why* -- `FaultOperation` says only `Open` or `Arm`, and the raw error was logged (D-58) and discarded. `FailureCode` is `Win32(u32)` or `HResult(i32)` rather than one currency: every source in this crate today is a classic last-error API, so `Win32` is the only variant anything currently produces, but a value is kept in the currency it actually arrived in rather than converted through `HRESULT_FROM_WIN32`/`HRESULT_CODE` to force a single shape. See [Failure detail on every fault report](#failure-detail-on-every-fault-report). |
 | <a id="d-80"></a>D-80 | **M11.2's fast reopen path is disabled (returns `None` unconditionally), and reopens by `OpenFileById` (file reference), not `ReOpenFile` (handle), when re-enabled.** Both were measured against the actual OS (D-52's precedent) rather than assumed: `ReOpenFile` against a directory handle fails outright with `ERROR_ACCESS_DENIED` for an ordinary, unprivileged process (it needs `SeBackupPrivilege` *enabled*, which `FILE_FLAG_BACKUP_SEMANTICS` does not grant); `OpenFileById` reopens correctly by identity (confirmed delete-pending-safe and recreate-safe) but is path-independent, which is its own hazard (it would silently keep following a moved/renamed directory away from the path a client subscribed to -- caught by comparing `GetFinalPathNameByHandleW` before trusting it); and, independently of both, a handle obtained via `OpenFileById` hangs or (once) crashes with `STATUS_STACK_BUFFER_OVERRUN` once associated with the thread pool's `ThreadpoolIo`/IOCP and armed, for a reason not yet root-caused. See [Reopening by file reference, and why the fast path is off](#reopening-by-file-reference-and-why-the-fast-path-is-off). |
+| <a id="d-81"></a>D-81 | **The consumer test surface is the *already-public* seam -- `channel_with_bound` + `Sender::send` + `WatchId::from_raw` -- blessed and documented, not re-gated.** A downstream consumer tests its own notification-handling code by feeding synthetic `Notification`s through a real `Receiver` it constructs itself: "go below" the `Monitor`, substituting the OS ingest while keeping the delivery model (`Notification`/`Receiver`/queue ordering/doorbell) intact. These pieces already shipped public in 0.1; re-gating them would be a breaking change with no offsetting safety gain, since exposing them is harmless. See [Consumer test surface](#consumer-test-surface). |
+| <a id="d-82"></a>D-82 | **The two boundary types a consumer cannot otherwise construct (`RelativeName`, `VolumeIdentity`) get valid-by-construction builders behind an off-by-default `test-util` feature -- not on the unconditional public surface.** This does not reverse [D-64](DESIGN-RATIONALE.md#the-m64-test-seam-is-a-private-constructor-not-a-public-feature-flag-d-64): D-64's seams serve the crate's own tests reaching internal state, for which `#[cfg(test)]`/`pub(crate)` is strictly better; this seam serves a downstream consumer's tests, which `#[cfg(test)]` cannot reach at all, and it exposes public boundary constructors rather than internal state (so the retired `unstable-internals` objection does not apply). Feature-gating keeps production code from forging a `RelativeName`/`VolumeIdentity`. See [Consumer test surface](#consumer-test-surface). |
+| <a id="d-83"></a>D-83 | **The consumer test surface tests the consumer's reactions, not whether this crate would ever emit a given sequence.** Builders are valid-by-construction, so an impossible value cannot be minted; an impossible ordering remains the consumer's responsibility, as with any hand-fed test double. This fidelity limit is documented on the surface so a passing handler test is not mistaken for confirmation that the crate produces that traffic. See [Consumer test surface](#consumer-test-surface). |
 
 
 ### Queue mediation
@@ -394,3 +397,44 @@ pre-existing property of D-7's design, not something M10 changed; `stopped`'s
 own permanent-stop path (`WatcherInner::record_stop`) can still classify a
 later re-establish's `NotADirectory` the same way `subscribe` does, and is
 equally hard to hit for the same structural reason.
+
+### Consumer test surface
+
+A downstream consumer of this crate reacts to `Notification`s drained from a
+`Receiver`. To let that consumer test its *own* reaction logic cheaply and
+deterministically -- with no real filesystem and no thread pool -- the crate lets
+the consumer feed a real `Receiver` itself, rather than only receiving one from
+`Monitor::session`. This is the "go below" seam: the consumer substitutes the OS
+ingest (the source of notifications) while keeping the crate's delivery model --
+`Notification`, `Receiver`, queue ordering, the doorbell -- intact. Substituting
+*above* the delivery model, or replacing it wholesale, would discard exactly the
+behavior the consumer is trying to test against (D-81).
+
+Because the consumer becomes the driver -- it decides what to push and when --
+its test is deterministic without this crate shipping any scheduler or virtual
+clock. Reproducibility falls out of removing the crate's own concurrency from the
+consumer's test, not out of modeling it.
+
+Most of the seam was already public: `channel_with_bound() -> (Sender, Receiver)`,
+`Sender::send(Notification)`, `WatchId::from_raw`, and every boundary enum
+(`DesyncCause`, `Outcome`, `FaultDetail`/`OpenFailure`/`FailureCode`, `WatchMode`,
+`FaultOperation`, `ChangeKind`) can already be constructed by a consumer. These
+are blessed and documented as the supported test surface rather than re-gated
+(D-81). Only two boundary types -- `RelativeName` (inside `Change`) and
+`VolumeIdentity` -- had no consumer-reachable constructor; each gains a
+valid-by-construction builder behind the off-by-default `test-util` feature
+(D-82).
+
+The feature gate is an audience distinction, not a reversal of D-64. D-64's
+`#[cfg(test)]`/`pub(crate)` seams exist for the crate's own tests to reach
+internal state, and a public feature there would leak internal state for no gain.
+This seam exists for a *downstream* consumer's tests, which `#[cfg(test)]` cannot
+reach at all (the cfg is not set when the crate is compiled as a dependency), so
+a feature is the only mechanism that reaches them -- and it exposes public
+boundary constructors, not internal state, so the anti-pattern that retired
+`unstable-internals` (a `#[doc(hidden)]` window into internals) is not what this
+is.
+
+The surface tests a consumer's reactions, not the crate's production of a given
+sequence (D-83): the builders cannot mint an impossible value, but an impossible
+*ordering* is the consumer's responsibility, as with any hand-fed test double.
