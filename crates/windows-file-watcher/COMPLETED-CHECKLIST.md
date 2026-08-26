@@ -428,3 +428,47 @@ together in one commit rather than four artificially separated ones.
   counts. Integration test for the milestone: `tests/scenario_stress.rs`'s three new M9+ tests plus four new
   JSON fixtures (`concurrent_file_churn.json`, `spoiler_blocks_delete.json`, `queue_overwhelm.json`,
   `nested_concurrent_composition.json`) all pass through the generic fixture runner.
+
+## Moved 2026-08-25 -- M13: consumer test surface (test-util)
+
+Let a downstream consumer drive *its own* notification-handling code with synthetic, deterministic
+notifications -- no real filesystem, no thread pool -- by feeding the real [`Receiver`]. This is the
+"go below" seam from the [testability design discussion](DESIGN-NOTES.md): the consumer substitutes the
+OS ingest while keeping the crate's delivery model (`Notification`/`Receiver`/queue semantics) intact.
+Because the consumer becomes the driver, their test is deterministic for free -- the crate ships no
+scheduler or virtual clock.
+
+The reachable part of the seam was already public (`WatchId::from_raw` and every boundary type); the
+feedable channel (`channel_with_bound`/`Sender`/`Delivery`/`Reservation`) was `pub` only inside the
+private `queue` module, hence unreachable, and is exposed behind `test-util` (discovered during
+execution, revising D-81/D-82). Records D-81 (bless the already-reachable pieces rather than re-gate
+them), D-82 (expose the feed channel and gap-filler constructors behind an off-by-default `test-util`
+feature, reconciled with D-64 by audience), and D-83 (fidelity limit: the seam tests the consumer's
+reactions, not whether the crate would ever emit that sequence).
+
+- [x] **M13.1** -- Add an off-by-default `test-util` Cargo feature (no new dependencies) and record the
+  three seam decisions D-81/D-82/D-83 in DESIGN-NOTES.md (Tier 1) and DESIGN-RATIONALE.md (Tier 2).
+
+- [x] **M13.2** -- Fill the `RelativeName` gap behind `test-util`: valid-by-construction `for_test`
+  constructors from `&str`/`&OsStr`/raw `u16` units, so a consumer can build a `Change`. Unit test.
+
+- [x] **M13.3** -- Fill the `VolumeIdentity` gap behind `test-util`: promote the `#[cfg(test)]`
+  `synthetic` builder to a `test-util`-gated public `for_test` constructor, keeping the crate's own
+  `#[cfg(test)]` use working. Unit test.
+
+- [x] **M13.4** -- Expose and document the consumer test surface: re-export
+  `channel_with_bound`/`Sender`/`Delivery`/`Reservation` behind `test-util` (they were `pub` only inside
+  the private `queue` module, hence unreachable -- revised D-81/D-82); rewrite `WatchId::from_raw`'s
+  stale doc; frame `channel_with_bound` + `Sender::send` as the injection seam; add a crate-level
+  "Testing your consumer code" docs section with a deterministic, cfg-gated doctest (D-83 fidelity limit).
+
+- [x] **M13.5** -- Consumer-facing example `examples/test_your_handler.rs` (`required-features =
+  ["test-util"]`): a small handler driven by a scripted deterministic sequence pushed through
+  `channel_with_bound`/`Sender::send` -- covering `Batch` (gap-filled `Change`), `Desync`, `Completion`,
+  `RetryQuestion`, and `VolumeChanged` (gap-filled `VolumeIdentity`) -- asserting the handler's
+  reactions, with no filesystem and no thread pool.
+
+- [x] **M13.6** -- Integration test `tests/consumer_test_surface.rs` (`required-features =
+  ["test-util"]`) exercising the surface exactly as a downstream consumer would (public + `test-util`
+  items only): a scripted sequence covering every `Notification` variant including both gap-filled types,
+  asserting deterministic receipt through `Receiver`.
