@@ -144,7 +144,7 @@ the seam tests the consumer's reactions, not whether the crate would ever emit t
   (re-gating shipped 0.1 API is a breaking change with no offsetting safety gain), and why feature-gate
   the gap-fillers (production code must not be able to forge a `RelativeName`/`VolumeIdentity`).
 
-- [ ] **M13.2** -- Fill the `RelativeName` gap behind `test-util`: a valid-by-construction public
+- [x] **M13.2** -- Fill the `RelativeName` gap behind `test-util`: a valid-by-construction public
   constructor building a name from a `&str`/`&OsStr` (and raw `u16` units), so a consumer can build a
   `Change`. Unit test.
 

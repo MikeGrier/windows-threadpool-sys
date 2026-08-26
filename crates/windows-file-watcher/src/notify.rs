@@ -120,6 +120,41 @@ impl RelativeName {
     }
 }
 
+/// Consumer test-surface constructors (D-82), available only under the
+/// off-by-default `test-util` feature. In production the kernel is the only
+/// source of a `RelativeName`; these let a downstream consumer synthesize a
+/// [`Change`] to feed its own handler through a test
+/// [`Receiver`](crate::Receiver), with no real `ReadDirectoryChangesW`
+/// completion. Any sequence of units is a valid relative name, so none of these
+/// can construct an invalid one (D-83).
+#[cfg(feature = "test-util")]
+impl RelativeName {
+    /// Build a relative name from a string.
+    #[must_use]
+    pub fn for_test(name: impl AsRef<str>) -> Self {
+        Self {
+            name: Wtf16String::from(name.as_ref()),
+        }
+    }
+
+    /// Build a relative name from an [`OsStr`](std::ffi::OsStr), losslessly.
+    #[must_use]
+    pub fn for_test_os(name: &std::ffi::OsStr) -> Self {
+        Self {
+            name: Wtf16String::from_os_str(name),
+        }
+    }
+
+    /// Build a relative name from raw UTF-16 units -- the exact shape the kernel
+    /// reports, lone surrogates and all.
+    #[must_use]
+    pub fn for_test_units(units: &[u16]) -> Self {
+        Self {
+            name: Wtf16String::from_units(units),
+        }
+    }
+}
+
 impl std::fmt::Debug for RelativeName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Wtf16Str's Debug escapes a lone surrogate as `\u{d800}` rather than

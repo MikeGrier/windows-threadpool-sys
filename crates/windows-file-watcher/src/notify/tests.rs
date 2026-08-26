@@ -436,3 +436,30 @@ fn an_interior_nul_in_a_name_is_preserved_and_reported() {
         "the terminated pointer would be truncated here, and the type reports it"
     );
 }
+
+#[cfg(feature = "test-util")]
+#[test]
+fn relative_name_for_test_round_trips_a_str() {
+    let name = super::RelativeName::for_test("sub\\leaf.txt");
+    assert_eq!(
+        name.to_os_string(),
+        std::ffi::OsString::from("sub\\leaf.txt")
+    );
+}
+
+#[cfg(feature = "test-util")]
+#[test]
+fn relative_name_for_test_os_round_trips() {
+    let original = std::ffi::OsString::from("dir\\file.bin");
+    let name = super::RelativeName::for_test_os(&original);
+    assert_eq!(name.to_os_string(), original);
+}
+
+#[cfg(feature = "test-util")]
+#[test]
+fn relative_name_for_test_units_preserves_a_lone_surrogate() {
+    // A lone high surrogate the kernel can report but a `str` cannot hold.
+    let units = [0x0073u16, 0xD800, 0x0074];
+    let name = super::RelativeName::for_test_units(&units);
+    assert_eq!(name.as_wide(), units.as_slice());
+}
