@@ -152,10 +152,12 @@ the seam tests the consumer's reactions, not whether the crate would ever emit t
   `synthetic` builder to a `test-util`-gated public constructor (valid-by-construction), keeping the
   crate's own `#[cfg(test)]` use working. Unit test.
 
-- [ ] **M13.4** -- Re-document the already-public seam as the supported consumer test surface (no
-  signature changes): rewrite `WatchId::from_raw`'s stale "M3.4 replaces this" doc, document
-  `channel_with_bound` + `Sender::send` as the injection seam, and add a crate-level "Testing your
-  consumer code" docs section covering the pattern and the D-83 fidelity limit.
+- [x] **M13.4** -- Expose and document the consumer test surface. Re-export
+  `channel_with_bound`/`Sender`/`Delivery`/`Reservation` behind `test-util` -- they were `pub` only
+  inside the private `queue` module, hence unreachable (discovered during execution, revising
+  D-81/D-82); rewrite `WatchId::from_raw`'s stale "M3.4 replaces this" doc; frame `channel_with_bound` +
+  `Sender::send` as the injection seam; add a crate-level "Testing your consumer code" docs section
+  covering the pattern and the D-83 fidelity limit.
 
 - [ ] **M13.5** -- Consumer-facing example `examples/test_your_handler.rs` (`required-features =
   ["test-util"]`): a small handler that reacts to notifications, driven by a scripted deterministic

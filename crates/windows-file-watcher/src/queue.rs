@@ -121,8 +121,11 @@ pub struct WatchId(u64);
 impl WatchId {
     /// Build an identifier from a raw value.
     ///
-    /// M3.4 replaces this with monitor-issued identifiers; it exists so M2 can
-    /// tag records before the monitor exists.
+    /// In production the monitor issues `WatchId`s. This constructor lets a
+    /// downstream consumer mint one to tag a synthetic [`Notification`] when
+    /// testing its own handler against a `Receiver` it drives (D-81); any value
+    /// is a valid identifier, so the pairing between an id and its notifications
+    /// is the consumer's to choose.
     #[must_use]
     pub fn from_raw(value: u64) -> Self {
         Self(value)
@@ -464,6 +467,12 @@ impl Sender {
     /// *can* fail: a full queue drops the notification and latches a
     /// `Desync { QueueFull }` against its subscription (D-29/D-33). Use
     /// [`Sender::reserve`] for anything whose loss a client cannot recover from.
+    ///
+    /// A downstream consumer may call this on a `Sender` from
+    /// [`channel_with_bound`] to feed its own handler synthetic notifications in
+    /// a test (behind the `test-util` feature); the returned [`Delivery`] reports
+    /// whether the queue accepted the notification or dropped-and-latched it,
+    /// exactly as in production.
     pub fn send(&self, notification: Notification) -> Delivery {
         let watch = notification.watch();
         let delivery = {
@@ -1088,6 +1097,14 @@ pub(crate) fn channel() -> (Sender, Receiver) {
 /// carry even the desync announcing its own saturation, making the crate's
 /// never-silently-lose guarantee vacuous. Making it unrepresentable rejects it at
 /// construction, where D-11 asks for it, and leaves no error path to handle.
+///
+/// This is also the consumer test seam (D-81/D-82), reachable by a downstream
+/// consumer only under the `test-util` feature: a consumer that wants to test its
+/// own notification-handling code constructs a pair here, pushes synthetic
+/// notifications through the [`Sender`] with [`Sender::send`], and drains the
+/// [`Receiver`] exactly as it would one from
+/// [`Monitor::session`](crate::Monitor::session) -- with no real filesystem or
+/// thread pool. See the crate-level "Testing your consumer code".
 pub fn channel_with_bound(bound: NonZeroUsize) -> (Sender, Receiver) {
     let shared = Arc::new(Shared {
         items: Mutex::new(State {

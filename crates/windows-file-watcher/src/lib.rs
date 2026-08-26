@@ -83,6 +83,60 @@
 //! (`ReadDirectoryChangesW`) or the coarse `FindFirstChangeNotification`
 //! fallback for volumes that do not support the detailed API -- is actually
 //! watching.
+//!
+//! # Testing your consumer code
+//!
+//! The code you build on top of this crate reacts to [`Notification`]s drained
+//! from a [`Receiver`]. You can test that reaction logic with no real filesystem
+//! and no thread pool by constructing a `Receiver` yourself and feeding it
+//! synthetic notifications, instead of obtaining one from [`Monitor::session`].
+//! This "goes below" the [`Monitor`]: you substitute the OS ingest while keeping
+//! the delivery model -- `Notification`, `Receiver`, queue ordering, the
+//! doorbell -- exactly as in production. Because your test decides what arrives
+//! and when, it is deterministic; this crate ships no scheduler for you to steer.
+//!
+//! The always-public pieces are the identity minter [`WatchId::from_raw`] and
+//! every boundary type. The feedable channel (`channel_with_bound`, its
+//! `Sender`, and `Sender::send`) and the builders for the two boundary types a
+//! consumer cannot otherwise construct (`RelativeName::for_test` and
+//! `VolumeIdentity::for_test`, for a [`Change`] and a
+//! [`Notification::VolumeChanged`] respectively) live behind the off-by-default
+//! `test-util` feature, so a production build's public surface is unchanged.
+//!
+//! ```
+//! # fn main() {
+//! #[cfg(all(windows, feature = "test-util"))]
+//! {
+//!     use windows_file_watcher::{
+//!         channel_with_bound, DesyncCause, Notification, Outcome, WatchId, DEFAULT_BOUND,
+//!     };
+//!
+//!     // The consumer reaction logic under test, in isolation.
+//!     fn handle(notification: &Notification, rescans: &mut u32) {
+//!         if matches!(notification, Notification::Desync { .. }) {
+//!             *rescans += 1;
+//!         }
+//!     }
+//!
+//!     let (sender, receiver) = channel_with_bound(DEFAULT_BOUND);
+//!     let watch = WatchId::from_raw(1);
+//!
+//!     // A scripted, deterministic sequence -- no OS involved.
+//!     let _ = sender.send(Notification::Completion { watch, outcome: Outcome::Subscribed });
+//!     let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Overflow });
+//!
+//!     let mut rescans = 0;
+//!     while let Some(notification) = receiver.try_recv() {
+//!         handle(&notification, &mut rescans);
+//!     }
+//!     assert_eq!(rescans, 1);
+//! }
+//! # }
+//! ```
+//!
+//! The surface tests your *reactions*, not whether this crate would ever emit a
+//! given sequence: the builders cannot mint an impossible value, but an
+//! impossible ordering is yours to avoid.
 
 #![warn(missing_docs)]
 
@@ -138,6 +192,13 @@ pub use monitor::Monitor;
 pub use notify::{Change, ChangeKind, DecodedBatch, DesyncCause, RelativeName, decode_batch};
 #[cfg(windows)]
 pub use queue::{DEFAULT_BOUND, Notification, Outcome, Receiver, WatchId};
+// The feedable channel is the consumer test seam (D-81/D-82): `channel_with_bound`
+// and its `Sender`/`Delivery`/`Reservation` are `pub` inside the private `queue`
+// module, so a downstream consumer can reach them only through this re-export,
+// gated on the off-by-default `test-util` feature so the production public surface
+// is unchanged.
+#[cfg(all(windows, feature = "test-util"))]
+pub use queue::{Delivery, Reservation, Sender, channel_with_bound};
 #[cfg(windows)]
 pub use retry::{FaultOperation, WatchMode};
 #[cfg(windows)]

@@ -482,12 +482,18 @@ the crate discards it outright. *Going below* -- the chosen path -- keeps
 source, the one option that preserves what the consumer is trying to test
 against.
 
-An audit found the seam was ~90% already public (`channel_with_bound`,
-`Sender::send`, `WatchId::from_raw`, and every boundary enum). Blessing those
-rather than re-gating them (D-81) was chosen because they shipped in 0.1 and are
-harmless to expose: re-gating would be a breaking change bought for nothing. The
-two gaps (`RelativeName`, `VolumeIdentity`) get builders behind an off-by-default
-`test-util` feature (D-82).
+An audit found the *delivery model* a consumer reasons against -- `WatchId::from_raw`
+and every boundary type -- was already reachable (re-exported at the crate root).
+Blessing those rather than re-gating them (D-81) was chosen because they shipped
+in 0.1 and re-gating would be a breaking change bought for nothing. Execution then
+corrected a mistaken assumption: `channel_with_bound` and `Sender`, though written
+`pub`, live in the *private* `queue` module, so they were never reachable by a
+consumer at all. They, and the `for_test` builders for the two unconstructible
+boundary types (`RelativeName`, `VolumeIdentity`), are therefore *exposed* --
+additively, behind the off-by-default `test-util` feature (D-82) -- rather than
+re-gated. Gating the feed channel keeps the crate's internal queue sender out of
+the production public surface, which is the right default for a purely test-facing
+affordance.
 
 That feature is *not* a reversal of D-64, and the distinction is audience. D-64
 kept `DirectoryWatcher::start_forcing_coarse` and the other forcing seams
