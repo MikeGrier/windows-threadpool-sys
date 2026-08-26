@@ -6,6 +6,65 @@
 //! ([`NotificationSpec`]) and converts it into a real `Notification` -- via the
 //! `test-util` builders -- at drive time. That JSON is a tool I/O format, not a
 //! data contract; its shape may change in any release.
+//!
+//! # The format is unvalidated (deliberately)
+//!
+//! A [`Schedule`] is plain data. Nothing here checks that a schedule is one
+//! file-watcher could actually produce -- you can express a `Resumed` with no
+//! prior `Suspended`, two outstanding questions for one watch, or a `Batch`
+//! after a `Cancelled`. That permissiveness is intentional (crate DESIGN-NOTES
+//! D-7): the same format must faithfully carry a *recorded* schedule (whatever
+//! actually happened), so it cannot be pre-constrained to only-legal; and the
+//! legality rules are stateful *sequencing* constraints a per-value type cannot
+//! enforce anyway. Staying inside file-watcher's contract is therefore the
+//! caller's job -- the generator's (DESIGN-NOTES D-5) or yours when you author a
+//! schedule by hand. The dependencies you must respect to stay legal follow.
+//!
+//! # Data dependencies
+//!
+//! - **`watch` correlates a subscription across steps.** Every notification
+//!   carries a `watch` id; equal raw values become equal `WatchId`s, so `watch`
+//!   is the field a handler uses to route or aggregate. A schedule for several
+//!   subscriptions interleaves their notifications, and each watch's own
+//!   sub-sequence is what carries ordering meaning -- the control-flow rules
+//!   below are *per watch*.
+//! - **A rename is a pair, in order.** Within a `Batch`, a
+//!   [`ChangeKindSpec::RenamedOldName`] is followed by the matching
+//!   [`ChangeKindSpec::RenamedNewName`]. A handler that tracks names depends on
+//!   seeing both, in that order; a batch with one and not the other is a
+//!   malformed rename.
+//! - **Carried detail must be self-consistent.** `Failed`, `RetryQuestion`, and
+//!   `VolumeChanged` carry a [`FaultDetailSpec`] / [`VolumeSpec`] the handler
+//!   reads. Nothing across steps depends on those values, but they should be
+//!   internally sensible (a real Win32 code, a plausible volume serial).
+//!
+//! # Control-flow (sequencing) dependencies
+//!
+//! The driver delivers steps strictly in order, one at a time, on one thread, so
+//! **schedule order is delivery order** -- all sequencing meaning lives in how
+//! you order `steps`. For one watch, file-watcher's contract implies:
+//!
+//! - **Establishment precedes data.** A watch is announced -- `Completion {
+//!   Subscribed }`, and, if liveness reporting is on, `Established { mode }` --
+//!   before it delivers any `Batch` (file-watcher D-30/D-13).
+//! - **`Desync` is an in-stream barrier.** Everything before a `Desync` for a
+//!   watch is accounted for; nothing after it is (file-watcher D-12). A schedule
+//!   that models loss puts the `Desync` exactly at the drop point.
+//! - **`Suspended`/`Resumed` bracket an outage.** A `Resumed` is preceded by a
+//!   `Suspended` for the same watch, and a `Desync { Reestablished }` accompanies
+//!   or precedes it (file-watcher D-13/D-31). Both are opt-in, so a schedule that
+//!   never emits `Suspended` never emits `Resumed`.
+//! - **At most one question per watch is outstanding.** A `RetryQuestion` or
+//!   `VolumeChanged` is a question the client answers; a watcher cannot fault
+//!   twice concurrently, so a second question for the same watch does not appear
+//!   before the first resolves (file-watcher D-28).
+//! - **`Cancelled` is terminal.** After `Completion { Cancelled }` for a watch,
+//!   nothing more arrives for that watch (file-watcher D-30) -- it is a per-watch
+//!   terminator.
+//! - **`Established` recurs on re-establishment.** When liveness is on,
+//!   `Established { mode }` appears once at first establishment and again after
+//!   each re-establishment (file-watcher D-17) -- e.g. after a Suspended/Resumed
+//!   bracket the tier may be re-announced.
 
 use serde::{Deserialize, Serialize};
 use windows_file_watcher::{
@@ -16,8 +75,11 @@ use windows_file_watcher::{
 /// An ordered, deterministic sequence of notifications to drive a handler with.
 ///
 /// The schedule is the *sole* source of events during a run, which is what makes
-/// a run reproducible. Build one by hand for a targeted test, or generate one
-/// (later milestones); either way it round-trips through JSON.
+/// a run reproducible, and its order *is* the delivery order (the driver never
+/// reorders). Build one by hand for a targeted test, or generate one (later
+/// milestones); either way it round-trips through JSON. See the [module
+/// docs](self) for the data and control-flow dependencies a legal schedule must
+/// respect.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Schedule {
     /// The notifications to deliver, in order.
@@ -53,8 +115,10 @@ impl Schedule {
 /// A serde-serializable description of one notification to deliver.
 ///
 /// `watch` is a raw subscription id you choose; the harness turns it into a
-/// `WatchId` with `WatchId::from_raw`. Every arm maps one-to-one onto a
-/// `Notification` variant.
+/// `WatchId` with `WatchId::from_raw`, so equal raw values correlate to the same
+/// subscription across steps. Every arm maps one-to-one onto a `Notification`
+/// variant. The ordering rules between these -- what may follow what, per watch
+/// -- are the control-flow dependencies in the [module docs](self).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum NotificationSpec {
     /// -> `Notification::Batch`.

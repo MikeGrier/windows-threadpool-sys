@@ -36,7 +36,7 @@ mod driver;
 #[cfg(windows)]
 mod handler;
 #[cfg(windows)]
-mod schedule;
+pub mod schedule;
 
 #[cfg(windows)]
 pub mod example_handler;

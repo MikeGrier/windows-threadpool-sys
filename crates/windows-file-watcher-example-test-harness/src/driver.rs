@@ -13,8 +13,16 @@ use crate::{Handler, Schedule};
 /// production uses, but with the schedule as the sole source of events. No
 /// filesystem and no thread pool are involved, so the run is deterministic.
 ///
-/// Each step is sent and then drained, so a long schedule never saturates the
-/// bounded queue.
+/// # Control flow
+///
+/// For each step the driver sends the notification, then drains everything the
+/// receiver has (a `try_recv` loop) and dispatches each to the handler. Sending
+/// and draining one step at a time keeps the bounded queue from filling, so
+/// `Sender::send` always reports `Delivery::Queued` -- a schedule never
+/// accidentally trips file-watcher's `QueueFull` backpressure (model queue-full
+/// loss explicitly with a `Desync { QueueFull }` step instead). Because delivery
+/// is single-threaded and in order, **schedule order is delivery order**: the
+/// handler sees exactly the sequence you scheduled.
 pub fn drive(schedule: &Schedule, handler: &mut impl Handler) {
     let (sender, receiver) = channel_with_bound(DEFAULT_BOUND);
     for spec in &schedule.steps {

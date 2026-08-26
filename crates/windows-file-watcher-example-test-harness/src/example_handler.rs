@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! A small, realistic example handler, used by the harness's own tests and bins.
 //!
-//! Replace it with your own [`Handler`](crate::Handler); it exists so the
+//! Replace it with your own [`Handler`]; it exists so the
 //! examples and the `capture`/`replay` bins have something concrete to drive.
 
 use std::collections::BTreeSet;
