@@ -606,14 +606,29 @@ impl VolumeIdentity {
     /// removable-media swap is not otherwise reproducible in an automated
     /// test). `volume_serial` is the only field that matters for the
     /// mismatch this seam exists to rig; the descriptive fields are for
-    /// display only.
-    #[cfg(test)]
+    /// display only. Available to the crate's own tests and, via the public
+    /// [`for_test`](Self::for_test) wrapper, under the `test-util` feature.
+    #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn synthetic(volume_serial: u32, filesystem_name: &str, volume_label: &str) -> Self {
         Self {
             volume_serial,
             filesystem_name: Wtf16String::from_os_str(std::ffi::OsStr::new(filesystem_name)),
             volume_label: Wtf16String::from_os_str(std::ffi::OsStr::new(volume_label)),
         }
+    }
+
+    /// Consumer test-surface constructor (D-82), available only under the
+    /// off-by-default `test-util` feature. Builds a `VolumeIdentity` for a
+    /// downstream consumer synthesizing a
+    /// [`VolumeChanged`](crate::Notification::VolumeChanged) notification to
+    /// feed its own handler; in production a `VolumeIdentity` only ever comes
+    /// from reading a real volume. Volume identity compares by serial alone, so
+    /// `volume_serial` is what decides whether two identities match; the
+    /// filesystem name and label are for display (D-83: valid by construction).
+    #[cfg(feature = "test-util")]
+    #[must_use]
+    pub fn for_test(volume_serial: u32, filesystem_name: &str, volume_label: &str) -> Self {
+        Self::synthetic(volume_serial, filesystem_name, volume_label)
     }
 }
 

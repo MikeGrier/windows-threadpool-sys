@@ -148,7 +148,7 @@ the seam tests the consumer's reactions, not whether the crate would ever emit t
   constructor building a name from a `&str`/`&OsStr` (and raw `u16` units), so a consumer can build a
   `Change`. Unit test.
 
-- [ ] **M13.3** -- Fill the `VolumeIdentity` gap behind `test-util`: promote the `#[cfg(test)]`
+- [x] **M13.3** -- Fill the `VolumeIdentity` gap behind `test-util`: promote the `#[cfg(test)]`
   `synthetic` builder to a `test-util`-gated public constructor (valid-by-construction), keeping the
   crate's own `#[cfg(test)]` use working. Unit test.
 

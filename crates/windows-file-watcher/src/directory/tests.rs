@@ -434,3 +434,16 @@ fn volume_identity_equality_is_on_the_serial_alone() {
          must not go undetected)"
     );
 }
+
+#[cfg(feature = "test-util")]
+#[test]
+fn volume_identity_for_test_is_the_public_synthetic_seam() {
+    let a = VolumeIdentity::for_test(0x1234, "NTFS", "System");
+    let b = VolumeIdentity::for_test(0x1234, "ReFS", "Data");
+    let c = VolumeIdentity::for_test(0x9999, "NTFS", "System");
+    assert_eq!(a.filesystem_name(), "NTFS");
+    assert_eq!(a.volume_label(), "System");
+    // Identity compares by volume serial alone.
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+}
