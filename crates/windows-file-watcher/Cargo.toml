@@ -44,6 +44,13 @@ required-features = ["scenario-tool"]
 name = "test_your_handler"
 required-features = ["test-util"]
 
+# The consumer test-surface integration test (M13.6): a downstream-style test
+# reachable only through the public API plus `test-util`.
+[[test]]
+name = "consumer_test_surface"
+path = "tests/consumer_test_surface.rs"
+required-features = ["test-util"]
+
 # The crate is Windows-only, so docs.rs must build it on a Windows target or it
 # would resolve to an empty crate and document nothing.
 [package.metadata.docs.rs]

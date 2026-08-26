@@ -165,7 +165,7 @@ the seam tests the consumer's reactions, not whether the crate would ever emit t
   `Change`), `Desync`, `Completion`, `RetryQuestion`, and `VolumeChanged` (with a gap-filled
   `VolumeIdentity`) -- asserting the handler's reactions, with no filesystem and no thread pool.
 
-- [ ] **M13.6** -- Integration test `tests/consumer_test_surface.rs` (`required-features = ["test-util"]`)
+- [x] **M13.6** -- Integration test `tests/consumer_test_surface.rs` (`required-features = ["test-util"]`)
   exercising the surface exactly as a downstream consumer would (public + `test-util` items only, no
   `pub(crate)` access): drive a scripted sequence covering every `Notification` variant including both
   gap-filled types, and assert deterministic receipt through `Receiver`. Milestone-closing integration
