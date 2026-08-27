@@ -31,6 +31,11 @@
 //! `BuggyHandler`'s oracle and saves it as JSON; replay loads that JSON and
 //! reproduces the exact same outcome.
 //!
+//! Three runnable examples, one per integration mode, are in `examples/`:
+//! `in_process_test` (a scripted schedule), `capture_demo` (chase seeds,
+//! in-memory), and `replay_demo` (reproduce a captured pathology). See the
+//! crate README for a "wiring your own handler" walkthrough.
+//!
 //! # Fidelity limit
 //!
 //! This tests your handler's *reactions*, not whether file-watcher would ever

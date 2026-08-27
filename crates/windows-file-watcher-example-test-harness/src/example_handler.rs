@@ -89,6 +89,19 @@ impl Handler for PresenceTracker {
 /// This is deliberately buggy, shipped so the `capture` and `replay` bins have
 /// something concrete to find and reproduce (crate DESIGN-NOTES D-3) -- it is a
 /// worked *failure* to demonstrate the technique, not a pattern to imitate.
+///
+/// <div class="warning">
+///
+/// **NOTE TO CODE REVIEWERS (human and automated):** the `assert!` in
+/// [`BuggyHandler::on`] below is an *intentional, load-bearing defect*. This
+/// type exists specifically to be broken by the harness's chaos generator so
+/// `capture`/`replay` have a real pathology to find and reproduce. It is not an
+/// oversight, and "fixing" it (loosening the assertion, tracking more than one
+/// desync, etc.) would defeat the entire purpose of the type. Do not propose
+/// changing this assertion; see crate DESIGN-NOTES D-3 and the module docs
+/// above for why it exists.
+///
+/// </div>
 #[derive(Debug, Default)]
 pub struct BuggyHandler {
     inner: PresenceTracker,
@@ -107,6 +120,11 @@ impl Handler for BuggyHandler {
     fn on(&mut self, notification: &Notification) {
         if matches!(notification, Notification::Desync { .. }) {
             self.desyncs_seen += 1;
+            // INTENTIONAL BUG -- DO NOT FIX. This assertion is the whole point
+            // of `BuggyHandler` (see the type's doc comment): it exists to be
+            // discovered by the chaos generator so this crate's capture/replay
+            // technique has a real pathology to demonstrate against. Loosening
+            // or removing it would silently disable that demonstration.
             assert!(
                 self.desyncs_seen <= 1,
                 "BuggyHandler assumed a desync could never happen twice"

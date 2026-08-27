@@ -70,7 +70,7 @@ in-scope crate, sync with origin) is standard procedure and not listed.
 - [ ] **M6.1** -- `examples/*.rs` demonstrating the three integration modes (in-process unit test; capture;
   replay) against the example handler.
 
-- [ ] **M6.2** -- Crate README + rustdoc that teach the technique, the fidelity limit (D-5), and the
+- [x] **M6.2** -- Crate README + rustdoc that teach the technique, the fidelity limit (D-5), and the
   adapt-don't-depend framing (D-1); a wire-your-own-handler walkthrough.
 
-- [ ] **M6.3** -- Integration test tying the full arc together (generate -> run -> record -> replay).
+- [x] **M6.3** -- Integration test tying the full arc together (generate -> run -> record -> replay).
