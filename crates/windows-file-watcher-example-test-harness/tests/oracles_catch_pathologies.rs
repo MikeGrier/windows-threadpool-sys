@@ -67,6 +67,26 @@ impl Handler for HangsOnDesync {
     }
 }
 
+/// Panics *inside `check`* (rather than returning `Err`) once it has seen a
+/// desync -- `run` does not wrap `check` in `catch_unwind` the way it wraps
+/// `on`, so this panic escapes `run` itself. Used to prove `run_with_deadline`
+/// reports it as a harness panic, not a stall.
+#[derive(Default)]
+struct PanicsInCheck {
+    saw_desync: bool,
+}
+impl Handler for PanicsInCheck {
+    fn on(&mut self, notification: &Notification) {
+        if matches!(notification, Notification::Desync { .. }) {
+            self.saw_desync = true;
+        }
+    }
+    fn check(&self) -> Result<(), String> {
+        assert!(!self.saw_desync, "check panicked instead of returning Err");
+        Ok(())
+    }
+}
+
 #[test]
 fn a_healthy_handler_is_healthy() {
     let mut handler = PresenceTracker::new();
@@ -109,5 +129,24 @@ fn a_wedged_handler_is_caught_by_the_deadline() {
     assert!(
         matches!(outcome.pathology(), Some(PathologyKind::Stalled { .. })),
         "expected a stall, got {outcome:?}"
+    );
+}
+
+#[test]
+fn a_panic_in_check_is_reported_as_a_harness_panic_not_a_stall() {
+    // Regression test (PR #42 review): a Handler::check that panics instead of
+    // returning Err used to unwind straight through run_with_deadline's worker
+    // thread, drop the sender, and get misdiagnosed as Stalled.
+    let outcome = run_with_deadline(
+        &establish_then_desync(),
+        PanicsInCheck::default(),
+        Duration::from_millis(500),
+    );
+    assert!(
+        matches!(
+            outcome.pathology(),
+            Some(PathologyKind::HarnessPanicked { .. })
+        ),
+        "expected a harness panic, got {outcome:?}"
     );
 }

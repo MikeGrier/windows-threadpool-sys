@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Mike Grier
 //! Oracles: driving a handler and detecting when it goes wrong.
 //!
-//! Three pathologies are detected, matching the three ways a notification
-//! handler tends to fail under an unexpected schedule: it panics, it violates
-//! its own invariant, or it wedges. [`run`] catches the first two; the
-//! wedge-catching [`run_with_deadline`] adds the third.
+//! Three pathologies a notification handler tends to fail with are detected:
+//! it panics, it violates its own invariant, or it wedges. [`run`] catches the
+//! first two; the wedge-catching [`run_with_deadline`] adds the third, and also
+//! distinguishes a genuine wedge from a panic in the harness itself (see
+//! [`PathologyKind::HarnessPanicked`]).
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -69,6 +70,17 @@ pub enum PathologyKind {
         /// precision, irrelevant at these timescales).
         deadline_ms: u128,
     },
+    /// The harness itself panicked while running the schedule -- not the
+    /// handler's `on`, which [`run`] already catches and reports as
+    /// [`PathologyKind::Panicked`]. The most likely cause is a
+    /// [`Handler::check`] implementation that panics instead of returning
+    /// `Err` (`check` is not wrapped in `catch_unwind`, unlike `on`). Only
+    /// [`run_with_deadline`] reports this; a plain [`run`] simply propagates
+    /// such a panic to its caller, where it is not silently misdiagnosed.
+    HarnessPanicked {
+        /// The panic message, if it was a string.
+        message: String,
+    },
 }
 
 /// Drive `handler` through `schedule`, watching for a panic or an invariant
@@ -116,6 +128,14 @@ pub fn run(schedule: &Schedule, handler: &mut impl Handler) -> Outcome {
 /// wedged thread cannot be killed safely in Rust -- which is fine for a one-shot
 /// test process. On completion the handler is dropped in the worker; use [`run`]
 /// when you need to inspect the handler afterward.
+///
+/// The worker's call to [`run`] is itself wrapped in `catch_unwind`, so a panic
+/// that escapes `run` (chiefly an unguarded [`Handler::check`] panic -- `check`
+/// is not caught inside `run` the way `on` is) is reported as
+/// [`PathologyKind::HarnessPanicked`] rather than silently disconnecting the
+/// channel and being misdiagnosed as [`PathologyKind::Stalled`]. A genuine
+/// stall -- the worker never finishing at all -- remains the only way to see
+/// `Stalled`.
 #[must_use]
 pub fn run_with_deadline<H>(schedule: &Schedule, handler: H, deadline: Duration) -> Outcome
 where
@@ -125,15 +145,25 @@ where
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut handler = handler;
-        let _ = tx.send(run(&schedule, &mut handler));
+        let outcome = match catch_unwind(AssertUnwindSafe(|| run(&schedule, &mut handler))) {
+            Ok(outcome) => outcome,
+            Err(payload) => Outcome::Pathology(PathologyKind::HarnessPanicked {
+                message: panic_message(&*payload),
+            }),
+        };
+        let _ = tx.send(outcome);
     });
     match rx.recv_timeout(deadline) {
         Ok(outcome) => outcome,
-        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
-            Outcome::Pathology(PathologyKind::Stalled {
-                deadline_ms: deadline.as_millis(),
-            })
-        }
+        Err(RecvTimeoutError::Timeout) => Outcome::Pathology(PathologyKind::Stalled {
+            deadline_ms: deadline.as_millis(),
+        }),
+        // The worker above always sends an outcome, even on a caught panic, so
+        // this should not occur in practice; kept as a distinct, honestly-named
+        // fallback rather than folding it into `Stalled` (which it is not).
+        Err(RecvTimeoutError::Disconnected) => Outcome::Pathology(PathologyKind::HarnessPanicked {
+            message: "worker thread disconnected without reporting an outcome".to_string(),
+        }),
     }
 }
 
