@@ -12,13 +12,25 @@ use windows_file_watcher::Notification;
 /// only to the extent your `on` uses it.
 pub trait Handler {
     /// React to one notification, exactly as your production drain loop would.
+    ///
+    /// Panicking here is caught and reported as
+    /// [`crate::PathologyKind::Panicked`]; it does not unwind into your test.
     fn on(&mut self, notification: &Notification);
 
-    /// Optional invariant check the harness may call after each notification and
-    /// at the end of a run. Return `Err(reason)` to signal *your own* pathology
-    /// (an invariant your handler must maintain has been violated). The default
-    /// reports healthy, so a handler with no cross-notification invariant need
-    /// not implement it.
+    /// Optional invariant check, called after **every** delivered notification
+    /// and once more at the end of a run -- unconditionally, not sampled.
+    ///
+    /// Return `Err(reason)` to signal *your own* pathology (an invariant your
+    /// handler must maintain has been violated), which is reported as
+    /// [`crate::PathologyKind::InvariantViolated`]. The default reports healthy,
+    /// so a handler with no cross-notification invariant need not implement it.
+    ///
+    /// Returning `Err` and panicking are both supported and both attributed to
+    /// your handler: a panic here (an `assert!`, say) is caught exactly as one
+    /// in [`Handler::on`] is, and reported as
+    /// [`crate::PathologyKind::Panicked`] with the message prefixed
+    /// `in check():`. Neither escapes into your test, and neither is charged to
+    /// the harness.
     fn check(&self) -> Result<(), String> {
         Ok(())
     }

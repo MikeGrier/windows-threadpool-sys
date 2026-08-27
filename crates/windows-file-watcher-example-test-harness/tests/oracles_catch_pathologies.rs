@@ -68,9 +68,9 @@ impl Handler for HangsOnDesync {
 }
 
 /// Panics *inside `check`* (rather than returning `Err`) once it has seen a
-/// desync -- `run` does not wrap `check` in `catch_unwind` the way it wraps
-/// `on`, so this panic escapes `run` itself. Used to prove `run_with_deadline`
-/// reports it as a harness panic, not a stall.
+/// desync. `run` wraps both handler hooks in `catch_unwind`, so this is caught
+/// and reported as a handler [`PathologyKind::Panicked`] carrying an
+/// `in check():` message -- not as a stall, and not as a harness panic.
 #[derive(Default)]
 struct PanicsInCheck {
     saw_desync: bool,

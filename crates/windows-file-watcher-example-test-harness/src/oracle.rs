@@ -3,8 +3,9 @@
 //!
 //! Three pathologies a notification handler tends to fail with are detected:
 //! it panics, it violates its own invariant, or it wedges. [`run`] catches the
-//! first two; the wedge-catching [`run_with_deadline`] adds the third, and also
-//! distinguishes a genuine wedge from a panic in the harness itself (see
+//! first two -- a panic in *either* handler hook, `on` or [`Handler::check`] --
+//! and the wedge-catching [`run_with_deadline`] adds the third. A panic in the
+//! oracle machinery itself is kept distinct from all three (see
 //! [`PathologyKind::HarnessPanicked`]).
 
 use std::any::Any;
@@ -76,13 +77,15 @@ pub enum PathologyKind {
         /// precision, irrelevant at these timescales).
         deadline_ms: u128,
     },
-    /// The harness itself panicked while running the schedule -- not the
-    /// handler's `on`, which [`run`] already catches and reports as
-    /// [`PathologyKind::Panicked`]. The most likely cause is a
-    /// [`Handler::check`] implementation that panics instead of returning
-    /// `Err` (`check` is not wrapped in `catch_unwind`, unlike `on`). Only
-    /// [`run_with_deadline`] reports this; a plain [`run`] simply propagates
-    /// such a panic to its caller, where it is not silently misdiagnosed.
+    /// The harness itself panicked while running the schedule.
+    ///
+    /// **Not** the handler: [`run`] wraps *both* handler hooks -- `on` and
+    /// [`Handler::check`] -- in `catch_unwind` and reports either panic as
+    /// [`PathologyKind::Panicked`], so a failure in consumer code never lands
+    /// here. This is reserved for a defect in the oracle machinery itself, and
+    /// seeing it means the harness is at fault rather than the handler under
+    /// test. Only [`run_with_deadline`] can report it, since it is the only
+    /// entry point that runs [`run`] behind a thread boundary it must guard.
     HarnessPanicked {
         /// The panic message, if it was a string.
         message: String,
