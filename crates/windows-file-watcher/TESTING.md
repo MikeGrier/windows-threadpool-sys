@@ -64,6 +64,10 @@ drain and dispatch exactly as a production loop would.
 
 ## A first test
 
+The body below is what goes inside your own `#[test] fn`. It is compiled and run
+as a doctest of this crate, so if a contract change ever invalidates it, this
+document fails the build rather than quietly teaching you the wrong thing.
+
 ```rust
 use windows_file_watcher::{
     channel_with_bound, DesyncCause, Notification, Outcome, WatchId, DEFAULT_BOUND,
@@ -80,24 +84,21 @@ fn handle(notification: &Notification, rescans: &mut u32, ended: &mut bool) {
     }
 }
 
-#[test]
-fn my_handler_counts_rescans() {
-    let (sender, receiver) = channel_with_bound(DEFAULT_BOUND);
-    let watch = WatchId::from_raw(1);
+let (sender, receiver) = channel_with_bound(DEFAULT_BOUND);
+let watch = WatchId::from_raw(1);
 
-    // A scripted, deterministic sequence -- no OS involved.
-    let _ = sender.send(Notification::Completion { watch, outcome: Outcome::Subscribed });
-    let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Overflow });
-    let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Stopped });
+// A scripted, deterministic sequence -- no OS involved.
+let _ = sender.send(Notification::Completion { watch, outcome: Outcome::Subscribed });
+let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Overflow });
+let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Stopped });
 
-    let mut rescans = 0;
-    let mut ended = false;
-    while let Some(notification) = receiver.try_recv() {
-        handle(&notification, &mut rescans, &mut ended);
-    }
-    assert_eq!(rescans, 1);
-    assert!(ended);
+let mut rescans = 0;
+let mut ended = false;
+while let Some(notification) = receiver.try_recv() {
+    handle(&notification, &mut rescans, &mut ended);
 }
+assert_eq!(rescans, 1);
+assert!(ended);
 ```
 
 Note the two arms. Four of the five `DesyncCause`s are advisory -- the response

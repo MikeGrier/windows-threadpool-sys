@@ -25,12 +25,14 @@ mine that had not propagated. Measured on the two crates involved: `QueueFull` s
 The remedy is ordered by how little it depends on anyone remembering: first make the fact impossible to
 restate, then make the restatements compile, and only then fall back on convention for what neither covers.
 
-- [ ] **M2.1** -- Make the prose compile. `windows-file-watcher`'s
+- [x] **M2.1** -- Make the prose compile. `windows-file-watcher`'s
   [TESTING.md](crates/windows-file-watcher/TESTING.md) carries four Rust blocks and
   [README.md](crates/windows-file-watcher/README.md) one, and **none is compiled today** -- there is no
   `include_str!` anywhere, so they can only rot, and the `Stopped` drift proved they do. Wire both in as
   doctests so a contract change that invalidates an example breaks the build instead of misleading a
   consumer. Expect to massage the blocks: they are written as `#[test] fn`, and a doctest wraps in `main`.
+  Done: doctest count 2 -> 7, verified by reintroducing the `Stopped` drift and confirming the failure.
+  CI's `cargo test --workspace --all-features` covers `test-util`, so the guard is live there.
 
 - [ ] **M2.2** -- `DesyncCause::is_terminal()`, and adopt it everywhere. This is the value-level fact that
   drifted across 8 files. Handlers branching on `is_terminal()` rather than matching `Stopped` by name also
