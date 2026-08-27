@@ -75,11 +75,24 @@ fn sample_configs() -> Vec<GeneratorConfig> {
 }
 
 #[test]
-fn first_two_notifications_of_a_liveness_watch_are_established_then_subscribed() {
+fn this_generator_never_opens_a_watch_other_than_established_or_subscribed() {
+    // A GENERATOR property, deliberately narrower than the contract.
+    //
     // windows-file-watcher sends the initial Established from inside route
-    // establishment, and only afterward turns the result into the Completion
-    // its caller reports (schedule docs: establishment precedes data, and
-    // Established precedes Completion for a liveness watch).
+    // establishment and only afterward reports Completion { Subscribed }, so
+    // for a watch that establishes against a healthy directory those are the
+    // first two notifications in that order. This generator only ever models
+    // that case, which is what this asserts.
+    //
+    // The contract is WIDER, and an earlier version of this test asserted the
+    // narrow rule under a contract-sounding name. A route that coalesces onto
+    // an already-faulted watcher never sees an initial Established at all --
+    // it is suppressed, because there is no settled tier to name -- so it
+    // observes Completion { Subscribed } first and its first Established only
+    // after recovery, behind Desync { Reestablished } and Resumed. See
+    // windows-file-watcher's M14 audit. A handler must not assume Established
+    // comes first; this test does not license that assumption, and its name
+    // now says whose property it is.
     for config in sample_configs() {
         let generator = Generator::with_config(config);
         for seed in 0..10 {
@@ -95,8 +108,8 @@ fn first_two_notifications_of_a_liveness_watch_are_established_then_subscribed()
                                     ..
                                 })
                             ),
-                            "seed {seed}, watch {watch}: Established must be immediately \
-                             followed by Completion {{ Subscribed }}, got {:?}",
+                            "seed {seed}, watch {watch}: this generator emits Established \
+                             immediately followed by Completion {{ Subscribed }}, got {:?}",
                             steps.get(1)
                         );
                     }
@@ -105,8 +118,8 @@ fn first_two_notifications_of_a_liveness_watch_are_established_then_subscribed()
                         ..
                     }) => {}
                     other => panic!(
-                        "seed {seed}, watch {watch}: first notification must be Established \
-                         or Completion {{ Subscribed }}, got {other:?}"
+                        "seed {seed}, watch {watch}: this generator opens a watch with \
+                         Established or Completion {{ Subscribed }}, got {other:?}"
                     ),
                 }
             }

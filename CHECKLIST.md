@@ -32,7 +32,7 @@ found is false of the contract. Separately, **nothing validates that the real wa
 contract-legal** -- the harness checks the generator, and the crate's own integration tests make point
 assertions.
 
-- [ ] **M3.1** -- Fix `first_two_notifications_of_a_liveness_watch_are_established_then_subscribed`, which is
+- [x] **M3.1** -- Fix `first_two_notifications_of_a_liveness_watch_are_established_then_subscribed`, which is
   a defect independent of the rest of this milestone: it asserts as a *contract* rule something
   [M14.2](crates/windows-file-watcher/COMPLETED-CHECKLIST.md) established is **not** universally true -- a
   route coalescing onto an already-faulted watcher sees `Completion { Subscribed }` first and its
