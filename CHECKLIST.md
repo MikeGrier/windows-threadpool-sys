@@ -57,11 +57,13 @@ restate, then make the restatements compile, and only then fall back on conventi
   a reader arriving at the categories learns that stating a rule correctly is necessary and not sufficient.
   Done: [Restatement drift](DESIGN-NOTES.md#restatement-drift), cross-linked both ways.
 
-- [ ] **M2.5** -- Turn the two conventions into binding rules in
+- [x] **M2.5** -- Turn the two conventions into binding rules in
   [.github/copilot-instructions.md](.github/copilot-instructions.md), which is the channel both humans and
   Copilot actually read: (a) an analysis document never restates normative content -- it edits the authority
   and cites it (the D-30 miss is the proof: the audit said "now stated" while the decision still said the
   opposite); and (b) a mandatory blast-radius sweep before committing any contract correction -- grep the
   distinctive term across `src/`, `tests/`, `examples/` and `*.md`, fix every hit or justify each, and record
   the sweep in the commit. The sweep is already proven: run once voluntarily, it immediately found a site no
-  reviewer had reported.
+  reviewer had reported. Done: added as a `CONTRACT INTEGRITY` section with three rules -- prefer a derived
+  fact (verified by sabotage), prose containing code must compile, and the blast-radius sweep with both
+  corollaries.
