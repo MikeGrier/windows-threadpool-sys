@@ -124,6 +124,10 @@ use windows_file_watcher::{
     WatchMode, WatchId,
 };
 
+// The real Win32 error code `directory::classify` maps to `OpenFailure::NotFound`,
+// named per the repo's no-bare-numeric-constants rule.
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+
 let watch = WatchId::from_raw(1);
 
 // Batch: the changes one completion carried, in kernel order.
@@ -150,7 +154,7 @@ let established = Notification::Established { watch, mode: WatchMode::Detailed }
 let question = Notification::RetryQuestion {
     watch,
     operation: FaultOperation::Open,
-    detail: FaultDetail { failure: OpenFailure::NotFound, code: FailureCode::Win32(2) },
+    detail: FaultDetail { failure: OpenFailure::NotFound, code: FailureCode::Win32(ERROR_FILE_NOT_FOUND) },
 };
 
 // VolumeChanged: a reopen landed on a different volume than before.
