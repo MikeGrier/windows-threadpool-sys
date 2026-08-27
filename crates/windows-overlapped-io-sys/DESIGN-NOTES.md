@@ -468,7 +468,7 @@ not pay for):
 - The event backend additionally needs `WaitForSingleObject`, which lives under `Win32_System_Threading`.
 - The published default feature set is empty (`default = []`): the safe endpoint creator
 	([`UnassociatedEndpoint::open`](src/endpoint.rs)) opens overlapped handles through `std::fs::OpenOptions`
-	(`custom_flags(FILE_FLAG_OVERLAPPED | …)`), so the core completion machinery needs no operation-family
+	(`custom_flags(FILE_FLAG_OVERLAPPED | ...)`), so the core completion machinery needs no operation-family
 	`windows-sys` bindings for that -- but the core dependency features are `Win32_Foundation`,
 	`Win32_System_IO`, **and `Win32_Storage_FileSystem`** (not two), because
 	`UnassociatedEndpoint::set_notification_modes` (`SetFileCompletionNotificationModes`) is core, not
@@ -478,13 +478,13 @@ not pay for):
 	all.
 - Operation-family bindings beyond that are gated behind three additive Cargo features so the core stays
 	minimal, one per the families the checklist enumerates:
-	- `fs` → `Win32_Storage_FileSystem` for file read / write and scatter / gather. (That binding is already
+	- `fs` -> `Win32_Storage_FileSystem` for file read / write and scatter / gather. (That binding is already
 		core per the point above; the feature adds no `windows-sys` feature of its own, only gating this crate's
 		own `src/fs.rs` module.)
-	- `socket` → `Win32_Networking_WinSock` — overlapped socket operations, including
+	- `socket` -> `Win32_Networking_WinSock` -- overlapped socket operations, including
 		`AssociatedSocket::set_notification_modes` (M12.2), which needs no further `windows-sys` feature beyond
 		the core `Win32_Storage_FileSystem` either, for the same reason `fs` does not.
-	- `device` → `Win32_System_Ioctl` — device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
+	- `device` -> `Win32_System_Ioctl` -- device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
 		itself is already in the always-on core (`Win32_System_IO`); the feature only adds the control-code
 		constants a device family needs.
 	Enabling a family turns on only the `windows-sys` features that family needs beyond the core and never
@@ -521,7 +521,7 @@ submission, `CancelThreadpoolIo` to balance an immediate failure, and reclamatio
 the operation family is known, or `reclaim_overlapped` during object rundown). This crate never links the
 thread-pool functions or references `TP_*`.
 
-### Decision — identities are generation-stamped and validated, not bare addresses
+### Decision -- identities are generation-stamped and validated, not bare addresses
 
 An operation's storage address alone is not a durable name for it. Reclaiming an operation returns that address
 to the allocator, which may hand it to a later operation, so an address retained past its operation's completion
@@ -705,7 +705,7 @@ owned-operation prototype must resolve this before any public submission API is 
 decide whether safe submission is generic, requires operation-specific safe adapters (possibly downstream), or
 retains a deliberately narrow unsafe extensibility seam.
 
-### Decision — per-family safe adapters, file family first
+### Decision -- per-family safe adapters, file family first
 
 The Open boundary is resolved for the **file family** by choosing the operation-specific safe-adapter path, in
 this crate behind the `fs` feature, rather than a fully generic safe submission API. The generic problem stays
