@@ -135,10 +135,12 @@
 //! ```
 //!
 //! The surface tests your *reactions*, not whether this crate would ever emit a
-//! given sequence: the builders cannot mint an impossible value, but an
-//! impossible ordering, or an impossible relationship between two otherwise
-//! valid values (a `VolumeChanged` with equal `previous`/`current` serials,
-//! say), is yours to avoid.
+//! given sequence: the builders are valid-by-construction only in the
+//! type-safety sense (memory-safe, lossless) -- `RelativeName::for_test_units`
+//! still accepts a unit sequence the kernel never reports, an interior NUL
+//! included. An impossible ordering, or an impossible relationship between two
+//! otherwise valid values (a `VolumeChanged` with equal `previous`/`current`
+//! serials, say), is likewise yours to avoid.
 
 #![warn(missing_docs)]
 

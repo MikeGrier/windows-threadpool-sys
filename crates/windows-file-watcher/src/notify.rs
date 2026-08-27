@@ -125,8 +125,14 @@ impl RelativeName {
 /// source of a `RelativeName`; these let a downstream consumer synthesize a
 /// [`Change`] to feed its own handler through a test
 /// [`Receiver`](crate::Receiver), with no real `ReadDirectoryChangesW`
-/// completion. Any sequence of units is a valid relative name, so none of these
-/// can construct an invalid one (D-83).
+/// completion. These are **representation-preserving**, not
+/// production-domain-validating: any sequence of units is memory-safe and
+/// stored losslessly (D-83), but that includes values the kernel itself never
+/// reports -- an interior NUL, for instance (`an_interior_nul_in_a_name_is_
+/// preserved_and_reported`, notify/tests.rs), which storage cannot reject
+/// without silently truncating a name that legitimately reached this crate
+/// some other way. Staying inside what the kernel would actually send is the
+/// caller's responsibility, exactly as with any hand-fed test double.
 #[cfg(feature = "test-util")]
 impl RelativeName {
     /// Build a relative name from a string.

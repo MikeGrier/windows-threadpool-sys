@@ -511,9 +511,14 @@ the crate. So D-64 and D-82 follow one rule -- gate a seam to match its audience
 -- rather than contradicting each other.
 
 The surface's honest limit (D-83) is that it tests the consumer's reactions, not
-whether this crate would ever emit the fed sequence. Valid-by-construction
-builders stop a consumer minting an impossible *value*; an impossible *ordering*,
-or an impossible *relationship* between two individually valid values (an equal-
-serial `VolumeChanged` is built from two legal `VolumeIdentity`s, but production
-never emits it), is still theirs to avoid, exactly as with any hand-authored test
-double.
+whether this crate would ever emit the fed sequence. Valid-by-construction only
+in the type-safety sense: a builder cannot mint a value that is memory-unsafe or
+lossy, but it does not validate the *production domain* -- `RelativeName::
+for_test_units` still accepts an interior NUL, which storage cannot reject
+without silently truncating a name that legitimately reached this crate some
+other way, even though the kernel itself never reports one
+(`an_interior_nul_in_a_name_is_preserved_and_reported`, notify/tests.rs). An
+impossible *ordering*, or an impossible *relationship* between two individually
+valid values (an equal-serial `VolumeChanged` is built from two legal
+`VolumeIdentity`s, but production never emits it), is likewise theirs to avoid,
+exactly as with any hand-authored test double.
