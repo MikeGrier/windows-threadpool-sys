@@ -534,3 +534,47 @@ getter, so a limit we were never told cannot constrain its counterpart. Refusing
 overshoot window unreachable through the safe API, which removed the flake at its root rather than by loosening
 the assertion. The superseded claim is marked in [DESIGN-NOTES.md](DESIGN-NOTES.md) and the new decision recorded
 beside it.
+
+## <a id="moved-2026-08-27-m1"></a>Moved 2026-08-27 -- M1: amplify PR #42's contract-specification findings across the delivery-contract crates
+
+PR #42 ("Testability: consumer test surface for windows-file-watcher + example test harness crate") took
+**19 automated review rounds**, and the review-response phase (39 commits, 2,077 insertions) added more code
+than the original implementation (16 commits, 3,220 insertions) did. The dominant failure was not
+implementation error: `windows-file-watcher`'s delivery contract, written as prose, was **true but
+incomplete** in categorizable ways, and the gaps stayed invisible until a second implementation (the example
+harness's contract-legal generator, its own D-5) had to obey the contract mechanically. Eight rounds fixed
+generated sequences the watcher could never emit; five corrected the contract prose itself; one found a real
+shipped reliability defect (`has_room`, 700e0eb) sitting on D-29's backpressure path.
+
+The transferable asset was the **taxonomy of gap categories**, not the individual fixes.
+
+- [x] **M1.1** -- Recorded the ten gap categories in the workspace
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#specifying-a-delivery-contract), each pinned to the PR #42 commit that
+  evidences it, plus the same-author hazard, why a passing test suite cannot surface them (they are
+  statements about the *set* of legal sequences, not points in it), and the `has_room` finding as evidence
+  that the cost is real rather than editorial. Canonical home; per-crate notes reference rather than restate.
+
+- [x] **M1.2** -- `windows-file-watcher`: recorded D-84, naming which decisions were stated incompletely and
+  how (D-9, D-12/D-30, D-17, D-27/D-28, D-50/D-78, D-83), and the `has_room` finding separately as a defect
+  in shipped 0.1 code rather than a harness bug. Queued the audit it does *not* claim to have done as that
+  crate's M14.
+
+- [x] **M1.3** -- `windows-overlapped-io-sys`: found two categories it had already paid for before the
+  taxonomy named them (`Issued`'s state-dependent legality, which hung rundown until M10.5; `post`/`post_raw`'s
+  arbitrary completion key), two it got right (`OperationId` generations, removing `from_parts`), and one
+  consequential omission -- **completion observation order was never stated**, which matters because
+  `windows-file-watcher` builds on this crate and *does* promise ordering to its own clients. Remaining
+  categories queued as that crate's M14.
+
+- [x] **M1.4** -- `windows-ioring-sys`: cited D-17 (`RingId`) and `Completion::synthetic`'s test-only gate as
+  the pattern done right, recorded D-14 as an honestly-flagged cross-message continuity assumption, and
+  stated the previously-missing completion-ordering rule -- a gap this crate is *more* exposed to than its
+  siblings, since "ring" invites the ordered-queue assumption and `drain_preceding`'s existence was the only
+  available evidence. Remaining categories queued as that crate's M10.
+
+Docs-only: nine `.md` files, no `.rs` touched. The audits are deliberately partial -- five of ten categories
+reached in overlapped-io, four of ten in ioring -- with the rest recorded as "not examined" rather than "does
+not apply", because that distinction is the point of having the taxonomy. Completing them is each crate's own
+milestone: [windows-file-watcher M14](crates/windows-file-watcher/CHECKLIST.md),
+[windows-overlapped-io-sys M14](crates/windows-overlapped-io-sys/CHECKLIST.md), and
+[windows-ioring-sys M10](crates/windows-ioring-sys/CHECKLIST.md).
