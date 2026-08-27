@@ -78,6 +78,8 @@ mod submission_ring;
 mod timestamp;
 
 #[cfg(test)]
+mod model;
+#[cfg(test)]
 mod testing;
 
 pub use admission::{EnumerationHandle, TokenCaptureError};

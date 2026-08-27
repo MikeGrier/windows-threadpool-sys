@@ -806,3 +806,39 @@ further starts and releases every carried enumeration without a terminal.
 
 199 unit tests plus the crate doctest pass; targeted all-target Clippy and
 `cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration session model tests (M5 complete)
+
+This group completes M5. The FE-1 through FE-5 stubs migrate with it; their
+archived entries above remain the record.
+
+### <a id="fe-6"></a>FE-6 -- Build a deterministic state-machine/model test suite for the two rings and the session. *(completed 2026-08-27 19:01:30 UTC-04:00)*
+
+[model.rs](crates/windows-file-enumeration-sys/src/model.rs) applies scripted
+operation sequences to a real session and re-checks every invariant after each
+step: ring accounting stays within the bound, reservations never take the last
+slot, the doorbell agrees exactly with what the receiver can observe, each
+enumeration's delivered entries are an in-order prefix of what was offered, no
+entry follows a terminal, and no enumeration terminates twice.
+
+Determinism required one addition: admission rings the servicer's doorbell, so
+the thread pool would otherwise race every scripted step. The model suppresses
+the ring and drains through the same code path the callback uses, while the
+thread-pool path keeps its own eventual-consistency tests. Modelling the engine
+also required the shell-side quantum transitions (`enter_quantum`,
+`leave_quantum`, `complete`) that the native engine will drive in M6.
+
+[model/tests.rs](crates/windows-file-enumeration-sys/src/model/tests.rs) covers
+twenty interleavings, including completion, two enumerations sharing a session,
+quiescent cancellation, handle drop, cancellation during a running quantum
+(the terminal lands behind that quantum's entries), a quantum scheduled after
+cancellation, cancellation of an unknown enumeration, backpressure with retry,
+backpressure shared across enumerations, parking and resumption, a terminal
+delivered into a ring with no ordinary room, abandonment with and without a
+running quantum, cancelling an already-completed enumeration, detachment,
+session drop with an owed terminal, both minimum bounds, the completion ring's
+reservation boundary, rejection of a completion ring of one, repeated cycles,
+and redundant servicing and draining.
+
+221 unit tests plus the crate doctest pass; targeted all-target Clippy and
+`cargo fmt --check` are clean.

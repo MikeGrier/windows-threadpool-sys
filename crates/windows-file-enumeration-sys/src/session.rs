@@ -27,6 +27,8 @@
 
 use std::io;
 use std::os::windows::io::{BorrowedHandle, OwnedHandle};
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
@@ -188,6 +190,63 @@ impl SessionShared {
         }
     }
 
+    /// Take ownership of one quantum of an enumeration's work.
+    ///
+    /// Returns `false` when the enumeration is gone or already cancelled, which
+    /// is how a scheduled quantum discovers it has nothing to do. While a
+    /// quantum is owned, cancellation only records its intent: it cannot
+    /// deliver a terminal underneath work that may still be parsing records.
+    #[allow(dead_code, reason = "the native engine (M6) runs the quanta")]
+    pub(crate) fn enter_quantum(&self, enumeration: EnumerationId) -> bool {
+        let mut registry = self.registry();
+        match registry.get_mut(enumeration) {
+            Some(state) if !state.cancelled => {
+                state.running = true;
+                state.parked = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Give a quantum back.
+    ///
+    /// `parked` says the quantum stopped for want of completion-ring room, so
+    /// it must be resumed when a receiver makes some. A cancellation observed
+    /// while the quantum was running is applied here, which is what keeps the
+    /// terminal after every entry that quantum had already delivered.
+    #[allow(dead_code, reason = "the native engine (M6) runs the quanta")]
+    pub(crate) fn leave_quantum(&self, enumeration: EnumerationId, parked: bool) {
+        let finished = {
+            let mut registry = self.registry();
+            let Some(state) = registry.get_mut(enumeration) else {
+                return;
+            };
+            state.running = false;
+            state.parked = parked && !state.cancelled;
+            if state.cancelled {
+                registry.remove(enumeration)
+            } else {
+                None
+            }
+        };
+        if let Some(state) = finished {
+            finish(state, TerminalOutcome::Cancelled);
+        }
+    }
+
+    /// Finish an enumeration with the outcome its own work decided on.
+    ///
+    /// A no-op if the enumeration is already gone, so a late completion racing
+    /// an abandonment cannot deliver a second terminal.
+    #[allow(dead_code, reason = "the native engine (M6) decides these outcomes")]
+    pub(crate) fn complete(&self, enumeration: EnumerationId, outcome: TerminalOutcome) {
+        let finished = self.registry().remove(enumeration);
+        if let Some(state) = finished {
+            finish(state, outcome);
+        }
+    }
+
     /// Resume every enumeration that stopped for want of completion-ring room.
     ///
     /// Called after a receiver takes a record, which is the only event that can
@@ -216,14 +275,29 @@ fn finish(mut state: EnumerationState, outcome: TerminalOutcome) {
 /// The servicer's work object, owned by the client-side handles.
 pub(crate) struct Doorbell {
     work: ThreadpoolWork,
+    /// Set by the state-machine model, which drains on its own thread so a
+    /// scenario decides exactly when servicing happens. Without it the pool
+    /// would race every scripted step and the model would not be a model.
+    #[cfg(test)]
+    suppressed: AtomicBool,
 }
 
 impl Doorbell {
     /// Queue a drain if this submission is the one that must schedule it.
     pub(crate) fn ring_if_needed(&self, outcome: PushOutcome) {
+        #[cfg(test)]
+        if self.suppressed.load(Ordering::Acquire) {
+            return;
+        }
         if outcome == PushOutcome::RingDoorbell {
             self.work.submit();
         }
+    }
+
+    /// Stop ringing, leaving servicing entirely to explicit drains.
+    #[cfg(test)]
+    fn suppress(&self) {
+        self.suppressed.store(true, Ordering::Release);
     }
 }
 
@@ -283,7 +357,11 @@ impl Session {
             None,
         )
         .map_err(|error| SessionError::with_source(SessionFailure::WorkObject, error))?;
-        let doorbell = Arc::new(Doorbell { work });
+        let doorbell = Arc::new(Doorbell {
+            work,
+            #[cfg(test)]
+            suppressed: AtomicBool::new(false),
+        });
 
         // Claimed now, not at receiver drop: at drop there is nowhere to report
         // that the ring had no room, and abandonment must never be the message
@@ -325,6 +403,13 @@ impl Session {
     #[must_use]
     pub fn is_abandoned(&self) -> bool {
         self.shared.submissions.is_abandoned()
+    }
+
+    /// Leave servicing entirely to explicit drains, for the state-machine
+    /// model, which must decide when each step happens.
+    #[cfg(test)]
+    pub(crate) fn suppress_doorbell(&self) {
+        self.doorbell.suppress();
     }
 
     /// Start enumerating one directory under the caller's own security context.

@@ -167,6 +167,19 @@ impl CompletionRing {
         self.lock().closed()
     }
 
+    /// How many slots outstanding terminal reservations hold.
+    #[cfg(test)]
+    pub(crate) fn reserved(&self) -> usize {
+        self.lock().reserved
+    }
+
+    /// Whether a receiver has anything to observe, which is exactly the
+    /// doorbell's signalled state.
+    #[cfg(test)]
+    pub(crate) fn is_pending(&self) -> bool {
+        self.lock().pending()
+    }
+
     /// Register one more session handle.
     pub(crate) fn add_session(&self) {
         self.lock().sessions += 1;

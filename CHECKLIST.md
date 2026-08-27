@@ -12,27 +12,7 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-6.** Build the deterministic model test suite for
-> the two rings and the session state machine.
-
-## M5 -- Publishable file-enumeration API and two-ring session
-
-- [x] **FE-1** -- Scaffold and register the publishable `windows-file-enumeration-sys` workspace crate. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-1)
-
-- [x] **FE-2** -- Close and record the remaining v1 public-contract decisions before implementing them. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-2)
-
-- [x] **FE-3** -- Implement the public request, predicate, result, error, terminal, and `EnumerationId` types. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-3)
-
-- [x] **FE-4** -- Implement the bounded two-ring session shell with its `Session`, submission, and receiver types. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-4)
-
-- [x] **FE-5** -- Implement begin and cancellation admission and the affine enumeration handle. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-5)
-
-- [ ] **FE-6** -- Build a deterministic state-machine/model test suite for the two
-  rings, reservations, registry, per-enumeration ordering, shared backpressure,
-  affine handle drop, explicit cancellation, receiver abandonment, cancel-before-
-  start servicing, cancel/refill races, terminal uniqueness, and lost-wakeup
-  resistance. Cover at least ten normal interleavings plus all boundary capacities,
-  including rejection of a CQ too small to retain one unreserved data slot.
+> **NEXT ACTIONABLE ITEM: FE-7.** Implement the native enumeration engine.
 
 ## M6 -- Native enumeration engine, integration, and publication readiness
 
