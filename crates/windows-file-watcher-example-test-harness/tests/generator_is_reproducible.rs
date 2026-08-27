@@ -231,17 +231,12 @@ fn an_interactive_watchs_fault_recovery_always_asks_a_retry_question() {
 }
 
 #[test]
-fn a_coarse_watch_never_reports_a_batch_or_a_kernel_overflow() {
-    // A Coarse-tier watcher reports activity only as Desync { Coarse }
-    // (watcher.rs:535-563, D-17) -- never a Batch, and never an Overflow,
-    // which is the kernel change buffer's own overflow and so observable only
-    // through a detailed read.
-    //
-    // QueueFull is deliberately NOT excluded: a coarse activation is published
-    // through the same best-effort queue as every other notification, so a
-    // saturated client turns it into a latched Desync { QueueFull } exactly as
-    // it would a Batch. An earlier version of this test asserted the opposite
-    // and codified a contract the watcher does not keep (PR #42 review).
+fn no_generated_desync_is_unreachable_in_its_watchs_current_tier() {
+    // Asserted against `DesyncCauseSpec::is_reachable_in`, which delegates to
+    // the crate's own predicate -- not against a rule restated here. A test
+    // that re-derives the contract only proves the generator agrees with the
+    // test author, which is exactly how this file previously codified a
+    // restriction the watcher does not keep (PR #42 review).
     let generator = Generator::with_config(GeneratorConfig {
         watches: 4,
         steps_per_watch: 30,
@@ -272,14 +267,12 @@ fn a_coarse_watch_never_reports_a_batch_or_a_kernel_overflow() {
                              Batch"
                         );
                     }
-                    NotificationSpec::Desync { cause, .. } if mode == WatchModeSpec::Coarse => {
-                        assert_ne!(
-                            *cause,
-                            DesyncCauseSpec::Overflow,
-                            "seed {seed}, watch {watch}: a Coarse watch cannot observe the \
-                             kernel's change-buffer overflow"
+                    NotificationSpec::Desync { cause, .. } => {
+                        assert!(
+                            cause.is_reachable_in(&mode),
+                            "seed {seed}, watch {watch}: {cause:?} is not reachable in {mode:?}"
                         );
-                        if *cause == DesyncCauseSpec::QueueFull {
+                        if mode == WatchModeSpec::Coarse && *cause == DesyncCauseSpec::QueueFull {
                             saw_coarse_queue_full = true;
                         }
                     }

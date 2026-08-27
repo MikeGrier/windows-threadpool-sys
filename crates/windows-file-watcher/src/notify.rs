@@ -17,6 +17,8 @@ use std::path::PathBuf;
 
 use wtf_string::{Wtf16Str, Wtf16String};
 
+use crate::retry::WatchMode;
+
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ACTION_ADDED, FILE_ACTION_MODIFIED, FILE_ACTION_REMOVED, FILE_ACTION_RENAMED_NEW_NAME,
     FILE_ACTION_RENAMED_OLD_NAME,
@@ -448,6 +450,49 @@ impl DesyncCause {
             | DesyncCause::QueueFull
             | DesyncCause::Coarse
             | DesyncCause::Reestablished => false,
+        }
+    }
+
+    /// Whether a watch established in `mode` can ever report this cause.
+    ///
+    /// Only two causes are tier-restricted, and the boundary is easy to state
+    /// wrongly in either direction -- this crate's own harness first emitted a
+    /// cause a coarse watch cannot produce, then excluded one it can. It is
+    /// therefore defined here once, and anything that needs it (a test double, a
+    /// schedule generator, a fuzzer) asks rather than re-deriving it:
+    ///
+    /// - [`Overflow`](Self::Overflow) is **Detailed-only**: it is the *kernel
+    ///   change buffer's* own overflow, which only a `ReadDirectoryChangesW`
+    ///   read observes.
+    /// - [`Coarse`](Self::Coarse) is **Coarse-only**: it is what a coarse
+    ///   activation reports in place of detail it does not have.
+    /// - [`QueueFull`](Self::QueueFull), [`Reestablished`](Self::Reestablished)
+    ///   and [`Stopped`](Self::Stopped) are **tier-independent**. `QueueFull` in
+    ///   particular is a *delivery-layer* loss: a coarse activation rides the
+    ///   same best-effort queue as a `Batch`, so saturation latches one against
+    ///   a coarse watch exactly as it would a detailed one.
+    ///
+    /// ```
+    /// use windows_file_watcher::{DesyncCause, WatchMode};
+    ///
+    /// // Tier-restricted, one each way.
+    /// assert!(DesyncCause::Overflow.is_reachable_in(WatchMode::Detailed));
+    /// assert!(!DesyncCause::Overflow.is_reachable_in(WatchMode::Coarse));
+    /// assert!(DesyncCause::Coarse.is_reachable_in(WatchMode::Coarse));
+    /// assert!(!DesyncCause::Coarse.is_reachable_in(WatchMode::Detailed));
+    ///
+    /// // Tier-independent: reachable under either tier.
+    /// for cause in [DesyncCause::QueueFull, DesyncCause::Reestablished, DesyncCause::Stopped] {
+    ///     assert!(cause.is_reachable_in(WatchMode::Detailed));
+    ///     assert!(cause.is_reachable_in(WatchMode::Coarse));
+    /// }
+    /// ```
+    #[must_use]
+    pub fn is_reachable_in(self, mode: WatchMode) -> bool {
+        match self {
+            DesyncCause::Overflow => matches!(mode, WatchMode::Detailed),
+            DesyncCause::Coarse => matches!(mode, WatchMode::Coarse),
+            DesyncCause::QueueFull | DesyncCause::Reestablished | DesyncCause::Stopped => true,
         }
     }
 }

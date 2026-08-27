@@ -334,11 +334,7 @@ impl Generator {
                     }
                 }
                 Event::Desync => {
-                    let cause = if current_mode == WatchModeSpec::Coarse {
-                        gen_coarse_loss_cause(rng)
-                    } else {
-                        gen_loss_cause(rng)
-                    };
+                    let cause = gen_loss_cause(rng, &current_mode);
                     out.push(NotificationSpec::Desync { watch, cause });
                 }
                 Event::FaultRecovery => {
@@ -492,29 +488,28 @@ fn gen_name(rng: &mut Rng) -> String {
     format!("file{stem:02}.{ext}")
 }
 
-/// A loss cause for a Detailed watch's live loop: the two ways changes actually
-/// go missing.
-fn gen_loss_cause(rng: &mut Rng) -> DesyncCauseSpec {
-    if rng.chance(50) {
-        DesyncCauseSpec::Overflow
-    } else {
-        DesyncCauseSpec::QueueFull
-    }
-}
-
-/// A loss cause for a Coarse watch's live loop.
+/// A loss cause for a watch's live loop, restricted to what `mode` can actually
+/// report.
 ///
-/// `Overflow` is excluded -- it is the kernel change buffer's own overflow,
-/// which only a detailed read can observe. `QueueFull` is not: a coarse
-/// activation rides the same best-effort queue as everything else, so a
-/// saturated client turns its `Desync { Coarse }` into a latched
-/// `Desync { QueueFull }` just as it would a `Batch`.
-fn gen_coarse_loss_cause(rng: &mut Rng) -> DesyncCauseSpec {
-    if rng.chance(75) {
-        DesyncCauseSpec::Coarse
-    } else {
-        DesyncCauseSpec::QueueFull
-    }
+/// The tier restriction is **not** re-derived here: candidates are filtered
+/// through [`DesyncCauseSpec::is_reachable_in`], which delegates to
+/// `windows-file-watcher`'s own predicate. A hand-written second copy of that
+/// rule is what produced two defects in this file already -- first emitting a
+/// cause a coarse watch cannot report, then excluding one it can.
+fn gen_loss_cause(rng: &mut Rng, mode: &WatchModeSpec) -> DesyncCauseSpec {
+    // The live loop models *losses*, so the recovery and terminal causes are
+    // excluded here by intent rather than by tier; `FaultRecovery` and the
+    // terminal step emit those.
+    let candidates: Vec<DesyncCauseSpec> = [
+        DesyncCauseSpec::Overflow,
+        DesyncCauseSpec::QueueFull,
+        DesyncCauseSpec::Coarse,
+    ]
+    .into_iter()
+    .filter(|cause| cause.is_reachable_in(mode))
+    .collect();
+    let index = rng.below(candidates.len() as u64) as usize;
+    candidates[index].clone()
 }
 
 /// A watch tier for a (re-)establishment.

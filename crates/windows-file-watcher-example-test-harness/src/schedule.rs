@@ -443,7 +443,9 @@ pub enum DesyncCauseSpec {
 }
 
 impl DesyncCauseSpec {
-    fn to_cause(&self) -> DesyncCause {
+    /// The real [`DesyncCause`] this spec stands for.
+    #[must_use]
+    pub fn to_cause(&self) -> DesyncCause {
         match self {
             DesyncCauseSpec::Overflow => DesyncCause::Overflow,
             DesyncCauseSpec::QueueFull => DesyncCause::QueueFull,
@@ -451,6 +453,18 @@ impl DesyncCauseSpec {
             DesyncCauseSpec::Reestablished => DesyncCause::Reestablished,
             DesyncCauseSpec::Stopped => DesyncCause::Stopped,
         }
+    }
+
+    /// Whether a watch established in `mode` can ever report this cause.
+    ///
+    /// Delegates to [`DesyncCause::is_reachable_in`] rather than re-deriving the
+    /// rule. That delegation is the point: this harness exists to hold itself to
+    /// `windows-file-watcher`'s contract, and a second, hand-written copy of a
+    /// contract rule is not a check of the contract but a check of the copy.
+    /// Both directions of getting it wrong have already happened here.
+    #[must_use]
+    pub fn is_reachable_in(&self, mode: &WatchModeSpec) -> bool {
+        self.to_cause().is_reachable_in(mode.to_mode())
     }
 }
 
@@ -559,7 +573,9 @@ pub enum WatchModeSpec {
 }
 
 impl WatchModeSpec {
-    fn to_mode(&self) -> WatchMode {
+    /// The real [`WatchMode`] this spec stands for.
+    #[must_use]
+    pub fn to_mode(&self) -> WatchMode {
         match self {
             WatchModeSpec::Detailed => WatchMode::Detailed,
             WatchModeSpec::Coarse => WatchMode::Coarse,

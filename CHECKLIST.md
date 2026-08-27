@@ -41,12 +41,14 @@ restate, then make the restatements compile, and only then fall back on conventi
   `PresenceTracker`), so the pattern being taught is the durable one. Done: all four adopted, and the
   predicate carries its own doctest enumerating all five causes.
 
-- [ ] **M2.3** -- `DesyncCause::is_reachable_in(WatchMode)`, and make the generator bind to it. The
+- [x] **M2.3** -- `DesyncCause::is_reachable_in(WatchMode)`, and make the generator bind to it. The
   Coarse/`QueueFull` fact had four independent encodings -- audit table, D-17 bullet, workspace taxonomy row,
   and the generator plus its test -- and drifted in both directions across two rounds (emitting a cause a
   coarse watch cannot, then excluding one it can). A generator re-deriving tier legality from its own reading
   of prose is the exact violation of PLATFORM INTEGRITY rule 2 (*depend on specified primitives, never on
   incidental behavior*); it must call the predicate instead, with its test asserting against the same one.
+  Done: the generator filters candidates through the predicate, and sabotaging the crate's definition was
+  confirmed to change the generator's output rather than only a test's expectation.
 
 - [ ] **M2.4** -- Record the decision in the workspace [DESIGN-NOTES.md](DESIGN-NOTES.md): restatement drift
   as a failure mode distinct from the ten specification-gap categories, why the taxonomy cannot catch it
