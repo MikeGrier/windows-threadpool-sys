@@ -39,7 +39,7 @@ assertions.
   `Established` only after recovery. The test passes solely because the generator never produces that case,
   so it is a property of the generator wearing a contract name. Rescope and rename it to say which it is.
 
-- [ ] **M3.2** -- Add a per-watch `ContractChecker` to `windows-file-watcher` behind `test-util`: a state
+- [x] **M3.2** -- Add a per-watch `ContractChecker` to `windows-file-watcher` behind `test-util`: a state
   machine over one subscription's notification stream (`NotYetEstablished` / `Live { mode }` /
   `Faulted { question_outstanding }` / `Ended`), with `observe(&Notification) -> Result<(), ContractViolation>`.
   It belongs in the **crate**, not the harness: one definition then serves the crate's own tests, the

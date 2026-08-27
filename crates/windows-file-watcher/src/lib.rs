@@ -171,6 +171,10 @@ mod directory;
 #[cfg(windows)]
 mod coarse;
 
+/// Validating a notification stream against the delivery contract.
+#[cfg(all(windows, feature = "test-util"))]
+pub mod contract;
+
 #[cfg(windows)]
 mod monitor;
 
@@ -222,6 +226,9 @@ pub use queue::{DEFAULT_BOUND, Notification, Outcome, Receiver, WatchId};
 // module, so a downstream consumer can reach them only through this re-export,
 // gated on the off-by-default `test-util` feature so the production public surface
 // is unchanged.
+#[cfg(all(windows, feature = "test-util"))]
+pub use contract::{ContractChecker, ContractViolation, Terminator};
+
 #[cfg(all(windows, feature = "test-util"))]
 pub use queue::{Delivery, Reservation, Sender, channel_with_bound};
 #[cfg(windows)]
