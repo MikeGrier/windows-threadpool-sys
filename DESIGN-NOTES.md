@@ -157,6 +157,12 @@ they were never going to fail, because they test what the watcher does, and the 
 *permits*. Only something that had to enumerate the legal set -- a generator, a model checker, a second
 implementation -- could surface them.
 
+**Stating a rule correctly is necessary and not sufficient.** This list addresses what a contract fails to
+*say*. It says nothing about whether the places that restate it agree, and running the audit itself creates
+more restatements. That is a separate failure mode with its own remedy -- see
+[Restatement drift](#restatement-drift), which measured five of six findings across three later review
+rounds as corrections that had not propagated rather than as original defects.
+
 ### <a id="the-has_room-finding"></a>The `has_room` finding: why this is not a documentation exercise
 
 One review round found a genuine, shipped reliability defect in `windows-file-watcher` 0.1, and it is worth
@@ -940,3 +946,52 @@ Primary references:
 - [`ReadDirectoryChangesExW`](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-readdirectorychangesexw)
 - [`CancelIoEx`](https://learn.microsoft.com/windows/win32/api/ioapiset/nf-ioapiset-cancelioex)
 - [`windows-sys::Win32::System::Threading`](https://docs.rs/windows-sys/0.61.2/windows_sys/Win32/System/Threading/)
+
+## <a id="restatement-drift"></a>Restatement drift: why stating a rule correctly is necessary and not sufficient
+
+[The ten gap categories](#specifying-a-delivery-contract) address **under-specification** -- what a contract
+fails to say. PR #42's later review rounds surfaced a second failure mode they have no mechanism for, and it
+produced more findings than the original problem did once the audit was underway.
+
+**Restatement drift** is this: one fact is stated in several independent places, a correction reaches some of
+them, and the rest keep teaching the old answer. It is not a failure to specify. It is a failure of a
+correct specification to *propagate*.
+
+The evidence is unambiguous. Across three consecutive review rounds, **five of six findings were corrections
+of ours that had not propagated** -- not original defects. Measured on the two crates involved: `QueueFull`
+semantics are restated across **13 files**, "`Stopped` is terminal" across **8**. One fact -- whether a
+Coarse-tier watch can report `QueueFull` -- had four independent encodings (an audit table, a decision
+bullet, the workspace taxonomy row, and a generator plus its test) and drifted in *both* directions, first
+excluding a legal cause and later emitting an illegal one.
+
+**Why the taxonomy cannot catch it.** Every category asks a question about the contract's *content*: does it
+state this? The answer can be yes -- correctly, in the authoritative place -- while every copy says something
+else. An audit that verifies the contract is complete says nothing about whether its restatements agree, and
+running the audit is what created several of the copies.
+
+**The three-tier remedy**, ordered by how little it depends on anyone remembering:
+
+1. **Make the fact underivable elsewhere.** A rule that is a predicate over values belongs in code, once,
+   with everything else asking. `DesyncCause::is_terminal()` and `is_reachable_in(WatchMode)` retired the two
+   facts that had drifted; the harness generator now *calls* the second rather than re-encoding it, which is
+   [PLATFORM INTEGRITY](../.github/copilot-instructions.md) rule 2 applied to a contract rather than to an
+   API. The test for this must be checked against a sabotaged definition: if changing the crate's rule does
+   not change the *consumer's behavior*, the binding is cosmetic. Limit, stated plainly: sequencing rules
+   (bracket ordering, entry states, terminality of a whole exchange) are not value-level and stay prose.
+
+2. **Make the restatements compile.** Prose examples rot silently because nothing executes them.
+   `windows-file-watcher`'s TESTING.md and README.md carried five Rust blocks that were never compiled --
+   there was no `include_str!` anywhere -- and one of them was among the four sites that taught the
+   `Stopped` error. Including them under `cfg(doctest)` turns a contract change that invalidates an example
+   into a build failure. This is the cheapest item and the highest yield.
+
+3. **Convention, for what neither covers.** Two rules, both recorded in
+   [.github/copilot-instructions.md](../.github/copilot-instructions.md) because that is the channel humans
+   and Copilot both read: an analysis document never restates normative content, it edits the authority and
+   cites it; and any contract correction is preceded by a blast-radius sweep for every other statement of the
+   same fact.
+
+**The deepest lesson is about audits themselves.** Our audit recorded "now stated" for a qualification it had
+written into the *audit table* while the decision row it contradicted still said the opposite. An audit
+finding is not discharged by being recorded in the audit. It is discharged when the statement it contradicted
+has changed.

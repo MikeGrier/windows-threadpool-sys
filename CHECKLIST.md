@@ -50,11 +50,12 @@ restate, then make the restatements compile, and only then fall back on conventi
   Done: the generator filters candidates through the predicate, and sabotaging the crate's definition was
   confirmed to change the generator's output rather than only a test's expectation.
 
-- [ ] **M2.4** -- Record the decision in the workspace [DESIGN-NOTES.md](DESIGN-NOTES.md): restatement drift
+- [x] **M2.4** -- Record the decision in the workspace [DESIGN-NOTES.md](DESIGN-NOTES.md): restatement drift
   as a failure mode distinct from the ten specification-gap categories, why the taxonomy cannot catch it
   (the taxonomy asks what the contract fails to *say*; this is about copies of what it does say), the
   measured evidence from PR #42, and the three-tier remedy. Cross-reference it from M1's taxonomy section so
   a reader arriving at the categories learns that stating a rule correctly is necessary and not sufficient.
+  Done: [Restatement drift](DESIGN-NOTES.md#restatement-drift), cross-linked both ways.
 
 - [ ] **M2.5** -- Turn the two conventions into binding rules in
   [.github/copilot-instructions.md](.github/copilot-instructions.md), which is the channel both humans and
