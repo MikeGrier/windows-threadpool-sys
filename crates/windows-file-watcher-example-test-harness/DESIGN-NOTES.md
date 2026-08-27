@@ -31,7 +31,7 @@ Three integration modes, so a reader can pick whichever fits their platform:
    (the handler panicked or failed its own invariant), and dump the offending schedule to JSON. `capture`
    itself runs the plain oracle (`run`), which cannot detect a handler that stops consuming without
    panicking; a wedge is only caught by the deadline oracle (`run_with_deadline`, demonstrated separately,
-   `oracles_catch_pathologies.rs`), not by this bin.
+   [tests/oracles_catch_pathologies.rs](tests/oracles_catch_pathologies.rs)), not by this bin.
 3. **Replay** (`replay` bin) -- load a captured JSON schedule and re-drive it against the handler to
    reproduce the pathology deterministically, as a regression test.
 
