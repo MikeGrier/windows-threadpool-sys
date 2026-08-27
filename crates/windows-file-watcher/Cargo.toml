@@ -56,6 +56,10 @@ required-features = ["test-util"]
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
+# Without this, docs.rs builds with default features only, so `test-util`'s
+# `channel_with_bound`/`Sender`/`for_test` APIs -- and any intra-doc links to
+# them -- would never appear in the published docs.
+features = ["test-util"]
 
 [features]
 # Enables `src/scenario.rs` (the data-driven stress model/harness, shared by
