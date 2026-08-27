@@ -56,13 +56,13 @@ in-scope crate, sync with origin) is standard procedure and not listed.
 
 ## M5 -- capture / replay bins
 
-- [ ] **M5.1** -- `src/bin/capture.rs`: run the generator under many seeds against the built-in example
+- [x] **M5.1** -- `src/bin/capture.rs`: run the generator under many seeds against the built-in example
   handler, preserving schedules that trip an oracle to JSON files. Declared with a `[[bin]]` entry.
 
-- [ ] **M5.2** -- `src/bin/replay.rs`: load a captured JSON schedule and replay it against the example
+- [x] **M5.2** -- `src/bin/replay.rs`: load a captured JSON schedule and replay it against the example
   handler, reporting reproduction. `[[bin]]` entry.
 
-- [ ] **M5.3** -- Document that these bins are handler-linked exemplars (D-3): a third party writes their
+- [x] **M5.3** -- Document that these bins are handler-linked exemplars (D-3): a third party writes their
   own against their own handler using the library.
 
 ## M6 -- Examples and exposition

@@ -81,3 +81,37 @@ impl Handler for PresenceTracker {
         }
     }
 }
+
+/// A handler with a real, findable bug: it wraps [`PresenceTracker`] but panics
+/// the moment it has seen more than one loss `Desync`, on the (wrong)
+/// assumption "that can't happen twice."
+///
+/// This is deliberately buggy, shipped so the `capture` and `replay` bins have
+/// something concrete to find and reproduce (crate DESIGN-NOTES D-3) -- it is a
+/// worked *failure* to demonstrate the technique, not a pattern to imitate.
+#[derive(Debug, Default)]
+pub struct BuggyHandler {
+    inner: PresenceTracker,
+    desyncs_seen: u32,
+}
+
+impl BuggyHandler {
+    /// A fresh handler.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Handler for BuggyHandler {
+    fn on(&mut self, notification: &Notification) {
+        if matches!(notification, Notification::Desync { .. }) {
+            self.desyncs_seen += 1;
+            assert!(
+                self.desyncs_seen <= 1,
+                "BuggyHandler assumed a desync could never happen twice"
+            );
+        }
+        self.inner.on(notification);
+    }
+}

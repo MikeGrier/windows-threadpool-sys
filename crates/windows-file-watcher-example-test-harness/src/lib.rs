@@ -21,10 +21,15 @@
 //!   invariant violation, or -- via [`run_with_deadline`] -- a wedge).
 //! - [`Recording`] / [`recording`] -- bundle a pathology's schedule and outcome
 //!   as a JSON artifact you can save, load, and replay as a regression.
-//! - [`example_handler`] -- a small, realistic handler used by the tests (and,
-//!   in later milestones, the `capture`/`replay` bins).
+//! - [`example_handler`] -- a small, realistic handler
+//!   ([`example_handler::PresenceTracker`]) used by the harness's own tests,
+//!   and an intentionally-buggy one ([`example_handler::BuggyHandler`]) the
+//!   `capture`/`replay` bins demonstrate against.
 //!
-//! Later milestones add `capture`/`replay` bin tools.
+//! The `capture` and `replay` binaries (`cargo run --bin capture` / `--bin
+//! replay`) show the full loop end to end: capture chases seeds until one trips
+//! `BuggyHandler`'s oracle and saves it as JSON; replay loads that JSON and
+//! reproduces the exact same outcome.
 //!
 //! # Fidelity limit
 //!

@@ -30,3 +30,13 @@ serde_json = "1.0"
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
+
+# Handler-linked exemplar bins (M5, DESIGN-NOTES D-3): both drive the built-in
+# example_handler::BuggyHandler. Write your own against your own Handler.
+[[bin]]
+name = "capture"
+path = "src/bin/capture.rs"
+
+[[bin]]
+name = "replay"
+path = "src/bin/replay.rs"
