@@ -704,3 +704,25 @@ Clippy pass without warnings.
 > **CROSS-COMPONENT PREREQUISITE SATISFIED:** component
 > `crates/windows-impersonation-token-sys` -> M4 -> **IT-5** completed before
 > this scaffold. See [CHECKLIST.md](CHECKLIST.md).
+
+## Moved 2026-08-27 -- file-enumeration v1 public contract
+
+### <a id="fe-2"></a>FE-2 -- Close and record the remaining v1 public-contract decisions before implementing them. *(completed 2026-08-27 17:39:09 UTC-04:00)*
+
+FE-2 settles caller-time ordinary-path snapshotting and explicit `\\?\`
+long-path handling, native unspecified ordering, the two-record CQ and embedded
+failed terminal, always-present defined inline metadata, native Windows
+timestamps, selected volume qualification, the extensible query-by-example
+predicate, synchronous versus accepted error boundaries, typed unsupported-
+capability behavior, and the fixed aligned buffer's typed oversize-record
+outcome.
+
+The authoritative contract is in the enumeration crate's
+[DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md), with
+alternatives and constraints in
+[DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+The cross-component summary is in the workspace
+[DESIGN-NOTES.md](DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Globazog replacement remains a
+mandatory publication gate: its native metadata and predicate capability must
+remain obtainable without per-entry opens.

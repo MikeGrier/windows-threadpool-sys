@@ -98,6 +98,51 @@ therefore the documented Windows-native bridge. Limiting each callback to one
 refill and finite parsing work prevents an enumeration from monopolizing workers
 without reaching into unsupported `Nt*` APIs.
 
+## Why the enumeration surface resolves paths and preserves native order
+
+Resolving ordinary paths before SQ acceptance snapshots relative-path meaning
+without opening under the submitter thread. Opening the resulting ordinary path
+can depend on executable and system long-path policy, so the crate deliberately
+caps ordinary forms at `MAX_PATH`; callers use a fully qualified, verbatim
+`\\?\` path for long input. `\\.\` retains ordinary Win32 normalization and is
+snapshotted like the other non-verbatim forms.
+
+The native API supplies no stable ordering contract, and sorting would require a
+whole-directory staging layer that defeats streaming bounded delivery. The crate
+therefore preserves order within each native record stream but labels it
+unspecified. A higher traversal or presentation layer owns any sorting policy.
+
+## Why metadata selection is limited to volume identity
+
+The extended record supplies attributes, reparse tag, logical and allocation
+sizes, extended-attribute size, four timestamps, and a 128-bit file ID together.
+Dropping any of those fields saves no native work and would narrow the level
+platform. The values remain native; in particular, signed 100-nanosecond Windows
+timestamps avoid lossy epoch conversion.
+
+Only volume qualification needs another query. Omitted, best-effort, and required
+modes expose that real cost and capability boundary without per-entry opens.
+
+## Why predicates and failures are crate-owned data
+
+A validated data-only predicate can cross the SQ and run in a callback without
+calling user code. A flat query-by-example conjunction maps the predicate leaves
+already needed by Globazog, including native-name patterns, attribute masks, and
+six-way size/time comparisons. Windows ordinal comparison defines case behavior
+without handing wildcard semantics to a filesystem.
+
+An accepted failure is embedded in the enumeration's one reserved terminal.
+This retains exact native detail without requiring another CQ data slot. Extended
+directory information that is unavailable fails explicitly instead of falling
+back to a metadata-poorer API. Likewise, a record that cannot fit the caller's
+fixed capacity produces a typed oversize failure; hidden growth would violate the
+memory bound and retry would rely on undocumented cursor behavior. Normal
+exhaustion includes `ERROR_NO_MORE_FILES` on any refill and
+`ERROR_FILE_NOT_FOUND` only on the initial restart refill; phase specificity
+keeps a failed open or late read from looking like success. Full details and
+alternatives are in the enumeration crate's
+[DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+
 ## References
 
 - [`QueueUserWorkItem` and `WT_TRANSFER_IMPERSONATION`](https://learn.microsoft.com/windows/win32/api/threadpoollegacyapiset/nf-threadpoollegacyapiset-queueuserworkitem)

@@ -8,8 +8,8 @@ an empty shell on other platforms.
 
 ## Status
 
-The publishable crate boundary and release automation are complete. Public API
-design and implementation are tracked by FE-2 through FE-11 in the workspace
+The publishable crate boundary, release automation, and v1 public API design are
+complete. Implementation is tracked by FE-3 through FE-11 in the workspace
 [CHECKLIST.md](../../CHECKLIST.md).
 
 ## Scope

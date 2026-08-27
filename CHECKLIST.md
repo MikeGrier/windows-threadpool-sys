@@ -12,21 +12,14 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-2.** Close the remaining v1 public-contract
-> decisions before implementing the public surface.
+> **NEXT ACTIONABLE ITEM: FE-3.** Implement the settled public request,
+> predicate, result, error, terminal, identity, and session types.
 
 ## M5 -- Publishable file-enumeration API and two-ring session
 
 - [x] **FE-1** -- Scaffold and register the publishable `windows-file-enumeration-sys` workspace crate. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-1)
 
-- [ ] **FE-2** -- Close and record the remaining v1 public-contract decisions before
-  implementing them: path and long-path inputs; native ordering; exact result and
-  terminal/error taxonomy; always-present versus selected metadata; native timestamp
-  representation; name matching and the extensible query-by-example predicate;
-  attribute all-set/all-clear validation; comparison/range operators; behavior when
-  `FileIdExtdDirectoryInfo` is unsupported; and behavior when one record exceeds the
-  configured buffer. Update Tier 1 and Tier 2 together and keep Globazog replacement
-  as a mandatory acceptance criterion.
+- [x] **FE-2** -- Close and record the remaining v1 public-contract decisions before implementing them. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-2)
 
 - [ ] **FE-3** -- Implement the public request, predicate, result, error, terminal,
   `EnumerationId`, session, submission, receiver, and affine enumeration-handle

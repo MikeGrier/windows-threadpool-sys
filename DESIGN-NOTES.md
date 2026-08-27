@@ -937,11 +937,37 @@ blocking a worker or dropping an accepted entry. `FindFirstFileExW`,
 `FindNextFileW`, direct `Nt*` APIs, and IOCP integration are not part of this
 design.
 
-The remaining v1 surface decisions -- predicates, metadata selection, native
-timestamp representation, errors, paths, ordering, unsupported filesystems, and
-oversize records -- must be settled before their implementation. That work is
-scheduled as FE-2 in [CHECKLIST.md](CHECKLIST.md), not left only in this design
-record.
+FE-2 closes the v1 surface. A request owns a NUL-free WTF-16 path snapshot.
+Ordinary forms, including `\\.\`, are resolved at construction and must fit
+`MAX_PATH`; long paths must be fully qualified `\\?\` inputs and remain
+verbatim. Entries preserve per-request native record order, which is explicitly
+unspecified; dot entries are omitted and no sorting mode is provided.
+
+The CQ carries only entry and terminal records. A terminal is completed,
+cancelled, or failed with its `EnumerationError`, so one reserved terminal slot
+also suffices for failure. `ERROR_NO_MORE_FILES`, plus
+`ERROR_FILE_NOT_FOUND` only on the initial restart query, produces completed
+exhaustion. All inline metadata with defined consumer meaning is always returned
+in native units, including all four signed Windows timestamps and the exact
+128-bit file ID; undefined `FileIndex` is omitted. The separately queried volume
+serial is selected as omitted, best-effort, or required; no selection opens
+individual entries.
+
+The v1 predicate is an extensible, data-only query-by-example conjunction. It
+covers native single-segment name patterns and sets with explicit Windows ordinal
+case behavior, type, reparse state/tag, non-zero all-set/all-clear attribute
+masks, both sizes, and all four timestamps. Numeric and timestamp comparisons
+provide `<`, `<=`, `==`, `!=`, `>=`, and `>`.
+
+Unsupported extended-directory information is a typed failure with the raw
+Win32 code, not a metadata-losing fallback. The fixed buffer defaults to 64 KiB,
+clamps below 1 KiB, has an 8-byte-aligned base and 8-byte-multiple capacity, and
+never grows. A refill that cannot return one complete record fails with a typed
+oversize-record terminal carrying the effective capacity and native code. Begin
+also rejects synchronously when its cancellation or terminal reservation is
+unavailable. The exact crate contract and Globazog replacement gate are
+authoritative in the enumeration crate's
+[DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md).
 
 Primary references:
 - [Thread Pools](https://learn.microsoft.com/windows/win32/procthread/thread-pools)
