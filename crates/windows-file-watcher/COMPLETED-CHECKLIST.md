@@ -447,7 +447,8 @@ feature, reconciled with D-64 by audience), and D-83 (fidelity limit: the seam t
 reactions, not whether the crate would ever emit that sequence).
 
 - [x] **M13.1** -- Add an off-by-default `test-util` Cargo feature (no new dependencies) and record the
-  three seam decisions D-81/D-82/D-83 in DESIGN-NOTES.md (Tier 1) and DESIGN-RATIONALE.md (Tier 2).
+  three seam decisions D-81/D-82/D-83 in [DESIGN-NOTES.md](DESIGN-NOTES.md) (Tier 1) and
+  [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) (Tier 2).
 
 - [x] **M13.2** -- Fill the `RelativeName` gap behind `test-util`: valid-by-construction `for_test`
   constructors from `&str`/`&OsStr`/raw `u16` units, so a consumer can build a `Change`. Unit test.
@@ -462,13 +463,13 @@ reactions, not whether the crate would ever emit that sequence).
   stale doc; frame `channel_with_bound` + `Sender::send` as the injection seam; add a crate-level
   "Testing your consumer code" docs section with a deterministic, cfg-gated doctest (D-83 fidelity limit).
 
-- [x] **M13.5** -- Consumer-facing example `examples/test_your_handler.rs` (`required-features =
+- [x] **M13.5** -- Consumer-facing example [examples/test_your_handler.rs](examples/test_your_handler.rs) (`required-features =
   ["test-util"]`): a small handler driven by a scripted deterministic sequence pushed through
   `channel_with_bound`/`Sender::send` -- covering `Batch` (gap-filled `Change`), `Desync`, `Completion`,
   `RetryQuestion`, and `VolumeChanged` (gap-filled `VolumeIdentity`) -- asserting the handler's
   reactions, with no filesystem and no thread pool.
 
-- [x] **M13.6** -- Integration test `tests/consumer_test_surface.rs` (`required-features =
+- [x] **M13.6** -- Integration test [tests/consumer_test_surface.rs](tests/consumer_test_surface.rs) (`required-features =
   ["test-util"]`) exercising the surface exactly as a downstream consumer would (public + `test-util`
   items only): a scripted sequence covering every `Notification` variant including both gap-filled types,
   asserting deterministic receipt through `Receiver`.

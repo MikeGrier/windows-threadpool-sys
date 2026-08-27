@@ -11,9 +11,9 @@ public `test-util` surface (D-2), which doubles as proof the M13 seam is suffici
 
 ### M1 -- Spine: handler trait, schedule wire format, driver
 
-- [x] **M1.1** -- Scaffold the crate: `Cargo.toml` (depends on `windows-file-watcher` with `test-util`,
-  plus `serde`), add it to the workspace members, a README framing it as an example (D-1), and a `lib.rs`
-  gating everything on `cfg(windows)`.
+- [x] **M1.1** -- Scaffold the crate: [Cargo.toml](Cargo.toml) (depends on `windows-file-watcher` with `test-util`,
+  plus `serde`), add it to the workspace members, a README framing it as an example (D-1), and a
+  [src/lib.rs](src/lib.rs) gating everything on `cfg(windows)`.
 
 - [x] **M1.2** -- `Handler` trait: `on(&mut self, &Notification)` plus a default `check(&self) ->
   Result<(), String>` invariant hook. The one plug point (D-3).
@@ -60,11 +60,11 @@ public `test-util` surface (D-2), which doubles as proof the M13 seam is suffici
 
 ### M5 -- capture / replay bins
 
-- [x] **M5.1** -- `src/bin/capture.rs`: runs the generator under many seeds against the built-in example
+- [x] **M5.1** -- [src/bin/capture.rs](src/bin/capture.rs): runs the generator under many seeds against the built-in example
   handler, preserving schedules that trip an oracle to JSON files. `[[bin]]` entry. Verified end to end: on
   the default generator config, every seed in `[0, 20)` tripped `BuggyHandler`'s oracle.
 
-- [x] **M5.2** -- `src/bin/replay.rs`: loads a captured JSON schedule and replays it against the example
+- [x] **M5.2** -- [src/bin/replay.rs](src/bin/replay.rs): loads a captured JSON schedule and replays it against the example
   handler, reporting reproduction. `[[bin]]` entry. Verified end to end: replaying `capture-0.json`
   reproduced the exact recorded outcome.
 
@@ -77,11 +77,11 @@ public `test-util` surface (D-2), which doubles as proof the M13 seam is suffici
 
 ### M6 -- Examples and exposition
 
-- [x] **M6.1** -- `examples/*.rs` demonstrating the three integration modes (in-process unit test;
+- [x] **M6.1** -- [examples/*.rs](examples/) demonstrating the three integration modes (in-process unit test;
   capture; replay) against the example handler. All three run end to end.
 
 - [x] **M6.2** -- Crate README + rustdoc teaching the technique, the fidelity limit (D-5), and the
   adapt-don't-depend framing (D-1); a "wiring your own handler" walkthrough.
 
 - [x] **M6.3** -- Integration test tying the full arc together (generate -> run -> record -> replay),
-  `tests/full_arc.rs`.
+  [tests/full_arc.rs](tests/full_arc.rs).
