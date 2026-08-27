@@ -58,27 +58,44 @@
 //! **schedule order is delivery order** -- all sequencing meaning lives in how
 //! you order `steps`. For one watch, file-watcher's contract implies:
 //!
-//! - **Establishment precedes data.** A watch is announced -- `Completion {
-//!   Subscribed }`, and, if liveness reporting is on, `Established { mode }` --
-//!   before it delivers any `Batch` (file-watcher D-30/D-13).
+//! - **Establishment precedes data, and (for a liveness watch) `Established`
+//!   precedes `Completion`.** `windows-file-watcher` sends the initial
+//!   `Established { mode }` from inside route establishment, and only
+//!   afterward turns the result into the `Completion { Subscribed }` its
+//!   caller reports -- so a liveness watch's first two notifications are
+//!   `Established` then `Completion { Subscribed }`, never the reverse. A
+//!   non-liveness watch has only the `Completion`. Either way, nothing
+//!   precedes establishment, and no `Batch` arrives before it (file-watcher
+//!   D-30/D-13).
 //! - **`Desync` is an in-stream barrier.** Everything before a `Desync` for a
 //!   watch is accounted for; nothing after it is (file-watcher D-12). A schedule
 //!   that models loss puts the `Desync` exactly at the drop point.
-//! - **`Suspended`/`Resumed` bracket an outage.** A `Resumed` is preceded by a
-//!   `Suspended` for the same watch, and a `Desync { Reestablished }` accompanies
-//!   or precedes it (file-watcher D-13/D-31). Both are opt-in, so a schedule that
-//!   never emits `Suspended` never emits `Resumed`.
-//! - **At most one question per watch is outstanding.** A `RetryQuestion` or
-//!   `VolumeChanged` is a question the client answers; a watcher cannot fault
-//!   twice concurrently, so a second question for the same watch does not appear
-//!   before the first resolves (file-watcher D-28).
+//! - **A fault and its resolution are one unit; nothing else interleaves
+//!   inside it.** Entering a fault sends `Suspended` (liveness only);
+//!   resolving it always sends `Desync { Reestablished }` (file-watcher D-12:
+//!   unconditional, never gated on liveness), then -- for a liveness watch,
+//!   and always together, never one without the other -- `Resumed` followed by
+//!   a fresh `Established` (file-watcher D-13/D-17/D-31). A watch that is
+//!   neither liveness nor interactive still legally sees the bare resolution
+//!   `Desync { Reestablished }` on a silent, autonomous recovery. No `Batch`,
+//!   and no second, overlapping fault, may appear between a `Suspended` (or,
+//!   for a non-liveness watch, the point a question is asked) and that
+//!   resolution -- the watch is not armed while faulted, so it cannot be
+//!   delivering data.
+//! - **A question, if any, is asked from inside that same bracket.** A
+//!   `RetryQuestion` or `VolumeChanged` is a question the client answers, and
+//!   it only ever arises from inside a fault (file-watcher's `enter_fault`) --
+//!   never on its own, and never without the resolution above eventually
+//!   following it. A watcher cannot fault twice concurrently, so a second
+//!   question for the same watch does not appear before the first resolves
+//!   (file-watcher D-28).
 //! - **`Cancelled` is terminal.** After `Completion { Cancelled }` for a watch,
 //!   nothing more arrives for that watch (file-watcher D-30) -- it is a per-watch
 //!   terminator.
 //! - **`Established` recurs on re-establishment.** When liveness is on,
 //!   `Established { mode }` appears once at first establishment and again after
-//!   each re-establishment (file-watcher D-17) -- e.g. after a Suspended/Resumed
-//!   bracket the tier may be re-announced.
+//!   each re-establishment (file-watcher D-17), immediately after `Resumed` in
+//!   the fault-recovery bracket above.
 
 use serde::{Deserialize, Serialize};
 use windows_file_watcher::{

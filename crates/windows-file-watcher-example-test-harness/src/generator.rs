@@ -14,18 +14,26 @@
 //! per-watch lifecycles are then interleaved (cross-watch order is free; per-watch
 //! order is preserved). For one watch:
 //!
-//! 1. **Establish first.** Emit `Completion { Subscribed }`, and -- for a watch
-//!    that reports liveness -- an `Established { mode }`, before any data. Nothing
-//!    else precedes establishment (schedule docs: establishment-before-data).
+//! 1. **Establish first.** For a watch that reports liveness, emit an
+//!    `Established { mode }` *before* `Completion { Subscribed }` --
+//!    `windows-file-watcher` itself sends the initial `Established` from
+//!    inside route establishment, and only afterward turns that into the
+//!    `Completion` its caller reports. A non-liveness watch has only the
+//!    `Completion`. Nothing precedes establishment (schedule docs:
+//!    establishment-before-data).
 //! 2. **Live loop.** A weighted mix of: a `Batch` (each record's kind, including
 //!    `RenamedOldName`/`RenamedNewName`, drawn independently rather than forced
 //!    into a pair -- `windows-file-watcher` never joins a rename, D-9); a loss
-//!    `Desync` (`Overflow`/`QueueFull`, the
-//!    D-29 loss shape); for a liveness watch, a `Suspended` -> `Desync {
-//!    Reestablished }` -> `Resumed` (-> optional re-`Established`) bracket; for an
-//!    interactive watch, a single `RetryQuestion` or `VolumeChanged`, which is
-//!    treated as resolved before the next event so at most one question is ever
-//!    outstanding (schedule docs: one-question-per-watch).
+//!    `Desync` (`Overflow`/`QueueFull`, the D-29 loss shape); or a fault
+//!    recovery, modeled as one unit because a real fault and its resolution are
+//!    never independent events: `Suspended` (liveness only) -> optionally a
+//!    question (`RetryQuestion` or `VolumeChanged`, interactive only) -> the
+//!    resolution, always a `Desync { Reestablished }` (D-12: unconditional,
+//!    never gated on liveness) followed by `Resumed` then `Established`
+//!    (liveness only, and always together -- `resolve_fault_success` never
+//!    sends one without the other). A bare `RetryQuestion`/`VolumeChanged` with
+//!    no bracket, or ordinary data delivered while a watch is faulted, is not a
+//!    schedule `windows-file-watcher` could produce.
 //! 3. **Optional terminal.** End with `Completion { Cancelled }`; nothing for that
 //!    watch follows it (schedule docs: Cancelled-as-terminator).
 //!
@@ -88,7 +96,16 @@ impl Rng {
     /// A uniform integer in `[low, high]` inclusive. Panics if `low > high`.
     pub fn range(&mut self, low: u64, high: u64) -> u64 {
         assert!(low <= high, "Rng::range with low > high");
-        low + self.below(high - low + 1)
+        // `high - low + 1` overflows exactly when the requested range is the
+        // full width of `u64` (`low == 0 && high == u64::MAX`) -- the only
+        // case in which `wrapping_add` yields 0, since `high - low` itself
+        // cannot overflow given the assertion above. Every `u64` is in range
+        // then, so the raw output already is one; no modulus is needed.
+        let span = (high - low).wrapping_add(1);
+        if span == 0 {
+            return self.next_u64();
+        }
+        low + self.below(span)
     }
 
     /// `true` with probability `percent`/100 (clamped to `[0, 100]`).
@@ -135,10 +152,16 @@ pub struct GeneratorConfig {
     pub weight_batch: u32,
     /// Relative weight of a loss `Desync` in the live loop.
     pub weight_desync: u32,
-    /// Relative weight of a `Suspended`/`Resumed` bracket (liveness watches only).
-    pub weight_suspend_resume: u32,
-    /// Relative weight of a question (interactive watches only).
-    pub weight_question: u32,
+    /// Relative weight of a fault-recovery event in the live loop. Available to
+    /// every watch, not only liveness/interactive ones: even a fully-default
+    /// watch (no liveness, `RetryMode::Defaults`) legally sees the bare
+    /// resolution `Desync { Reestablished }` when it silently recovers.
+    pub weight_fault_recovery: u32,
+    /// Given a fault recovery on an interactive watch, the percent chance it
+    /// includes a question (`RetryQuestion` or `VolumeChanged`) rather than
+    /// resolving without one (silent autonomous retry, D-27's default). Has no
+    /// effect on a non-interactive watch, which never asks.
+    pub question_percent: u32,
 }
 
 impl Default for GeneratorConfig {
@@ -151,8 +174,8 @@ impl Default for GeneratorConfig {
             cancel_percent: 25,
             weight_batch: 6,
             weight_desync: 2,
-            weight_suspend_resume: 1,
-            weight_question: 1,
+            weight_fault_recovery: 1,
+            question_percent: 50,
         }
     }
 }
@@ -220,57 +243,70 @@ impl Generator {
         let liveness = rng.chance(self.config.liveness_percent);
         let interactive = rng.chance(self.config.interactive_percent);
 
-        // 1. Establish first.
-        out.push(NotificationSpec::Completion {
-            watch,
-            outcome: OutcomeSpec::Subscribed,
-        });
+        // 1. Establish first. windows-file-watcher sends the initial
+        // `Established` (liveness only) from inside route establishment, and
+        // only afterward turns the result into the `Completion` its caller
+        // reports -- so the real order is Established, then Completion, never
+        // the reverse.
         if liveness {
             out.push(NotificationSpec::Established {
                 watch,
                 mode: WatchModeSpec::Detailed,
             });
         }
+        out.push(NotificationSpec::Completion {
+            watch,
+            outcome: OutcomeSpec::Subscribed,
+        });
 
         // 2. Live loop.
         for _ in 0..self.config.steps_per_watch {
-            match self.pick_event(rng, liveness, interactive) {
+            match self.pick_event(rng) {
                 Event::Batch => out.push(self.gen_batch(rng, watch)),
                 Event::Desync => out.push(NotificationSpec::Desync {
                     watch,
                     cause: gen_loss_cause(rng),
                 }),
-                Event::SuspendResume => {
-                    out.push(NotificationSpec::Suspended { watch });
+                Event::FaultRecovery => {
+                    // A real fault and its resolution are never independent
+                    // events, so this is modeled as one atomic unit: nothing
+                    // else may be interleaved between entering a fault and
+                    // resolving it (schedule docs: no ordinary data while
+                    // faulted).
+                    if liveness {
+                        out.push(NotificationSpec::Suspended { watch });
+                    }
+                    if interactive && rng.chance(self.config.question_percent) {
+                        if rng.chance(50) {
+                            out.push(NotificationSpec::RetryQuestion {
+                                watch,
+                                operation: gen_operation(rng),
+                                detail: gen_detail(rng),
+                            });
+                        } else {
+                            let (previous, current) = gen_volume_change(rng);
+                            out.push(NotificationSpec::VolumeChanged {
+                                watch,
+                                previous,
+                                current,
+                            });
+                        }
+                    }
+                    // The resolution: always a Desync (D-12, never gated on
+                    // liveness), then -- for a liveness watch, and always
+                    // together, never one without the other -- Resumed and a
+                    // fresh Established.
                     out.push(NotificationSpec::Desync {
                         watch,
                         cause: DesyncCauseSpec::Reestablished,
                     });
-                    out.push(NotificationSpec::Resumed { watch });
-                    if rng.chance(50) {
+                    if liveness {
+                        out.push(NotificationSpec::Resumed { watch });
                         out.push(NotificationSpec::Established {
                             watch,
                             mode: gen_mode(rng),
                         });
                     }
-                }
-                Event::Question => {
-                    if rng.chance(50) {
-                        out.push(NotificationSpec::RetryQuestion {
-                            watch,
-                            operation: gen_operation(rng),
-                            detail: gen_detail(rng),
-                        });
-                    } else {
-                        let (previous, current) = gen_volume_change(rng);
-                        out.push(NotificationSpec::VolumeChanged {
-                            watch,
-                            previous,
-                            current,
-                        });
-                    }
-                    // The question is treated as resolved before the next event,
-                    // so a second question never overlaps the first.
                 }
             }
         }
@@ -291,27 +327,15 @@ impl Generator {
         rng.below(len as u64) as usize
     }
 
-    /// Choose a live-loop event, honoring which kinds this watch may emit.
-    fn pick_event(&self, rng: &mut Rng, liveness: bool, interactive: bool) -> Event {
+    /// Choose a live-loop event. `liveness`/`interactive` do not gate whether a
+    /// fault recovery can occur at all (even a fully-default watch legally
+    /// sees the bare resolution `Desync`) -- they only shape *what a recovery
+    /// contains*, decided in [`Self::generate_watch`].
+    fn pick_event(&self, rng: &mut Rng) -> Event {
         let candidates = [
             (Event::Batch, self.config.weight_batch),
             (Event::Desync, self.config.weight_desync),
-            (
-                Event::SuspendResume,
-                if liveness {
-                    self.config.weight_suspend_resume
-                } else {
-                    0
-                },
-            ),
-            (
-                Event::Question,
-                if interactive {
-                    self.config.weight_question
-                } else {
-                    0
-                },
-            ),
+            (Event::FaultRecovery, self.config.weight_fault_recovery),
         ];
         let weights: Vec<u32> = candidates.iter().map(|(_, w)| *w).collect();
         candidates[rng.weighted(&weights)].0
@@ -338,8 +362,7 @@ impl Generator {
 enum Event {
     Batch,
     Desync,
-    SuspendResume,
-    Question,
+    FaultRecovery,
 }
 
 /// One raw change kind, drawn uniformly. `RenamedOldName`/`RenamedNewName` are
@@ -389,20 +412,56 @@ fn gen_operation(rng: &mut Rng) -> FaultOperationSpec {
     }
 }
 
-/// A plausible fault detail (a classification plus a real Win32 code).
+/// The real Win32 error codes `directory::classify` maps to each
+/// `OpenFailure`, named per the repo's no-bare-numeric-constants rule (not
+/// imported from `windows-sys`, to avoid a dependency for four well-known,
+/// stable `WinError` values).
+mod win32 {
+    pub const ERROR_FILE_NOT_FOUND: u32 = 2;
+    pub const ERROR_PATH_NOT_FOUND: u32 = 3;
+    pub const ERROR_INVALID_FUNCTION: u32 = 1;
+    pub const ERROR_NOT_SUPPORTED: u32 = 50;
+    pub const ERROR_ACCESS_DENIED: u32 = 5;
+    pub const ERROR_SHARING_VIOLATION: u32 = 32;
+}
+
+/// A legal fault detail for a `RetryQuestion`.
+///
+/// `windows-file-watcher`'s `retry_reestablish` only re-enters the fault loop
+/// (and so only ever asks a question) for an open failure that
+/// `OpenFailure::is_retryable()` -- `NotFound`, `Unsupported`, or `Retryable`;
+/// the permanent classifications (`NotADirectory`, `InvalidPath`,
+/// `RetryUnavailable`) only ever reach `Completion::Failed`, never
+/// `RetryQuestion`. The code paired with each classification matches
+/// `directory::classify`'s real mapping exactly, so a (classification, code)
+/// pair this crate could never itself produce is not generated.
 fn gen_detail(rng: &mut Rng) -> FaultDetailSpec {
-    let failure = match rng.below(6) {
-        0 => OpenFailureSpec::NotFound,
-        1 => OpenFailureSpec::NotADirectory,
-        2 => OpenFailureSpec::Unsupported,
-        3 => OpenFailureSpec::Retryable,
-        4 => OpenFailureSpec::InvalidPath,
-        _ => OpenFailureSpec::RetryUnavailable,
-    };
-    // A handful of common Win32 error codes.
-    const CODES: [u32; 5] = [2, 3, 5, 32, 1231];
-    let code = FailureCodeSpec::Win32(CODES[rng.below(CODES.len() as u64) as usize]);
-    FaultDetailSpec { failure, code }
+    match rng.below(3) {
+        0 => FaultDetailSpec {
+            failure: OpenFailureSpec::NotFound,
+            code: FailureCodeSpec::Win32(if rng.chance(50) {
+                win32::ERROR_FILE_NOT_FOUND
+            } else {
+                win32::ERROR_PATH_NOT_FOUND
+            }),
+        },
+        1 => FaultDetailSpec {
+            failure: OpenFailureSpec::Unsupported,
+            code: FailureCodeSpec::Win32(if rng.chance(50) {
+                win32::ERROR_INVALID_FUNCTION
+            } else {
+                win32::ERROR_NOT_SUPPORTED
+            }),
+        },
+        _ => FaultDetailSpec {
+            failure: OpenFailureSpec::Retryable,
+            code: FailureCodeSpec::Win32(if rng.chance(50) {
+                win32::ERROR_ACCESS_DENIED
+            } else {
+                win32::ERROR_SHARING_VIOLATION
+            }),
+        },
+    }
 }
 
 /// A plausible volume identity. Its `serial` alone is not guaranteed distinct
