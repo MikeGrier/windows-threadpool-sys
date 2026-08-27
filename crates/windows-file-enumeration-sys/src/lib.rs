@@ -7,8 +7,83 @@
 //! engine. Recursive traversal belongs in a separate layer that composes these
 //! flat requests.
 //!
-//! The public API is scheduled by M5 in the workspace checklist and is not yet
-//! implemented.
+//! # What is implemented so far
+//!
+//! The public value types are complete: [`EnumerationRequest`], the
+//! [`EntryPredicate`] family, [`DirectoryEntry`] and its metadata, the error
+//! taxonomy, and the [`Completion`] records a receiver observes. The session
+//! that carries them and the native engine that fills them are scheduled by M5
+//! and M6 in the workspace checklist.
+//!
+//! # Native values stay native
+//!
+//! Names and paths are native-width WTF-16 ([`wtf_string`]), so an ill-formed
+//! surrogate a filesystem contains survives the round trip. Times are signed
+//! Windows tick counts ([`WindowsFileTimestamp`]), attributes are the raw
+//! `FILE_ATTRIBUTE_*` bitmask, and a file ID keeps the record's exact 16 bytes.
+//! Nothing is converted eagerly into a portable shape whose losses a caller
+//! could not undo.
+//!
+//! # Example
+//!
+//! Build a request for one directory, delivering only files larger than 4 KiB
+//! whose names end in `.log`:
+//!
+//! ```no_run
+//! use windows_file_enumeration_sys::{
+//!     ComparisonOperator, EntryType, EnumerationRequest, NamePattern, PatternToken,
+//!     PredicateClause, QueryByExample,
+//! };
+//! use wtf_string::Wtf16String;
+//!
+//! let suffix = NamePattern::empty()
+//!     .with(PatternToken::AnyRun)
+//!     .with(PatternToken::Literal(Wtf16String::from(".log")));
+//!
+//! let query = QueryByExample::new()
+//!     .with(PredicateClause::Name {
+//!         pattern: suffix,
+//!         case: Default::default(),
+//!         negated: false,
+//!     })?
+//!     .with(PredicateClause::IsType {
+//!         entry_type: EntryType::File,
+//!         negated: false,
+//!     })?
+//!     .with(PredicateClause::LogicalSize {
+//!         operator: ComparisonOperator::Greater,
+//!         value: 4096,
+//!     })?;
+//!
+//! let request = EnumerationRequest::for_path("C:/logs".as_ref())?.with_predicate(query);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
+#![warn(missing_docs)]
+
+mod completion;
+mod entry;
+mod error;
+mod path;
+mod pattern;
+mod predicate;
+mod request;
+mod timestamp;
+
+#[cfg(test)]
+mod testing;
+
+pub use completion::{Completion, EnumerationId, TerminalOutcome};
+pub use entry::{DirectoryEntry, EntryType, FileIdentity, FileIdentityMode};
+pub use error::{
+    EnumerationError, MalformedRecord, PredicateError, PredicateFailure, RequestError,
+    RequestFailure, Win32Error,
+};
+pub use pattern::{CaseSensitivity, NamePattern, PatternToken};
+pub use predicate::{
+    ComparisonOperator, EntryPredicate, PredicateClause, QueryByExample, TimestampField,
+};
+pub use request::{DEFAULT_BUFFER_CAPACITY, EnumerationRequest, MINIMUM_BUFFER_CAPACITY};
+pub use timestamp::WindowsFileTimestamp;

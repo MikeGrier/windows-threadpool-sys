@@ -12,8 +12,7 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-3.** Implement the settled public request,
-> predicate, result, error, terminal, and identity types.
+> **NEXT ACTIONABLE ITEM: FE-4.** Implement the bounded two-ring session shell.
 
 ## M5 -- Publishable file-enumeration API and two-ring session
 
@@ -21,11 +20,7 @@ as checklist work. Conventional Commit scopes for the new crates are
 
 - [x] **FE-2** -- Close and record the remaining v1 public-contract decisions before implementing them. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-2)
 
-- [ ] **FE-3** -- Implement the public request, predicate, result, error, terminal,
-  and `EnumerationId` types. Preserve native Microsoft value types where they
-  express the contract, retain names and paths as native-width WTF-16, make the
-  predicate extensible without replacing the request API, default the native buffer
-  to 64 KiB, and clamp requested capacities below 1 KiB.
+- [x] **FE-3** -- Implement the public request, predicate, result, error, terminal, and `EnumerationId` types. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-3)
 
 - [ ] **FE-4** -- Implement the bounded multi-producer SQ and single-receiver CQ
   session shell, including the `Session`, submission, and receiver types that own

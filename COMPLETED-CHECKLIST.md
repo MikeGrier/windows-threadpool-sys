@@ -726,3 +726,38 @@ The cross-component summary is in the workspace
 [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Globazog replacement remains a
 mandatory publication gate: its native metadata and predicate capability must
 remain obtainable without per-entry opens.
+
+## Moved 2026-08-27 -- file-enumeration public value types
+
+### <a id="fe-3"></a>FE-3 -- Implement the public request, predicate, result, error, terminal, and `EnumerationId` types. *(completed 2026-08-27 18:18:50 UTC-04:00)*
+
+The crate now carries the settled v1 value surface.
+[request.rs](crates/windows-file-enumeration-sys/src/request.rs) owns
+`EnumerationRequest`, whose path is validated and resolved at construction by
+[path.rs](crates/windows-file-enumeration-sys/src/path.rs): `\\?\` inputs are
+checked for full qualification and kept verbatim, every other form (including
+`\\.\`) is resolved through `GetFullPathNameW` and held to `MAX_PATH` so
+behaviour does not depend on the host's `longPathAware` manifest. Buffer
+capacity defaults to 64 KiB, clamps up to 1 KiB, rounds to the 8-byte record
+alignment, and rejects a value that cannot reach Win32 as a `u32`.
+
+[predicate.rs](crates/windows-file-enumeration-sys/src/predicate.rs) and
+[pattern.rs](crates/windows-file-enumeration-sys/src/pattern.rs) implement the
+data-only query-by-example predicate: a non-exhaustive `EntryPredicate` seam
+over a validating `QueryByExample`, ten clause forms, six comparison operators,
+and a compiled single-segment name matcher whose insensitive comparison uses
+`CompareStringOrdinal`. Vacuous clauses -- a zero attribute mask, an empty name
+set -- are rejected when the query is built.
+
+[entry.rs](crates/windows-file-enumeration-sys/src/entry.rs) and
+[timestamp.rs](crates/windows-file-enumeration-sys/src/timestamp.rs) hold every
+inline record field in native units, suppress a reparse tag the attributes do
+not justify, and keep times as signed Windows ticks with `FILETIME` interop.
+[error.rs](crates/windows-file-enumeration-sys/src/error.rs) splits synchronous
+build failures from accepted-enumeration failures and retains every raw Win32
+code, and
+[completion.rs](crates/windows-file-enumeration-sys/src/completion.rs) defines
+the two-record completion surface with the failure carried inside its terminal.
+
+118 unit tests plus the crate doctest pass; targeted all-target Clippy and
+`cargo fmt --check` are clean.
