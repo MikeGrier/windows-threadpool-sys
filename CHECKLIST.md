@@ -37,7 +37,8 @@ as checklist work. Conventional Commit scopes for the new crates are
   lifetime independence, concurrent use, identification-level behavior,
   delegation-level preservation, anonymous-token rejection, capture failure,
   application failure, and restoration-failure fail-fast in a subprocess. Keep the
-  unit-test portion below one second and put OS-heavy cases in integration tests.
+  strictly in-memory, mock-based unit-test portion below one second; reserve integration
+  tests for longer-running cases and cases that require real OS state or a subprocess.
 
 - [ ] **IT-5** -- Complete the crate-level API documentation, safety/invariant
   documentation, README examples, changelog baseline, and publication validation.

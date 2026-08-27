@@ -912,7 +912,9 @@ context in a CHECKLIST file.
 
 Checklists for work more than 2-3 items long should be organized into milestones.
 Milestones should generally be sized to about 5 work items (suggestion, not a rule) and
-should end with integration tests when possible.
+should end with integration tests only when the milestone includes behavior that meets
+the integration-test criteria under "Quality." Do not create integration tests merely
+to close a milestone.
 
 At the end of every milestone, the following steps are **implicit** and must NOT be written
 as checklist items:
@@ -1236,10 +1238,18 @@ When providing testing, always provide extensive testing to test at least 10 nor
 computation required to test the edge cases would be excessive on a modern system. The unit tests for a submodule should be able to complete
 in under one second of elapsed time on an AMD Ryzen R7 processor running at 1.5ghz with 16gb of memory.
 
+Prefer unit tests whenever behavior can be exercised quickly and strictly in memory with mocks or fakes. Reserve integration tests for
+longer-running cases or cases that cannot be exercised strictly in memory because they must cross a real process, filesystem, network,
+device, operating-system API, or other external boundary.
+
+In a mixed-target repository only, target-specific isolation is an additional reason to place platform-dependent cases in integration tests
+when that isolation is needed to keep portable unit-test targets buildable. In a repository that targets a single operating system,
+dependence on that operating system alone does not make a test an integration test; apply the duration and external-boundary criteria above.
+
 If there are tests which seem vital that would take longer, put an item in a CHECKLIST.md file with special importance for the user to
 decide on whether to include them or not.
 
-In any case, if the test is vital it must be authored and be run as part of the integration tests rather than the unit tests.
+Whether a test is vital affects whether it must be authored, not where it belongs. Test placement is governed only by the criteria above.
 
 ### Milestone vs sub-milestone checklist work
 
@@ -1257,7 +1267,8 @@ it should be recorded in a design note.
 
 ### Integration tests
 
-Integration tests should use larger scale data.
+Integration tests are reserved for the duration, external-boundary, and mixed-target isolation cases described above. They should use larger
+scale data when data volume is the reason the case belongs at integration scope.
 
 There is no required minimum, but in general should start with data volume in the hundreds or thousands.
 
