@@ -126,40 +126,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-25----
 
 ## M14 -- Audit the delivery contract against the ten specification-gap categories (D-84)
 
-PR #42 found gaps in this crate's contract prose one at a time, reactively, over 19 review rounds. Each was
-fixed where it was found, and [D-84](DESIGN-NOTES.md) records which decisions were amended. What has **not**
-been done is the converse: a deliberate pass over the contract asking, for each of
-[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract), whether this crate states it or
-leaves it to omission. Reactive fixes cannot establish that, because they only ever reach the categories some
-reviewer happened to probe.
-
-- [x] **M14.1** -- Audit [D-12](DESIGN-NOTES.md) (`Desync`), [D-27](DESIGN-NOTES.md)/[D-28](DESIGN-NOTES.md)
-  (the fault protocol), and [D-30](DESIGN-NOTES.md) (request completions) against all ten categories, and
-  state each answer -- including "unspecified, deliberately" where that is the honest one. These three carry
-  the sequencing rules a consumer builds recovery on, so they are the highest-value targets. Done: see
-  [The M14 audit](DESIGN-NOTES.md#the-m14-audit). Found three shipped documentation defects (`DesyncCause`'s
-  type-level doc contradicting its own `Stopped` variant, a four-of-five cause enumeration, and a
-  `Delivery and saturation` section still describing the pre-D-29 drop policy and the phrasing D-39 corrects)
-  and two load-bearing rules stated nowhere (the standing slot's mutual-exclusion invariant, and that
-  "every request produces a completion" holds for lifecycle requests only).
-
-- [x] **M14.2** -- Audit the remaining notification-shaping decisions ([D-10](DESIGN-NOTES.md),
-  [D-13](DESIGN-NOTES.md), [D-17](DESIGN-NOTES.md), [D-26](DESIGN-NOTES.md), [D-57](DESIGN-NOTES.md)) the
-  same way, and fold any newly-stated rule into the harness's `schedule` module docs so the generator and
-  the contract stay in step. Done: see [The M14 audit](DESIGN-NOTES.md#the-m14-audit). Three sequences the
-  contract did not admit -- a liveness bracket can open with `Resumed` (a route coalescing onto an
-  already-faulted watcher) and can close with `Desync { Stopped }` instead of `Resumed`; `Established` is
-  not necessarily a watch's first notification; and the tier is re-resolved on every reopen, so it may
-  differ between establishments. All three folded into the harness `schedule` docs.
-
-- [x] **M14.3** -- Sweep for the [`has_room`](DESIGN-NOTES.md#the-has_room-finding-in-this-crate) shape:
-  every advisory predicate this crate exposes or consumes on a reliability path, checked for whether its
-  stated contract holds under the condition its caller actually uses it in, with a test in that condition.
-  `has_room` was found by review rather than by looking; nothing establishes it was the only one. Done: see
-  [The M14.3 predicate sweep](DESIGN-NOTES.md#the-m143-predicate-sweep). Nine predicates swept, one defect
-  found -- `Receiver::is_empty` excludes owed latched losses and the end of the stream, so a client that
-  waits on the doorbell (signalled on all three, D-41) and then tests it spins without ever collecting the
-  loss report. `Receiver::has_pending` now publishes D-41's own predicate; three regression tests added.
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----m14-audit-the-delivery-contract-against-the-ten-specification-gap-categories-d-84).
 
 ## M-inf -- Horizon (ungated, post-v1)
 

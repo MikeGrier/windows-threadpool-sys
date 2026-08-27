@@ -473,3 +473,41 @@ reactions, not whether the crate would ever emit that sequence).
   ["test-util"]`) exercising the surface exactly as a downstream consumer would (public + `test-util`
   items only): a scripted sequence covering every `Notification` variant including both gap-filled types,
   asserting deterministic receipt through `Receiver`.
+
+## Moved 2026-08-27 -- M14: audit the delivery contract against the ten specification-gap categories (D-84)
+
+PR #42 found gaps in this crate's contract prose one at a time, reactively, over 19 review rounds. M14 ran
+the converse pass: a deliberate sweep asking, for each of
+[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract), whether this crate states the
+answer or leaves it to omission. It found four shipped defects and five rules that were true of the code and
+written down nowhere. Full results in [The M14 audit](DESIGN-NOTES.md#the-m14-audit) and
+[The M14.3 predicate sweep](DESIGN-NOTES.md#the-m143-predicate-sweep).
+
+- [x] **M14.1** -- Audited D-12 (`Desync`), D-27/D-28 (the fault protocol), and D-30 (request completions)
+  against all ten categories. Three documentation defects: `DesyncCause`'s type-level doc claimed every cause
+  is advisory and always answered by a re-scan while its own `Stopped` variant said the opposite (a consumer
+  reading the type doc first would re-scan forever against a dead watch); "The Desync primitive" enumerated
+  four causes when there are five; and "Delivery and saturation" still described the pre-D-29 drop policy and
+  the exact latch phrasing D-39 corrects. Two rules stated for the first time: the standing slot shared by
+  `RetryQuestion` and `VolumeChanged` rests on a mutual-exclusion invariant its soundness depends on, and
+  D-30's "every request produces a completion" holds for lifecycle requests only -- `Answer` and
+  `AnswerVolumeChange` deliberately carry none.
+
+- [x] **M14.2** -- Audited D-10, D-13, D-17, D-26 and D-57 the same way, folding every newly-stated rule into
+  the harness's `schedule` module docs. Three legal sequences the contract described in a way that excludes
+  them: a liveness bracket can open with `Resumed` (a route coalescing onto an already-faulted watcher joins
+  after `enter_fault` sent its `Suspended`s) and can close with `Desync { Stopped }` instead of `Resumed`, so
+  a consumer balancing brackets is wrong in both directions; `Established` is not necessarily a watch's first
+  notification; and the tier is re-resolved on every reopen (D-61), so it may differ between establishments.
+  Also recorded that D-10's "one completion = one batch" is per-subscription and only when that
+  subscription's filtered subset is non-empty.
+
+- [x] **M14.3** -- Swept all nine advisory predicates this crate exposes or consumes for the `has_room`
+  shape. One defect: `Receiver::is_empty` is `len() == 0`, and `len` excludes owed latched losses, so a
+  drained queue that still owes a `Desync { QueueFull }` reports itself empty while `recv` would still yield
+  it. D-41 makes that a spin rather than a silent miss -- the doorbell is signalled on all three of queued,
+  owed, and disconnected, so a client that waits on it and then tests `is_empty` never collects the report it
+  was woken for. That this crate's own tests never use `is_empty` alone, always rebuilding
+  `!is_empty() || latched() > 0` by hand, is the same signal `has_room` gave before it was fixed. Fixed by
+  publishing D-41's own predicate as `Receiver::has_pending` rather than redefining `is_empty`, with three
+  regression tests that had no predecessor.

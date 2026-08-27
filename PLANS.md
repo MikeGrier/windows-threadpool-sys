@@ -11,7 +11,6 @@ finished move to [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [crates/windows-file-watcher/CHECKLIST.md](crates/windows-file-watcher/CHECKLIST.md) | not started | M14: audit this crate's delivery contract against all ten specification-gap categories (D-84), and sweep for other `has_room`-shaped advisory predicates on reliability paths. | [crates/windows-file-watcher/DESIGN-NOTES.md](crates/windows-file-watcher/DESIGN-NOTES.md) |
 | [crates/windows-overlapped-io-sys/CHECKLIST.md](crates/windows-overlapped-io-sys/CHECKLIST.md) | not started | M14: finish the contract audit -- categories 1, 2, 6, 8, 9 were not examined -- and sweep `outstanding()` for the advisory-predicate hazard. | [crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) |
 | [crates/windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Windows `IoRing` submission/completion ring, as a new crate. M1-M7 (ring lifecycle through the `ring-copy` topology-aligned sample) are complete and archived. The parked, pinned-thread `M6+` work and the new M10 contract audit remain. | [crates/windows-ioring-sys/DESIGN-NOTES.md](crates/windows-ioring-sys/DESIGN-NOTES.md) |
 
