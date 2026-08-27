@@ -122,8 +122,9 @@ fn a_lone_utf16_surrogate_name_round_trips_through_json_and_drives() {
     let loaded: Schedule = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(loaded, schedule);
 
-    // Also drives cleanly: the handler's lossy string conversion tolerates
-    // the unpaired surrogate rather than panicking.
+    // Also drives cleanly: PresenceTracker stores the name losslessly
+    // (OsString, not a lossy String conversion), so the unpaired surrogate is
+    // preserved rather than causing a panic.
     let mut handler = PresenceTracker::new();
     drive(&loaded, &mut handler);
     assert_eq!(handler.present().len(), 1);
