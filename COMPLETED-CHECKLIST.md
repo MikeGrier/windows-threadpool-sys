@@ -679,3 +679,23 @@ The stress suite is the more valuable of the two: `a_fault_storm_of_repeated_del
 walks the fault-bracket path 25 times against a real directory being deleted and recreated, which is exactly
 where a sequencing violation would appear and exactly where a point assertion would not notice. Run with
 `WINDOWS_FILE_WATCHER_STRESS=1`, all four stress tests pass with the checker live and report no violations.
+
+## <a id="moved-2026-08-27-m3-correction"></a>Moved 2026-08-27 -- M3 correction: one of the two "remaining gaps" was not a contract rule
+
+[The M3 follow-up](#moved-2026-08-27-m3-followup) recorded two harness tests as hand-encoding "contract rules
+the checker does not cover", and named extending the checker to them as real work. One of the two was not a
+contract rule at all (PR #42 review).
+
+`resolve_fault_success` issues `Resumed` and `Established` back to back, and the M3 entry read that as
+"always together". But each is a **separate best-effort observation send** ([D-57](crates/windows-file-watcher/DESIGN-NOTES.md)),
+so a saturated queue can take `Resumed` and latch `Established` into a `Desync { QueueFull }`. Together
+describes the *attempt*, not the delivery. There is therefore no invariant to extend the checker with, and
+adding one would have made it reject production output -- the same over-constraint the checker's must-accept
+tests exist to prevent, this time queued as planned work.
+
+The test is kept and renamed `this_generator_always_pairs_resumed_with_established`, which is what it
+actually asserts: the generator models the unsaturated case. The same false claim was corrected at five other
+sites in the same change (the schedule module's legality guide, the generator's module docs and two inline
+comments, and this test's own comment).
+
+The other remaining gap -- an interactive fault always asking -- stands as recorded.

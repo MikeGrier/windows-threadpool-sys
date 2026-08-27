@@ -177,9 +177,13 @@ fn this_generator_resolves_every_question_contiguously() {
 }
 
 #[test]
-fn every_resumed_is_immediately_followed_by_established() {
-    // resolve_fault_success never sends Resumed without Established, or vice
-    // versa -- they are always together (schedule docs).
+fn this_generator_always_pairs_resumed_with_established() {
+    // A GENERATOR property, not a contract rule. `resolve_fault_success`
+    // attempts the two back to back, but each is a separate best-effort
+    // observation send (file-watcher D-57), so a saturated queue can take
+    // `Resumed` and latch `Established` into a `Desync { QueueFull }`. This
+    // generator models the unsaturated case, which is what this asserts; a
+    // schedule carrying `Resumed` alone is legal and a handler must tolerate it.
     for config in sample_configs() {
         let generator = Generator::with_config(config);
         for seed in 0..10 {

@@ -35,8 +35,12 @@
 //!    Confirm` are separate `WatchOptions` fields, never conflated) -> the
 //!    resolution, always a `Desync { Reestablished }` (D-12: unconditional,
 //!    never gated on liveness) followed by `Resumed` then `Established`
-//!    (liveness only, and always together -- `resolve_fault_success` never
-//!    sends one without the other). A bare `RetryQuestion`/`VolumeChanged` with
+//!    (liveness only). Those last two are **attempted** together by
+//!    `resolve_fault_success`, but each is a separate best-effort send on the
+//!    observation tier (D-57), so saturation can queue one and latch the other
+//!    into a `Desync { QueueFull }`. Their contiguous pair here is this
+//!    generator's unsaturated choice, not a delivery guarantee. A bare
+//!    `RetryQuestion`/`VolumeChanged` with
 //!    no bracket is not a schedule `windows-file-watcher` could produce.
 //!
 //!    This generator keeps the bracket contiguous, which is a **coverage
@@ -302,10 +306,13 @@ impl Generator {
         let mut current_volume: Option<VolumeSpec> = None;
 
         // 1. Establish first. windows-file-watcher sends the initial
-        // `Established` (liveness only) from inside route establishment, and
+        // `Established` (liveness only) from inside route establishment and
         // only afterward turns the result into the `Completion` its caller
-        // reports -- so the real order is Established, then Completion, never
-        // the reverse.
+        // reports, so that is the order it attempts. `Established` is a
+        // best-effort observation send (D-57), so production may drop it under
+        // saturation and report only the `Completion`; a route coalescing onto
+        // an already-faulted watcher does not get one at all. This generator
+        // models the unsaturated, healthy-directory case.
         if liveness {
             out.push(NotificationSpec::Established {
                 watch,
@@ -394,9 +401,11 @@ impl Generator {
                         });
                     }
                     // The resolution: always a Desync (D-12, never gated on
-                    // liveness), then -- for a liveness watch, and always
-                    // together, never one without the other -- Resumed and a
-                    // fresh Established.
+                    // liveness), then -- for a liveness watch -- Resumed and a
+                    // fresh Established. Those two are attempted together but
+                    // sent separately and best-effort (D-57), so saturation can
+                    // separate them; emitting them contiguously is this
+                    // generator's unsaturated choice.
                     out.push(NotificationSpec::Desync {
                         watch,
                         cause: DesyncCauseSpec::Reestablished,

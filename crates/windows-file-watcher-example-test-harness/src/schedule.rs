@@ -101,15 +101,22 @@
 //!   bullet's scope; a not-yet-established watch's retryable open is the
 //!   separate case documented above) ends one of two ways: **successful
 //!   recovery** always sends `Desync { Reestablished }` (file-watcher D-12:
-//!   unconditional, never gated on liveness), then -- for a liveness watch,
-//!   and always together, never one without the other -- `Resumed` followed
-//!   by a fresh `Established` (file-watcher D-13/D-17/D-31); or **permanent
+//!   unconditional, never gated on liveness), then -- for a liveness watch --
+//!   `Resumed` followed by a fresh `Established`
+//!   (file-watcher D-13/D-17/D-31); or **permanent
 //!   failure to reopen** ends the watch instead with the terminal
 //!   `Desync { Stopped }` (`record_stop`, watcher.rs) and nothing further for
 //!   it. A watch that is neither liveness nor interactive still legally sees
 //!   the bare successful-recovery resolution `Desync { Reestablished }` on a
 //!   silent, autonomous recovery. No second, overlapping fault may appear
 //!   inside the bracket.
+//!
+//!   `Resumed` and `Established` are **attempted** together --
+//!   `resolve_fault_success` issues them back to back -- but each is a separate
+//!   best-effort observation send (file-watcher D-57), so a saturated queue can
+//!   take one and latch the other into a `Desync { QueueFull }`. "Always
+//!   together" describes the attempt, not the delivery: a schedule carrying
+//!   `Resumed` without `Established` is legal.
 //!
 //!   **The exception is a single `Batch`, and it is real rather than
 //!   theoretical.** `WatcherInner::on_completion` re-arms *before* it decodes,

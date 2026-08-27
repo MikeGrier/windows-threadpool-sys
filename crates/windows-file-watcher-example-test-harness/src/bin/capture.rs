@@ -74,12 +74,25 @@ mod imp {
         let Some(args) = Args::parse(&mut output) else {
             return std::process::ExitCode::FAILURE;
         };
-        capture(&args, &mut output);
-        std::process::ExitCode::SUCCESS
+        if capture(&args, &mut output) {
+            std::process::ExitCode::SUCCESS
+        } else {
+            std::process::ExitCode::FAILURE
+        }
     }
 
-    fn capture(args: &Args, output: &mut Output<impl std::io::Write, impl std::io::Write>) {
-        std::fs::create_dir_all(&args.out).expect("create output directory");
+    /// Returns whether the run completed. A filesystem failure -- a full disk,
+    /// a read-only or missing directory -- is an expected outcome for a tool
+    /// that writes files, so it is reported and fails the command rather than
+    /// aborting the process after however many seeds have already been checked.
+    fn capture(args: &Args, output: &mut Output<impl std::io::Write, impl std::io::Write>) -> bool {
+        if let Err(error) = std::fs::create_dir_all(&args.out) {
+            output.diagnostic(&format!(
+                "error: could not create output directory '{}': {error}",
+                args.out.display()
+            ));
+            return false;
+        }
         // Cannot overflow: `Args::parse_from` rejects a range that would, so
         // the check lives in one place rather than being restated here.
         let end = args.start + args.seeds;
@@ -93,7 +106,14 @@ mod imp {
             if let Some(pathology) = outcome.pathology() {
                 let recording = Recording::new(seed, schedule, outcome.clone());
                 let path = args.out.join(format!("capture-{seed}.json"));
-                recording.save(&path).expect("save recording");
+                if let Err(error) = recording.save(&path) {
+                    output.diagnostic(&format!(
+                        "error: seed {seed} found {pathology:?} but could not be saved to '{}': \
+                         {error}",
+                        path.display()
+                    ));
+                    return false;
+                }
                 output.report(&format!("seed {seed}: {pathology:?} -> {}", path.display()));
                 found += 1;
             }
@@ -104,6 +124,7 @@ mod imp {
             args.start,
             args.out.display(),
         ));
+        true
     }
 
     /// Minimal hand-rolled argument parsing -- deliberately no CLI-argument
