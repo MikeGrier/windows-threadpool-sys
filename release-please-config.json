@@ -15,6 +15,10 @@
             "package-name": "windows-file-watcher",
             "component": "windows-file-watcher"
         },
+        "crates/windows-file-watcher-example-test-harness": {
+            "package-name": "windows-file-watcher-example-test-harness",
+            "component": "windows-file-watcher-example-test-harness"
+        },
         "crates/windows-ioring-sys": {
             "package-name": "windows-ioring-sys",
             "component": "windows-ioring-sys"
