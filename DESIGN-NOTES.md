@@ -108,6 +108,78 @@ below are the common surface both must satisfy.
 	[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) for the
 	overlapped-side realization.
 
+## <a id="specifying-a-delivery-contract"></a>Specifying a delivery contract: the ten gaps prose leaves open
+
+Three crates here publish a contract a consumer builds reliability on: `windows-file-watcher` (notification
+delivery), `windows-overlapped-io-sys` (completion delivery), and `windows-ioring-sys` (ring completion).
+Each states that contract as prose. Prose is the right medium -- these are stateful sequencing rules a
+per-value type cannot carry -- but prose fails in a *specific, repeating* way: it describes the happy path
+exhaustively and everything else **by omission**, and a reader cannot tell an omission that means "never
+happens" from one that means "we did not think to write it down."
+
+This was measured rather than theorized. PR #42 added a consumer test surface to `windows-file-watcher` plus
+an example harness whose generator promised to emit only contract-legal schedules. That promise made the
+harness a **second implementation of the contract**, and it took **19 automated review rounds** to converge:
+the review-response phase (39 commits, 2,077 insertions) exceeded the original implementation (16 commits).
+Eight of those rounds fixed schedules the watcher could never actually emit; five corrected the contract
+prose itself; one found a real shipped reliability defect (see
+[the `has_room` finding](#the-has_room-finding)).
+
+Every one of those findings falls into one of ten categories. **A contract that a consumer is invited to rely
+on must state each of these explicitly, or say plainly that it is unspecified.** Silence is the defect.
+
+| # | Category | The question prose usually leaves unanswered | PR #42 instance (commit) |
+|---|---|---|---|
+| 1 | **Independent options read as one concept** | Two separately-named options exist; are all four combinations legal, or do they co-vary? | `RetryMode::Interactive` and `VolumeChangePolicy::Confirm` are independent `WatchOptions` fields; the generator gated both on one "interactive" flag, so it could not model a confirm-only watch (`3e78dca`) |
+| 2 | **Unconditional read as probabilistic** | When the contract says an event "may" occur, is it *always* emitted in that state, or sometimes? | `enter_fault` asks **every** interactive route on **every** fault, with no probability; the generator gated the question on a chance, producing impossible silent recoveries (`a4d0a9b`) |
+| 3 | **State-dependent legality unenumerated** | The contract lists the modes; which messages is each mode *capable* of emitting? | A Coarse-tier watcher can only ever emit `Desync { Coarse }`; the generator emitted `Batch` and `Overflow` after a re-establishment picked Coarse (`4a5a744`) |
+| 4 | **Cross-message continuity invariant** | Message N carries a value; must message N+1's field equal it? | `install` stores the confirmed `VolumeIdentity`, so a watch's next `VolumeChanged.previous` must equal its prior `.current`; the generator drew each independently (`dc5cf30`) |
+| 5 | **Cross-field relationship within one message** | Each field is individually valid; are all *combinations* of them reachable? | `VolumeChanged` is only emitted when identity actually differs (D-78) and identity compares by serial alone (D-50), so equal serials are impossible -- but each serial is individually a legal value (`7e5b85c`) |
+| 6 | **Which state a transition is entered *from*** | A transition has a label; can it occur as a first entry, or only as a re-entry? | A live watch's fault always enters as `Arm`; `Open` only ever *re*-enters an already-unresolved bracket, so a standalone `Open` for a live watch is impossible (`867f419`) |
+| 7 | **Branch and terminal paths documented by omission** | The success path is exhaustive; are the failure and retry branches? | `Completion { Failed }` is not only an initial-registration outcome (rekey emits it too, `514df4b`); a question does not always resolve with `Desync { Reestablished }` -- a retry loop can ask again, and `record_stop` can terminate with `Desync { Stopped }` (`1c20ffc`) |
+| 8 | **Values that are deliberately never correlated** | Two related messages arrive; does the layer join them, or is that the consumer's job? | Rename halves are never joined or paired across a buffer (D-9); the generator forced them adjacent (`3056907`) |
+| 9 | **Boundary-type fidelity lost at the consumer** | The type is lossless; does the consumer's *storage of a derived form* stay lossless? | A lone UTF-16 surrogate cannot survive a Rust `String` (`a4e5c96`), and a lossy identity collapses two distinct valid Windows names into one set entry (`7498a3c`) |
+| 10 | **"Valid by construction" overclaimed** | A test builder is valid-by-construction; valid in the type-safety sense, or the *production-domain* sense? | `RelativeName::for_test_units` accepts an interior NUL the kernel never reports -- memory-safe and lossless, but outside the production domain (`20c2e25`) |
+
+Two properties of this list are worth stating outright.
+
+**It is a same-author hazard, not a competence one.** The same person wrote the watcher and the harness. Every
+gap above is a place where the author *knew* what the contract meant and the written contract did not say it,
+so the assumption was silently re-encoded rather than questioned. An independent implementer would have hit
+the same walls and asked; a same-author second implementation just quietly guesses, and guesses consistently
+with the first implementation's accidents as often as with its intent. **Writing a second implementation of
+your own contract is the cheapest way to find out what the contract failed to say** -- and it only works if
+the second implementation is held to the contract rather than to the first implementation's behavior.
+
+**Categories 1-8 are why "we have tests" is not a substitute.** Each is a statement about the *set of legal
+sequences*, and a test asserts one point in that set. The watcher's own 278 tests all passed throughout;
+they were never going to fail, because they test what the watcher does, and the gap was in what the contract
+*permits*. Only something that had to enumerate the legal set -- a generator, a model checker, a second
+implementation -- could surface them.
+
+### <a id="the-has_room-finding"></a>The `has_room` finding: why this is not a documentation exercise
+
+One review round found a genuine, shipped reliability defect in `windows-file-watcher` 0.1, and it is worth
+recording because it shows the cost is real rather than editorial.
+
+`Sender::has_room()` reported `free() > 0`. But `Sender::send` always flushes every **owed latched desync**
+into the queue *before* considering the caller's own notification, so a freed slot with a latch outstanding
+was never actually available to a new notification. `has_room` therefore returned `true` for a slot the very
+next `send` would consume for the flush.
+
+That is not a cosmetic mismatch, because of *who calls it*: `WatcherInner::arm_locked` gates re-arming on
+`any_route_has_room()`, which is [D-29](crates/windows-file-watcher/DESIGN-NOTES.md)'s entire backpressure
+mechanism. Its own comment states the intent -- "refusing to arm leaves the changes in the kernel's own
+buffer, which is a grace period rather than a loss, where discovering a full queue after the read has
+completed is a batch with nowhere to go." The bug produced exactly the outcome the design exists to prevent:
+the watcher armed a read, the read completed, the flush took the slot, and the batch was dropped and
+re-latched -- the grace period skipped, a loss taken where the design promised none. Fixed in `700e0eb` with
+a regression test; the crate's own test suite had never covered a `has_room` call with a latch outstanding.
+
+The general shape is the transferable part: **an advisory predicate that another subsystem's reliability
+gate depends on is not advisory.** Where one exists, its contract must state the condition it is checked
+under, and it must be tested in that condition rather than in isolation.
+
 ## Downstream directory notification evaluation scenario
 
 A separate future directory notification facility is an evaluation scenario for deciding how fully this crate
