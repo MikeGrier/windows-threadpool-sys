@@ -21,24 +21,31 @@ this repo that publish a delivery/completion contract -- `windows-file-watcher`,
 and `windows-ioring-sys` -- are all exposed to the same categories, and the latter two have already paid for
 instances of them (overlapped-io's M10.5 rundown wedge; ioring's D-17 cross-ring identity).
 
-- [ ] **M1.1** -- Record the taxonomy in the workspace [DESIGN-NOTES.md](DESIGN-NOTES.md) as a shared
+- [x] **M1.1** -- Record the taxonomy in the workspace [DESIGN-NOTES.md](DESIGN-NOTES.md) as a shared
   invariant: the ten gap categories, each with the PR #42 instance and commit that evidences it, plus the
   rule that a contract claiming a consumer can rely on it must state every category explicitly rather than
   by omission. This is the canonical home; the per-crate notes reference it rather than restating it.
 
-- [ ] **M1.2** -- `windows-file-watcher`: record the retrospective as a decision (D-84) -- the contract was
+- [x] **M1.2** -- `windows-file-watcher`: record the retrospective as a decision (D-84) -- the contract was
   underspecified, the second implementation is what exposed it, and `has_room` is the evidence that the cost
   is real rather than cosmetic. Cross-reference the taxonomy and the specific decisions each finding
-  amended (D-9, D-12, D-17, D-27, D-28, D-30, D-50, D-78, D-83).
+  amended (D-9, D-12, D-17, D-27, D-28, D-30, D-50, D-78, D-83). Queued the audit this does *not* claim to
+  have done as that crate's M14.
 
-- [ ] **M1.3** -- `windows-overlapped-io-sys`: apply the taxonomy to its own published contract. It has
-  already paid for two categories (the `Issued` "will a packet arrive" conflation, which its own notes call
-  "the single most misread part of the seam"; and `post`/`post_raw`'s arbitrary completion key, which its
-  notes already flag as corrupting per-endpoint counters). State them as instances of a named category
-  rather than as isolated war stories, and enumerate the categories its contract has *not* yet stated.
+- [x] **M1.3** -- `windows-overlapped-io-sys`: apply the taxonomy to its own published contract. Found two
+  categories it had already paid for (`Issued`'s state-dependent legality, which hung rundown until M10.5;
+  `post`/`post_raw`'s arbitrary completion key), two it got right (`OperationId` generations, removing
+  `from_parts`), and one consequential omission -- **completion observation order was never stated**, which
+  matters because `windows-file-watcher` builds on this crate and *does* promise ordering to its own clients.
+  Remaining categories queued as that crate's M14.
 
-- [ ] **M1.4** -- `windows-ioring-sys`: apply the taxonomy. Its D-14 (registration bookkeeping advances at
-  queue time) is an explicitly unverified cross-message continuity assumption; its D-17 (`RingId`) is a
-  cross-object identity rule it already got right and should be cited as the positive example; and
-  `Completion::synthetic`'s `#[cfg(test)]` gate is the production-domain-fidelity rule it already got right.
-  Record what a consumer may and may not infer about completion ordering, which the notes do not yet state.
+- [x] **M1.4** -- `windows-ioring-sys`: apply the taxonomy. Cited D-17 (`RingId`) and
+  `Completion::synthetic`'s test-only gate as the pattern done right, recorded D-14 as an honestly-flagged
+  cross-message continuity assumption, and stated the previously-missing completion-ordering rule -- a gap
+  this crate is *more* exposed to than its siblings, since "ring" invites the ordered-queue assumption.
+  Remaining categories queued as that crate's M10.
+
+**The audits are deliberately partial, and say so.** Between them they reach five of ten categories in
+overlapped-io and four of ten in ioring; the rest are recorded as "not examined" rather than "does not
+apply", because that distinction is the entire point of having the taxonomy. Completing them is each crate's
+own milestone, not this one's.
