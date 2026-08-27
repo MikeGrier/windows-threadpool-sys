@@ -280,6 +280,13 @@ impl Generator {
         // activity (watcher.rs:535-563, D-17) -- never a `Batch` or an
         // `Overflow`/`QueueFull` loss `Desync`, both Detailed-only concepts.
         let mut current_mode = WatchModeSpec::Detailed;
+        // Tracks the volume identity `WatcherInner::install` last confirmed
+        // for this watch (watcher.rs:1137-1139): the *next* VolumeChanged's
+        // `previous` must be that same identity, not a fresh independent
+        // draw, or the generated pair would claim a continuity file-watcher
+        // never breaks. `None` until the first VolumeChanged, which has
+        // nothing earlier to continue from.
+        let mut current_volume: Option<VolumeSpec> = None;
 
         // 1. Establish first. windows-file-watcher sends the initial
         // `Established` (liveness only) from inside route establishment, and
@@ -365,7 +372,9 @@ impl Generator {
                     // different volume (file-watcher D-78), which is not
                     // guaranteed on every recovery.
                     if volume_confirm && rng.chance(self.config.question_percent) {
-                        let (previous, current) = gen_volume_change(rng);
+                        let previous = current_volume.clone().unwrap_or_else(|| gen_volume(rng));
+                        let current = gen_changed_volume(rng, &previous);
+                        current_volume = Some(current.clone());
                         out.push(NotificationSpec::VolumeChanged {
                             watch,
                             previous,
@@ -559,20 +568,20 @@ fn gen_volume(rng: &mut Rng) -> VolumeSpec {
     }
 }
 
-/// A `(previous, current)` pair for `VolumeChanged`, with a **serial
+/// A `current` identity that continues from `previous`, with a **serial
 /// guaranteed distinct by construction**: `windows-file-watcher` only emits
-/// this notification when a reopen's volume identity actually differs from
-/// the one previously confirmed (D-78), and identity compares by serial alone
-/// (D-50). Two independent [`gen_volume`] draws could coincidentally collide,
-/// which would make an illegal, impossible `VolumeChanged` -- so `current`'s
-/// serial is offset from `previous`'s by a nonzero amount (mod 2^32) rather
-/// than drawn independently and hoped to differ.
-fn gen_volume_change(rng: &mut Rng) -> (VolumeSpec, VolumeSpec) {
-    let previous = gen_volume(rng);
+/// `VolumeChanged` when a reopen's volume identity actually differs from the
+/// one previously confirmed (D-78), and identity compares by serial alone
+/// (D-50). A fresh independent draw could coincidentally collide with
+/// `previous`'s serial, which would make an illegal, impossible
+/// `VolumeChanged` -- so `current`'s serial is offset from `previous`'s by a
+/// nonzero amount (mod 2^32) rather than drawn independently and hoped to
+/// differ.
+fn gen_changed_volume(rng: &mut Rng, previous: &VolumeSpec) -> VolumeSpec {
     let mut current = gen_volume(rng);
     // A nonzero offset in [1, u32::MAX - 1] added mod 2^32 can never land back
     // on the original value, so this is a guarantee, not a low-probability draw.
     let offset = 1 + rng.below(u64::from(u32::MAX) - 1) as u32;
     current.serial = previous.serial.wrapping_add(offset);
-    (previous, current)
+    current
 }

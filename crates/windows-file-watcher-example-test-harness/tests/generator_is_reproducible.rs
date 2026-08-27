@@ -7,7 +7,8 @@
 use std::collections::BTreeMap;
 
 use windows_file_watcher_example_test_harness::{
-    DesyncCauseSpec, Generator, GeneratorConfig, NotificationSpec, OutcomeSpec, WatchModeSpec,
+    DesyncCauseSpec, Generator, GeneratorConfig, NotificationSpec, OutcomeSpec, VolumeSpec,
+    WatchModeSpec,
 };
 
 #[test]
@@ -346,5 +347,53 @@ fn every_generated_volume_changed_has_a_distinct_previous_and_current_serial() {
     assert!(
         checked > 0,
         "expected at least one VolumeChanged across 50 seeds with interactive_percent/question_percent: 100"
+    );
+}
+
+#[test]
+fn a_watchs_volume_changed_events_continue_from_the_prior_confirmed_identity() {
+    // Regression test (PR #42 review): WatcherInner::install stores the
+    // just-confirmed volume identity (watcher.rs:1137-1139), so a watch's
+    // next VolumeChanged.previous must equal that same watch's prior
+    // VolumeChanged.current, not an independently drawn value.
+    let generator = Generator::with_config(GeneratorConfig {
+        watches: 4,
+        steps_per_watch: 60,
+        volume_confirm_percent: 100,
+        question_percent: 100,
+        weight_fault_recovery: 3,
+        ..GeneratorConfig::default()
+    });
+
+    let mut watches_with_multiple_changes = 0;
+    for seed in 0..50 {
+        let schedule = generator.generate(seed);
+        for (watch, steps) in by_watch(&schedule) {
+            let mut last_current: Option<&VolumeSpec> = None;
+            let mut changes_for_watch = 0;
+            for step in &steps {
+                if let NotificationSpec::VolumeChanged {
+                    previous, current, ..
+                } = step
+                {
+                    if let Some(expected_previous) = last_current {
+                        assert_eq!(
+                            previous, expected_previous,
+                            "seed {seed}, watch {watch}: VolumeChanged.previous must equal \
+                             this watch's prior VolumeChanged.current"
+                        );
+                        changes_for_watch += 1;
+                    }
+                    last_current = Some(current);
+                }
+            }
+            if changes_for_watch > 0 {
+                watches_with_multiple_changes += 1;
+            }
+        }
+    }
+    assert!(
+        watches_with_multiple_changes > 0,
+        "expected at least one watch with multiple VolumeChanged events across 50 seeds"
     );
 }
