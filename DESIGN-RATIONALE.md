@@ -59,15 +59,15 @@ token-bearing begin message as one operation. It also offers an explicit-token f
 for traversal and other orchestrators that need to reuse a previously captured
 context.
 
-## Why restoration failure is fail-fast
+## Why restoration failure panics
 
 Failure to restore an arbitrary application thread would already be serious.
 Failure on a shared Windows thread-pool worker is worse: later unrelated callbacks
 could execute under the wrong identity. Returning an error to the enumeration
 consumer does not repair that worker, and swallowing the failure turns a known
-security breach into process-global nondeterminism. WIL uses the same fail-fast
-answer. Restoration still runs during Rust unwind; only restoration failure itself
-terminates the process.
+security breach into process-global nondeterminism. The guard therefore panics
+from `Drop` when `SetThreadToken` fails. Restoration still runs during Rust unwind;
+if restoration itself then panics, Rust's double-panic behavior aborts the process.
 
 ## Why enumeration uses a bounded SQ and CQ
 

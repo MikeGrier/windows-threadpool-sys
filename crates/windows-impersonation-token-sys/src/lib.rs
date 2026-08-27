@@ -11,9 +11,11 @@
 
 use std::fmt;
 use std::io;
+use std::marker::PhantomData;
 use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{ERROR_CANT_OPEN_ANONYMOUS, ERROR_NO_TOKEN, FALSE, TRUE};
@@ -23,7 +25,7 @@ use windows_sys::Win32::Security::{
     TokenImpersonation, TokenImpersonationLevel,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
+    GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken, SetThreadToken,
 };
 
 const THREAD_TOKEN_CAPTURE_ACCESS: TOKEN_ACCESS_MASK = TOKEN_DUPLICATE | TOKEN_QUERY;
@@ -105,6 +107,58 @@ impl std::error::Error for CaptureError {
     }
 }
 
+/// The stage at which a captured token could not be applied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ApplyFailure {
+    /// Windows could not open the current thread token for exact restoration.
+    SavePreviousToken,
+    /// Windows could not assign the captured token to the current thread.
+    ApplyToken,
+}
+
+/// A synchronous failure while applying a captured impersonation context.
+#[derive(Debug)]
+pub struct ApplyError {
+    failure: ApplyFailure,
+    source: io::Error,
+}
+
+impl ApplyError {
+    fn new(failure: ApplyFailure, source: io::Error) -> Self {
+        Self { failure, source }
+    }
+
+    /// The application stage that failed.
+    #[must_use]
+    pub fn failure(&self) -> ApplyFailure {
+        self.failure
+    }
+
+    /// The underlying Win32 error code.
+    #[must_use]
+    pub fn raw_os_error(&self) -> Option<i32> {
+        self.source.raw_os_error()
+    }
+}
+
+impl fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let stage = match self.failure {
+            ApplyFailure::SavePreviousToken => "OpenThreadToken for exact restoration",
+            ApplyFailure::ApplyToken => "SetThreadToken",
+        };
+
+        write!(f, "{stage}: {}", self.source)
+    }
+}
+
+impl std::error::Error for ApplyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 /// An owned, immutable snapshot of a Windows impersonation context.
 ///
 /// Cloning this value shares ownership of the same captured token. The native
@@ -167,11 +221,110 @@ impl ImpersonationToken {
             handle: Arc::new(handle),
         })
     }
+
+    /// Runs `operation` with this token applied to the current thread.
+    ///
+    /// The exact prior thread-token state is restored before this method
+    /// returns, whether `operation` returns an ordinary value or a `Result`.
+    /// Stack unwinding also restores the prior state. The closure's return value
+    /// is not interpreted, so a fallible closure produces
+    /// `Result<Result<T, E>, ApplyError>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ApplyError`] before calling `operation` when the exact prior
+    /// context cannot be saved or the captured token cannot be applied.
+    ///
+    /// # Panics
+    ///
+    /// Panics if restoring the exact prior thread-token state fails. Returning
+    /// a shared worker thread under an unknown identity would permit unrelated
+    /// later work to run with the wrong security context. If restoration fails
+    /// while `operation` is already unwinding, Rust's double-panic behavior
+    /// aborts the process.
+    pub fn with_impersonation<F, T>(&self, operation: F) -> Result<T, ApplyError>
+    where
+        F: FnOnce() -> T,
+    {
+        let guard = ApplicationGuard::apply(self)?;
+        let result = operation();
+        drop(guard);
+        Ok(result)
+    }
 }
 
 impl fmt::Debug for ImpersonationToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImpersonationToken").finish_non_exhaustive()
+    }
+}
+
+struct ApplicationGuard {
+    previous: Option<OwnedHandle>,
+    _thread_bound: PhantomData<Rc<()>>,
+}
+
+impl ApplicationGuard {
+    fn apply(token: &ImpersonationToken) -> Result<Self, ApplyError> {
+        let previous = open_previous_token()?;
+
+        // SAFETY: a null thread pointer selects the current thread. The
+        // captured handle remains live and has TOKEN_IMPERSONATE access.
+        let applied = unsafe { SetThreadToken(ptr::null(), token.handle.as_raw_handle()) };
+        if applied == FALSE {
+            return Err(ApplyError::new(
+                ApplyFailure::ApplyToken,
+                io::Error::last_os_error(),
+            ));
+        }
+
+        Ok(Self {
+            previous,
+            _thread_bound: PhantomData,
+        })
+    }
+}
+
+impl Drop for ApplicationGuard {
+    fn drop(&mut self) {
+        let previous = self
+            .previous
+            .as_ref()
+            .map_or(ptr::null_mut(), AsRawHandle::as_raw_handle);
+
+        // SAFETY: a null thread pointer selects the current thread. previous is
+        // either null (restore no-token process context) or a live token handle
+        // opened with TOKEN_IMPERSONATE. The Rc marker prevents this guard from
+        // moving to or being shared with another thread.
+        let restored = unsafe { SetThreadToken(ptr::null(), previous) };
+        if restored == FALSE {
+            let error = io::Error::last_os_error();
+            panic!("SetThreadToken failed to restore the previous thread token: {error}");
+        }
+    }
+}
+
+fn open_previous_token() -> Result<Option<OwnedHandle>, ApplyError> {
+    let mut raw = ptr::null_mut();
+
+    // SAFETY: GetCurrentThread is a valid pseudo-handle for this call and raw
+    // points to writable handle storage. OpenAsSelf permits saving an
+    // identification-level token using the process context for the access check.
+    let opened =
+        unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &raw mut raw) };
+    if opened != FALSE {
+        // SAFETY: successful OpenThreadToken returns a new, owned handle closed
+        // by OwnedHandle.
+        return Ok(Some(unsafe { OwnedHandle::from_raw_handle(raw) }));
+    }
+
+    let error = io::Error::last_os_error();
+    if error.raw_os_error()
+        == Some(i32::try_from(ERROR_NO_TOKEN).expect("ERROR_NO_TOKEN fits in i32"))
+    {
+        Ok(None)
+    } else {
+        Err(ApplyError::new(ApplyFailure::SavePreviousToken, error))
     }
 }
 

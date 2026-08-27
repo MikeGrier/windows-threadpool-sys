@@ -8,9 +8,9 @@ an empty shell on other platforms.
 
 ## Status
 
-The publishable crate skeleton and owned `ImpersonationToken` capture type are
-complete. Scoped application, deterministic tests, and final publication
-documentation are tracked as IT-3 through IT-5 in the workspace
+The publishable crate skeleton and owned `ImpersonationToken` capture and scoped
+application operations are complete. Deterministic tests and final publication
+documentation are tracked as IT-4 and IT-5 in the workspace
 [CHECKLIST.md](../../CHECKLIST.md).
 
 ## Scope

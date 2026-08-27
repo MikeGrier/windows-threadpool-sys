@@ -882,9 +882,9 @@ The workspace will add the independently published
 `ImpersonationToken` that captures the calling thread's effective impersonation
 state into owned transportable state, applies that state temporarily on another
 thread, and restores the exact prior thread-token state afterward. Restoration
-failure is fail-fast: returning a shared worker to the pool under an unknown
-identity is a process security failure, not an error that can be safely reported
-and ignored.
+failure panics from the application guard's `Drop`: returning a shared worker to
+the pool under an unknown identity is a process security failure, not an error
+that can be safely reported and ignored.
 
 The type is crate-owned even though this workspace normally prefers Microsoft
 native types. A raw `HANDLE` cannot express ownership, required rights,

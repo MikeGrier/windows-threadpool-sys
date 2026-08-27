@@ -34,7 +34,7 @@ APIs.
 impersonation token. A shared thread-pool worker may have a prior state that must
 survive the bounded operation. If restoration fails, reporting an ordinary error
 does not repair the worker; later unrelated callbacks could execute under the
-wrong identity. The only safe response is fail-fast.
+wrong identity. The guard therefore panics from `Drop`.
 
 ## Why capture duplicates and narrows the token
 
@@ -55,3 +55,25 @@ The captured handle requests only `TOKEN_IMPERSONATE`, which is all scoped
 application needs. Null security attributes keep it non-inheritable. Sharing that
 immutable owned handle through clones avoids both borrowed-handle lifetime
 hazards and acquisition of duplicate or adjustment rights after capture.
+
+## Why application is closure-only
+
+A public RAII guard could be passed to `mem::forget`, which is safe Rust and would
+leave a shared worker under the captured identity indefinitely. The public
+`with_impersonation` operation keeps its guard private, so every ordinary return
+restores before control reaches the caller and every unwind runs the guard's
+destructor.
+
+Before applying the captured token, the guard opens the current thread token with
+only `TOKEN_IMPERSONATE`; `ERROR_NO_TOKEN` is recorded as explicit process
+context rather than as an error. `OpenThreadToken` opens another handle to the
+same token object; it does not duplicate or normalize the token. Restoration
+passes that saved handle directly back to `SetThreadToken`, preserving
+identification and delegation levels. Explicit process context is restored by
+passing a null token.
+
+The guard contains an `Rc` marker solely to make it `!Send` and `!Sync`, so the
+saved state can only be restored on the thread where it was acquired. If that
+restoration call fails, `Drop` panics rather than dropping the saved handle and
+returning a worker with an unknown effective identity. If this happens while
+another panic is already unwinding through the guard, Rust aborts the process.

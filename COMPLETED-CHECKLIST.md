@@ -577,3 +577,30 @@ mechanics and rationale are recorded in the crate
 [DESIGN-RATIONALE.md](crates/windows-impersonation-token-sys/DESIGN-RATIONALE.md).
 The targeted all-target check and Clippy pass without warnings, and the package
 test and documentation-test harnesses pass.
+
+## Moved 2026-08-27 -- scoped impersonation application
+
+### <a id="it-3"></a>IT-3 -- Implement scoped application of an `ImpersonationToken` with exact prior-token restoration. *(completed 2026-08-27 16:41:44 UTC-04:00)*
+
+`ImpersonationToken::with_impersonation` opens a `TOKEN_IMPERSONATE` handle to
+the exact thread token present at scope entry, or records explicit no-token
+process context. It applies the captured token with `SetThreadToken`, runs the
+closure without interpreting its return value, and restores the saved state
+before ordinary return and during unwind. Restoration reuses the same opened
+token handle; it does not duplicate or normalize the token and does not call
+`RevertToSelf`. A null token is used only when entry had no thread token.
+
+The private application guard carries an `Rc` marker so it is `!Send` and
+`!Sync`, and the closure-only public API prevents safe callers from forgetting
+it. If `SetThreadToken` cannot restore the saved state, the guard's `Drop`
+panics; restoration failure during an existing unwind triggers Rust's
+double-panic abort behavior. Application failures before the closure are
+reported synchronously through `ApplyError` and `ApplyFailure`.
+
+The exact mechanics and rationale are recorded in the workspace
+[DESIGN-NOTES.md](DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md), and in the crate
+[DESIGN-NOTES.md](crates/windows-impersonation-token-sys/DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](crates/windows-impersonation-token-sys/DESIGN-RATIONALE.md).
+The targeted all-target check and Clippy pass without warnings, and the package
+test and documentation-test harnesses pass.
