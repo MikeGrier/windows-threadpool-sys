@@ -300,15 +300,59 @@ pub struct ChangeSpec {
     /// What kind of change.
     pub kind: ChangeKindSpec,
     /// The affected name, relative to the watched directory.
-    pub name: String,
+    pub name: NameSpec,
 }
 
 impl ChangeSpec {
     fn to_change(&self) -> Change {
         Change {
             kind: self.kind.to_kind(),
-            name: RelativeName::for_test(&self.name),
+            name: self.name.to_relative_name(),
         }
+    }
+}
+
+/// A change's name, losslessly. A plain UTF-8 string is enough for a
+/// hand-authored schedule, but a *recorded* one must be able to carry
+/// whatever the kernel actually reported (D-7) -- including a lone UTF-16
+/// surrogate, which is a legal `RelativeName` (file-watcher D-83) but not
+/// representable as a Rust `String` at all. `Units` exists for that case;
+/// `Text` is the ergonomic common case, and both serialize the way you would
+/// expect (a plain JSON string, or an array of `u16`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum NameSpec {
+    /// A well-formed UTF-8 name.
+    Text(String),
+    /// Raw UTF-16 units, kernel-shape -- the only form that can carry a lone
+    /// surrogate.
+    Units(Vec<u16>),
+}
+
+impl NameSpec {
+    fn to_relative_name(&self) -> RelativeName {
+        match self {
+            NameSpec::Text(name) => RelativeName::for_test(name),
+            NameSpec::Units(units) => RelativeName::for_test_units(units),
+        }
+    }
+}
+
+impl From<&str> for NameSpec {
+    fn from(name: &str) -> Self {
+        NameSpec::Text(name.to_string())
+    }
+}
+
+impl From<String> for NameSpec {
+    fn from(name: String) -> Self {
+        NameSpec::Text(name)
+    }
+}
+
+impl From<Vec<u16>> for NameSpec {
+    fn from(units: Vec<u16>) -> Self {
+        NameSpec::Units(units)
     }
 }
 

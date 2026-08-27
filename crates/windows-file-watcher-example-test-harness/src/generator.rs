@@ -383,7 +383,7 @@ impl Generator {
         let changes = (0..count)
             .map(|_| ChangeSpec {
                 kind: gen_change_kind(rng),
-                name: gen_name(rng),
+                name: gen_name(rng).into(),
             })
             .collect();
         NotificationSpec::Batch { watch, changes }

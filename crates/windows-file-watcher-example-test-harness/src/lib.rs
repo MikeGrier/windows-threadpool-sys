@@ -75,8 +75,8 @@ pub use recording::Recording;
 #[cfg(windows)]
 pub use schedule::{
     ChangeKindSpec, ChangeSpec, DesyncCauseSpec, FailureCodeSpec, FaultDetailSpec,
-    FaultOperationSpec, NotificationSpec, OpenFailureSpec, OutcomeSpec, Schedule, VolumeSpec,
-    WatchModeSpec,
+    FaultOperationSpec, NameSpec, NotificationSpec, OpenFailureSpec, OutcomeSpec, Schedule,
+    VolumeSpec, WatchModeSpec,
 };
 // Re-exported so a handler author can name the type its `on` receives without a
 // separate `windows-file-watcher` import in their tests.
