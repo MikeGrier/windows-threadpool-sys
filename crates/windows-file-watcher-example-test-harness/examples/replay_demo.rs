@@ -10,16 +10,32 @@
 //! cargo run --example replay_demo
 //! ```
 
-use std::io::{self, Write};
-
 use windows_file_watcher_example_test_harness::{
     Generator, Recording, example_handler::BuggyHandler, run,
 };
 
+/// Where this example's reports go, kept as one seam (the repo's
+/// architectural pre-step, matching
+/// `windows-file-watcher/examples/minimal_directory_watch.rs`) rather than
+/// scattering `println!` across the file.
+struct Output<O> {
+    stdout: O,
+}
+
+impl<O: std::io::Write> Output<O> {
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.stdout, "{message}");
+    }
+}
+
+fn stdio() -> Output<std::io::Stdout> {
+    Output {
+        stdout: std::io::stdout(),
+    }
+}
+
 fn main() {
-    // All reporting is routed through one writer (repository architecture
-    // rule: never call print!/eprintln! from more than one site).
-    let mut out = io::stdout().lock();
+    let mut output = stdio();
 
     // Stand in for "a recording captured earlier and persisted to disk": find
     // one pathology, serialize it, and only ever touch the JSON from here on.
@@ -41,20 +57,18 @@ fn main() {
     // From here on, this is exactly what `replay` does: load JSON, re-drive the
     // schedule, compare.
     let recording = Recording::from_json(&json).expect("deserialize");
-    writeln!(
-        out,
+    output.report(&format!(
         "loaded recording from seed {}, {} step(s)",
         recording.seed,
         recording.schedule.len()
-    )
-    .expect("write");
+    ));
 
     let replayed = run(&recording.schedule, &mut BuggyHandler::new());
-    writeln!(out, "recorded outcome: {:?}", recording.outcome).expect("write");
-    writeln!(out, "replayed outcome: {replayed:?}").expect("write");
+    output.report(&format!("recorded outcome: {:?}", recording.outcome));
+    output.report(&format!("replayed outcome: {replayed:?}"));
     assert_eq!(
         replayed, recording.outcome,
         "replay must reproduce the captured outcome exactly"
     );
-    writeln!(out, "reproduced: identical outcome.").expect("write");
+    output.report("reproduced: identical outcome.");
 }

@@ -19,12 +19,31 @@
 //! feature, which is why this example declares `required-features`.
 
 use std::collections::BTreeSet;
-use std::io::{self, Write};
 
 use windows_file_watcher::{
     Change, ChangeKind, DEFAULT_BOUND, DesyncCause, FailureCode, FaultDetail, FaultOperation,
     Notification, OpenFailure, Outcome, RelativeName, VolumeIdentity, WatchId, channel_with_bound,
 };
+
+/// Where this example's reports go, kept as one seam (the repo's
+/// architectural pre-step, matching
+/// `windows-file-watcher/examples/minimal_directory_watch.rs`) rather than
+/// scattering `println!` across the file.
+struct Output<O> {
+    stdout: O,
+}
+
+impl<O: std::io::Write> Output<O> {
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.stdout, "{message}");
+    }
+}
+
+fn stdio() -> Output<std::io::Stdout> {
+    Output {
+        stdout: std::io::stdout(),
+    }
+}
 
 /// The consumer's own state machine -- the thing under test. It reacts to
 /// notifications and never talks to the operating system.
@@ -146,20 +165,11 @@ fn main() {
     ));
     assert!(handler.volume_changed);
 
-    // Both report lines are routed through one writer (repository
-    // architecture rule: never call print!/eprintln! from more than one
-    // site), so the destination stays separable from the formatting here.
-    let mut out = io::stdout().lock();
-    writeln!(
-        out,
+    let mut output = stdio();
+    output.report(&format!(
         "handler reacted as expected: {} name(s) present, {} re-scan(s)",
         handler.present.len(),
         handler.rescans
-    )
-    .expect("write");
-    writeln!(
-        out,
-        "all assertions passed with no filesystem and no thread pool"
-    )
-    .expect("write");
+    ));
+    output.report("all assertions passed with no filesystem and no thread pool");
 }

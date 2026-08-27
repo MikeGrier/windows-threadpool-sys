@@ -25,23 +25,39 @@ fn main() {
 
 #[cfg(windows)]
 mod imp {
-    use std::io::{self, Write};
     use std::path::PathBuf;
 
     use windows_file_watcher_example_test_harness::{
         Generator, Recording, example_handler::BuggyHandler, run,
     };
 
-    pub fn main() {
-        let args = Args::parse();
-        // All reporting is routed through one writer (repository architecture
-        // rule: never call print!/eprintln! from more than one site), so this
-        // exemplar's storage target -- here `stdout`, easily any `impl Write`
-        // -- stays separable from the formatting at each call site.
-        capture(&args, &mut io::stdout().lock());
+    /// Where this bin's per-pathology and summary lines go, kept as one seam
+    /// (the repo's architectural pre-step, matching
+    /// `windows-file-watcher/src/bin/run_scenario.rs`) rather than scattering
+    /// `println!` across the file.
+    struct Output<O> {
+        stdout: O,
     }
 
-    fn capture(args: &Args, out: &mut impl Write) {
+    impl<O: std::io::Write> Output<O> {
+        fn report(&mut self, message: &str) {
+            let _ = writeln!(self.stdout, "{message}");
+        }
+    }
+
+    fn stdio() -> Output<std::io::Stdout> {
+        Output {
+            stdout: std::io::stdout(),
+        }
+    }
+
+    pub fn main() {
+        let args = Args::parse();
+        let mut output = stdio();
+        capture(&args, &mut output);
+    }
+
+    fn capture(args: &Args, output: &mut Output<impl std::io::Write>) {
         std::fs::create_dir_all(&args.out).expect("create output directory");
         let end = args
             .start
@@ -58,18 +74,16 @@ mod imp {
                 let recording = Recording::new(seed, schedule, outcome.clone());
                 let path = args.out.join(format!("capture-{seed}.json"));
                 recording.save(&path).expect("save recording");
-                writeln!(out, "seed {seed}: {pathology:?} -> {}", path.display()).expect("write");
+                output.report(&format!("seed {seed}: {pathology:?} -> {}", path.display()));
                 found += 1;
             }
         }
-        writeln!(
-            out,
+        output.report(&format!(
             "checked {} seed(s) [{}, {end}), captured {found} pathology(ies) into {}",
             args.seeds,
             args.start,
             args.out.display(),
-        )
-        .expect("write");
+        ));
     }
 
     /// Minimal hand-rolled argument parsing -- deliberately no CLI-argument

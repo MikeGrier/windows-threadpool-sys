@@ -13,16 +13,32 @@
 //! cargo run --example capture_demo
 //! ```
 
-use std::io::{self, Write};
-
 use windows_file_watcher_example_test_harness::{
     Generator, Recording, example_handler::BuggyHandler, run,
 };
 
+/// Where this example's reports go, kept as one seam (the repo's
+/// architectural pre-step, matching
+/// `windows-file-watcher/examples/minimal_directory_watch.rs`) rather than
+/// scattering `println!` across the file.
+struct Output<O> {
+    stdout: O,
+}
+
+impl<O: std::io::Write> Output<O> {
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.stdout, "{message}");
+    }
+}
+
+fn stdio() -> Output<std::io::Stdout> {
+    Output {
+        stdout: std::io::stdout(),
+    }
+}
+
 fn main() {
-    // All reporting is routed through one writer (repository architecture
-    // rule: never call print!/eprintln! from more than one site).
-    let mut out = io::stdout().lock();
+    let mut output = stdio();
     let generator = Generator::new();
     let mut recordings = Vec::new();
 
@@ -31,17 +47,15 @@ fn main() {
         let mut handler = BuggyHandler::new();
         let outcome = run(&schedule, &mut handler);
         if let Some(pathology) = outcome.pathology() {
-            writeln!(out, "seed {seed}: {pathology:?}").expect("write");
+            output.report(&format!("seed {seed}: {pathology:?}"));
             recordings.push(Recording::new(seed, schedule, outcome));
         }
     }
 
-    writeln!(
-        out,
+    output.report(&format!(
         "checked 10 seed(s), captured {} pathology(ies) in memory",
         recordings.len()
-    )
-    .expect("write");
+    ));
     assert!(
         !recordings.is_empty(),
         "the default generator config should find at least one pathology in 10 seeds"
@@ -50,10 +64,8 @@ fn main() {
     // Any of these could be persisted with `Recording::save` for later replay,
     // exactly as `src/bin/capture.rs` does.
     let first = &recordings[0];
-    writeln!(
-        out,
+    output.report(&format!(
         "first captured recording, as JSON:\n{}",
         first.to_json().expect("serialize")
-    )
-    .expect("write");
+    ));
 }

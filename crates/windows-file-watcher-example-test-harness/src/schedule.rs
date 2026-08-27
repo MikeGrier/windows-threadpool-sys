@@ -89,9 +89,12 @@
 //!   following it. A watcher cannot fault twice concurrently, so a second
 //!   question for the same watch does not appear before the first resolves
 //!   (file-watcher D-28).
-//! - **`Cancelled` is terminal.** After `Completion { Cancelled }` for a watch,
-//!   nothing more arrives for that watch (file-watcher D-30) -- it is a per-watch
-//!   terminator.
+//! - **Three forms are terminal for a watch, not only `Cancelled`.** After
+//!   `Completion { Cancelled }` (file-watcher D-30), `Completion { Failed }`
+//!   (permanent open failure -- nothing was ever registered, so there was no
+//!   live watch for anything to follow), or `Desync { Stopped }` (a live watch
+//!   that later became permanently unwatchable), nothing more arrives for that
+//!   watch. Each is a per-watch terminator.
 //! - **`Established` recurs on re-establishment.** When liveness is on,
 //!   `Established { mode }` appears once at first establishment and again after
 //!   each re-establishment (file-watcher D-17), immediately after `Resumed` in

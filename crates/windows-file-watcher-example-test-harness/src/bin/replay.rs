@@ -11,62 +11,89 @@
 //! cargo run --bin replay -- <path-to-recording.json>
 //! ```
 
-fn main() {
+fn main() -> std::process::ExitCode {
     #[cfg(windows)]
-    imp::main();
+    return imp::main();
     #[cfg(not(windows))]
-    eprintln!("windows-file-watcher-example-test-harness is Windows-only; nothing to do here.");
+    {
+        eprintln!("windows-file-watcher-example-test-harness is Windows-only; nothing to do here.");
+        std::process::ExitCode::FAILURE
+    }
 }
 
 #[cfg(windows)]
 mod imp {
-    use std::io::{self, Write};
-
     use windows_file_watcher_example_test_harness::{
         Recording, example_handler::BuggyHandler, run,
     };
 
-    pub fn main() {
+    /// Where this bin's diagnostics and result go, kept as one seam (the
+    /// repo's architectural pre-step, matching
+    /// `windows-file-watcher/src/bin/run_scenario.rs`) rather than scattering
+    /// `println!`/`eprintln!` across the file.
+    struct Output<E, O> {
+        stderr: E,
+        stdout: O,
+    }
+
+    impl<E: std::io::Write, O: std::io::Write> Output<E, O> {
+        /// A usage/error line, to stderr.
+        fn diagnostic(&mut self, message: &str) {
+            let _ = writeln!(self.stderr, "{message}");
+        }
+
+        /// A progress or result line, to stdout.
+        fn report(&mut self, message: &str) {
+            let _ = writeln!(self.stdout, "{message}");
+        }
+    }
+
+    fn stdio() -> Output<std::io::Stderr, std::io::Stdout> {
+        Output {
+            stderr: std::io::stderr(),
+            stdout: std::io::stdout(),
+        }
+    }
+
+    pub fn main() -> std::process::ExitCode {
+        use std::process::ExitCode;
+
         let path = std::env::args()
             .nth(1)
             .expect("usage: replay <path-to-recording.json>");
-        // All reporting -- including the non-reproduction case -- is routed
-        // through one writer (repository architecture rule: never call
-        // print!/eprintln! from more than one site), so the destination stays
-        // separable from the formatting at each call site.
-        let reproduced = replay(&path, &mut io::stdout().lock());
-        if !reproduced {
-            std::process::exit(1);
+        let mut output = stdio();
+        if replay(&path, &mut output) {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
         }
     }
 
     /// Replay the recording at `path` against the example handler, reporting
-    /// through `out`. Returns whether the recorded pathology reproduced.
-    fn replay(path: &str, out: &mut impl Write) -> bool {
+    /// through `output`. Returns whether the recorded pathology reproduced.
+    fn replay(path: &str, output: &mut Output<impl std::io::Write, impl std::io::Write>) -> bool {
         let recording = Recording::load(path).expect("load recording");
 
-        writeln!(
-            out,
+        output.report(&format!(
             "loaded {path}: seed {}, {} step(s)",
             recording.seed,
             recording.schedule.len()
-        )
-        .expect("write");
-        writeln!(out, "recorded outcome: {:?}", recording.outcome).expect("write");
+        ));
+        output.report(&format!("recorded outcome: {:?}", recording.outcome));
 
         let mut handler = BuggyHandler::new();
         let replayed = run(&recording.schedule, &mut handler);
-        writeln!(out, "replayed outcome: {replayed:?}").expect("write");
+        output.report(&format!("replayed outcome: {replayed:?}"));
 
         if replayed == recording.outcome {
-            writeln!(out, "reproduced: identical outcome.").expect("write");
+            output.report("reproduced: identical outcome.");
             true
         } else {
             // A schedule-caused pathology (this bin's whole point) should always
             // reproduce; divergence here would mean the harness's own
             // determinism promise was broken, not a fidelity-limit case (that
             // limit concerns a *handler's own* nondeterminism, not the harness).
-            writeln!(out, "NOT reproduced: outcome differs from the recording.").expect("write");
+            output.diagnostic("NOT reproduced: outcome differs from the recording.");
             false
         }
     }
