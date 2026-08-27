@@ -34,6 +34,16 @@ mod imp {
     /// needs to catch a genuine wedge, not race a legitimately-slow handler.
     const DEFAULT_REPLAY_DEADLINE: Duration = Duration::from_secs(30);
 
+    /// Hard ceiling applied to a *recorded* [`PathologyKind::Stalled`]
+    /// deadline. `deadline_ms` comes from an externally loaded JSON
+    /// recording with no upper bound of its own -- an oversized or malicious
+    /// value (or `u64::try_from`'s own `u64::MAX` fallback for a value that
+    /// does not fit) would otherwise make this bin wait for it verbatim,
+    /// defeating replay's whole "cannot hang" guarantee. Generous enough that
+    /// a legitimate wedge test's deadline is never actually reached by this
+    /// clamp in practice.
+    const MAX_REPLAY_DEADLINE: Duration = Duration::from_secs(300);
+
     /// Where this bin's diagnostics and result go, kept as one seam (the
     /// repo's architectural pre-step, matching
     /// `windows-file-watcher/src/bin/run_scenario.rs`) rather than scattering
@@ -98,7 +108,16 @@ mod imp {
 
         let deadline = match &recording.outcome {
             Outcome::Pathology(PathologyKind::Stalled { deadline_ms }) => {
-                Duration::from_millis(u64::try_from(*deadline_ms).unwrap_or(u64::MAX))
+                let requested =
+                    Duration::from_millis(u64::try_from(*deadline_ms).unwrap_or(u64::MAX));
+                let clamped = requested.min(MAX_REPLAY_DEADLINE);
+                if clamped != requested {
+                    output.diagnostic(&format!(
+                        "recorded deadline {requested:?} exceeds this bin's {MAX_REPLAY_DEADLINE:?} \
+                         cap; clamping so replay cannot be made to hang by an untrusted recording"
+                    ));
+                }
+                clamped
             }
             _ => DEFAULT_REPLAY_DEADLINE,
         };
