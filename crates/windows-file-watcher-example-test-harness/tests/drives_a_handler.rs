@@ -43,8 +43,16 @@ fn drives_the_example_handler_through_a_scripted_schedule() {
     drive(&schedule, &mut handler);
 
     assert!(handler.is_subscribed());
-    assert!(handler.present().contains("report.csv"));
-    assert!(!handler.present().contains("report.tmp"));
+    assert!(
+        handler
+            .present()
+            .contains(std::ffi::OsStr::new("report.csv"))
+    );
+    assert!(
+        !handler
+            .present()
+            .contains(std::ffi::OsStr::new("report.tmp"))
+    );
     assert_eq!(handler.rescans(), 1);
 }
 

@@ -5,6 +5,7 @@
 //! examples and the `capture`/`replay` bins have something concrete to drive.
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 
 use windows_file_watcher::{ChangeKind, Notification, Outcome};
 
@@ -16,7 +17,7 @@ use crate::Handler;
 /// example, not a library.
 #[derive(Debug, Default)]
 pub struct PresenceTracker {
-    present: BTreeSet<String>,
+    present: BTreeSet<OsString>,
     rescans: u32,
     subscribed: bool,
     volume_changes: u32,
@@ -29,9 +30,11 @@ impl PresenceTracker {
         Self::default()
     }
 
-    /// The names currently believed present.
+    /// The names currently believed present. `OsString`, not `String`: a
+    /// lossy conversion would collapse distinct valid Windows names that
+    /// differ only in an unpaired surrogate into the same entry.
     #[must_use]
-    pub fn present(&self) -> &BTreeSet<String> {
+    pub fn present(&self) -> &BTreeSet<OsString> {
         &self.present
     }
 
@@ -59,7 +62,7 @@ impl Handler for PresenceTracker {
         match notification {
             Notification::Batch { changes, .. } => {
                 for change in changes {
-                    let name = change.name.to_os_string().to_string_lossy().into_owned();
+                    let name = change.name.to_os_string();
                     match &change.kind {
                         ChangeKind::Removed | ChangeKind::RenamedOldName => {
                             self.present.remove(&name);

@@ -19,6 +19,7 @@
 //! feature, which is why this example declares `required-features`.
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 
 use windows_file_watcher::{
     Change, ChangeKind, DEFAULT_BOUND, DesyncCause, FailureCode, FaultDetail, FaultOperation,
@@ -50,8 +51,10 @@ fn stdio() -> Output<std::io::Stdout> {
 #[derive(Default)]
 struct Handler {
     /// The set of leaf names currently believed present, maintained from the
-    /// change stream (a real consumer's core job).
-    present: BTreeSet<String>,
+    /// change stream (a real consumer's core job). `OsString`, not `String`:
+    /// a lossy `to_string_lossy` collapses distinct valid Windows names that
+    /// differ only in an unpaired surrogate into the same key.
+    present: BTreeSet<OsString>,
     /// How many re-scan (desync) signals were seen.
     rescans: u32,
     /// Whether the subscription was confirmed registered.
@@ -67,7 +70,7 @@ impl Handler {
         match notification {
             Notification::Batch { changes, .. } => {
                 for change in changes {
-                    let name = change.name.to_os_string().to_string_lossy().into_owned();
+                    let name = change.name.to_os_string();
                     match &change.kind {
                         ChangeKind::Removed | ChangeKind::RenamedOldName => {
                             self.present.remove(&name);
@@ -151,11 +154,11 @@ fn main() {
         "the Subscribed completion should mark the subscription registered"
     );
     assert!(
-        handler.present.contains("report.csv"),
+        handler.present.contains(std::ffi::OsStr::new("report.csv")),
         "the renamed-in file should be present"
     );
     assert!(
-        !handler.present.contains("report.tmp"),
+        !handler.present.contains(std::ffi::OsStr::new("report.tmp")),
         "the temp file was renamed away, so it should not be present"
     );
     assert_eq!(handler.rescans, 1, "one Overflow desync means one re-scan");

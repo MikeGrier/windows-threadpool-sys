@@ -70,8 +70,16 @@ fn main() {
 
     // Assert on your handler's reactions -- this is the whole point.
     assert!(handler.is_subscribed());
-    assert!(handler.present().contains("report.csv"));
-    assert!(!handler.present().contains("draft.tmp"));
+    assert!(
+        handler
+            .present()
+            .contains(std::ffi::OsStr::new("report.csv"))
+    );
+    assert!(
+        !handler
+            .present()
+            .contains(std::ffi::OsStr::new("draft.tmp"))
+    );
     assert_eq!(handler.rescans(), 1);
 
     output.report(&format!("in-process test passed: {handler:?}"));
