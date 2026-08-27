@@ -25,6 +25,7 @@ fn main() {
 
 #[cfg(windows)]
 mod imp {
+    use std::io::{self, Write};
     use std::path::PathBuf;
 
     use windows_file_watcher_example_test_harness::{
@@ -33,11 +34,23 @@ mod imp {
 
     pub fn main() {
         let args = Args::parse();
+        // All reporting is routed through one writer (repository architecture
+        // rule: never call print!/eprintln! from more than one site), so this
+        // exemplar's storage target -- here `stdout`, easily any `impl Write`
+        // -- stays separable from the formatting at each call site.
+        capture(&args, &mut io::stdout().lock());
+    }
+
+    fn capture(args: &Args, out: &mut impl Write) {
         std::fs::create_dir_all(&args.out).expect("create output directory");
+        let end = args
+            .start
+            .checked_add(args.seeds)
+            .expect("--start + --seeds overflowed u64");
 
         let generator = Generator::new();
         let mut found = 0usize;
-        for seed in args.start..args.start + args.seeds {
+        for seed in args.start..end {
             let schedule = generator.generate(seed);
             let mut handler = BuggyHandler::new();
             let outcome = run(&schedule, &mut handler);
@@ -45,17 +58,18 @@ mod imp {
                 let recording = Recording::new(seed, schedule, outcome.clone());
                 let path = args.out.join(format!("capture-{seed}.json"));
                 recording.save(&path).expect("save recording");
-                println!("seed {seed}: {pathology:?} -> {}", path.display());
+                writeln!(out, "seed {seed}: {pathology:?} -> {}", path.display()).expect("write");
                 found += 1;
             }
         }
-        println!(
-            "checked {} seed(s) [{}, {}), captured {found} pathology(ies) into {}",
+        writeln!(
+            out,
+            "checked {} seed(s) [{}, {end}), captured {found} pathology(ies) into {}",
             args.seeds,
             args.start,
-            args.start + args.seeds,
             args.out.display(),
-        );
+        )
+        .expect("write");
     }
 
     /// Minimal hand-rolled argument parsing -- deliberately no CLI-argument

@@ -19,6 +19,7 @@
 //! feature, which is why this example declares `required-features`.
 
 use std::collections::BTreeSet;
+use std::io::{self, Write};
 
 use windows_file_watcher::{
     Change, ChangeKind, DEFAULT_BOUND, DesyncCause, FailureCode, FaultDetail, FaultOperation,
@@ -145,10 +146,20 @@ fn main() {
     ));
     assert!(handler.volume_changed);
 
-    println!(
+    // Both report lines are routed through one writer (repository
+    // architecture rule: never call print!/eprintln! from more than one
+    // site), so the destination stays separable from the formatting here.
+    let mut out = io::stdout().lock();
+    writeln!(
+        out,
         "handler reacted as expected: {} name(s) present, {} re-scan(s)",
         handler.present.len(),
         handler.rescans
-    );
-    println!("all assertions passed with no filesystem and no thread pool");
+    )
+    .expect("write");
+    writeln!(
+        out,
+        "all assertions passed with no filesystem and no thread pool"
+    )
+    .expect("write");
 }

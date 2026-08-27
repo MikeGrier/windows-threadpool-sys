@@ -10,11 +10,17 @@
 //! cargo run --example replay_demo
 //! ```
 
+use std::io::{self, Write};
+
 use windows_file_watcher_example_test_harness::{
     Generator, Recording, example_handler::BuggyHandler, run,
 };
 
 fn main() {
+    // All reporting is routed through one writer (repository architecture
+    // rule: never call print!/eprintln! from more than one site).
+    let mut out = io::stdout().lock();
+
     // Stand in for "a recording captured earlier and persisted to disk": find
     // one pathology, serialize it, and only ever touch the JSON from here on.
     let generator = Generator::new();
@@ -35,18 +41,20 @@ fn main() {
     // From here on, this is exactly what `replay` does: load JSON, re-drive the
     // schedule, compare.
     let recording = Recording::from_json(&json).expect("deserialize");
-    println!(
+    writeln!(
+        out,
         "loaded recording from seed {}, {} step(s)",
         recording.seed,
         recording.schedule.len()
-    );
+    )
+    .expect("write");
 
     let replayed = run(&recording.schedule, &mut BuggyHandler::new());
-    println!("recorded outcome: {:?}", recording.outcome);
-    println!("replayed outcome: {replayed:?}");
+    writeln!(out, "recorded outcome: {:?}", recording.outcome).expect("write");
+    writeln!(out, "replayed outcome: {replayed:?}").expect("write");
     assert_eq!(
         replayed, recording.outcome,
         "replay must reproduce the captured outcome exactly"
     );
-    println!("reproduced: identical outcome.");
+    writeln!(out, "reproduced: identical outcome.").expect("write");
 }
