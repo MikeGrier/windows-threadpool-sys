@@ -512,5 +512,8 @@ the crate. So D-64 and D-82 follow one rule -- gate a seam to match its audience
 
 The surface's honest limit (D-83) is that it tests the consumer's reactions, not
 whether this crate would ever emit the fed sequence. Valid-by-construction
-builders stop a consumer minting an impossible *value*; an impossible *ordering*
-is still theirs to avoid, exactly as with any hand-authored test double.
+builders stop a consumer minting an impossible *value*; an impossible *ordering*,
+or an impossible *relationship* between two individually valid values (an equal-
+serial `VolumeChanged` is built from two legal `VolumeIdentity`s, but production
+never emits it), is still theirs to avoid, exactly as with any hand-authored test
+double.

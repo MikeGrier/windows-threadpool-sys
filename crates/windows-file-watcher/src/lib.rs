@@ -136,7 +136,9 @@
 //!
 //! The surface tests your *reactions*, not whether this crate would ever emit a
 //! given sequence: the builders cannot mint an impossible value, but an
-//! impossible ordering is yours to avoid.
+//! impossible ordering, or an impossible relationship between two otherwise
+//! valid values (a `VolumeChanged` with equal `previous`/`current` serials,
+//! say), is yours to avoid.
 
 #![warn(missing_docs)]
 

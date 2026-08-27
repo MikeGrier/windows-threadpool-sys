@@ -231,9 +231,12 @@ This surface tests **your reactions**, not whether the crate would ever emit the
 sequence you fed it. Two consequences:
 
 - The `for_test` builders are **valid by construction**, so you cannot mint an
-  impossible *value* -- but an impossible *ordering* (a `Resumed` with no prior
-  `Suspended`, say) is your responsibility to avoid, exactly as with any
-  hand-authored test double.
+  impossible *value* -- but that guarantee is per boundary object, not per
+  notification: an impossible *ordering* (a `Resumed` with no prior
+  `Suspended`, say) or an impossible *relationship between two valid values*
+  (a `VolumeChanged` whose `previous`/`current` carry the identical serial,
+  which production never emits) is your responsibility to avoid, exactly as
+  with any hand-authored test double.
 - Do **not** use this surface to convince yourself you are calling the crate's
   *own* API correctly. That is a different question, and only a real `Monitor`
   answers it.
