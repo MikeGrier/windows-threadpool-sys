@@ -119,7 +119,12 @@ fn every_question_is_immediately_resolved_with_a_reestablished_desync() {
     // this generator's fault-recovery event pushes the resolution
     // contiguously, so no other notification for the same watch can land
     // between a question and its resolution (schedule docs: a fault and its
-    // resolution are one unit).
+    // resolution are one unit). `RetryMode::Interactive` and
+    // `VolumeChangePolicy::Confirm` are independent options, so a single
+    // recovery may surface a `RetryQuestion` followed by a `VolumeChanged` (or
+    // just one, or neither) before the resolution -- so the step immediately
+    // after a question is either the other kind of question or the
+    // resolution itself, never anything else.
     for config in sample_configs() {
         let generator = Generator::with_config(config);
         for seed in 0..10 {
@@ -135,6 +140,10 @@ fn every_question_is_immediately_resolved_with_a_reestablished_desync() {
                         assert!(
                             matches!(
                                 steps.get(index + 1),
+                                Some(NotificationSpec::RetryQuestion { .. })
+                                    | Some(NotificationSpec::VolumeChanged { .. })
+                            ) || matches!(
+                                steps.get(index + 1),
                                 Some(NotificationSpec::Desync { cause, .. })
                                     if matches!(
                                         cause,
@@ -142,7 +151,8 @@ fn every_question_is_immediately_resolved_with_a_reestablished_desync() {
                                     )
                             ),
                             "seed {seed}, watch {watch}: a question must be immediately \
-                             resolved with Desync {{ Reestablished }}, got {:?}",
+                             followed by another question or resolved with \
+                             Desync {{ Reestablished }}, got {:?}",
                             steps.get(index + 1)
                         );
                     }

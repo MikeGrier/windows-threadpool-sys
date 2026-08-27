@@ -27,13 +27,16 @@
 //!    `Desync` (`Overflow`/`QueueFull`, the D-29 loss shape); or a fault
 //!    recovery, modeled as one unit because a real fault and its resolution are
 //!    never independent events: `Suspended` (liveness only) -> optionally a
-//!    question (`RetryQuestion` or `VolumeChanged`, interactive only) -> the
-//!    resolution, always a `Desync { Reestablished }` (D-12: unconditional,
-//!    never gated on liveness) followed by `Resumed` then `Established`
-//!    (liveness only, and always together -- `resolve_fault_success` never
-//!    sends one without the other). A bare `RetryQuestion`/`VolumeChanged` with
-//!    no bracket, or ordinary data delivered while a watch is faulted, is not a
-//!    schedule `windows-file-watcher` could produce.
+//!    `RetryQuestion` (interactive watches) and/or, independently, a
+//!    `VolumeChanged` (volume-confirming watches -- `RetryMode::Interactive`
+//!    and `VolumeChangePolicy::Confirm` are separate `WatchOptions` fields,
+//!    never conflated) -> the resolution, always a `Desync { Reestablished }`
+//!    (D-12: unconditional, never gated on liveness) followed by `Resumed`
+//!    then `Established` (liveness only, and always together --
+//!    `resolve_fault_success` never sends one without the other). A bare
+//!    `RetryQuestion`/`VolumeChanged` with no bracket, or ordinary data
+//!    delivered while a watch is faulted, is not a schedule
+//!    `windows-file-watcher` could produce.
 //! 3. **Optional terminal.** End with `Completion { Cancelled }`; nothing for that
 //!    watch follows it (schedule docs: Cancelled-as-terminator).
 //!
@@ -143,9 +146,19 @@ pub struct GeneratorConfig {
     /// Percent chance a watch reports liveness (can emit
     /// `Suspended`/`Resumed`/`Established`).
     pub liveness_percent: u32,
-    /// Percent chance a watch is interactive (can be asked a `RetryQuestion` /
-    /// `VolumeChanged`).
+    /// Percent chance a watch is interactive (`RetryMode::Interactive`, can be
+    /// asked a `RetryQuestion`). Independent of
+    /// [`volume_confirm_percent`](Self::volume_confirm_percent):
+    /// `windows-file-watcher`'s `RetryMode` and `VolumeChangePolicy` are two
+    /// separate `WatchOptions` fields (`watch.rs`), not one "interactive"
+    /// concept.
     pub interactive_percent: u32,
+    /// Percent chance a watch opts into volume-change confirmation
+    /// (`VolumeChangePolicy::Confirm`, can be asked a `VolumeChanged`).
+    /// Independent of
+    /// [`interactive_percent`](Self::interactive_percent) -- a watch can
+    /// confirm volume changes without being interactive, or vice versa.
+    pub volume_confirm_percent: u32,
     /// Percent chance a watch ends with `Completion { Cancelled }`.
     pub cancel_percent: u32,
     /// Relative weight of a `Batch` in the live loop.
@@ -157,10 +170,12 @@ pub struct GeneratorConfig {
     /// watch (no liveness, `RetryMode::Defaults`) legally sees the bare
     /// resolution `Desync { Reestablished }` when it silently recovers.
     pub weight_fault_recovery: u32,
-    /// Given a fault recovery on an interactive watch, the percent chance it
-    /// includes a question (`RetryQuestion` or `VolumeChanged`) rather than
+    /// Given a fault recovery on an eligible watch, the percent chance it
+    /// includes a question (`RetryQuestion` for an interactive watch,
+    /// `VolumeChanged` for a volume-confirming one -- checked independently,
+    /// so a recovery may include neither, either, or both) rather than
     /// resolving without one (silent autonomous retry, D-27's default). Has no
-    /// effect on a non-interactive watch, which never asks.
+    /// effect where the corresponding option is off.
     pub question_percent: u32,
 }
 
@@ -171,6 +186,7 @@ impl Default for GeneratorConfig {
             steps_per_watch: 16,
             liveness_percent: 50,
             interactive_percent: 40,
+            volume_confirm_percent: 40,
             cancel_percent: 25,
             weight_batch: 6,
             weight_desync: 2,
@@ -242,6 +258,7 @@ impl Generator {
         let mut out = Vec::new();
         let liveness = rng.chance(self.config.liveness_percent);
         let interactive = rng.chance(self.config.interactive_percent);
+        let volume_confirm = rng.chance(self.config.volume_confirm_percent);
 
         // 1. Establish first. windows-file-watcher sends the initial
         // `Established` (liveness only) from inside route establishment, and
@@ -261,7 +278,13 @@ impl Generator {
 
         // 2. Live loop.
         for _ in 0..self.config.steps_per_watch {
-            match self.pick_event(rng) {
+            let Some(event) = self.pick_event(rng) else {
+                // All three weights are zero: an ordinary, if unusual, public
+                // configuration (D-5's "never panic on a legal input"), not a
+                // schedule-authoring error. Nothing to generate this step.
+                continue;
+            };
+            match event {
                 Event::Batch => out.push(self.gen_batch(rng, watch)),
                 Event::Desync => out.push(NotificationSpec::Desync {
                     watch,
@@ -276,21 +299,24 @@ impl Generator {
                     if liveness {
                         out.push(NotificationSpec::Suspended { watch });
                     }
+                    // RetryQuestion (RetryMode::Interactive) and VolumeChanged
+                    // (VolumeChangePolicy::Confirm) are independent options in
+                    // production (watch.rs) -- checked independently here, so
+                    // a recovery may surface neither, either, or both.
                     if interactive && rng.chance(self.config.question_percent) {
-                        if rng.chance(50) {
-                            out.push(NotificationSpec::RetryQuestion {
-                                watch,
-                                operation: gen_operation(rng),
-                                detail: gen_detail(rng),
-                            });
-                        } else {
-                            let (previous, current) = gen_volume_change(rng);
-                            out.push(NotificationSpec::VolumeChanged {
-                                watch,
-                                previous,
-                                current,
-                            });
-                        }
+                        out.push(NotificationSpec::RetryQuestion {
+                            watch,
+                            operation: gen_operation(rng),
+                            detail: gen_detail(rng),
+                        });
+                    }
+                    if volume_confirm && rng.chance(self.config.question_percent) {
+                        let (previous, current) = gen_volume_change(rng);
+                        out.push(NotificationSpec::VolumeChanged {
+                            watch,
+                            previous,
+                            current,
+                        });
                     }
                     // The resolution: always a Desync (D-12, never gated on
                     // liveness), then -- for a liveness watch, and always
@@ -331,14 +357,21 @@ impl Generator {
     /// fault recovery can occur at all (even a fully-default watch legally
     /// sees the bare resolution `Desync`) -- they only shape *what a recovery
     /// contains*, decided in [`Self::generate_watch`].
-    fn pick_event(&self, rng: &mut Rng) -> Event {
+    ///
+    /// `None` if every weight is zero: an ordinary public `GeneratorConfig`
+    /// (not a schedule-authoring error), so this is a legal "generate nothing
+    /// this step" rather than [`Rng::weighted`]'s zero-total panic.
+    fn pick_event(&self, rng: &mut Rng) -> Option<Event> {
         let candidates = [
             (Event::Batch, self.config.weight_batch),
             (Event::Desync, self.config.weight_desync),
             (Event::FaultRecovery, self.config.weight_fault_recovery),
         ];
         let weights: Vec<u32> = candidates.iter().map(|(_, w)| *w).collect();
-        candidates[rng.weighted(&weights)].0
+        if weights.iter().all(|weight| *weight == 0) {
+            return None;
+        }
+        Some(candidates[rng.weighted(&weights)].0)
     }
 
     /// A `Batch` of 1..=3 raw change records. `RenamedOldName`/`RenamedNewName`

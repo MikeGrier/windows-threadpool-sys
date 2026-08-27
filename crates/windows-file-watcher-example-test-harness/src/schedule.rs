@@ -58,15 +58,27 @@
 //! **schedule order is delivery order** -- all sequencing meaning lives in how
 //! you order `steps`. For one watch, file-watcher's contract implies:
 //!
-//! - **Establishment precedes data, and (for a liveness watch) `Established`
-//!   precedes `Completion`.** `windows-file-watcher` sends the initial
-//!   `Established { mode }` from inside route establishment, and only
-//!   afterward turns the result into the `Completion { Subscribed }` its
-//!   caller reports -- so a liveness watch's first two notifications are
-//!   `Established` then `Completion { Subscribed }`, never the reverse. A
-//!   non-liveness watch has only the `Completion`. Either way, nothing
-//!   precedes establishment, and no `Batch` arrives before it (file-watcher
-//!   D-30/D-13).
+//! - **Establishment precedes data, and (for a liveness watch, on immediate
+//!   success) `Established` precedes `Completion`.** `windows-file-watcher`
+//!   sends the initial `Established { mode }` from inside route
+//!   establishment, and only afterward turns the result into the
+//!   `Completion { Subscribed }` its caller reports -- so a liveness watch
+//!   that establishes immediately has `Established` then
+//!   `Completion { Subscribed }` as its first two notifications, never the
+//!   reverse. A non-liveness watch that establishes immediately has only the
+//!   `Completion`. Either way, nothing precedes establishment, and no `Batch`
+//!   arrives before it (file-watcher D-30/D-13).
+//!
+//!   Two other first-registration outcomes exist, and this ordering rule does
+//!   not apply to them: a **retryable first open** reports
+//!   `Completion { Establishing }` instead -- and, for an interactive watch,
+//!   `park_pending` (monitor.rs) sends that attempt's `RetryQuestion` *before*
+//!   `Completion { Establishing }` is even reported, so the question can
+//!   precede the completion it answers on behalf of, not only follow an
+//!   already-`Establishing` watch's later `Completion { Subscribed }`. A
+//!   **permanent initial failure** reports `Completion { Failed }` directly,
+//!   with no `Established` and no prior `Completion` at all -- it is that
+//!   watch's sole and terminal notification.
 //! - **`Desync` is an in-stream barrier.** Everything before a `Desync` for a
 //!   watch is accounted for; nothing after it is (file-watcher D-12). A schedule
 //!   that models loss puts the `Desync` exactly at the drop point.
