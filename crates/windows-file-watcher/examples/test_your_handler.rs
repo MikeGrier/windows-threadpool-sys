@@ -26,6 +26,10 @@ use windows_file_watcher::{
     Notification, OpenFailure, Outcome, RelativeName, VolumeIdentity, WatchId, channel_with_bound,
 };
 
+/// The real Win32 error code paired with `OpenFailure::NotFound` below,
+/// named per the repo's no-bare-numeric-constants rule.
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+
 /// Where this example's reports go, kept as one seam (the repo's
 /// architectural pre-step, matching
 /// `windows-file-watcher/examples/minimal_directory_watch.rs`) rather than
@@ -133,7 +137,7 @@ fn main() {
         operation: FaultOperation::Open,
         detail: FaultDetail {
             failure: OpenFailure::NotFound,
-            code: FailureCode::Win32(2),
+            code: FailureCode::Win32(ERROR_FILE_NOT_FOUND),
         },
     });
     let _ = sender.send(Notification::VolumeChanged {

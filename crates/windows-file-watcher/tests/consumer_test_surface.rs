@@ -17,6 +17,10 @@ use windows_file_watcher::{
     WatchMode, channel_with_bound,
 };
 
+/// The real Win32 error code paired with `OpenFailure::Retryable` below,
+/// named per the repo's no-bare-numeric-constants rule.
+const ERROR_ACCESS_DENIED: u32 = 5;
+
 /// One of every `Notification` variant, in a fixed order, tagged to `watch`.
 fn every_variant(watch: WatchId) -> Vec<Notification> {
     vec![
@@ -52,7 +56,7 @@ fn every_variant(watch: WatchId) -> Vec<Notification> {
             operation: FaultOperation::Arm,
             detail: FaultDetail {
                 failure: OpenFailure::Retryable,
-                code: FailureCode::Win32(5),
+                code: FailureCode::Win32(ERROR_ACCESS_DENIED),
             },
         },
         Notification::VolumeChanged {
