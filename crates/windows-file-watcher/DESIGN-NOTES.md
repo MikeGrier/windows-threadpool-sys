@@ -137,21 +137,34 @@ path, because we never call into it.
 
 Delivery is a crate-owned bounded queue: the monitor enqueues decoded batches and
 the client drains the matching receiver. Enqueue never blocks -- a slow client must
-not stall the cadence (D-2) -- so a full queue drops the batch. The core contract is
-that a client is *never silently* left out of sync, which a naive design breaks
-here: the `Desync { QueueFull }` that reports the drop cannot be pushed onto the
-very queue that is full (and reserving one data slot only defers the problem -- a
-second overflow has nowhere to go).
+not stall the cadence (D-2). The core contract is that a client is *never silently*
+left out of sync, and the shape that keeps it has three layers, not one.
 
-The signal is therefore kept **out of band**. The sender holds a latched overflow
-set -- the `WatchId`s with a pending `QueueFull` -- as control state separate from the
-bounded data queue, so it never competes for data capacity. A failed enqueue drops
-the batch and adds each affected `WatchId` to that set; repeats coalesce, which
-loses nothing because `Desync` is idempotent (the response is always a re-scan).
-The receiver is guaranteed to observe a synthesized `Desync { QueueFull }` for each
-latched `WatchId`, surfaced ahead of the next successful batch and cleared once
-observed -- so the dropped batch and its desync can never both vanish, at any queue
-depth >= 1. A zero-capacity bound is rejected at construction. (D-11, D-12)
+**Reserved capacity, not message type, decides what can be lost** (D-33). A
+completion's slot is taken at submit and an interactive subscription's fault slot
+at registration, so control delivery cannot fail. Change notifications reserve
+nothing and are best-effort, because a lost batch is re-derivable by re-scanning
+where a lost completion would be a liveness bug.
+
+**Saturation is survived at the arm, not at the enqueue** (D-29). A full queue does
+not simply drop the batch: the watcher stops re-arming the read, which propagates
+backpressure into the kernel's own change buffer -- a grace period rather than a
+loss, and nothing is lost at all if the client drains in time. A batch can still
+arrive to a full ring (a control reservation may have taken the room since the read
+was armed), and that one is dropped; if the kernel buffer overflows first, that is
+the already-specified `Desync { Overflow }`.
+
+**The loss report is latched out of band, and lands where the loss actually
+happened** (D-28/D-39). `Desync { QueueFull }` cannot be pushed onto the very queue
+that is full, so the sender holds a latched set of `WatchId`s owed one, coalesced
+(a second loss adds nothing, since the response to one is the response to ten). The
+latch is flushed into the queue at the next successful enqueue -- **not** ahead of
+the next batch, which would claim the hole is older than it is. The queue was full
+when the loss occurred, so everything still queued precedes it; a freed slot goes to
+the *report* and the new notification is re-latched. A receiver draining to empty
+synthesizes any remainder directly, so the report never depends on future traffic
+arriving. A zero-capacity bound is unrepresentable (D-40). (D-11, D-12, D-28, D-29,
+D-33, D-39)
 
 ### Coalescing by directory
 
@@ -171,8 +184,16 @@ the same fact to a client -- "there is a hole in your event set" -- so all four 
 delivered as one cause-tagged `Desync { Overflow | QueueFull | Coarse |
 Reestablished }`. Honest reporting of this limitation is a core requirement, not
 an afterthought. (D-12)
-
-### Completeness is the contract (no change-type filter)
+There is a **fifth cause, and it is not the same fact**: `Desync { Stopped }` is
+terminal. It is published once by `record_stop`, reached only when a re-establish
+attempt's own open fails in a way D-22 classifies as permanent -- the single edge
+D-14's "no terminal fault state" does not cover, because retrying would spin
+forever against a target that can never become watchable again. A re-scan does not
+resynchronize it; nothing further will ever arrive for that watch, and the reason
+is readable from `Monitor::stop_reason`. A client that treats the cause as purely
+advisory and re-scans on every desync will therefore re-scan forever against a dead
+watch, which is why the cause is advisory across the recoverable four and
+match-worthy on the fifth. (D-12, D-22)### Completeness is the contract (no change-type filter)
 
 A client's real question is almost never "which class of change was this?" It is
 "is this file finished?" Windows cannot answer that: `ReadDirectoryChangesW`
@@ -491,9 +512,89 @@ out to be stated incompletely, and how:
   permits.** A legal batch may carry a lone half, both halves, or halves with
   unrelated records between them.
 
-Each of those is now stated. The audit that would confirm nothing *else* is
-stated only by omission has not been done, and is queued as
-[CHECKLIST.md](CHECKLIST.md) -> M14 rather than claimed here.
+Each of those is now stated. [M14.1](CHECKLIST.md) then ran the converse pass over
+the sequencing decisions a consumer builds recovery on; see
+[The M14 audit](#the-m14-audit) below. The remaining decisions are M14.2's.
+
+### <a id="the-m14-audit"></a>The M14 audit: the sequencing decisions against all ten categories
+
+Reactive fixes only ever reach the categories a reviewer happened to probe, so
+M14.1 asked the question deliberately, for each of
+[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract), of the
+three decisions carrying the rules a consumer's recovery logic rests on. "Not
+applicable" below means the category has no instance here, and is distinguished
+throughout from "unspecified", which means the contract deliberately declines to
+say.
+
+It found three shipped defects, corrected in the same change, and two rules that
+were true of the code but stated nowhere.
+
+**[D-12](#d-12), the `Desync` primitive.**
+
+| # | Answer |
+|---|---|
+| 1 | No `WatchOptions` field suppresses any desync. Unfilterability is load-bearing, not incidental (D-77): a hole must invalidate an in-flight settling window. |
+| 2 | Unconditional. `Desync { Reestablished }` is published on **every** successful re-establishment and is *not* gated on `report_liveness`, unlike the `Resumed`/`Established` that follow it. |
+| 3 | Per tier: `Overflow` is Detailed-only, `Coarse` is Coarse-only, and `QueueFull`/`Reestablished`/`Stopped` are tier-independent. **Was unstated; now stated.** |
+| 4 | `Desync { Reestablished }` is always published *before* the `Resumed`/`Established` for the same recovery, so a client is told to re-scan the gap before being told it can trust incremental changes again. |
+| 5 | Not every `(watch, cause)` pair is reachable -- the tier restriction in 3 constrains it, and nothing follows a `Stopped` for that watch. |
+| 6 | `Reestablished` only ever leaves an unresolved fault bracket; `Coarse` fires on every coarse activation including the first; `Stopped` is reachable only from a re-establish attempt, never from initial registration (that path reports `Completion { Failed }`). |
+| 7 | **`Stopped` is terminal and was documented as though it were not** -- see the defects below. |
+| 8 | A desync is never correlated with what was lost. The crate says a hole exists, never what fell in it; there is no partial-recovery path. |
+| 9 | Not applicable -- a desync carries no name or boundary-typed value. |
+| 10 | `test-util` can build tier-impossible pairs (a Coarse watch's `Overflow`); D-83's fidelity limit governs. |
+
+**[D-27](#d-27)/[D-28](#d-28), the fault protocol.**
+
+| # | Answer |
+|---|---|
+| 1 | **Three** independent `WatchOptions` fields, not two: `retry`, `on_volume_change`, and `report_liveness`. All eight combinations are legal. A standing slot is taken iff `Interactive \|\| Confirm`. |
+| 2 | Unconditional -- every interactive route is asked on every fault, with no probability anywhere. The source reads conditionally (`retry == Interactive && fault_slot.is_some()`), but the second conjunct is *implied* by the first: `subscribe` fails with `WouldBlock` when the reservation cannot be carved out, so an interactive route always has its slot. |
+| 3 | A `RetryQuestion` reaches only an `Interactive` subscription, a `VolumeChanged` only a `Confirm` one -- both over the same standing slot. |
+| 4 | **The shared slot rests on a mutual-exclusion invariant** -- a `RetryQuestion` and a `VolumeChanged` are never outstanding at once for one subscription, because a volume-change question is only raised by a reopen that already succeeded, and the gate blocks arming while one is pending. This was a source comment, load-bearing for a reservation's soundness, and stated nowhere in the contract. **Now stated.** |
+| 5 | A live watch's fault always enters as `Arm`; `Open` reaches a route only by re-entering an already-unresolved bracket. |
+| 6 | As 5 -- entry state, not just transition label, is what distinguishes the two. |
+| 7 | A question does not always resolve with `Desync { Reestablished }`: a retry loop can ask again, and `record_stop` can terminate the watch with `Desync { Stopped }` instead. |
+| 8 | Answers are keyed by `WatchId` alone, never to a question instance, so a late answer to an already-resolved fault is silently discarded rather than misapplied. Deliberate, and deliberately not a correlation the client can rely on. |
+| 9 | `FailureCode` keeps a code in the currency it arrived in (`Win32` or `HResult`) rather than forcing one shape through `HRESULT_FROM_WIN32` (D-79). |
+| 10 | As D-12's row 10. |
+
+**[D-30](#d-30), request completions.**
+
+| # | Answer |
+|---|---|
+| 1 | No option suppresses a completion; reliability is reservation, not opt-in (D-33). |
+| 2 | **"Every request produces a completion" is true of every *lifecycle* request, not of every `Request` variant** -- `Answer` and `AnswerVolumeChange` are responses to questions the crate posed and deliberately carry none. D-30's blanket wording did not admit the exception. **Now stated.** |
+| 3 | `Subscribed`/`Establishing`/`Failed` arise only from a subscribe; `Cancelled` only from a cancellation. |
+| 4 | A subscription yields exactly one registration outcome and at most one `Cancelled`. |
+| 5 | `Establishing` is not a failure and carries no terminal meaning (D-46); only D-22's permanent pair reaches `Failed`. |
+| 6 | `Failed` is not only an initial-registration outcome -- `rekey` emits it for an already-routed watch. |
+| 7 | `Cancelled` is the stream boundary and is sent *after* teardown, which is what makes D-30's ordering claim structural rather than a race. |
+| 8 | Completions are keyed by `WatchId`, never by a request identity; the crate issues none, so two requests for one watch are distinguished by their `Outcome` alone. |
+| 9 | `Failed { detail }` carries the full `FaultDetail` rather than a reduced code (D-79). |
+| 10 | As D-12's row 10. |
+
+**The three defects this pass found**, all in prose or rustdoc rather than behaviour,
+and all corrected here:
+
+1. **`DesyncCause`'s own doc contradicted its own variant.** The enum said "the
+   cause is advisory: the client's response is the same in every case (a re-scan)"
+   while `Stopped` said "unlike every other cause, a re-scan will not resynchronize
+   this watch". A consumer reading the type-level doc -- the one a reader reaches
+   first -- would re-scan forever against a dead watch. `Notification::Desync`'s
+   `cause` field carried the same claim.
+2. **[The Desync primitive](#the-desync-primitive) enumerated four causes.** There
+   are five; `Stopped` was absent, so the section's "all four are the same fact to
+   a client" was the exact over-generalisation defect 1 shipped.
+3. **[Delivery and saturation](#delivery-and-saturation) still described the
+   pre-D-29 design.** It said a full queue "drops the batch" (D-29 replaced that
+   with throttling at the arm) and that the latch is "surfaced ahead of the next
+   successful batch" -- the precise phrasing [D-39](#d-39) identifies as wrong,
+   because it would claim the hole is older than it is.
+
+All three are the same shape: a decision was superseded or extended, the index row
+was updated, and the prose section a reader actually reads was not. That the
+per-decision rows were correct throughout is what let it go unnoticed.
 
 ### <a id="the-has_room-finding-in-this-crate"></a>The `has_room` finding
 

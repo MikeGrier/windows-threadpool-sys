@@ -188,7 +188,9 @@ pub enum Notification {
     Desync {
         /// The subscription affected.
         watch: WatchId,
-        /// How the gap arose. Advisory: the response is a re-scan either way.
+        /// How the gap arose. Advisory for the four recoverable causes -- the
+        /// response is a re-scan either way -- but
+        /// [`DesyncCause::Stopped`] is terminal and must be matched on.
         cause: DesyncCause,
     },
     /// A request the client made has been serviced (D-30).

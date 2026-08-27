@@ -388,8 +388,13 @@ pub struct Change {
 /// Why a [`DecodedBatch::Desync`] -- a "you may have missed changes, re-scan"
 /// signal -- was raised.
 ///
-/// The cause is advisory: the client's response is the same in every case (a
-/// re-scan). It exists so a client can diagnose *how* it fell behind.
+/// The cause is advisory for the four *recoverable* causes -- [`Overflow`](Self::Overflow),
+/// [`QueueFull`](Self::QueueFull), [`Coarse`](Self::Coarse), and
+/// [`Reestablished`](Self::Reestablished) -- whose response is the same in every
+/// case (a re-scan); it exists so a client can diagnose *how* it fell behind.
+/// [`Stopped`](Self::Stopped) is **not** advisory and must be matched on: it is
+/// terminal, and a re-scan does not resynchronize a watch that will never
+/// deliver again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DesyncCause {
     /// The kernel change buffer overflowed (a zero-byte completion): changes were

@@ -133,10 +133,15 @@ been done is the converse: a deliberate pass over the contract asking, for each 
 leaves it to omission. Reactive fixes cannot establish that, because they only ever reach the categories some
 reviewer happened to probe.
 
-- [ ] **M14.1** -- Audit [D-12](DESIGN-NOTES.md) (`Desync`), [D-27](DESIGN-NOTES.md)/[D-28](DESIGN-NOTES.md)
+- [x] **M14.1** -- Audit [D-12](DESIGN-NOTES.md) (`Desync`), [D-27](DESIGN-NOTES.md)/[D-28](DESIGN-NOTES.md)
   (the fault protocol), and [D-30](DESIGN-NOTES.md) (request completions) against all ten categories, and
   state each answer -- including "unspecified, deliberately" where that is the honest one. These three carry
-  the sequencing rules a consumer builds recovery on, so they are the highest-value targets.
+  the sequencing rules a consumer builds recovery on, so they are the highest-value targets. Done: see
+  [The M14 audit](DESIGN-NOTES.md#the-m14-audit). Found three shipped documentation defects (`DesyncCause`'s
+  type-level doc contradicting its own `Stopped` variant, a four-of-five cause enumeration, and a
+  `Delivery and saturation` section still describing the pre-D-29 drop policy and the phrasing D-39 corrects)
+  and two load-bearing rules stated nowhere (the standing slot's mutual-exclusion invariant, and that
+  "every request produces a completion" holds for lifecycle requests only).
 
 - [ ] **M14.2** -- Audit the remaining notification-shaping decisions ([D-10](DESIGN-NOTES.md),
   [D-13](DESIGN-NOTES.md), [D-17](DESIGN-NOTES.md), [D-26](DESIGN-NOTES.md), [D-57](DESIGN-NOTES.md)) the
