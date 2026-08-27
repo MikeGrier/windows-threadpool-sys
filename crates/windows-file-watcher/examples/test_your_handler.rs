@@ -59,8 +59,13 @@ struct Handler {
     /// a lossy `to_string_lossy` collapses distinct valid Windows names that
     /// differ only in an unpaired surrogate into the same key.
     present: BTreeSet<OsString>,
-    /// How many re-scan (desync) signals were seen.
+    /// How many *recoverable* re-scan (desync) signals were seen.
     rescans: u32,
+    /// Whether the watch stopped permanently (`DesyncCause::Stopped`).
+    ///
+    /// Tracked separately from `rescans` because it is the one cause a re-scan
+    /// does not answer: nothing further will ever arrive for the watch.
+    ended: bool,
     /// Whether the subscription was confirmed registered.
     subscribed: bool,
     /// Why the last retry question was asked, if any.
@@ -85,6 +90,12 @@ impl Handler {
                     }
                 }
             }
+            // Terminal, and matched *before* the general arm: a re-scan cannot
+            // resynchronize a watch that will never deliver again.
+            Notification::Desync {
+                cause: DesyncCause::Stopped,
+                ..
+            } => self.ended = true,
             Notification::Desync { .. } => self.rescans += 1,
             Notification::Completion { outcome, .. } => {
                 if matches!(outcome, Outcome::Subscribed) {
@@ -167,6 +178,21 @@ fn main() {
         watch,
         cause: DesyncCause::Reestablished,
     });
+    // A later fault whose re-establish attempt finds the target permanently
+    // unwatchable. `Desync { Stopped }` is the one terminal cause: nothing
+    // further arrives for this watch, and a re-scan will not bring it back.
+    let _ = sender.send(Notification::RetryQuestion {
+        watch,
+        operation: FaultOperation::Arm,
+        detail: FaultDetail {
+            failure: OpenFailure::NotFound,
+            code: FailureCode::Win32(ERROR_FILE_NOT_FOUND),
+        },
+    });
+    let _ = sender.send(Notification::Desync {
+        watch,
+        cause: DesyncCause::Stopped,
+    });
 
     // Drive the handler exactly as a production loop would: drain and dispatch.
     let mut handler = Handler::default();
@@ -189,8 +215,13 @@ fn main() {
     );
     assert_eq!(
         handler.rescans, 2,
-        "both the Overflow and the Reestablished desync mean re-scan -- the \
-         cause is advisory across the recoverable four"
+        "Overflow and Reestablished are both recoverable, so both mean re-scan \
+         -- but Stopped is not counted among them"
+    );
+    assert!(
+        handler.ended,
+        "the terminal Stopped cause must be handled as termination, not as one \
+         more re-scan"
     );
     assert!(matches!(
         handler.last_retry_reason,
@@ -200,9 +231,11 @@ fn main() {
 
     let mut output = stdio();
     output.report(&format!(
-        "handler reacted as expected: {} name(s) present, {} re-scan(s)",
+        "handler reacted as expected: {} name(s) present, {} recoverable re-scan(s), \
+         watch ended: {}",
         handler.present.len(),
-        handler.rescans
+        handler.rescans,
+        handler.ended
     ));
     output.report("all assertions passed with no filesystem and no thread pool");
 }

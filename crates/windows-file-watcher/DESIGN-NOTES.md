@@ -737,3 +737,30 @@ transition -- where both versions reach 1, differing only in *when*. Asserting t
 count at the intermediate step (still 0 while `has_room` is false) is what
 distinguishes them. A regression test for a timing defect has to be run against the
 unfixed code to be worth anything, which is now how both were confirmed.
+
+**A third round: the audit was right and the generator was not.** The review after
+the wake-edge fix found that the harness generator excluded `Desync { QueueFull }`
+for a Coarse-tier watch, with a test codifying that exclusion -- while
+[the M14 audit's own table](#the-m14-audit) had just recorded `QueueFull` as
+tier-independent.
+
+The audit's table is correct, and the source settles it: `on_activation` publishes
+`Desync { Coarse }` through `publish` -> `route.sink.send`, which is the same
+best-effort path a `Batch` takes, so a saturated client latches a `QueueFull`
+against a coarse watch exactly as it would a detailed one. Only `Overflow` is
+Detailed-only, because it is the *kernel change buffer's* overflow and a coarse
+handle never reports one.
+
+The generator's error was a plausible-sounding conflation -- "`Overflow` and
+`QueueFull` are the two loss causes, and a coarse watcher's losses are `Coarse`"
+-- which reads as one rule and is really two, one true and one false. Worth
+recording because it is the mirror image of every other finding in this section:
+here the *contract* was stated correctly and the second implementation still
+diverged, so writing the rule down is necessary and not sufficient. Anything that
+was built against the pre-audit understanding has to be re-checked against the
+post-audit statement, and nothing does that automatically.
+
+The corrected test also asserts that a coarse `QueueFull` is actually *generated*,
+not merely permitted -- without that, the test would pass just as well against a
+generator that still excluded it, which is the same weakness the wake-edge
+regression test had in its first form.

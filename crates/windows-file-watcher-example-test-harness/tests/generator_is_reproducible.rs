@@ -61,7 +61,7 @@ fn sample_configs() -> Vec<GeneratorConfig> {
             steps_per_watch: 25,
             liveness_percent: 0,
             interactive_percent: 100,
-            question_percent: 100,
+            volume_change_percent: 100,
             ..GeneratorConfig::default()
         },
         GeneratorConfig {
@@ -231,12 +231,17 @@ fn an_interactive_watchs_fault_recovery_always_asks_a_retry_question() {
 }
 
 #[test]
-fn a_coarse_watch_never_reports_a_batch_or_a_detailed_only_loss_desync() {
-    // A Coarse-tier watcher can only ever report Desync { Coarse } for
-    // activity (watcher.rs:535-563, D-17) -- never a Batch, and never an
-    // Overflow/QueueFull loss Desync (both Detailed-only concepts). Track the
-    // mode across each watch's own re-establishments, exactly as
-    // Generator::generate_watch does, and check every step against it.
+fn a_coarse_watch_never_reports_a_batch_or_a_kernel_overflow() {
+    // A Coarse-tier watcher reports activity only as Desync { Coarse }
+    // (watcher.rs:535-563, D-17) -- never a Batch, and never an Overflow,
+    // which is the kernel change buffer's own overflow and so observable only
+    // through a detailed read.
+    //
+    // QueueFull is deliberately NOT excluded: a coarse activation is published
+    // through the same best-effort queue as every other notification, so a
+    // saturated client turns it into a latched Desync { QueueFull } exactly as
+    // it would a Batch. An earlier version of this test asserted the opposite
+    // and codified a contract the watcher does not keep (PR #42 review).
     let generator = Generator::with_config(GeneratorConfig {
         watches: 4,
         steps_per_watch: 30,
@@ -246,6 +251,7 @@ fn a_coarse_watch_never_reports_a_batch_or_a_detailed_only_loss_desync() {
         weight_fault_recovery: 2,
         ..GeneratorConfig::default()
     });
+    let mut saw_coarse_queue_full = false;
     for seed in 0..40 {
         let schedule = generator.generate(seed);
         for (watch, steps) in by_watch(&schedule) {
@@ -266,25 +272,27 @@ fn a_coarse_watch_never_reports_a_batch_or_a_detailed_only_loss_desync() {
                              Batch"
                         );
                     }
-                    NotificationSpec::Desync { cause, .. }
-                        if mode == WatchModeSpec::Coarse
-                            && !matches!(
-                                cause,
-                                DesyncCauseSpec::Reestablished | DesyncCauseSpec::Stopped
-                            ) =>
-                    {
-                        assert_eq!(
+                    NotificationSpec::Desync { cause, .. } if mode == WatchModeSpec::Coarse => {
+                        assert_ne!(
                             *cause,
-                            DesyncCauseSpec::Coarse,
-                            "seed {seed}, watch {watch}: a Coarse watch's ordinary loss Desync \
-                             must be Coarse, got {cause:?}"
+                            DesyncCauseSpec::Overflow,
+                            "seed {seed}, watch {watch}: a Coarse watch cannot observe the \
+                             kernel's change-buffer overflow"
                         );
+                        if *cause == DesyncCauseSpec::QueueFull {
+                            saw_coarse_queue_full = true;
+                        }
                     }
                     _ => {}
                 }
             }
         }
     }
+    assert!(
+        saw_coarse_queue_full,
+        "the generator must actually exercise a Coarse watch's QueueFull loss, or this test \
+         would pass just as well against a generator that still excludes it"
+    );
 }
 
 #[test]
@@ -325,7 +333,7 @@ fn every_generated_volume_changed_has_a_distinct_previous_and_current_serial() {
         watches: 4,
         steps_per_watch: 40,
         interactive_percent: 100,
-        question_percent: 100,
+        volume_change_percent: 100,
         ..GeneratorConfig::default()
     });
 
@@ -346,7 +354,7 @@ fn every_generated_volume_changed_has_a_distinct_previous_and_current_serial() {
     }
     assert!(
         checked > 0,
-        "expected at least one VolumeChanged across 50 seeds with interactive_percent/question_percent: 100"
+        "expected at least one VolumeChanged across 50 seeds with interactive_percent/volume_change_percent: 100"
     );
 }
 
@@ -360,7 +368,7 @@ fn a_watchs_volume_changed_events_continue_from_the_prior_confirmed_identity() {
         watches: 4,
         steps_per_watch: 60,
         volume_confirm_percent: 100,
-        question_percent: 100,
+        volume_change_percent: 100,
         weight_fault_recovery: 3,
         ..GeneratorConfig::default()
     });

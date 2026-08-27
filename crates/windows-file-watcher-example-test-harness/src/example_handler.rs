@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 
-use windows_file_watcher::{ChangeKind, Notification, Outcome, WatchId};
+use windows_file_watcher::{ChangeKind, DesyncCause, Notification, Outcome, WatchId};
 
 use crate::Handler;
 
@@ -24,6 +24,7 @@ pub struct PresenceTracker {
     // for the same reason).
     present: BTreeSet<(WatchId, OsString)>,
     rescans: u32,
+    stopped: BTreeSet<WatchId>,
     subscribed: bool,
     volume_changes: u32,
 }
@@ -43,10 +44,24 @@ impl PresenceTracker {
         &self.present
     }
 
-    /// How many re-scan (desync) signals were seen.
+    /// How many *recoverable* re-scan (desync) signals were seen.
+    ///
+    /// Excludes [`DesyncCause::Stopped`], which is terminal -- see
+    /// [`PresenceTracker::stopped`].
     #[must_use]
     pub fn rescans(&self) -> u32 {
         self.rescans
+    }
+
+    /// The watches that stopped permanently.
+    ///
+    /// Kept apart from [`PresenceTracker::rescans`] because a re-scan is not
+    /// the answer to this one: nothing further will ever arrive for such a
+    /// watch, so a handler that lumped it in with the recoverable causes would
+    /// keep re-scanning a dead watch forever.
+    #[must_use]
+    pub fn stopped(&self) -> &BTreeSet<WatchId> {
+        &self.stopped
     }
 
     /// Whether the subscription was confirmed registered.
@@ -77,6 +92,12 @@ impl Handler for PresenceTracker {
                         }
                     }
                 }
+            }
+            Notification::Desync {
+                watch,
+                cause: DesyncCause::Stopped,
+            } => {
+                self.stopped.insert(*watch);
             }
             Notification::Desync { .. } => self.rescans += 1,
             Notification::Completion { outcome, .. } => {

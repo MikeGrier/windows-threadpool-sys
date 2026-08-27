@@ -70,9 +70,13 @@ use windows_file_watcher::{
 };
 
 // The reaction logic under test -- your code, in isolation.
-fn handle(notification: &Notification, rescans: &mut u32) {
-    if matches!(notification, Notification::Desync { .. }) {
-        *rescans += 1;
+fn handle(notification: &Notification, rescans: &mut u32, ended: &mut bool) {
+    match notification {
+        // Terminal, and matched first: a re-scan cannot resynchronize a watch
+        // that will never deliver again. `Monitor::stop_reason` says why.
+        Notification::Desync { cause: DesyncCause::Stopped, .. } => *ended = true,
+        Notification::Desync { .. } => *rescans += 1,
+        _ => {}
     }
 }
 
@@ -84,14 +88,24 @@ fn my_handler_counts_rescans() {
     // A scripted, deterministic sequence -- no OS involved.
     let _ = sender.send(Notification::Completion { watch, outcome: Outcome::Subscribed });
     let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Overflow });
+    let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Stopped });
 
     let mut rescans = 0;
+    let mut ended = false;
     while let Some(notification) = receiver.try_recv() {
-        handle(&notification, &mut rescans);
+        handle(&notification, &mut rescans, &mut ended);
     }
     assert_eq!(rescans, 1);
+    assert!(ended);
 }
 ```
+
+Note the two arms. Four of the five `DesyncCause`s are advisory -- the response
+is a re-scan either way, and the cause only tells you *how* you fell behind.
+`DesyncCause::Stopped` is not: it is terminal, nothing further arrives for that
+watch, and re-scanning will never resynchronize it. Matching it separately is
+the difference between a handler that notices its watch died and one that
+re-scans a dead watch forever.
 
 See [`examples/test_your_handler.rs`](examples/test_your_handler.rs) for a fuller
 worked example covering every notification kind.

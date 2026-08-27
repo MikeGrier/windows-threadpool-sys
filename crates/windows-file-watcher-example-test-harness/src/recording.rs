@@ -1,13 +1,26 @@
 // Copyright (c) 2026 Mike Grier
 //! Capturing a pathology as a replayable JSON artifact.
 //!
-//! A [`Recording`] is what turns a pathology found once into a deterministic
+//! A [`Recording`] is what turns a pathology found once into a repeatable
 //! regression: the seed and the schedule it produced, plus the outcome that run
-//! reported. Loading it back and re-running its schedule reproduces that
-//! outcome exactly, because the schedule -- not the seed -- is what the driver
-//! actually replays; the seed is kept only as provenance (crate DESIGN-NOTES
-//! D-5/D-7: schedules, not seeds, are the unit of reproduction, since a
-//! hand-authored or mutated schedule has no seed at all).
+//! reported. Loading it back replays the *schedule* -- not the seed, which is
+//! kept only as provenance (crate DESIGN-NOTES D-5/D-7: schedules, not seeds,
+//! are the unit of reproduction, since a hand-authored or mutated schedule has
+//! no seed at all).
+//!
+//! **What that guarantees, and what it does not.** Replaying the schedule
+//! removes all *generator* variation: the driver delivers exactly the same
+//! notifications, in exactly the same order, on one thread. Whether the
+//! *outcome* then matches is a property of the handler, not of this type -- a
+//! handler with its own nondeterminism (a clock, a thread, a hash iteration
+//! order) can behave differently on identical input, which is why the
+//! crate-level fidelity section calls a replay a strong lead rather than a
+//! proof. Exact outcome reproduction therefore requires a deterministic
+//! handler in addition to the recorded schedule.
+//!
+//! [`Recording::new`] also accepts any schedule/outcome pair it is given, so
+//! "this outcome came from this schedule" is a claim about how the recording
+//! was produced, not an invariant this type enforces.
 //!
 //! The JSON schema is a tool I/O format, not a data contract (DESIGN-NOTES D-4):
 //! it may change shape in any release.

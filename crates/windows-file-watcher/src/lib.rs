@@ -112,9 +112,12 @@
 //!     };
 //!
 //!     // The consumer reaction logic under test, in isolation.
-//!     fn handle(notification: &Notification, rescans: &mut u32) {
-//!         if matches!(notification, Notification::Desync { .. }) {
-//!             *rescans += 1;
+//!     fn handle(notification: &Notification, rescans: &mut u32, ended: &mut bool) {
+//!         match notification {
+//!             // Terminal: a re-scan cannot resynchronize a stopped watch.
+//!             Notification::Desync { cause: DesyncCause::Stopped, .. } => *ended = true,
+//!             Notification::Desync { .. } => *rescans += 1,
+//!             _ => {}
 //!         }
 //!     }
 //!
@@ -124,12 +127,15 @@
 //!     // A scripted, deterministic sequence -- no OS involved.
 //!     let _ = sender.send(Notification::Completion { watch, outcome: Outcome::Subscribed });
 //!     let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Overflow });
+//!     let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Stopped });
 //!
 //!     let mut rescans = 0;
+//!     let mut ended = false;
 //!     while let Some(notification) = receiver.try_recv() {
-//!         handle(&notification, &mut rescans);
+//!         handle(&notification, &mut rescans, &mut ended);
 //!     }
 //!     assert_eq!(rescans, 1);
+//!     assert!(ended);
 //! }
 //! # }
 //! ```

@@ -44,9 +44,14 @@
 //!    reporting exposes it (watcher.rs picks a mode on every re-establishment
 //!    regardless of `report_liveness`). From that point until the watch's next
 //!    re-establishment, its live loop is restricted the way a real Coarse
-//!    endpoint is: no `Batch`, and every loss `Desync` reports
-//!    `DesyncCauseSpec::Coarse` rather than `Overflow`/`QueueFull`, both
-//!    Detailed-only concepts (watcher.rs:535-563, D-17).
+//!    endpoint is: no `Batch`, and no `Overflow`, which is the *kernel's*
+//!    change-buffer overflow and therefore Detailed-only (watcher.rs:535-563,
+//!    D-17). `QueueFull` is **not** restricted: a coarse activation is
+//!    published through the same best-effort queue every other notification
+//!    uses, so saturation can replace its `Desync { Coarse }` with a latched
+//!    `Desync { QueueFull }` exactly as it would a `Batch` (file-watcher
+//!    DESIGN-NOTES, the M14 audit: `QueueFull`/`Reestablished`/`Stopped` are
+//!    tier-independent).
 //! 3. **Optional terminal.** End with `Completion { Cancelled }`; nothing for that
 //!    watch follows it (schedule docs: Cancelled-as-terminator).
 //!
@@ -187,7 +192,7 @@ pub struct GeneratorConfig {
     /// `RetryQuestion`, which is unconditional (`enter_fault`, watcher.rs:
     /// every interactive route is asked on every fault, with no
     /// probability), nor on a watch that is not volume-confirming.
-    pub question_percent: u32,
+    pub volume_change_percent: u32,
 }
 
 impl Default for GeneratorConfig {
@@ -202,7 +207,7 @@ impl Default for GeneratorConfig {
             weight_batch: 6,
             weight_desync: 2,
             weight_fault_recovery: 1,
-            question_percent: 50,
+            volume_change_percent: 50,
         }
     }
 }
@@ -275,10 +280,12 @@ impl Generator {
         let volume_confirm = rng.chance(self.config.volume_confirm_percent);
         // Tracks the watch's *actual* tier, whether or not liveness reporting
         // exposes it: `watcher.rs` picks a mode on every (re-)establishment
-        // regardless of whether the client asked to be told about it, and a
-        // Coarse watcher can only ever report `Desync { Coarse }` for
-        // activity (watcher.rs:535-563, D-17) -- never a `Batch` or an
-        // `Overflow`/`QueueFull` loss `Desync`, both Detailed-only concepts.
+        // regardless of whether the client asked to be told about it. A Coarse
+        // watcher reports activity only as `Desync { Coarse }`
+        // (watcher.rs:535-563, D-17) -- never a `Batch`, and never an
+        // `Overflow`, which is the kernel change buffer's own overflow and so
+        // Detailed-only. `QueueFull` is a *delivery-layer* loss and applies to
+        // either tier.
         let mut current_mode = WatchModeSpec::Detailed;
         // Tracks the volume identity `WatcherInner::install` last confirmed
         // for this watch (watcher.rs:1137-1139): the *next* VolumeChanged's
@@ -328,7 +335,7 @@ impl Generator {
                 }
                 Event::Desync => {
                     let cause = if current_mode == WatchModeSpec::Coarse {
-                        DesyncCauseSpec::Coarse
+                        gen_coarse_loss_cause(rng)
                     } else {
                         gen_loss_cause(rng)
                     };
@@ -371,7 +378,7 @@ impl Generator {
                     // sent when a confirming reopen actually lands on a
                     // different volume (file-watcher D-78), which is not
                     // guaranteed on every recovery.
-                    if volume_confirm && rng.chance(self.config.question_percent) {
+                    if volume_confirm && rng.chance(self.config.volume_change_percent) {
                         let previous = current_volume.clone().unwrap_or_else(|| gen_volume(rng));
                         let current = gen_changed_volume(rng, &previous);
                         current_volume = Some(current.clone());
@@ -485,10 +492,26 @@ fn gen_name(rng: &mut Rng) -> String {
     format!("file{stem:02}.{ext}")
 }
 
-/// A loss cause for the live loop: the two ways changes actually go missing.
+/// A loss cause for a Detailed watch's live loop: the two ways changes actually
+/// go missing.
 fn gen_loss_cause(rng: &mut Rng) -> DesyncCauseSpec {
     if rng.chance(50) {
         DesyncCauseSpec::Overflow
+    } else {
+        DesyncCauseSpec::QueueFull
+    }
+}
+
+/// A loss cause for a Coarse watch's live loop.
+///
+/// `Overflow` is excluded -- it is the kernel change buffer's own overflow,
+/// which only a detailed read can observe. `QueueFull` is not: a coarse
+/// activation rides the same best-effort queue as everything else, so a
+/// saturated client turns its `Desync { Coarse }` into a latched
+/// `Desync { QueueFull }` just as it would a `Batch`.
+fn gen_coarse_loss_cause(rng: &mut Rng) -> DesyncCauseSpec {
+    if rng.chance(75) {
+        DesyncCauseSpec::Coarse
     } else {
         DesyncCauseSpec::QueueFull
     }
