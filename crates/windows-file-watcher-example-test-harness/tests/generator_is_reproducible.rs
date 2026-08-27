@@ -190,6 +190,46 @@ fn every_resumed_is_immediately_followed_by_established() {
 }
 
 #[test]
+fn an_interactive_watchs_fault_recovery_always_asks_a_retry_question() {
+    // RetryQuestion is unconditional for an interactive watch (enter_fault,
+    // watcher.rs: every interactive route is asked on every fault, with no
+    // probability involved) -- a schedule where one is skipped is not one
+    // file-watcher could produce. liveness_percent: 100 makes every
+    // fault-recovery bracket start with Suspended, unambiguously marking
+    // where to look; volume_confirm_percent: 0 keeps VolumeChanged out of the
+    // way so RetryQuestion is exactly the next step.
+    let generator = Generator::with_config(GeneratorConfig {
+        watches: 4,
+        steps_per_watch: 20,
+        liveness_percent: 100,
+        interactive_percent: 100,
+        volume_confirm_percent: 0,
+        weight_batch: 1,
+        weight_desync: 1,
+        weight_fault_recovery: 3,
+        ..GeneratorConfig::default()
+    });
+    for seed in 0..20 {
+        let schedule = generator.generate(seed);
+        for (watch, steps) in by_watch(&schedule) {
+            for (index, step) in steps.iter().enumerate() {
+                if matches!(step, NotificationSpec::Suspended { .. }) {
+                    assert!(
+                        matches!(
+                            steps.get(index + 1),
+                            Some(NotificationSpec::RetryQuestion { .. })
+                        ),
+                        "seed {seed}, watch {watch}: an interactive watch's fault recovery \
+                         must ask a RetryQuestion immediately after Suspended, got {:?}",
+                        steps.get(index + 1)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn cancelled_is_always_the_last_notification_for_its_watch() {
     for config in sample_configs() {
         let generator = Generator::with_config(config);

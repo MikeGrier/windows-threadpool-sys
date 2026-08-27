@@ -26,17 +26,19 @@
 //!    into a pair -- `windows-file-watcher` never joins a rename, D-9); a loss
 //!    `Desync` (`Overflow`/`QueueFull`, the D-29 loss shape); or a fault
 //!    recovery, modeled as one unit because a real fault and its resolution are
-//!    never independent events: `Suspended` (liveness only) -> optionally a
-//!    `RetryQuestion` (interactive watches) and/or, independently, a
-//!    `VolumeChanged` (volume-confirming watches -- `RetryMode::Interactive`
-//!    and `VolumeChangePolicy::Confirm` are separate `WatchOptions` fields,
-//!    never conflated) -> the resolution, always a `Desync { Reestablished }`
-//!    (D-12: unconditional, never gated on liveness) followed by `Resumed`
-//!    then `Established` (liveness only, and always together --
-//!    `resolve_fault_success` never sends one without the other). A bare
-//!    `RetryQuestion`/`VolumeChanged` with no bracket, or ordinary data
-//!    delivered while a watch is faulted, is not a schedule
-//!    `windows-file-watcher` could produce.
+//!    never independent events: `Suspended` (liveness only) -> an unconditional
+//!    `RetryQuestion` for an interactive watch (`enter_fault`, watcher.rs, asks
+//!    every interactive route on every fault with no probability involved)
+//!    and/or, independently and only probabilistically, a `VolumeChanged` for
+//!    a volume-confirming watch whose confirming reopen actually landed on a
+//!    different volume (`RetryMode::Interactive` and `VolumeChangePolicy::
+//!    Confirm` are separate `WatchOptions` fields, never conflated) -> the
+//!    resolution, always a `Desync { Reestablished }` (D-12: unconditional,
+//!    never gated on liveness) followed by `Resumed` then `Established`
+//!    (liveness only, and always together -- `resolve_fault_success` never
+//!    sends one without the other). A bare `RetryQuestion`/`VolumeChanged` with
+//!    no bracket, or ordinary data delivered while a watch is faulted, is not a
+//!    schedule `windows-file-watcher` could produce.
 //! 3. **Optional terminal.** End with `Completion { Cancelled }`; nothing for that
 //!    watch follows it (schedule docs: Cancelled-as-terminator).
 //!
@@ -170,12 +172,13 @@ pub struct GeneratorConfig {
     /// watch (no liveness, `RetryMode::Defaults`) legally sees the bare
     /// resolution `Desync { Reestablished }` when it silently recovers.
     pub weight_fault_recovery: u32,
-    /// Given a fault recovery on an eligible watch, the percent chance it
-    /// includes a question (`RetryQuestion` for an interactive watch,
-    /// `VolumeChanged` for a volume-confirming one -- checked independently,
-    /// so a recovery may include neither, either, or both) rather than
-    /// resolving without one (silent autonomous retry, D-27's default). Has no
-    /// effect where the corresponding option is off.
+    /// Given a fault recovery on a volume-confirming watch, the percent
+    /// chance the confirming reopen actually landed on a different volume
+    /// (and so surfaces a `VolumeChanged`, file-watcher D-78) rather than
+    /// reopening the same volume. Has no effect on an interactive watch's
+    /// `RetryQuestion`, which is unconditional (`enter_fault`, watcher.rs:
+    /// every interactive route is asked on every fault, with no
+    /// probability), nor on a watch that is not volume-confirming.
     pub question_percent: u32,
 }
 
@@ -234,21 +237,24 @@ impl Generator {
             .collect();
 
         let mut schedule = Schedule::new();
-        loop {
-            let live: Vec<usize> = queues
-                .iter()
-                .enumerate()
-                .filter(|(_, queue)| !queue.is_empty())
-                .map(|(index, _)| index)
-                .collect();
-            if live.is_empty() {
-                break;
-            }
-            let pick = live[self.pick_index(&mut rng, live.len())];
+        // A mutable index of non-empty queues, rather than rescanning all
+        // `queues` on every selection: with `watches` queues and O(total
+        // notifications) selections, a full rescan per selection makes
+        // generation O(notifications * watches) -- quadratic as `watches`
+        // grows. `swap_remove` drops a drained queue's index in O(1).
+        let mut live: Vec<usize> = (0..queues.len())
+            .filter(|&i| !queues[i].is_empty())
+            .collect();
+        while !live.is_empty() {
+            let position = self.pick_index(&mut rng, live.len());
+            let pick = live[position];
             let spec = queues[pick]
                 .pop_front()
                 .expect("chosen queue was non-empty");
             schedule.steps.push(spec);
+            if queues[pick].is_empty() {
+                live.swap_remove(position);
+            }
         }
         schedule
     }
@@ -303,13 +309,23 @@ impl Generator {
                     // (VolumeChangePolicy::Confirm) are independent options in
                     // production (watch.rs) -- checked independently here, so
                     // a recovery may surface neither, either, or both.
-                    if interactive && rng.chance(self.config.question_percent) {
+                    // RetryQuestion is unconditional for an interactive watch:
+                    // `enter_fault` (watcher.rs) puts every interactive route
+                    // in the awaiting set and asks it on *every* fault, with
+                    // no probability involved -- a watch that sometimes
+                    // recovers silently despite being interactive is not a
+                    // schedule file-watcher could produce.
+                    if interactive {
                         out.push(NotificationSpec::RetryQuestion {
                             watch,
                             operation: gen_operation(rng),
                             detail: gen_detail(rng),
                         });
                     }
+                    // VolumeChanged is genuinely probabilistic: it is only
+                    // sent when a confirming reopen actually lands on a
+                    // different volume (file-watcher D-78), which is not
+                    // guaranteed on every recovery.
                     if volume_confirm && rng.chance(self.config.question_percent) {
                         let (previous, current) = gen_volume_change(rng);
                         out.push(NotificationSpec::VolumeChanged {
