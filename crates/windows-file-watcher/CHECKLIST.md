@@ -15,7 +15,7 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: none.** M1 through M13 are archived/done. Only the parked, ungated M-inf horizon
+> **NEXT ACTIONABLE ITEM: none.** M1 through M14 are archived/done. Only the parked, ungated M-inf horizon
 > items remain, and none is a current obligation.
 
 ## M4 -- Coalescing by directory and file targets

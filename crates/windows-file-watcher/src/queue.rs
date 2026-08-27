@@ -399,6 +399,26 @@ impl State {
         self.capacity - self.queue.len() - self.reserved
     }
 
+    /// Slots a best-effort notification could actually take *right now*.
+    ///
+    /// [`Sender::send`] flushes every owed latch into the queue before it
+    /// considers the caller's own notification, so a free slot with a latch
+    /// outstanding already belongs to that flush. This is therefore
+    /// `free()` minus what is owed, and it is the **single** definition both
+    /// [`Sender::has_room`] (`> 0`) and [`freed_resumers`]' wake edge (`== 1`)
+    /// are expressed in terms of.
+    ///
+    /// Keeping them derived from one quantity is deliberate: they were
+    /// previously two independent expressions, `free() > latched.len()` and
+    /// `free() == 1`, which disagreed the moment anything was latched -- the
+    /// prod fired one slot too early, the re-check still said "no room", and no
+    /// later drain re-fired it, wedging the watcher permanently
+    /// (PR #42 review). A predicate and the edge that wakes it cannot be
+    /// allowed to drift apart.
+    fn best_effort_room(&self) -> usize {
+        self.free().saturating_sub(self.latched.len())
+    }
+
     /// Whether a receiver has anything to observe.
     ///
     /// Disconnection counts: a client waiting on the doorbell must learn that the
@@ -569,8 +589,7 @@ impl Sender {
     /// still get `Delivery::Latched` back from the very next `send` -- the
     /// flush consumed the slot this check saw.
     pub fn has_room(&self) -> bool {
-        let state = lock(&self.shared.items);
-        state.free() > state.latched.len()
+        lock(&self.shared.items).best_effort_room() > 0
     }
 
     /// Ask to be prodded when a saturated queue frees a slot.
@@ -1181,8 +1200,13 @@ pub fn channel_with_bound(bound: NonZeroUsize) -> (Sender, Receiver) {
 /// Dead producers are pruned here, which is the only place the list is walked.
 fn freed_resumers(state: &mut State, took_one: bool) -> Vec<Arc<dyn Resume>> {
     // Only on the transition into having room: prodding on every take would put
-    // a wake behind every single notification a client drains.
-    if !took_one || state.resumers.is_empty() || state.free() != 1 {
+    // a wake behind every single notification a client drains. The edge is
+    // expressed in `best_effort_room` -- the same quantity `Sender::has_room`
+    // tests -- so the prod fires exactly when a parked producer's re-check will
+    // now succeed. Every step that frees capacity (taking a queued item,
+    // synthesising a latched one, releasing a reservation) raises it by exactly
+    // one, so `== 1` catches the crossing and cannot be stepped over.
+    if !took_one || state.resumers.is_empty() || state.best_effort_room() != 1 {
         return Vec::new();
     }
     let mut live = Vec::with_capacity(state.resumers.len());

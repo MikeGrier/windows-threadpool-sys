@@ -124,7 +124,7 @@ mod imp {
         let replayed = run_with_deadline(&recording.schedule, BuggyHandler::new(), deadline);
         output.report(&format!("replayed outcome: {replayed:?}"));
 
-        if replayed == recording.outcome {
+        if reproduces(&recording.outcome, &replayed) {
             output.report("reproduced: identical outcome.");
             true
         } else {
@@ -134,6 +134,25 @@ mod imp {
             // limit concerns a *handler's own* nondeterminism, not the harness).
             output.diagnostic("NOT reproduced: outcome differs from the recording.");
             false
+        }
+    }
+
+    /// Whether `replayed` reproduces `recorded`.
+    ///
+    /// Equality everywhere except `Stalled`, where the `deadline_ms` is the
+    /// run's *configuration* rather than anything the handler did. Clamping an
+    /// oversized recorded deadline (so an untrusted recording cannot hang this
+    /// process) necessarily changes that field, and comparing it exactly would
+    /// report every clamped stall as "NOT reproduced" even though the handler
+    /// wedged exactly as recorded. What reproduces is the wedge; the deadline is
+    /// only how long we waited before calling it one.
+    fn reproduces(recorded: &Outcome, replayed: &Outcome) -> bool {
+        match (recorded, replayed) {
+            (
+                Outcome::Pathology(PathologyKind::Stalled { .. }),
+                Outcome::Pathology(PathologyKind::Stalled { .. }),
+            ) => true,
+            _ => recorded == replayed,
         }
     }
 }

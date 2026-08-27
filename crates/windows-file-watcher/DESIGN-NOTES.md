@@ -703,3 +703,37 @@ a predicate that matches it. `is_empty` and `len` keep their meaning and gained 
 warning they lacked. Three regression tests cover the drained-with-a-loss-owed
 state, agreement with the doorbell at every step of that transition, and the
 disconnected-and-empty case -- none of which had a predecessor.
+
+**The sequel: fixing a predicate without fixing its wake edge.** The review round
+that followed M14.3 found the other half of the original `has_room` defect, and it
+is the sharper lesson of the two.
+
+`has_room` was corrected to `free() > latched.len()`. The prod that *wakes* a
+parked producer was left at its original `free() == 1`. Those two expressions agree
+only while nothing is latched -- which is exactly the state that never matters,
+because a producer only parks when the queue is saturated, and saturation is what
+creates latches. With one loss owed, draining a slot took `free()` to 1 and fired
+the prod, but `has_room` was still `1 > 1` = false, so the producer re-checked and
+stayed parked. The next drain took `free()` to 2, where `has_room` finally became
+true -- and `free() != 1`, so **no prod was ever sent again**. The watcher remained
+`Backpressured` with room available, permanently, and no error anywhere.
+
+That is [D-47](#d-47)'s lost-wake failure returning through a door D-47 did not
+guard. D-47 reasoned carefully about *when* the prod is rung relative to the gate
+lock, and got that right; what it did not anticipate is the wake *threshold* and
+the arm predicate being two separately-written expressions that a later fix to one
+would silently desynchronise from the other.
+
+So the fix is not to correct the second expression to match the first -- that just
+restores the coupling and waits for the next edit to break it again. Both are now
+derived from one quantity, `State::best_effort_room()`: `has_room` is `> 0` and the
+wake edge is `== 1`. Every step that frees capacity raises it by exactly one, so the
+edge cannot be stepped over. **A predicate and the edge that wakes it are one
+decision, and must have one source of truth.**
+
+Worth recording about the test, too. The first regression test written for this
+passed against the buggy code, because it only asserted the prod count *after* the
+transition -- where both versions reach 1, differing only in *when*. Asserting the
+count at the intermediate step (still 0 while `has_room` is false) is what
+distinguishes them. A regression test for a timing defect has to be run against the
+unfixed code to be worth anything, which is now how both were confirmed.

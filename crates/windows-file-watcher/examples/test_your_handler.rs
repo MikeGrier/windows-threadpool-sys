@@ -105,8 +105,20 @@ fn main() {
     let (sender, receiver) = channel_with_bound(DEFAULT_BOUND);
     let watch = WatchId::from_raw(1);
 
-    // A scripted, deterministic sequence -- exactly the shape your handler would
-    // see in production, but with no real directory and no thread pool.
+    // A scripted, deterministic sequence: no real directory, no thread pool.
+    //
+    // The order below is contract-legal for one watch -- registration, live
+    // traffic, a kernel overflow, then a fault bracket that resolves. Two
+    // details are easy to get wrong and are called out because this crate's own
+    // review found them: a *live* watch's fault always enters as
+    // `FaultOperation::Arm` (`Open` only ever re-enters an already-unresolved
+    // bracket), and a fault is followed by its resolution rather than left
+    // hanging.
+    //
+    // It is still a *script*, not a recording. Per D-83 the builders are
+    // valid-by-construction only in the type-safety sense, so nothing here
+    // validates legality for you -- see the harness crate's `schedule` module
+    // docs for the full sequencing rules a hand-authored schedule must respect.
     let _ = sender.send(Notification::Completion {
         watch,
         outcome: Outcome::Subscribed,
@@ -134,16 +146,26 @@ fn main() {
     });
     let _ = sender.send(Notification::RetryQuestion {
         watch,
-        operation: FaultOperation::Open,
+        operation: FaultOperation::Arm,
         detail: FaultDetail {
             failure: OpenFailure::NotFound,
             code: FailureCode::Win32(ERROR_FILE_NOT_FOUND),
         },
     });
+    // The recovery's reopen landed on different media, and this subscription
+    // opted into confirming that (D-78). It rides the same standing slot the
+    // question above does, which is sound only because the two are never
+    // outstanding at once for one watch.
     let _ = sender.send(Notification::VolumeChanged {
         watch,
         previous: VolumeIdentity::for_test(0x1111, "NTFS", "System"),
         current: VolumeIdentity::for_test(0x2222, "FAT32", "Removable"),
+    });
+    // The bracket resolves. Unconditional on recovery, never gated on the
+    // opt-in liveness reports (D-12).
+    let _ = sender.send(Notification::Desync {
+        watch,
+        cause: DesyncCause::Reestablished,
     });
 
     // Drive the handler exactly as a production loop would: drain and dispatch.
@@ -165,7 +187,11 @@ fn main() {
         !handler.present.contains(std::ffi::OsStr::new("report.tmp")),
         "the temp file was renamed away, so it should not be present"
     );
-    assert_eq!(handler.rescans, 1, "one Overflow desync means one re-scan");
+    assert_eq!(
+        handler.rescans, 2,
+        "both the Overflow and the Reestablished desync mean re-scan -- the \
+         cause is advisory across the recoverable four"
+    );
     assert!(matches!(
         handler.last_retry_reason,
         Some(OpenFailure::NotFound)

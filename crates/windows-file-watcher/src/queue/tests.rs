@@ -1341,3 +1341,110 @@ fn a_disconnected_empty_queue_still_has_something_to_take() {
     );
     assert!(receiver.recv().is_none());
 }
+
+// --- the resume edge must agree with has_room (PR #42 review) ---
+
+/// A [`Resume`] that only records how many times it was prodded.
+#[derive(Default)]
+struct CountingResumer {
+    prods: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingResumer {
+    fn count(&self) -> usize {
+        self.prods.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl super::Resume for CountingResumer {
+    fn resume(&self) {
+        self.prods.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_parked_producer_is_prodded_at_the_slot_has_room_actually_becomes_true() {
+    // The wedge: `has_room` is `free() > latched.len()` but the wake edge was
+    // `free() == 1`. With a latch owed, the prod fired one slot too early --
+    // the re-check still said "no room" -- and the next drain moved `free()`
+    // to 2, which was no longer the edge, so no prod ever came again. A bound
+    // greater than one is what exposes it; at capacity 1 the two expressions
+    // coincide.
+    let (sender, receiver) = bounded(4);
+    let watch = WatchId::from_raw(101);
+    let producer = Arc::new(CountingResumer::default());
+    sender.register_resume(&producer);
+
+    fill(&sender, watch, 4);
+    assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
+    assert_eq!(receiver.latched(), 1, "a loss is owed");
+    assert!(!sender.has_room(), "saturated");
+    assert_eq!(producer.count(), 0, "nothing freed yet");
+
+    // free() == 1, latched == 1: the old edge fired here, but has_room is
+    // still false, so a prod now is wasted -- and, worse, it is the *only*
+    // one that ever comes.
+    receiver.recv().expect("first");
+    assert!(
+        !sender.has_room(),
+        "the freed slot is owed to the latch flush, not to a new notification"
+    );
+    assert_eq!(
+        producer.count(),
+        0,
+        "prodding while has_room is still false burns the one wake the \
+         producer was going to get"
+    );
+
+    // free() == 2, latched == 1: has_room becomes true, so the prod must land
+    // here. The old edge skipped it and never fired again.
+    receiver.recv().expect("second");
+    assert!(sender.has_room(), "room genuinely exists now");
+    assert_eq!(
+        producer.count(),
+        1,
+        "the producer must have been prodded at the transition, or it stays \
+         parked forever with room available"
+    );
+}
+
+#[test]
+fn draining_only_latched_reports_still_reaches_the_resume_edge() {
+    // Taking a latched report leaves `free()` untouched and shrinks `latched`,
+    // so the transition can happen without any queued item being taken. An
+    // edge phrased on `free()` alone cannot see this at all.
+    let (sender, receiver) = bounded(2);
+    let producer = Arc::new(CountingResumer::default());
+    sender.register_resume(&producer);
+
+    // Three watches saturate the queue and two more are left owed a report.
+    fill(&sender, WatchId::from_raw(1), 2);
+    for id in [2, 3] {
+        assert_eq!(
+            sender.send(batch(WatchId::from_raw(id), &["lost.txt"])),
+            Delivery::Latched
+        );
+    }
+    assert_eq!(receiver.latched(), 2);
+
+    receiver.recv().expect("first queued");
+    receiver.recv().expect("second queued");
+    // Queue empty, free() == 2, latched == 2: still no room.
+    assert!(!sender.has_room());
+    assert_eq!(producer.count(), 0);
+
+    // Taking one synthesised report is what creates the room.
+    assert!(matches!(
+        receiver.recv().expect("a synthesised loss report"),
+        Notification::Desync {
+            cause: DesyncCause::QueueFull,
+            ..
+        }
+    ));
+    assert!(sender.has_room());
+    assert_eq!(
+        producer.count(),
+        1,
+        "the edge must be reachable by draining latched reports alone"
+    );
+}
