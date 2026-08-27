@@ -136,6 +136,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-impersonation-token-sys"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "windows-implement"
 version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

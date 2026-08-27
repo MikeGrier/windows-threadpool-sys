@@ -1,6 +1,21 @@
 # Design notes
 
-This is the Windows Threadpool System crate. (windows-threadpool-sys).
+## Founding theme
+
+This repository exists to enable asynchronous Windows code in Rust that uses native
+Windows APIs and the Windows thread pool while imposing zero thread overhead when idle.
+It favors Windows-native fidelity and composition over a lowest-common-denominator
+reactor model. The repository is called `windows-threadpool-sys` because it began with
+the memory-safe Windows thread-pool facade documented here; the other crates extend the
+same premise to adjacent Windows asynchronous facilities.
+
+These crates complement the Microsoft `windows` and `windows-sys` crates rather than
+compete with them. Public APIs use or re-export their corresponding native Windows types
+when those types faithfully express the contract. A crate-owned parallel type requires
+an additional invariant or semantic distinction that the native type cannot express;
+surface-level convenience alone is not sufficient.
+
+This is the Windows Threadpool System crate (`windows-threadpool-sys`).
 
 It provides a Rust memory safe API over the Windows operating system's threadpool APIs. The Windows threadpool
 is uniquely valuable in that it gives the ability to interact with the Windows operating system's
@@ -859,6 +874,74 @@ otherwise be rediscovered the hard way:
 	each was silently testing the arming calls alone. Scenarios that need firings now pause past a tick and
 	assert a floor, so the same degeneration cannot recur unnoticed. The rapid create/arm/drop scenario keeps its
 	zero -- there it is the point, and it is documented rather than asserted away.
+
+## Captured impersonation is a separate platform layer
+
+The workspace will add the independently published
+`windows-impersonation-token-sys` crate. It owns an opaque
+`ImpersonationToken` that captures the calling thread's effective impersonation
+state into owned transportable state, applies that state temporarily on another
+thread, and restores the exact prior thread-token state afterward. Restoration
+failure is fail-fast: returning a shared worker to the pool under an unknown
+identity is a process security failure, not an error that can be safely reported
+and ignored.
+
+The type is crate-owned even though this workspace normally prefers Microsoft
+native types. A raw `HANDLE` cannot express ownership, required rights,
+cross-thread transportability, immutability, scoped application, exact nested
+restoration, or the fail-fast restoration invariant. The helper remains built on
+the corresponding `windows-sys` token APIs and does not define a competing token
+model.
+
+The ordinary file-enumeration SQ begin helper captures this token synchronously
+before publishing its begin message. A second explicit-token form lets a future
+traversal layer capture once at traversal submission and reuse that same context
+for all descendant directory opens. Recapturing on a thread-pool worker would
+capture the worker or process identity and repeat the Globazog defect this layer
+exists to prevent.
+
+The legacy `QueueUserWorkItem` API exposes this behavior through
+`WT_TRANSFER_IMPERSONATION`; the modern object-based thread pool has no
+equivalent callback-environment setting. Microsoft WIL provides the constituent
+open-current-token and exact-restore helpers in C++, but the Microsoft Rust
+libraries expose raw APIs rather than a complete capture/transport/apply type.
+The reasoning and rejected Rust alternatives are recorded in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md).
+
+## Flat asynchronous enumeration is a separate publishable crate
+
+The workspace will add the independently published
+`windows-file-enumeration-sys` crate. One request enumerates one directory; a
+future traversal crate composes those flat requests rather than moving recursion
+into this layer. The crate must replace Globazog's current Windows
+one-directory backend without losing metadata, native path/name fidelity, error
+detail, backpressure correctness, or throughput.
+
+Each session owns a bounded multi-producer submission ring and bounded
+single-receiver completion ring. Begin, cancellation, abandonment, and future
+control operations enter through the SQ. Entries and exactly one terminal
+outcome per accepted enumeration leave through the CQ, tagged with an
+`EnumerationId`. Ordinary SQ saturation rejects a begin synchronously.
+Per-enumeration reservations make later cancellation infallible; a standing
+session reservation makes receiver-drop abandonment infallible. CQ terminal
+reservations may not consume every data slot.
+
+The native engine uses an opened directory handle and
+`GetFileInformationByHandleEx` with `FileIdExtdDirectoryRestartInfo` followed by
+`FileIdExtdDirectoryInfo`. It owns one fixed, reusable, correctly aligned native
+buffer per request, defaulting to 64 KiB and clamping configured values below
+1 KiB. It retains partially parsed batches across callbacks, performs at most
+one potentially blocking refill per callback, and uses finite record and cheap
+monotonic elapsed-time budgets. Ring pressure suspends enumeration without
+blocking a worker or dropping an accepted entry. `FindFirstFileExW`,
+`FindNextFileW`, direct `Nt*` APIs, and IOCP integration are not part of this
+design.
+
+The remaining v1 surface decisions -- predicates, metadata selection, native
+timestamp representation, errors, paths, ordering, unsupported filesystems, and
+oversize records -- must be settled before their implementation. That work is
+scheduled as FE-2 in [CHECKLIST.md](CHECKLIST.md), not left only in this design
+record.
 
 Primary references:
 - [Thread Pools](https://learn.microsoft.com/windows/win32/procthread/thread-pools)

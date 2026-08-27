@@ -534,3 +534,25 @@ getter, so a limit we were never told cannot constrain its counterpart. Refusing
 overshoot window unreachable through the safe API, which removed the flake at its root rather than by loosening
 the assertion. The superseded claim is marked in [DESIGN-NOTES.md](DESIGN-NOTES.md) and the new decision recorded
 beside it.
+
+## Moved 2026-08-27 -- windows-impersonation-token-sys scaffold
+
+### <a id="it-1"></a>IT-1 -- Scaffold and register the publishable `windows-impersonation-token-sys` workspace crate. *(completed 2026-08-27 16:10:13 UTC-04:00)*
+
+Scaffold `crates/windows-impersonation-token-sys` as a publishable Windows-only
+workspace crate. Its manifest inherits the workspace authors, edition, Rust version,
+license, repository, and homepage; declares version `0.1.0` with the
+release-please marker; provides crates.io description, README, documentation URL,
+keywords, categories, and Windows docs.rs target metadata; and selects only the
+`windows-sys` foundation, security, and threading features. The crate is registered
+in the workspace, [release-please-config.json](release-please-config.json),
+[.release-please-manifest.json](.release-please-manifest.json), and every crate-name
+surface in
+[.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml),
+including tag triggers, manual dispatch, and sibling-dependency recognition. Its
+local Tier 1 and Tier 2 design records, plans, completed-plans, changelog, README,
+manifest, and source skeleton are present with required copyright headers.
+
+Cargo metadata discovers the package as version `0.1.0`, the targeted package check
+passes, the package's empty unit and documentation test harnesses pass, and the
+crate name was unclaimed on crates.io when the scaffold was completed.

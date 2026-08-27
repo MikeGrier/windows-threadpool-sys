@@ -411,7 +411,8 @@ When executing checklist items (CHECKLIST.md files):
     `docs: archive M8, the fifth review round`).
   - **`<scope>`** — the crate the commit's diff lives under, using this repo's established short names:
     `threadpool` (`windows-threadpool-sys`), `overlapped-io` (`windows-overlapped-io-sys`), `wtf-string`
-    (`wtf-string`), `file-watcher` (`windows-file-watcher`), `ioring` (`windows-ioring-sys`), `topology`
+    (`wtf-string`), `file-watcher` (`windows-file-watcher`), `impersonation-token`
+    (`windows-impersonation-token-sys`), `ioring` (`windows-ioring-sys`), `topology`
     (`windows-topology-sys`). Omit the scope for a commit with no single
     crate home (root-level docs, workspace-wide chores). A commit that touches more than one crate's `src/`
     should be split so each Conventional Commit scope stays accurate — release-please attributes a bump by
