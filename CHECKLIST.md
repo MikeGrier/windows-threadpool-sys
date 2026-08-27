@@ -13,7 +13,7 @@ as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
 > **NEXT ACTIONABLE ITEM: FE-3.** Implement the settled public request,
-> predicate, result, error, terminal, identity, and session types.
+> predicate, result, error, terminal, and identity types.
 
 ## M5 -- Publishable file-enumeration API and two-ring session
 
@@ -22,28 +22,29 @@ as checklist work. Conventional Commit scopes for the new crates are
 - [x] **FE-2** -- Close and record the remaining v1 public-contract decisions before implementing them. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-2)
 
 - [ ] **FE-3** -- Implement the public request, predicate, result, error, terminal,
-  `EnumerationId`, session, submission, receiver, and affine enumeration-handle
-  types. Preserve native Microsoft value types where they express the contract,
-  retain names and paths as native-width WTF-16, make the predicate extensible
-  without replacing the request API, default the native buffer to 64 KiB, and clamp
-  requested capacities below 1 KiB.
+  and `EnumerationId` types. Preserve native Microsoft value types where they
+  express the contract, retain names and paths as native-width WTF-16, make the
+  predicate extensible without replacing the request API, default the native buffer
+  to 64 KiB, and clamp requested capacities below 1 KiB.
 
 - [ ] **FE-4** -- Implement the bounded multi-producer SQ and single-receiver CQ
-  session shell. Every begin and control operation enters through the SQ; every
-  entry and terminal carries its `EnumerationId`. Use one coalesced
-  `ThreadpoolWork` SQ doorbell and one logical FIFO drain authority. Give the CQ a
-  lazily created manual-reset event whose signaled state exactly matches observable
-  receiver work. The SQ servicer mutates the registry and schedules per-enumeration
-  work but never performs directory refills itself.
+  session shell, including the `Session`, submission, and receiver types that own
+  them. Every begin and control operation enters through the SQ; every entry and
+  terminal carries its `EnumerationId`. Use one coalesced `ThreadpoolWork` SQ
+  doorbell and one logical FIFO drain authority. Give the CQ a lazily created
+  manual-reset event whose signaled state exactly matches observable receiver work.
+  The SQ servicer mutates the registry and schedules per-enumeration work but never
+  performs directory refills itself.
 
-- [ ] **FE-5** -- Implement begin and cancellation admission. The ordinary
-  `try_begin` helper captures the caller's current `ImpersonationToken` before the SQ
-  entry becomes visible; an explicit-token form lets traversal capture once and
-  reuse that context for child enumerations. Accepted requests reserve an
-  exactly-once CQ terminal slot and an infallible future SQ cancellation slot;
-  ordinary full-SQ submission is rejected synchronously without acceptance. Reserve
-  a session-level abandon message so receiver drop rejects future starts and
-  asynchronously cancels all attached enumerations without blocking.
+- [ ] **FE-5** -- Implement begin and cancellation admission, including the affine
+  enumeration-handle type. The ordinary `try_begin` helper captures the caller's
+  current `ImpersonationToken` before the SQ entry becomes visible; an
+  explicit-token form lets traversal capture once and reuse that context for child
+  enumerations. Accepted requests reserve an exactly-once CQ terminal slot and an
+  infallible future SQ cancellation slot; ordinary full-SQ submission is rejected
+  synchronously without acceptance. Reserve a session-level abandon message so
+  receiver drop rejects future starts and asynchronously cancels all attached
+  enumerations without blocking.
 
 - [ ] **FE-6** -- Build a deterministic state-machine/model test suite for the two
   rings, reservations, registry, per-enumeration ordering, shared backpressure,
