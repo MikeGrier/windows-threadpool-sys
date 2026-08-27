@@ -16,11 +16,14 @@
 //! [`example_handler`]: windows_file_watcher_example_test_harness::example_handler
 //! [`example_handler::BuggyHandler`]: windows_file_watcher_example_test_harness::example_handler::BuggyHandler
 
-fn main() {
+fn main() -> std::process::ExitCode {
     #[cfg(windows)]
-    imp::main();
+    return imp::main();
     #[cfg(not(windows))]
-    eprintln!("windows-file-watcher-example-test-harness is Windows-only; nothing to do here.");
+    {
+        eprintln!("windows-file-watcher-example-test-harness is Windows-only; nothing to do here.");
+        std::process::ExitCode::FAILURE
+    }
 }
 
 #[cfg(windows)]
@@ -51,10 +54,11 @@ mod imp {
         }
     }
 
-    pub fn main() {
+    pub fn main() -> std::process::ExitCode {
         let args = Args::parse();
         let mut output = stdio();
         capture(&args, &mut output);
+        std::process::ExitCode::SUCCESS
     }
 
     fn capture(args: &Args, output: &mut Output<impl std::io::Write>) {
