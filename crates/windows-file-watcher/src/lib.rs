@@ -97,11 +97,16 @@
 //!
 //! The always-public pieces are the identity minter [`WatchId::from_raw`] and
 //! every boundary type. The feedable channel (`channel_with_bound`, its
-//! `Sender`, and `Sender::send`) and the builders for the two boundary types a
+//! `Sender`, and `Sender::send`), the builders for the two boundary types a
 //! consumer cannot otherwise construct (`RelativeName::for_test` and
 //! `VolumeIdentity::for_test`, for a [`Change`] and a
-//! [`Notification::VolumeChanged`] respectively) live behind the off-by-default
-//! `test-util` feature, so a production build's public surface is unchanged.
+//! [`Notification::VolumeChanged`] respectively), and
+//! [`ContractChecker`] all live behind the
+//! off-by-default `test-util` feature, so none of the *injection* surface
+//! reaches a production build. Three ordinary predicates are unconditional,
+//! because they answer questions a production handler asks:
+//! [`Receiver::has_pending`], [`DesyncCause::is_terminal`] and
+//! [`DesyncCause::is_reachable_in`].
 //!
 //! ```
 //! # fn main() {

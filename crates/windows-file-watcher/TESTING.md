@@ -114,7 +114,11 @@ dead watch forever -- and asking [`DesyncCause::is_terminal`] rather than matchi
 `Stopped` by name is what keeps that true if a further terminal cause is added.
 
 See [`examples/test_your_handler.rs`](examples/test_your_handler.rs) for a fuller
-worked example covering every notification kind.
+worked example: `Completion`, `Batch` (including a rename pair), `Desync` in both
+its recoverable and terminal forms, `RetryQuestion` and `VolumeChanged`. It does
+not exercise the opt-in liveness bracket (`Suspended`/`Resumed`/`Established`),
+which that handler deliberately leaves unused; the next section constructs every
+variant, those included.
 
 ## The building blocks
 
@@ -125,7 +129,10 @@ worked example covering every notification kind.
 | `Sender::reserve() -> Option<Reservation>` | Claim a slot for a message that must not be dropped; `Reservation::send` then cannot fail. |
 | `Sender::has_room() -> bool` | Whether a best-effort `send` would be accepted right now. |
 | `WatchId::from_raw(u64)` | Mint a subscription identity to tag notifications with. Any value is valid; the pairing is yours to choose. |
-| `Receiver::try_recv() -> Option<Notification>` | Non-blocking drain; `None` when empty. |
+| `Receiver::try_recv() -> Option<Notification>` | Non-blocking drain; `None` when there is nothing to collect. Note that is **not** the same as "the queue is empty": an owed latched `Desync { QueueFull }` is not queued but is still collected here. |
+| `Receiver::has_pending() -> bool` | Whether `recv` would produce something rather than block: a queued notification, an owed loss report, or the end of the stream. The predicate the doorbell is signalled on -- prefer it to `is_empty()`. |
+| `Receiver::is_empty()` / `len()` | Queue depth only. Excludes owed losses, so neither answers "is there anything for me?". |
+| `Receiver::is_disconnected() -> bool` | Whether every `Sender` is gone. A disconnected queue keeps its doorbell signalled, so a doorbell loop must test this to stop. |
 | `Receiver::recv() -> Option<Notification>` | Blocking drain; `None` once the queue is empty *and* every `Sender` is dropped (clean teardown). |
 | `Receiver::recv_timeout(Duration)` | Blocking drain with a deadline. |
 | `Receiver::doorbell()` | A manual-reset event you can wait on from your own thread instead of blocking in `recv`. |

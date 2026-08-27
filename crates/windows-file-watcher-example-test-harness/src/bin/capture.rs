@@ -16,12 +16,45 @@
 //! [`example_handler`]: windows_file_watcher_example_test_harness::example_handler
 //! [`example_handler::BuggyHandler`]: windows_file_watcher_example_test_harness::example_handler::BuggyHandler
 
+/// Where this bin's diagnostics and result lines go, kept as one seam (the
+/// repo's architectural pre-step, matching
+/// `windows-file-watcher/src/bin/run_scenario.rs`) rather than scattering
+/// `println!`/`eprintln!` across the file.
+///
+/// Declared outside the `cfg(windows)` gate so the non-Windows arm reports
+/// through the same seam rather than opening a second output site.
+struct Output<E, O> {
+    stderr: E,
+    stdout: O,
+}
+
+impl<E: std::io::Write, O: std::io::Write> Output<E, O> {
+    /// A usage or error line, to stderr.
+    fn diagnostic(&mut self, message: &str) {
+        let _ = writeln!(self.stderr, "{message}");
+    }
+
+    /// A progress or result line, to stdout.
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.stdout, "{message}");
+    }
+}
+
+fn stdio() -> Output<std::io::Stderr, std::io::Stdout> {
+    Output {
+        stderr: std::io::stderr(),
+        stdout: std::io::stdout(),
+    }
+}
+
 fn main() -> std::process::ExitCode {
     #[cfg(windows)]
     return imp::main();
     #[cfg(not(windows))]
     {
-        eprintln!("windows-file-watcher-example-test-harness is Windows-only; nothing to do here.");
+        stdio().diagnostic(
+            "windows-file-watcher-example-test-harness is Windows-only; nothing to do here.",
+        );
         std::process::ExitCode::FAILURE
     }
 }
@@ -34,34 +67,18 @@ mod imp {
         Generator, Recording, example_handler::BuggyHandler, run,
     };
 
-    /// Where this bin's per-pathology and summary lines go, kept as one seam
-    /// (the repo's architectural pre-step, matching
-    /// `windows-file-watcher/src/bin/run_scenario.rs`) rather than scattering
-    /// `println!` across the file.
-    struct Output<O> {
-        stdout: O,
-    }
-
-    impl<O: std::io::Write> Output<O> {
-        fn report(&mut self, message: &str) {
-            let _ = writeln!(self.stdout, "{message}");
-        }
-    }
-
-    fn stdio() -> Output<std::io::Stdout> {
-        Output {
-            stdout: std::io::stdout(),
-        }
-    }
+    use super::{Output, stdio};
 
     pub fn main() -> std::process::ExitCode {
-        let args = Args::parse();
         let mut output = stdio();
+        let Some(args) = Args::parse(&mut output) else {
+            return std::process::ExitCode::FAILURE;
+        };
         capture(&args, &mut output);
         std::process::ExitCode::SUCCESS
     }
 
-    fn capture(args: &Args, output: &mut Output<impl std::io::Write>) {
+    fn capture(args: &Args, output: &mut Output<impl std::io::Write, impl std::io::Write>) {
         std::fs::create_dir_all(&args.out).expect("create output directory");
         let end = args
             .start
@@ -99,34 +116,54 @@ mod imp {
     }
 
     impl Args {
-        fn parse() -> Self {
+        /// Parse, or report the usage error and give back `None`.
+        ///
+        /// A malformed command line is an ordinary usage error, not a panic:
+        /// it goes through the same output seam as everything else this bin
+        /// prints, matching `replay` and `windows-file-watcher`'s
+        /// `run_scenario`.
+        fn parse(output: &mut Output<impl std::io::Write, impl std::io::Write>) -> Option<Self> {
+            const USAGE: &str = "usage: capture [--seeds N] [--start N] [--out DIR]";
+
             let mut seeds = 1000u64;
             let mut start = 0u64;
             let mut out = PathBuf::from("captures");
             let mut args = std::env::args().skip(1);
             while let Some(flag) = args.next() {
                 match flag.as_str() {
-                    "--seeds" => {
-                        seeds = args
-                            .next()
-                            .expect("--seeds needs a value")
-                            .parse()
-                            .expect("--seeds must be a number");
-                    }
-                    "--start" => {
-                        start = args
-                            .next()
-                            .expect("--start needs a value")
-                            .parse()
-                            .expect("--start must be a number");
+                    "--seeds" | "--start" => {
+                        let Some(raw) = args.next() else {
+                            output.diagnostic(&format!("error: {flag} needs a value\n{USAGE}"));
+                            return None;
+                        };
+                        let Ok(value) = raw.parse::<u64>() else {
+                            output.diagnostic(&format!(
+                                "error: {flag} must be a number, got '{raw}'\n{USAGE}"
+                            ));
+                            return None;
+                        };
+                        if flag == "--seeds" {
+                            seeds = value;
+                        } else {
+                            start = value;
+                        }
                     }
                     "--out" => {
-                        out = PathBuf::from(args.next().expect("--out needs a value"));
+                        let Some(raw) = args.next() else {
+                            output.diagnostic(&format!("error: --out needs a value\n{USAGE}"));
+                            return None;
+                        };
+                        out = PathBuf::from(raw);
                     }
-                    other => panic!("unrecognized argument: {other}"),
+                    other => {
+                        output.diagnostic(&format!(
+                            "error: unrecognized argument '{other}'\n{USAGE}"
+                        ));
+                        return None;
+                    }
                 }
             }
-            Self { seeds, start, out }
+            Some(Self { seeds, start, out })
         }
     }
 }

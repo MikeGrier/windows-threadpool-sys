@@ -588,7 +588,9 @@ of them, and the rest keep teaching the old answer. Across three consecutive PR 
 findings were corrections that had not propagated rather than original defects. Recorded in
 [DESIGN-NOTES.md](DESIGN-NOTES.md#restatement-drift).
 
-- [x] **M2.1** -- Compiled `windows-file-watcher`'s TESTING.md and README.md as doctests. Neither was
+- [x] **M2.1** -- Compiled `windows-file-watcher`'s
+  [TESTING.md](crates/windows-file-watcher/TESTING.md) and
+  [README.md](crates/windows-file-watcher/README.md) as doctests. Neither was
   compiled before -- there was no `include_str!` anywhere -- so the five Rust blocks across them could only
   rot, and one was among the four sites that taught the `Stopped` error. Doctest count went 2 -> 7. Verified
   by reintroducing the exact drift and confirming the failure (`left: 2, right: 1`) before reverting; CI's

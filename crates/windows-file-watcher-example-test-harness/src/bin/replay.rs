@@ -11,12 +11,45 @@
 //! cargo run --bin replay -- <path-to-recording.json>
 //! ```
 
+/// Where this bin's diagnostics and result go, kept as one seam (the repo's
+/// architectural pre-step, matching
+/// `windows-file-watcher/src/bin/run_scenario.rs`) rather than scattering
+/// `println!`/`eprintln!` across the file.
+///
+/// Declared outside the `cfg(windows)` gate so the non-Windows arm reports
+/// through the same seam rather than opening a second output site.
+struct Output<E, O> {
+    stderr: E,
+    stdout: O,
+}
+
+impl<E: std::io::Write, O: std::io::Write> Output<E, O> {
+    /// A usage/error line, to stderr.
+    fn diagnostic(&mut self, message: &str) {
+        let _ = writeln!(self.stderr, "{message}");
+    }
+
+    /// A progress or result line, to stdout.
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.stdout, "{message}");
+    }
+}
+
+fn stdio() -> Output<std::io::Stderr, std::io::Stdout> {
+    Output {
+        stderr: std::io::stderr(),
+        stdout: std::io::stdout(),
+    }
+}
+
 fn main() -> std::process::ExitCode {
     #[cfg(windows)]
     return imp::main();
     #[cfg(not(windows))]
     {
-        eprintln!("windows-file-watcher-example-test-harness is Windows-only; nothing to do here.");
+        stdio().diagnostic(
+            "windows-file-watcher-example-test-harness is Windows-only; nothing to do here.",
+        );
         std::process::ExitCode::FAILURE
     }
 }
@@ -28,6 +61,8 @@ mod imp {
     use windows_file_watcher_example_test_harness::{
         Outcome, PathologyKind, Recording, example_handler::BuggyHandler, run_with_deadline,
     };
+
+    use super::{Output, stdio};
 
     // `replay.rs` is a bin root, so this module's own directory is
     // `src/bin/imp/`; the tests live beside the bin they cover, at
@@ -62,35 +97,6 @@ mod imp {
     /// whatever it is handed. Clamping up to a floor makes an unreproducible
     /// recording fail honestly instead.
     const MIN_REPLAY_DEADLINE: Duration = Duration::from_millis(100);
-
-    /// Where this bin's diagnostics and result go, kept as one seam (the
-    /// repo's architectural pre-step, matching
-    /// `windows-file-watcher/src/bin/run_scenario.rs`) rather than scattering
-    /// `println!`/`eprintln!` across the file.
-    struct Output<E, O> {
-        stderr: E,
-        stdout: O,
-    }
-
-    impl<E: std::io::Write, O: std::io::Write> Output<E, O> {
-        /// A usage/error line, to stderr.
-        fn diagnostic(&mut self, message: &str) {
-            let _ = writeln!(self.stderr, "{message}");
-        }
-
-        /// A progress or result line, to stdout.
-        fn report(&mut self, message: &str) {
-            let _ = writeln!(self.stdout, "{message}");
-        }
-    }
-
-    fn stdio() -> Output<std::io::Stderr, std::io::Stdout> {
-        Output {
-            stderr: std::io::stderr(),
-            stdout: std::io::stdout(),
-        }
-    }
-
     pub fn main() -> std::process::ExitCode {
         use std::process::ExitCode;
 
