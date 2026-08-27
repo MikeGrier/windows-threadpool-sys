@@ -596,6 +596,45 @@ All three are the same shape: a decision was superseded or extended, the index r
 was updated, and the prose section a reader actually reads was not. That the
 per-decision rows were correct throughout is what let it go unnoticed.
 
+**[D-10](#d-10)/[D-13](#d-13)/[D-17](#d-17)/[D-26](#d-26)/[D-57](#d-57), the
+notification-shaping decisions**, audited by M14.2 the same way. Only the rows that
+were not already answered above are listed.
+
+| # | Answer |
+|---|---|
+| 1 | `report_liveness` is the third independent option (M14.2 confirms D-27/D-28's row 1 from the other side): it gates `Suspended`/`Resumed`/`Established` and nothing else, and never creates a standing slot (D-57). |
+| 2 | `Established` is *conditional in a second way* beyond `report_liveness`: a route coalescing onto an already-faulted watcher is deliberately not told a tier, since there is no settled one to name. |
+| 3 | One decoded completion yields **zero, one, or many** `Batch` notifications, not one. `publish` de-multiplexes across every route (D-6) and a route whose filtered subset is empty is skipped, on the same reasoning D-26 applies to a wholly empty completion. **D-10's "one completion = one batch" is per-subscription, and only when that subscription's filtered subset is non-empty.** |
+| 4 | **The tier is not sticky.** `reopen` re-resolves it on every call (D-61), so `Established { Detailed }` then `Established { Coarse }` for one watch is legal, as is the reverse -- detailed is retried first every time, so a downgrade is not permanent. A client caching "this watch is detailed" is caching something the contract never promised. |
+| 5 | `Suspended`/`Resumed` carry only a `WatchId`; `Established` pairs it with a tier, both of whose values are always reachable. |
+| 6 | **A `Resumed` does not imply this subscription saw the matching `Suspended`.** A route that coalesces onto a faulted watcher joins `routes` after `enter_fault` has sent its `Suspended`s, so it receives `Resumed` (and its first `Established`) out of a bracket it never saw open. |
+| 7 | **A `Suspended` is not always followed by `Resumed`.** If the re-establish attempt's own open fails permanently, `record_stop` publishes `Desync { Stopped }` and sends no `Resumed` and no `Established` -- the bracket is closed by a terminator instead. A client balancing brackets must treat `Stopped` as closing every open one. |
+| 8 | An `Established` is never correlated with the `Completion` for the same registration; their relative order is fixed only in the immediate-success case. |
+| 9 | Not applicable -- none of these five carry a boundary-typed value. |
+| 10 | As D-12's row 10. |
+
+**What M14.2 found**, all in the contract's description of sequences rather than in
+behaviour:
+
+1. **A liveness bracket can open with `Resumed`.** Rows 6 and 7 above are the two
+   halves of the same omission: the contract described `Suspended`/`Resumed` as a
+   pair, and both a mid-fault join (opens without `Suspended`) and a permanent stop
+   (closes without `Resumed`) break the pairing. A consumer that counts brackets --
+   the obvious way to track "is my watch live?" -- is wrong in both directions.
+2. **`Established` is not the first notification a liveness subscription sees.**
+   For a route joining a faulted watcher the order is `Completion { Subscribed }`,
+   then later `Desync { Reestablished }`, `Resumed`, `Established`.
+3. **The tier can change between establishments**, which "reported once at first
+   establishment and again after every re-establishment" does not imply.
+
+One correction to M14.1's own table falls out of this pass: its D-27/D-28 row 2 says
+the `fault_slot.is_some()` conjunct is *implied* by `retry == Interactive`. That
+holds for every route `subscribe` builds, which is every route in production, but
+the crate's own unit tests construct `Route` directly and do pair `Interactive` with
+`fault_slot: None`. The guard is therefore live code, not redundant, and the honest
+statement is that the pairing is an invariant of the public registration path rather
+than of the type.
+
 ### <a id="the-has_room-finding-in-this-crate"></a>The `has_room` finding
 
 One round found a genuine defect in shipped 0.1 code rather than in the harness.

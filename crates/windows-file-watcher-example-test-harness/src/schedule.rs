@@ -66,8 +66,11 @@
 //!   that establishes immediately has `Established` then
 //!   `Completion { Subscribed }` as its first two notifications, never the
 //!   reverse. A non-liveness watch that establishes immediately has only the
-//!   `Completion`. Either way, nothing precedes establishment, and no `Batch`
-//!   arrives before it (file-watcher D-30/D-13).
+//!   `Completion`. Either way no `Batch` arrives before establishment
+//!   (file-watcher D-30/D-13). "Nothing precedes establishment" holds for a
+//!   watch that establishes against a *healthy* directory; one that coalesces
+//!   onto an already-faulted watcher is the documented exception, and is
+//!   covered in the liveness-bracket bullet below.
 //!
 //!   Two other first-registration outcomes exist, and this ordering rule does
 //!   not apply to them: a **retryable first open** reports
@@ -124,10 +127,33 @@
 //!   monitor.rs's `rekey`), or `Desync { Stopped }` (a live watch that later
 //!   became permanently unwatchable), nothing more arrives for that watch.
 //!   Each is a per-watch terminator.
-//! - **`Established` recurs on re-establishment.** When liveness is on,
-//!   `Established { mode }` appears once at first establishment and again after
-//!   each re-establishment (file-watcher D-17), immediately after `Resumed` in
-//!   the fault-recovery bracket above.
+//! - **`Established` recurs on re-establishment, and the tier may differ each
+//!   time.** When liveness is on, `Established { mode }` appears once at first
+//!   establishment and again after each re-establishment (file-watcher D-17),
+//!   immediately after `Resumed` in the fault-recovery bracket above. The
+//!   `mode` is **re-resolved on every reopen** (file-watcher D-61), so one
+//!   watch may legally see `Established { Detailed }` and later
+//!   `Established { Coarse }`, or the reverse -- detailed is attempted first
+//!   every time, so a downgrade is not permanent. A handler that caches a
+//!   watch's tier from the first `Established` is caching something the
+//!   contract does not promise.
+//! - **A liveness bracket does not always open with `Suspended`, and does not
+//!   always close with `Resumed`.** Both halves of the pairing can be absent,
+//!   so a schedule may legally contain either:
+//!   - a **`Resumed` with no prior `Suspended`** for that watch. A subscription
+//!     that coalesces onto a directory whose watcher is *already faulted* joins
+//!     the route set after `enter_fault` has sent its `Suspended`s, so it never
+//!     sees one; its first `Established` is suppressed as well (there is no
+//!     settled tier to name), and it observes
+//!     `Completion { Subscribed }` first, then `Desync { Reestablished }`,
+//!     `Resumed`, and only then its first `Established`. So `Established` is
+//!     **not** necessarily a watch's first notification.
+//!   - a **`Suspended` closed by `Desync { Stopped }` with no `Resumed`**, per
+//!     the terminal branch documented above.
+//!
+//!   A handler that tracks liveness by balancing `Suspended`/`Resumed` pairs is
+//!   therefore wrong in both directions, which is exactly the kind of assumption
+//!   this harness exists to test against.
 
 use serde::{Deserialize, Serialize};
 use windows_file_watcher::{

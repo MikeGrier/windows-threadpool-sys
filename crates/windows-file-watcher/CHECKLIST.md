@@ -143,10 +143,14 @@ reviewer happened to probe.
   and two load-bearing rules stated nowhere (the standing slot's mutual-exclusion invariant, and that
   "every request produces a completion" holds for lifecycle requests only).
 
-- [ ] **M14.2** -- Audit the remaining notification-shaping decisions ([D-10](DESIGN-NOTES.md),
+- [x] **M14.2** -- Audit the remaining notification-shaping decisions ([D-10](DESIGN-NOTES.md),
   [D-13](DESIGN-NOTES.md), [D-17](DESIGN-NOTES.md), [D-26](DESIGN-NOTES.md), [D-57](DESIGN-NOTES.md)) the
   same way, and fold any newly-stated rule into the harness's `schedule` module docs so the generator and
-  the contract stay in step.
+  the contract stay in step. Done: see [The M14 audit](DESIGN-NOTES.md#the-m14-audit). Three sequences the
+  contract did not admit -- a liveness bracket can open with `Resumed` (a route coalescing onto an
+  already-faulted watcher) and can close with `Desync { Stopped }` instead of `Resumed`; `Established` is
+  not necessarily a watch's first notification; and the tier is re-resolved on every reopen, so it may
+  differ between establishments. All three folded into the harness `schedule` docs.
 
 - [ ] **M14.3** -- Sweep for the [`has_room`](DESIGN-NOTES.md#the-has_room-finding-in-this-crate) shape:
   every advisory predicate this crate exposes or consumes on a reliability path, checked for whether its
