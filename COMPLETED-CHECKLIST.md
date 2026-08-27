@@ -622,3 +622,41 @@ findings were corrections that had not propagated rather than original defects. 
 Net effect: the two facts that actually drifted are now derived rather than restated, the prose that taught
 them is compiled, and what neither mechanism can reach is a binding rule in the file humans and Copilot both
 read. 943 workspace tests pass; default workspace builds clean in debug and release.
+
+## <a id="moved-2026-08-27-m3"></a>Moved 2026-08-27 -- M3: make the sequencing rules executable too
+
+[M2](#moved-2026-08-27-m2) made the *value-level* contract facts derived rather than restated, and recorded
+that sequencing rules would stay prose. That was too pessimistic: what cannot express them is the **type
+system**, not the codebase. A shared executable oracle can, and it is the same derive-don't-restate move at
+runtime.
+
+- [x] **M3.1** -- Renamed `first_two_notifications_of_a_liveness_watch_are_established_then_subscribed`,
+  which asserted as a *contract* rule something M14.2 had already established is not universally true: a
+  route coalescing onto an already-faulted watcher sees `Completion { Subscribed }` first and its
+  `Established` only after recovery. It passed solely because the generator never produces that case -- a
+  generator property wearing a contract name, and drift that had already happened with nothing catching it.
+
+- [x] **M3.2** -- Added `ContractChecker` to `windows-file-watcher` behind `test-util`: a per-`WatchId` state
+  machine checking terminality, tier-conditioned emission (delegated to `DesyncCause::is_reachable_in`), and
+  D-50/D-78 volume continuity and distinctness. It lives in the crate, not the harness, so one definition
+  serves the crate's tests, the harness, and a consumer's test doubles. Equal care went into what it does
+  **not** check: six tests assert it *accepts* the sequences M14 found legal but surprising, since
+  over-constraining is the same defect as under-specifying and this crate has shipped it. The one rule
+  genuinely uncheckable from the stream -- at most one question outstanding, whose answer travels the request
+  queue -- is documented as such rather than approximated.
+
+- [x] **M3.3** -- Adopted the checker in `windows-file-watcher`'s own integration tests, at the single
+  `Drained::pump` funnel every test drains through, so the **real** watcher's output is validated rather than
+  spot-checked. No violations found. Verified the guard actually fires rather than being compiled out by its
+  feature gate: sabotaging the checker made 13 of 15 tests fail.
+
+- [x] **M3.4** -- Collapsed four hand-written sequencing restatements in the harness into one
+  "generate, then validate" test. Two tests were kept and renamed to say whose property they assert:
+  generator *coverage* (which a contract checker cannot supply -- it says nothing illegal was emitted, never
+  that anything interesting was) and a deliberately narrower generator rule.
+
+Net effect: the sequencing rules now have one executable definition that the crate's own tests, the harness
+generator, and any consumer bind to. **Known remaining gap, left visible rather than papered over:** two
+harness tests still hand-encode contract rules the checker does not cover (`Resumed` followed by
+`Established`, and an interactive fault always asking). Extending the checker to them is real work, not
+bookkeeping.
