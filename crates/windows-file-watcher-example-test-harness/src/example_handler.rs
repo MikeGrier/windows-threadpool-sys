@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 
-use windows_file_watcher::{ChangeKind, DesyncCause, Notification, Outcome, WatchId};
+use windows_file_watcher::{ChangeKind, Notification, Outcome, WatchId};
 
 use crate::Handler;
 
@@ -93,10 +93,7 @@ impl Handler for PresenceTracker {
                     }
                 }
             }
-            Notification::Desync {
-                watch,
-                cause: DesyncCause::Stopped,
-            } => {
+            Notification::Desync { watch, cause } if cause.is_terminal() => {
                 self.stopped.insert(*watch);
             }
             Notification::Desync { .. } => self.rescans += 1,

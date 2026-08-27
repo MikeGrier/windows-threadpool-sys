@@ -419,6 +419,39 @@ pub enum DesyncCause {
     Stopped,
 }
 
+impl DesyncCause {
+    /// Whether this cause **ends** the watch rather than asking it to re-scan.
+    ///
+    /// Branch on this rather than matching [`DesyncCause::Stopped`] by name.
+    /// Doing so is what keeps a handler correct if a further terminal cause is
+    /// ever added: a name-match silently treats the new one as recoverable and
+    /// re-scans a dead watch forever, where this reports it as terminal.
+    ///
+    /// ```
+    /// use windows_file_watcher::DesyncCause;
+    ///
+    /// // The four recoverable causes: re-scan and carry on.
+    /// assert!(!DesyncCause::Overflow.is_terminal());
+    /// assert!(!DesyncCause::QueueFull.is_terminal());
+    /// assert!(!DesyncCause::Coarse.is_terminal());
+    /// assert!(!DesyncCause::Reestablished.is_terminal());
+    ///
+    /// // The one terminal cause: nothing further arrives for that watch, and a
+    /// // re-scan will not resynchronize it.
+    /// assert!(DesyncCause::Stopped.is_terminal());
+    /// ```
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        match self {
+            DesyncCause::Stopped => true,
+            DesyncCause::Overflow
+            | DesyncCause::QueueFull
+            | DesyncCause::Coarse
+            | DesyncCause::Reestablished => false,
+        }
+    }
+}
+
 /// The result of decoding one `ReadDirectoryChangesW` completion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DecodedBatch {

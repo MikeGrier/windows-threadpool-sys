@@ -75,12 +75,16 @@ use windows_file_watcher::{
 
 // The reaction logic under test -- your code, in isolation.
 fn handle(notification: &Notification, rescans: &mut u32, ended: &mut bool) {
-    match notification {
-        // Terminal, and matched first: a re-scan cannot resynchronize a watch
-        // that will never deliver again. `Monitor::stop_reason` says why.
-        Notification::Desync { cause: DesyncCause::Stopped, .. } => *ended = true,
-        Notification::Desync { .. } => *rescans += 1,
-        _ => {}
+    if let Notification::Desync { cause, .. } = notification {
+        // Ask the cause whether it is terminal rather than naming `Stopped`:
+        // a re-scan cannot resynchronize a watch that will never deliver
+        // again, and asking keeps this correct if another terminal cause is
+        // ever added. `Monitor::stop_reason` says why it stopped.
+        if cause.is_terminal() {
+            *ended = true;
+        } else {
+            *rescans += 1;
+        }
     }
 }
 
@@ -101,12 +105,13 @@ assert_eq!(rescans, 1);
 assert!(ended);
 ```
 
-Note the two arms. Four of the five `DesyncCause`s are advisory -- the response
+Note the two branches. Four of the five `DesyncCause`s are advisory -- the response
 is a re-scan either way, and the cause only tells you *how* you fell behind.
 `DesyncCause::Stopped` is not: it is terminal, nothing further arrives for that
-watch, and re-scanning will never resynchronize it. Matching it separately is
-the difference between a handler that notices its watch died and one that
-re-scans a dead watch forever.
+watch, and re-scanning will never resynchronize it. Distinguishing them is the
+difference between a handler that notices its watch died and one that re-scans a
+dead watch forever -- and asking [`DesyncCause::is_terminal`] rather than matching
+`Stopped` by name is what keeps that true if a further terminal cause is added.
 
 See [`examples/test_your_handler.rs`](examples/test_your_handler.rs) for a fuller
 worked example covering every notification kind.

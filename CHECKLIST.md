@@ -34,11 +34,12 @@ restate, then make the restatements compile, and only then fall back on conventi
   Done: doctest count 2 -> 7, verified by reintroducing the `Stopped` drift and confirming the failure.
   CI's `cargo test --workspace --all-features` covers `test-util`, so the guard is live there.
 
-- [ ] **M2.2** -- `DesyncCause::is_terminal()`, and adopt it everywhere. This is the value-level fact that
+- [x] **M2.2** -- `DesyncCause::is_terminal()`, and adopt it everywhere. This is the value-level fact that
   drifted across 8 files. Handlers branching on `is_terminal()` rather than matching `Stopped` by name also
   means a sixth cause added later cannot silently break every consumer. Adopt at all four example sites (the
   crate-level rustdoc example, TESTING.md, `examples/test_your_handler.rs`, and the harness's
-  `PresenceTracker`), so the pattern being taught is the durable one.
+  `PresenceTracker`), so the pattern being taught is the durable one. Done: all four adopted, and the
+  predicate carries its own doctest enumerating all five causes.
 
 - [ ] **M2.3** -- `DesyncCause::is_reachable_in(WatchMode)`, and make the generator bind to it. The
   Coarse/`QueueFull` fact had four independent encodings -- audit table, D-17 bullet, workspace taxonomy row,

@@ -113,11 +113,14 @@
 //!
 //!     // The consumer reaction logic under test, in isolation.
 //!     fn handle(notification: &Notification, rescans: &mut u32, ended: &mut bool) {
-//!         match notification {
-//!             // Terminal: a re-scan cannot resynchronize a stopped watch.
-//!             Notification::Desync { cause: DesyncCause::Stopped, .. } => *ended = true,
-//!             Notification::Desync { .. } => *rescans += 1,
-//!             _ => {}
+//!         if let Notification::Desync { cause, .. } = notification {
+//!             // Ask the cause, rather than naming the terminal one: a re-scan
+//!             // cannot resynchronize a stopped watch.
+//!             if cause.is_terminal() {
+//!                 *ended = true;
+//!             } else {
+//!                 *rescans += 1;
+//!             }
 //!         }
 //!     }
 //!

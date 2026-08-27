@@ -90,12 +90,9 @@ impl Handler {
                     }
                 }
             }
-            // Terminal, and matched *before* the general arm: a re-scan cannot
-            // resynchronize a watch that will never deliver again.
-            Notification::Desync {
-                cause: DesyncCause::Stopped,
-                ..
-            } => self.ended = true,
+            // Ask the cause rather than naming the terminal one: a re-scan
+            // cannot resynchronize a watch that will never deliver again.
+            Notification::Desync { cause, .. } if cause.is_terminal() => self.ended = true,
             Notification::Desync { .. } => self.rescans += 1,
             Notification::Completion { outcome, .. } => {
                 if matches!(outcome, Outcome::Subscribed) {
