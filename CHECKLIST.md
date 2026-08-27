@@ -12,22 +12,12 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-1.** M4 is complete; begin the publishable
-> `windows-file-enumeration-sys` crate scaffold.
+> **NEXT ACTIONABLE ITEM: FE-2.** Close the remaining v1 public-contract
+> decisions before implementing the public surface.
 
 ## M5 -- Publishable file-enumeration API and two-ring session
 
-- [ ] **FE-1** -- Scaffold `crates/windows-file-enumeration-sys` as a publishable
-  Windows-only workspace crate with the same complete crates.io, docs.rs,
-  release-please, publish-workflow, local design/plans, changelog, README, and
-  copyright setup required by IT-1. Declare path-plus-version dependencies on
-  `windows-impersonation-token-sys`, `windows-threadpool-sys`, and
-  `wtf-string`, and select only the `windows-sys` features used by directory
-  enumeration and its doorbells.
-
-  > **CROSS-COMPONENT PREREQUISITE:** component
-  > `crates/windows-impersonation-token-sys` -> M4 -> **IT-5** must be
-  > complete first. See [CHECKLIST.md](CHECKLIST.md).
+- [x] **FE-1** -- Scaffold and register the publishable `windows-file-enumeration-sys` workspace crate. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-1)
 
 - [ ] **FE-2** -- Close and record the remaining v1 public-contract decisions before
   implementing them: path and long-path inputs; native ordering; exact result and

@@ -665,3 +665,42 @@ the default workspace passes all-target checks in debug and release modes.
 > **-> CROSS-COMPONENT HANDOFF:** next work is in component
 > `crates/windows-file-enumeration-sys` -> M5 -> **FE-1** (publishable enumeration
 > crate scaffold). See [CHECKLIST.md](CHECKLIST.md).
+
+## Moved 2026-08-27 -- windows-file-enumeration-sys scaffold
+
+### <a id="fe-1"></a>FE-1 -- Scaffold and register the publishable `windows-file-enumeration-sys` workspace crate. *(completed 2026-08-27 17:23:34 UTC-04:00)*
+
+The new Windows-only
+[Cargo.toml](crates/windows-file-enumeration-sys/Cargo.toml) inherits the
+workspace authors, edition, Rust version, license, repository, and homepage;
+declares version `0.1.0` with the release-please marker; and provides complete
+crates.io metadata plus a Windows docs.rs target. Its path-plus-version
+dependencies are `windows-impersonation-token-sys 0.1.0`,
+`windows-threadpool-sys 0.1.2`, and `wtf-string 0.1.0`. Its direct
+`windows-sys 0.61.2` dependency enables only Foundation, Storage FileSystem,
+and System Threading for directory enumeration and CQ event signaling.
+
+The workspace manifest and lockfile include the crate. Release automation
+recognizes its component and `0.1.0` baseline, and
+[publish-crate.yml](.github/workflows/publish-crate.yml) accepts its tags,
+manual selection, and sibling-dependency ordering. The `file-enumeration`
+Conventional Commit scope is recorded in
+[copilot-instructions.md](.github/copilot-instructions.md).
+
+The crate has its copyright-bearing library scaffold,
+[README.md](crates/windows-file-enumeration-sys/README.md),
+[CHANGELOG.md](crates/windows-file-enumeration-sys/CHANGELOG.md), local
+[PLANS.md](crates/windows-file-enumeration-sys/PLANS.md) and
+[COMPLETED-PLANS.md](crates/windows-file-enumeration-sys/COMPLETED-PLANS.md),
+and Tier 1/Tier 2
+[DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+The local design record mirrors settled workspace decisions while explicitly
+leaving FE-2's public-contract questions unresolved.
+
+The package all-target check, test harness, documentation tests, rustdoc, and
+Clippy pass without warnings.
+
+> **CROSS-COMPONENT PREREQUISITE SATISFIED:** component
+> `crates/windows-impersonation-token-sys` -> M4 -> **IT-5** completed before
+> this scaffold. See [CHECKLIST.md](CHECKLIST.md).

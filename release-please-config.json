@@ -11,6 +11,10 @@
         "cargo-workspace"
     ],
     "packages": {
+        "crates/windows-file-enumeration-sys": {
+            "package-name": "windows-file-enumeration-sys",
+            "component": "windows-file-enumeration-sys"
+        },
         "crates/windows-file-watcher": {
             "package-name": "windows-file-watcher",
             "component": "windows-file-watcher"

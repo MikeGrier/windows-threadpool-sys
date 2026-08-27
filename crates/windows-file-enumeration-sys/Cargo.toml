@@ -1,0 +1,46 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-file-enumeration-sys"
+version = "0.1.0" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/windows-file-enumeration-sys"
+description = "Memory-safe asynchronous enumeration of one Windows directory with bounded submission and completion rings."
+readme = "README.md"
+keywords = ["windows", "directory", "enumeration", "asynchronous", "ffi"]
+categories = ["api-bindings", "filesystem", "os::windows-apis"]
+
+[lib]
+path = "src/lib.rs"
+
+# The crate is Windows-only, so docs.rs must build it on a Windows target or it
+# would render an empty crate.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+[dependencies]
+# Begin submission captures the caller's effective security context, and
+# traversal can supply one previously captured context for descendant opens.
+windows-impersonation-token-sys = { version = "0.1.0", path = "../windows-impersonation-token-sys" }
+
+# ThreadpoolWork provides the coalesced SQ doorbell and the per-enumeration
+# synchronous refill workers.
+windows-threadpool-sys = { version = "0.1.2", path = "../windows-threadpool-sys" }
+
+# Paths and returned names remain native-width WTF-16 without lossy conversion.
+wtf-string = { version = "0.1.0", path = "../wtf-string" }
+
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+	"Win32_Foundation",
+	"Win32_Storage_FileSystem",
+	"Win32_System_Threading",
+]

@@ -1,4 +1,5 @@
 {
+    "crates/windows-file-enumeration-sys": "0.1.0",
     "crates/windows-file-watcher": "0.1.1",
     "crates/windows-impersonation-token-sys": "0.1.0",
     "crates/windows-ioring-sys": "0.1.1",

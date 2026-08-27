@@ -4,6 +4,7 @@ name: publish-crate
 on:
   push:
     tags:
+      - 'windows-file-enumeration-sys-v*'
       - 'windows-file-watcher-v*'
       - 'windows-impersonation-token-sys-v*'
       - 'windows-ioring-sys-v*'
@@ -24,6 +25,7 @@ on:
         required: true
         type: choice
         options:
+          - windows-file-enumeration-sys
           - windows-file-watcher
           - windows-impersonation-token-sys
           - windows-ioring-sys
@@ -99,7 +101,7 @@ jobs:
       - name: Wait for workspace-sibling dependencies on crates.io
         shell: bash
         run: |
-          workspace_crates="windows-file-watcher windows-impersonation-token-sys windows-ioring-sys windows-overlapped-io-sys windows-threadpool-sys windows-topology-sys wtf-string"
+          workspace_crates="windows-file-enumeration-sys windows-file-watcher windows-impersonation-token-sys windows-ioring-sys windows-overlapped-io-sys windows-threadpool-sys windows-topology-sys wtf-string"
           metadata="$(cargo metadata --no-deps --format-version 1)"
           # `tr -d '\r'` is load-bearing on the Windows runner: jq.exe writes
           # CRLF, and `read` splits on LF alone, so without this the last field

@@ -2,6 +2,7 @@
 
 [workspace]
 members = [
+	"crates/windows-file-enumeration-sys",
 	"crates/windows-file-watcher",
 	"crates/windows-impersonation-token-sys",
 	"crates/windows-ioring-sys",
