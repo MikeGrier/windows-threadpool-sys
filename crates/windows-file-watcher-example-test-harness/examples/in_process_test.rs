@@ -27,7 +27,7 @@ fn main() {
             watch: 1,
             changes: vec![
                 ChangeSpec {
-                    kind: ChangeKindSpec::Added,
+                    kind: ChangeKindSpec::RenamedOldName,
                     name: "draft.tmp".into(),
                 },
                 ChangeSpec {
@@ -48,6 +48,7 @@ fn main() {
     // Assert on your handler's reactions -- this is the whole point.
     assert!(handler.is_subscribed());
     assert!(handler.present().contains("report.csv"));
+    assert!(!handler.present().contains("draft.tmp"));
     assert_eq!(handler.rescans(), 1);
 
     println!("in-process test passed: {handler:?}");

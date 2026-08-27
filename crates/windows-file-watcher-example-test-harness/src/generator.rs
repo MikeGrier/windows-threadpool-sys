@@ -17,8 +17,10 @@
 //! 1. **Establish first.** Emit `Completion { Subscribed }`, and -- for a watch
 //!    that reports liveness -- an `Established { mode }`, before any data. Nothing
 //!    else precedes establishment (schedule docs: establishment-before-data).
-//! 2. **Live loop.** A weighted mix of: a `Batch` (with rename changes emitted as
-//!    an old/new *pair*, in order); a loss `Desync` (`Overflow`/`QueueFull`, the
+//! 2. **Live loop.** A weighted mix of: a `Batch` (each record's kind, including
+//!    `RenamedOldName`/`RenamedNewName`, drawn independently rather than forced
+//!    into a pair -- `windows-file-watcher` never joins a rename, D-9); a loss
+//!    `Desync` (`Overflow`/`QueueFull`, the
 //!    D-29 loss shape); for a liveness watch, a `Suspended` -> `Desync {
 //!    Reestablished }` -> `Resumed` (-> optional re-`Established`) bracket; for an
 //!    interactive watch, a single `RetryQuestion` or `VolumeChanged`, which is
@@ -314,39 +316,18 @@ impl Generator {
         candidates[rng.weighted(&weights)].0
     }
 
-    /// A `Batch` of 1..=3 changes, with renames emitted as ordered old/new pairs.
+    /// A `Batch` of 1..=3 raw change records. `RenamedOldName`/`RenamedNewName`
+    /// are drawn independently, like every other kind, rather than forced into
+    /// an adjacent pair: `windows-file-watcher` never joins a rename (D-9), so
+    /// a legal batch may carry a lone half, both halves, or neither.
     fn gen_batch(&self, rng: &mut Rng, watch: u64) -> NotificationSpec {
         let count = rng.range(1, 3);
-        let mut changes = Vec::new();
-        for _ in 0..count {
-            match rng.below(4) {
-                0 => changes.push(ChangeSpec {
-                    kind: ChangeKindSpec::Added,
-                    name: gen_name(rng),
-                }),
-                1 => changes.push(ChangeSpec {
-                    kind: ChangeKindSpec::Removed,
-                    name: gen_name(rng),
-                }),
-                2 => changes.push(ChangeSpec {
-                    kind: ChangeKindSpec::Modified,
-                    name: gen_name(rng),
-                }),
-                _ => {
-                    // A rename is a pair: old name then the matching new name.
-                    let old = gen_name(rng);
-                    let new = gen_name(rng);
-                    changes.push(ChangeSpec {
-                        kind: ChangeKindSpec::RenamedOldName,
-                        name: old,
-                    });
-                    changes.push(ChangeSpec {
-                        kind: ChangeKindSpec::RenamedNewName,
-                        name: new,
-                    });
-                }
-            }
-        }
+        let changes = (0..count)
+            .map(|_| ChangeSpec {
+                kind: gen_change_kind(rng),
+                name: gen_name(rng),
+            })
+            .collect();
         NotificationSpec::Batch { watch, changes }
     }
 }
@@ -358,6 +339,18 @@ enum Event {
     Desync,
     SuspendResume,
     Question,
+}
+
+/// One raw change kind, drawn uniformly. `RenamedOldName`/`RenamedNewName` are
+/// independent draws, matching D-9 -- neither implies or requires the other.
+fn gen_change_kind(rng: &mut Rng) -> ChangeKindSpec {
+    match rng.below(5) {
+        0 => ChangeKindSpec::Added,
+        1 => ChangeKindSpec::Removed,
+        2 => ChangeKindSpec::Modified,
+        3 => ChangeKindSpec::RenamedOldName,
+        _ => ChangeKindSpec::RenamedNewName,
+    }
 }
 
 /// A deterministic relative name from a small pool.

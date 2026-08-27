@@ -28,11 +28,16 @@
 //!   subscriptions interleaves their notifications, and each watch's own
 //!   sub-sequence is what carries ordering meaning -- the control-flow rules
 //!   below are *per watch*.
-//! - **A rename is a pair, in order.** Within a `Batch`, a
-//!   [`ChangeKindSpec::RenamedOldName`] is followed by the matching
-//!   [`ChangeKindSpec::RenamedNewName`]. A handler that tracks names depends on
-//!   seeing both, in that order; a batch with one and not the other is a
-//!   malformed rename.
+//! - **A rename's two halves are independent, unjoined records.**
+//!   [`ChangeKindSpec::RenamedOldName`] and [`ChangeKindSpec::RenamedNewName`]
+//!   are raw, distinct kinds; `windows-file-watcher` never joins them or
+//!   correlates them across a buffer (its own DESIGN-NOTES D-9). The kernel
+//!   usually delivers them adjacent within one `Batch`, but nothing in the
+//!   contract requires that: a legal schedule may carry a lone half (its mate
+//!   arriving in a later batch, or never, e.g. lost to a `Desync`), both
+//!   halves together, or other changes interleaved between them. A handler
+//!   that assumes adjacency or pairing is assuming something
+//!   `windows-file-watcher` does not promise.
 //! - **Carried detail must be self-consistent.** `Failed`, `RetryQuestion`, and
 //!   `VolumeChanged` carry a [`FaultDetailSpec`] / [`VolumeSpec`] the handler
 //!   reads. Nothing across steps depends on those values, but they should be

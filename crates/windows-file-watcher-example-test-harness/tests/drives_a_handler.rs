@@ -25,17 +25,14 @@ fn drives_the_example_handler_through_a_scripted_schedule() {
                     name: "report.tmp".into(),
                 },
                 ChangeSpec {
+                    kind: ChangeKindSpec::RenamedOldName,
+                    name: "report.tmp".into(),
+                },
+                ChangeSpec {
                     kind: ChangeKindSpec::RenamedNewName,
                     name: "report.csv".into(),
                 },
             ],
-        })
-        .push(NotificationSpec::Batch {
-            watch: 1,
-            changes: vec![ChangeSpec {
-                kind: ChangeKindSpec::Removed,
-                name: "report.tmp".into(),
-            }],
         })
         .push(NotificationSpec::Desync {
             watch: 1,

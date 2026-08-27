@@ -92,17 +92,14 @@ fn main() {
                 name: RelativeName::for_test("report.tmp"),
             },
             Change {
+                kind: ChangeKind::RenamedOldName,
+                name: RelativeName::for_test("report.tmp"),
+            },
+            Change {
                 kind: ChangeKind::RenamedNewName,
                 name: RelativeName::for_test("report.csv"),
             },
         ],
-    });
-    let _ = sender.send(Notification::Batch {
-        watch,
-        changes: vec![Change {
-            kind: ChangeKind::Removed,
-            name: RelativeName::for_test("report.tmp"),
-        }],
     });
     let _ = sender.send(Notification::Desync {
         watch,
@@ -139,7 +136,7 @@ fn main() {
     );
     assert!(
         !handler.present.contains("report.tmp"),
-        "the temp file was removed, so it should not be present"
+        "the temp file was renamed away, so it should not be present"
     );
     assert_eq!(handler.rescans, 1, "one Overflow desync means one re-scan");
     assert!(matches!(
