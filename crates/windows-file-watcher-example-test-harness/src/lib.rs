@@ -19,10 +19,12 @@
 //!   stays inside file-watcher's documented contract).
 //! - [`run`] / [`oracle`] -- drive a handler and detect a pathology (a panic, an
 //!   invariant violation, or -- via [`run_with_deadline`] -- a wedge).
+//! - [`Recording`] / [`recording`] -- bundle a pathology's schedule and outcome
+//!   as a JSON artifact you can save, load, and replay as a regression.
 //! - [`example_handler`] -- a small, realistic handler used by the tests (and,
 //!   in later milestones, the `capture`/`replay` bins).
 //!
-//! Later milestones add JSON record/replay and `capture`/`replay` bin tools.
+//! Later milestones add `capture`/`replay` bin tools.
 //!
 //! # Fidelity limit
 //!
@@ -43,6 +45,8 @@ mod handler;
 #[cfg(windows)]
 pub mod oracle;
 #[cfg(windows)]
+pub mod recording;
+#[cfg(windows)]
 pub mod schedule;
 
 #[cfg(windows)]
@@ -56,6 +60,8 @@ pub use generator::{Generator, GeneratorConfig, Rng};
 pub use handler::Handler;
 #[cfg(windows)]
 pub use oracle::{Outcome, PathologyKind, run, run_with_deadline};
+#[cfg(windows)]
+pub use recording::Recording;
 #[cfg(windows)]
 pub use schedule::{
     ChangeKindSpec, ChangeSpec, DesyncCauseSpec, FailureCodeSpec, FaultDetailSpec,

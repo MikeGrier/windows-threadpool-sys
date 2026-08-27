@@ -11,12 +11,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use windows_file_watcher::{DEFAULT_BOUND, channel_with_bound};
 
 use crate::{Handler, Schedule};
 
 /// The result of running a schedule against a handler.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Outcome {
     /// Every notification was processed and the handler's invariant held.
     Healthy,
@@ -42,7 +43,7 @@ impl Outcome {
 }
 
 /// What went wrong.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PathologyKind {
     /// The handler panicked while processing the notification at `at_step`.
     Panicked {
@@ -63,8 +64,10 @@ pub enum PathologyKind {
     /// The handler wedged -- it did not finish within the deadline. Only
     /// [`run_with_deadline`] reports this.
     Stalled {
-        /// The deadline that elapsed.
-        deadline: Duration,
+        /// The deadline that elapsed, in milliseconds (a `Duration` has no
+        /// direct serde representation; this loses only sub-millisecond
+        /// precision, irrelevant at these timescales).
+        deadline_ms: u128,
     },
 }
 
@@ -127,7 +130,9 @@ where
     match rx.recv_timeout(deadline) {
         Ok(outcome) => outcome,
         Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
-            Outcome::Pathology(PathologyKind::Stalled { deadline })
+            Outcome::Pathology(PathologyKind::Stalled {
+                deadline_ms: deadline.as_millis(),
+            })
         }
     }
 }

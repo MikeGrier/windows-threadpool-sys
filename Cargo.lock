@@ -140,6 +140,7 @@ name = "windows-file-watcher-example-test-harness"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "windows-file-watcher",
 ]
 

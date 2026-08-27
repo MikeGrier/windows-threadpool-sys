@@ -48,10 +48,10 @@ in-scope crate, sync with origin) is standard procedure and not listed.
 
 ## M4 -- Record / replay (JSON)
 
-- [ ] **M4.1** -- Add `serde_json`; a `Recording { seed, schedule, outcome }` with save/load helpers. The
+- [x] **M4.1** -- Add `serde_json`; a `Recording { seed, schedule, outcome }` with save/load helpers. The
   JSON schema is explicitly not semver-covered (D-4).
 
-- [ ] **M4.2** -- Unit test: generate -> find a pathology -> serialize -> deserialize -> replay -> the same
+- [x] **M4.2** -- Unit test: generate -> find a pathology -> serialize -> deserialize -> replay -> the same
   pathology, deterministically.
 
 ## M5 -- capture / replay bins
