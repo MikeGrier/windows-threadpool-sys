@@ -140,6 +140,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: cargo clippy (default features)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # See build-test's matching isolated steps: --workspace unifies
+      # windows-file-watcher-example-test-harness's test-util dependency onto
+      # windows-file-watcher, so the default-feature lint above never actually
+      # checks it in isolation either.
+      - name: cargo clippy (windows-file-watcher, default features)
+        run: cargo clippy -p windows-file-watcher --all-targets --locked -- -D warnings
 
   docs:
     name: rustdoc (intra-doc links)
