@@ -52,7 +52,7 @@ assertions.
   watcher's output is validated against the contract rather than only spot-checked. This is the item most
   likely to find a behavioural defect rather than a documentation one, since nothing has ever asserted this.
 
-- [ ] **M3.4** -- Make the harness bind to the checker and collapse the hand-written sequencing invariant
+- [x] **M3.4** -- Make the harness bind to the checker and collapse the hand-written sequencing invariant
   tests into "generate, then validate". Each collapsed test is one fewer restatement that can drift from the
   contract, which is the whole point; keep any test that genuinely asserts a *generator* property (coverage,
   reproducibility) and say so in its name.

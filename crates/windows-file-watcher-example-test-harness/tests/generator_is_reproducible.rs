@@ -6,9 +6,9 @@
 
 use std::collections::BTreeMap;
 
+use windows_file_watcher::ContractChecker;
 use windows_file_watcher_example_test_harness::{
-    DesyncCauseSpec, Generator, GeneratorConfig, NotificationSpec, OutcomeSpec, VolumeSpec,
-    WatchModeSpec,
+    DesyncCauseSpec, Generator, GeneratorConfig, NotificationSpec, OutcomeSpec, WatchModeSpec,
 };
 
 #[test]
@@ -128,17 +128,17 @@ fn this_generator_never_opens_a_watch_other_than_established_or_subscribed() {
 }
 
 #[test]
-fn every_question_is_immediately_resolved_with_a_reestablished_desync() {
-    // A RetryQuestion/VolumeChanged only ever arises from inside a fault, and
-    // this generator's fault-recovery event pushes the resolution
-    // contiguously, so no other notification for the same watch can land
-    // between a question and its resolution (schedule docs: a fault and its
-    // resolution are one unit). `RetryMode::Interactive` and
-    // `VolumeChangePolicy::Confirm` are independent options, so a single
-    // recovery may surface a `RetryQuestion` followed by a `VolumeChanged` (or
-    // just one, or neither) before the resolution -- so the step immediately
-    // after a question is either the other kind of question or the
-    // resolution itself, never anything else.
+fn this_generator_resolves_every_question_contiguously() {
+    // A GENERATOR property. The contract requires only that a question is
+    // eventually followed by its bracket's resolution or a terminator; this
+    // generator emits them contiguously, which is narrower, and that narrowness
+    // is what this asserts.
+    //
+    // `RetryMode::Interactive` and `VolumeChangePolicy::Confirm` are
+    // independent options, so a single recovery may surface a `RetryQuestion`
+    // followed by a `VolumeChanged` (or just one, or neither) before the
+    // resolution -- so the step immediately after a question is either the
+    // other kind of question or the resolution itself.
     for config in sample_configs() {
         let generator = Generator::with_config(config);
         for seed in 0..10 {
@@ -244,12 +244,44 @@ fn an_interactive_watchs_fault_recovery_always_asks_a_retry_question() {
 }
 
 #[test]
-fn no_generated_desync_is_unreachable_in_its_watchs_current_tier() {
-    // Asserted against `DesyncCauseSpec::is_reachable_in`, which delegates to
-    // the crate's own predicate -- not against a rule restated here. A test
-    // that re-derives the contract only proves the generator agrees with the
-    // test author, which is exactly how this file previously codified a
-    // restriction the watcher does not keep (PR #42 review).
+fn every_generated_schedule_satisfies_the_contract() {
+    // The point of this milestone: the sequencing rules are asserted by the
+    // crate's own `ContractChecker`, not restated here. Four hand-written tests
+    // collapsed into this one -- terminality of `Cancelled`, tier-conditioned
+    // `Desync` legality, `VolumeChanged` distinctness, and `VolumeChanged`
+    // continuity -- each of which was a copy of a contract rule that could
+    // drift from it, and one of which already had.
+    //
+    // Adding a rule to the contract now covers the generator automatically; a
+    // rule the generator violates fails here without anyone remembering to
+    // write a matching assertion.
+    for config in sample_configs() {
+        let generator = Generator::with_config(config);
+        for seed in 0..20 {
+            let schedule = generator.generate(seed);
+            let mut checker = ContractChecker::new();
+            for (index, spec) in schedule.steps.iter().enumerate() {
+                let notification = spec.to_notification();
+                if let Err(violation) = checker.observe(&notification) {
+                    panic!(
+                        "seed {seed}, step {index}: the generator produced a schedule the \
+                         watcher could never emit: {violation:?} on {notification:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn this_generator_exercises_a_coarse_watchs_queue_full_loss() {
+    // A GENERATOR coverage property, not a contract rule. `QueueFull` is
+    // tier-independent, so a coarse watch may report it -- and this generator
+    // must actually produce that case, or the contract check above would pass
+    // just as well against a generator that quietly never explored it.
+    //
+    // Coverage is the one thing a contract checker cannot tell you: it says
+    // nothing illegal was emitted, never that anything interesting was.
     let generator = Generator::with_config(GeneratorConfig {
         watches: 4,
         steps_per_watch: 30,
@@ -262,32 +294,19 @@ fn no_generated_desync_is_unreachable_in_its_watchs_current_tier() {
     let mut saw_coarse_queue_full = false;
     for seed in 0..40 {
         let schedule = generator.generate(seed);
-        for (watch, steps) in by_watch(&schedule) {
+        for (_watch, steps) in by_watch(&schedule) {
             let mut mode = WatchModeSpec::Detailed;
             for step in &steps {
                 match step {
                     NotificationSpec::Established {
                         mode: established_mode,
                         ..
-                    } => {
-                        mode = established_mode.clone();
-                    }
-                    NotificationSpec::Batch { .. } => {
-                        assert_ne!(
-                            mode,
-                            WatchModeSpec::Coarse,
-                            "seed {seed}, watch {watch}: a Coarse watch must never report a \
-                             Batch"
-                        );
-                    }
-                    NotificationSpec::Desync { cause, .. } => {
-                        assert!(
-                            cause.is_reachable_in(&mode),
-                            "seed {seed}, watch {watch}: {cause:?} is not reachable in {mode:?}"
-                        );
-                        if mode == WatchModeSpec::Coarse && *cause == DesyncCauseSpec::QueueFull {
-                            saw_coarse_queue_full = true;
-                        }
+                    } => mode = established_mode.clone(),
+                    NotificationSpec::Desync { cause, .. }
+                        if mode == WatchModeSpec::Coarse
+                            && *cause == DesyncCauseSpec::QueueFull =>
+                    {
+                        saw_coarse_queue_full = true;
                     }
                     _ => {}
                 }
@@ -296,118 +315,6 @@ fn no_generated_desync_is_unreachable_in_its_watchs_current_tier() {
     }
     assert!(
         saw_coarse_queue_full,
-        "the generator must actually exercise a Coarse watch's QueueFull loss, or this test \
-         would pass just as well against a generator that still excludes it"
-    );
-}
-
-#[test]
-fn cancelled_is_always_the_last_notification_for_its_watch() {
-    for config in sample_configs() {
-        let generator = Generator::with_config(config);
-        for seed in 0..10 {
-            let schedule = generator.generate(seed);
-            for (watch, steps) in by_watch(&schedule) {
-                if let Some(position) = steps.iter().position(|step| {
-                    matches!(
-                        step,
-                        NotificationSpec::Completion {
-                            outcome: OutcomeSpec::Cancelled,
-                            ..
-                        }
-                    )
-                }) {
-                    assert_eq!(
-                        position,
-                        steps.len() - 1,
-                        "seed {seed}, watch {watch}: Cancelled must be the last notification \
-                         for its watch"
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn every_generated_volume_changed_has_a_distinct_previous_and_current_serial() {
-    // Regression test (PR #42 review): windows-file-watcher only emits
-    // VolumeChanged when the volume identity actually differs (D-78), and
-    // identity compares by serial alone (D-50). An equal previous/current
-    // serial would be an impossible, illegal notification.
-    let generator = Generator::with_config(GeneratorConfig {
-        watches: 4,
-        steps_per_watch: 40,
-        interactive_percent: 100,
-        volume_change_percent: 100,
-        ..GeneratorConfig::default()
-    });
-
-    let mut checked = 0;
-    for seed in 0..50 {
-        for step in &generator.generate(seed).steps {
-            if let NotificationSpec::VolumeChanged {
-                previous, current, ..
-            } = step
-            {
-                assert_ne!(
-                    previous.serial, current.serial,
-                    "seed {seed}: a VolumeChanged with equal serials is not a legal schedule"
-                );
-                checked += 1;
-            }
-        }
-    }
-    assert!(
-        checked > 0,
-        "expected at least one VolumeChanged across 50 seeds with interactive_percent/volume_change_percent: 100"
-    );
-}
-
-#[test]
-fn a_watchs_volume_changed_events_continue_from_the_prior_confirmed_identity() {
-    // Regression test (PR #42 review): WatcherInner::install stores the
-    // just-confirmed volume identity (watcher.rs:1137-1139), so a watch's
-    // next VolumeChanged.previous must equal that same watch's prior
-    // VolumeChanged.current, not an independently drawn value.
-    let generator = Generator::with_config(GeneratorConfig {
-        watches: 4,
-        steps_per_watch: 60,
-        volume_confirm_percent: 100,
-        volume_change_percent: 100,
-        weight_fault_recovery: 3,
-        ..GeneratorConfig::default()
-    });
-
-    let mut watches_with_multiple_changes = 0;
-    for seed in 0..50 {
-        let schedule = generator.generate(seed);
-        for (watch, steps) in by_watch(&schedule) {
-            let mut last_current: Option<&VolumeSpec> = None;
-            let mut changes_for_watch = 0;
-            for step in &steps {
-                if let NotificationSpec::VolumeChanged {
-                    previous, current, ..
-                } = step
-                {
-                    if let Some(expected_previous) = last_current {
-                        assert_eq!(
-                            previous, expected_previous,
-                            "seed {seed}, watch {watch}: VolumeChanged.previous must equal \
-                             this watch's prior VolumeChanged.current"
-                        );
-                        changes_for_watch += 1;
-                    }
-                    last_current = Some(current);
-                }
-            }
-            if changes_for_watch > 0 {
-                watches_with_multiple_changes += 1;
-            }
-        }
-    }
-    assert!(
-        watches_with_multiple_changes > 0,
-        "expected at least one watch with multiple VolumeChanged events across 50 seeds"
+        "the generator must actually exercise a Coarse watch's QueueFull loss"
     );
 }
