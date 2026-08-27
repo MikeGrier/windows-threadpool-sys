@@ -46,7 +46,8 @@ impl PresenceTracker {
 
     /// How many *recoverable* re-scan (desync) signals were seen.
     ///
-    /// Excludes [`DesyncCause::Stopped`], which is terminal -- see
+    /// Excludes [`windows_file_watcher::DesyncCause::Stopped`], which is
+    /// terminal -- see
     /// [`PresenceTracker::stopped`].
     #[must_use]
     pub fn rescans(&self) -> u32 {

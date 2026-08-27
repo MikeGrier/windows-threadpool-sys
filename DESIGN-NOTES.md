@@ -974,7 +974,7 @@ running the audit is what created several of the copies.
 1. **Make the fact underivable elsewhere.** A rule that is a predicate over values belongs in code, once,
    with everything else asking. `DesyncCause::is_terminal()` and `is_reachable_in(WatchMode)` retired the two
    facts that had drifted; the harness generator now *calls* the second rather than re-encoding it, which is
-   [PLATFORM INTEGRITY](../.github/copilot-instructions.md) rule 2 applied to a contract rather than to an
+   [PLATFORM INTEGRITY](.github/copilot-instructions.md) rule 2 applied to a contract rather than to an
    API. The test for this must be checked against a sabotaged definition: if changing the crate's rule does
    not change the *consumer's behavior*, the binding is cosmetic.
 
@@ -995,7 +995,7 @@ running the audit is what created several of the copies.
    into a build failure. This is the cheapest item and the highest yield.
 
 3. **Convention, for what neither covers.** Two rules, both recorded in
-   [.github/copilot-instructions.md](../.github/copilot-instructions.md) because that is the channel humans
+   [.github/copilot-instructions.md](.github/copilot-instructions.md) because that is the channel humans
    and Copilot both read: an analysis document never restates normative content, it edits the authority and
    cites it; and any contract correction is preceded by a blast-radius sweep for every other statement of the
    same fact.

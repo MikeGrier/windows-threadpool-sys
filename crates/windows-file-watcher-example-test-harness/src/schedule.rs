@@ -10,15 +10,25 @@
 //! # The format is unvalidated (deliberately)
 //!
 //! A [`Schedule`] is plain data. Nothing here checks that a schedule is one
-//! file-watcher could actually produce -- you can express a `Resumed` with no
-//! prior `Suspended`, two outstanding questions for one watch, or a `Batch`
-//! after a `Cancelled`. That permissiveness is intentional (crate DESIGN-NOTES
-//! D-7): the same format must faithfully carry a *recorded* schedule (whatever
-//! actually happened), so it cannot be pre-constrained to only-legal; and the
-//! legality rules are stateful *sequencing* constraints a per-value type cannot
-//! enforce anyway. Staying inside file-watcher's contract is therefore the
-//! caller's job -- the generator's (DESIGN-NOTES D-5) or yours when you author a
-//! schedule by hand. The dependencies you must respect to stay legal follow.
+//! file-watcher could actually produce -- you can express a `Batch` after that
+//! watch's `Completion { Cancelled }`, a `Desync { Overflow }` on a watch
+//! established `Coarse`, or a `VolumeChanged` whose `previous` does not
+//! continue from its own prior `current`. That permissiveness is intentional
+//! (crate DESIGN-NOTES D-7): the same format must faithfully carry a *recorded*
+//! schedule (whatever actually happened), so it cannot be pre-constrained to
+//! only-legal. Staying inside file-watcher's contract is therefore the caller's
+//! job -- the generator's (DESIGN-NOTES D-5) or yours when you author a schedule
+//! by hand.
+//!
+//! For the sequencing rules that *are* mechanically checkable, hand a schedule's
+//! notifications to [`windows_file_watcher::ContractChecker`] rather than
+//! re-deriving them; the three examples above are exactly what it rejects. Be
+//! careful which orderings you assume are illegal, though: a `Resumed` with no
+//! prior `Suspended` looks wrong and is legal (a subscription joining an
+//! already-faulted watcher never sees the `Suspended`), and two consecutive
+//! questions for one watch are legal too, because the answer that separates them
+//! travels the request queue, which this format does not represent.
+//! The dependencies you must respect to stay legal follow.
 //!
 //! # Data dependencies
 //!

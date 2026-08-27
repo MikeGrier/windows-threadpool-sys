@@ -660,3 +660,20 @@ generator, and any consumer bind to. **Known remaining gap, left visible rather 
 harness tests still hand-encode contract rules the checker does not cover (`Resumed` followed by
 `Established`, and an interactive fault always asking). Extending the checker to them is real work, not
 bookkeeping.
+
+## <a id="moved-2026-08-27-m3-followup"></a>Moved 2026-08-27 -- M3 follow-up: contract checking extended to every real-watcher drain
+
+[M3.3](#moved-2026-08-27-m3) recorded adopting `ContractChecker` "at the single `Drained::pump` funnel every
+test drains through". That was true of [tests/watched_paths.rs](crates/windows-file-watcher/tests/watched_paths.rs)
+and its 15 tests, but read as crate-wide coverage, which it was not: `tests/fault_detail.rs` and
+`tests/stress.rs` also drain real `Monitor` sessions, through their own loops, and neither was checked
+(PR #42 review).
+
+The claim is now true rather than narrowed. Both files route every drain through the checker:
+`fault_detail.rs` at its own `drain_until` funnel, and `stress.rs` at all four of its drain sites via a
+`Guard` alias that compiles to a no-op when `test-util` is off, so the call sites need no `cfg`.
+
+The stress suite is the more valuable of the two: `a_fault_storm_of_repeated_delete_recreate_always_reestablishes`
+walks the fault-bracket path 25 times against a real directory being deleted and recreated, which is exactly
+where a sequencing violation would appear and exactly where a point assertion would not notice. Run with
+`WINDOWS_FILE_WATCHER_STRESS=1`, all four stress tests pass with the checker live and report no violations.

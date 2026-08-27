@@ -30,6 +30,44 @@ fn stress_enabled() -> bool {
 /// fails the run rather than hanging it forever.
 const STRESS_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// The contract checker, when `test-util` is on.
+///
+/// These are real `Monitor` sessions under load, which is where a sequencing
+/// violation is most likely to appear and least likely to be caught by a point
+/// assertion -- the fault-storm test in particular walks the bracket path
+/// repeatedly. Each test keeps its own guard because each has its own session.
+#[cfg(feature = "test-util")]
+type Guard = windows_file_watcher::ContractChecker;
+
+/// A no-op stand-in when `test-util` is off, so the call sites need no `cfg`.
+#[cfg(not(feature = "test-util"))]
+struct Guard;
+
+#[cfg(not(feature = "test-util"))]
+impl Guard {
+    fn new() -> Self {
+        Self
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    fn observe(&mut self, _notification: &Notification) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+/// Validate one drained notification, if any, and hand it back.
+macro_rules! check {
+    ($guard:expr, $notification:expr) => {{
+        let notification = $notification;
+        if let Some(item) = notification.as_ref()
+            && let Err(violation) = $guard.observe(item)
+        {
+            panic!("the watcher emitted a contract violation: {violation:?} on {item:?}");
+        }
+        notification
+    }};
+}
+
 struct TempDir {
     path: PathBuf,
 }
@@ -96,10 +134,13 @@ fn change_churn_is_never_silently_lost() {
     // once, and that is a correctly reported loss, not a bug.
     let mut seen_any = false;
     let mut settled = false;
+    let mut checker = Guard::new();
     let deadline = Instant::now() + STRESS_TIMEOUT;
     while !settled {
         assert!(Instant::now() < deadline, "the watch stalled under churn");
-        if let Some(notification) = receiver.recv_timeout(Duration::from_millis(200)) {
+        if let Some(notification) =
+            check!(checker, receiver.recv_timeout(Duration::from_millis(200)))
+        {
             seen_any = true;
             if matches!(notification, Notification::Desync { .. }) {
                 // A desync is an explicit, honest "you may have missed
@@ -133,16 +174,17 @@ fn a_fault_storm_of_repeated_delete_recreate_always_reestablishes() {
         .expect("register");
 
     const ROUNDS: usize = 25;
+    let mut checker = Guard::new();
     for round in 0..ROUNDS {
         std::fs::write(dir.path().join("marker.txt"), b"x").expect("mark the round");
         wait_for(&format!("round {round}'s marker"), || !receiver.is_empty());
         // Drain whatever arrived so the queue never saturates across 25 rounds.
-        while receiver.try_recv().is_some() {}
+        while check!(checker, receiver.try_recv()).is_some() {}
 
         std::fs::remove_dir_all(dir.path()).expect("delete the watched directory");
         wait_for(&format!("round {round}'s suspension"), || {
             let mut suspended = false;
-            while let Some(notification) = receiver.try_recv() {
+            while let Some(notification) = check!(checker, receiver.try_recv()) {
                 if matches!(notification, Notification::Suspended { .. }) {
                     suspended = true;
                 }
@@ -153,7 +195,7 @@ fn a_fault_storm_of_repeated_delete_recreate_always_reestablishes() {
         std::fs::create_dir_all(dir.path()).expect("recreate the watched directory");
         wait_for(&format!("round {round}'s resumption"), || {
             let mut resumed = false;
-            while let Some(notification) = receiver.try_recv() {
+            while let Some(notification) = check!(checker, receiver.try_recv()) {
                 if matches!(notification, Notification::Resumed { .. }) {
                     resumed = true;
                 }
@@ -258,6 +300,7 @@ fn a_deeply_coalesced_directory_delivers_to_every_subscription_under_load() {
 
     let mut seen: std::collections::HashSet<windows_file_watcher::WatchId> =
         std::collections::HashSet::new();
+    let mut checker = Guard::new();
     let deadline = Instant::now() + STRESS_TIMEOUT;
     while seen.len() < SUBSCRIPTIONS {
         assert!(
@@ -265,7 +308,8 @@ fn a_deeply_coalesced_directory_delivers_to_every_subscription_under_load() {
             "only {} of {SUBSCRIPTIONS} subscriptions ever saw a change",
             seen.len()
         );
-        if let Some(notification) = receiver.recv_timeout(Duration::from_millis(200))
+        if let Some(notification) =
+            check!(checker, receiver.recv_timeout(Duration::from_millis(200)))
             && let Notification::Batch { watch, changes } = notification
             && !changes.is_empty()
         {

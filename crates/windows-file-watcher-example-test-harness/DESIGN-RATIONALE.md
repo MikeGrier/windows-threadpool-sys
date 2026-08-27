@@ -50,12 +50,21 @@ is a release-ordering constraint, recorded so it is not discovered at publish ti
 
 ## D-7: the wire format is deliberately unvalidated
 
-The format can express schedules file-watcher would never produce (a `Resumed` with no prior
-`Suspended`, two concurrent questions for one watch, a `Batch` after a `Cancelled`). This is
-intentional on two counts: the same format must faithfully carry a *recorded* schedule (whatever
-actually happened, so it cannot be pre-constrained to only-legal), and the legality rules are
-stateful *sequencing* constraints a per-value type cannot express anyway. Staying inside
-file-watcher's contract -- the data and control-flow dependencies documented on the `schedule`
-module -- is therefore the generator's (D-5) and the hand-author's responsibility. It is
+The format can express schedules file-watcher would never produce (a `Batch` after that watch's
+`Completion { Cancelled }`, a `Desync { Overflow }` on a watch established `Coarse`, a
+`VolumeChanged` whose `previous` does not continue from its own prior `current`). This is
+intentional: the same format must faithfully carry a *recorded* schedule -- whatever actually
+happened -- so it cannot be pre-constrained to only-legal. Staying inside file-watcher's contract
+is therefore the generator's (D-5) and the hand-author's responsibility. It is
 mechanism-not-policy applied to the format: the format supplies the vocabulary, the caller
 supplies legal sentences.
+
+This originally added "and the legality rules are stateful *sequencing* constraints a per-value
+type cannot express anyway", with `Resumed`-without-`Suspended` and two consecutive questions as
+its examples. Both halves were wrong. Those two sequences are **legal** -- a subscription joining
+an already-faulted watcher never sees the `Suspended`, and the answer separating two questions
+travels the request queue, which this format does not represent -- and a per-value type is not the
+only alternative to prose: `windows-file-watcher`'s `ContractChecker` is a state machine that
+checks the sequencing rules mechanically. The format stays unvalidated *by construction* so it can
+carry recordings; validation is available to a caller that wants it, and is simply not applied
+here.
