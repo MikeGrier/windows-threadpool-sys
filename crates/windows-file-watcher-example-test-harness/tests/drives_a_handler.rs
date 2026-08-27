@@ -6,7 +6,7 @@
 
 use windows_file_watcher_example_test_harness::{
     ChangeKindSpec, ChangeSpec, DesyncCauseSpec, NameSpec, NotificationSpec, OutcomeSpec, Schedule,
-    drive, example_handler::PresenceTracker,
+    WatchId, drive, example_handler::PresenceTracker,
 };
 
 #[test]
@@ -46,14 +46,61 @@ fn drives_the_example_handler_through_a_scripted_schedule() {
     assert!(
         handler
             .present()
-            .contains(std::ffi::OsStr::new("report.csv"))
+            .contains(&(WatchId::from_raw(1), std::ffi::OsString::from("report.csv")))
     );
     assert!(
         !handler
             .present()
-            .contains(std::ffi::OsStr::new("report.tmp"))
+            .contains(&(WatchId::from_raw(1), std::ffi::OsString::from("report.tmp")))
     );
     assert_eq!(handler.rescans(), 1);
+}
+
+#[test]
+fn distinct_watches_do_not_conflate_a_shared_name() {
+    // Generator draws from a small, shared name pool across several watches
+    // by default, so two subscriptions legally seeing the identical name is
+    // routine, not an edge case -- watch 2 removing "shared.txt" must not
+    // touch watch 1's entry for the same name.
+    let mut schedule = Schedule::new();
+    schedule
+        .push(NotificationSpec::Batch {
+            watch: 1,
+            changes: vec![ChangeSpec {
+                kind: ChangeKindSpec::Added,
+                name: "shared.txt".into(),
+            }],
+        })
+        .push(NotificationSpec::Batch {
+            watch: 2,
+            changes: vec![ChangeSpec {
+                kind: ChangeKindSpec::Added,
+                name: "shared.txt".into(),
+            }],
+        })
+        .push(NotificationSpec::Batch {
+            watch: 2,
+            changes: vec![ChangeSpec {
+                kind: ChangeKindSpec::Removed,
+                name: "shared.txt".into(),
+            }],
+        });
+
+    let mut handler = PresenceTracker::new();
+    drive(&schedule, &mut handler);
+
+    assert!(
+        handler
+            .present()
+            .contains(&(WatchId::from_raw(1), std::ffi::OsString::from("shared.txt"))),
+        "watch 1's entry must survive watch 2's unrelated removal"
+    );
+    assert!(
+        !handler
+            .present()
+            .contains(&(WatchId::from_raw(2), std::ffi::OsString::from("shared.txt"))),
+        "watch 2's own removal must still take effect"
+    );
 }
 
 #[test]

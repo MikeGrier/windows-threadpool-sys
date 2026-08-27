@@ -11,8 +11,8 @@
 //! ```
 
 use windows_file_watcher_example_test_harness::{
-    ChangeKindSpec, ChangeSpec, DesyncCauseSpec, NotificationSpec, OutcomeSpec, Schedule, drive,
-    example_handler::PresenceTracker,
+    ChangeKindSpec, ChangeSpec, DesyncCauseSpec, NotificationSpec, OutcomeSpec, Schedule, WatchId,
+    drive, example_handler::PresenceTracker,
 };
 
 /// Where this example's report goes, kept as one seam (the repo's
@@ -73,12 +73,12 @@ fn main() {
     assert!(
         handler
             .present()
-            .contains(std::ffi::OsStr::new("report.csv"))
+            .contains(&(WatchId::from_raw(1), std::ffi::OsString::from("report.csv")))
     );
     assert!(
         !handler
             .present()
-            .contains(std::ffi::OsStr::new("draft.tmp"))
+            .contains(&(WatchId::from_raw(1), std::ffi::OsString::from("draft.tmp")))
     );
     assert_eq!(handler.rescans(), 1);
 

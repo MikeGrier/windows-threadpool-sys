@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 
-use windows_file_watcher::{ChangeKind, Notification, Outcome};
+use windows_file_watcher::{ChangeKind, Notification, Outcome, WatchId};
 
 use crate::Handler;
 
@@ -17,7 +17,12 @@ use crate::Handler;
 /// example, not a library.
 #[derive(Debug, Default)]
 pub struct PresenceTracker {
-    present: BTreeSet<OsString>,
+    // Keyed by (watch, name), not name alone: `Generator` defaults to several
+    // watches drawn from one small name pool, so two subscriptions can
+    // legally see the identical name, and a name present under one watch says
+    // nothing about another (a real consumer routes/aggregates by `WatchId`
+    // for the same reason).
+    present: BTreeSet<(WatchId, OsString)>,
     rescans: u32,
     subscribed: bool,
     volume_changes: u32,
@@ -30,11 +35,11 @@ impl PresenceTracker {
         Self::default()
     }
 
-    /// The names currently believed present. `OsString`, not `String`: a
-    /// lossy conversion would collapse distinct valid Windows names that
-    /// differ only in an unpaired surrogate into the same entry.
+    /// The `(watch, name)` pairs currently believed present. `OsString`, not
+    /// `String`: a lossy conversion would collapse distinct valid Windows
+    /// names that differ only in an unpaired surrogate into the same entry.
     #[must_use]
-    pub fn present(&self) -> &BTreeSet<OsString> {
+    pub fn present(&self) -> &BTreeSet<(WatchId, OsString)> {
         &self.present
     }
 
@@ -60,15 +65,15 @@ impl PresenceTracker {
 impl Handler for PresenceTracker {
     fn on(&mut self, notification: &Notification) {
         match notification {
-            Notification::Batch { changes, .. } => {
+            Notification::Batch { watch, changes } => {
                 for change in changes {
                     let name = change.name.to_os_string();
                     match &change.kind {
                         ChangeKind::Removed | ChangeKind::RenamedOldName => {
-                            self.present.remove(&name);
+                            self.present.remove(&(*watch, name));
                         }
                         _ => {
-                            self.present.insert(name);
+                            self.present.insert((*watch, name));
                         }
                     }
                 }

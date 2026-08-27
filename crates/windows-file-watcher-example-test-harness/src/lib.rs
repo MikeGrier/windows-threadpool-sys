@@ -82,7 +82,8 @@ pub use schedule::{
     FaultOperationSpec, NameSpec, NotificationSpec, OpenFailureSpec, OutcomeSpec, Schedule,
     VolumeSpec, WatchModeSpec,
 };
-// Re-exported so a handler author can name the type its `on` receives without a
-// separate `windows-file-watcher` import in their tests.
+// Re-exported so a handler author can name the types their `on` receives (and,
+// for `WatchId`, key their own tracking by it) without a separate
+// `windows-file-watcher` import in their tests.
 #[cfg(windows)]
-pub use windows_file_watcher::Notification;
+pub use windows_file_watcher::{Notification, WatchId};
