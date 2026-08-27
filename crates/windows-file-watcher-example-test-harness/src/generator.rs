@@ -345,11 +345,18 @@ impl Generator {
                     // in the awaiting set and asks it on *every* fault, with
                     // no probability involved -- a watch that sometimes
                     // recovers silently despite being interactive is not a
-                    // schedule file-watcher could produce.
+                    // schedule file-watcher could produce. The operation is
+                    // always Arm: every `enter_fault` call site but one
+                    // passes `FaultOperation::Arm` (watcher.rs); the sole
+                    // `Open`-class site (`retry_reestablish`) only re-enters
+                    // an *already unresolved* bracket via that bracket's own
+                    // retry timer, never a live watch's first fault entry --
+                    // and this generator models one question per bracket, so
+                    // that later-retry case never applies here.
                     if interactive {
                         out.push(NotificationSpec::RetryQuestion {
                             watch,
-                            operation: gen_operation(rng),
+                            operation: FaultOperationSpec::Arm,
                             detail: gen_detail(rng),
                         });
                     }
@@ -484,15 +491,6 @@ fn gen_mode(rng: &mut Rng) -> WatchModeSpec {
         WatchModeSpec::Coarse
     } else {
         WatchModeSpec::Detailed
-    }
-}
-
-/// A faulting operation.
-fn gen_operation(rng: &mut Rng) -> FaultOperationSpec {
-    if rng.chance(50) {
-        FaultOperationSpec::Open
-    } else {
-        FaultOperationSpec::Arm
     }
 }
 
