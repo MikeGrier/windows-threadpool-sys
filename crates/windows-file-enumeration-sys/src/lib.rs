@@ -63,27 +63,36 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+mod admission;
 mod completion;
+mod completion_ring;
 mod entry;
 mod error;
 mod path;
 mod pattern;
 mod predicate;
+mod registry;
 mod request;
+mod session;
+mod submission_ring;
 mod timestamp;
 
 #[cfg(test)]
 mod testing;
 
+pub use admission::{EnumerationHandle, TokenCaptureError};
 pub use completion::{Completion, EnumerationId, TerminalOutcome};
 pub use entry::{DirectoryEntry, EntryType, FileIdentity, FileIdentityMode};
 pub use error::{
-    EnumerationError, MalformedRecord, PredicateError, PredicateFailure, RequestError,
-    RequestFailure, Win32Error,
+    BeginError, BeginFailure, EnumerationError, MalformedRecord, PredicateError, PredicateFailure,
+    RequestError, RequestFailure, SessionError, SessionFailure, Win32Error,
 };
 pub use pattern::{CaseSensitivity, NamePattern, PatternToken};
 pub use predicate::{
     ComparisonOperator, EntryPredicate, PredicateClause, QueryByExample, TimestampField,
 };
 pub use request::{DEFAULT_BUFFER_CAPACITY, EnumerationRequest, MINIMUM_BUFFER_CAPACITY};
+pub use session::{
+    MINIMUM_COMPLETION_RING_CAPACITY, MINIMUM_SUBMISSION_CAPACITY, Receiver, Session,
+};
 pub use timestamp::WindowsFileTimestamp;

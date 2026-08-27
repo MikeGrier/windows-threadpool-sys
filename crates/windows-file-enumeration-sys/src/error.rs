@@ -17,7 +17,9 @@
 use std::fmt;
 use std::io;
 
-use windows_impersonation_token_sys::ApplyError;
+use windows_impersonation_token_sys::{ApplyError, CaptureError, ImpersonationToken};
+
+use crate::request::EnumerationRequest;
 
 /// A raw Win32 error code, kept in the currency it arrived in.
 ///
@@ -173,6 +175,205 @@ impl fmt::Display for RequestError {
 }
 
 impl std::error::Error for RequestError {}
+
+/// Why an enumeration was not admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum BeginFailure {
+    /// The submission ring had no room for ordinary traffic.
+    ///
+    /// Reserved cancellation and abandonment messages are unaffected: this is
+    /// backpressure on *starting* work, applied where a caller can respond to
+    /// it.
+    SubmissionRingFull,
+    /// The completion ring could not reserve the terminal slot this enumeration
+    /// would owe.
+    ///
+    /// Reservations never take the ring's last slot, so this is reached when the
+    /// session is already carrying as many enumerations as its completion ring
+    /// can account for.
+    CompletionRingFull,
+    /// The receiver is gone, so the session no longer starts anything.
+    Abandoned,
+    /// The caller's security context could not be captured.
+    TokenCapture,
+}
+
+impl BeginFailure {
+    const fn describe(self) -> &'static str {
+        match self {
+            BeginFailure::SubmissionRingFull => "the submission ring is full",
+            BeginFailure::CompletionRingFull => {
+                "the completion ring cannot reserve a terminal slot"
+            }
+            BeginFailure::Abandoned => "the session has been abandoned by its receiver",
+            BeginFailure::TokenCapture => "the caller's security context could not be captured",
+        }
+    }
+}
+
+/// A synchronous refusal to start an enumeration.
+///
+/// The request -- and the captured security context, when there was one -- come
+/// back with the error, because nothing was accepted: a caller can retry with
+/// exactly what it submitted rather than rebuilding it.
+#[derive(Debug)]
+pub struct BeginError {
+    failure: BeginFailure,
+    request: EnumerationRequest,
+    token: Option<ImpersonationToken>,
+    capture: Option<CaptureError>,
+}
+
+impl BeginError {
+    pub(crate) fn rejected(
+        failure: BeginFailure,
+        request: EnumerationRequest,
+        token: Option<ImpersonationToken>,
+    ) -> Self {
+        Self {
+            failure,
+            request,
+            token,
+            capture: None,
+        }
+    }
+
+    pub(crate) fn capture(request: EnumerationRequest, capture: CaptureError) -> Self {
+        Self {
+            failure: BeginFailure::TokenCapture,
+            request,
+            token: None,
+            capture: Some(capture),
+        }
+    }
+
+    /// Why the enumeration was refused.
+    #[must_use]
+    pub const fn failure(&self) -> BeginFailure {
+        self.failure
+    }
+
+    /// The request that was refused.
+    #[must_use]
+    pub const fn request(&self) -> &EnumerationRequest {
+        &self.request
+    }
+
+    /// Take back the request and, when one was captured, the security context,
+    /// so a retry costs neither a rebuild nor a second capture.
+    #[must_use]
+    pub fn into_parts(self) -> (EnumerationRequest, Option<ImpersonationToken>) {
+        (self.request, self.token)
+    }
+
+    /// The capture failure behind a [`BeginFailure::TokenCapture`].
+    #[must_use]
+    pub const fn capture_error(&self) -> Option<&CaptureError> {
+        self.capture.as_ref()
+    }
+}
+
+impl fmt::Display for BeginError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.capture {
+            Some(capture) => write!(f, "{}: {capture}", self.failure.describe()),
+            None => f.write_str(self.failure.describe()),
+        }
+    }
+}
+
+impl std::error::Error for BeginError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.capture
+            .as_ref()
+            .map(|capture| capture as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// Why a session could not be built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SessionFailure {
+    /// The submission ring could not carry one enumeration.
+    ///
+    /// It needs room for the session's standing abandon message, one
+    /// enumeration's reserved cancellation, and one ordinary begin.
+    SubmissionCapacityTooSmall,
+    /// The completion ring could not carry one enumeration.
+    ///
+    /// It needs room for one reserved terminal outcome and one entry, and
+    /// reservations never take the last slot.
+    CompletionCapacityTooSmall,
+    /// Windows refused to create the servicer's thread-pool work object.
+    WorkObject,
+}
+
+impl SessionFailure {
+    const fn describe(self) -> &'static str {
+        match self {
+            SessionFailure::SubmissionCapacityTooSmall => {
+                "the submission ring is too small to carry one enumeration"
+            }
+            SessionFailure::CompletionCapacityTooSmall => {
+                "the completion ring is too small to carry one enumeration"
+            }
+            SessionFailure::WorkObject => "the servicer's work object could not be created",
+        }
+    }
+}
+
+/// A synchronous failure while building a session.
+#[derive(Debug)]
+pub struct SessionError {
+    failure: SessionFailure,
+    source: Option<io::Error>,
+}
+
+impl SessionError {
+    pub(crate) const fn new(failure: SessionFailure) -> Self {
+        Self {
+            failure,
+            source: None,
+        }
+    }
+
+    pub(crate) const fn with_source(failure: SessionFailure, source: io::Error) -> Self {
+        Self {
+            failure,
+            source: Some(source),
+        }
+    }
+
+    /// What about the session was rejected.
+    #[must_use]
+    pub const fn failure(&self) -> SessionFailure {
+        self.failure
+    }
+
+    /// The OS error behind the failure, when Windows produced one.
+    #[must_use]
+    pub const fn os_error(&self) -> Option<&io::Error> {
+        self.source.as_ref()
+    }
+}
+
+impl fmt::Display for SessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.source {
+            Some(source) => write!(f, "{}: {source}", self.failure.describe()),
+            None => f.write_str(self.failure.describe()),
+        }
+    }
+}
+
+impl std::error::Error for SessionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|source| source as &(dyn std::error::Error + 'static))
+    }
+}
 
 /// Why a query-by-example clause was rejected.
 ///

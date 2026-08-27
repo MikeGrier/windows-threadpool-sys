@@ -761,3 +761,48 @@ the two-record completion surface with the failure carried inside its terminal.
 
 118 unit tests plus the crate doctest pass; targeted all-target Clippy and
 `cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration two-ring session and admission
+
+FE-4 and FE-5 land in one commit. They are not independent as written: FE-4's
+rings, reservations, registry, and servicer have no reachable producer until
+FE-5's admission path exists, so FE-4 alone cannot build without pervasive
+dead-code suppression that FE-5 would immediately remove. Committing them
+together is the acknowledged-coupling response rather than disguising it with
+temporary lint allowances.
+
+### <a id="fe-4"></a>FE-4 -- Implement the bounded two-ring session shell with its `Session`, submission, and receiver types. *(completed 2026-08-27 18:49:34 UTC-04:00)*
+
+[completion_ring.rs](crates/windows-file-enumeration-sys/src/completion_ring.rs)
+is the bounded single-receiver ring: reserved terminal slots that never consume
+the last data slot, best-effort entry sends that hand a refused record straight
+back rather than dropping it, and a lazily created manual-reset doorbell whose
+signalled state is re-established under the ring lock at the end of every
+mutation.
+[submission_ring.rs](crates/windows-file-enumeration-sys/src/submission_ring.rs)
+is the bounded multi-producer control ring, with reserved cancellation and
+abandon slots and the coalescing drain flag that keeps a burst of submissions
+from queueing a burst of empty drains.
+
+[session.rs](crates/windows-file-enumeration-sys/src/session.rs) owns both rings
+plus the [registry.rs](crates/windows-file-enumeration-sys/src/registry.rs)
+of live enumerations, and drains the submission ring in FIFO order from one
+`ThreadpoolWork` callback. The work object is deliberately owned by the
+client-side handles rather than by the state its callback touches, so a callback
+can never drop the work object it is running inside.
+
+### <a id="fe-5"></a>FE-5 -- Implement begin and cancellation admission and the affine enumeration handle. *(completed 2026-08-27 18:49:34 UTC-04:00)*
+
+[admission.rs](crates/windows-file-enumeration-sys/src/admission.rs) secures the
+captured security context, the completion-ring terminal slot, and the
+submission-ring cancellation slot before a begin becomes visible, so a begin is
+either fully accepted or fully refused with the request and token handed back.
+`Session::try_begin` captures the submitter's context synchronously;
+`try_begin_with_token` takes an already-captured one for a traversal layer.
+`EnumerationHandle` is affine: cancelling or dropping it spends the reservation
+exactly once, and `detach` returns it so an enumeration can outlive its handle.
+Dropping the `Receiver` spends the standing abandon reservation, which stops
+further starts and releases every carried enumeration without a terminal.
+
+199 unit tests plus the crate doctest pass; targeted all-target Clippy and
+`cargo fmt --check` are clean.
