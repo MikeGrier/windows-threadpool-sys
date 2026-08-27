@@ -636,3 +636,32 @@ The exact mechanics and rationale are recorded in the workspace
 [DESIGN-RATIONALE.md](crates/windows-impersonation-token-sys/DESIGN-RATIONALE.md).
 The targeted all-target check and Clippy pass without warnings, and the package
 test and documentation-test harnesses pass.
+
+## Moved 2026-08-27 -- impersonation token documentation and publication readiness
+
+### <a id="it-5"></a>IT-5 -- Complete documentation and publication validation for the reusable impersonation-token layer. *(completed 2026-08-27 17:15:19 UTC-04:00)*
+
+The crate-level documentation and
+[README.md](crates/windows-impersonation-token-sys/README.md) now state the
+capture contract, nested-result behavior, cross-thread use, owned-handle and
+rights guarantees, exact prior-token restoration, and restoration-failure panic
+policy. The public surface is guarded by the `missing_docs` lint, the README
+contains ordinary and cross-thread examples, and
+[CHANGELOG.md](crates/windows-impersonation-token-sys/CHANGELOG.md) has the
+release-please baseline.
+
+The package manifest retains the Windows docs.rs target, complete crates.io
+metadata, version `0.1.0`, and only `windows-sys 0.61.2` with the Foundation,
+Security, and Threading features. The crate is registered consistently in
+[release-please-config.json](release-please-config.json),
+[.release-please-manifest.json](.release-please-manifest.json), and
+[publish-crate.yml](.github/workflows/publish-crate.yml).
+
+`cargo publish --dry-run` packages and verifies all 15 expected files as a
+55.5 KiB crate (14.0 KiB compressed). The 25 unit and integration tests and the
+crate doctest pass, rustdoc and targeted all-target Clippy are warning-free, and
+the default workspace passes all-target checks in debug and release modes.
+
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component
+> `crates/windows-file-enumeration-sys` -> M5 -> **FE-1** (publishable enumeration
+> crate scaffold). See [CHECKLIST.md](CHECKLIST.md).

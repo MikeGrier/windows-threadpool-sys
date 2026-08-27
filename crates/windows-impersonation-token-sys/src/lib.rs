@@ -5,9 +5,65 @@
 //! [`ImpersonationToken`] captures the calling thread's effective security
 //! context into an owned impersonation token that can be carried across
 //! threads without exposing its raw handle or mutation rights.
+//!
+//! # Capture contract
+//!
+//! Capture is synchronous. If the calling thread is impersonating, the
+//! captured token preserves its identification, impersonation, or delegation
+//! level. If the thread has no token, capture snapshots the process identity as
+//! a `SecurityImpersonation` token. Windows does not permit anonymous
+//! impersonation contexts to be opened, so they are rejected as
+//! [`CaptureFailure::AnonymousContext`].
+//!
+//! # Application and restoration
+//!
+//! [`ImpersonationToken::with_impersonation`] applies the captured token only
+//! for the dynamic extent of a closure. Before applying it, the method opens a
+//! handle to the exact thread-token object present on entry, or records that
+//! the thread had no token. That exact state is restored on ordinary return and
+//! during unwinding; restoration never substitutes a duplicate token and never
+//! uses `RevertToSelf`.
+//!
+//! A failure to save the entry state or apply the captured token is returned as
+//! [`ApplyError`] before the closure runs. A failure to restore the entry state
+//! panics because continuing to use a shared worker thread under an unknown
+//! identity would be unsafe. If the closure is already unwinding, the resulting
+//! double panic aborts the process.
+//!
+//! # Security invariants
+//!
+//! - The captured handle is owned, non-inheritable, and grants only
+//!   `TOKEN_IMPERSONATE`.
+//! - Clones share the same immutable token object; no safe API exposes its
+//!   handle or permits token mutation or rights expansion.
+//! - The private restoration guard cannot move to or be shared with another
+//!   thread.
+//! - The public API is closure-only, so safe code cannot forget the restoration
+//!   guard.
+//!
+//! # Example
+//!
+//! Capture once, move the owned token to a worker, and scope access-checked work
+//! to that context:
+//!
+//! ```no_run
+//! use std::thread;
+//! use windows_impersonation_token_sys::ImpersonationToken;
+//!
+//! let token = ImpersonationToken::capture()?;
+//! let worker = thread::spawn(move || {
+//!     token.with_impersonation(|| {
+//!         // Perform access-checked Windows work here.
+//!     })
+//! });
+//!
+//! worker.join().expect("worker panicked")?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
+#![warn(missing_docs)]
 
 mod restore;
 
@@ -166,7 +222,9 @@ impl std::error::Error for ApplyError {
 /// Cloning this value shares ownership of the same captured token. The native
 /// handle is real rather than pseudo or borrowed, is not inheritable, and has
 /// only `TOKEN_IMPERSONATE` access. No safe API exposes that handle or permits
-/// callers to mutate the captured token.
+/// callers to mutate the captured token. The value is safe to send to and share
+/// between threads; each call to [`Self::with_impersonation`] affects only the
+/// calling thread for the duration of its closure.
 #[must_use = "dropping the token discards the captured impersonation context"]
 pub struct ImpersonationToken {
     handle: Arc<OwnedHandle>,
@@ -185,7 +243,8 @@ impl ImpersonationToken {
     ///
     /// If the thread is impersonating, capture preserves its identification,
     /// impersonation, or delegation level. If the thread has no token, capture
-    /// snapshots the process token as a `SecurityImpersonation` token.
+    /// snapshots the process token as a `SecurityImpersonation` token. The
+    /// captured handle is non-inheritable and grants only `TOKEN_IMPERSONATE`.
     ///
     /// # Errors
     ///
@@ -231,6 +290,9 @@ impl ImpersonationToken {
     /// Stack unwinding also restores the prior state. The closure's return value
     /// is not interpreted, so a fallible closure produces
     /// `Result<Result<T, E>, ApplyError>`.
+    ///
+    /// This method changes only the calling thread's impersonation state. The
+    /// token may be reused sequentially or concurrently on other threads.
     ///
     /// # Errors
     ///

@@ -12,28 +12,8 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: IT-5.** Finish M4 before beginning any
-> `windows-file-enumeration-sys` implementation.
-
-## M4 -- Publishable captured-impersonation platform layer
-
-- [x] **IT-1** -- Scaffold and register the publishable `windows-impersonation-token-sys` workspace crate. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#it-1)
-
-- [x] **IT-2** -- Implement the opaque, owned, clonable `ImpersonationToken` capture type. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#it-2)
-
-- [x] **IT-3** -- Implement scoped application of an `ImpersonationToken` with exact prior-token restoration. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#it-3)
-
-- [x] **IT-4** -- Add deterministic capture, application, restoration, and failure-path tests. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#it-4)
-
-- [ ] **IT-5** -- Complete the crate-level API documentation, safety/invariant
-  documentation, README examples, changelog baseline, and publication validation.
-  Verify packaged contents, Windows docs.rs configuration, dependency versions,
-  release-please recognition, and `cargo publish --dry-run` through the repository's
-  Cargo tooling before declaring the reusable layer ready.
-
-  > **-> CROSS-COMPONENT HANDOFF:** next work is in component
-  > `crates/windows-file-enumeration-sys` -> M5 -> **FE-1** (publishable enumeration
-  > crate scaffold). See [CHECKLIST.md](CHECKLIST.md).
+> **NEXT ACTIONABLE ITEM: FE-1.** M4 is complete; begin the publishable
+> `windows-file-enumeration-sys` crate scaffold.
 
 ## M5 -- Publishable file-enumeration API and two-ring session
 
