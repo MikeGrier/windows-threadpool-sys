@@ -959,6 +959,19 @@ case behavior, type, reparse state/tag, non-zero all-set/all-clear attribute
 masks, both sizes, and all four timestamps. Numeric and timestamp comparisons
 provide `<`, `<=`, `==`, `!=`, `>=`, and `>`.
 
+Within a session, the submission-ring servicer is the sole authority that
+mutates the enumeration registry. A worker delivers entries and its own terminal
+to the completion ring and then reports retirement through the submission ring;
+it never removes a registry entry and never releases a thread-pool object.
+Consequently no thread-pool object is stored per enumeration: one session-owned
+engine work object, owned by the client-side handles and created with a runs-long
+environment, serves every enumeration through a ready set, and a running
+enumeration is never claimed twice. This keeps a worker from waiting on its own
+callback and keeps receiver-drop teardown from waiting on a directory query. Each
+accepted enumeration reserves a retirement message as well as a cancellation, and
+its native buffer is allocated -- fallibly, 8-byte aligned -- at admission rather
+than in the request.
+
 Unsupported extended-directory information is a typed failure with the raw
 Win32 code, not a metadata-losing fallback. The fixed buffer defaults to 64 KiB,
 clamps below 1 KiB, has an 8-byte-aligned base and 8-byte-multiple capacity, and

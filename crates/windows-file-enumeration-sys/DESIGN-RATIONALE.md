@@ -139,6 +139,57 @@ undocumented cursor behavior. `ERROR_MORE_DATA`,
 record exceeded the effective capacity. A typed terminal lets the caller retry
 with a larger explicitly chosen request without hiding allocation or replay.
 
+## Why a worker reports rather than acts (D-16, D-17)
+
+The first shape of this was the obvious one: a worker finishes its own
+enumeration, removing the registry entry and delivering the terminal. It does not
+survive contact with the thread pool. Removing the entry drops that
+enumeration's work object, and this workspace's `ThreadpoolWork::drop` waits for
+outstanding callbacks before closing -- so the worker waits for itself, forever,
+and would then free the closure it is still running inside.
+`CloseThreadpoolWork` is legal from within a callback, but the wait and the
+synchronous context free are not, so `DisassociateCurrentThreadFromCallback`
+does not rescue it either.
+
+The fix is not a safer release path but a smaller worker. A worker's outputs are
+records and one retirement report; the servicer, which already had sole authority
+over the registry, does the releasing. That also removes a liveness defect that
+had nothing to do with deadlock: abandonment used to drop every enumeration's
+work object on the servicer, waiting for in-flight *and queued* directory
+queries, so the cheap teardown path stalled the session's only drain authority
+behind an unbounded network read.
+
+Keeping thread-pool objects out of the registry entirely -- one session-owned
+engine object plus a ready set -- is what makes that guarantee structural rather
+than a rule someone has to remember. It costs a claim protocol, which the
+single-flight rule needs anyway, and saves modifying a published sibling crate
+purely to make a per-enumeration object releasable from the wrong place.
+
+## Why retirement is reserved like cancellation (D-18)
+
+A worker that cannot report itself finished leaks its enumeration: the registry
+entry, its token, handle, and buffer stay until the session dies. Retirement is
+therefore exactly as unable to fail as cancellation is, and gets the same
+treatment -- a slot claimed at admission, before the enumeration is allowed to
+start. The visible cost is one more reserved slot per live enumeration and a
+minimum submission capacity of four rather than three, which is the honest price
+of a control message that must always fit.
+
+## Why the native buffer belongs to the enumeration, not the request (D-19)
+
+The contract first put allocation in request construction, which reads well until
+`EnumerationRequest` is examined: it is `Clone`, it is `Eq`, it may be submitted
+more than once, and a refused begin hands it back for retry. A request owning a
+64 KiB buffer would make cloning it an infallible large allocation, make equality
+compare scratch space, and make a traversal layer pay that allocation for every
+begin the rings refuse.
+
+Admission is where the buffer belongs, beside the token capture and the two
+reservations, because admission is already the boundary where everything that can
+fail does so on the caller's own thread. The allocation must be fallible and
+8-byte aligned, and neither comes free: the ordinary growable vector aborts the
+process on allocation failure and guarantees only byte alignment.
+
 ## Why this remains a Globazog replacement
 
 Globazog's existing Windows backend demonstrates the minimum viable native

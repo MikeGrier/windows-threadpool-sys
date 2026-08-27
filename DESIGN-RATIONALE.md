@@ -131,6 +131,16 @@ already needed by Globazog, including native-name patterns, attribute masks, and
 six-way size/time comparisons. Windows ordinal comparison defines case behavior
 without handing wildcard semantics to a filesystem.
 
+The same reasoning applies inside a session, to which of its own components may
+act. A worker that finished its own enumeration would drop that enumeration's
+thread-pool work object from inside that object's callback, waiting for itself
+and then freeing the closure still running; and abandonment that released those
+objects on the servicer would stall the session's only drain authority behind an
+unbounded directory query. Making the worker a reporter, and keeping thread-pool
+objects out of the registry entirely, removes both structurally rather than by
+rule. Full details are in the enumeration crate's
+[DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+
 An accepted failure is embedded in the enumeration's one reserved terminal.
 This retains exact native detail without requiring another CQ data slot. Extended
 directory information that is unavailable fails explicitly instead of falling

@@ -30,6 +30,39 @@ making submission, delivery, cancellation, and resource bounds explicit.
 | <a id="d-13"></a>D-13 | **Unsupported extended directory enumeration is a typed terminal failure, never a metadata-losing fallback.** The crate owns the classification while preserving the native code. |
 | <a id="d-14"></a>D-14 | **The native buffer has one fallibly allocated, fixed effective capacity and an 8-byte-aligned base address.** It defaults to 64 KiB, clamps and aligns small requests, never grows, and reports a typed oversize-record terminal. |
 | <a id="d-15"></a>D-15 | **Replacing Globazog's Windows one-directory backend is a release acceptance gate.** The adapter must retain all required metadata, native paths and names, predicates, errors, ordering, and no-per-entry-open performance. |
+| <a id="d-16"></a>D-16 | **A worker reports; the submission-ring servicer is the sole registry authority.** A worker delivers entries and its own terminal to the completion ring, then reports retirement through the submission ring. It never mutates the registry and never releases a thread-pool object. |
+| <a id="d-17"></a>D-17 | **One session-owned engine work object serves every enumeration, through a ready set.** No thread-pool object is stored per enumeration, so nothing the servicer or a worker drops can wait on a directory query. |
+| <a id="d-18"></a>D-18 | **Each accepted enumeration reserves a retirement message as well as a cancellation.** Reporting oneself finished must be as infallible as being cancelled, which raises the minimum submission capacity to four. |
+| <a id="d-19"></a>D-19 | **The native buffer is allocated at admission, fallibly, with an 8-byte-aligned base.** A request stays a cheap, clonable, comparable description; the buffer belongs to the enumeration it serves. |
+
+## Control authority and worker lifetime
+
+The submission-ring servicer is the only authority that mutates the registry.
+A worker's outputs are completion records and one retirement report:
+
+- accepted entries go to the completion ring, best-effort, under backpressure;
+- the terminal outcome goes into the slot that enumeration reserved at
+  admission, which the worker owns and which cannot fail; and
+- retirement goes to the submission ring through a slot reserved at admission,
+  after which the servicer removes the registry entry and releases the token,
+  directory handle, native buffer, and remaining reservations.
+
+A worker therefore never removes a registry entry, never releases a
+thread-pool object, and never blocks another authority. This is not a stylistic
+split. Letting a worker finish its own enumeration meant dropping that
+enumeration's work object from inside that object's own callback, which
+self-waits forever and then frees the closure that is still executing. Reporting
+instead of acting removes the hazard rather than guarding against it.
+
+For the same reason no thread-pool object lives in the registry. One
+session-owned engine work object, created with a runs-long callback environment
+and owned by the client-side handles, serves every enumeration; `schedule` adds
+an enumeration to a ready set and submits that object, and each callback claims
+one ready enumeration. A claim is single-flight: an enumeration already running
+is never claimed twice, so one native buffer and record cursor are only ever
+touched by one worker. Abandonment then releases registry entries that own no
+thread-pool object at all, which is what lets receiver drop tear a session down
+without waiting on a directory query.
 
 ## Request path contract
 
@@ -173,12 +206,13 @@ conversion.
 
 Request construction reports typed synchronous errors for empty, interior-NUL,
 over-limit, or non-fully-qualified extended paths; path-resolution failure;
-invalid predicate data; unrepresentable buffer capacity; and buffer allocation
-failure. Begin admission reports capture failure, ordinary SQ saturation,
-cancellation-reservation exhaustion, terminal-reservation exhaustion, or
-receiver abandonment synchronously. A rejected begin preserves the request and
-any explicit token for retry. No rejected operation receives an `EnumerationId`
-or terminal.
+invalid predicate data; and unrepresentable buffer capacity. Begin admission
+reports capture failure, ordinary SQ saturation, cancellation-reservation
+exhaustion, retirement-reservation exhaustion, terminal-reservation exhaustion,
+and native-buffer allocation failure synchronously, as well as refusing a
+session whose receiver has abandoned it. A rejected begin preserves the request
+and any explicit token for retry. No rejected operation receives an
+`EnumerationId` or terminal.
 
 After acceptance, `EnumerationError` distinguishes impersonation application,
 directory open, required volume identity, unsupported extended directory
@@ -204,10 +238,17 @@ attribute size, and the 128-bit file ID from the promised level platform.
 
 The requested buffer capacity defaults to 64 KiB. Values below 1 KiB are clamped
 to 1 KiB, then the effective capacity is rounded up to an 8-byte multiple. A
-value whose aligned result cannot be passed as a Win32 `u32` is rejected. The
-fallible allocation must additionally produce a base address aligned to at least
-8 bytes so the record's `i64` fields can be read without misaligned access.
-Allocation completes before begin can be accepted.
+value whose aligned result cannot be passed as a Win32 `u32` is rejected when the
+request is built.
+
+The buffer itself is allocated at admission, one per accepted enumeration, and
+completes before the begin is accepted. It does not belong to the request: a
+request is a cheap, clonable, comparable description that may be submitted more
+than once and is handed back intact when a begin is refused, none of which
+survives owning a 64 KiB scratch buffer. The allocation must be fallible rather
+than aborting, and must produce a base address aligned to at least 8 bytes so
+the record's `i64` fields are never read misaligned -- neither of which the
+ordinary growable-vector allocation path provides on its own.
 
 The request uses that one effective capacity for its lifetime. It neither grows
 nor retries with a different capacity. If a directory refill reports
