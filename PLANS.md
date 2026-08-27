@@ -11,7 +11,6 @@ finished move to [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | M2: stop contract corrections from failing to propagate. Restatement drift is a failure mode distinct from M1's under-specification taxonomy -- one fact restated across many files, a correction reaching only some. Derived predicates where the fact is value-level, compiled doctests for prose examples, and binding conventions for the rest. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
 | [crates/windows-overlapped-io-sys/CHECKLIST.md](crates/windows-overlapped-io-sys/CHECKLIST.md) | not started | M14: finish the contract audit -- categories 1, 2, 6, 8, 9 were not examined -- and sweep `outstanding()` for the advisory-predicate hazard. | [crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) |
 | [crates/windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Windows `IoRing` submission/completion ring, as a new crate. M1-M7 (ring lifecycle through the `ring-copy` topology-aligned sample) are complete and archived. The parked, pinned-thread `M6+` work and the new M10 contract audit remain. | [crates/windows-ioring-sys/DESIGN-NOTES.md](crates/windows-ioring-sys/DESIGN-NOTES.md) |
 

@@ -578,3 +578,47 @@ not apply", because that distinction is the point of having the taxonomy. Comple
 milestone: [windows-file-watcher M14](crates/windows-file-watcher/CHECKLIST.md),
 [windows-overlapped-io-sys M14](crates/windows-overlapped-io-sys/CHECKLIST.md), and
 [windows-ioring-sys M10](crates/windows-ioring-sys/CHECKLIST.md).
+
+## <a id="moved-2026-08-27-m2"></a>Moved 2026-08-27 -- M2: stop contract corrections from failing to propagate
+
+[M1](#moved-2026-08-27-m1) recorded the ten specification-gap categories, which address **under-specification**
+-- what a contract fails to say. Executing it exposed a second failure mode the taxonomy has no mechanism
+for: **restatement drift**, where one fact is stated in several independent places, a correction reaches some
+of them, and the rest keep teaching the old answer. Across three consecutive PR #42 review rounds, five of six
+findings were corrections that had not propagated rather than original defects. Recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#restatement-drift).
+
+- [x] **M2.1** -- Compiled `windows-file-watcher`'s TESTING.md and README.md as doctests. Neither was
+  compiled before -- there was no `include_str!` anywhere -- so the five Rust blocks across them could only
+  rot, and one was among the four sites that taught the `Stopped` error. Doctest count went 2 -> 7. Verified
+  by reintroducing the exact drift and confirming the failure (`left: 2, right: 1`) before reverting; CI's
+  `cargo test --workspace --all-features` covers `test-util`, so the guard is live there rather than local
+  only.
+
+- [x] **M2.2** -- `DesyncCause::is_terminal()`, adopted at all four example sites. The terminal-vs-recoverable
+  distinction was restated across 8 files and drifted in 4 at once. Asking the cause rather than matching
+  `Stopped` by name also keeps a handler correct if a further terminal cause is added, where a name-match
+  would silently treat it as recoverable and re-scan a dead watch forever.
+
+- [x] **M2.3** -- `DesyncCause::is_reachable_in(WatchMode)`, with the harness generator binding to it rather
+  than re-encoding tier legality. That fact had four independent encodings and drifted in *both* directions
+  across two rounds. Verified the binding is real by sabotage: changing the crate's definition changed the
+  generator's **output**, not merely a test's expectation. One test written during this item was deleted
+  rather than shipped -- it compared `is_reachable_in` against `to_cause().is_reachable_in()`, which is the
+  same expression, so it was tautological and redundant with the existing mirror test.
+
+- [x] **M2.4** -- Recorded [Restatement drift](DESIGN-NOTES.md#restatement-drift) with the measurement rather
+  than the impression (13 files restate `QueueFull`, 8 restate "`Stopped` is terminal"), why the taxonomy
+  cannot catch it, and the three-tier remedy. Cross-linked from the taxonomy section so a reader arriving at
+  the ten categories learns that stating a rule correctly is necessary and not sufficient.
+
+- [x] **M2.5** -- Added a `CONTRACT INTEGRITY` section to
+  [.github/copilot-instructions.md](.github/copilot-instructions.md): prefer a derived fact to a restated one
+  (verified by sabotage), prose that contains code must compile, and a mandatory blast-radius sweep before
+  any contract correction -- with the two corollaries that each already cost a review round, that an analysis
+  document never restates normative content, and that correcting a shipped rule obliges re-checking whatever
+  was built against the old one.
+
+Net effect: the two facts that actually drifted are now derived rather than restated, the prose that taught
+them is compiled, and what neither mechanism can reach is a binding rule in the file humans and Copilot both
+read. 943 workspace tests pass; default workspace builds clean in debug and release.
