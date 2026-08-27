@@ -411,3 +411,96 @@ fn an_unchanged_volume_violation_also_advances_state() {
         "the violated change still recorded its current, so this discontinuity is visible"
     );
 }
+
+#[test]
+fn a_saturated_cancellation_delivers_its_terminator_before_the_owed_loss() {
+    // Driven through the REAL queue rather than a hand-built sequence, because
+    // the ordering under test is produced by the interaction of three
+    // mechanisms and a hand-built stream would only prove the checker agrees
+    // with my reading of them (PR #42 review).
+    //
+    // A subscription holds its cancellation slot from registration (D-45).
+    // Saturate the unreserved capacity, latch a loss, then cancel: with the
+    // queue full, `Reservation::send` flushes the latch while its own
+    // reservation is still counted, finds no free slot, and appends
+    // `Cancelled` regardless. `take` drains the queue before synthesizing
+    // latches, so `Cancelled` arrives first and the owed
+    // `Desync { QueueFull }` after it.
+    let (sender, receiver) =
+        crate::queue::channel_with_bound(std::num::NonZeroUsize::new(2).expect("a positive bound"));
+    let w = watch();
+
+    // The cancellation's standing reservation, taken at registration.
+    let cancellation = sender.reserve().expect("a slot for the cancellation");
+
+    // Fill every remaining slot, then latch a loss.
+    assert_eq!(sender.send(batch(w)), crate::queue::Delivery::Queued);
+    assert_eq!(sender.send(batch(w)), crate::queue::Delivery::Latched);
+
+    cancellation.send(Notification::Completion {
+        watch: w,
+        outcome: Outcome::Cancelled,
+    });
+
+    let mut drained = Vec::new();
+    while let Some(item) = receiver.try_recv() {
+        drained.push(item);
+    }
+
+    // The ordering the checker has to accept, asserted explicitly so this test
+    // fails loudly if the queue's behaviour ever changes rather than silently
+    // testing something else.
+    assert!(
+        matches!(
+            drained.as_slice(),
+            [
+                Notification::Batch { .. },
+                Notification::Completion {
+                    outcome: Outcome::Cancelled,
+                    ..
+                },
+                Notification::Desync {
+                    cause: DesyncCause::QueueFull,
+                    ..
+                },
+            ]
+        ),
+        "expected Batch, Cancelled, then the owed loss; got {drained:?}"
+    );
+
+    let mut checker = ContractChecker::new();
+    checker
+        .observe_all(&drained)
+        .expect("the checker must accept what the real queue produced");
+}
+
+#[test]
+fn nothing_other_than_an_owed_loss_may_follow_a_terminator() {
+    // The exception above is exactly one cause wide; everything else stays
+    // rejected, or the terminality rule would be worth nothing.
+    let w = watch();
+    for follower in [
+        batch(w),
+        desync(w, DesyncCause::Overflow),
+        desync(w, DesyncCause::Coarse),
+        desync(w, DesyncCause::Reestablished),
+        Notification::Resumed { watch: w },
+        established(w, WatchMode::Detailed),
+    ] {
+        let mut checker = ContractChecker::new();
+        checker
+            .observe(&Notification::Completion {
+                watch: w,
+                outcome: Outcome::Cancelled,
+            })
+            .expect("cancellation");
+        assert_eq!(
+            checker.observe(&follower),
+            Err(ContractViolation::AfterTerminal {
+                watch: w,
+                terminator: Terminator::Cancelled,
+            }),
+            "{follower:?} must not be accepted after a terminator"
+        );
+    }
+}

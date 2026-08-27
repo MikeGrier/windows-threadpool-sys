@@ -54,6 +54,10 @@
 //!   `enter_fault` first and publishes the already-completed batch afterwards.
 //!   Those changes were in hand and dropping them would be silent loss, so one
 //!   batch may legally follow a bracket's opening notifications.
+//! - A `Desync { QueueFull }` **after that watch's terminator**. The latch is
+//!   synthesized once the queue drains, while a cancellation completion holds a
+//!   slot reserved since registration (D-45), so a saturated queue delivers the
+//!   terminator first and the owed loss report after it.
 //!
 //! **Not checkable from the stream alone**, and so not attempted: at most one
 //! question is outstanding per subscription (D-28's standing-slot invariant). The
@@ -123,6 +127,32 @@ pub enum Terminator {
     Stopped,
 }
 
+/// Whether `notification` is an owed loss report, which may legally arrive
+/// *after* that watch's terminator.
+///
+/// A latched `Desync { QueueFull }` is not in the queue -- it is synthesized
+/// once the queue drains -- while a subscription's cancellation completion has
+/// held a reserved slot since registration (D-45). So when saturation latches a
+/// loss and the watch is then cancelled, `Reservation::send` flushes the latch
+/// *while its own reservation is still counted*, finds no free slot, and
+/// appends `Cancelled` anyway. The receiver drains the queue before
+/// synthesizing latches, so it observes `Cancelled` and only then the owed
+/// `Desync { QueueFull }`.
+///
+/// That is real, legal output, and it is the one thing that may follow a
+/// terminator. Rejecting it would be over-constraining -- the same defect as
+/// under-specifying, and the reason this checker has as many
+/// must-accept tests as must-reject ones.
+fn is_owed_loss_report(notification: &Notification) -> bool {
+    matches!(
+        notification,
+        Notification::Desync {
+            cause: DesyncCause::QueueFull,
+            ..
+        }
+    )
+}
+
 /// One subscription's position in the contract.
 #[derive(Debug, Default)]
 struct WatchState {
@@ -187,7 +217,9 @@ impl ContractChecker {
         let watch = notification.watch();
         let state = self.watches.entry(watch).or_default();
 
-        if let Some(terminator) = state.ended {
+        if let Some(terminator) = state.ended
+            && !is_owed_loss_report(notification)
+        {
             return Err(ContractViolation::AfterTerminal { watch, terminator });
         }
 
