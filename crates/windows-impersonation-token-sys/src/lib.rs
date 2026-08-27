@@ -9,6 +9,8 @@
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+mod restore;
+
 use std::fmt;
 use std::io;
 use std::marker::PhantomData;
@@ -246,10 +248,7 @@ impl ImpersonationToken {
     where
         F: FnOnce() -> T,
     {
-        let guard = ApplicationGuard::apply(self)?;
-        let result = operation();
-        drop(guard);
-        Ok(result)
+        run_in_scope(ApplicationGuard::apply(self), operation)
     }
 }
 
@@ -257,6 +256,16 @@ impl fmt::Debug for ImpersonationToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImpersonationToken").finish_non_exhaustive()
     }
+}
+
+fn run_in_scope<G, F, T>(guard: Result<G, ApplyError>, operation: F) -> Result<T, ApplyError>
+where
+    F: FnOnce() -> T,
+{
+    let guard = guard?;
+    let result = operation();
+    drop(guard);
+    Ok(result)
 }
 
 struct ApplicationGuard {
@@ -271,12 +280,7 @@ impl ApplicationGuard {
         // SAFETY: a null thread pointer selects the current thread. The
         // captured handle remains live and has TOKEN_IMPERSONATE access.
         let applied = unsafe { SetThreadToken(ptr::null(), token.handle.as_raw_handle()) };
-        if applied == FALSE {
-            return Err(ApplyError::new(
-                ApplyFailure::ApplyToken,
-                io::Error::last_os_error(),
-            ));
-        }
+        check_application_result(applied, io::Error::last_os_error)?;
 
         Ok(Self {
             previous,
@@ -298,9 +302,19 @@ impl Drop for ApplicationGuard {
         // moving to or being shared with another thread.
         let restored = unsafe { SetThreadToken(ptr::null(), previous) };
         if restored == FALSE {
-            let error = io::Error::last_os_error();
-            panic!("SetThreadToken failed to restore the previous thread token: {error}");
+            restore::panic_failure(io::Error::last_os_error());
         }
+    }
+}
+
+fn check_application_result<F>(applied: i32, last_error: F) -> Result<(), ApplyError>
+where
+    F: FnOnce() -> io::Error,
+{
+    if applied == FALSE {
+        Err(ApplyError::new(ApplyFailure::ApplyToken, last_error()))
+    } else {
+        Ok(())
     }
 }
 
@@ -358,20 +372,9 @@ impl SourceToken {
         }
 
         let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(code)
-                if code
-                    == i32::try_from(ERROR_CANT_OPEN_ANONYMOUS)
-                        .expect("ERROR_CANT_OPEN_ANONYMOUS fits in i32") =>
-            {
-                Err(CaptureError::new(CaptureFailure::AnonymousContext, error))
-            }
-            Some(code)
-                if code == i32::try_from(ERROR_NO_TOKEN).expect("ERROR_NO_TOKEN fits in i32") =>
-            {
-                Self::open_process()
-            }
-            _ => Err(CaptureError::new(CaptureFailure::OpenThreadToken, error)),
+        match classify_thread_token_open_error(error) {
+            ThreadTokenOpenError::NoToken => Self::open_process(),
+            ThreadTokenOpenError::Capture(error) => Err(error),
         }
     }
 
@@ -436,3 +439,34 @@ fn query_impersonation_level(
 
     Ok(level)
 }
+
+enum ThreadTokenOpenError {
+    NoToken,
+    Capture(CaptureError),
+}
+
+fn classify_thread_token_open_error(error: io::Error) -> ThreadTokenOpenError {
+    match error.raw_os_error() {
+        Some(code)
+            if code
+                == i32::try_from(ERROR_CANT_OPEN_ANONYMOUS)
+                    .expect("ERROR_CANT_OPEN_ANONYMOUS fits in i32") =>
+        {
+            ThreadTokenOpenError::Capture(CaptureError::new(
+                CaptureFailure::AnonymousContext,
+                error,
+            ))
+        }
+        Some(code)
+            if code == i32::try_from(ERROR_NO_TOKEN).expect("ERROR_NO_TOKEN fits in i32") =>
+        {
+            ThreadTokenOpenError::NoToken
+        }
+        _ => {
+            ThreadTokenOpenError::Capture(CaptureError::new(CaptureFailure::OpenThreadToken, error))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

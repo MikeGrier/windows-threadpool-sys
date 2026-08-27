@@ -12,7 +12,7 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: IT-4.** Finish M4 before beginning any
+> **NEXT ACTIONABLE ITEM: IT-5.** Finish M4 before beginning any
 > `windows-file-enumeration-sys` implementation.
 
 ## M4 -- Publishable captured-impersonation platform layer
@@ -23,16 +23,7 @@ as checklist work. Conventional Commit scopes for the new crates are
 
 - [x] **IT-3** -- Implement scoped application of an `ImpersonationToken` with exact prior-token restoration. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#it-3)
 
-- [ ] **IT-4** -- Add deterministic tests for at least ten normal capture/apply
-  cases plus every identifiable edge: no thread token, impersonated thread,
-  cross-thread transport, repeated reuse, nested contexts, exact prior-context
-  restoration, closure success, closure error, unwind restoration, source-handle
-  lifetime independence, concurrent use, identification-level behavior,
-  delegation-level preservation, anonymous-token rejection, capture failure,
-  application failure, restoration-failure panic, and double-panic abort during
-  unwind in a subprocess. Keep the strictly in-memory, mock-based unit-test portion
-  below one second; reserve integration tests for longer-running cases and cases
-  that require real OS state or a subprocess.
+- [x] **IT-4** -- Add deterministic capture, application, restoration, and failure-path tests. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#it-4)
 
 - [ ] **IT-5** -- Complete the crate-level API documentation, safety/invariant
   documentation, README examples, changelog baseline, and publication validation.

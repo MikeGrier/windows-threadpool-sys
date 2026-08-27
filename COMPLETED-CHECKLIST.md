@@ -578,6 +578,38 @@ mechanics and rationale are recorded in the crate
 The targeted all-target check and Clippy pass without warnings, and the package
 test and documentation-test harnesses pass.
 
+## Moved 2026-08-27 -- impersonation token test matrix
+
+### <a id="it-4"></a>IT-4 -- Add deterministic capture, application, restoration, and failure-path tests. *(completed 2026-08-27 17:07:20 UTC-04:00)*
+
+The sibling unit module
+[src/tests.rs](crates/windows-impersonation-token-sys/src/tests.rs) contains nine
+strictly in-memory tests for capture-error classification, application failure,
+closure success and error propagation, unwind drop behavior, positive
+`ImpersonationToken` traits, and compile-time proof that the private application
+guard is neither `Send` nor `Sync`. These tests finish in 0.00 seconds.
+
+The real-Windows
+[tests/impersonation.rs](crates/windows-impersonation-token-sys/tests/impersonation.rs)
+target contains fourteen tests covering no thread token, impersonated capture,
+cross-thread transport, repeated reuse, nested scopes, exact prior-token-object
+restoration, closure success, closure error, unwind restoration, source-handle
+lifetime independence, concurrent use, identification-level preservation,
+delegation-level preservation, and anonymous rejection. Exact restoration is
+verified with the prior token's `TOKEN_STATISTICS.TokenId`, so clearing to process
+identity or substituting a duplicate cannot pass.
+
+The
+[tests/restoration_failure.rs](crates/windows-impersonation-token-sys/tests/restoration_failure.rs)
+target verifies that restoration failure panics with the native error and that a
+restoration panic during existing unwind aborts in a bounded child process. Both
+tests call the same production panic helper in
+[src/restore.rs](crates/windows-impersonation-token-sys/src/restore.rs).
+
+All 25 tests pass: nine unit tests in 0.00 seconds, fourteen real-token tests in
+0.00 seconds, and two restoration subprocess tests in 1.69 seconds. Targeted
+all-target Clippy and documentation tests also pass without warnings.
+
 ## Moved 2026-08-27 -- scoped impersonation application
 
 ### <a id="it-3"></a>IT-3 -- Implement scoped application of an `ImpersonationToken` with exact prior-token restoration. *(completed 2026-08-27 16:41:44 UTC-04:00)*
