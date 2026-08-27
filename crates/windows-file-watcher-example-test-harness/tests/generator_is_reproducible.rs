@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use windows_file_watcher_example_test_harness::{
-    Generator, GeneratorConfig, NotificationSpec, OutcomeSpec,
+    DesyncCauseSpec, Generator, GeneratorConfig, NotificationSpec, OutcomeSpec, WatchModeSpec,
 };
 
 #[test]
@@ -223,6 +223,63 @@ fn an_interactive_watchs_fault_recovery_always_asks_a_retry_question() {
                          must ask a RetryQuestion immediately after Suspended, got {:?}",
                         steps.get(index + 1)
                     );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_coarse_watch_never_reports_a_batch_or_a_detailed_only_loss_desync() {
+    // A Coarse-tier watcher can only ever report Desync { Coarse } for
+    // activity (watcher.rs:535-563, D-17) -- never a Batch, and never an
+    // Overflow/QueueFull loss Desync (both Detailed-only concepts). Track the
+    // mode across each watch's own re-establishments, exactly as
+    // Generator::generate_watch does, and check every step against it.
+    let generator = Generator::with_config(GeneratorConfig {
+        watches: 4,
+        steps_per_watch: 30,
+        liveness_percent: 100,
+        weight_batch: 2,
+        weight_desync: 2,
+        weight_fault_recovery: 2,
+        ..GeneratorConfig::default()
+    });
+    for seed in 0..40 {
+        let schedule = generator.generate(seed);
+        for (watch, steps) in by_watch(&schedule) {
+            let mut mode = WatchModeSpec::Detailed;
+            for step in &steps {
+                match step {
+                    NotificationSpec::Established {
+                        mode: established_mode,
+                        ..
+                    } => {
+                        mode = established_mode.clone();
+                    }
+                    NotificationSpec::Batch { .. } => {
+                        assert_ne!(
+                            mode,
+                            WatchModeSpec::Coarse,
+                            "seed {seed}, watch {watch}: a Coarse watch must never report a \
+                             Batch"
+                        );
+                    }
+                    NotificationSpec::Desync { cause, .. }
+                        if mode == WatchModeSpec::Coarse
+                            && !matches!(
+                                cause,
+                                DesyncCauseSpec::Reestablished | DesyncCauseSpec::Stopped
+                            ) =>
+                    {
+                        assert_eq!(
+                            *cause,
+                            DesyncCauseSpec::Coarse,
+                            "seed {seed}, watch {watch}: a Coarse watch's ordinary loss Desync \
+                             must be Coarse, got {cause:?}"
+                        );
+                    }
+                    _ => {}
                 }
             }
         }

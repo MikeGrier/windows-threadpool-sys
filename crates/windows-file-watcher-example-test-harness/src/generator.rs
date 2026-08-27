@@ -39,6 +39,14 @@
 //!    sends one without the other). A bare `RetryQuestion`/`VolumeChanged` with
 //!    no bracket, or ordinary data delivered while a watch is faulted, is not a
 //!    schedule `windows-file-watcher` could produce.
+//!
+//!    A re-establishment can (re)select `Coarse` tier, whether or not liveness
+//!    reporting exposes it (watcher.rs picks a mode on every re-establishment
+//!    regardless of `report_liveness`). From that point until the watch's next
+//!    re-establishment, its live loop is restricted the way a real Coarse
+//!    endpoint is: no `Batch`, and every loss `Desync` reports
+//!    `DesyncCauseSpec::Coarse` rather than `Overflow`/`QueueFull`, both
+//!    Detailed-only concepts (watcher.rs:535-563, D-17).
 //! 3. **Optional terminal.** End with `Completion { Cancelled }`; nothing for that
 //!    watch follows it (schedule docs: Cancelled-as-terminator).
 //!
@@ -265,6 +273,13 @@ impl Generator {
         let liveness = rng.chance(self.config.liveness_percent);
         let interactive = rng.chance(self.config.interactive_percent);
         let volume_confirm = rng.chance(self.config.volume_confirm_percent);
+        // Tracks the watch's *actual* tier, whether or not liveness reporting
+        // exposes it: `watcher.rs` picks a mode on every (re-)establishment
+        // regardless of whether the client asked to be told about it, and a
+        // Coarse watcher can only ever report `Desync { Coarse }` for
+        // activity (watcher.rs:535-563, D-17) -- never a `Batch` or an
+        // `Overflow`/`QueueFull` loss `Desync`, both Detailed-only concepts.
+        let mut current_mode = WatchModeSpec::Detailed;
 
         // 1. Establish first. windows-file-watcher sends the initial
         // `Established` (liveness only) from inside route establishment, and
@@ -291,11 +306,27 @@ impl Generator {
                 continue;
             };
             match event {
-                Event::Batch => out.push(self.gen_batch(rng, watch)),
-                Event::Desync => out.push(NotificationSpec::Desync {
-                    watch,
-                    cause: gen_loss_cause(rng),
-                }),
+                Event::Batch => {
+                    if current_mode == WatchModeSpec::Coarse {
+                        // A coarse endpoint has no way to report what
+                        // changed -- substitute the one signal it can
+                        // legally send instead of skipping the step.
+                        out.push(NotificationSpec::Desync {
+                            watch,
+                            cause: DesyncCauseSpec::Coarse,
+                        });
+                    } else {
+                        out.push(self.gen_batch(rng, watch));
+                    }
+                }
+                Event::Desync => {
+                    let cause = if current_mode == WatchModeSpec::Coarse {
+                        DesyncCauseSpec::Coarse
+                    } else {
+                        gen_loss_cause(rng)
+                    };
+                    out.push(NotificationSpec::Desync { watch, cause });
+                }
                 Event::FaultRecovery => {
                     // A real fault and its resolution are never independent
                     // events, so this is modeled as one atomic unit: nothing
@@ -342,12 +373,16 @@ impl Generator {
                         watch,
                         cause: DesyncCauseSpec::Reestablished,
                     });
+                    // Mode selection happens on every re-establishment,
+                    // liveness or not -- liveness only gates whether the
+                    // client is *told* the tier, not whether the tier can
+                    // change (watcher.rs's `finish_reopen`/`route_established`
+                    // do not consult `report_liveness`).
+                    let mode = gen_mode(rng);
+                    current_mode = mode.clone();
                     if liveness {
                         out.push(NotificationSpec::Resumed { watch });
-                        out.push(NotificationSpec::Established {
-                            watch,
-                            mode: gen_mode(rng),
-                        });
+                        out.push(NotificationSpec::Established { watch, mode });
                     }
                 }
             }
