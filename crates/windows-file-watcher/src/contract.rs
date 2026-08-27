@@ -224,15 +224,21 @@ impl ContractChecker {
             Notification::VolumeChanged {
                 previous, current, ..
             } => {
-                if previous == current {
-                    return Err(ContractViolation::VolumeUnchanged { watch });
-                }
-                if let Some(known) = &state.volume
-                    && known != previous
-                {
-                    return Err(ContractViolation::VolumeDiscontinuity { watch });
-                }
+                let violation = if previous == current {
+                    Some(ContractViolation::VolumeUnchanged { watch })
+                } else if state.volume.as_ref().is_some_and(|known| known != previous) {
+                    Some(ContractViolation::VolumeDiscontinuity { watch })
+                } else {
+                    None
+                };
+                // Recorded before returning, or a caller following the
+                // documented log-and-continue behaviour would be told the next,
+                // legitimately-continuous change is discontinuous as well --
+                // one violation cascading into every later one.
                 state.volume = Some(current.clone());
+                if let Some(violation) = violation {
+                    return Err(violation);
+                }
             }
             Notification::Suspended { .. }
             | Notification::Resumed { .. }

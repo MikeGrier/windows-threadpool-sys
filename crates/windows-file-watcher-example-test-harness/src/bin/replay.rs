@@ -94,10 +94,11 @@ mod imp {
     pub fn main() -> std::process::ExitCode {
         use std::process::ExitCode;
 
-        let path = std::env::args()
-            .nth(1)
-            .expect("usage: replay <path-to-recording.json>");
         let mut output = stdio();
+        let Some(path) = std::env::args().nth(1) else {
+            output.diagnostic("usage: replay <path-to-recording.json>");
+            return ExitCode::FAILURE;
+        };
         if replay(&path, &mut output) {
             ExitCode::SUCCESS
         } else {
@@ -116,7 +117,18 @@ mod imp {
     /// replayed under `catch_unwind` rather than letting that panic escape
     /// and crash the replay itself.
     fn replay(path: &str, output: &mut Output<impl std::io::Write, impl std::io::Write>) -> bool {
-        let recording = Recording::load(path).expect("load recording");
+        // A recording is untrusted input -- that is why the deadline is clamped
+        // at both ends below -- so a malformed or missing one is an ordinary
+        // failure to report, not a panic.
+        let recording = match Recording::load(path) {
+            Ok(recording) => recording,
+            Err(error) => {
+                output.diagnostic(&format!(
+                    "error: could not load '{path}' as a recording: {error}"
+                ));
+                return false;
+            }
+        };
 
         output.report(&format!(
             "loaded {path}: seed {}, {} step(s)",

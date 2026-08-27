@@ -344,3 +344,70 @@ fn a_batch_inside_a_fault_bracket_is_legal() {
         .observe(&desync(w, DesyncCause::Reestablished))
         .expect("and the bracket resolves");
 }
+
+#[test]
+fn a_volume_violation_does_not_cascade_into_the_next_change() {
+    // `observe` documents that state advances even when it reports a violation,
+    // so a caller that logs and continues sees genuinely new violations rather
+    // than echoes of the first. Both volume branches used to return before
+    // recording `current`, so the next legitimately-continuous change was
+    // falsely reported as discontinuous too (PR #42 review).
+    let mut checker = ContractChecker::new();
+    let w = watch();
+
+    checker
+        .observe(&Notification::VolumeChanged {
+            watch: w,
+            previous: volume(0x1111),
+            current: volume(0x2222),
+        })
+        .expect("first change");
+
+    // A discontinuity: `previous` does not continue from the prior `current`.
+    assert_eq!(
+        checker.observe(&Notification::VolumeChanged {
+            watch: w,
+            previous: volume(0x9999),
+            current: volume(0x3333),
+        }),
+        Err(ContractViolation::VolumeDiscontinuity { watch: w })
+    );
+
+    // Continuing from 0x3333 is legal and must be accepted: the violation above
+    // advanced the state to its `current` rather than leaving 0x2222 behind.
+    checker
+        .observe(&Notification::VolumeChanged {
+            watch: w,
+            previous: volume(0x3333),
+            current: volume(0x4444),
+        })
+        .expect("the violation must not echo into the next change");
+}
+
+#[test]
+fn an_unchanged_volume_violation_also_advances_state() {
+    // Checked by what happens *next*: after the violation the state must hold
+    // 0x1111, so a follow-up that does not continue from it is caught. A test
+    // that merely accepted a continuous follow-up would pass without the fix
+    // too, since an unrecorded `None` state skips the continuity check
+    // entirely.
+    let mut checker = ContractChecker::new();
+    let w = watch();
+    assert_eq!(
+        checker.observe(&Notification::VolumeChanged {
+            watch: w,
+            previous: volume(0x1111),
+            current: volume(0x1111),
+        }),
+        Err(ContractViolation::VolumeUnchanged { watch: w })
+    );
+    assert_eq!(
+        checker.observe(&Notification::VolumeChanged {
+            watch: w,
+            previous: volume(0x9999),
+            current: volume(0x2222),
+        }),
+        Err(ContractViolation::VolumeDiscontinuity { watch: w }),
+        "the violated change still recorded its current, so this discontinuity is visible"
+    );
+}
