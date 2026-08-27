@@ -124,6 +124,30 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-23----
 
 Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-25----m13-consumer-test-surface-test-util).
 
+## M14 -- Audit the delivery contract against the ten specification-gap categories (D-84)
+
+PR #42 found gaps in this crate's contract prose one at a time, reactively, over 19 review rounds. Each was
+fixed where it was found, and [D-84](DESIGN-NOTES.md) records which decisions were amended. What has **not**
+been done is the converse: a deliberate pass over the contract asking, for each of
+[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract), whether this crate states it or
+leaves it to omission. Reactive fixes cannot establish that, because they only ever reach the categories some
+reviewer happened to probe.
+
+- [ ] **M14.1** -- Audit [D-12](DESIGN-NOTES.md) (`Desync`), [D-27](DESIGN-NOTES.md)/[D-28](DESIGN-NOTES.md)
+  (the fault protocol), and [D-30](DESIGN-NOTES.md) (request completions) against all ten categories, and
+  state each answer -- including "unspecified, deliberately" where that is the honest one. These three carry
+  the sequencing rules a consumer builds recovery on, so they are the highest-value targets.
+
+- [ ] **M14.2** -- Audit the remaining notification-shaping decisions ([D-10](DESIGN-NOTES.md),
+  [D-13](DESIGN-NOTES.md), [D-17](DESIGN-NOTES.md), [D-26](DESIGN-NOTES.md), [D-57](DESIGN-NOTES.md)) the
+  same way, and fold any newly-stated rule into the harness's `schedule` module docs so the generator and
+  the contract stay in step.
+
+- [ ] **M14.3** -- Sweep for the [`has_room`](DESIGN-NOTES.md#the-has_room-finding-in-this-crate) shape:
+  every advisory predicate this crate exposes or consumes on a reliability path, checked for whether its
+  stated contract holds under the condition its caller actually uses it in, with a test in that condition.
+  `has_room` was found by review rather than by looking; nothing establishes it was the only one.
+
 ## M-inf -- Horizon (ungated, post-v1)
 
 Parked, not pending. These are the deferred seams recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-19,

@@ -102,6 +102,7 @@ threads of its own.
 | <a id="d-81"></a>D-81 | **The consumer test surface reuses the delivery model rather than replacing it, and its already-reachable pieces -- `WatchId::from_raw` and every re-exported boundary type -- are blessed as-is, not re-gated.** A downstream consumer tests its own notification-handling code by feeding synthetic `Notification`s through a real `Receiver`: "go below" the `Monitor`, substituting the OS ingest while keeping the delivery model (`Notification`/`Receiver`/queue ordering/doorbell) intact. The reachable pieces shipped public in 0.1, so re-gating them would be a breaking change with no offsetting safety gain. The one further thing a consumer needs -- a `Receiver` it can feed -- was `pub` only inside a private module (hence unreachable), so it is *exposed*, not re-gated, under `test-util` (D-82). See [Consumer test surface](#consumer-test-surface). |
 | <a id="d-82"></a>D-82 | **Everything a consumer needs but cannot otherwise reach is exposed behind an off-by-default `test-util` feature, not on the unconditional public surface: the feedable channel (`channel_with_bound` with `Sender`/`Delivery`/`Reservation`, previously `pub` only inside a private module) and valid-by-construction builders for the two unconstructible boundary types (`RelativeName`, `VolumeIdentity`).** This does not reverse [D-64](DESIGN-RATIONALE.md#the-m64-test-seam-is-a-private-constructor-not-a-public-feature-flag-d-64): D-64's seams serve the crate's own tests reaching internal state, for which `#[cfg(test)]`/`pub(crate)` is strictly better; this seam serves a downstream consumer's tests, which `#[cfg(test)]` cannot reach at all, and it exposes the delivery channel and public boundary constructors rather than internal state (so the retired `unstable-internals` objection does not apply). Feature-gating keeps the crate's internal queue sender, and identity/name construction, out of the production API. See [Consumer test surface](#consumer-test-surface). |
 | <a id="d-83"></a>D-83 | **The consumer test surface tests the consumer's reactions, not whether this crate would ever emit a given sequence.** Builders are valid-by-construction in the type-safety sense (memory-safe, lossless), not production-domain-validating: a `RelativeName` can still carry a unit sequence the kernel itself never reports (an interior NUL, say), and an impossible ordering or an impossible relationship between two otherwise valid values (a `VolumeChanged` with equal `previous`/`current` serials, each individually a legal `VolumeIdentity`) both remain the consumer's responsibility, as with any hand-fed test double. This fidelity limit is documented on the surface so a passing handler test is not mistaken for confirmation that the crate produces that traffic. See [Consumer test surface](#consumer-test-surface). |
+| <a id="d-84"></a>D-84 | **The delivery contract was under-specified, and a second implementation of it -- not a test suite -- is what proved that.** PR #42's example harness promised contract-legal schedules only (its own D-5), which made its generator a second implementation of *this* crate's contract. Converging it took **19 automated review rounds**: eight fixed generated sequences this crate could never emit, five corrected the contract prose itself, and one found a real shipped reliability defect ([`has_room`](#the-has_room-finding-in-this-crate)) on [D-29](#d-29)'s backpressure path. All 278 of this crate's own tests passed throughout and were never going to fail -- they assert what the watcher *does*, and every gap was in what the contract *permits*. The gap categories are workspace-wide and recorded once, in [the workspace design notes](../../DESIGN-NOTES.md#specifying-a-delivery-contract); the decisions amended in response were [D-9](#d-9) (renames never joined), [D-12](#d-12)/[D-30](#d-30) (branch and terminal paths), [D-17](#d-17) (per-tier emission legality), [D-27](#d-27)/[D-28](#d-28) (a fault question is unconditional, and enters as `Arm`), [D-50](#d-50)/[D-78](#d-78) (volume identity: distinct serials, and continuity across reopens), and [D-83](#d-83) (fidelity is type-safety, not production-domain). See [What the second implementation exposed](#what-the-second-implementation-exposed). |
 
 
 ### Queue mediation
@@ -444,3 +445,73 @@ sequence the kernel never reports (an interior NUL, say). An impossible
 *ordering*, or an impossible *relationship between two otherwise valid values*
 (a `VolumeChanged` with equal `previous`/`current` serials, say), is likewise
 the consumer's responsibility, as with any hand-fed test double.
+
+### What the second implementation exposed
+
+D-84. The example harness published alongside this crate promises to generate
+only schedules this crate could actually emit. That promise is what made it a
+**second implementation of this crate's delivery contract**, and converging it
+took 19 automated review rounds -- more review-response commits than the
+original implementation had.
+
+The value is not the harness. It is that a contract stated as prose can only be
+*read*, never *executed*, so nothing forces its gaps into the open. A second
+implementation has to make a decision at every point the prose is silent, and
+each decision it gets wrong is a place the contract failed to say something.
+This crate's own test suite could not have found any of it: 278 tests passed
+throughout, because a test asserts one point in the set of legal sequences and
+every gap was in the *boundary* of that set.
+
+The ten categories those findings fall into are workspace-wide and recorded in
+[the workspace design notes](../../DESIGN-NOTES.md#specifying-a-delivery-contract),
+since `windows-overlapped-io-sys` and `windows-ioring-sys` publish contracts of
+the same shape. What is specific to this crate is which of its decisions turned
+out to be stated incompletely, and how:
+
+- **[D-27](#d-27)/[D-28](#d-28) said the monitor "asks" on fault.** It did not
+  say *always*: `enter_fault` puts every interactive route in the awaiting set
+  and asks on every fault, with no probability anywhere. Nor did it say which
+  operation a *live* watch's fault enters as -- always `Arm`, with `Open`
+  reachable only as a re-entry into an already-unresolved bracket.
+- **[D-17](#d-17) named the two tiers but not what each can emit.** A Coarse
+  endpoint's `on_activation` publishes only `Desync { Coarse }`; `Batch` and
+  the `Overflow`/`QueueFull` loss causes are Detailed-only concepts, which the
+  tier decision never stated.
+- **[D-50](#d-50)/[D-78](#d-78) specified volume identity per message, not
+  across messages.** `install` stores the confirmed identity, so a watch's next
+  `VolumeChanged.previous` must equal its own prior `.current` -- a continuity
+  rule that only exists *between* two notifications and so had no natural home
+  in either one's description.
+- **[D-12](#d-12)/[D-30](#d-30) enumerated the success path exhaustively and
+  the branches by omission.** `Completion { Failed }` is not only an initial
+  outcome (`rekey` emits it for an already-routed watch), and a fault question
+  is not always followed by `Desync { Reestablished }` -- a pending retry can
+  ask again, and `record_stop` can end the watch with `Desync { Stopped }`.
+- **[D-9](#d-9) said renames are never joined; it did not say what that
+  permits.** A legal batch may carry a lone half, both halves, or halves with
+  unrelated records between them.
+
+Each of those is now stated. The audit that would confirm nothing *else* is
+stated only by omission has not been done, and is queued as
+[CHECKLIST.md](CHECKLIST.md) -> M14 rather than claimed here.
+
+### <a id="the-has_room-finding-in-this-crate"></a>The `has_room` finding
+
+One round found a genuine defect in shipped 0.1 code rather than in the harness.
+`Sender::has_room` reported `free() > 0`, but `Sender::send` flushes every owed
+latched desync into the queue *before* considering the caller's notification --
+so a freed slot with a latch outstanding was never available to a new
+notification, and `has_room` returned `true` for a slot the next `send` would
+consume for the flush.
+
+`WatcherInner::arm_locked` gates re-arming on `any_route_has_room()`, so this
+sat directly on [D-29](#d-29)'s backpressure path. The intended behaviour is to
+leave changes in the kernel's buffer as a grace period rather than let a batch
+complete with nowhere to go; the bug produced exactly the outcome D-29 exists to
+prevent -- arm, complete, flush takes the slot, batch dropped and re-latched.
+Fixed with a regression test that had no predecessor: no existing test called
+`has_room` with a latch outstanding.
+
+The transferable rule is recorded workspace-wide: an advisory predicate another
+subsystem's reliability gate depends on is not advisory, and must be tested in
+the condition that gate uses it under.
