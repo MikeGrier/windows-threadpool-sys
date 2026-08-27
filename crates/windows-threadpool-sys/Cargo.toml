@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-threadpool-sys"
-version = "0.1.2" # x-release-please-version
+version = "0.1.3" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -31,7 +31,7 @@ targets = ["x86_64-pc-windows-msvc"]
 # workspace) and a version (for consumers building from crates.io) are required. No
 # features are enabled (`default-features = false`): the `TP_IO` backend needs only
 # the core completion machinery, not any operation-family adapter (fs, socket, device).
-windows-overlapped-io-sys = { version = "0.1.2", path = "../windows-overlapped-io-sys", default-features = false }
+windows-overlapped-io-sys = { version = "0.1.3", path = "../windows-overlapped-io-sys", default-features = false }
 
 [dependencies.windows-sys]
 version = "0.61.2"
