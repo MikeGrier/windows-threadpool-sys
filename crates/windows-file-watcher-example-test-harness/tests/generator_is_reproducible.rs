@@ -74,7 +74,7 @@ fn sample_configs() -> Vec<GeneratorConfig> {
 }
 
 #[test]
-fn a_liveness_watchs_first_two_notifications_are_established_then_subscribed() {
+fn first_two_notifications_of_a_liveness_watch_are_established_then_subscribed() {
     // windows-file-watcher sends the initial Established from inside route
     // establishment, and only afterward turns the result into the Completion
     // its caller reports (schedule docs: establishment precedes data, and
