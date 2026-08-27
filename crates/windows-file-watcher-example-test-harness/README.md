@@ -44,16 +44,16 @@ on directly.
 1. Implement [`Handler`](src/handler.rs) for your type: `fn on(&mut self, notification: &Notification)`.
    Add `fn check(&self) -> Result<(), String>` if your handler has a cross-notification invariant worth
    asserting (e.g. "every name I've seen added is eventually removed").
-2. Start with `in_process_test.rs`'s shape: script a handful of `NotificationSpec`s that model the
-   traffic you care about, `drive` your handler, assert.
+2. Start with [`examples/in_process_test.rs`](examples/in_process_test.rs)'s shape: script a handful of
+   `NotificationSpec`s that model the traffic you care about, `drive` your handler, assert.
 3. Once that works, let `Generator` find cases you didn't think to script: `run(&generator.generate(seed),
    &mut YourHandler::new())` in a loop over seeds, checking `outcome.pathology()`.
 4. When a seed trips something, `Recording::new(seed, schedule, outcome).save(path)` preserves it. Load
    it back with `Recording::load(path)` and re-`run` it any time to confirm the fix (or, before the fix,
    to hand a teammate an exact reproduction).
 
-Copy `src/bin/capture.rs` / `src/bin/replay.rs` as your starting point for a CLI version of the same
-loop against your own handler.
+Copy [`src/bin/capture.rs`](src/bin/capture.rs) / [`src/bin/replay.rs`](src/bin/replay.rs) as your
+starting point for a CLI version of the same loop against your own handler.
 
 ## Fidelity limit
 

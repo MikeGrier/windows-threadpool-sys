@@ -65,13 +65,16 @@ targets = ["x86_64-pc-windows-msvc"]
 # crate's semver contract.
 scenario-tool = ["dep:serde", "dep:serde_json"]
 
-# Exposes the consumer test surface (D-81/D-82/D-83): valid-by-construction
-# builders for the two boundary types a downstream consumer's test cannot
-# otherwise construct (`RelativeName`, `VolumeIdentity`), so a consumer can drive
-# its own notification-handling code with synthetic notifications fed through the
-# real `Receiver` -- no filesystem, no thread pool. The rest of the seam
-# (`channel_with_bound`, `Sender::send`, `WatchId::from_raw`) is already public
-# (D-81). Off by default; adds no dependencies.
+# Exposes the consumer test surface (D-81/D-82/D-83): a feedable notification
+# channel (`channel_with_bound`/`Sender`/`Delivery`/`Reservation`, `pub` only
+# inside the private `queue` module until this feature re-exports them) plus
+# valid-by-construction builders for the two boundary types a downstream
+# consumer's test cannot otherwise construct (`RelativeName`, `VolumeIdentity`),
+# so a consumer can drive its own notification-handling code with synthetic
+# notifications fed through the real `Receiver` -- no filesystem, no thread
+# pool. The already-reachable part of the seam (`WatchId::from_raw` and every
+# boundary type) needed no re-export (D-81). Off by default; adds no
+# dependencies.
 test-util = []
 
 [dependencies]

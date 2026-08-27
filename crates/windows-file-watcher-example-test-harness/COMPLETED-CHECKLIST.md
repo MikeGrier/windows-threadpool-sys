@@ -5,7 +5,7 @@ Append-only archive of completed milestones, moved out of [CHECKLIST.md](CHECKLI
 ## Moved 2026-08-26 -- M1..M6: the full crate (spine through examples and exposition)
 
 A published EXAMPLE test harness for file-change-notification handlers, built on
-[windows-file-watcher](../windows-file-watcher/README.md)'s `test-util` seam. Decisions D-1...D-6 are in
+[windows-file-watcher](../windows-file-watcher/README.md)'s `test-util` seam. Decisions D-1...D-7 are in
 [DESIGN-NOTES.md](DESIGN-NOTES.md). Legibility beats completeness (D-1); the crate is built only on the
 public `test-util` surface (D-2), which doubles as proof the M13 seam is sufficient for a real harness.
 
