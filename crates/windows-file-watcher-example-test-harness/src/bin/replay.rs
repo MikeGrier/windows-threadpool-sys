@@ -97,6 +97,73 @@ mod imp {
     /// whatever it is handed. Clamping up to a floor makes an unreproducible
     /// recording fail honestly instead.
     const MIN_REPLAY_DEADLINE: Duration = Duration::from_millis(100);
+
+    /// The largest recording file this bin will read.
+    ///
+    /// The replay deadline bounds the *handler*, and nothing else: `load` reads
+    /// and deserializes the whole file, and `run_with_deadline` clones the whole
+    /// schedule, both before the clock starts. A large but perfectly valid JSON
+    /// file could therefore exhaust memory or burn unbounded time entirely
+    /// outside the protection this bin advertises. Enforced with a truncating
+    /// reader rather than a pre-flight `metadata()` check, so the bound holds
+    /// even if the file grows between the check and the read.
+    const MAX_RECORDING_BYTES: u64 = 16 * 1024 * 1024;
+
+    /// The most steps this bin will replay, bounding the schedule clone that
+    /// `run_with_deadline` performs before its own deadline applies.
+    const MAX_SCHEDULE_STEPS: usize = 100_000;
+
+    /// Read a recording from `path`, refusing anything larger than
+    /// [`MAX_RECORDING_BYTES`] or longer than [`MAX_SCHEDULE_STEPS`].
+    fn load_bounded(
+        path: &str,
+        output: &mut Output<impl std::io::Write, impl std::io::Write>,
+    ) -> Option<Recording> {
+        use std::io::Read;
+
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) => {
+                output.diagnostic(&format!("error: could not open '{path}': {error}"));
+                return None;
+            }
+        };
+
+        // One byte past the cap, so hitting it is distinguishable from a file
+        // that merely ends exactly at the limit.
+        let mut json = String::new();
+        if let Err(error) = file.take(MAX_RECORDING_BYTES + 1).read_to_string(&mut json) {
+            output.diagnostic(&format!("error: could not read '{path}': {error}"));
+            return None;
+        }
+        if json.len() as u64 > MAX_RECORDING_BYTES {
+            output.diagnostic(&format!(
+                "error: '{path}' exceeds this bin's {MAX_RECORDING_BYTES}-byte cap for an \
+                 untrusted recording"
+            ));
+            return None;
+        }
+
+        let recording = match Recording::from_json(&json) {
+            Ok(recording) => recording,
+            Err(error) => {
+                output.diagnostic(&format!(
+                    "error: '{path}' is not a valid recording: {error}"
+                ));
+                return None;
+            }
+        };
+
+        if recording.schedule.len() > MAX_SCHEDULE_STEPS {
+            output.diagnostic(&format!(
+                "error: '{path}' has {} steps, over this bin's {MAX_SCHEDULE_STEPS}-step cap",
+                recording.schedule.len()
+            ));
+            return None;
+        }
+
+        Some(recording)
+    }
     pub fn main() -> std::process::ExitCode {
         use std::process::ExitCode;
 
@@ -123,17 +190,12 @@ mod imp {
     /// replayed under `catch_unwind` rather than letting that panic escape
     /// and crash the replay itself.
     fn replay(path: &str, output: &mut Output<impl std::io::Write, impl std::io::Write>) -> bool {
-        // A recording is untrusted input -- that is why the deadline is clamped
-        // at both ends below -- so a malformed or missing one is an ordinary
-        // failure to report, not a panic.
-        let recording = match Recording::load(path) {
-            Ok(recording) => recording,
-            Err(error) => {
-                output.diagnostic(&format!(
-                    "error: could not load '{path}' as a recording: {error}"
-                ));
-                return false;
-            }
+        // A recording is untrusted input -- that is why it is size-bounded and
+        // why the deadline is clamped at both ends below -- so a malformed,
+        // missing or oversized one is an ordinary failure to report, not a
+        // panic.
+        let Some(recording) = load_bounded(path, output) else {
+            return false;
         };
 
         output.report(&format!(

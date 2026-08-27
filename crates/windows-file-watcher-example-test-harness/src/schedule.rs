@@ -145,6 +145,16 @@
 //!   monitor.rs's `rekey`), or `Desync { Stopped }` (a live watch that later
 //!   became permanently unwatchable), nothing more arrives for that watch.
 //!   Each is a per-watch terminator.
+//!
+//!   **One exception, and it is real output rather than a technicality:** a
+//!   single `Desync { QueueFull }` may follow a terminator. A cancellation
+//!   completion holds a slot reserved since registration (file-watcher D-45),
+//!   so when saturation has latched a loss, the reserved send cannot flush that
+//!   latch -- its own reservation is still counted -- and enqueues
+//!   `Cancelled` ahead of it. The receiver drains the queue before synthesizing
+//!   latches, so the owed report arrives after the terminator. Exactly one can
+//!   be owed, since latching coalesces per watch. `ContractChecker` accepts that
+//!   one and rejects a second.
 //! - **`Established` recurs on re-establishment, and the tier may differ each
 //!   time.** When liveness is on, `Established { mode }` appears once at first
 //!   establishment and again after each re-establishment (file-watcher D-17),

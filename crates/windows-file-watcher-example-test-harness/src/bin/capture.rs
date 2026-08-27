@@ -80,10 +80,9 @@ mod imp {
 
     fn capture(args: &Args, output: &mut Output<impl std::io::Write, impl std::io::Write>) {
         std::fs::create_dir_all(&args.out).expect("create output directory");
-        let end = args
-            .start
-            .checked_add(args.seeds)
-            .expect("--start + --seeds overflowed u64");
+        // Cannot overflow: `Args::parse_from` rejects a range that would, so
+        // the check lives in one place rather than being restated here.
+        let end = args.start + args.seeds;
 
         let generator = Generator::new();
         let mut found = 0usize;
@@ -123,12 +122,23 @@ mod imp {
         /// prints, matching `replay` and `windows-file-watcher`'s
         /// `run_scenario`.
         fn parse(output: &mut Output<impl std::io::Write, impl std::io::Write>) -> Option<Self> {
+            Self::parse_from(std::env::args().skip(1), output)
+        }
+
+        /// The parser proper, over any argument sequence.
+        ///
+        /// Separated from [`Args::parse`] so the error branches are reachable
+        /// from tests without a process; `parse` supplies the real command line.
+        fn parse_from(
+            args: impl IntoIterator<Item = String>,
+            output: &mut Output<impl std::io::Write, impl std::io::Write>,
+        ) -> Option<Self> {
             const USAGE: &str = "usage: capture [--seeds N] [--start N] [--out DIR]";
 
             let mut seeds = 1000u64;
             let mut start = 0u64;
             let mut out = PathBuf::from("captures");
-            let mut args = std::env::args().skip(1);
+            let mut args = args.into_iter();
             while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--seeds" | "--start" => {
@@ -163,7 +173,25 @@ mod imp {
                     }
                 }
             }
+            if seeds == 0 {
+                output.diagnostic(&format!(
+                    "error: --seeds must be at least 1; nothing would be checked\n{USAGE}"
+                ));
+                return None;
+            }
+            if start.checked_add(seeds).is_none() {
+                output.diagnostic(&format!(
+                    "error: --start {start} + --seeds {seeds} overflows a u64\n{USAGE}"
+                ));
+                return None;
+            }
             Some(Self { seeds, start, out })
         }
     }
+
+    // `capture.rs` is a bin root, so this module's own directory is
+    // `src/bin/imp/`; the tests live beside the bin they cover.
+    #[cfg(test)]
+    #[path = "../capture/tests.rs"]
+    mod tests;
 }

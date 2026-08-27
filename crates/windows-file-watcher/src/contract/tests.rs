@@ -504,3 +504,31 @@ fn nothing_other_than_an_owed_loss_may_follow_a_terminator() {
         );
     }
 }
+
+#[test]
+fn only_one_owed_loss_may_follow_a_terminator() {
+    // The exception is one notification wide, not a standing licence. `latch`
+    // coalesces per watch and nothing is sent for a watch after its
+    // terminator, so production can owe at most one report; accepting every
+    // post-terminal QueueFull would leave a hole any number could pass
+    // through (PR #42 review).
+    let mut checker = ContractChecker::new();
+    let w = watch();
+    checker
+        .observe(&Notification::Completion {
+            watch: w,
+            outcome: Outcome::Cancelled,
+        })
+        .expect("cancellation");
+    checker
+        .observe(&desync(w, DesyncCause::QueueFull))
+        .expect("the one owed report");
+    assert_eq!(
+        checker.observe(&desync(w, DesyncCause::QueueFull)),
+        Err(ContractViolation::AfterTerminal {
+            watch: w,
+            terminator: Terminator::Cancelled,
+        }),
+        "a second post-terminal loss report is not reachable"
+    );
+}

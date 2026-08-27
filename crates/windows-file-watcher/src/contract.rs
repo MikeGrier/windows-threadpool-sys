@@ -54,10 +54,12 @@
 //!   `enter_fault` first and publishes the already-completed batch afterwards.
 //!   Those changes were in hand and dropping them would be silent loss, so one
 //!   batch may legally follow a bracket's opening notifications.
-//! - A `Desync { QueueFull }` **after that watch's terminator**. The latch is
-//!   synthesized once the queue drains, while a cancellation completion holds a
-//!   slot reserved since registration (D-45), so a saturated queue delivers the
-//!   terminator first and the owed loss report after it.
+//! - A `Desync { QueueFull }` **after that watch's terminator**, once. The latch
+//!   is synthesized when the queue drains, while a cancellation completion holds
+//!   a slot reserved since registration (D-45), so a saturated queue delivers
+//!   the terminator first and the owed loss report after it. Exactly one can be
+//!   owed -- latching coalesces per watch, and nothing is sent for a watch after
+//!   its terminator -- so a second is rejected.
 //!
 //! **Not checkable from the stream alone**, and so not attempted: at most one
 //! question is outstanding per subscription (D-28's standing-slot invariant). The
@@ -165,6 +167,13 @@ struct WatchState {
     volume: Option<VolumeIdentity>,
     /// Set once the watch has ended; any later notification is a violation.
     ended: Option<Terminator>,
+    /// Whether the one post-terminal loss report has already been seen.
+    ///
+    /// `latch` coalesces per `WatchId`, and nothing is sent for a watch after
+    /// its terminator, so at most **one** owed report can follow. Tracking it
+    /// keeps the exception exactly one notification wide instead of leaving a
+    /// hole every later `QueueFull` could pass through.
+    owed_loss_taken: bool,
 }
 
 /// Validates a notification stream against the delivery contract.
@@ -217,10 +226,14 @@ impl ContractChecker {
         let watch = notification.watch();
         let state = self.watches.entry(watch).or_default();
 
-        if let Some(terminator) = state.ended
-            && !is_owed_loss_report(notification)
-        {
-            return Err(ContractViolation::AfterTerminal { watch, terminator });
+        if let Some(terminator) = state.ended {
+            // The single owed loss report is the one thing that may follow a
+            // terminator, and only once.
+            if !is_owed_loss_report(notification) || state.owed_loss_taken {
+                return Err(ContractViolation::AfterTerminal { watch, terminator });
+            }
+            state.owed_loss_taken = true;
+            return Ok(());
         }
 
         match notification {
