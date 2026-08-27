@@ -505,8 +505,11 @@ fn gen_mode(rng: &mut Rng) -> WatchModeSpec {
 
 /// The real Win32 error codes `directory::classify` maps to each
 /// `OpenFailure`, named per the repo's no-bare-numeric-constants rule (not
-/// imported from `windows-sys`, to avoid a dependency for four well-known,
-/// stable `WinError` values).
+/// imported from `windows-sys`, to avoid a dependency for six well-known,
+/// stable `WinError` values). **Changing any of these values is a breaking
+/// change**: each is a protocol identity this generator's own contract-legal
+/// guarantee (D-5) depends on matching `directory::classify`'s real mapping
+/// exactly.
 mod win32 {
     pub const ERROR_FILE_NOT_FOUND: u32 = 2;
     pub const ERROR_PATH_NOT_FOUND: u32 = 3;
@@ -556,7 +559,7 @@ fn gen_detail(rng: &mut Rng) -> FaultDetailSpec {
 }
 
 /// A plausible volume identity. Its `serial` alone is not guaranteed distinct
-/// from any other draw -- use [`gen_volume_change`] for a `VolumeChanged`
+/// from any other draw -- use [`gen_changed_volume`] for a `VolumeChanged`
 /// pair, which needs that guarantee.
 fn gen_volume(rng: &mut Rng) -> VolumeSpec {
     const FS: [&str; 3] = ["NTFS", "ReFS", "FAT32"];

@@ -22,6 +22,25 @@ fn watch(raw: u64) -> WatchId {
     WatchId::from_raw(raw)
 }
 
+/// Protocol identities used as representative test data below, named per the
+/// repo's no-bare-numeric-constants rule. **Changing any of these values is a
+/// breaking change to the test data itself** (each is an identity this
+/// assertion table depends on matching a real Win32/HRESULT/action-code
+/// meaning, not an arbitrary number).
+mod protocol {
+    /// A `FILE_ACTION_*` code file-watcher does not recognise, preserved
+    /// verbatim as `ChangeKind::Unknown`.
+    pub const UNKNOWN_ACTION_CODE: u32 = 99;
+    /// `WinError` `ERROR_FILE_NOT_FOUND`.
+    pub const ERROR_FILE_NOT_FOUND: u32 = 2;
+    /// `WinError` `ERROR_NOT_SUPPORTED`.
+    pub const ERROR_NOT_SUPPORTED: u32 = 50;
+    /// `WinError` `ERROR_INVALID_NAME`.
+    pub const ERROR_INVALID_NAME: u32 = 123;
+    /// The `E_ACCESSDENIED` `HRESULT`.
+    pub const E_ACCESSDENIED: i32 = 0x8007_0005u32 as i32;
+}
+
 #[test]
 fn every_notification_spec_case_converts_to_the_intended_notification() {
     let cases: Vec<(&str, NotificationSpec, Notification)> = vec![
@@ -51,7 +70,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                         name: NameSpec::Text("new.txt".to_string()),
                     },
                     ChangeSpec {
-                        kind: ChangeKindSpec::Unknown(99),
+                        kind: ChangeKindSpec::Unknown(protocol::UNKNOWN_ACTION_CODE),
                         name: NameSpec::Units(vec![0xD800]),
                     },
                 ],
@@ -80,7 +99,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                         name: RelativeName::for_test("new.txt"),
                     },
                     Change {
-                        kind: ChangeKind::Unknown(99),
+                        kind: ChangeKind::Unknown(protocol::UNKNOWN_ACTION_CODE),
                         name: RelativeName::for_test_units(&[0xD800]),
                     },
                 ],
@@ -181,7 +200,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 outcome: OutcomeSpec::Failed {
                     detail: FaultDetailSpec {
                         failure: OpenFailureSpec::NotFound,
-                        code: FailureCodeSpec::Win32(2),
+                        code: FailureCodeSpec::Win32(protocol::ERROR_FILE_NOT_FOUND),
                     },
                 },
             },
@@ -190,7 +209,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 outcome: Outcome::Failed {
                     detail: FaultDetail {
                         failure: OpenFailure::NotFound,
-                        code: FailureCode::Win32(2),
+                        code: FailureCode::Win32(protocol::ERROR_FILE_NOT_FOUND),
                     },
                 },
             },
@@ -223,7 +242,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 outcome: OutcomeSpec::Failed {
                     detail: FaultDetailSpec {
                         failure: OpenFailureSpec::Unsupported,
-                        code: FailureCodeSpec::Win32(50),
+                        code: FailureCodeSpec::Win32(protocol::ERROR_NOT_SUPPORTED),
                     },
                 },
             },
@@ -232,7 +251,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 outcome: Outcome::Failed {
                     detail: FaultDetail {
                         failure: OpenFailure::Unsupported,
-                        code: FailureCode::Win32(50),
+                        code: FailureCode::Win32(protocol::ERROR_NOT_SUPPORTED),
                     },
                 },
             },
@@ -244,7 +263,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 outcome: OutcomeSpec::Failed {
                     detail: FaultDetailSpec {
                         failure: OpenFailureSpec::Retryable,
-                        code: FailureCodeSpec::HResult(0x8007_0005u32 as i32),
+                        code: FailureCodeSpec::HResult(protocol::E_ACCESSDENIED),
                     },
                 },
             },
@@ -253,7 +272,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 outcome: Outcome::Failed {
                     detail: FaultDetail {
                         failure: OpenFailure::Retryable,
-                        code: FailureCode::HResult(0x8007_0005u32 as i32),
+                        code: FailureCode::HResult(protocol::E_ACCESSDENIED),
                     },
                 },
             },
@@ -265,7 +284,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 outcome: OutcomeSpec::Failed {
                     detail: FaultDetailSpec {
                         failure: OpenFailureSpec::InvalidPath,
-                        code: FailureCodeSpec::Win32(123),
+                        code: FailureCodeSpec::Win32(protocol::ERROR_INVALID_NAME),
                     },
                 },
             },
@@ -274,7 +293,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 outcome: Outcome::Failed {
                     detail: FaultDetail {
                         failure: OpenFailure::InvalidPath,
-                        code: FailureCode::Win32(123),
+                        code: FailureCode::Win32(protocol::ERROR_INVALID_NAME),
                     },
                 },
             },
@@ -339,7 +358,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 operation: FaultOperationSpec::Open,
                 detail: FaultDetailSpec {
                     failure: OpenFailureSpec::NotFound,
-                    code: FailureCodeSpec::Win32(2),
+                    code: FailureCodeSpec::Win32(protocol::ERROR_FILE_NOT_FOUND),
                 },
             },
             Notification::RetryQuestion {
@@ -347,7 +366,7 @@ fn every_notification_spec_case_converts_to_the_intended_notification() {
                 operation: FaultOperation::Open,
                 detail: FaultDetail {
                     failure: OpenFailure::NotFound,
-                    code: FailureCode::Win32(2),
+                    code: FailureCode::Win32(protocol::ERROR_FILE_NOT_FOUND),
                 },
             },
         ),
