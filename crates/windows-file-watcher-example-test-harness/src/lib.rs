@@ -39,10 +39,14 @@
 //! # Fidelity limit
 //!
 //! This tests your handler's *reactions*, not whether file-watcher would ever
-//! emit a given sequence. Schedules stay inside file-watcher's documented
-//! contract, so a pathology found here is real; a bug that depends on your
-//! handler's own internal nondeterminism replays as a lead, not a guaranteed
-//! repro.
+//! emit a given sequence. A schedule the [`generator`] produces stays inside
+//! file-watcher's documented contract, so a pathology found against a
+//! *generated* schedule is real; a hand-authored schedule is deliberately
+//! unvalidated (`schedule` module docs, D-7) and may contain an ordering
+//! file-watcher could never produce, so a pathology found against one is only
+//! as trustworthy as the schedule that produced it. Either way, a bug that
+//! depends on your handler's own internal nondeterminism replays as a lead,
+//! not a guaranteed repro.
 //!
 //! [`windows-file-watcher`]: https://crates.io/crates/windows-file-watcher
 
