@@ -48,7 +48,7 @@ assertions.
   audit rather than from how the watcher currently behaves, or it blesses today's accidents instead of the
   contract; cite the decision on each.
 
-- [ ] **M3.3** -- Adopt the checker in `windows-file-watcher`'s own integration tests, so the **real**
+- [x] **M3.3** -- Adopt the checker in `windows-file-watcher`'s own integration tests, so the **real**
   watcher's output is validated against the contract rather than only spot-checked. This is the item most
   likely to find a behavioural defect rather than a documentation one, since nothing has ever asserted this.
 
