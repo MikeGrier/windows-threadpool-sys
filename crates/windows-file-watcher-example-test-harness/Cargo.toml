@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-file-watcher-example-test-harness"
-version = "0.1.0" # x-release-please-version
+version = "0.1.1" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,7 +17,7 @@ categories = ["development-tools::testing", "os::windows-apis"]
 [dependencies]
 # The crate under demonstration. `test-util` is a build-time requirement here
 # (this is a testing tool), so it is a regular dependency feature, not a dev one.
-windows-file-watcher = { version = "0.1.1", path = "../windows-file-watcher", features = [
+windows-file-watcher = { version = "0.1.2", path = "../windows-file-watcher", features = [
 	"test-util",
 ] }
 serde = { version = "1.0", features = ["derive"] }
