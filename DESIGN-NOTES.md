@@ -417,9 +417,10 @@ the damage was real and the stated consequence was not -- worth separating, beca
 what would have driven the wrong fix (a lint setting that does nothing).
 
 [tools/check-encoding.ps1](tools/check-encoding.ps1) now rejects `///` immediately following a non-space
-character at end of line, in `.rs` files. The pattern was checked for false positives across the whole
-repository before being adopted: there are none, because a legitimate doc comment is always preceded by
-whitespace or begins its line. The script's own description was widened from "encoding" to **text hygiene**,
+character, in `.rs` files. The pattern was checked for false positives across the whole repository before being
+adopted: there are none, because a legitimate doc comment is always preceded by whitespace or begins its line.
+A preceding slash is excluded so a `////` banner comment is not flagged. The script's own description was
+widened from "encoding" to **text hygiene**,
 since neither this rule nor the control-character rule is an encoding fault; they live here because this is the
 check CI already runs over every tracked file.
 
@@ -428,6 +429,12 @@ file loop, so it silently matched nothing and the planted probe passed. This is 
 that a guard has been written, observed to pass, and believed. The rule that caught it is worth restating: **a
 guard you have only seen pass is untested.** Plant the defect it is meant to catch and watch it fail, then
 remove the defect and watch it pass. Both directions, every time.
+
+The second version was anchored at end of line (`\S///\s*$`), so it caught only the *bare* glued marker -- the
+rarer form. The typical splice glues a whole doc line onto the code (`let x = 1;/// The next thing`), and that
+passed. This is a narrower rule than "test the guard": the guard *was* tested, against the exact instance that
+motivated it, and the instance was not representative. **A guard written from one observed defect must be
+checked against the general shape of the defect, not only against the instance in hand.**
 
 ## Restoring a file with an old timestamp silently disables the rebuild
 

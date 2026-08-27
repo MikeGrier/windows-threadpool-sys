@@ -1,9 +1,10 @@
 # Plans
 
-Master tracker for every active CHECKLIST.md in the repository. Each source-component also keeps its own
-PLANS.md: [crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overlapped-io-sys/PLANS.md) and
-[crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md). Checklists whose work is
-finished move to [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
+Master tracker for every active checklist in the repository: this component's own
+[CHECKLIST.md](CHECKLIST.md), plus the crates' below. Each source-component also keeps its own plans
+file -- [crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overlapped-io-sys/PLANS.md) and
+[crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md). Checklists whose
+work is finished move to [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
 
 No checklists are active.
 

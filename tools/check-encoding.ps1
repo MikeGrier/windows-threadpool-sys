@@ -140,8 +140,14 @@ foreach ($file in $files) {
     #    every check the toolchain applies. It is never intentional: it is what
     #    a mis-joined edit looks like, and one lived in a doc example for nine
     #    review rounds before being spotted by eye.
+    #
+    #    The marker is matched wherever it appears, not only at end of line: the
+    #    typical splice glues a whole doc line onto the code (`let x = 1;/// The
+    #    next thing`), and the first version of this check -- anchored at end of
+    #    line -- caught only the rarer bare-marker form. A preceding slash is
+    #    excluded so a `////` banner comment is not flagged.
     if ([System.IO.Path]::GetExtension($file) -eq '.rs') {
-        $glued = [regex]::Match($text, '(?m)^.*\S///\s*$')
+        $glued = [regex]::Match($text, '(?m)^.*[^\s/]///')
         if ($glued.Success) {
             $prefix = $text.Substring(0, $glued.Index)
             $line = ($prefix -split "`n").Count
