@@ -558,8 +558,17 @@ impl Sender {
     /// The observation tier checks this *before* arming a read rather than
     /// discovering it at the enqueue, which is what turns saturation into a
     /// grace period in the kernel's own change buffer instead of a loss (D-29).
+    ///
+    /// Accounts for a pending latched loss: [`Sender::send`] always flushes
+    /// every owed [`Delivery::Latched`] desync into the queue *before*
+    /// considering the caller's own notification, so a freed slot with a
+    /// latch still outstanding is not actually available to it. Without this,
+    /// a caller could see `true` immediately after a slot freed up, then
+    /// still get `Delivery::Latched` back from the very next `send` -- the
+    /// flush consumed the slot this check saw.
     pub fn has_room(&self) -> bool {
-        lock(&self.shared.items).free() > 0
+        let state = lock(&self.shared.items);
+        state.free() > state.latched.len()
     }
 
     /// Ask to be prodded when a saturated queue frees a slot.

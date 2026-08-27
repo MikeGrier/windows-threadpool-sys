@@ -431,6 +431,37 @@ fn a_chosen_bound_is_honoured() {
 }
 
 #[test]
+fn has_room_accounts_for_a_pending_latch() {
+    // A freed slot that is already owed to a pending latched desync is not
+    // actually available to a new notification: send() always flushes every
+    // owed latch first, so has_room() must account for that or it reports a
+    // slot as available when the very next send would still be Latched.
+    let (sender, receiver) = bounded(1);
+    let watch = WatchId::from_raw(1);
+    fill(&sender, watch, 1);
+    assert_eq!(
+        sender.send(batch(watch, &["lost.txt"])),
+        Delivery::Latched,
+        "the one slot is already full"
+    );
+    assert!(!sender.has_room(), "the queue is full, no room at all");
+
+    // Draining the queued entry frees a slot, but the latch is still owed.
+    let _ = receiver.recv().expect("the queued entry");
+    assert!(
+        !sender.has_room(),
+        "the freed slot is already earmarked for the pending latch flush"
+    );
+
+    // Confirm: the next send flushes the latch, not this notification.
+    assert_eq!(
+        sender.send(batch(watch, &["new.txt"])),
+        Delivery::Latched,
+        "the freed slot went to the owed desync flush, not this notification"
+    );
+}
+
+#[test]
 fn a_dropped_notification_is_reported_as_a_desync_not_lost_silently() {
     // The crate's central promise (D-12): a change is either delivered or its
     // loss is reported. Never neither.
