@@ -15,7 +15,30 @@ use windows_file_watcher_example_test_harness::{
     example_handler::PresenceTracker,
 };
 
+/// Where this example's report goes, kept as one seam (the repo's
+/// architectural pre-step, matching
+/// `windows-file-watcher/examples/minimal_directory_watch.rs`) rather than
+/// calling `println!` directly, even for this example's single report line --
+/// consistency with the crate's other examples matters more than the line
+/// count.
+struct Output<O> {
+    stdout: O,
+}
+
+impl<O: std::io::Write> Output<O> {
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.stdout, "{message}");
+    }
+}
+
+fn stdio() -> Output<std::io::Stdout> {
+    Output {
+        stdout: std::io::stdout(),
+    }
+}
+
 fn main() {
+    let mut output = stdio();
     // Build a schedule describing exactly the traffic you want to test against.
     let mut schedule = Schedule::new();
     schedule
@@ -51,5 +74,5 @@ fn main() {
     assert!(!handler.present().contains("draft.tmp"));
     assert_eq!(handler.rescans(), 1);
 
-    println!("in-process test passed: {handler:?}");
+    output.report(&format!("in-process test passed: {handler:?}"));
 }

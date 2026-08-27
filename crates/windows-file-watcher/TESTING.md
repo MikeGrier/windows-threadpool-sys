@@ -201,8 +201,10 @@ if let Some(reservation) = sender.reserve() {
 
 ## Writing a reusable test framework
 
-The channel is a plain in-memory queue with no OS dependency, so a framework can
-build freely on top of it:
+The channel involves no filesystem watcher and no thread pool -- it is a plain
+in-memory queue, not categorically OS-independent: `Receiver::doorbell()` (used
+below) lazily creates a real Win32 manual-reset event via `CreateEventW`. Short
+of that opt-in, a framework can build freely on top of it:
 
 - **You own ordering and timing.** Drive the sequence from a single thread for a
   strictly reproducible test. There is no hidden concurrency to control.
