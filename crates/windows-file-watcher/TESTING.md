@@ -241,9 +241,18 @@ of that opt-in, a framework can build freely on top of it:
   interesting interleaving reproducible while the rest runs freely.
 - **Doorbell integration.** If your harness drains on its own thread pool rather
   than blocking in `recv`, wait on `Receiver::doorbell()` -- a manual-reset event
-  -- and drain with `try_recv` when it signals.
-- **Teardown.** Dropping every `Sender` makes `recv` return `None`, so a drain
-  loop terminates cleanly; use that to end a framework's collector thread.
+  -- and drain when it signals. **Test `has_pending()`, not `is_empty()`.** The
+  doorbell is signalled whenever there is something to collect, and that is three
+  things, not one: a queued notification, an *owed loss report* that is not in the
+  queue, and the **end of the stream**. A loop that waits, then drains with
+  `try_recv` until it returns `None`, then re-arms the wait will spin once the
+  senders are gone, because a disconnected queue stays signalled forever. Check
+  `is_disconnected()` and stop, rather than re-arming.
+- **Teardown.** Dropping every `Sender` makes `recv` return `None`, so a
+  `recv`-based drain loop terminates cleanly; use that to end a framework's
+  collector thread. A doorbell-based loop must test `is_disconnected()` as above,
+  since for it the disconnect arrives as a permanently-signalled event rather
+  than as a `None`.
 
 ## The fidelity limit (read this)
 
@@ -254,11 +263,16 @@ sequence you fed it. Two consequences:
   type-safety sense (memory-safe, lossless) -- `RelativeName::for_test_units`
   still accepts a unit sequence the kernel never reports (an interior NUL,
   say). That guarantee is also per boundary object, not per notification: an
-  impossible *ordering* (a `Resumed` with no prior `Suspended`, say) or an
-  impossible *relationship between two valid values* (a `VolumeChanged`
-  whose `previous`/`current` carry the identical serial, which production
-  never emits) is your responsibility to avoid, exactly as with any
-  hand-authored test double.
+  impossible *ordering* (a `Batch` after that watch's `Completion { Cancelled }`,
+  say) or an impossible *relationship between two valid values* (a
+  `VolumeChanged` whose `previous`/`current` carry the identical serial, which
+  production never emits) is your responsibility to avoid, exactly as with any
+  hand-authored test double. `ContractChecker` catches both of those examples if
+  you want the check rather than the discipline -- but be careful which
+  orderings you assume are impossible: a `Resumed` with **no** prior `Suspended`
+  looks wrong and is perfectly legal, since a subscription that joins a
+  directory whose watcher is already faulted never sees the `Suspended` that
+  opened the bracket.
 - Do **not** use this surface to convince yourself you are calling the crate's
   *own* API correctly. That is a different question, and only a real `Monitor`
   answers it.

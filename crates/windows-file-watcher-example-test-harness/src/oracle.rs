@@ -101,6 +101,13 @@ pub enum PathologyKind {
 /// let a panic abort the process. A panic from either hook is reported as
 /// [`PathologyKind::Panicked`], since both are the consumer's code failing. This
 /// does not catch a handler that *hangs*; use [`run_with_deadline`] for that.
+///
+/// Catching requires the **unwinding** panic strategy. Under `panic = "abort"`,
+/// or for a panic that aborts regardless (a panic while panicking, or one
+/// crossing an `extern "C"` boundary), the process terminates and no `Outcome`
+/// is ever returned. That is a property of the runtime rather than of this
+/// function, and it is stated because the promise above would otherwise read as
+/// unconditional.
 pub fn run(schedule: &Schedule, handler: &mut impl Handler) -> Outcome {
     let (sender, receiver) = channel_with_bound(DEFAULT_BOUND);
     for (step, spec) in schedule.steps.iter().enumerate() {

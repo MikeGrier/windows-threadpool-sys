@@ -85,8 +85,8 @@
 //! - **`Desync` is an in-stream barrier.** Everything before a `Desync` for a
 //!   watch is accounted for; nothing after it is (file-watcher D-12). A schedule
 //!   that models loss puts the `Desync` exactly at the drop point.
-//! - **A fault and its resolution -- or its terminal outcome -- are one unit;
-//!   nothing else interleaves inside it.** Entering a fault sends `Suspended`
+//! - **A fault and its resolution -- or its terminal outcome -- are one unit,
+//!   with one documented exception.** Entering a fault sends `Suspended`
 //!   (liveness only). A fault against an already-established watch (this
 //!   bullet's scope; a not-yet-established watch's retryable open is the
 //!   separate case documented above) ends one of two ways: **successful
@@ -98,11 +98,19 @@
 //!   `Desync { Stopped }` (`record_stop`, watcher.rs) and nothing further for
 //!   it. A watch that is neither liveness nor interactive still legally sees
 //!   the bare successful-recovery resolution `Desync { Reestablished }` on a
-//!   silent, autonomous recovery. No `Batch`, and no second, overlapping
-//!   fault, may appear between a `Suspended` (or, for a non-liveness watch,
-//!   the point a question is asked) and that resolution or terminal outcome
-//!   -- the watch is not armed while faulted, so it cannot be delivering
-//!   data.
+//!   silent, autonomous recovery. No second, overlapping fault may appear
+//!   inside the bracket.
+//!
+//!   **The exception is a single `Batch`, and it is real rather than
+//!   theoretical.** `WatcherInner::on_completion` re-arms *before* it decodes,
+//!   so a read that completed successfully and then failed to re-arm calls
+//!   `enter_fault` first -- emitting `Suspended`/`RetryQuestion` -- and only
+//!   then publishes the batch that already completed. Those changes are real
+//!   and were already in hand; dropping them to keep the bracket tidy would be
+//!   the silent loss the whole design forbids. So exactly one `Batch`, carrying
+//!   the completion that triggered the fault, may follow the bracket's opening
+//!   notifications. A handler that treats any data inside a bracket as
+//!   impossible is wrong about production.
 //! - **A question, if any, is asked from inside that same bracket -- but is
 //!   not always followed by a resolution.** A `RetryQuestion` or
 //!   `VolumeChanged` is a question the client answers, and it only ever

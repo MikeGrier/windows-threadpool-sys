@@ -323,3 +323,24 @@ fn observe_all_reports_the_first_violation() {
         })
     );
 }
+
+#[test]
+fn a_batch_inside_a_fault_bracket_is_legal() {
+    // `on_completion` re-arms before it decodes, so a read that completed and
+    // then failed to re-arm enters the fault first and publishes the batch it
+    // already had in hand afterwards. Dropping those changes to keep the
+    // bracket tidy would be the silent loss the design forbids, so this
+    // ordering is real. A checker that rejected data inside a bracket would
+    // reject production output (PR #42 review).
+    let mut checker = ContractChecker::new();
+    let w = watch();
+    checker
+        .observe(&Notification::Suspended { watch: w })
+        .expect("the fault opens");
+    checker
+        .observe(&batch(w))
+        .expect("the completion that triggered it still delivers");
+    checker
+        .observe(&desync(w, DesyncCause::Reestablished))
+        .expect("and the bracket resolves");
+}

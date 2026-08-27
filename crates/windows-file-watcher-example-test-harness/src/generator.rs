@@ -37,8 +37,14 @@
 //!    never gated on liveness) followed by `Resumed` then `Established`
 //!    (liveness only, and always together -- `resolve_fault_success` never
 //!    sends one without the other). A bare `RetryQuestion`/`VolumeChanged` with
-//!    no bracket, or ordinary data delivered while a watch is faulted, is not a
-//!    schedule `windows-file-watcher` could produce.
+//!    no bracket is not a schedule `windows-file-watcher` could produce.
+//!
+//!    This generator keeps the bracket contiguous, which is a **coverage
+//!    choice, not a production invariant**: `on_completion` re-arms before it
+//!    decodes, so a completed read whose re-arm fails enters the fault first
+//!    and publishes that already-completed `Batch` afterwards. One batch may
+//!    therefore legally appear inside a bracket. This generator does not model
+//!    that case; a schedule that does is still legal.
 //!
 //!    A re-establishment can (re)select `Coarse` tier, whether or not liveness
 //!    reporting exposes it (watcher.rs picks a mode on every re-establishment
@@ -338,11 +344,14 @@ impl Generator {
                     out.push(NotificationSpec::Desync { watch, cause });
                 }
                 Event::FaultRecovery => {
-                    // A real fault and its resolution are never independent
-                    // events, so this is modeled as one atomic unit: nothing
-                    // else may be interleaved between entering a fault and
-                    // resolving it (schedule docs: no ordinary data while
-                    // faulted).
+                    // This generator models a fault and its resolution as one
+                    // contiguous unit. That is a coverage choice, not a
+                    // production invariant: `on_completion` re-arms before
+                    // decoding, so a completed read whose re-arm fails enters
+                    // the fault and *then* publishes the batch it already had
+                    // in hand. Emitting the bracket contiguously keeps this
+                    // generator's output a legal subset; it does not make the
+                    // interleaved form illegal.
                     if liveness {
                         out.push(NotificationSpec::Suspended { watch });
                     }

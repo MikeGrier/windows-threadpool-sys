@@ -49,6 +49,11 @@
 //!   (M14.2).
 //! - A tier that **changes** between establishments: `reopen` re-resolves it every
 //!   call (D-61), so Detailed then Coarse, or the reverse, is legal.
+//! - A `Batch` **inside a fault bracket**. `on_completion` re-arms before it
+//!   decodes, so a read that completed and then failed to re-arm calls
+//!   `enter_fault` first and publishes the already-completed batch afterwards.
+//!   Those changes were in hand and dropping them would be silent loss, so one
+//!   batch may legally follow a bracket's opening notifications.
 //!
 //! **Not checkable from the stream alone**, and so not attempted: at most one
 //! question is outstanding per subscription (D-28's standing-slot invariant). The
