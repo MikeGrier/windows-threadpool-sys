@@ -20,6 +20,7 @@ for a bounded operation, and restoring the exact prior state.
 | <a id="d-3"></a>D-3 | **Capture is explicit and synchronous on the submitting thread.** No worker may infer or recapture the submitter's context. A consumer may capture once and reuse the resulting token for later operations. |
 | <a id="d-4"></a>D-4 | **Application restores the exact prior thread-token state.** This includes nested impersonation and unwind paths. Restoration failure fails fast because returning a shared worker under an unknown identity is a process security failure. |
 | <a id="d-5"></a>D-5 | **This is not a general security-helper collection.** New surface belongs only when it is required to preserve the capture, transport, apply, or restore lifecycle of `ImpersonationToken`. |
+| <a id="d-6"></a>D-6 | **Capture duplicates the effective token into an immutable `TOKEN_IMPERSONATE`-only handle.** The thread token is opened with `OpenAsSelf` and only query/duplicate rights; its identification, impersonation, or delegation level is preserved. No-thread-token context falls back to a process-token snapshot at `SecurityImpersonation`. Anonymous context is rejected synchronously. Clones share ownership of the captured handle rather than acquiring broader rights. |
 
 ## Publication boundary
 

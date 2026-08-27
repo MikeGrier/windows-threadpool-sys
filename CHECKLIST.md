@@ -12,22 +12,14 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: IT-2.** Finish M4 before beginning any
+> **NEXT ACTIONABLE ITEM: IT-3.** Finish M4 before beginning any
 > `windows-file-enumeration-sys` implementation.
 
 ## M4 -- Publishable captured-impersonation platform layer
 
 - [x] **IT-1** -- Scaffold and register the publishable `windows-impersonation-token-sys` workspace crate. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#it-1)
 
-- [ ] **IT-2** -- Implement the public opaque, owned, clonable `ImpersonationToken`
-  capture type. Capture occurs synchronously on the calling thread; a real token
-  handle, never a pseudo-handle or borrowed raw handle, carries impersonation state
-  across threads. Open the thread token as the process where necessary, handle the
-  no-thread-token process context explicitly, duplicate with only the rights needed
-  for later application, preserve the source impersonation/delegation level, and
-  report anonymous or otherwise uncapturable contexts as typed synchronous errors.
-  Do not expose safe raw-handle construction or token-mutation rights that could
-  invalidate the captured-context invariant.
+- [x] **IT-2** -- Implement the opaque, owned, clonable `ImpersonationToken` capture type. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#it-2)
 
 - [ ] **IT-3** -- Implement scoped application of an `ImpersonationToken` to the
   current thread. Save the exact prior thread-token state, apply the captured state,

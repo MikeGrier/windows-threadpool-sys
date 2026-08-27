@@ -2,8 +2,284 @@
 //! Memory-safe capture, transport, and scoped application of Windows
 //! impersonation tokens.
 //!
-//! This crate is currently a publication-ready scaffold. Its public API is
-//! added by the subsequent implementation milestones.
+//! [`ImpersonationToken`] captures the calling thread's effective security
+//! context into an owned impersonation token that can be carried across
+//! threads without exposing its raw handle or mutation rights.
 
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
+
+use std::fmt;
+use std::io;
+use std::mem::size_of;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::ptr;
+use std::sync::Arc;
+
+use windows_sys::Win32::Foundation::{ERROR_CANT_OPEN_ANONYMOUS, ERROR_NO_TOKEN, FALSE, TRUE};
+use windows_sys::Win32::Security::{
+    DuplicateTokenEx, GetTokenInformation, SECURITY_IMPERSONATION_LEVEL, SecurityAnonymous,
+    SecurityImpersonation, TOKEN_ACCESS_MASK, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY,
+    TokenImpersonation, TokenImpersonationLevel,
+};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
+};
+
+const THREAD_TOKEN_CAPTURE_ACCESS: TOKEN_ACCESS_MASK = TOKEN_DUPLICATE | TOKEN_QUERY;
+const PROCESS_TOKEN_CAPTURE_ACCESS: TOKEN_ACCESS_MASK = TOKEN_DUPLICATE;
+const CAPTURED_TOKEN_ACCESS: TOKEN_ACCESS_MASK = TOKEN_IMPERSONATE;
+
+/// The stage at which an impersonation context could not be captured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CaptureFailure {
+    /// The current thread is impersonating at `SecurityAnonymous`, whose token
+    /// Windows does not permit callers to open or transport.
+    AnonymousContext,
+    /// Windows could not open the current thread token.
+    OpenThreadToken,
+    /// The thread had no token and Windows could not open the process token.
+    OpenProcessToken,
+    /// Windows could not report the thread token's impersonation level.
+    QueryImpersonationLevel,
+    /// Windows could not duplicate the effective token into the captured form.
+    DuplicateToken,
+}
+
+/// A synchronous failure while capturing the calling thread's effective
+/// impersonation context.
+#[derive(Debug)]
+pub struct CaptureError {
+    failure: CaptureFailure,
+    source: io::Error,
+}
+
+impl CaptureError {
+    fn new(failure: CaptureFailure, source: io::Error) -> Self {
+        Self { failure, source }
+    }
+
+    fn anonymous() -> Self {
+        Self::new(
+            CaptureFailure::AnonymousContext,
+            io::Error::from_raw_os_error(
+                i32::try_from(ERROR_CANT_OPEN_ANONYMOUS)
+                    .expect("ERROR_CANT_OPEN_ANONYMOUS fits in i32"),
+            ),
+        )
+    }
+
+    /// The capture stage that failed.
+    #[must_use]
+    pub fn failure(&self) -> CaptureFailure {
+        self.failure
+    }
+
+    /// The underlying Win32 error code.
+    #[must_use]
+    pub fn raw_os_error(&self) -> Option<i32> {
+        self.source.raw_os_error()
+    }
+}
+
+impl fmt::Display for CaptureError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let stage = match self.failure {
+            CaptureFailure::AnonymousContext => "anonymous impersonation context",
+            CaptureFailure::OpenThreadToken => "OpenThreadToken",
+            CaptureFailure::OpenProcessToken => "OpenProcessToken",
+            CaptureFailure::QueryImpersonationLevel => {
+                "GetTokenInformation(TokenImpersonationLevel)"
+            }
+            CaptureFailure::DuplicateToken => "DuplicateTokenEx",
+        };
+
+        write!(f, "{stage}: {}", self.source)
+    }
+}
+
+impl std::error::Error for CaptureError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// An owned, immutable snapshot of a Windows impersonation context.
+///
+/// Cloning this value shares ownership of the same captured token. The native
+/// handle is real rather than pseudo or borrowed, is not inheritable, and has
+/// only `TOKEN_IMPERSONATE` access. No safe API exposes that handle or permits
+/// callers to mutate the captured token.
+#[must_use = "dropping the token discards the captured impersonation context"]
+pub struct ImpersonationToken {
+    handle: Arc<OwnedHandle>,
+}
+
+impl Clone for ImpersonationToken {
+    fn clone(&self) -> Self {
+        Self {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+}
+
+impl ImpersonationToken {
+    /// Captures the calling thread's effective Windows security context.
+    ///
+    /// If the thread is impersonating, capture preserves its identification,
+    /// impersonation, or delegation level. If the thread has no token, capture
+    /// snapshots the process token as a `SecurityImpersonation` token.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CaptureError`] synchronously when the effective token cannot
+    /// be opened, inspected, or duplicated. Anonymous impersonation is reported
+    /// as [`CaptureFailure::AnonymousContext`].
+    pub fn capture() -> Result<Self, CaptureError> {
+        let source = SourceToken::open()?;
+        let mut captured = ptr::null_mut();
+
+        // SAFETY: source.handle is a live token handle with TOKEN_DUPLICATE;
+        // captured points to writable storage. Null security attributes make
+        // the new TOKEN_IMPERSONATE-only handle non-inheritable.
+        let duplicated = unsafe {
+            DuplicateTokenEx(
+                source.handle.as_raw_handle(),
+                CAPTURED_TOKEN_ACCESS,
+                ptr::null(),
+                source.level,
+                TokenImpersonation,
+                &raw mut captured,
+            )
+        };
+        if duplicated == FALSE {
+            return Err(CaptureError::new(
+                CaptureFailure::DuplicateToken,
+                io::Error::last_os_error(),
+            ));
+        }
+
+        // SAFETY: successful DuplicateTokenEx returns a new, owned token handle
+        // that must be released with CloseHandle, which OwnedHandle does.
+        let handle = unsafe { OwnedHandle::from_raw_handle(captured) };
+        Ok(Self {
+            handle: Arc::new(handle),
+        })
+    }
+}
+
+impl fmt::Debug for ImpersonationToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ImpersonationToken").finish_non_exhaustive()
+    }
+}
+
+struct SourceToken {
+    handle: OwnedHandle,
+    level: SECURITY_IMPERSONATION_LEVEL,
+}
+
+impl SourceToken {
+    fn open() -> Result<Self, CaptureError> {
+        let mut raw = ptr::null_mut();
+
+        // SAFETY: GetCurrentThread is a valid pseudo-handle for this call and
+        // raw points to writable handle storage. OpenAsSelf uses the process
+        // context for the access check, which is required for identification
+        // level impersonation.
+        let opened = unsafe {
+            OpenThreadToken(
+                GetCurrentThread(),
+                THREAD_TOKEN_CAPTURE_ACCESS,
+                TRUE,
+                &raw mut raw,
+            )
+        };
+        if opened != FALSE {
+            // SAFETY: successful OpenThreadToken returns a new, owned handle
+            // closed by OwnedHandle.
+            let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+            let level = query_impersonation_level(&handle)?;
+            return Ok(Self { handle, level });
+        }
+
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(code)
+                if code
+                    == i32::try_from(ERROR_CANT_OPEN_ANONYMOUS)
+                        .expect("ERROR_CANT_OPEN_ANONYMOUS fits in i32") =>
+            {
+                Err(CaptureError::new(CaptureFailure::AnonymousContext, error))
+            }
+            Some(code)
+                if code == i32::try_from(ERROR_NO_TOKEN).expect("ERROR_NO_TOKEN fits in i32") =>
+            {
+                Self::open_process()
+            }
+            _ => Err(CaptureError::new(CaptureFailure::OpenThreadToken, error)),
+        }
+    }
+
+    fn open_process() -> Result<Self, CaptureError> {
+        let mut raw = ptr::null_mut();
+
+        // SAFETY: GetCurrentProcess is a valid pseudo-handle for this call and
+        // raw points to writable handle storage.
+        let opened = unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                PROCESS_TOKEN_CAPTURE_ACCESS,
+                &raw mut raw,
+            )
+        };
+        if opened == FALSE {
+            return Err(CaptureError::new(
+                CaptureFailure::OpenProcessToken,
+                io::Error::last_os_error(),
+            ));
+        }
+
+        // SAFETY: successful OpenProcessToken returns a new, owned handle
+        // closed by OwnedHandle.
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        Ok(Self {
+            handle,
+            level: SecurityImpersonation,
+        })
+    }
+}
+
+fn query_impersonation_level(
+    handle: &OwnedHandle,
+) -> Result<SECURITY_IMPERSONATION_LEVEL, CaptureError> {
+    let mut level = SecurityAnonymous;
+    let mut returned = 0;
+    let level_size =
+        u32::try_from(size_of::<SECURITY_IMPERSONATION_LEVEL>()).expect("token level fits in u32");
+
+    // SAFETY: handle has TOKEN_QUERY and remains live for the call. level is a
+    // correctly sized writable SECURITY_IMPERSONATION_LEVEL buffer and returned
+    // points to writable length storage.
+    let queried = unsafe {
+        GetTokenInformation(
+            handle.as_raw_handle(),
+            TokenImpersonationLevel,
+            (&raw mut level).cast(),
+            level_size,
+            &raw mut returned,
+        )
+    };
+    if queried == FALSE {
+        return Err(CaptureError::new(
+            CaptureFailure::QueryImpersonationLevel,
+            io::Error::last_os_error(),
+        ));
+    }
+    if level == SecurityAnonymous {
+        return Err(CaptureError::anonymous());
+    }
+
+    Ok(level)
+}

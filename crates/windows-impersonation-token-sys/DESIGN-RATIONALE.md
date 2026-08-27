@@ -35,3 +35,23 @@ impersonation token. A shared thread-pool worker may have a prior state that mus
 survive the bounded operation. If restoration fails, reporting an ordinary error
 does not repair the worker; later unrelated callbacks could execute under the
 wrong identity. The only safe response is fail-fast.
+
+## Why capture duplicates and narrows the token
+
+The source thread handle is opened with `OpenAsSelf` so an identification-level
+caller can still capture its own token while the access check uses the process
+context. Query access is needed only to read that token's impersonation level,
+and duplicate access is needed only to create the independent snapshot. The
+source handle is then closed.
+
+A thread with no token is running as the process. Its primary process token has
+no impersonation level to preserve, so capture duplicates that security context
+as `SecurityImpersonation`: sufficient for local worker operations without
+claiming delegation semantics the source did not have. An existing thread
+token's identification, impersonation, or delegation level is passed through to
+`DuplicateTokenEx` unchanged.
+
+The captured handle requests only `TOKEN_IMPERSONATE`, which is all scoped
+application needs. Null security attributes keep it non-inheritable. Sharing that
+immutable owned handle through clones avoids both borrowed-handle lifetime
+hazards and acquisition of duplicate or adjustment rights after capture.

@@ -556,3 +556,24 @@ manifest, and source skeleton are present with required copyright headers.
 Cargo metadata discovers the package as version `0.1.0`, the targeted package check
 passes, the package's empty unit and documentation test harnesses pass, and the
 crate name was unclaimed on crates.io when the scaffold was completed.
+
+## Moved 2026-08-27 -- captured impersonation token
+
+### <a id="it-2"></a>IT-2 -- Implement the opaque, owned, clonable `ImpersonationToken` capture type. *(completed 2026-08-27 16:23:53 UTC-04:00)*
+
+The public `ImpersonationToken::capture` operation synchronously opens the calling
+thread's effective real token with `OpenAsSelf`, explicitly falls back to the
+process token when the thread has none, and duplicates that context into a
+non-inheritable `TokenImpersonation` handle with only `TOKEN_IMPERSONATE` access.
+Existing identification, impersonation, and delegation levels are preserved;
+process context becomes `SecurityImpersonation`; and anonymous context plus every
+native failure stage is reported through `CaptureError` and `CaptureFailure`.
+
+The captured handle is private, owned by `OwnedHandle`, and shared across clones
+through `Arc`, so source-handle lifetime, pseudo-handle transport, mutation rights,
+and rights expansion cannot invalidate the captured-context invariant. The exact
+mechanics and rationale are recorded in the crate
+[DESIGN-NOTES.md](crates/windows-impersonation-token-sys/DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](crates/windows-impersonation-token-sys/DESIGN-RATIONALE.md).
+The targeted all-target check and Clippy pass without warnings, and the package
+test and documentation-test harnesses pass.
