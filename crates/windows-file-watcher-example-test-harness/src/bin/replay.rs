@@ -23,9 +23,16 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(windows)]
 mod imp {
+    use std::time::Duration;
+
     use windows_file_watcher_example_test_harness::{
-        Recording, example_handler::BuggyHandler, run,
+        Outcome, PathologyKind, Recording, example_handler::BuggyHandler, run_with_deadline,
     };
+
+    /// Bound applied when the recording's own outcome does not name a
+    /// [`PathologyKind::Stalled`] deadline. Generous, not tight: this only
+    /// needs to catch a genuine wedge, not race a legitimately-slow handler.
+    const DEFAULT_REPLAY_DEADLINE: Duration = Duration::from_secs(30);
 
     /// Where this bin's diagnostics and result go, kept as one seam (the
     /// repo's architectural pre-step, matching
@@ -71,6 +78,14 @@ mod imp {
 
     /// Replay the recording at `path` against the example handler, reporting
     /// through `output`. Returns whether the recorded pathology reproduced.
+    ///
+    /// Always replays through [`run_with_deadline`], never a plain `run`: a
+    /// recording's `outcome` is arbitrary (it may have come from any capture
+    /// tool, not only this crate's own `capture` bin), so a recorded
+    /// `Stalled` must be replayed under that same deadline rather than
+    /// hanging this process forever, and a recorded `HarnessPanicked` must be
+    /// replayed under `catch_unwind` rather than letting that panic escape
+    /// and crash the replay itself.
     fn replay(path: &str, output: &mut Output<impl std::io::Write, impl std::io::Write>) -> bool {
         let recording = Recording::load(path).expect("load recording");
 
@@ -81,8 +96,13 @@ mod imp {
         ));
         output.report(&format!("recorded outcome: {:?}", recording.outcome));
 
-        let mut handler = BuggyHandler::new();
-        let replayed = run(&recording.schedule, &mut handler);
+        let deadline = match &recording.outcome {
+            Outcome::Pathology(PathologyKind::Stalled { deadline_ms }) => {
+                Duration::from_millis(u64::try_from(*deadline_ms).unwrap_or(u64::MAX))
+            }
+            _ => DEFAULT_REPLAY_DEADLINE,
+        };
+        let replayed = run_with_deadline(&recording.schedule, BuggyHandler::new(), deadline);
         output.report(&format!("replayed outcome: {replayed:?}"));
 
         if replayed == recording.outcome {
