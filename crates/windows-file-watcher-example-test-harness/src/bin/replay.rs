@@ -29,6 +29,13 @@ mod imp {
         Outcome, PathologyKind, Recording, example_handler::BuggyHandler, run_with_deadline,
     };
 
+    // `replay.rs` is a bin root, so this module's own directory is
+    // `src/bin/imp/`; the tests live beside the bin they cover, at
+    // `src/bin/replay/tests.rs`.
+    #[cfg(test)]
+    #[path = "../replay/tests.rs"]
+    mod tests;
+
     /// Bound applied when the recording's own outcome does not name a
     /// [`PathologyKind::Stalled`] deadline. Generous, not tight: this only
     /// needs to catch a genuine wedge, not race a legitimately-slow handler.
@@ -43,6 +50,18 @@ mod imp {
     /// a legitimate wedge test's deadline is never actually reached by this
     /// clamp in practice.
     const MAX_REPLAY_DEADLINE: Duration = Duration::from_secs(300);
+
+    /// The shortest recorded deadline this bin will honour.
+    ///
+    /// The upper clamp alone is not enough. A recording is untrusted input, so
+    /// it can also name a *too small* deadline -- `deadline_ms: 0` being the
+    /// worst case -- which expires before the handler has run at all. Since a
+    /// `Stalled` replay is compared semantically rather than on its deadline
+    /// value, that would report a wedge as reproduced without ever giving the
+    /// handler a chance to wedge, turning this bin into something that confirms
+    /// whatever it is handed. Clamping up to a floor makes an unreproducible
+    /// recording fail honestly instead.
+    const MIN_REPLAY_DEADLINE: Duration = Duration::from_millis(100);
 
     /// Where this bin's diagnostics and result go, kept as one seam (the
     /// repo's architectural pre-step, matching
@@ -106,21 +125,7 @@ mod imp {
         ));
         output.report(&format!("recorded outcome: {:?}", recording.outcome));
 
-        let deadline = match &recording.outcome {
-            Outcome::Pathology(PathologyKind::Stalled { deadline_ms }) => {
-                let requested =
-                    Duration::from_millis(u64::try_from(*deadline_ms).unwrap_or(u64::MAX));
-                let clamped = requested.min(MAX_REPLAY_DEADLINE);
-                if clamped != requested {
-                    output.diagnostic(&format!(
-                        "recorded deadline {requested:?} exceeds this bin's {MAX_REPLAY_DEADLINE:?} \
-                         cap; clamping so replay cannot be made to hang by an untrusted recording"
-                    ));
-                }
-                clamped
-            }
-            _ => DEFAULT_REPLAY_DEADLINE,
-        };
+        let deadline = replay_deadline(&recording.outcome, output);
         let replayed = run_with_deadline(&recording.schedule, BuggyHandler::new(), deadline);
         output.report(&format!("replayed outcome: {replayed:?}"));
 
@@ -135,6 +140,33 @@ mod imp {
             output.diagnostic("NOT reproduced: outcome differs from the recording.");
             false
         }
+    }
+
+    /// The deadline to replay `recorded` under.
+    ///
+    /// A recording is untrusted input, so its `deadline_ms` is clamped into
+    /// `MIN_REPLAY_DEADLINE..=MAX_REPLAY_DEADLINE` at both ends: too large and
+    /// it defeats replay's cannot-hang guarantee, too small and it expires
+    /// before the handler has run, which -- since `reproduces` compares
+    /// `Stalled` semantically -- would report a wedge that never happened.
+    fn replay_deadline(
+        recorded: &Outcome,
+        output: &mut Output<impl std::io::Write, impl std::io::Write>,
+    ) -> Duration {
+        let Outcome::Pathology(PathologyKind::Stalled { deadline_ms }) = recorded else {
+            return DEFAULT_REPLAY_DEADLINE;
+        };
+        let requested = Duration::from_millis(u64::try_from(*deadline_ms).unwrap_or(u64::MAX));
+        let clamped = requested.clamp(MIN_REPLAY_DEADLINE, MAX_REPLAY_DEADLINE);
+        if clamped != requested {
+            output.diagnostic(&format!(
+                "recorded deadline {requested:?} is outside this bin's \
+                 {MIN_REPLAY_DEADLINE:?}..={MAX_REPLAY_DEADLINE:?} range; clamping to {clamped:?} \
+                 so an untrusted recording can neither hang the replay nor expire before the \
+                 handler runs"
+            ));
+        }
+        clamped
     }
 
     /// Whether `replayed` reproduces `recorded`.

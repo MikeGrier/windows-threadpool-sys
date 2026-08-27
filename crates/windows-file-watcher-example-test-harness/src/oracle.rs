@@ -46,7 +46,13 @@ impl Outcome {
 /// What went wrong.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PathologyKind {
-    /// The handler panicked while processing the notification at `at_step`.
+    /// The handler panicked, in either [`Handler::on`] or [`Handler::check`],
+    /// while processing the notification at `at_step`.
+    ///
+    /// Both hooks are the consumer's code, so a panic in either is a handler
+    /// pathology rather than a [`PathologyKind::HarnessPanicked`]. A panic that
+    /// came from `check` is prefixed `in check():` in `message`; `at_step` is
+    /// `steps.len()` for the end-of-run check.
     Panicked {
         /// The schedule step being delivered when the panic happened.
         at_step: usize,
@@ -86,11 +92,12 @@ pub enum PathologyKind {
 /// Drive `handler` through `schedule`, watching for a panic or an invariant
 /// violation, and return at the first pathology (or [`Outcome::Healthy`]).
 ///
-/// The handler's `on` is wrapped in `catch_unwind`: the handler is *consumer*
-/// code, not an FFI callback, so containing its panic is correct here -- the
-/// opposite of file-watcher's own trampolines, which must let a panic abort the
-/// process. This does not catch a handler that *hangs*; use
-/// [`run_with_deadline`] for that.
+/// Both handler hooks -- `on` **and** `check` -- are wrapped in `catch_unwind`:
+/// the handler is *consumer* code, not an FFI callback, so containing its panic
+/// is correct here -- the opposite of file-watcher's own trampolines, which must
+/// let a panic abort the process. A panic from either hook is reported as
+/// [`PathologyKind::Panicked`], since both are the consumer's code failing. This
+/// does not catch a handler that *hangs*; use [`run_with_deadline`] for that.
 pub fn run(schedule: &Schedule, handler: &mut impl Handler) -> Outcome {
     let (sender, receiver) = channel_with_bound(DEFAULT_BOUND);
     for (step, spec) in schedule.steps.iter().enumerate() {
@@ -102,21 +109,34 @@ pub fn run(schedule: &Schedule, handler: &mut impl Handler) -> Outcome {
                     message: panic_message(&*payload),
                 });
             }
-            if let Err(reason) = handler.check() {
-                return Outcome::Pathology(PathologyKind::InvariantViolated {
-                    at_step: step,
-                    reason,
-                });
+            match catch_unwind(AssertUnwindSafe(|| handler.check())) {
+                Err(payload) => {
+                    return Outcome::Pathology(PathologyKind::Panicked {
+                        at_step: step,
+                        message: format!("in check(): {}", panic_message(&*payload)),
+                    });
+                }
+                Ok(Err(reason)) => {
+                    return Outcome::Pathology(PathologyKind::InvariantViolated {
+                        at_step: step,
+                        reason,
+                    });
+                }
+                Ok(Ok(())) => {}
             }
         }
     }
-    if let Err(reason) = handler.check() {
-        return Outcome::Pathology(PathologyKind::InvariantViolated {
+    match catch_unwind(AssertUnwindSafe(|| handler.check())) {
+        Err(payload) => Outcome::Pathology(PathologyKind::Panicked {
+            at_step: schedule.steps.len(),
+            message: format!("in check(): {}", panic_message(&*payload)),
+        }),
+        Ok(Err(reason)) => Outcome::Pathology(PathologyKind::InvariantViolated {
             at_step: schedule.steps.len(),
             reason,
-        });
+        }),
+        Ok(Ok(())) => Outcome::Healthy,
     }
-    Outcome::Healthy
 }
 
 /// Like [`run`], but bounds the whole run by `deadline` so a handler that
@@ -130,8 +150,7 @@ pub fn run(schedule: &Schedule, handler: &mut impl Handler) -> Outcome {
 /// when you need to inspect the handler afterward.
 ///
 /// The worker's call to [`run`] is itself wrapped in `catch_unwind`, so a panic
-/// that escapes `run` (chiefly an unguarded [`Handler::check`] panic -- `check`
-/// is not caught inside `run` the way `on` is) is reported as
+/// that escapes `run` is reported as
 /// [`PathologyKind::HarnessPanicked`] rather than silently disconnecting the
 /// channel and being misdiagnosed as [`PathologyKind::Stalled`]. A genuine
 /// stall -- the worker never finishing at all -- remains the only way to see

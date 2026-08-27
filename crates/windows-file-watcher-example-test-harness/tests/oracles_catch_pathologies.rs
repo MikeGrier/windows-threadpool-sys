@@ -133,20 +133,25 @@ fn a_wedged_handler_is_caught_by_the_deadline() {
 }
 
 #[test]
-fn a_panic_in_check_is_reported_as_a_harness_panic_not_a_stall() {
-    // Regression test (PR #42 review): a Handler::check that panics instead of
-    // returning Err used to unwind straight through run_with_deadline's worker
-    // thread, drop the sender, and get misdiagnosed as Stalled.
+fn a_panic_in_check_is_reported_as_a_handler_panic() {
+    // Regression test (PR #42 review, twice). First round: a Handler::check
+    // that panics instead of returning Err unwound straight through
+    // run_with_deadline's worker thread, dropped the sender, and was
+    // misdiagnosed as Stalled. Second round: catching it at the worker
+    // boundary classified it as HarnessPanicked, which is also wrong --
+    // `check` is the consumer's code exactly as `on` is, and the oracle
+    // advertises that it catches handler panics. Both hooks are now caught
+    // inside `run` and reported as Panicked.
     let outcome = run_with_deadline(
         &establish_then_desync(),
         PanicsInCheck::default(),
         Duration::from_millis(500),
     );
+    let Some(PathologyKind::Panicked { message, .. }) = outcome.pathology() else {
+        panic!("expected a handler panic, got {outcome:?}");
+    };
     assert!(
-        matches!(
-            outcome.pathology(),
-            Some(PathologyKind::HarnessPanicked { .. })
-        ),
-        "expected a harness panic, got {outcome:?}"
+        message.starts_with("in check():"),
+        "the message must identify which hook panicked, got {message:?}"
     );
 }
