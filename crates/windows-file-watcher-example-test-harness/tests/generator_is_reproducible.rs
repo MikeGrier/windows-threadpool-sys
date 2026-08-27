@@ -57,3 +57,37 @@ fn every_watch_is_established_before_it_delivers_data() {
     }
     assert_eq!(seen.len(), 4, "all four watches should appear");
 }
+
+#[test]
+fn every_generated_volume_changed_has_a_distinct_previous_and_current_serial() {
+    // Regression test (PR #42 review): windows-file-watcher only emits
+    // VolumeChanged when the volume identity actually differs (D-78), and
+    // identity compares by serial alone (D-50). An equal previous/current
+    // serial would be an impossible, illegal notification.
+    let generator = Generator::with_config(GeneratorConfig {
+        watches: 4,
+        steps_per_watch: 40,
+        interactive_percent: 100,
+        ..GeneratorConfig::default()
+    });
+
+    let mut checked = 0;
+    for seed in 0..50 {
+        for step in &generator.generate(seed).steps {
+            if let NotificationSpec::VolumeChanged {
+                previous, current, ..
+            } = step
+            {
+                assert_ne!(
+                    previous.serial, current.serial,
+                    "seed {seed}: a VolumeChanged with equal serials is not a legal schedule"
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(
+        checked > 0,
+        "expected at least one VolumeChanged across 50 seeds with interactive_percent: 100"
+    );
+}

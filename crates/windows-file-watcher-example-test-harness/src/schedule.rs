@@ -38,10 +38,19 @@
 //!   halves together, or other changes interleaved between them. A handler
 //!   that assumes adjacency or pairing is assuming something
 //!   `windows-file-watcher` does not promise.
-//! - **Carried detail must be self-consistent.** `Failed`, `RetryQuestion`, and
-//!   `VolumeChanged` carry a [`FaultDetailSpec`] / [`VolumeSpec`] the handler
-//!   reads. Nothing across steps depends on those values, but they should be
-//!   internally sensible (a real Win32 code, a plausible volume serial).
+//! - **`VolumeChanged`'s `previous`/`current` must have distinct serials.**
+//!   `windows-file-watcher` only emits this notification when a reopen's
+//!   volume identity actually differs from the one previously confirmed
+//!   (file-watcher D-78), and identity compares by serial alone
+//!   (`VolumeSpec::serial`, mirroring `VolumeIdentity`'s own `PartialEq`,
+//!   file-watcher D-50). A `previous`/`current` pair with equal serials is not
+//!   a legal schedule -- it describes a volume "changing" to itself, which the
+//!   crate never reports. The generator enforces this by construction rather
+//!   than by chance.
+//! - **Carried detail must otherwise be self-consistent.** `Failed` and
+//!   `RetryQuestion` carry a [`FaultDetailSpec`] the handler reads. Nothing
+//!   across steps depends on its value, but it should be internally sensible
+//!   (a real Win32 code).
 //!
 //! # Control-flow (sequencing) dependencies
 //!

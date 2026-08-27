@@ -262,10 +262,11 @@ impl Generator {
                             detail: gen_detail(rng),
                         });
                     } else {
+                        let (previous, current) = gen_volume_change(rng);
                         out.push(NotificationSpec::VolumeChanged {
                             watch,
-                            previous: gen_volume(rng),
-                            current: gen_volume(rng),
+                            previous,
+                            current,
                         });
                     }
                     // The question is treated as resolved before the next event,
@@ -404,7 +405,9 @@ fn gen_detail(rng: &mut Rng) -> FaultDetailSpec {
     FaultDetailSpec { failure, code }
 }
 
-/// A plausible volume identity.
+/// A plausible volume identity. Its `serial` alone is not guaranteed distinct
+/// from any other draw -- use [`gen_volume_change`] for a `VolumeChanged`
+/// pair, which needs that guarantee.
 fn gen_volume(rng: &mut Rng) -> VolumeSpec {
     const FS: [&str; 3] = ["NTFS", "ReFS", "FAT32"];
     const LABELS: [&str; 4] = ["System", "Data", "Removable", "Backup"];
@@ -413,4 +416,22 @@ fn gen_volume(rng: &mut Rng) -> VolumeSpec {
         filesystem: FS[rng.below(FS.len() as u64) as usize].to_string(),
         label: LABELS[rng.below(LABELS.len() as u64) as usize].to_string(),
     }
+}
+
+/// A `(previous, current)` pair for `VolumeChanged`, with a **serial
+/// guaranteed distinct by construction**: `windows-file-watcher` only emits
+/// this notification when a reopen's volume identity actually differs from
+/// the one previously confirmed (D-78), and identity compares by serial alone
+/// (D-50). Two independent [`gen_volume`] draws could coincidentally collide,
+/// which would make an illegal, impossible `VolumeChanged` -- so `current`'s
+/// serial is offset from `previous`'s by a nonzero amount (mod 2^32) rather
+/// than drawn independently and hoped to differ.
+fn gen_volume_change(rng: &mut Rng) -> (VolumeSpec, VolumeSpec) {
+    let previous = gen_volume(rng);
+    let mut current = gen_volume(rng);
+    // A nonzero offset in [1, u32::MAX - 1] added mod 2^32 can never land back
+    // on the original value, so this is a guarantee, not a low-probability draw.
+    let offset = 1 + rng.below(u64::from(u32::MAX) - 1) as u32;
+    current.serial = previous.serial.wrapping_add(offset);
+    (previous, current)
 }
