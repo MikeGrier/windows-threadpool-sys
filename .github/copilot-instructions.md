@@ -899,6 +899,80 @@ A component may layer additional, stricter conventions on top of this rule (for 
 required cross-reference syntax between decision IDs and checklist items). Follow the
 nearest applicable component instructions in addition to this baseline.
 
+## CONTRACT INTEGRITY — a rule stated correctly in one place is still wrong everywhere else
+
+Specifying a contract well is necessary and **not sufficient**. A single fact — "this cause is
+terminal", "this message is tier-independent", "every *lifecycle* request completes" — typically
+ends up restated in a decision row, a prose section, a rustdoc comment, a consumer-facing example,
+a generator, and that generator's test. Correcting one of those does nothing for the others, and
+nothing detects the disagreement. This is **restatement drift**, and it is measured, not
+hypothetical: across three consecutive review rounds on PR #42, *five of six findings were
+corrections that had not propagated* rather than original defects. See
+[DESIGN-NOTES.md](../DESIGN-NOTES.md) -> [Restatement drift](../DESIGN-NOTES.md#restatement-drift).
+
+Three rules follow, ordered by how little each depends on anyone remembering.
+
+### 1. Prefer a derived fact to a restated one
+
+**If a contract rule is a predicate over values, define it once in code and make every other place
+ask.** Do not re-encode it in a test, a generator, a fuzzer, a mock, or an example — a hand-written
+second copy of a contract rule is not a check of the contract, it is a check of the copy. This is
+the consumer-side twin of PLATFORM INTEGRITY rule 2, applied to a *contract* rather than to an API.
+
+When you add such a predicate, **verify the binding by sabotage**: change the definition and
+confirm the consumer's *behavior* changes. If only a test's expectation moves, or nothing moves,
+the binding is cosmetic and the copy is still there.
+
+Know the limit — but know that it is narrower than it first appears. **Sequencing rules
+(ordering, bracket entry states, what may follow what) are not value-level, and are still
+derivable**: define them once as a shared executable oracle — a state machine over the
+observable stream — and have the generator, the producing crate's own tests, and the consumer's
+test doubles all bind to that one definition. `windows-file-watcher`'s `ContractChecker` is the
+worked example; an earlier revision of this rule said such rules "stay prose", and building it
+disproved that. What cannot express them is the *type system*, not the codebase.
+
+Put the oracle in the crate that **owns** the contract, never in the consumer or the test
+harness — a harness-side copy is a second implementation again, which is the whole defect. And
+give as much care to what the oracle deliberately does *not* check: over-constraining is the
+same defect as under-specifying, so assert that it **accepts** the sequences that are legal but
+surprising, and say plainly which rules are unobservable from the stream rather than
+approximating them.
+
+The genuine residue for rules 2 and 3 is what no oracle can observe: facts about state the
+stream never carries.
+
+### 2. Prose that contains code must compile
+
+**Any markdown document carrying runnable examples of a crate's own API must be compiled as
+doctests** (`#[cfg(doctest)] #[doc = include_str!("../FILE.md")] struct FileDoctests;`), so a
+contract change that invalidates an example breaks the build instead of silently teaching the old
+answer. An example nothing executes can only rot. Where an example genuinely cannot run, prefer
+`no_run` (still compiled) over `ignore` (not compiled at all), and reserve `ignore` for fragments
+that are not valid Rust on their own.
+
+### 3. Blast-radius sweep before any contract correction
+
+**Before committing a change to a stated contract rule, enumerate every other statement of the
+same fact and fix them together.** Grep the distinguishing term across `src/`, `tests/`,
+`examples/`, `benches/` and `*.md` for the component and its dependents; fix every hit or state
+why each is out of scope. Record the sweep in the commit message (e.g. "swept `QueueFull`: 13
+files, 4 updated, 9 incidental mentions"). Do **not** fix only the site a reviewer pointed at —
+the reported site is a sample, not the population. This is cheap and it works: run once
+voluntarily on this repository, a sweep immediately found a stale site no reviewer had reported.
+
+Two corollaries that have each already cost a review round:
+
+- **An analysis document never restates normative content.** An audit, review response, or design
+  session records *findings and rationale*; the normative statement lives in exactly one
+  authoritative place, and the analysis links to it. Writing "now stated" in an audit table while
+  the decision it contradicts still says the opposite is not a fix — it is a second, contradictory
+  copy. **An audit finding is discharged when the statement it contradicted has changed**, never by
+  being recorded in the audit.
+- **A correction to a shipped rule obliges a re-check of everything built against the old one.**
+  Nothing re-checks it automatically. When you correct a rule, ask specifically which code was
+  written while the old reading was current — generators, test doubles, examples — because those
+  encode the reading rather than citing it.
+
 ## CHECKLIST file hygiene
 
 CHECKLIST files are **action-only**: they contain pending, in-progress, and recently

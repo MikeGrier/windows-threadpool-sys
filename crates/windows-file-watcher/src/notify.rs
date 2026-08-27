@@ -17,6 +17,8 @@ use std::path::PathBuf;
 
 use wtf_string::{Wtf16Str, Wtf16String};
 
+use crate::retry::WatchMode;
+
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ACTION_ADDED, FILE_ACTION_MODIFIED, FILE_ACTION_REMOVED, FILE_ACTION_RENAMED_NEW_NAME,
     FILE_ACTION_RENAMED_OLD_NAME,
@@ -117,6 +119,47 @@ impl RelativeName {
     #[must_use]
     pub fn to_path_buf(&self) -> PathBuf {
         PathBuf::from(self.to_os_string())
+    }
+}
+
+/// Consumer test-surface constructors (D-82), available only under the
+/// off-by-default `test-util` feature. In production the kernel is the only
+/// source of a `RelativeName`; these let a downstream consumer synthesize a
+/// [`Change`] to feed its own handler through a test
+/// [`Receiver`](crate::Receiver), with no real `ReadDirectoryChangesW`
+/// completion. These are **representation-preserving**, not
+/// production-domain-validating: any sequence of units is memory-safe and
+/// stored losslessly (D-83), but that includes values the kernel itself never
+/// reports -- an interior NUL, for instance (`an_interior_nul_in_a_name_is_
+/// preserved_and_reported`, notify/tests.rs), which storage cannot reject
+/// without silently truncating a name that legitimately reached this crate
+/// some other way. Staying inside what the kernel would actually send is the
+/// caller's responsibility, exactly as with any hand-fed test double.
+#[cfg(feature = "test-util")]
+impl RelativeName {
+    /// Build a relative name from a string.
+    #[must_use]
+    pub fn for_test(name: impl AsRef<str>) -> Self {
+        Self {
+            name: Wtf16String::from(name.as_ref()),
+        }
+    }
+
+    /// Build a relative name from an [`OsStr`](std::ffi::OsStr), losslessly.
+    #[must_use]
+    pub fn for_test_os(name: &std::ffi::OsStr) -> Self {
+        Self {
+            name: Wtf16String::from_os_str(name),
+        }
+    }
+
+    /// Build a relative name from raw UTF-16 units -- the exact shape the kernel
+    /// reports, lone surrogates and all.
+    #[must_use]
+    pub fn for_test_units(units: &[u16]) -> Self {
+        Self {
+            name: Wtf16String::from_units(units),
+        }
     }
 }
 
@@ -347,8 +390,13 @@ pub struct Change {
 /// Why a [`DecodedBatch::Desync`] -- a "you may have missed changes, re-scan"
 /// signal -- was raised.
 ///
-/// The cause is advisory: the client's response is the same in every case (a
-/// re-scan). It exists so a client can diagnose *how* it fell behind.
+/// The cause is advisory for the four *recoverable* causes -- [`Overflow`](Self::Overflow),
+/// [`QueueFull`](Self::QueueFull), [`Coarse`](Self::Coarse), and
+/// [`Reestablished`](Self::Reestablished) -- whose response is the same in every
+/// case (a re-scan); it exists so a client can diagnose *how* it fell behind.
+/// [`Stopped`](Self::Stopped) is **not** advisory and must be matched on: it is
+/// terminal, and a re-scan does not resynchronize a watch that will never
+/// deliver again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DesyncCause {
     /// The kernel change buffer overflowed (a zero-byte completion): changes were
@@ -371,6 +419,82 @@ pub enum DesyncCause {
     /// every other cause, a re-scan will not resynchronize this watch -- the client
     /// should treat it as ended and consult `Monitor::stop_reason` for why.
     Stopped,
+}
+
+impl DesyncCause {
+    /// Whether this cause **ends** the watch rather than asking it to re-scan.
+    ///
+    /// Branch on this rather than matching [`DesyncCause::Stopped`] by name.
+    /// Doing so is what keeps a handler correct if a further terminal cause is
+    /// ever added: a name-match silently treats the new one as recoverable and
+    /// re-scans a dead watch forever, where this reports it as terminal.
+    ///
+    /// ```
+    /// use windows_file_watcher::DesyncCause;
+    ///
+    /// // The four recoverable causes: re-scan and carry on.
+    /// assert!(!DesyncCause::Overflow.is_terminal());
+    /// assert!(!DesyncCause::QueueFull.is_terminal());
+    /// assert!(!DesyncCause::Coarse.is_terminal());
+    /// assert!(!DesyncCause::Reestablished.is_terminal());
+    ///
+    /// // The one terminal cause: nothing further arrives for that watch, and a
+    /// // re-scan will not resynchronize it.
+    /// assert!(DesyncCause::Stopped.is_terminal());
+    /// ```
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        match self {
+            DesyncCause::Stopped => true,
+            DesyncCause::Overflow
+            | DesyncCause::QueueFull
+            | DesyncCause::Coarse
+            | DesyncCause::Reestablished => false,
+        }
+    }
+
+    /// Whether a watch established in `mode` can ever report this cause.
+    ///
+    /// Only two causes are tier-restricted, and the boundary is easy to state
+    /// wrongly in either direction -- this crate's own harness first emitted a
+    /// cause a coarse watch cannot produce, then excluded one it can. It is
+    /// therefore defined here once, and anything that needs it (a test double, a
+    /// schedule generator, a fuzzer) asks rather than re-deriving it:
+    ///
+    /// - [`Overflow`](Self::Overflow) is **Detailed-only**: it is the *kernel
+    ///   change buffer's* own overflow, which only a `ReadDirectoryChangesW`
+    ///   read observes.
+    /// - [`Coarse`](Self::Coarse) is **Coarse-only**: it is what a coarse
+    ///   activation reports in place of detail it does not have.
+    /// - [`QueueFull`](Self::QueueFull), [`Reestablished`](Self::Reestablished)
+    ///   and [`Stopped`](Self::Stopped) are **tier-independent**. `QueueFull` in
+    ///   particular is a *delivery-layer* loss: a coarse activation rides the
+    ///   same best-effort queue as a `Batch`, so saturation latches one against
+    ///   a coarse watch exactly as it would a detailed one.
+    ///
+    /// ```
+    /// use windows_file_watcher::{DesyncCause, WatchMode};
+    ///
+    /// // Tier-restricted, one each way.
+    /// assert!(DesyncCause::Overflow.is_reachable_in(WatchMode::Detailed));
+    /// assert!(!DesyncCause::Overflow.is_reachable_in(WatchMode::Coarse));
+    /// assert!(DesyncCause::Coarse.is_reachable_in(WatchMode::Coarse));
+    /// assert!(!DesyncCause::Coarse.is_reachable_in(WatchMode::Detailed));
+    ///
+    /// // Tier-independent: reachable under either tier.
+    /// for cause in [DesyncCause::QueueFull, DesyncCause::Reestablished, DesyncCause::Stopped] {
+    ///     assert!(cause.is_reachable_in(WatchMode::Detailed));
+    ///     assert!(cause.is_reachable_in(WatchMode::Coarse));
+    /// }
+    /// ```
+    #[must_use]
+    pub fn is_reachable_in(self, mode: WatchMode) -> bool {
+        match self {
+            DesyncCause::Overflow => matches!(mode, WatchMode::Detailed),
+            DesyncCause::Coarse => matches!(mode, WatchMode::Coarse),
+            DesyncCause::QueueFull | DesyncCause::Reestablished | DesyncCause::Stopped => true,
+        }
+    }
 }
 
 /// The result of decoding one `ReadDirectoryChangesW` completion.

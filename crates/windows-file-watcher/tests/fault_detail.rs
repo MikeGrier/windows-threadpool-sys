@@ -45,14 +45,25 @@ impl TempPath {
 
 /// Drain `receiver` until `predicate` holds over everything seen so far,
 /// failing rather than hanging.
+///
+/// Every notification is validated against the delivery contract as it arrives,
+/// for the same reason `watched_paths.rs` does it at its own drain funnel: these
+/// are real `Monitor` sessions, and point assertions test that the right things
+/// happened, not that nothing illegal happened alongside them.
 fn drain_until<F>(receiver: &Receiver, what: &str, mut predicate: F) -> Vec<Notification>
 where
     F: FnMut(&[Notification]) -> bool,
 {
     let deadline = Instant::now() + NOTIFY_TIMEOUT;
     let mut seen = Vec::new();
+    #[cfg(feature = "test-util")]
+    let mut checker = windows_file_watcher::ContractChecker::new();
     loop {
         while let Some(item) = receiver.try_recv() {
+            #[cfg(feature = "test-util")]
+            if let Err(violation) = checker.observe(&item) {
+                panic!("the watcher emitted a contract violation: {violation:?} on {item:?}");
+            }
             seen.push(item);
         }
         if predicate(&seen) {

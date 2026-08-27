@@ -124,3 +124,24 @@ process.
   `examples/ring_copy/main.rs`'s existing pattern. `PLANS.md`'s bare `COMPLETED-PLANS.md`/
   `COMPLETED-CHECKLIST.md` references were also made clickable relative links.
 
+
+## M10 -- Finish the contract audit against the ten specification-gap categories
+
+[DESIGN-NOTES.md](DESIGN-NOTES.md) -> "Specifying this contract" audits this crate against
+[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract) and reaches four of them: D-17's
+`RingId` (categories 4/5, handled correctly), `Completion::synthetic`'s test-only gate (category 10, handled
+correctly), D-14's registration-index continuity (category 4, recorded as an explicitly unverified
+assumption), and the previously-unstated completion-ordering rule. Categories 1, 2, 3, 6, 8, and 9 were
+**not examined**, and that is recorded as "not looked at" rather than "does not apply".
+
+- [ ] **M10.1** -- Audit category 3 (state-dependent legality unenumerated) first: capability negotiation
+  (D-6) makes the legal op set a per-ring *runtime* property, so which pushes are legal depends on state the
+  type system does not carry. Enumerate, per capability state, which `Batch` methods can succeed and what a
+  caller may infer from `supports_raw`.
+
+- [ ] **M10.2** -- Audit the remaining categories (1, 2, 6, 8, 9) against the ring/token/registration
+  surface, stating each answer including "unspecified, deliberately" where that is honest.
+
+- [ ] **M10.3** -- Resolve or re-record D-14's unverified registration-index continuity assumption. It is a
+  cross-message invariant a consumer can silently depend on; either establish it by measurement (the spike's
+  precedent) or state plainly on the public API that index continuity is not guaranteed.

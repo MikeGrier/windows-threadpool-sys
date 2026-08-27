@@ -37,11 +37,29 @@ name = "scenario_stress"
 path = "tests/scenario_stress.rs"
 required-features = ["scenario-tool"]
 
+# The consumer test-surface example (M13.5): builds and runs only with
+# `test-util`, since it uses the feed channel and the `for_test` boundary-type
+# builders.
+[[example]]
+name = "test_your_handler"
+required-features = ["test-util"]
+
+# The consumer test-surface integration test (M13.6): a downstream-style test
+# reachable only through the public API plus `test-util`.
+[[test]]
+name = "consumer_test_surface"
+path = "tests/consumer_test_surface.rs"
+required-features = ["test-util"]
+
 # The crate is Windows-only, so docs.rs must build it on a Windows target or it
 # would resolve to an empty crate and document nothing.
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
+# Without this, docs.rs builds with default features only, so `test-util`'s
+# `channel_with_bound`/`Sender`/`for_test` APIs -- and any intra-doc links to
+# them -- would never appear in the published docs.
+features = ["test-util"]
 
 [features]
 # Enables `src/scenario.rs` (the data-driven stress model/harness, shared by
@@ -50,6 +68,18 @@ targets = ["x86_64-pc-windows-msvc"]
 # for why the JSON schema this enables is deliberately **not** part of this
 # crate's semver contract.
 scenario-tool = ["dep:serde", "dep:serde_json"]
+
+# Exposes the consumer test surface (D-81/D-82/D-83): a feedable notification
+# channel (`channel_with_bound`/`Sender`/`Delivery`/`Reservation`, `pub` only
+# inside the private `queue` module until this feature re-exports them) plus
+# valid-by-construction builders for the two boundary types a downstream
+# consumer's test cannot otherwise construct (`RelativeName`, `VolumeIdentity`),
+# so a consumer can drive its own notification-handling code with synthetic
+# notifications fed through the real `Receiver` -- no filesystem, no thread
+# pool. The already-reachable part of the seam (`WatchId::from_raw` and every
+# boundary type) needed no re-export (D-81). Off by default; adds no
+# dependencies.
+test-util = []
 
 [dependencies]
 # The owned overlapped-I/O foundation. Directory reads are issued through its

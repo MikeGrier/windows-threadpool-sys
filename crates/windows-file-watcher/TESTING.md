@@ -1,0 +1,301 @@
+# Testing your code against `windows-file-watcher`
+
+This guide is for **consumers** of `windows-file-watcher` -- application authors
+and test-framework authors -- who want to test the code they build *on top of*
+this crate without a real filesystem, a real thread pool, or the timing flakiness
+those bring.
+
+The crate exposes a small **test surface** (behind an off-by-default Cargo
+feature) that lets your test become the source of notifications. You feed a real
+`Receiver` with a scripted sequence of synthetic `Notification`s and assert on
+how your own code reacts. Because your test decides *what* arrives and *when*, it
+is fully deterministic -- the crate ships no scheduler or virtual clock for you to
+steer.
+
+## Philosophy: go below, don't mock above
+
+A consumer reacts to `Notification`s drained from a `Receiver`. There are three
+ways you could try to test that reaction logic:
+
+- **Go above** -- wrap the whole `Monitor` API. Messy, and it throws away the
+  delivery model you are actually trying to test against.
+- **Replace** -- swap the crate for a fake. Also throws the delivery model away.
+- **Go below** -- keep the crate's delivery model (`Notification`, `Receiver`,
+  queue ordering, the doorbell) and substitute only the *source* of
+  notifications. This is what the test surface does.
+
+Going below is the only option that preserves the exact machinery your code runs
+against in production, so a test that passes here exercises your real handler on
+the real queue.
+
+## Enabling the test surface
+
+The surface is behind the `test-util` feature, which is **off by default**, adds
+**no dependencies**, and (like the rest of the crate) is Windows-only. Turn it on
+as a dev-dependency so it never touches your production build:
+
+```toml
+[dev-dependencies]
+windows-file-watcher = { version = "0.1", features = ["test-util"] }
+```
+
+If you are building a reusable test framework that other crates depend on, expose
+your own feature that forwards to it:
+
+```toml
+[features]
+# your-crate's opt-in test support
+test-support = ["windows-file-watcher/test-util"]
+```
+
+Everything below requires `test-util`; without it, the feed channel and the
+`for_test` builders are not part of the public API.
+
+## The shape of the seam
+
+```text
+  your test                  the crate's real delivery model         your code
+  ---------                  -------------------------------         ---------
+  Sender::send(n)  -->  [ bounded queue + doorbell + ordering ]  -->  Receiver::recv()
+```
+
+You build the channel, mint identities, construct notifications, push them, then
+drain and dispatch exactly as a production loop would.
+
+## A first test
+
+The body below is what goes inside your own `#[test] fn`. It is compiled and run
+as a doctest of this crate, so if a contract change ever invalidates it, this
+document fails the build rather than quietly teaching you the wrong thing.
+
+```rust
+use windows_file_watcher::{
+    channel_with_bound, DesyncCause, Notification, Outcome, WatchId, DEFAULT_BOUND,
+};
+
+// The reaction logic under test -- your code, in isolation.
+fn handle(notification: &Notification, rescans: &mut u32, ended: &mut bool) {
+    if let Notification::Desync { cause, .. } = notification {
+        // Ask the cause whether it is terminal rather than naming `Stopped`:
+        // a re-scan cannot resynchronize a watch that will never deliver
+        // again, and asking keeps this correct if another terminal cause is
+        // ever added. `Monitor::stop_reason` says why it stopped.
+        if cause.is_terminal() {
+            *ended = true;
+        } else {
+            *rescans += 1;
+        }
+    }
+}
+
+let (sender, receiver) = channel_with_bound(DEFAULT_BOUND);
+let watch = WatchId::from_raw(1);
+
+// A scripted, deterministic sequence -- no OS involved.
+let _ = sender.send(Notification::Completion { watch, outcome: Outcome::Subscribed });
+let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Overflow });
+let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Stopped });
+
+let mut rescans = 0;
+let mut ended = false;
+while let Some(notification) = receiver.try_recv() {
+    handle(&notification, &mut rescans, &mut ended);
+}
+assert_eq!(rescans, 1);
+assert!(ended);
+```
+
+Note the two branches. Four of the five `DesyncCause`s are advisory -- the response
+is a re-scan either way, and the cause only tells you *how* you fell behind.
+`DesyncCause::Stopped` is not: it is terminal, nothing further arrives for that
+watch, and re-scanning will never resynchronize it. Distinguishing them is the
+difference between a handler that notices its watch died and one that re-scans a
+dead watch forever -- and asking [`DesyncCause::is_terminal`] rather than matching
+`Stopped` by name is what keeps that true if a further terminal cause is added.
+
+See [`examples/test_your_handler.rs`](examples/test_your_handler.rs) for a fuller
+worked example: `Completion`, `Batch` (including a rename pair), `Desync` in both
+its recoverable and terminal forms, `RetryQuestion` and `VolumeChanged`. It does
+not exercise the opt-in liveness bracket (`Suspended`/`Resumed`/`Established`),
+which that handler deliberately leaves unused; the next section constructs every
+variant, those included.
+
+## The building blocks
+
+| Item | Purpose |
+|---|---|
+| `channel_with_bound(bound) -> (Sender, Receiver)` | Build a connected pair yourself. `bound` is a `NonZeroUsize`; `DEFAULT_BOUND` is a sensible default. |
+| `Sender::send(Notification) -> Delivery` | Push a best-effort notification. Returns `Delivery::Queued` or `Delivery::Latched` (see backpressure below). |
+| `Sender::reserve() -> Option<Reservation>` | Claim a slot for a message that must not be dropped; `Reservation::send` then cannot fail. |
+| `Sender::has_room() -> bool` | Whether a best-effort `send` would be accepted right now. |
+| `WatchId::from_raw(u64)` | Mint a subscription identity to tag notifications with. Any value is valid; the pairing is yours to choose. |
+| `Receiver::try_recv() -> Option<Notification>` | Non-blocking drain; `None` when there is nothing to collect. Note that is **not** the same as "the queue is empty": an owed latched `Desync { QueueFull }` is not queued but is still collected here. |
+| `Receiver::has_pending() -> bool` | Whether `recv` would produce something rather than block: a queued notification, an owed loss report, or the end of the stream. The predicate the doorbell is signalled on -- prefer it to `is_empty()`. |
+| `Receiver::is_empty()` / `len()` | Queue depth only. Excludes owed losses, so neither answers "is there anything for me?". |
+| `Receiver::is_disconnected() -> bool` | Whether every `Sender` is gone. A disconnected queue keeps its doorbell signalled, so a doorbell loop must test this to stop. |
+| `Receiver::recv() -> Option<Notification>` | Blocking drain; `None` once the queue is empty *and* every `Sender` is dropped (clean teardown). |
+| `Receiver::recv_timeout(Duration)` | Blocking drain with a deadline. |
+| `Receiver::doorbell()` | A manual-reset event you can wait on from your own thread instead of blocking in `recv`. |
+
+## Constructing every notification variant
+
+All boundary types are constructible from public items. Two of them --
+`RelativeName` (inside a `Change`) and `VolumeIdentity` -- have no production
+constructor and gain `for_test` builders under the `test-util` feature.
+
+```rust
+use std::num::NonZeroUsize;
+use windows_file_watcher::{
+    channel_with_bound, Change, ChangeKind, DesyncCause, FailureCode, FaultDetail,
+    FaultOperation, Notification, OpenFailure, Outcome, RelativeName, VolumeIdentity,
+    WatchMode, WatchId,
+};
+
+// The real Win32 error code `directory::classify` maps to `OpenFailure::NotFound`,
+// named per the repo's no-bare-numeric-constants rule.
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+
+let watch = WatchId::from_raw(1);
+
+// Batch: the changes one completion carried, in kernel order.
+let batch = Notification::Batch {
+    watch,
+    changes: vec![
+        Change { kind: ChangeKind::Added,    name: RelativeName::for_test("new.txt") },
+        Change { kind: ChangeKind::Modified, name: RelativeName::for_test("sub\\data.bin") },
+    ],
+};
+
+// Desync: "you may have missed changes, re-scan".
+let desync = Notification::Desync { watch, cause: DesyncCause::Overflow };
+
+// Completion: a request you made was serviced.
+let completion = Notification::Completion { watch, outcome: Outcome::Subscribed };
+
+// Liveness bracket (opt-in in production via WatchOptions::report_liveness).
+let suspended   = Notification::Suspended { watch };
+let resumed     = Notification::Resumed { watch };
+let established = Notification::Established { watch, mode: WatchMode::Detailed };
+
+// RetryQuestion: an interactive subscription is asked how long to wait.
+let question = Notification::RetryQuestion {
+    watch,
+    operation: FaultOperation::Open,
+    detail: FaultDetail { failure: OpenFailure::NotFound, code: FailureCode::Win32(ERROR_FILE_NOT_FOUND) },
+};
+
+// VolumeChanged: a reopen landed on a different volume than before.
+let volume = Notification::VolumeChanged {
+    watch,
+    previous: VolumeIdentity::for_test(0x1111, "NTFS", "System"),
+    current:  VolumeIdentity::for_test(0x2222, "FAT32", "Removable"),
+};
+```
+
+`RelativeName` also offers `for_test_os(&OsStr)` (lossless) and
+`for_test_units(&[u16])` (the exact shape the kernel reports, lone surrogates and
+all), for names a `&str` cannot express.
+
+## Backpressure and loss
+
+The queue is bounded, and its saturation behaviour is observable -- useful if your
+code reasons about loss. Send into a full queue and the notification is dropped
+and a `Desync { QueueFull }` is latched instead; the return value tells you which
+happened:
+
+```rust
+use std::num::NonZeroUsize;
+use windows_file_watcher::{channel_with_bound, Delivery, DesyncCause, Notification, Outcome, WatchId};
+
+let (sender, _receiver) = channel_with_bound(NonZeroUsize::new(1).unwrap());
+let watch = WatchId::from_raw(1);
+
+assert!(matches!(
+    sender.send(Notification::Completion { watch, outcome: Outcome::Subscribed }),
+    Delivery::Queued,
+));
+// The queue (capacity 1) is now full; the next best-effort send is latched.
+assert!(matches!(
+    sender.send(Notification::Desync { watch, cause: DesyncCause::Coarse }),
+    Delivery::Latched,
+));
+```
+
+For a message whose loss your code cannot tolerate, reserve first:
+
+```rust,ignore
+if let Some(reservation) = sender.reserve() {
+    // ... produce the message ...
+    reservation.send(control_notification); // cannot fail: the slot is already held
+}
+```
+
+## Writing a reusable test framework
+
+The channel involves no filesystem watcher and no thread pool -- it is a plain
+in-memory queue, not categorically OS-independent: `Receiver::doorbell()` (used
+below) lazily creates a real Win32 manual-reset event via `CreateEventW`. Short
+of that opt-in, a framework can build freely on top of it:
+
+- **You own ordering and timing.** Drive the sequence from a single thread for a
+  strictly reproducible test. There is no hidden concurrency to control.
+- **Reproducible variation.** If you want to explore many orderings, drive the
+  choice points from a *seeded* PRNG so a given seed always replays identically.
+  A tiny splitmix64-style generator on one thread is enough.
+- **Multi-threaded rendezvous.** If your framework spawns threads (for example to
+  model a producer racing a consumer), coordinate them with barriers/latches at
+  the points that matter rather than relying on the scheduler; that keeps the
+  interesting interleaving reproducible while the rest runs freely.
+- **Doorbell integration.** If your harness drains on its own thread pool rather
+  than blocking in `recv`, wait on `Receiver::doorbell()` -- a manual-reset event
+  -- and drain when it signals. **Test `has_pending()`, not `is_empty()`.** The
+  doorbell is signalled whenever there is something to collect, and that is three
+  things, not one: a queued notification, an *owed loss report* that is not in the
+  queue, and the **end of the stream**. A loop that waits, then drains with
+  `try_recv` until it returns `None`, then re-arms the wait will spin once the
+  senders are gone, because a disconnected queue stays signalled forever. Check
+  `is_disconnected()` and stop, rather than re-arming.
+- **Teardown.** Dropping every `Sender` makes `recv` return `None`, so a
+  `recv`-based drain loop terminates cleanly; use that to end a framework's
+  collector thread. A doorbell-based loop must test `is_disconnected()` as above,
+  since for it the disconnect arrives as a permanently-signalled event rather
+  than as a `None`.
+
+## The fidelity limit (read this)
+
+This surface tests **your reactions**, not whether the crate would ever emit the
+sequence you fed it. Two consequences:
+
+- The `for_test` builders are **valid by construction** only in the
+  type-safety sense (memory-safe, lossless) -- `RelativeName::for_test_units`
+  still accepts a unit sequence the kernel never reports (an interior NUL,
+  say). That guarantee is also per boundary object, not per notification: an
+  impossible *ordering* (a `Batch` after that watch's `Completion { Cancelled }`,
+  say) or an impossible *relationship between two valid values* (a
+  `VolumeChanged` whose `previous`/`current` carry the identical serial, which
+  production never emits) is your responsibility to avoid, exactly as with any
+  hand-authored test double. `ContractChecker` catches both of those examples if
+  you want the check rather than the discipline -- but be careful which
+  orderings you assume are impossible: a `Resumed` with **no** prior `Suspended`
+  looks wrong and is perfectly legal, since a subscription that joins a
+  directory whose watcher is already faulted never sees the `Suspended` that
+  opened the bracket.
+- Do **not** use this surface to convince yourself you are calling the crate's
+  *own* API correctly. That is a different question, and only a real `Monitor`
+  answers it.
+
+For end-to-end fidelity against the operating system -- that a real directory
+change produces the notifications you expect -- drive a real `Monitor` against a
+temporary directory instead. The crate's own integration tests under
+[`tests/`](tests) and the runnable
+[`examples/`](examples) show that shape.
+
+## See also
+
+- The crate-level "Testing your consumer code" section in the API docs
+  (a compile-tested version of the first example above).
+- [`examples/test_your_handler.rs`](examples/test_your_handler.rs) -- a fuller
+  worked example.
+- [`DESIGN-NOTES.md`](DESIGN-NOTES.md) -> "Consumer test surface" (decisions
+  D-81/D-82/D-83) for the rationale, including why the feed channel and the
+  `for_test` builders are feature-gated.

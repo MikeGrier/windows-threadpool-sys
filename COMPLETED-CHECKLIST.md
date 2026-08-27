@@ -534,3 +534,168 @@ getter, so a limit we were never told cannot constrain its counterpart. Refusing
 overshoot window unreachable through the safe API, which removed the flake at its root rather than by loosening
 the assertion. The superseded claim is marked in [DESIGN-NOTES.md](DESIGN-NOTES.md) and the new decision recorded
 beside it.
+
+## <a id="moved-2026-08-27-m1"></a>Moved 2026-08-27 -- M1: amplify PR #42's contract-specification findings across the delivery-contract crates
+
+PR #42 ("Testability: consumer test surface for windows-file-watcher + example test harness crate") took
+**19 automated review rounds**, and the review-response phase (39 commits, 2,077 insertions) added more code
+than the original implementation (16 commits, 3,220 insertions) did. The dominant failure was not
+implementation error: `windows-file-watcher`'s delivery contract, written as prose, was **true but
+incomplete** in categorizable ways, and the gaps stayed invisible until a second implementation (the example
+harness's contract-legal generator, its own D-5) had to obey the contract mechanically. Eight rounds fixed
+generated sequences the watcher could never emit; five corrected the contract prose itself; one found a real
+shipped reliability defect (`has_room`, 700e0eb) sitting on D-29's backpressure path.
+
+The transferable asset was the **taxonomy of gap categories**, not the individual fixes.
+
+- [x] **M1.1** -- Recorded the ten gap categories in the workspace
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#specifying-a-delivery-contract), each pinned to the PR #42 commit that
+  evidences it, plus the same-author hazard, why a passing test suite cannot surface them (they are
+  statements about the *set* of legal sequences, not points in it), and the `has_room` finding as evidence
+  that the cost is real rather than editorial. Canonical home; per-crate notes reference rather than restate.
+
+- [x] **M1.2** -- `windows-file-watcher`: recorded D-84, naming which decisions were stated incompletely and
+  how (D-9, D-12/D-30, D-17, D-27/D-28, D-50/D-78, D-83), and the `has_room` finding separately as a defect
+  in shipped 0.1 code rather than a harness bug. Queued the audit it does *not* claim to have done as that
+  crate's M14.
+
+- [x] **M1.3** -- `windows-overlapped-io-sys`: found two categories it had already paid for before the
+  taxonomy named them (`Issued`'s state-dependent legality, which hung rundown until M10.5; `post`/`post_raw`'s
+  arbitrary completion key), two it got right (`OperationId` generations, removing `from_parts`), and one
+  consequential omission -- **completion observation order was never stated**, which matters because
+  `windows-file-watcher` builds on this crate and *does* promise ordering to its own clients. Remaining
+  categories queued as that crate's M14.
+
+- [x] **M1.4** -- `windows-ioring-sys`: cited D-17 (`RingId`) and `Completion::synthetic`'s test-only gate as
+  the pattern done right, recorded D-14 as an honestly-flagged cross-message continuity assumption, and
+  stated the previously-missing completion-ordering rule -- a gap this crate is *more* exposed to than its
+  siblings, since "ring" invites the ordered-queue assumption and `drain_preceding`'s existence was the only
+  available evidence. Remaining categories queued as that crate's M10.
+
+Docs-only: nine `.md` files, no `.rs` touched. The audits are deliberately partial -- five of ten categories
+reached in overlapped-io, four of ten in ioring -- with the rest recorded as "not examined" rather than "does
+not apply", because that distinction is the point of having the taxonomy. Completing them is each crate's own
+milestone: [windows-file-watcher M14](crates/windows-file-watcher/CHECKLIST.md),
+[windows-overlapped-io-sys M14](crates/windows-overlapped-io-sys/CHECKLIST.md), and
+[windows-ioring-sys M10](crates/windows-ioring-sys/CHECKLIST.md).
+
+## <a id="moved-2026-08-27-m2"></a>Moved 2026-08-27 -- M2: stop contract corrections from failing to propagate
+
+[M1](#moved-2026-08-27-m1) recorded the ten specification-gap categories, which address **under-specification**
+-- what a contract fails to say. Executing it exposed a second failure mode the taxonomy has no mechanism
+for: **restatement drift**, where one fact is stated in several independent places, a correction reaches some
+of them, and the rest keep teaching the old answer. Across three consecutive PR #42 review rounds, five of six
+findings were corrections that had not propagated rather than original defects. Recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#restatement-drift).
+
+- [x] **M2.1** -- Compiled `windows-file-watcher`'s
+  [TESTING.md](crates/windows-file-watcher/TESTING.md) and
+  [README.md](crates/windows-file-watcher/README.md) as doctests. Neither was
+  compiled before -- there was no `include_str!` anywhere -- so the five Rust blocks across them could only
+  rot, and one was among the four sites that taught the `Stopped` error. Doctest count went 2 -> 7. Verified
+  by reintroducing the exact drift and confirming the failure (`left: 2, right: 1`) before reverting; CI's
+  `cargo test --workspace --all-features` covers `test-util`, so the guard is live there rather than local
+  only.
+
+- [x] **M2.2** -- `DesyncCause::is_terminal()`, adopted at all four example sites. The terminal-vs-recoverable
+  distinction was restated across 8 files and drifted in 4 at once. Asking the cause rather than matching
+  `Stopped` by name also keeps a handler correct if a further terminal cause is added, where a name-match
+  would silently treat it as recoverable and re-scan a dead watch forever.
+
+- [x] **M2.3** -- `DesyncCause::is_reachable_in(WatchMode)`, with the harness generator binding to it rather
+  than re-encoding tier legality. That fact had four independent encodings and drifted in *both* directions
+  across two rounds. Verified the binding is real by sabotage: changing the crate's definition changed the
+  generator's **output**, not merely a test's expectation. One test written during this item was deleted
+  rather than shipped -- it compared `is_reachable_in` against `to_cause().is_reachable_in()`, which is the
+  same expression, so it was tautological and redundant with the existing mirror test.
+
+- [x] **M2.4** -- Recorded [Restatement drift](DESIGN-NOTES.md#restatement-drift) with the measurement rather
+  than the impression (13 files restate `QueueFull`, 8 restate "`Stopped` is terminal"), why the taxonomy
+  cannot catch it, and the three-tier remedy. Cross-linked from the taxonomy section so a reader arriving at
+  the ten categories learns that stating a rule correctly is necessary and not sufficient.
+
+- [x] **M2.5** -- Added a `CONTRACT INTEGRITY` section to
+  [.github/copilot-instructions.md](.github/copilot-instructions.md): prefer a derived fact to a restated one
+  (verified by sabotage), prose that contains code must compile, and a mandatory blast-radius sweep before
+  any contract correction -- with the two corollaries that each already cost a review round, that an analysis
+  document never restates normative content, and that correcting a shipped rule obliges re-checking whatever
+  was built against the old one.
+
+Net effect: the two facts that actually drifted are now derived rather than restated, the prose that taught
+them is compiled, and what neither mechanism can reach is a binding rule in the file humans and Copilot both
+read. 943 workspace tests pass; default workspace builds clean in debug and release.
+
+## <a id="moved-2026-08-27-m3"></a>Moved 2026-08-27 -- M3: make the sequencing rules executable too
+
+[M2](#moved-2026-08-27-m2) made the *value-level* contract facts derived rather than restated, and recorded
+that sequencing rules would stay prose. That was too pessimistic: what cannot express them is the **type
+system**, not the codebase. A shared executable oracle can, and it is the same derive-don't-restate move at
+runtime.
+
+- [x] **M3.1** -- Renamed `first_two_notifications_of_a_liveness_watch_are_established_then_subscribed`,
+  which asserted as a *contract* rule something M14.2 had already established is not universally true: a
+  route coalescing onto an already-faulted watcher sees `Completion { Subscribed }` first and its
+  `Established` only after recovery. It passed solely because the generator never produces that case -- a
+  generator property wearing a contract name, and drift that had already happened with nothing catching it.
+
+- [x] **M3.2** -- Added `ContractChecker` to `windows-file-watcher` behind `test-util`: a per-`WatchId` state
+  machine checking terminality, tier-conditioned emission (delegated to `DesyncCause::is_reachable_in`), and
+  D-50/D-78 volume continuity and distinctness. It lives in the crate, not the harness, so one definition
+  serves the crate's tests, the harness, and a consumer's test doubles. Equal care went into what it does
+  **not** check: six tests assert it *accepts* the sequences M14 found legal but surprising, since
+  over-constraining is the same defect as under-specifying and this crate has shipped it. The one rule
+  genuinely uncheckable from the stream -- at most one question outstanding, whose answer travels the request
+  queue -- is documented as such rather than approximated.
+
+- [x] **M3.3** -- Adopted the checker in `windows-file-watcher`'s own integration tests, at the single
+  `Drained::pump` funnel every test drains through, so the **real** watcher's output is validated rather than
+  spot-checked. No violations found. Verified the guard actually fires rather than being compiled out by its
+  feature gate: sabotaging the checker made 13 of 15 tests fail.
+
+- [x] **M3.4** -- Collapsed four hand-written sequencing restatements in the harness into one
+  "generate, then validate" test. Two tests were kept and renamed to say whose property they assert:
+  generator *coverage* (which a contract checker cannot supply -- it says nothing illegal was emitted, never
+  that anything interesting was) and a deliberately narrower generator rule.
+
+Net effect: the sequencing rules now have one executable definition that the crate's own tests, the harness
+generator, and any consumer bind to. **Known remaining gap, left visible rather than papered over:** two
+harness tests still hand-encode contract rules the checker does not cover (`Resumed` followed by
+`Established`, and an interactive fault always asking). Extending the checker to them is real work, not
+bookkeeping.
+
+## <a id="moved-2026-08-27-m3-followup"></a>Moved 2026-08-27 -- M3 follow-up: contract checking extended to every real-watcher drain
+
+[M3.3](#moved-2026-08-27-m3) recorded adopting `ContractChecker` "at the single `Drained::pump` funnel every
+test drains through". That was true of [tests/watched_paths.rs](crates/windows-file-watcher/tests/watched_paths.rs)
+and its 15 tests, but read as crate-wide coverage, which it was not: `tests/fault_detail.rs` and
+`tests/stress.rs` also drain real `Monitor` sessions, through their own loops, and neither was checked
+(PR #42 review).
+
+The claim is now true rather than narrowed. Both files route every drain through the checker:
+`fault_detail.rs` at its own `drain_until` funnel, and `stress.rs` at all four of its drain sites via a
+`Guard` alias that compiles to a no-op when `test-util` is off, so the call sites need no `cfg`.
+
+The stress suite is the more valuable of the two: `a_fault_storm_of_repeated_delete_recreate_always_reestablishes`
+walks the fault-bracket path 25 times against a real directory being deleted and recreated, which is exactly
+where a sequencing violation would appear and exactly where a point assertion would not notice. Run with
+`WINDOWS_FILE_WATCHER_STRESS=1`, all four stress tests pass with the checker live and report no violations.
+
+## <a id="moved-2026-08-27-m3-correction"></a>Moved 2026-08-27 -- M3 correction: one of the two "remaining gaps" was not a contract rule
+
+[The M3 follow-up](#moved-2026-08-27-m3-followup) recorded two harness tests as hand-encoding "contract rules
+the checker does not cover", and named extending the checker to them as real work. One of the two was not a
+contract rule at all (PR #42 review).
+
+`resolve_fault_success` issues `Resumed` and `Established` back to back, and the M3 entry read that as
+"always together". But each is a **separate best-effort observation send** ([D-57](crates/windows-file-watcher/DESIGN-NOTES.md)),
+so a saturated queue can take `Resumed` and latch `Established` into a `Desync { QueueFull }`. Together
+describes the *attempt*, not the delivery. There is therefore no invariant to extend the checker with, and
+adding one would have made it reject production output -- the same over-constraint the checker's must-accept
+tests exist to prevent, this time queued as planned work.
+
+The test is kept and renamed `this_generator_always_pairs_resumed_with_established`, which is what it
+actually asserts: the generator models the unsaturated case. The same false claim was corrected at five other
+sites in the same change (the schedule module's legality guide, the generator's module docs and two inline
+comments, and this test's own comment).
+
+The other remaining gap -- an interactive fault always asking -- stands as recorded.

@@ -464,3 +464,61 @@ Consequences recorded so nothing is left implicit:
   same hazard -- a client that predicates away `Modified` has disarmed its own
   quiescence detection. It is recorded here as the shape to reach for, and is
   unscheduled.
+
+## The consumer test surface, and why it is a feature when D-64 was not (D-81, D-82, D-83)
+
+The question this crate now answers for its *consumers* is: this is fiddly
+concurrent code; how do I test my own code that reacts to it without standing up
+a real filesystem and thread pool and paying for the flakiness that brings? The
+answer is to let a consumer feed a real `Receiver` with synthetic notifications
+and drive its own handler deterministically -- "going below" the `Monitor` to
+substitute the OS ingest while keeping the delivery model the consumer is testing
+against.
+
+Three options were weighed for where a consumer intervenes. *Going above*
+(wrapping the public API) is messy and discards the delivery model. *Replacing*
+the crate discards it outright. *Going below* -- the chosen path -- keeps
+`Notification`/`Receiver`/queue semantics and substitutes only the notification
+source, the one option that preserves what the consumer is trying to test
+against.
+
+An audit found the *delivery model* a consumer reasons against -- `WatchId::from_raw`
+and every boundary type -- was already reachable (re-exported at the crate root).
+Blessing those rather than re-gating them (D-81) was chosen because they shipped
+in 0.1 and re-gating would be a breaking change bought for nothing. Execution then
+corrected a mistaken assumption: `channel_with_bound` and `Sender`, though written
+`pub`, live in the *private* `queue` module, so they were never reachable by a
+consumer at all. They, and the `for_test` builders for the two unconstructible
+boundary types (`RelativeName`, `VolumeIdentity`), are therefore *exposed* --
+additively, behind the off-by-default `test-util` feature (D-82) -- rather than
+re-gated. Gating the feed channel keeps the crate's internal queue sender out of
+the production public surface, which is the right default for a purely test-facing
+affordance.
+
+That feature is *not* a reversal of D-64, and the distinction is audience. D-64
+kept `DirectoryWatcher::start_forcing_coarse` and the other forcing seams
+`#[cfg(test)]`/`pub(crate)` because they serve the crate's *own* test tree
+reaching *internal* state, and it explicitly declined to reintroduce
+`unstable-internals` -- a `#[doc(hidden)]`, feature-gated public window into
+internals -- for one test's convenience. This seam is the opposite case on both
+axes: its audience is a *downstream* consumer's own tests, which `#[cfg(test)]`
+cannot reach (the cfg is unset when this crate is a dependency), so a feature is
+the *only* mechanism that reaches them; and what it exposes is *public boundary
+constructors* (valid-by-construction `RelativeName`/`VolumeIdentity`), not a
+window into internal state. Feature-gating rather than making them unconditional
+keeps production code from forging identities it should only ever receive from
+the crate. So D-64 and D-82 follow one rule -- gate a seam to match its audience
+-- rather than contradicting each other.
+
+The surface's honest limit (D-83) is that it tests the consumer's reactions, not
+whether this crate would ever emit the fed sequence. Valid-by-construction only
+in the type-safety sense: a builder cannot mint a value that is memory-unsafe or
+lossy, but it does not validate the *production domain* -- `RelativeName::
+for_test_units` still accepts an interior NUL, which storage cannot reject
+without silently truncating a name that legitimately reached this crate some
+other way, even though the kernel itself never reports one
+(`an_interior_nul_in_a_name_is_preserved_and_reported`, notify/tests.rs). An
+impossible *ordering*, or an impossible *relationship* between two individually
+valid values (an equal-serial `VolumeChanged` is built from two legal
+`VolumeIdentity`s, but production never emits it), is likewise theirs to avoid,
+exactly as with any hand-authored test double.

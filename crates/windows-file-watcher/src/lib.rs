@@ -83,14 +83,102 @@
 //! (`ReadDirectoryChangesW`) or the coarse `FindFirstChangeNotification`
 //! fallback for volumes that do not support the detailed API -- is actually
 //! watching.
+//!
+//! # Testing your consumer code
+//!
+//! The code you build on top of this crate reacts to [`Notification`]s drained
+//! from a [`Receiver`]. You can test that reaction logic with no real filesystem
+//! and no thread pool by constructing a `Receiver` yourself and feeding it
+//! synthetic notifications, instead of obtaining one from [`Monitor::session`].
+//! This "goes below" the [`Monitor`]: you substitute the OS ingest while keeping
+//! the delivery model -- `Notification`, `Receiver`, queue ordering, the
+//! doorbell -- exactly as in production. Because your test decides what arrives
+//! and when, it is deterministic; this crate ships no scheduler for you to steer.
+//!
+//! The always-public pieces are the identity minter [`WatchId::from_raw`] and
+//! every boundary type. The feedable channel (`channel_with_bound`, its
+//! `Sender`, and `Sender::send`), the builders for the two boundary types a
+//! consumer cannot otherwise construct (`RelativeName::for_test` and
+//! `VolumeIdentity::for_test`, for a [`Change`] and a
+//! [`Notification::VolumeChanged`] respectively), and
+//! [`ContractChecker`] all live behind the
+//! off-by-default `test-util` feature, so none of the *injection* surface
+//! reaches a production build. Three ordinary predicates are unconditional,
+//! because they answer questions a production handler asks:
+//! [`Receiver::has_pending`], [`DesyncCause::is_terminal`] and
+//! [`DesyncCause::is_reachable_in`].
+//!
+//! ```
+//! # fn main() {
+//! #[cfg(all(windows, feature = "test-util"))]
+//! {
+//!     use windows_file_watcher::{
+//!         channel_with_bound, DesyncCause, Notification, Outcome, WatchId, DEFAULT_BOUND,
+//!     };
+//!
+//!     // The consumer reaction logic under test, in isolation.
+//!     fn handle(notification: &Notification, rescans: &mut u32, ended: &mut bool) {
+//!         if let Notification::Desync { cause, .. } = notification {
+//!             // Ask the cause, rather than naming the terminal one: a re-scan
+//!             // cannot resynchronize a stopped watch.
+//!             if cause.is_terminal() {
+//!                 *ended = true;
+//!             } else {
+//!                 *rescans += 1;
+//!             }
+//!         }
+//!     }
+//!
+//!     let (sender, receiver) = channel_with_bound(DEFAULT_BOUND);
+//!     let watch = WatchId::from_raw(1);
+//!
+//!     // A scripted, deterministic sequence -- no OS involved.
+//!     let _ = sender.send(Notification::Completion { watch, outcome: Outcome::Subscribed });
+//!     let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Overflow });
+//!     let _ = sender.send(Notification::Desync { watch, cause: DesyncCause::Stopped });
+//!
+//!     let mut rescans = 0;
+//!     let mut ended = false;
+//!     while let Some(notification) = receiver.try_recv() {
+//!         handle(&notification, &mut rescans, &mut ended);
+//!     }
+//!     assert_eq!(rescans, 1);
+//!     assert!(ended);
+//! }
+//! # }
+//! ```
+//!
+//! The surface tests your *reactions*, not whether this crate would ever emit a
+//! given sequence: the builders are valid-by-construction only in the
+//! type-safety sense (memory-safe, lossless) -- `RelativeName::for_test_units`
+//! still accepts a unit sequence the kernel never reports, an interior NUL
+//! included. An impossible ordering, or an impossible relationship between two
+//! otherwise valid values (a `VolumeChanged` with equal `previous`/`current`
+//! serials, say), is likewise yours to avoid.
 
 #![warn(missing_docs)]
+
+// The crate's markdown documentation is compiled as doctests, so an example that
+// a contract change invalidates breaks the build instead of quietly teaching the
+// old answer. `cfg(doctest)` means these items exist only while rustdoc collects
+// tests, so they cost an ordinary build nothing.
+#[cfg(all(doctest, windows))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
+#[cfg(all(doctest, windows, feature = "test-util"))]
+#[doc = include_str!("../TESTING.md")]
+struct TestingDoctests;
 
 #[cfg(windows)]
 mod directory;
 
 #[cfg(windows)]
 mod coarse;
+
+/// Validating a notification stream against the delivery contract.
+#[cfg(all(windows, feature = "test-util"))]
+pub mod contract;
 
 #[cfg(windows)]
 mod monitor;
@@ -138,6 +226,16 @@ pub use monitor::Monitor;
 pub use notify::{Change, ChangeKind, DecodedBatch, DesyncCause, RelativeName, decode_batch};
 #[cfg(windows)]
 pub use queue::{DEFAULT_BOUND, Notification, Outcome, Receiver, WatchId};
+// The feedable channel is the consumer test seam (D-81/D-82): `channel_with_bound`
+// and its `Sender`/`Delivery`/`Reservation` are `pub` inside the private `queue`
+// module, so a downstream consumer can reach them only through this re-export,
+// gated on the off-by-default `test-util` feature so the production public surface
+// is unchanged.
+#[cfg(all(windows, feature = "test-util"))]
+pub use contract::{ContractChecker, ContractViolation, Terminator};
+
+#[cfg(all(windows, feature = "test-util"))]
+pub use queue::{Delivery, Reservation, Sender, channel_with_bound};
 #[cfg(windows)]
 pub use retry::{FaultOperation, WatchMode};
 #[cfg(windows)]
