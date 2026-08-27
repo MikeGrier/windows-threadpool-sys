@@ -42,9 +42,10 @@ use windows_impersonation_token_sys::{CaptureError, ImpersonationToken};
 use crate::completion::EnumerationId;
 use crate::error::{BeginError, BeginFailure};
 use crate::request::EnumerationRequest;
-use crate::session::{Doorbell, SessionShared};
+use crate::session::SessionShared;
 use crate::submission_ring::{
     BeginMessage, CancelSlot, ControlMessage, SubmitRejection, release_cancel_slot,
+    release_retire_slot,
 };
 use std::sync::Arc;
 
@@ -62,7 +63,6 @@ use std::sync::Arc;
 pub struct EnumerationHandle {
     enumeration: EnumerationId,
     shared: Arc<SessionShared>,
-    doorbell: Arc<Doorbell>,
     /// Taken at admission, spent by exactly one of cancel, detach, or drop.
     cancel: Option<CancelSlot>,
 }
@@ -71,13 +71,11 @@ impl EnumerationHandle {
     pub(crate) fn new(
         enumeration: EnumerationId,
         shared: Arc<SessionShared>,
-        doorbell: Arc<Doorbell>,
         cancel: CancelSlot,
     ) -> Self {
         Self {
             enumeration,
             shared,
-            doorbell,
             cancel: Some(cancel),
         }
     }
@@ -118,8 +116,8 @@ impl EnumerationHandle {
         let Some(slot) = self.cancel.take() else {
             return;
         };
-        let outcome = self.shared.submissions.push_cancel(slot, self.enumeration);
-        self.doorbell.ring_if_needed(outcome);
+        let pushed = self.shared.submissions.push_cancel(slot, self.enumeration);
+        self.shared.ring_servicer(pushed);
     }
 }
 
@@ -143,7 +141,6 @@ impl std::fmt::Debug for EnumerationHandle {
 /// Admit one request, capturing the caller's current security context.
 pub(crate) fn try_begin(
     shared: &Arc<SessionShared>,
-    doorbell: &Arc<Doorbell>,
     request: EnumerationRequest,
 ) -> Result<EnumerationHandle, BeginError> {
     // Captured before anything else is claimed, so a capture failure costs no
@@ -152,13 +149,12 @@ pub(crate) fn try_begin(
         Ok(token) => token,
         Err(error) => return Err(BeginError::capture(request, error)),
     };
-    try_begin_with_token(shared, doorbell, request, token)
+    try_begin_with_token(shared, request, token)
 }
 
 /// Admit one request under an already-captured security context.
 pub(crate) fn try_begin_with_token(
     shared: &Arc<SessionShared>,
-    doorbell: &Arc<Doorbell>,
     request: EnumerationRequest,
     token: ImpersonationToken,
 ) -> Result<EnumerationHandle, BeginError> {
@@ -177,9 +173,21 @@ pub(crate) fn try_begin_with_token(
             Some(token),
         ));
     };
+    // Claimed here too, so a worker can always report itself finished. Without
+    // it a completed enumeration would strand its registry entry, and with it
+    // the token, handle, and buffer that entry holds.
+    let Some(retire) = shared.submissions.reserve_retire() else {
+        release_cancel_slot(&shared.submissions, cancel);
+        return Err(BeginError::rejected(
+            BeginFailure::SubmissionRingFull,
+            request,
+            Some(token),
+        ));
+    };
     let enumeration = shared.next_enumeration_id();
     let Some(terminal) = shared.completions.reserve_terminal(enumeration) else {
         release_cancel_slot(&shared.submissions, cancel);
+        release_retire_slot(&shared.submissions, retire);
         return Err(BeginError::rejected(
             BeginFailure::CompletionRingFull,
             request,
@@ -192,25 +200,26 @@ pub(crate) fn try_begin_with_token(
         request,
         token,
         terminal,
+        retire,
     }));
     match shared.submissions.try_push(message) {
-        Ok(outcome) => {
-            doorbell.ring_if_needed(outcome);
+        Ok(pushed) => {
+            shared.ring_servicer(pushed);
             Ok(EnumerationHandle::new(
                 enumeration,
                 Arc::clone(shared),
-                Arc::clone(doorbell),
                 cancel,
             ))
         }
         Err((message, rejection)) => {
             // Nothing was accepted, so every claim made above is given back and
             // the caller's request and token are returned intact. Dropping the
-            // message releases its terminal reservation.
+            // message's terminal slot releases its completion-ring reservation.
             release_cancel_slot(&shared.submissions, cancel);
             let (request, token) = match message {
                 ControlMessage::Begin(begin) => {
                     let begin = *begin;
+                    release_retire_slot(&shared.submissions, begin.retire);
                     (begin.request, begin.token)
                 }
                 _ => unreachable!("the message pushed above is always a begin"),

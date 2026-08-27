@@ -16,11 +16,15 @@ fn one_enumeration_runs_to_completion() {
     model.run(&[
         Op::Begin,
         Op::Service,
-        Op::EnterQuantum(0),
+        Op::Claim,
         Op::OfferEntry(0, "a"),
         Op::OfferEntry(0, "b"),
-        Op::LeaveQuantum(0, false),
-        Op::Complete(0),
+        Op::Report(Quantum::Idle),
+        // An idle quantum does not re-queue itself, so the next one is asked for.
+        Op::Schedule(0),
+        Op::RunEngine(Quantum::Completed),
+        // The worker reports; the servicer is what retires the entry.
+        Op::Service,
         Op::Detach(0),
         Op::DrainReceiver,
     ]);
@@ -42,8 +46,10 @@ fn two_enumerations_interleave_without_losing_their_own_order() {
         Op::OfferEntry(0, "a1"),
         Op::OfferEntry(1, "b1"),
         Op::OfferEntry(0, "a2"),
-        Op::Complete(0),
-        Op::Complete(1),
+        Op::RunEngine(Quantum::Completed),
+        Op::Schedule(1),
+        Op::RunEngine(Quantum::Completed),
+        Op::Service,
         Op::Detach(0),
         Op::Detach(1),
         Op::DrainReceiver,
@@ -91,7 +97,7 @@ fn cancelling_during_a_quantum_defers_the_terminal_behind_its_entries() {
     model.run(&[
         Op::Begin,
         Op::Service,
-        Op::EnterQuantum(0),
+        Op::Claim,
         Op::OfferEntry(0, "a"),
         // The cancel is serviced while the quantum is still running, so it can
         // only record the intent.
@@ -105,7 +111,8 @@ fn cancelling_during_a_quantum_defers_the_terminal_behind_its_entries() {
         // The quantum produces one more entry before it notices, which must
         // still be delivered.
         Op::OfferEntry(0, "b"),
-        Op::LeaveQuantum(0, false),
+        Op::Report(Quantum::Idle),
+        Op::Service,
         Op::DrainReceiver,
     ]);
     assert_eq!(model.entries(0), ["a", "b"]);
@@ -124,8 +131,8 @@ fn a_quantum_scheduled_after_cancellation_does_nothing() {
         Op::Service,
         // The enumeration is gone, so entering finds nothing and leaving is a
         // no-op rather than a second terminal.
-        Op::EnterQuantum(0),
-        Op::LeaveQuantum(0, false),
+        Op::Claim,
+        Op::Report(Quantum::Idle),
         Op::DrainReceiver,
     ]);
     assert_eq!(model.terminal(0), Some("cancelled"));
@@ -169,7 +176,11 @@ fn backpressure_refuses_entries_and_resumes_after_a_take() {
     model.run(&[Op::Recv, Op::OfferEntry(0, "d")]);
     assert_eq!(model.refused(), 1, "room appeared, so the retry succeeded");
 
-    model.run(&[Op::Complete(0), Op::Detach(0), Op::DrainReceiver]);
+    model.run(&[
+        Op::RunEngine(Quantum::Completed),
+        Op::Detach(0),
+        Op::DrainReceiver,
+    ]);
     assert_eq!(model.entries(0), ["a", "b", "c", "d"]);
     assert_eq!(model.terminal(0), Some("completed"));
 }
@@ -207,20 +218,22 @@ fn a_parked_enumeration_is_resumed_by_a_take() {
     model.run(&[
         Op::Begin,
         Op::Service,
-        Op::EnterQuantum(0),
+        Op::Claim,
         Op::OfferEntry(0, "a"),
         Op::OfferEntry(0, "b"),
         // No room for the third, so the quantum yields parked rather than
         // blocking a worker or dropping the record it had not yet parsed.
         Op::OfferEntry(0, "c"),
-        Op::LeaveQuantum(0, true),
+        Op::Report(Quantum::Parked),
     ]);
     assert_eq!(model.refused(), 1);
 
     model.run(&[
         Op::Recv,
         Op::OfferEntry(0, "c"),
-        Op::Complete(0),
+        Op::RunEngine(Quantum::Completed),
+        // The worker reports; the servicer is what retires the entry.
+        Op::Service,
         Op::Detach(0),
         Op::DrainReceiver,
     ]);
@@ -241,7 +254,11 @@ fn a_terminal_lands_in_a_ring_with_no_ordinary_room() {
         Op::OfferEntry(0, "c"),
     ]);
     assert_eq!(model.refused(), 1);
-    model.run(&[Op::Complete(0), Op::Detach(0), Op::DrainReceiver]);
+    model.run(&[
+        Op::RunEngine(Quantum::Completed),
+        Op::Detach(0),
+        Op::DrainReceiver,
+    ]);
     assert_eq!(model.entries(0), ["a", "b"]);
     assert_eq!(model.terminal(0), Some("completed"));
 }
@@ -274,12 +291,12 @@ fn abandonment_during_a_quantum_is_safe() {
     model.run(&[
         Op::Begin,
         Op::Service,
-        Op::EnterQuantum(0),
+        Op::Claim,
         Op::DropReceiver,
         Op::Service,
         Op::OfferEntry(0, "a"),
-        Op::LeaveQuantum(0, false),
-        Op::Complete(0),
+        Op::Report(Quantum::Idle),
+        Op::RunEngine(Quantum::Completed),
         Op::Detach(0),
     ]);
     assert_eq!(model.registered(), 0);
@@ -293,7 +310,7 @@ fn cancelling_a_completed_enumeration_adds_no_terminal() {
     model.run(&[
         Op::Begin,
         Op::Service,
-        Op::Complete(0),
+        Op::RunEngine(Quantum::Completed),
         // The handle still holds its reservation, so this is the ordinary race
         // between a caller cancelling and an enumeration finishing.
         Op::Cancel(0),
@@ -313,7 +330,7 @@ fn a_detached_enumeration_still_reports_its_outcome() {
         Op::Service,
         Op::Detach(0),
         Op::OfferEntry(0, "a"),
-        Op::Complete(0),
+        Op::RunEngine(Quantum::Completed),
         Op::DrainReceiver,
     ]);
     assert_eq!(model.entries(0), ["a"]);
@@ -329,7 +346,7 @@ fn dropping_the_session_does_not_strand_an_owed_terminal() {
         Op::Begin,
         Op::Service,
         Op::OfferEntry(0, "a"),
-        Op::Complete(0),
+        Op::RunEngine(Quantum::Completed),
         Op::Detach(0),
         Op::DropSession,
         Op::DrainReceiver,
@@ -355,7 +372,11 @@ fn the_minimum_bounds_carry_one_enumeration() {
     ]);
     assert_eq!(model.refused(), 1);
 
-    model.run(&[Op::Complete(0), Op::Detach(0), Op::DrainReceiver]);
+    model.run(&[
+        Op::RunEngine(Quantum::Completed),
+        Op::Detach(0),
+        Op::DrainReceiver,
+    ]);
     assert_eq!(model.entries(0), ["only"]);
     assert_eq!(model.terminal(0), Some("completed"));
 }
@@ -434,6 +455,237 @@ fn draining_an_empty_ring_changes_nothing() {
         Op::Service,
         Op::DrainReceiver,
         Op::Detach(0),
+    ]);
+    assert_eq!(model.registered(), 1);
+}
+
+/// A worker's terminal reaches the receiver, and the servicer -- not the worker
+/// -- is what releases the entry behind it.
+#[test]
+fn a_worker_reports_and_the_servicer_retires() {
+    let mut model = Model::new(8, 8);
+    model.run(&[Op::Begin, Op::Service, Op::RunEngine(Quantum::Completed)]);
+    assert_eq!(
+        model.registered(),
+        1,
+        "the entry survives until the report is serviced"
+    );
+
+    model.run(&[Op::DrainReceiver]);
+    assert_eq!(
+        model.terminal(0),
+        Some("completed"),
+        "the terminal is the worker's to deliver"
+    );
+
+    model.run(&[Op::Service]);
+    assert_eq!(model.registered(), 0);
+    model.run(&[Op::Detach(0)]);
+}
+
+/// A retirement report serviced after abandonment finds nothing, and must not
+/// release anything a second time.
+#[test]
+fn a_retire_serviced_after_abandonment_is_a_no_op() {
+    let mut model = Model::new(8, 8);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        // The worker finishes and reports, but the receiver goes away before
+        // the servicer reaches either message.
+        Op::RunEngine(Quantum::Completed),
+        Op::DropReceiver,
+        Op::Service,
+    ]);
+    assert_eq!(model.registered(), 0);
+    model.run(&[Op::Service, Op::Detach(0)]);
+    assert_eq!(model.registered(), 0);
+}
+
+/// Abandonment while a worker holds a claim leaves the worker's report with
+/// nothing to apply.
+#[test]
+fn a_report_after_abandonment_finds_its_enumeration_gone() {
+    let mut model = Model::new(8, 8);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        Op::Claim,
+        Op::DropReceiver,
+        Op::Service,
+        // The worker had no way to know; reporting must be harmless.
+        Op::Report(Quantum::Completed),
+        Op::Service,
+    ]);
+    assert_eq!(model.registered(), 0);
+    model.run(&[Op::Detach(0)]);
+}
+
+/// One enumeration is claimed by at most one worker at a time.
+#[test]
+fn claiming_is_single_flight() {
+    let mut model = Model::new(8, 8);
+    model.run(&[Op::Begin, Op::Service, Op::Claim]);
+    assert_eq!(model.claimed(), Some(model.id(0)));
+
+    // A second claim finds nothing: the only runnable enumeration is held.
+    model.run(&[Op::Claim]);
+    assert_eq!(model.claimed(), None);
+
+    // Once reported, it is claimable again -- but only after being scheduled,
+    // since a quantum that yields decides for itself whether there is more.
+    model.run(&[Op::Report(Quantum::Idle), Op::Schedule(0), Op::Claim]);
+    assert_eq!(model.claimed(), Some(model.id(0)));
+    model.run(&[Op::Report(Quantum::Idle), Op::Detach(0)]);
+}
+
+/// Scheduling twice queues an enumeration once.
+#[test]
+fn scheduling_is_idempotent() {
+    let mut model = Model::new(8, 8);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        Op::Schedule(0),
+        Op::Schedule(0),
+        Op::Schedule(0),
+    ]);
+    assert_eq!(model.ready(), 1, "one entry, however often it is scheduled");
+    model.run(&[Op::Claim]);
+    assert_eq!(model.ready(), 0);
+    model.run(&[Op::Claim]);
+    assert_eq!(model.claimed(), None, "the queue held only the one");
+    model.run(&[Op::Detach(0)]);
+}
+
+/// A running enumeration is not queued again underneath its worker.
+#[test]
+fn scheduling_a_claimed_enumeration_does_not_queue_it() {
+    let mut model = Model::new(8, 8);
+    model.run(&[Op::Begin, Op::Service, Op::Claim, Op::Schedule(0)]);
+    assert_eq!(
+        model.ready(),
+        0,
+        "re-queuing it would let a second worker take the same buffer"
+    );
+    model.run(&[Op::Report(Quantum::Idle), Op::Detach(0)]);
+}
+
+/// A worker that decides its own outcome wins over a cancellation that arrived
+/// while it was deciding.
+#[test]
+fn a_finished_quantum_outranks_a_concurrent_cancellation() {
+    let mut model = Model::new(8, 8);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        Op::Claim,
+        Op::Cancel(0),
+        Op::Service,
+        Op::Report(Quantum::Completed),
+        Op::Service,
+        Op::DrainReceiver,
+    ]);
+    assert_eq!(model.terminal(0), Some("completed"));
+    assert_eq!(model.registered(), 0);
+}
+
+/// A failing quantum delivers a failed terminal and retires like any other.
+#[test]
+fn a_failed_quantum_delivers_a_failed_terminal() {
+    let mut model = Model::new(8, 8);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        Op::OfferEntry(0, "before"),
+        Op::RunEngine(Quantum::Failed),
+        Op::Service,
+        Op::DrainReceiver,
+    ]);
+    assert_eq!(
+        model.entries(0),
+        ["before"],
+        "a late failure truncates rather than retracts"
+    );
+    assert_eq!(model.terminal(0), Some("failed"));
+    assert_eq!(model.registered(), 0);
+    model.run(&[Op::Detach(0)]);
+}
+
+/// A worker that observed cancellation itself reports it as its outcome.
+#[test]
+fn a_worker_may_report_cancellation_as_its_own_outcome() {
+    let mut model = Model::new(8, 8);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        Op::RunEngine(Quantum::Cancelled),
+        Op::Service,
+        Op::DrainReceiver,
+    ]);
+    assert_eq!(model.terminal(0), Some("cancelled"));
+    assert_eq!(model.registered(), 0);
+    model.run(&[Op::Detach(0)]);
+}
+
+/// A parked quantum is resumed by consumer progress, through the ready set.
+#[test]
+fn a_parked_quantum_is_re_queued_when_room_appears() {
+    let mut model = Model::new(8, 3);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        Op::Claim,
+        Op::OfferEntry(0, "a"),
+        Op::OfferEntry(0, "b"),
+        Op::Report(Quantum::Parked),
+    ]);
+    assert_eq!(model.ready(), 0, "parked, not runnable");
+
+    model.run(&[Op::Recv]);
+    assert_eq!(model.ready(), 1, "taking a record made it runnable again");
+    model.run(&[
+        Op::Claim,
+        Op::OfferEntry(0, "c"),
+        Op::Report(Quantum::Completed),
+        Op::Service,
+        Op::DrainReceiver,
+    ]);
+    assert_eq!(model.entries(0), ["a", "b", "c"]);
+    assert_eq!(model.terminal(0), Some("completed"));
+    model.run(&[Op::Detach(0)]);
+}
+
+/// An admitted enumeration is runnable as soon as the servicer registers it.
+#[test]
+fn servicing_a_begin_makes_it_runnable() {
+    let mut model = Model::new(8, 8);
+    model.run(&[Op::Begin]);
+    assert_eq!(model.ready(), 0, "not registered yet");
+    model.run(&[Op::Service]);
+    assert_eq!(model.ready(), 1);
+    model.run(&[Op::Detach(0)]);
+}
+
+/// The smallest submission ring accounts for both of a live enumeration's
+/// reserved control messages.
+#[test]
+fn the_minimum_submission_ring_covers_cancel_and_retire() {
+    // Abandon, cancel, retire, and one begin -- and nothing else fits until the
+    // first enumeration has fully retired.
+    let mut model = Model::new(MINIMUM_SUBMISSION_CAPACITY, 8);
+    model.run(&[
+        Op::Begin,
+        Op::BeginRefused(BeginFailure::SubmissionRingFull),
+        Op::Service,
+        Op::BeginRefused(BeginFailure::SubmissionRingFull),
+        Op::RunEngine(Quantum::Completed),
+        Op::Service,
+        Op::Detach(0),
+        // Cancel, retire, and the begin message's slot are all back.
+        Op::Begin,
+        Op::Service,
+        Op::Detach(1),
     ]);
     assert_eq!(model.registered(), 1);
 }

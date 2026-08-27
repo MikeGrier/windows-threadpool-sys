@@ -14,7 +14,23 @@ fn request() -> EnumerationRequest {
     EnumerationRequest::new(&Wtf16String::from(r"C:\Windows")).expect("a resolvable path")
 }
 
+/// A session whose pool objects never fire, so a test that drives servicing
+/// explicitly is not racing the thread pool for the same work.
 fn session() -> (Session, Receiver) {
+    session_with(8, 8)
+}
+
+/// A suppressed session with explicit bounds, for the tests whose subject is
+/// how the rings account for reservations.
+fn session_with(submission: usize, completion: usize) -> (Session, Receiver) {
+    let (session, receiver) = Session::new(submission, completion).expect("valid bounds");
+    session.suppress_pool();
+    (session, receiver)
+}
+
+/// A session that really does use the thread pool, for the tests whose subject
+/// is that the pool eventually runs.
+fn live_session() -> (Session, Receiver) {
     Session::new(8, 8).expect("a session with room")
 }
 
@@ -75,7 +91,7 @@ fn a_full_submission_ring_refuses_a_begin_and_returns_the_request() {
     // Three slots: abandon, this enumeration's cancel reservation, and its
     // begin message. A second begin has nowhere to go until the first is
     // serviced.
-    let (session, _receiver) = Session::new(MINIMUM_SUBMISSION_CAPACITY, 8).expect("valid");
+    let (session, _receiver) = session_with(MINIMUM_SUBMISSION_CAPACITY, 8);
     let first = session.try_begin(request()).expect("the only room");
 
     let error = session.try_begin(request()).expect_err("no room");
@@ -90,16 +106,17 @@ fn a_full_submission_ring_refuses_a_begin_and_returns_the_request() {
 #[test]
 fn a_refused_begin_leaves_no_reservation_behind() {
     // The smallest ring accounts for exactly one live enumeration: the standing
-    // abandon slot, that enumeration's cancellation reservation, and one
-    // transient begin message.
-    let (session, _receiver) = Session::new(MINIMUM_SUBMISSION_CAPACITY, 8).expect("valid");
+    // abandon slot, that enumeration's cancellation and retirement
+    // reservations, and one transient begin message.
+    let (session, _receiver) = session_with(MINIMUM_SUBMISSION_CAPACITY, 8);
     let first = session.try_begin(request()).expect("room");
     session.try_begin(request()).expect_err("no room");
     service(&session);
 
-    // Detaching returns the first enumeration's cancellation reservation. If
-    // the refused attempt had kept anything, this second begin would not fit.
-    first.detach();
+    // Cancelling returns everything the first enumeration held. If the refused
+    // attempt had kept anything, this second begin would not fit.
+    first.cancel();
+    service(&session);
     let second = session.try_begin(request()).expect("room again");
     second.detach();
 }
@@ -109,7 +126,7 @@ fn the_smallest_submission_ring_carries_one_live_enumeration_at_a_time() {
     // Each live enumeration holds a cancellation reservation for as long as its
     // handle can cancel it, so the bound is on *outstanding* work, not on the
     // total a session may ever start.
-    let (session, _receiver) = Session::new(MINIMUM_SUBMISSION_CAPACITY, 8).expect("valid");
+    let (session, _receiver) = session_with(MINIMUM_SUBMISSION_CAPACITY, 8);
     for _ in 0..3 {
         let handle = session.try_begin(request()).expect("room for one");
         session
@@ -124,7 +141,7 @@ fn the_smallest_submission_ring_carries_one_live_enumeration_at_a_time() {
 #[test]
 fn a_completion_ring_that_cannot_reserve_a_terminal_refuses_the_begin() {
     // The smallest completion ring accounts for exactly one enumeration.
-    let (session, _receiver) = Session::new(8, MINIMUM_COMPLETION_RING_CAPACITY).expect("valid");
+    let (session, _receiver) = session_with(8, MINIMUM_COMPLETION_RING_CAPACITY);
     let first = session
         .try_begin(request())
         .expect("the only terminal slot");
@@ -135,7 +152,7 @@ fn a_completion_ring_that_cannot_reserve_a_terminal_refuses_the_begin() {
 
 #[test]
 fn a_begin_refused_by_the_completion_ring_returns_its_submission_reservation() {
-    let (session, _receiver) = Session::new(8, MINIMUM_COMPLETION_RING_CAPACITY).expect("valid");
+    let (session, _receiver) = session_with(8, MINIMUM_COMPLETION_RING_CAPACITY);
     let first = session.try_begin(request()).expect("room");
     session.try_begin(request()).expect_err("no terminal slot");
 
@@ -209,14 +226,29 @@ fn a_detached_enumeration_is_not_cancelled() {
 
 #[test]
 fn detaching_returns_the_cancellation_reservation() {
-    let (session, _receiver) = Session::new(MINIMUM_SUBMISSION_CAPACITY, 8).expect("valid");
+    let (session, _receiver) = session_with(MINIMUM_SUBMISSION_CAPACITY, 8);
     let handle = session.try_begin(request()).expect("room");
     service(&session);
-    // With the begin serviced, the ring holds only the abandon and cancel
-    // reservations; detaching gives the cancel slot back.
+    // Abandon, cancel, and retire are outstanding once the begin is serviced.
+    assert_eq!(session.shared.submissions.reserved(), 3);
+
+    // Detaching gives back exactly the cancellation slot. The retirement slot
+    // stays: the worker still has to be able to report itself finished.
     handle.detach();
-    let second = session.try_begin(request()).expect("the slot came back");
-    second.detach();
+    assert_eq!(session.shared.submissions.reserved(), 2);
+}
+
+#[test]
+fn an_enumeration_reserves_both_of_its_control_messages() {
+    let (session, _receiver) = session_with(16, 16);
+    let before = session.shared.submissions.reserved();
+    let handle = session.try_begin(request()).expect("room");
+    assert_eq!(
+        session.shared.submissions.reserved(),
+        before + 2,
+        "one for cancellation, one for retirement"
+    );
+    handle.detach();
 }
 
 #[test]
@@ -266,7 +298,7 @@ fn abandonment_releases_enumerations_without_terminals() {
 fn abandonment_reaches_the_servicer_through_the_thread_pool() {
     // Receiver drop must not block on the teardown it starts, so the work is
     // done by the pool; the session observes it shortly afterwards.
-    let (session, receiver) = session();
+    let (session, receiver) = live_session();
     let handle = session.try_begin(request()).expect("room");
     handle.detach();
     drop(receiver);
@@ -282,7 +314,7 @@ fn abandonment_reaches_the_servicer_through_the_thread_pool() {
 
 #[test]
 fn admission_reaches_the_servicer_through_the_thread_pool() {
-    let (session, _receiver) = session();
+    let (session, _receiver) = live_session();
     let handle = session.try_begin(request()).expect("room");
     let id = handle.id();
     handle.detach();
@@ -298,7 +330,7 @@ fn admission_reaches_the_servicer_through_the_thread_pool() {
 
 #[test]
 fn several_session_clones_may_admit_concurrently() {
-    let (session, _receiver) = Session::new(64, 64).expect("valid");
+    let (session, _receiver) = session_with(64, 64);
     let mut handles = Vec::new();
     let mut threads = Vec::new();
     for _ in 0..4 {

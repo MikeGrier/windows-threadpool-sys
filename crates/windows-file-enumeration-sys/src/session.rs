@@ -9,31 +9,44 @@
 //! observer.
 //!
 //! Everything a client asks of a session -- start, cancel, abandon -- enters
-//! through the submission ring and is applied by the servicer. The servicer runs
-//! on a thread-pool work item, mutates the registry, and hands each enumeration
-//! to its own work object; it never performs a directory query itself, because a
-//! query may block and the servicer is the only thing that can start or stop
-//! anything.
+//! through the submission ring and is applied by the servicer. The servicer
+//! mutates the registry and marks enumerations runnable; it never performs a
+//! directory query itself, because a query may block and the servicer is the
+//! only thing that can start or stop anything.
 //!
-//! # Why the doorbell is not inside the shared state
+//! # A worker reports; the servicer applies
 //!
-//! The servicer's work object is owned by the client-side handles, not by the
-//! state its callback touches, and the callback reaches that state through a
-//! `Weak`. If the work object lived in the shared state, a callback holding the
-//! last reference would drop the work object *from inside its own callback*,
-//! and `WaitForThreadpoolWorkCallbacks` would then wait for the callback that is
-//! doing the waiting. Keeping ownership on the handle side means the work object
-//! is always dropped by a client thread.
+//! Work runs on a second thread-pool object, whose callback claims one runnable
+//! enumeration and runs one quantum. That worker delivers entries and its own
+//! terminal to the completion ring and then *reports* retirement through the
+//! submission ring. It never removes a registry entry.
+//!
+//! That is not tidiness. If a worker finished its own enumeration it would drop
+//! that enumeration's state, and any thread-pool object living in that state
+//! would be closed from inside its own callback -- which waits for the callback
+//! doing the waiting and then frees the closure still running. Reporting instead
+//! of acting removes the hazard, and keeping no thread-pool object per
+//! enumeration removes it structurally: abandonment releases entries that own
+//! nothing the pool must be drained for.
+//!
+//! # Who owns the pool objects
+//!
+//! The shared state owns them, and the *last client handle* releases them on its
+//! own thread before letting go of its share of that state. A callback therefore
+//! never holds the last reference to anything whose release would wait on that
+//! callback: by the time the shared state can be dropped, the pool objects are
+//! already closed.
 
 use std::io;
 use std::os::windows::io::{BorrowedHandle, OwnedHandle};
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use windows_impersonation_token_sys::ImpersonationToken;
+use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::work::ThreadpoolWork;
 
 use crate::admission::{self, EnumerationHandle};
@@ -42,15 +55,17 @@ use crate::completion_ring::{CompletionRing, MINIMUM_COMPLETION_CAPACITY};
 use crate::error::{BeginError, SessionError, SessionFailure};
 use crate::registry::{EnumerationState, Registry};
 use crate::request::EnumerationRequest;
-use crate::submission_ring::{AbandonSlot, ControlMessage, PushOutcome, SubmissionRing};
+use crate::submission_ring::{
+    AbandonSlot, ControlMessage, PushOutcome, SubmissionRing, release_retire_slot,
+};
 
 /// The smallest submission-ring capacity that can carry one enumeration.
 ///
-/// Three, and each one is load-bearing: the session's standing abandon message,
-/// one enumeration's reserved cancellation, and one ordinary begin. A smaller
-/// ring could be built but could never start anything, which is not a bound
-/// worth offering.
-pub const MINIMUM_SUBMISSION_CAPACITY: usize = 3;
+/// Four, and each one is load-bearing: the session's standing abandon message,
+/// one enumeration's reserved cancellation, its reserved retirement report, and
+/// one ordinary begin. A smaller ring could be built but could never start
+/// anything, which is not a bound worth offering.
+pub const MINIMUM_SUBMISSION_CAPACITY: usize = 4;
 
 /// The smallest completion-ring capacity that can carry one enumeration.
 ///
@@ -58,17 +73,92 @@ pub const MINIMUM_SUBMISSION_CAPACITY: usize = 3;
 /// the last slot, so a ring of one could not hold both.
 pub const MINIMUM_COMPLETION_RING_CAPACITY: usize = MINIMUM_COMPLETION_CAPACITY;
 
+/// What one quantum of work decided.
+///
+/// Only [`Idle`](Self::Idle) is produced today: [`advance`](SessionShared::advance)
+/// has no engine behind it until FE-8, which is what decides the other two.
+#[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "FE-8's native engine is what parks and finishes an enumeration"
+)]
+pub(crate) enum QuantumOutcome {
+    /// Nothing to do. The enumeration stays registered and idle.
+    Idle,
+    /// Stopped for want of completion-ring room; resume on consumer progress.
+    Parked,
+    /// The enumeration is over, with this outcome.
+    Finished(TerminalOutcome),
+}
+
+/// The session's thread-pool objects.
+///
+/// Two, deliberately: the servicer must stay responsive, so it is not the object
+/// marked as running long. Only the engine may block on a directory query.
+struct SessionWork {
+    servicer: ThreadpoolWork,
+    engine: ThreadpoolWork,
+    /// Set by the state-machine model, which drives both callbacks on its own
+    /// thread so a scenario decides exactly when they run.
+    #[cfg(test)]
+    suppressed: AtomicBool,
+}
+
+impl SessionWork {
+    #[cfg(test)]
+    fn is_suppressed(&self) -> bool {
+        self.suppressed.load(Ordering::Acquire)
+    }
+
+    #[cfg(not(test))]
+    fn is_suppressed(&self) -> bool {
+        false
+    }
+
+    /// Queue one drain of the submission ring.
+    fn submit_servicer(&self) {
+        if !self.is_suppressed() {
+            self.servicer.submit();
+        }
+    }
+
+    /// Queue one quantum of enumeration work.
+    fn submit_engine(&self) {
+        if !self.is_suppressed() {
+            self.engine.submit();
+        }
+    }
+}
+
 /// State both halves of a session share.
 pub(crate) struct SessionShared {
     pub(crate) completions: Arc<CompletionRing>,
     pub(crate) submissions: SubmissionRing,
     registry: Mutex<Registry>,
     next_id: AtomicU64,
+    /// The pool objects, taken and dropped by the last client handle.
+    ///
+    /// `None` once a session has been torn down, after which nothing further is
+    /// scheduled -- which is correct, because nothing is left to observe it.
+    work: Mutex<Option<SessionWork>>,
+    /// Live [`Session`] and [`Receiver`] handles. Not the `Arc` strong count,
+    /// which a callback transiently inflates.
+    handles: AtomicUsize,
+    /// Quantum outcomes the state-machine model has scripted, standing in for
+    /// the native engine.
+    #[cfg(test)]
+    scripted: Mutex<std::collections::VecDeque<QuantumOutcome>>,
 }
 
 impl SessionShared {
     fn registry(&self) -> MutexGuard<'_, Registry> {
         self.registry
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    fn work(&self) -> MutexGuard<'_, Option<SessionWork>> {
+        self.work
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
     }
@@ -92,6 +182,43 @@ impl SessionShared {
         self.registry().len()
     }
 
+    /// How many enumerations are waiting for a worker.
+    #[cfg(test)]
+    pub(crate) fn ready(&self) -> usize {
+        self.registry().ready_len()
+    }
+
+    /// Queue a drain if this submission is the one that must schedule it.
+    pub(crate) fn ring_servicer(&self, outcome: PushOutcome) {
+        if outcome != PushOutcome::RingDoorbell {
+            return;
+        }
+        if let Some(work) = self.work().as_ref() {
+            work.submit_servicer();
+        }
+    }
+
+    /// Note one more client handle.
+    fn acquire_handle(&self) {
+        self.handles.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Release one client handle, tearing the session's pool objects down when
+    /// it was the last.
+    ///
+    /// Runs on whichever thread dropped the handle -- always a client thread,
+    /// never a callback -- which is exactly the precondition for waiting out
+    /// in-flight callbacks.
+    fn release_handle(&self) {
+        if self.handles.fetch_sub(1, Ordering::AcqRel) != 1 {
+            return;
+        }
+        // Taken under the lock and dropped outside it, so a callback blocked on
+        // this lock cannot be what the drop is waiting for.
+        let work = self.work().take();
+        drop(work);
+    }
+
     /// Service every queued control message, in order, until the ring is empty.
     ///
     /// The ring clears its own drain flag when it runs out, under the same lock
@@ -102,29 +229,32 @@ impl SessionShared {
             match message {
                 ControlMessage::Begin(begin) => self.service_begin(*begin),
                 ControlMessage::Cancel(enumeration) => self.service_cancel(enumeration),
+                ControlMessage::Retire(enumeration) => self.service_retire(enumeration),
                 ControlMessage::Abandon => self.service_abandon(),
             }
         }
     }
 
-    /// Register an admitted enumeration and hand it to its own work object.
+    /// Register an admitted enumeration and make it runnable.
     fn service_begin(&self, begin: crate::submission_ring::BeginMessage) {
         let enumeration = begin.enumeration;
         {
             let mut registry = self.registry();
             if !registry.is_accepting() {
                 // Abandoned between admission and servicing. Releasing the
-                // message's terminal slot without sending is correct: no
-                // receiver remains to owe an outcome to. Done after the registry
-                // lock is released, because releasing a reservation takes the
-                // completion ring's lock.
+                // message's slots without spending them is correct: no receiver
+                // remains to owe an outcome to. Done after the registry lock is
+                // released, because releasing takes the other rings' locks.
                 drop(registry);
-                drop(begin);
+                self.retire_state(
+                    EnumerationState::new(begin.request, begin.token, begin.terminal, begin.retire),
+                    None,
+                );
                 return;
             }
             registry.insert(
                 enumeration,
-                EnumerationState::new(begin.request, begin.token, begin.terminal),
+                EnumerationState::new(begin.request, begin.token, begin.terminal, begin.retire),
             );
         }
         self.schedule(enumeration);
@@ -133,8 +263,9 @@ impl SessionShared {
     /// Stop one enumeration.
     ///
     /// A quantum in flight cannot be preempted, so this only records the
-    /// intention; whichever side sees the enumeration quiescent delivers the
-    /// outcome, which is what keeps exactly one terminal per enumeration.
+    /// intention; the worker holding it applies the outcome when it reports.
+    /// Only a quiescent enumeration is finished here, which is what keeps
+    /// exactly one terminal per enumeration.
     fn service_cancel(&self, enumeration: EnumerationId) {
         let finished = {
             let mut registry = self.registry();
@@ -151,99 +282,145 @@ impl SessionShared {
                 None
             }
         };
-        // Outside the registry lock: delivering a terminal takes the completion
-        // ring's lock, and dropping a work object waits for its callbacks.
         if let Some(state) = finished {
-            finish(state, TerminalOutcome::Cancelled);
+            self.retire_state(state, Some(TerminalOutcome::Cancelled));
+        }
+    }
+
+    /// Release an enumeration whose worker has reported itself finished.
+    ///
+    /// The terminal was already delivered by that worker, so nothing is owed
+    /// here; this returns what the entry still holds.
+    fn service_retire(&self, enumeration: EnumerationId) {
+        let state = self.registry().remove(enumeration);
+        if let Some(state) = state {
+            self.retire_state(state, None);
         }
     }
 
     /// Tear the session down because its receiver is gone.
     ///
     /// No terminal outcomes are delivered, because nothing remains to observe
-    /// them; the reserved slots are simply released.
+    /// them; the reserved slots are simply released. Nothing here waits on a
+    /// worker, because a registry entry owns no thread-pool object.
     fn service_abandon(&self) {
         let abandoned = {
             let mut registry = self.registry();
             registry.stop_accepting();
             registry.drain_all()
         };
-        // Dropping each state releases its terminal reservation and waits out
-        // any callback its work object still has in flight, so it happens
-        // outside the registry lock.
-        drop(abandoned);
+        for (_, state) in abandoned {
+            self.retire_state(state, None);
+        }
     }
 
-    /// Submit one enumeration's work, if the engine has installed it.
+    /// Release everything a removed entry still holds, delivering `outcome` if
+    /// one is still owed.
     ///
-    /// The native engine (M6) is what installs a work object; until then this
-    /// clears the parked flag and has nothing to submit, so an admitted
-    /// enumeration is registered and cancellable but produces no entries.
+    /// An unspent slot of either kind returns to its ring rather than being
+    /// leaked; a terminal slot dropped without an outcome releases its
+    /// completion-ring reservation.
+    fn retire_state(&self, mut state: EnumerationState, outcome: Option<TerminalOutcome>) {
+        if let Some(retire) = state.retire.take() {
+            release_retire_slot(&self.submissions, retire);
+        }
+        match (state.terminal.take(), outcome) {
+            (Some(terminal), Some(outcome)) => terminal.send(outcome),
+            (slot, _) => drop(slot),
+        }
+    }
+
+    /// Make one enumeration runnable and ask for a worker.
     pub(crate) fn schedule(&self, enumeration: EnumerationId) {
-        let mut registry = self.registry();
-        let Some(state) = registry.get_mut(enumeration) else {
+        self.registry().mark_ready(enumeration);
+        if let Some(work) = self.work().as_ref() {
+            work.submit_engine();
+        }
+    }
+
+    /// Run one quantum for one runnable enumeration.
+    ///
+    /// This is the engine callback's whole body. Claiming is single-flight, so
+    /// an enumeration already held by another worker is skipped rather than run
+    /// twice over the same buffer and cursor.
+    pub(crate) fn run_engine_quantum(&self) {
+        let Some(enumeration) = self.claim_next() else {
             return;
         };
-        state.parked = false;
-        if let Some(work) = state.work.as_ref() {
-            work.submit();
-        }
+        let outcome = self.advance(enumeration);
+        self.report_quantum(enumeration, outcome);
     }
 
-    /// Take ownership of one quantum of an enumeration's work.
-    ///
-    /// Returns `false` when the enumeration is gone or already cancelled, which
-    /// is how a scheduled quantum discovers it has nothing to do. While a
-    /// quantum is owned, cancellation only records its intent: it cannot
-    /// deliver a terminal underneath work that may still be parsing records.
-    #[allow(dead_code, reason = "the native engine (M6) runs the quanta")]
-    pub(crate) fn enter_quantum(&self, enumeration: EnumerationId) -> bool {
-        let mut registry = self.registry();
-        match registry.get_mut(enumeration) {
-            Some(state) if !state.cancelled => {
-                state.running = true;
-                state.parked = false;
-                true
-            }
-            _ => false,
-        }
+    /// Claim the next runnable enumeration for this worker.
+    pub(crate) fn claim_next(&self) -> Option<EnumerationId> {
+        self.registry().claim_next()
     }
 
-    /// Give a quantum back.
+    /// Advance one enumeration by one bounded quantum.
     ///
-    /// `parked` says the quantum stopped for want of completion-ring room, so
-    /// it must be resumed when a receiver makes some. A cancellation observed
-    /// while the quantum was running is applied here, which is what keeps the
-    /// terminal after every entry that quantum had already delivered.
-    #[allow(dead_code, reason = "the native engine (M6) runs the quanta")]
-    pub(crate) fn leave_quantum(&self, enumeration: EnumerationId, parked: bool) {
-        let finished = {
+    /// The native engine lands here in FE-8. Until then an enumeration that is
+    /// not cancelled simply has nothing to do, so it is claimed, found idle, and
+    /// released.
+    fn advance(&self, enumeration: EnumerationId) -> QuantumOutcome {
+        #[cfg(test)]
+        if let Some(scripted) = self
+            .scripted
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .pop_front()
+        {
+            return scripted;
+        }
+        let _ = enumeration;
+        QuantumOutcome::Idle
+    }
+
+    /// Hand the claim back and apply whatever the quantum decided.
+    pub(crate) fn report_quantum(&self, enumeration: EnumerationId, outcome: QuantumOutcome) {
+        let finish = {
             let mut registry = self.registry();
             let Some(state) = registry.get_mut(enumeration) else {
+                // Removed while this worker held it, which is what abandonment
+                // does. Nothing is owed and nothing is left to release.
                 return;
             };
             state.running = false;
-            state.parked = parked && !state.cancelled;
-            if state.cancelled {
-                registry.remove(enumeration)
-            } else {
-                None
+            match outcome {
+                // The worker reached a real conclusion, which wins over a
+                // cancellation that arrived while it was doing so.
+                QuantumOutcome::Finished(outcome) => Some(outcome),
+                _ if state.cancelled => Some(TerminalOutcome::Cancelled),
+                QuantumOutcome::Parked => {
+                    state.parked = true;
+                    None
+                }
+                QuantumOutcome::Idle => None,
             }
         };
-        if let Some(state) = finished {
-            finish(state, TerminalOutcome::Cancelled);
+        if let Some(outcome) = finish {
+            self.finish_from_worker(enumeration, outcome);
         }
     }
 
-    /// Finish an enumeration with the outcome its own work decided on.
+    /// Deliver a worker's terminal and report the enumeration for retirement.
     ///
-    /// A no-op if the enumeration is already gone, so a late completion racing
-    /// an abandonment cannot deliver a second terminal.
-    #[allow(dead_code, reason = "the native engine (M6) decides these outcomes")]
-    pub(crate) fn complete(&self, enumeration: EnumerationId, outcome: TerminalOutcome) {
-        let finished = self.registry().remove(enumeration);
-        if let Some(state) = finished {
-            finish(state, outcome);
+    /// The worker owns the terminal slot, so delivery cannot fail. Removing the
+    /// entry is the servicer's job, which is why this reports rather than
+    /// removes.
+    fn finish_from_worker(&self, enumeration: EnumerationId, outcome: TerminalOutcome) {
+        let (terminal, retire) = {
+            let mut registry = self.registry();
+            match registry.get_mut(enumeration) {
+                Some(state) => (state.terminal.take(), state.retire.take()),
+                None => return,
+            }
+        };
+        if let Some(terminal) = terminal {
+            terminal.send(outcome);
+        }
+        if let Some(retire) = retire {
+            let pushed = self.submissions.push_retire(retire, enumeration);
+            self.ring_servicer(pushed);
         }
     }
 
@@ -252,52 +429,22 @@ impl SessionShared {
     /// Called after a receiver takes a record, which is the only event that can
     /// create that room.
     pub(crate) fn resume_parked(&self) {
-        let parked = self.registry().parked();
+        let parked = {
+            let registry = self.registry();
+            registry.parked()
+        };
         for enumeration in parked {
             self.schedule(enumeration);
         }
     }
-}
 
-/// Deliver one enumeration's outcome and release everything it held.
-///
-/// Never call this from inside the enumeration's own work callback: dropping the
-/// state drops that work object, whose `Drop` waits for the very callback doing
-/// the dropping.
-fn finish(mut state: EnumerationState, outcome: TerminalOutcome) {
-    let terminal = state
-        .terminal
-        .take()
-        .expect("a registered enumeration always holds its terminal slot");
-    terminal.send(outcome);
-}
-
-/// The servicer's work object, owned by the client-side handles.
-pub(crate) struct Doorbell {
-    work: ThreadpoolWork,
-    /// Set by the state-machine model, which drains on its own thread so a
-    /// scenario decides exactly when servicing happens. Without it the pool
-    /// would race every scripted step and the model would not be a model.
+    /// Push a scripted quantum outcome for the state-machine model.
     #[cfg(test)]
-    suppressed: AtomicBool,
-}
-
-impl Doorbell {
-    /// Queue a drain if this submission is the one that must schedule it.
-    pub(crate) fn ring_if_needed(&self, outcome: PushOutcome) {
-        #[cfg(test)]
-        if self.suppressed.load(Ordering::Acquire) {
-            return;
-        }
-        if outcome == PushOutcome::RingDoorbell {
-            self.work.submit();
-        }
-    }
-
-    /// Stop ringing, leaving servicing entirely to explicit drains.
-    #[cfg(test)]
-    fn suppress(&self) {
-        self.suppressed.store(true, Ordering::Release);
+    pub(crate) fn script_quantum(&self, outcome: QuantumOutcome) {
+        self.scripted
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push_back(outcome);
     }
 }
 
@@ -307,7 +454,6 @@ impl Doorbell {
 /// submission ring and the same receiver.
 pub struct Session {
     pub(crate) shared: Arc<SessionShared>,
-    doorbell: Arc<Doorbell>,
 }
 
 impl Session {
@@ -320,8 +466,8 @@ impl Session {
     /// # Errors
     ///
     /// Returns [`SessionError`] if either capacity is below the minimum that can
-    /// carry one enumeration, or if the thread pool refused to create the
-    /// servicer's work object.
+    /// carry one enumeration, or if the thread pool refused to create either of
+    /// the session's work objects.
     pub fn new(
         submission_capacity: usize,
         completion_capacity: usize,
@@ -342,23 +488,47 @@ impl Session {
             submissions: SubmissionRing::new(submission_capacity),
             registry: Mutex::new(Registry::new()),
             next_id: AtomicU64::new(1),
+            work: Mutex::new(None),
+            // The session and its receiver.
+            handles: AtomicUsize::new(2),
+            #[cfg(test)]
+            scripted: Mutex::new(std::collections::VecDeque::new()),
         });
 
-        // The callback holds only a `Weak`, so the servicer never keeps the
-        // session alive and never becomes the owner that drops its own work
-        // object.
-        let weak: Weak<SessionShared> = Arc::downgrade(&shared);
-        let work = ThreadpoolWork::new(
-            move || {
-                if let Some(shared) = weak.upgrade() {
-                    shared.drain_submissions();
-                }
-            },
-            None,
-        )
-        .map_err(|error| SessionError::with_source(SessionFailure::WorkObject, error))?;
-        let doorbell = Arc::new(Doorbell {
-            work,
+        // Both callbacks hold only a `Weak`, so neither keeps the session alive
+        // and neither can become the owner that closes its own work object.
+        let servicer = {
+            let weak: Weak<SessionShared> = Arc::downgrade(&shared);
+            ThreadpoolWork::new(
+                move || {
+                    if let Some(shared) = weak.upgrade() {
+                        shared.drain_submissions();
+                    }
+                },
+                None,
+            )
+            .map_err(|error| SessionError::with_source(SessionFailure::WorkObject, error))?
+        };
+        let engine = {
+            let weak: Weak<SessionShared> = Arc::downgrade(&shared);
+            // Any quantum may perform a synchronous directory query, so the pool
+            // is told these callbacks can block. That accounting belongs to the
+            // engine alone: the servicer must stay responsive.
+            let mut environment = CallbackEnviron::new();
+            environment.set_runs_long();
+            ThreadpoolWork::new(
+                move || {
+                    if let Some(shared) = weak.upgrade() {
+                        shared.run_engine_quantum();
+                    }
+                },
+                Some(&mut environment),
+            )
+            .map_err(|error| SessionError::with_source(SessionFailure::WorkObject, error))?
+        };
+        *shared.work() = Some(SessionWork {
+            servicer,
+            engine,
             #[cfg(test)]
             suppressed: AtomicBool::new(false),
         });
@@ -374,10 +544,9 @@ impl Session {
 
         let receiver = Receiver {
             shared: Arc::clone(&shared),
-            doorbell: Arc::clone(&doorbell),
             abandon: Some(abandon),
         };
-        Ok((Session { shared, doorbell }, receiver))
+        Ok((Session { shared }, receiver))
     }
 
     /// The submission ring's bound.
@@ -408,8 +577,10 @@ impl Session {
     /// Leave servicing entirely to explicit drains, for the state-machine
     /// model, which must decide when each step happens.
     #[cfg(test)]
-    pub(crate) fn suppress_doorbell(&self) {
-        self.doorbell.suppress();
+    pub(crate) fn suppress_pool(&self) {
+        if let Some(work) = self.shared.work().as_ref() {
+            work.suppressed.store(true, Ordering::Release);
+        }
     }
 
     /// Start enumerating one directory under the caller's own security context.
@@ -430,7 +601,7 @@ impl Session {
     /// the receiver has already abandoned the session. Nothing is accepted in
     /// any of those cases, and the request comes back with the error.
     pub fn try_begin(&self, request: EnumerationRequest) -> Result<EnumerationHandle, BeginError> {
-        admission::try_begin(&self.shared, &self.doorbell, request)
+        admission::try_begin(&self.shared, request)
     }
 
     /// Start enumerating one directory under an already-captured context.
@@ -450,16 +621,16 @@ impl Session {
         request: EnumerationRequest,
         token: ImpersonationToken,
     ) -> Result<EnumerationHandle, BeginError> {
-        admission::try_begin_with_token(&self.shared, &self.doorbell, request, token)
+        admission::try_begin_with_token(&self.shared, request, token)
     }
 }
 
 impl Clone for Session {
     fn clone(&self) -> Self {
         self.shared.completions.add_session();
+        self.shared.acquire_handle();
         Self {
             shared: Arc::clone(&self.shared),
-            doorbell: Arc::clone(&self.doorbell),
         }
     }
 }
@@ -470,6 +641,7 @@ impl Drop for Session {
         // enumerating, the receiver learns the stream has ended rather than
         // blocking on a record that can never arrive.
         self.shared.completions.remove_session();
+        self.shared.release_handle();
     }
 }
 
@@ -489,12 +661,12 @@ impl std::fmt::Debug for Session {
 /// enumeration before its terminal -- is a statement about one observer, and two
 /// receivers racing on the same ring would each see an arbitrary subsequence of
 /// it.
+///
 /// Dropping the receiver abandons the session: the session stops accepting
 /// enumerations and releases the ones it is carrying, without delivering any
 /// terminal outcome, because no observer remains to owe one to.
 pub struct Receiver {
     shared: Arc<SessionShared>,
-    doorbell: Arc<Doorbell>,
     /// The standing abandon reservation, claimed when the session was built so
     /// that `Drop` has nowhere to fail.
     abandon: Option<AbandonSlot>,
@@ -529,7 +701,8 @@ impl Receiver {
     /// Block for at most `timeout`.
     ///
     /// Returns `None` on timeout as well as at the end of the stream; a caller
-    /// that must tell them apart can check [`is_disconnected`](Self::is_disconnected).
+    /// that must tell them apart can check
+    /// [`is_disconnected`](Self::is_disconnected).
     #[must_use]
     pub fn recv_timeout(&self, timeout: Duration) -> Option<Completion> {
         let record = self.shared.completions.take_blocking(Some(timeout));
@@ -596,13 +769,15 @@ impl Receiver {
 impl Drop for Receiver {
     fn drop(&mut self) {
         // Infallible by construction: the slot was claimed when the session was
-        // built precisely so this path cannot fail. Ringing the doorbell here is
-        // what makes abandonment asynchronous -- `Drop` never blocks on the
-        // teardown it starts.
+        // built precisely so this path cannot fail. Ringing rather than draining
+        // is what makes abandonment asynchronous -- `Drop` never blocks on the
+        // teardown it starts, unless it is also the last handle, in which case
+        // releasing the pool objects necessarily waits out their callbacks.
         if let Some(slot) = self.abandon.take() {
-            let outcome = self.shared.submissions.push_abandon(slot);
-            self.doorbell.ring_if_needed(outcome);
+            let pushed = self.shared.submissions.push_abandon(slot);
+            self.shared.ring_servicer(pushed);
         }
+        self.shared.release_handle();
     }
 }
 

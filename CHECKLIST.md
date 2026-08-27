@@ -12,30 +12,18 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-7.** Split the worker from the control authority
-> before any native I/O exists to run on it.
+> **NEXT ACTIONABLE ITEM: FE-8.** Open the directory on a worker under the
+> submitted token.
 
 ## M6 -- Native enumeration engine
 
-M5's shell left a latent hazard that M6 must remove before it can install a
+M5's shell left a latent hazard that M6 had to remove before it could install a
 worker: `leave_quantum` and `complete` let a worker mutate the registry and drop
 its own thread-pool object from inside its own callback, which self-waits and
-frees the executing closure. FE-7 closes that by making the worker a reporter
+frees the executing closure. FE-7 closed that by making the worker a reporter
 and the submission-ring servicer the sole registry authority (D-16, D-17).
 
-- [ ] **FE-7** -- Make the worker a reporter and the servicer the sole registry
-  authority, and give the session something to run work on. Add one session-owned
-  engine work object created with a runs-long callback environment and owned by the
-  client-side handles, never by the state its callback touches; replace
-  `EnumerationState::work` with a session ready set that `schedule` pushes to and
-  the engine callback pops from. Enforce single-flight: `enter_quantum` must refuse
-  an enumeration that is already running. Add the reserved `Retire` control message
-  each accepted enumeration claims at admission, so a worker can always report
-  itself finished; the servicer alone removes the registry entry and releases the
-  token, handle, buffer, and reservations. Raise the minimum submission capacity to
-  cover abandon, cancel, retire, and one begin. No native I/O yet: extend the
-  state-machine model to cover the new control path, including a retire serviced
-  after an abandon.
+- [x] **FE-7** -- Make the worker a reporter and the servicer the sole registry authority, and give the session something to run work on. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-7)
 
 - [ ] **FE-8** -- Open the directory on a worker under the submitted
   `ImpersonationToken`, restoring the worker's exact prior token immediately after

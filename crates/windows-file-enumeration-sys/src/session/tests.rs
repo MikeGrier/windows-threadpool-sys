@@ -7,8 +7,25 @@ use crate::error::SessionFailure;
 use crate::testing::named_file;
 use wtf_string::Wtf16String;
 
+/// A session whose pool objects never fire, so a test that drives servicing
+/// explicitly is not racing the thread pool for the same work.
 fn session() -> (Session, Receiver) {
+    let (session, receiver) = Session::new(8, 8).expect("a session with room");
+    session.suppress_pool();
+    (session, receiver)
+}
+
+/// A session that really does use the thread pool, for the tests whose subject
+/// is that the pool eventually runs.
+fn live_session() -> (Session, Receiver) {
     Session::new(8, 8).expect("a session with room")
+}
+
+/// A suppressed session with explicit bounds.
+fn session_with(submission: usize, completion: usize) -> (Session, Receiver) {
+    let (session, receiver) = Session::new(submission, completion).expect("valid bounds");
+    session.suppress_pool();
+    (session, receiver)
 }
 
 fn request() -> EnumerationRequest {
@@ -151,9 +168,11 @@ fn an_outstanding_enumeration_keeps_the_stream_open_past_the_last_handle() {
 
 #[test]
 fn a_begin_is_registered_when_the_servicer_reaches_it() {
+    // Deliberately no assertion that it is *not* yet registered: the pool is
+    // live here, so the servicer may already have run. What is guaranteed is
+    // that servicing registers it.
     let (session, _receiver) = session();
     let enumeration = admit(&session);
-    assert_eq!(session.enumerations(), 0, "not yet serviced");
 
     service(&session);
     assert_eq!(session.enumerations(), 1);
@@ -273,7 +292,7 @@ fn a_begin_is_refused_once_the_session_has_been_abandoned() {
 fn abandonment_frees_the_completion_reservations_it_released() {
     // The smallest ring makes the accounting visible: one reservation uses the
     // only reservable slot, and abandonment must give it back.
-    let (session, receiver) = Session::new(8, MINIMUM_COMPLETION_RING_CAPACITY).expect("valid");
+    let (session, receiver) = session_with(8, MINIMUM_COMPLETION_RING_CAPACITY);
     admit(&session);
     service(&session);
     assert!(
@@ -302,7 +321,7 @@ fn abandonment_frees_the_completion_reservations_it_released() {
 #[test]
 fn the_doorbell_drains_the_ring_on_a_pool_thread() {
     // The end-to-end path: submit, ring, and let the thread pool service it.
-    let (session, _receiver) = session();
+    let (session, _receiver) = live_session();
     let enumeration = admit(&session);
 
     for _ in 0..1000 {
@@ -316,7 +335,9 @@ fn the_doorbell_drains_the_ring_on_a_pool_thread() {
 
 #[test]
 fn a_burst_of_submissions_is_serviced_by_coalesced_drains() {
-    let (session, receiver) = session();
+    // Room for three concurrent begins: the standing abandon slot, two reserved
+    // control messages each, and three unserviced begin messages.
+    let (session, receiver) = Session::new(16, 16).expect("a session with room");
     let mut handles = Vec::new();
     for _ in 0..3 {
         handles.push(session.try_begin(request()).expect("room"));

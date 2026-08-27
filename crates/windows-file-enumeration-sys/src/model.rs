@@ -24,13 +24,15 @@
 //!
 //! # What stands in for the engine
 //!
-//! The native engine (M6) is what will produce entries and decide outcomes.
-//! Here the scenario plays that part with [`Op::OfferEntry`],
-//! [`Op::EnterQuantum`], [`Op::LeaveQuantum`], and [`Op::Complete`], driving the
-//! same crate-internal transitions the engine will drive. That is deliberate:
-//! the shell's invariants must hold for *any* engine that respects those
-//! transitions, so modelling them directly tests the contract rather than one
-//! engine's habits.
+//! The native engine (FE-8) is what will produce entries and decide outcomes.
+//! Here the scenario plays that part: [`Op::OfferEntry`] writes an entry the way
+//! a worker will, and [`Op::Claim`] / [`Op::Report`] drive the same claim-and-
+//! report transitions the engine callback drives, split so a scenario can
+//! interleave a cancellation with a quantum that is still executing.
+//! [`Op::RunEngine`] runs both halves through the real callback body. That is
+//! deliberate: the shell's invariants must hold for *any* engine that respects
+//! those transitions, so modelling them directly tests the contract rather than
+//! one engine's habits.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -38,10 +40,39 @@ use wtf_string::Wtf16String;
 
 use crate::admission::EnumerationHandle;
 use crate::completion::{Completion, EnumerationId, TerminalOutcome};
-use crate::error::BeginFailure;
+use crate::error::{BeginFailure, EnumerationError, Win32Error};
 use crate::request::EnumerationRequest;
-use crate::session::{Receiver, Session};
+use crate::session::{QuantumOutcome, Receiver, Session};
 use crate::testing::named_file;
+
+/// What a scripted quantum decided, in a form a scenario can spell.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Quantum {
+    /// Nothing to do.
+    Idle,
+    /// Out of completion-ring room.
+    Parked,
+    /// The directory was enumerated to exhaustion.
+    Completed,
+    /// The worker observed cancellation and stopped.
+    Cancelled,
+    /// The enumeration failed.
+    Failed,
+}
+
+impl Quantum {
+    fn into_outcome(self) -> QuantumOutcome {
+        match self {
+            Quantum::Idle => QuantumOutcome::Idle,
+            Quantum::Parked => QuantumOutcome::Parked,
+            Quantum::Completed => QuantumOutcome::Finished(TerminalOutcome::Completed),
+            Quantum::Cancelled => QuantumOutcome::Finished(TerminalOutcome::Cancelled),
+            Quantum::Failed => QuantumOutcome::Finished(TerminalOutcome::Failed(
+                EnumerationError::DirectoryQuery(Win32Error::from_code(5)),
+            )),
+        }
+    }
+}
 
 /// One scripted step.
 #[derive(Clone, Copy, Debug)]
@@ -58,17 +89,26 @@ pub(crate) enum Op {
     DropHandle(usize),
     /// Detach the handle for `slot`, letting the enumeration run on.
     Detach(usize),
-    /// The engine takes a quantum of work for `slot`.
-    EnterQuantum(usize),
-    /// The engine gives the quantum back; `true` parks for want of room.
-    LeaveQuantum(usize, bool),
+
+    /// A worker claims the next runnable enumeration.
+    ///
+    /// Split from reporting so a scenario can interleave a cancellation with a
+    /// quantum that is still executing -- the race the shell exists to get
+    /// right.
+    Claim,
+    /// The worker that last claimed reports what its quantum decided.
+    Report(Quantum),
+    /// One whole engine callback: script an outcome, then claim and report
+    /// through the same body the thread pool runs.
+    RunEngine(Quantum),
+    /// Mark `slot` runnable again.
+    Schedule(usize),
     /// The engine offers one entry named `name` for `slot`.
     ///
     /// Records whether the ring accepted it, which is what backpressure means
     /// here: a refused entry is still the engine's to retry.
     OfferEntry(usize, &'static str),
-    /// The engine finishes `slot` normally.
-    Complete(usize),
+
     /// The receiver takes one record, if any.
     Recv,
     /// The receiver takes everything queued.
@@ -102,6 +142,10 @@ pub(crate) struct Model {
     finished: HashSet<EnumerationId>,
     /// Entries the ring refused, which is backpressure rather than loss.
     refused: usize,
+    /// Enumerations claimed but not yet reported, newest last.
+    held: Vec<EnumerationId>,
+    /// What the last [`Op::Claim`] returned, including when it returned nothing.
+    last_claim: Option<EnumerationId>,
     completion_capacity: usize,
 }
 
@@ -112,7 +156,7 @@ impl Model {
             Session::new(submission_capacity, completion_capacity).expect("valid bounds");
         // Nothing rings the servicer's doorbell, so the pool never races a
         // scripted step: `Op::Service` is the only thing that drains.
-        session.suppress_doorbell();
+        session.suppress_pool();
         // Created up front so every check can compare the doorbell against the
         // ring rather than only from the point a scenario happens to ask.
         receiver.doorbell().expect("an event");
@@ -125,6 +169,8 @@ impl Model {
             observed: HashMap::new(),
             finished: HashSet::new(),
             refused: 0,
+            held: Vec::new(),
+            last_claim: None,
             completion_capacity,
         }
     }
@@ -162,6 +208,23 @@ impl Model {
         self.refused
     }
 
+    /// The identifier admitted into `slot`.
+    pub(crate) fn id(&self, slot: usize) -> EnumerationId {
+        self.ids[slot]
+    }
+
+    /// What the last [`Op::Claim`] returned.
+    pub(crate) fn claimed(&self) -> Option<EnumerationId> {
+        self.last_claim
+    }
+
+    /// How many enumerations are waiting for a worker.
+    pub(crate) fn ready(&self) -> usize {
+        self.session
+            .as_ref()
+            .map_or(0, |session| session.shared.ready())
+    }
+
     fn session(&self) -> &Session {
         self.session.as_ref().expect("the session is still held")
     }
@@ -197,13 +260,29 @@ impl Model {
                     handle.detach();
                 }
             }
-            Op::EnterQuantum(slot) => {
-                let id = self.ids[slot];
-                self.session().shared.enter_quantum(id);
+            Op::Claim => {
+                // A claim that finds nothing must not disturb one already held:
+                // the two are different questions.
+                let claimed = self.session().shared.claim_next();
+                self.last_claim = claimed;
+                if let Some(enumeration) = claimed {
+                    self.held.push(enumeration);
+                }
             }
-            Op::LeaveQuantum(slot, parked) => {
+            Op::Report(quantum) => {
+                if let Some(enumeration) = self.held.pop() {
+                    self.session()
+                        .shared
+                        .report_quantum(enumeration, quantum.into_outcome());
+                }
+            }
+            Op::RunEngine(quantum) => {
+                self.session().shared.script_quantum(quantum.into_outcome());
+                self.session().shared.run_engine_quantum();
+            }
+            Op::Schedule(slot) => {
                 let id = self.ids[slot];
-                self.session().shared.leave_quantum(id, parked);
+                self.session().shared.schedule(id);
             }
             Op::OfferEntry(slot, name) => {
                 let id = self.ids[slot];
@@ -219,12 +298,6 @@ impl Model {
                         .push_back(name.to_string()),
                     Err(_) => self.refused += 1,
                 }
-            }
-            Op::Complete(slot) => {
-                let id = self.ids[slot];
-                self.session()
-                    .shared
-                    .complete(id, TerminalOutcome::Completed);
             }
             Op::Recv => {
                 let record = self

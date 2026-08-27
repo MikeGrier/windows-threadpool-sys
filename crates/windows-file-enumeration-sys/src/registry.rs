@@ -1,24 +1,34 @@
 // Copyright (c) 2026 Mike Grier
-//! The registry of enumerations a session is carrying.
+//! The registry of enumerations a session is carrying, and the ready set that
+//! decides which of them a worker runs next.
 //!
-//! Exactly one authority mutates this: the submission-ring servicer. Begin,
-//! cancel, and abandon all arrive through that one ordered path, so the registry
-//! never has to reconcile two callers racing to decide whether an enumeration
-//! exists.
+//! # One authority removes, one authority claims
 //!
-//! Each entry owns the two things that make its outcome unconditional -- the
-//! reserved completion slot its terminal will use, and the impersonation context
-//! its directory will be opened under -- plus the flags the engine consults
-//! between records.
+//! The submission-ring servicer is the only thing that inserts or removes an
+//! entry. A worker never does: it *claims* an enumeration, runs a quantum, and
+//! reports. That split is what lets a worker finish an enumeration without ever
+//! dropping the state -- and therefore without dropping anything whose release
+//! would wait on the worker itself (D-16).
+//!
+//! Both live behind one lock. They are two views of the same question -- what
+//! exists, and what is runnable -- and separating them would only invent a lock
+//! order to get wrong.
+//!
+//! # Claiming is single-flight
+//!
+//! One enumeration owns one native buffer and one record cursor, so exactly one
+//! worker may hold it at a time. [`Registry::claim_next`] enforces that by
+//! refusing an enumeration that is already running, rather than trusting callers
+//! to submit only as often as is safe.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use windows_impersonation_token_sys::ImpersonationToken;
-use windows_threadpool_sys::work::ThreadpoolWork;
 
 use crate::completion::EnumerationId;
 use crate::completion_ring::TerminalSlot;
 use crate::request::EnumerationRequest;
+use crate::submission_ring::RetireSlot;
 
 /// One enumeration the session is carrying.
 pub(crate) struct EnumerationState {
@@ -26,35 +36,33 @@ pub(crate) struct EnumerationState {
     ///
     /// Read by the native engine (M6), which opens the path and evaluates the
     /// predicate; the shell only carries it.
-    #[allow(dead_code, reason = "the native engine (M6) reads the request")]
+    #[allow(dead_code, reason = "FE-8 opens the path this describes")]
     pub(crate) request: EnumerationRequest,
     /// The submitter's captured security context, applied only while the
     /// directory handle is opened.
-    #[allow(
-        dead_code,
-        reason = "the native engine (M6) opens the directory with this"
-    )]
+    #[allow(dead_code, reason = "FE-8 opens the directory with this")]
     pub(crate) token: ImpersonationToken,
     /// The reserved completion slot this enumeration's terminal will use.
     ///
-    /// `None` only while the outcome is being delivered, which is also when the
-    /// entry is being removed.
+    /// Taken by whichever authority delivers the outcome, which is the worker
+    /// for an outcome its own work decided and the servicer for a cancellation
+    /// observed while the enumeration was quiescent.
     pub(crate) terminal: Option<TerminalSlot>,
-    /// Set once cancellation has been serviced. A running quantum observes it
-    /// between records; a quiescent enumeration is finished immediately.
-    pub(crate) cancelled: bool,
-    /// Whether a quantum is executing right now.
+    /// The reserved submission slot a worker spends to report retirement.
     ///
-    /// Cancellation cannot preempt one, so it defers the terminal to whichever
-    /// side observes the state last.
+    /// Still present when the servicer removes an entry itself, in which case it
+    /// is returned to the ring rather than spent.
+    pub(crate) retire: Option<RetireSlot>,
+    /// Set once cancellation has been serviced. A running quantum observes it
+    /// when it reports; a quiescent enumeration is finished immediately.
+    pub(crate) cancelled: bool,
+    /// Whether a worker holds this enumeration right now.
     pub(crate) running: bool,
     /// Whether the enumeration is waiting for completion-ring room.
     pub(crate) parked: bool,
-    /// The work object that advances this enumeration.
-    ///
-    /// The native engine (M6) installs it. Until then an admitted enumeration is
-    /// registered and cancellable but produces no entries.
-    pub(crate) work: Option<ThreadpoolWork>,
+    /// Whether the enumeration is already in the ready queue, so a second
+    /// schedule does not queue it twice.
+    queued: bool,
 }
 
 impl EnumerationState {
@@ -62,19 +70,22 @@ impl EnumerationState {
         request: EnumerationRequest,
         token: ImpersonationToken,
         terminal: TerminalSlot,
+        retire: RetireSlot,
     ) -> Self {
         Self {
             request,
             token,
             terminal: Some(terminal),
+            retire: Some(retire),
             cancelled: false,
             running: false,
             parked: false,
-            work: None,
+            queued: false,
         }
     }
 
-    /// Whether this enumeration can be finished right now.
+    /// Whether this enumeration can be finished by an authority other than the
+    /// worker holding it.
     ///
     /// A quantum in flight owns the transition instead, because a terminal
     /// delivered underneath a running quantum could be followed by an entry that
@@ -84,9 +95,11 @@ impl EnumerationState {
     }
 }
 
-/// Every enumeration a session is carrying, and the identifiers it hands out.
+/// Every enumeration a session is carrying, plus the order they run in.
 pub(crate) struct Registry {
     entries: HashMap<EnumerationId, EnumerationState>,
+    /// Enumerations with work to do, oldest first.
+    ready: VecDeque<EnumerationId>,
     /// Cleared by abandonment. A session that has lost its receiver owes no
     /// outcomes, so it must not take on new work either.
     accepting: bool,
@@ -96,6 +109,7 @@ impl Registry {
     pub(crate) fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            ready: VecDeque::new(),
             accepting: true,
         }
     }
@@ -135,9 +149,48 @@ impl Registry {
 
     /// Take every registered enumeration, leaving the registry empty.
     ///
-    /// Used by abandonment, which tears the whole session down at once.
+    /// Used by abandonment, which tears the whole session down at once. The
+    /// ready set goes with them: an id left queued would name nothing.
     pub(crate) fn drain_all(&mut self) -> Vec<(EnumerationId, EnumerationState)> {
+        self.ready.clear();
         self.entries.drain().collect()
+    }
+
+    /// Mark an enumeration runnable.
+    ///
+    /// Idempotent, and a no-op for an enumeration that is gone or already
+    /// running -- a running one is re-queued when its worker reports, not while
+    /// it still holds the buffer.
+    pub(crate) fn mark_ready(&mut self, enumeration: EnumerationId) {
+        let Some(state) = self.entries.get_mut(&enumeration) else {
+            return;
+        };
+        state.parked = false;
+        if state.queued || state.running {
+            return;
+        }
+        state.queued = true;
+        self.ready.push_back(enumeration);
+    }
+
+    /// Claim the next runnable enumeration for one worker.
+    ///
+    /// Skips ids that have since been removed or claimed, so a stale queue entry
+    /// costs a pop rather than a wrong answer.
+    pub(crate) fn claim_next(&mut self) -> Option<EnumerationId> {
+        while let Some(enumeration) = self.ready.pop_front() {
+            let Some(state) = self.entries.get_mut(&enumeration) else {
+                continue;
+            };
+            state.queued = false;
+            if state.running {
+                continue;
+            }
+            state.running = true;
+            state.parked = false;
+            return Some(enumeration);
+        }
+        None
     }
 
     /// The enumerations waiting for completion-ring room, in no particular
@@ -148,5 +201,11 @@ impl Registry {
             .filter(|(_, state)| state.parked)
             .map(|(id, _)| *id)
             .collect()
+    }
+
+    /// How many enumerations are waiting to run.
+    #[cfg(test)]
+    pub(crate) fn ready_len(&self) -> usize {
+        self.ready.len()
     }
 }

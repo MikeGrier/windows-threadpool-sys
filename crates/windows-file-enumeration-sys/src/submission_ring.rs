@@ -45,6 +45,11 @@ pub(crate) struct BeginMessage {
     pub(crate) request: EnumerationRequest,
     pub(crate) token: ImpersonationToken,
     pub(crate) terminal: TerminalSlot,
+    /// The slot this enumeration will use to report itself finished. Claimed at
+    /// admission for the same reason the terminal is: a worker that could not
+    /// report retirement would strand its registry entry and everything it
+    /// holds.
+    pub(crate) retire: RetireSlot,
 }
 
 impl std::fmt::Debug for BeginMessage {
@@ -65,6 +70,11 @@ pub(crate) enum ControlMessage {
     Begin(Box<BeginMessage>),
     /// Stop one enumeration, whether or not it has started.
     Cancel(EnumerationId),
+    /// A worker has finished with this enumeration and delivered its terminal.
+    ///
+    /// Only the servicer removes a registry entry, so this is how a worker asks
+    /// for the token, handle, buffer, and remaining reservations to be released.
+    Retire(EnumerationId),
     /// The receiver is gone: reject further starts and stop everything.
     Abandon,
 }
@@ -147,6 +157,12 @@ impl SubmissionRing {
         self.lock().abandoned
     }
 
+    /// How many slots outstanding reservations hold.
+    #[cfg(test)]
+    pub(crate) fn reserved(&self) -> usize {
+        self.lock().reserved
+    }
+
     /// Claim the slot an enumeration's future cancellation will use.
     ///
     /// Returns `None` when the ring cannot spare one. Taking it at admission is
@@ -159,6 +175,20 @@ impl SubmissionRing {
         }
         state.reserved += 1;
         Some(CancelSlot { _private: () })
+    }
+
+    /// Claim the slot this enumeration will use to report itself finished.
+    ///
+    /// Returns `None` when the ring cannot spare one. Like cancellation, this is
+    /// claimed at admission so the report itself can never fail; unlike
+    /// cancellation, it is spent by a worker rather than by a client.
+    pub(crate) fn reserve_retire(&self) -> Option<RetireSlot> {
+        let mut state = self.lock();
+        if state.free() == 0 {
+            return None;
+        }
+        state.reserved += 1;
+        Some(RetireSlot { _private: () })
     }
 
     /// Claim the session's one standing abandon slot.
@@ -206,6 +236,14 @@ impl SubmissionRing {
         claim_drain(&mut state)
     }
 
+    /// Enqueue a retirement report into its reserved slot. Cannot fail.
+    pub(crate) fn push_retire(&self, _slot: RetireSlot, enumeration: EnumerationId) -> PushOutcome {
+        let mut state = self.lock();
+        state.reserved -= 1;
+        state.queue.push_back(ControlMessage::Retire(enumeration));
+        claim_drain(&mut state)
+    }
+
     /// Enqueue abandonment into the standing slot, and latch the flag that
     /// refuses further begins. Cannot fail.
     pub(crate) fn push_abandon(&self, _slot: AbandonSlot) -> PushOutcome {
@@ -233,8 +271,8 @@ impl SubmissionRing {
         }
     }
 
-    /// Release a cancel reservation whose enumeration ended without using it.
-    fn release_cancel(&self) {
+    /// Return one unspent reservation of any kind to the ring.
+    fn release_reservation(&self) {
         self.lock().reserved -= 1;
     }
 }
@@ -272,6 +310,16 @@ pub(crate) struct CancelSlot {
     _private: (),
 }
 
+/// A claimed slot for one enumeration's retirement report.
+///
+/// Lives in the registry entry rather than in a client handle, because the
+/// worker is what spends it. An entry removed before a worker reports -- by
+/// cancellation or abandonment -- still holds an unspent slot, which the
+/// servicer returns.
+pub(crate) struct RetireSlot {
+    _private: (),
+}
+
 /// A claimed slot for the session's one abandon message.
 pub(crate) struct AbandonSlot {
     _private: (),
@@ -285,7 +333,15 @@ pub(crate) struct AbandonSlot {
 /// back would keep the session alive past the last handle that should own it.
 /// The owner therefore returns the slot explicitly.
 pub(crate) fn release_cancel_slot(ring: &SubmissionRing, _slot: CancelSlot) {
-    ring.release_cancel();
+    ring.release_reservation();
+}
+
+/// Return an unspent retirement reservation to the ring.
+///
+/// Used when an enumeration is removed before its worker ever reported, which
+/// is what cancellation and abandonment do.
+pub(crate) fn release_retire_slot(ring: &SubmissionRing, _slot: RetireSlot) {
+    ring.release_reservation();
 }
 
 #[cfg(test)]

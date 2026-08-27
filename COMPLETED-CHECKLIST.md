@@ -842,3 +842,43 @@ and redundant servicing and draining.
 
 221 unit tests plus the crate doctest pass; targeted all-target Clippy and
 `cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration worker/servicer split
+
+### <a id="fe-7"></a>FE-7 -- Make the worker a reporter and the servicer the sole registry authority, and give the session something to run work on. *(completed 2026-08-27 19:56:15 UTC-04:00)*
+
+The session now owns two thread-pool objects rather than one: a servicer that
+stays responsive, and an engine created with a runs-long callback environment
+because any quantum may block on a directory query.
+[session.rs](crates/windows-file-enumeration-sys/src/session.rs) holds both in
+the shared state and hands them to the *last client handle* to release on its
+own thread, so no callback can ever hold the last reference to something whose
+release would wait on that callback.
+
+`EnumerationState::work` is gone. Runnability lives in a ready set inside
+[registry.rs](crates/windows-file-enumeration-sys/src/registry.rs), and
+`claim_next` is single-flight: an enumeration already held is skipped rather
+than run twice over the same buffer and cursor. Scheduling is idempotent and
+never queues a claimed enumeration underneath its worker.
+
+A worker now delivers its own terminal into the slot it reserved and reports
+retirement through the new `Retire` control message, which every accepted
+enumeration claims at admission alongside its cancellation -- raising
+`MINIMUM_SUBMISSION_CAPACITY` to four. Only the servicer removes an entry, and
+it returns any unspent cancellation or retirement reservation rather than
+leaking it. Abandonment now releases entries that own no thread-pool object, so
+receiver-drop teardown never waits on a directory query.
+
+The state-machine model gained `Claim`, `Report`, `RunEngine`, and `Schedule`
+operations plus twelve scenarios for the new control path: worker-reports-then-
+servicer-retires, a retire serviced after abandonment, a report whose
+enumeration is already gone, single-flight claiming, idempotent scheduling, a
+finished quantum outranking a concurrent cancellation, failed and cancelled
+quantum outcomes, park-and-resume through the ready set, and the minimum ring
+covering both reserved control messages.
+
+Three pre-existing tests were racing the live thread pool for work they also
+drove explicitly; they now use suppressed sessions, and the tests whose subject
+*is* the pool use live ones. 234 unit tests plus the crate doctest pass, stable
+across fifteen consecutive runs; targeted all-target Clippy and
+`cargo fmt --check` are clean.
