@@ -17,11 +17,12 @@
 //!   dispatch each notification to your handler.
 //! - [`generator`] -- a seeded generator of contract-legal schedules (chaos that
 //!   stays inside file-watcher's documented contract).
+//! - [`run`] / [`oracle`] -- drive a handler and detect a pathology (a panic, an
+//!   invariant violation, or -- via [`run_with_deadline`] -- a wedge).
 //! - [`example_handler`] -- a small, realistic handler used by the tests (and,
 //!   in later milestones, the `capture`/`replay` bins).
 //!
-//! Later milestones add oracles, JSON record/replay, and `capture`/`replay` bin
-//! tools.
+//! Later milestones add JSON record/replay and `capture`/`replay` bin tools.
 //!
 //! # Fidelity limit
 //!
@@ -40,6 +41,8 @@ pub mod generator;
 #[cfg(windows)]
 mod handler;
 #[cfg(windows)]
+pub mod oracle;
+#[cfg(windows)]
 pub mod schedule;
 
 #[cfg(windows)]
@@ -52,8 +55,14 @@ pub use generator::{Generator, GeneratorConfig, Rng};
 #[cfg(windows)]
 pub use handler::Handler;
 #[cfg(windows)]
+pub use oracle::{Outcome, PathologyKind, run, run_with_deadline};
+#[cfg(windows)]
 pub use schedule::{
     ChangeKindSpec, ChangeSpec, DesyncCauseSpec, FailureCodeSpec, FaultDetailSpec,
     FaultOperationSpec, NotificationSpec, OpenFailureSpec, OutcomeSpec, Schedule, VolumeSpec,
     WatchModeSpec,
 };
+// Re-exported so a handler author can name the type its `on` receives without a
+// separate `windows-file-watcher` import in their tests.
+#[cfg(windows)]
+pub use windows_file_watcher::Notification;

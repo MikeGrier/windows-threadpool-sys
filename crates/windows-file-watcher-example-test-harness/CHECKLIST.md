@@ -39,12 +39,12 @@ in-scope crate, sync with origin) is standard procedure and not listed.
 
 ## M3 -- Oracles
 
-- [ ] **M3.1** -- An `Outcome` (Healthy | Pathology { kind, at_step, .. }) and `run(&Schedule, &mut impl
+- [x] **M3.1** -- An `Outcome` (Healthy | Pathology { kind, at_step, .. }) and `run(&Schedule, &mut impl
   Handler) -> Outcome` that catches a handler panic (`catch_unwind` around dispatch -- legitimate here, the
   handler is consumer code, not an FFI callback), a failed `Handler::check`, and a stalled/never-consumed
   condition.
 
-- [ ] **M3.2** -- Unit test: a deliberately-buggy example handler trips each oracle.
+- [x] **M3.2** -- Unit test: a deliberately-buggy example handler trips each oracle.
 
 ## M4 -- Record / replay (JSON)
 
