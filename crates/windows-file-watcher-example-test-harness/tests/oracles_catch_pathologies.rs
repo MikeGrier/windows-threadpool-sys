@@ -62,7 +62,13 @@ struct HangsOnDesync;
 impl Handler for HangsOnDesync {
     fn on(&mut self, notification: &Notification) {
         if matches!(notification, Notification::Desync { .. }) {
-            std::thread::park();
+            // Looped: `park` is documented to return spuriously, and nothing
+            // ever unparks this thread, so a bare call could let the
+            // deliberately-wedged handler resume and report Healthy instead of
+            // Stalled -- a flake in the test that proves the wedge oracle works.
+            loop {
+                std::thread::park();
+            }
         }
     }
 }

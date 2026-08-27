@@ -923,9 +923,23 @@ When you add such a predicate, **verify the binding by sabotage**: change the de
 confirm the consumer's *behavior* changes. If only a test's expectation moves, or nothing moves,
 the binding is cosmetic and the copy is still there.
 
-Know the limit and state it rather than pretending otherwise: sequencing rules — ordering,
-bracket entry states, what may follow what — are not value-level and stay prose. Rules 2 and 3
-exist for them.
+Know the limit — but know that it is narrower than it first appears. **Sequencing rules
+(ordering, bracket entry states, what may follow what) are not value-level, and are still
+derivable**: define them once as a shared executable oracle — a state machine over the
+observable stream — and have the generator, the producing crate's own tests, and the consumer's
+test doubles all bind to that one definition. `windows-file-watcher`'s `ContractChecker` is the
+worked example; an earlier revision of this rule said such rules "stay prose", and building it
+disproved that. What cannot express them is the *type system*, not the codebase.
+
+Put the oracle in the crate that **owns** the contract, never in the consumer or the test
+harness — a harness-side copy is a second implementation again, which is the whole defect. And
+give as much care to what the oracle deliberately does *not* check: over-constraining is the
+same defect as under-specifying, so assert that it **accepts** the sequences that are legal but
+surprising, and say plainly which rules are unobservable from the stream rather than
+approximating them.
+
+The genuine residue for rules 2 and 3 is what no oracle can observe: facts about state the
+stream never carries.
 
 ### 2. Prose that contains code must compile
 

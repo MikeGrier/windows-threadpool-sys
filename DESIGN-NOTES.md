@@ -976,8 +976,17 @@ running the audit is what created several of the copies.
    facts that had drifted; the harness generator now *calls* the second rather than re-encoding it, which is
    [PLATFORM INTEGRITY](../.github/copilot-instructions.md) rule 2 applied to a contract rather than to an
    API. The test for this must be checked against a sabotaged definition: if changing the crate's rule does
-   not change the *consumer's behavior*, the binding is cosmetic. Limit, stated plainly: sequencing rules
-   (bracket ordering, entry states, terminality of a whole exchange) are not value-level and stay prose.
+   not change the *consumer's behavior*, the binding is cosmetic.
+
+   **Sequencing rules are derivable too, and this originally said otherwise.** The first version of this
+   section recorded that ordering, bracket entry states and terminality "are not value-level and stay
+   prose". That was wrong, and building `ContractChecker` (M3) disproved it: what cannot express such rules
+   is the *type system*, not the codebase. Define them once as a shared executable oracle -- a state machine
+   over the observable stream -- placed in the crate that **owns** the contract, and have the generator, the
+   crate's own tests, and consumers' test doubles all bind to it. Give equal care to what the oracle
+   deliberately does *not* check: over-constraining is the same defect as under-specifying. The genuine
+   residue is only what no oracle can observe -- facts about state the stream never carries, such as
+   whether a question is still outstanding when its answer travels a different queue.
 
 2. **Make the restatements compile.** Prose examples rot silently because nothing executes them.
    `windows-file-watcher`'s TESTING.md and README.md carried five Rust blocks that were never compiled --

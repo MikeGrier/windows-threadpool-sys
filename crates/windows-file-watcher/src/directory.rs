@@ -601,13 +601,19 @@ impl VolumeIdentity {
         self.volume_label.to_string_lossy()
     }
 
-    /// Build a synthetic identity that cannot match any real volume this
-    /// crate would ever read (M12.6's test seam: rigging a mismatch a real
+    /// Build a synthetic identity (M12.6's test seam: rigging a mismatch a real
     /// removable-media swap is not otherwise reproducible in an automated
     /// test). `volume_serial` is the only field that matters for the
     /// mismatch this seam exists to rig; the descriptive fields are for
     /// display only. Available to the crate's own tests and, via the public
     /// [`for_test`](Self::for_test) wrapper, under the `test-util` feature.
+    ///
+    /// **No uniqueness is promised.** Every `u32` is an accepted serial and
+    /// equality compares by serial alone, so a caller may pick a value that
+    /// collides with a real volume's. That is harmless for the seam's purpose
+    /// -- it rigs a comparison between two values the caller supplies -- but it
+    /// means a synthetic identity must not be treated as distinguishable from a
+    /// read one.
     #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn synthetic(volume_serial: u32, filesystem_name: &str, volume_label: &str) -> Self {
         Self {

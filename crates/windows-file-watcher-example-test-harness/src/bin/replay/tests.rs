@@ -6,8 +6,8 @@ use std::time::Duration;
 use windows_file_watcher_example_test_harness::{Outcome, PathologyKind};
 
 use super::{
-    DEFAULT_REPLAY_DEADLINE, MAX_REPLAY_DEADLINE, MIN_REPLAY_DEADLINE, Output, replay_deadline,
-    reproduces,
+    DEFAULT_REPLAY_DEADLINE, MAX_REPLAY_DEADLINE, MIN_REPLAY_DEADLINE, Output, Reproduction,
+    replay_deadline, reproduces,
 };
 
 /// An `Output` that discards everything, for tests that do not inspect it.
@@ -88,12 +88,34 @@ fn a_non_stall_outcome_uses_the_default_deadline() {
 }
 
 #[test]
-fn stalls_reproduce_regardless_of_deadline_but_other_outcomes_compare_exactly() {
-    // The deadline is the run's configuration, not something the handler did,
-    // so a clamped stall still reproduces the recorded one.
-    assert!(reproduces(&stalled(600_000), &stalled(300_000)));
+fn a_stall_replayed_for_at_least_as_long_is_confirmed() {
+    // Equal deadlines, and a replay that waited longer, both establish the
+    // recorded stall.
+    assert_eq!(
+        reproduces(&stalled(300_000), &stalled(300_000)),
+        Reproduction::Confirmed
+    );
+    assert_eq!(
+        reproduces(&stalled(1_000), &stalled(300_000)),
+        Reproduction::Confirmed
+    );
+}
 
-    // Everything else stays an exact comparison.
+#[test]
+fn a_stall_replayed_for_less_time_than_recorded_is_unverifiable() {
+    // The unsoundness this closes: a recording claiming a 600s stall, replayed
+    // under the 300s cap, only shows the handler exceeded 300s. It may well
+    // have finished before 600s, so the recording is not established. Calling
+    // that a reproduction would let any handler taking over 300s "confirm" an
+    // arbitrarily large recorded stall.
+    assert_eq!(
+        reproduces(&stalled(600_000), &stalled(300_000)),
+        Reproduction::Unverifiable
+    );
+}
+
+#[test]
+fn non_stall_outcomes_still_compare_exactly() {
     let a = Outcome::Pathology(PathologyKind::InvariantViolated {
         at_step: 1,
         reason: "x".to_string(),
@@ -102,7 +124,10 @@ fn stalls_reproduce_regardless_of_deadline_but_other_outcomes_compare_exactly() 
         at_step: 2,
         reason: "x".to_string(),
     });
-    assert!(reproduces(&a, &a));
-    assert!(!reproduces(&a, &b));
-    assert!(!reproduces(&Outcome::Healthy, &stalled(100)));
+    assert_eq!(reproduces(&a, &a), Reproduction::Confirmed);
+    assert_eq!(reproduces(&a, &b), Reproduction::Diverged);
+    assert_eq!(
+        reproduces(&Outcome::Healthy, &stalled(100)),
+        Reproduction::Diverged
+    );
 }

@@ -141,16 +141,30 @@ mod imp {
         let replayed = run_with_deadline(&recording.schedule, BuggyHandler::new(), deadline);
         output.report(&format!("replayed outcome: {replayed:?}"));
 
-        if reproduces(&recording.outcome, &replayed) {
-            output.report("reproduced: identical outcome.");
-            true
-        } else {
-            // A schedule-caused pathology (this bin's whole point) should always
-            // reproduce; divergence here would mean the harness's own
-            // determinism promise was broken, not a fidelity-limit case (that
-            // limit concerns a *handler's own* nondeterminism, not the harness).
-            output.diagnostic("NOT reproduced: outcome differs from the recording.");
-            false
+        match reproduces(&recording.outcome, &replayed) {
+            Reproduction::Confirmed => {
+                output.report("reproduced: identical outcome.");
+                true
+            }
+            Reproduction::Unverifiable => {
+                // Not a divergence and not a reproduction: the replay waited
+                // less long than the recording did, so it cannot establish the
+                // recorded stall either way.
+                output.diagnostic(
+                    "UNVERIFIABLE: the recorded deadline was clamped down, so this replay only \
+                     shows the handler exceeded the shorter deadline -- not that it would have \
+                     exceeded the recorded one. Re-record with a deadline within this bin's cap.",
+                );
+                false
+            }
+            Reproduction::Diverged => {
+                // A schedule-caused pathology (this bin's whole point) should
+                // always reproduce; divergence here would mean the harness's own
+                // determinism promise was broken, not a fidelity-limit case (that
+                // limit concerns a *handler's own* nondeterminism, not the harness).
+                output.diagnostic("NOT reproduced: outcome differs from the recording.");
+                false
+            }
         }
     }
 
@@ -181,22 +195,51 @@ mod imp {
         clamped
     }
 
-    /// Whether `replayed` reproduces `recorded`.
+    /// What a replay established about the recorded outcome.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Reproduction {
+        /// The replay confirms the recorded outcome.
+        Confirmed,
+        /// The replay is consistent with the recording but does not establish
+        /// it -- see [`reproduces`].
+        Unverifiable,
+        /// The replay produced a different outcome.
+        Diverged,
+    }
+
+    /// What `replayed` establishes about `recorded`.
     ///
-    /// Equality everywhere except `Stalled`, where the `deadline_ms` is the
-    /// run's *configuration* rather than anything the handler did. Clamping an
-    /// oversized recorded deadline (so an untrusted recording cannot hang this
-    /// process) necessarily changes that field, and comparing it exactly would
-    /// report every clamped stall as "NOT reproduced" even though the handler
-    /// wedged exactly as recorded. What reproduces is the wedge; the deadline is
-    /// only how long we waited before calling it one.
-    fn reproduces(recorded: &Outcome, replayed: &Outcome) -> bool {
+    /// Exact equality everywhere except `Stalled`, where `deadline_ms` is the
+    /// run's *configuration* rather than anything the handler did: comparing it
+    /// exactly would report a clamped stall as a divergence even though the
+    /// handler wedged exactly as recorded.
+    ///
+    /// The comparison is **one-directional**, which is the subtle part. A stall
+    /// only proves the handler exceeded the deadline it ran under, so a replay
+    /// establishes the recording *only when it waited at least as long*. Replay
+    /// under a shorter deadline -- which the `MAX_REPLAY_DEADLINE` clamp
+    /// produces for an oversized recording -- proves the handler exceeded the
+    /// shorter one, and says nothing about whether it would have finished before
+    /// the recorded one. Calling that a reproduction would let a recording
+    /// claiming a 600s stall be "confirmed" by a handler that merely took 300s.
+    fn reproduces(recorded: &Outcome, replayed: &Outcome) -> Reproduction {
         match (recorded, replayed) {
             (
-                Outcome::Pathology(PathologyKind::Stalled { .. }),
-                Outcome::Pathology(PathologyKind::Stalled { .. }),
-            ) => true,
-            _ => recorded == replayed,
+                Outcome::Pathology(PathologyKind::Stalled {
+                    deadline_ms: recorded_ms,
+                }),
+                Outcome::Pathology(PathologyKind::Stalled {
+                    deadline_ms: replayed_ms,
+                }),
+            ) => {
+                if replayed_ms >= recorded_ms {
+                    Reproduction::Confirmed
+                } else {
+                    Reproduction::Unverifiable
+                }
+            }
+            _ if recorded == replayed => Reproduction::Confirmed,
+            _ => Reproduction::Diverged,
         }
     }
 }
