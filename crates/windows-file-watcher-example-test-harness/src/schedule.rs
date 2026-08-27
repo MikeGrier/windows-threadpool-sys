@@ -82,25 +82,40 @@
 //! - **`Desync` is an in-stream barrier.** Everything before a `Desync` for a
 //!   watch is accounted for; nothing after it is (file-watcher D-12). A schedule
 //!   that models loss puts the `Desync` exactly at the drop point.
-//! - **A fault and its resolution are one unit; nothing else interleaves
-//!   inside it.** Entering a fault sends `Suspended` (liveness only);
-//!   resolving it always sends `Desync { Reestablished }` (file-watcher D-12:
+//! - **A fault and its resolution -- or its terminal outcome -- are one unit;
+//!   nothing else interleaves inside it.** Entering a fault sends `Suspended`
+//!   (liveness only). A fault against an already-established watch (this
+//!   bullet's scope; a not-yet-established watch's retryable open is the
+//!   separate case documented above) ends one of two ways: **successful
+//!   recovery** always sends `Desync { Reestablished }` (file-watcher D-12:
 //!   unconditional, never gated on liveness), then -- for a liveness watch,
-//!   and always together, never one without the other -- `Resumed` followed by
-//!   a fresh `Established` (file-watcher D-13/D-17/D-31). A watch that is
-//!   neither liveness nor interactive still legally sees the bare resolution
-//!   `Desync { Reestablished }` on a silent, autonomous recovery. No `Batch`,
-//!   and no second, overlapping fault, may appear between a `Suspended` (or,
-//!   for a non-liveness watch, the point a question is asked) and that
-//!   resolution -- the watch is not armed while faulted, so it cannot be
-//!   delivering data.
-//! - **A question, if any, is asked from inside that same bracket.** A
-//!   `RetryQuestion` or `VolumeChanged` is a question the client answers, and
-//!   it only ever arises from inside a fault (file-watcher's `enter_fault`) --
-//!   never on its own, and never without the resolution above eventually
-//!   following it. A watcher cannot fault twice concurrently, so a second
-//!   question for the same watch does not appear before the first resolves
-//!   (file-watcher D-28).
+//!   and always together, never one without the other -- `Resumed` followed
+//!   by a fresh `Established` (file-watcher D-13/D-17/D-31); or **permanent
+//!   failure to reopen** ends the watch instead with the terminal
+//!   `Desync { Stopped }` (`record_stop`, watcher.rs) and nothing further for
+//!   it. A watch that is neither liveness nor interactive still legally sees
+//!   the bare successful-recovery resolution `Desync { Reestablished }` on a
+//!   silent, autonomous recovery. No `Batch`, and no second, overlapping
+//!   fault, may appear between a `Suspended` (or, for a non-liveness watch,
+//!   the point a question is asked) and that resolution or terminal outcome
+//!   -- the watch is not armed while faulted, so it cannot be delivering
+//!   data.
+//! - **A question, if any, is asked from inside that same bracket -- but is
+//!   not always followed by a resolution.** A `RetryQuestion` or
+//!   `VolumeChanged` is a question the client answers, and it only ever
+//!   arises from inside a fault (file-watcher's `enter_fault`) -- never on
+//!   its own. For an already-established watch's fault (the bracket
+//!   documented immediately above), a question is always eventually followed
+//!   by that bracket's resolution or its `Desync { Stopped }` terminal
+//!   outcome. For a not-yet-established watch's retryable open, a further
+//!   retry attempt can ask *another* `RetryQuestion` with no resolution
+//!   between them (`monitor.rs`'s retry path), repeating until the watch
+//!   either establishes (`Established`/`Completion { Subscribed }`) or
+//!   permanently fails (`Completion { Failed }`, with no
+//!   `Desync { Reestablished }` ever, since nothing was ever established). A
+//!   watcher cannot fault twice concurrently, so a second question for the
+//!   same watch does not appear before the first resolves, retries, or
+//!   terminates (file-watcher D-28).
 //! - **Three forms are terminal for a watch, not only `Cancelled`.** After
 //!   `Completion { Cancelled }` (file-watcher D-30), `Completion { Failed }`
 //!   (an establishment-or-continuation failure -- not only a permanent open
