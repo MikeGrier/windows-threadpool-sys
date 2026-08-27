@@ -655,3 +655,51 @@ Fixed with a regression test that had no predecessor: no existing test called
 The transferable rule is recorded workspace-wide: an advisory predicate another
 subsystem's reliability gate depends on is not advisory, and must be tested in
 the condition that gate uses it under.
+
+### <a id="the-m143-predicate-sweep"></a>The M14.3 predicate sweep
+
+`has_room` was found by review rather than by looking, so nothing established it
+was the only one. M14.3 enumerated every predicate this crate exposes or consumes
+and asked the same question of each: **does its stated contract hold under the
+condition its caller actually uses it in?**
+
+| Predicate | Used by | On a reliability gate? | Verdict |
+|---|---|---|---|
+| `Sender::has_room` | `any_route_has_room` -> `arm_locked` | Yes -- [D-29](#d-29) backpressure | The original finding; accounts for the latch since `700e0eb` |
+| `Receiver::is_empty` / `len` | a client's own drain loop | Yes -- a drain loop is the client's liveness gate | **Defect. See below.** |
+| `Receiver::is_disconnected` | end-of-stream detection | Yes | Honest: `senders == 0` is exactly what it claims |
+| `Receiver::latched` / `capacity` | diagnostics | No | Informational, and correct |
+| `DirectoryWatcher::stop_reason().is_none()` | `route_established`, to discard a permanently-stopped watcher before coalescing onto it | Yes | Sound: read under the same `resident` lock as the insert that acts on it, so there is no window |
+| `DirectoryWatcher::is_faulted` | `route_established`, to suppress a tier report with no settled tier | Yes | Sound, same critical section |
+| `Session::is_open` / `Servicer::is_open` | advisory pre-check | No -- `submit` returns `Rejected` regardless | The right shape: the fallible *operation* is authoritative, the predicate is a courtesy |
+| `Monitor::is_registered` / `is_watching` / `is_running` | [D-31](#d-31) observability | No | Point-in-time snapshots by construction, and documented as such |
+| `OpenFailure::is_retryable` | [D-15](#d-15) classification | Yes | Pure function of a value; no timing dimension, so the shape cannot arise |
+
+**The defect: `Receiver::is_empty` is not "nothing to take".** It is `len() == 0`,
+and `len` deliberately excludes latched losses -- so a drained queue that still
+owes a `Desync { QueueFull }` reports itself empty while `recv` would still yield
+that report. The caller's actual question is the drain loop's, and
+`while !receiver.is_empty()` exits with a loss still owed.
+
+It is worse than a silent miss, because of [D-41](#d-41): the doorbell is signalled
+whenever the receiver has something to take, and "something to take" is
+deliberately *three* things -- a queued notification, an owed latched loss, and the
+end of the stream. A client that waits on the doorbell and then tests `is_empty`
+therefore **spins**: the event stays signalled because a loss is owed, and the
+predicate keeps saying there is nothing to collect. That is the `has_room` shape
+exactly -- a predicate consulted at a gate whose condition it does not model.
+
+The evidence it was already biting: **this crate's own tests never use `is_empty`
+alone.** They write `!receiver.is_empty() || receiver.latched() > 0`, and
+`receiver.is_disconnected() && receiver.is_empty() && receiver.latched() == 0`.
+Every internal call site that means "is there anything for me" reconstructs the
+conjunction by hand, which is the same signal `has_room` gave before it was fixed.
+
+The fix is to publish the predicate D-41 already defines internally rather than to
+redefine `is_empty` (whose `len() == 0` correspondence is a Rust-wide expectation
+and is not itself wrong): `Receiver::has_pending` *is* `State::pending`, the exact
+condition the doorbell is signalled on, so a client waiting on the doorbell now has
+a predicate that matches it. `is_empty` and `len` keep their meaning and gained the
+warning they lacked. Three regression tests cover the drained-with-a-loss-owed
+state, agreement with the doorbell at every step of that transition, and the
+disconnected-and-empty case -- none of which had a predecessor.

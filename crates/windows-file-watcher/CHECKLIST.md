@@ -152,10 +152,14 @@ reviewer happened to probe.
   not necessarily a watch's first notification; and the tier is re-resolved on every reopen, so it may
   differ between establishments. All three folded into the harness `schedule` docs.
 
-- [ ] **M14.3** -- Sweep for the [`has_room`](DESIGN-NOTES.md#the-has_room-finding-in-this-crate) shape:
+- [x] **M14.3** -- Sweep for the [`has_room`](DESIGN-NOTES.md#the-has_room-finding-in-this-crate) shape:
   every advisory predicate this crate exposes or consumes on a reliability path, checked for whether its
   stated contract holds under the condition its caller actually uses it in, with a test in that condition.
-  `has_room` was found by review rather than by looking; nothing establishes it was the only one.
+  `has_room` was found by review rather than by looking; nothing establishes it was the only one. Done: see
+  [The M14.3 predicate sweep](DESIGN-NOTES.md#the-m143-predicate-sweep). Nine predicates swept, one defect
+  found -- `Receiver::is_empty` excludes owed latched losses and the end of the stream, so a client that
+  waits on the doorbell (signalled on all three, D-41) and then tests it spins without ever collecting the
+  loss report. `Receiver::has_pending` now publishes D-41's own predicate; three regression tests added.
 
 ## M-inf -- Horizon (ungated, post-v1)
 

@@ -1000,15 +1000,50 @@ impl Receiver {
     ///
     /// Excludes latched losses, which are not queued -- that is the point of the
     /// latch. [`Receiver::latched`] counts those.
+    ///
+    /// **This is not "how much is there to take".** A drained queue with a loss
+    /// still owed reports `0` here while [`Receiver::recv`] would still yield a
+    /// synthesised `Desync { QueueFull }`. Use [`Receiver::has_pending`] to ask
+    /// whether anything is collectable.
     #[must_use]
     pub fn len(&self) -> usize {
         lock(&self.shared.items).queue.len()
     }
 
     /// Whether nothing is queued right now.
+    ///
+    /// **Not the same as "nothing to collect"**, and the difference is a live
+    /// hazard rather than a nicety: this excludes owed latched losses and the
+    /// end of the stream, both of which [`Receiver::recv`] still reports. A
+    /// drain loop written as `while !receiver.is_empty()` therefore exits with a
+    /// `Desync { QueueFull }` still owed -- and, because the doorbell stays
+    /// signalled while a loss is owed (D-41), a client that waits on the
+    /// doorbell and then tests this spins without ever collecting the report it
+    /// was woken for. Use [`Receiver::has_pending`], which is the predicate the
+    /// doorbell is actually signalled on.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Whether a [`Receiver::recv`] would produce something rather than block.
+    ///
+    /// This is *the* predicate the doorbell is signalled on (D-41), so it is the
+    /// one to test after a doorbell wait. "Something to take" is deliberately
+    /// three things, not one:
+    ///
+    /// - a queued notification ([`Receiver::len`]);
+    /// - an **owed latched loss** ([`Receiver::latched`]) -- not in the queue,
+    ///   but still collectable, and synthesised on demand (D-39);
+    /// - the **end of the stream** ([`Receiver::is_disconnected`]) -- a client
+    ///   must learn the stream ended rather than wait for a notification
+    ///   nothing can send.
+    ///
+    /// Prefer this over [`Receiver::is_empty`] anywhere the question is "is
+    /// there anything for me?" rather than "how deep is the queue?".
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        lock(&self.shared.items).pending()
     }
 
     /// How many subscriptions are owed a `Desync { QueueFull }`.

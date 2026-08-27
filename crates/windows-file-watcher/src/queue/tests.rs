@@ -1256,3 +1256,88 @@ fn a_client_can_drain_from_its_own_threadpool_wait() {
     let expected: Vec<String> = (0..64).map(|index| format!("f-{index}")).collect();
     assert_eq!(seen, expected);
 }
+
+// --- has_pending: the predicate the doorbell is signalled on (D-41, M14.3) ---
+
+#[test]
+fn a_drained_queue_with_a_loss_owed_is_empty_but_still_has_something_to_take() {
+    // The `has_room` shape (workspace DESIGN-NOTES): a predicate must hold in
+    // the condition its caller actually uses it in. `is_empty` answers "how
+    // deep is the queue", which is not the question a drain loop asks.
+    let (sender, receiver) = bounded(1);
+    let watch = WatchId::from_raw(77);
+    deliver(&sender, batch(watch, &["queued.txt"]));
+    assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
+
+    assert_eq!(
+        names(&receiver.recv().expect("the queued batch")),
+        vec!["queued.txt"]
+    );
+
+    // Drained, but a loss is still owed.
+    assert!(receiver.is_empty(), "nothing is *queued*");
+    assert_eq!(receiver.len(), 0);
+    assert_eq!(receiver.latched(), 1, "but a loss is owed");
+    assert!(
+        receiver.has_pending(),
+        "so there is still something to take -- what `is_empty` cannot say"
+    );
+
+    assert!(matches!(
+        receiver.recv().expect("the synthesised loss report"),
+        Notification::Desync {
+            cause: DesyncCause::QueueFull,
+            ..
+        }
+    ));
+    assert!(!receiver.has_pending(), "now genuinely drained");
+}
+
+#[test]
+fn has_pending_tracks_the_doorbell_exactly_through_a_latched_loss() {
+    // D-41's invariant is that the event is signalled exactly when the receiver
+    // has something to take. `has_pending` is that same predicate made public,
+    // so the two must agree at every step -- including the drained-with-a-loss-
+    // owed state, which is where a client that waits on the doorbell and then
+    // tests `is_empty` would spin without ever collecting the report.
+    let (sender, receiver) = bounded(1);
+    let watch = WatchId::from_raw(78);
+    let doorbell = receiver.doorbell().expect("a doorbell");
+
+    assert_eq!(receiver.has_pending(), is_signalled(doorbell));
+    assert!(!receiver.has_pending());
+
+    deliver(&sender, batch(watch, &["queued.txt"]));
+    assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
+    assert_eq!(receiver.has_pending(), is_signalled(doorbell));
+
+    receiver.recv().expect("the queued batch");
+    assert_eq!(
+        receiver.has_pending(),
+        is_signalled(doorbell),
+        "still agreed while only a latched loss remains"
+    );
+    assert!(is_signalled(doorbell), "the doorbell is still ringing");
+    assert!(receiver.is_empty(), "yet the queue reports itself empty");
+
+    receiver.recv().expect("the loss report");
+    assert_eq!(receiver.has_pending(), is_signalled(doorbell));
+    assert!(!is_signalled(doorbell), "and only now does it stop");
+}
+
+#[test]
+fn a_disconnected_empty_queue_still_has_something_to_take() {
+    // The third arm of "something to take": the end of the stream. A client
+    // must learn the stream ended rather than wait for what cannot arrive.
+    let (sender, receiver) = channel();
+    assert!(!receiver.has_pending());
+    drop(sender);
+
+    assert!(receiver.is_empty());
+    assert_eq!(receiver.latched(), 0);
+    assert!(
+        receiver.has_pending(),
+        "disconnection is collectable: recv returns None rather than blocking"
+    );
+    assert!(receiver.recv().is_none());
+}
