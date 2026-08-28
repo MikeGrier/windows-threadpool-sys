@@ -37,16 +37,21 @@
 //! false".
 
 use std::ffi::c_void;
-use std::os::windows::io::AsRawHandle;
+use std::io::Write;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, S_OK};
 use windows_sys::Win32::Storage::FileSystem::{
     BuildIoRingReadFile, BuildIoRingRegisterFileHandles, CloseIoRing, CreateIoRing, HIORING,
     IORING_BUFFER_REF, IORING_BUFFER_REF_0, IORING_CQE, IORING_CREATE_FLAGS, IORING_HANDLE_REF,
     IORING_HANDLE_REF_0, IORING_REF_RAW, IORING_REF_REGISTERED, IORING_VERSION_3,
     PopIoRingCompletion, SubmitIoRing,
+};
+use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OVERLAPPED, PIPE_ACCESS_INBOUND};
+use windows_sys::Win32::System::Pipes::{
+    CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 
 /// How long a submit may wait for its completions.
@@ -61,6 +66,13 @@ pub(crate) const FILL: u8 = 0xAB;
 
 /// How large each fixture is, and how much each probe read asks for.
 pub(crate) const FIXTURE_LEN: usize = 4096;
+
+/// How much the thread-agnosticism probe's read asks for.
+///
+/// Sized on its own rather than sharing [`FIXTURE_LEN`] because this probe is
+/// the one that needs the read to still be outstanding when its submitting
+/// thread ends -- see `measure_thread_agnosticism`.
+pub(crate) const READ_LEN: u32 = 512;
 
 /// Whether this host can answer these questions at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,12 +132,28 @@ impl Ring {
     }
 
     /// Pops one completion, or `None` when the queue is empty.
+    ///
+    /// # Why this tests for `S_OK` rather than for success
+    ///
+    /// `PopIoRingCompletion` reports an **empty queue** with `S_FALSE`, which
+    /// is a success code. Testing `>= 0`, the usual shape for an `HRESULT`,
+    /// therefore treats "there was nothing to pop" as "here is a completion"
+    /// and hands back the zeroed `IORING_CQE` the call left untouched -- whose
+    /// `ResultCode` field is `0`, and so reads as a *successful operation*.
+    ///
+    /// That is not a hypothetical. This probe module previously reported that
+    /// an `IoRing` operation survives its submitting thread on the strength of
+    /// exactly such a phantom completion: the queue was empty, `pop` returned
+    /// a zeroed CQE, and the probe read `ResultCode == 0` as success. The
+    /// finding was recorded in DESIGN-NOTES.md before the confusion was found.
+    /// A probe that cannot tell an empty queue from a successful operation
+    /// cannot measure anything.
     pub(crate) fn pop(&self) -> Option<IORING_CQE> {
         let mut cqe = unsafe { std::mem::zeroed::<IORING_CQE>() };
         // SAFETY: the ring is live and `cqe` is writable.
         let popped = unsafe { PopIoRingCompletion(self.0, &raw mut cqe) };
 
-        (popped >= 0).then_some(cqe)
+        (popped == S_OK).then_some(cqe)
     }
 }
 
@@ -189,6 +217,86 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// A pipe with nothing in it yet, and the writer that can fill it.
+///
+/// The thread-agnosticism probe needs an operation that is genuinely still
+/// outstanding when its submitting thread ends. A read of a small cached temp
+/// file is not: measured on this workspace's hardware, it completed inside
+/// `SubmitIoRing` on 8 runs out of 8, so the operation had already finished
+/// before the submitter returned and the run was evidence of nothing. That is
+/// why the earlier version of this probe could not fail.
+///
+/// A pipe with nothing written to it cannot complete until we choose to write,
+/// so the pending state is *controlled* rather than hoped for, and the probe
+/// can distinguish "the IRP survived its submitter" from "the IRP was already
+/// finished".
+pub(crate) struct PipePair {
+    /// The read end, opened for overlapped use so the read can go pending.
+    server: OwnedHandle,
+    /// The write end. Writing here is what lets the pending read complete.
+    client: std::fs::File,
+}
+
+impl PipePair {
+    pub(crate) fn new(label: &str) -> Self {
+        // Unique per instance for the same reason `Fixture` is: two probes
+        // running concurrently must not collide on a name, or one would
+        // observe the other's pipe and report a platform behaviour that was
+        // really a fixture collision.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+        let name = format!(
+            r"\\.\pipe\windows-platform-probes-{}-{label}-{unique}",
+            std::process::id()
+        );
+        let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+
+        // SAFETY: `wide` is NUL-terminated and every other argument is a plain
+        // value; a null security descriptor requests the default.
+        let raw = unsafe {
+            CreateNamedPipeW(
+                wide.as_ptr(),
+                PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                READ_LEN,
+                READ_LEN,
+                0,
+                std::ptr::null(),
+            )
+        };
+        assert!(
+            !raw.is_null() && raw != INVALID_HANDLE_VALUE,
+            "create the probe pipe"
+        );
+
+        // SAFETY: `raw` is a fresh, valid handle this type now owns solely.
+        let server = unsafe { OwnedHandle::from_raw_handle(raw.cast()) };
+
+        // Opening the client end is what connects it, so no ConnectNamedPipe
+        // is needed.
+        let client = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&name)
+            .expect("connect to the probe pipe");
+
+        Self { server, client }
+    }
+
+    /// The read end, for handing to a Win32 call.
+    pub(crate) fn server_handle(&self) -> *mut c_void {
+        self.server.as_raw_handle().cast::<c_void>()
+    }
+
+    /// Fills the pipe, letting a pending read complete.
+    pub(crate) fn fill(&mut self) {
+        self.client
+            .write_all(&vec![FILL; READ_LEN as usize])
+            .expect("write to the probe pipe");
+        self.client.flush().expect("flush the probe pipe");
     }
 }
 
@@ -377,19 +485,41 @@ pub fn measure_registration() -> IoRingSupport<RegistrationObservation> {
 }
 
 /// What the thread-agnosticism probe observed.
+///
+/// The interesting field is [`pending_at_submitter_exit`]. That the submitter
+/// exited is not worth recording -- the probe joins it, so it is true by
+/// construction. What decides whether the run measured anything is whether the
+/// operation was still *outstanding* at that moment: an operation that had
+/// already completed inside `SubmitIoRing` would be collected afterwards no
+/// matter how thread-affine the platform were, and such a run is evidence of
+/// nothing.
+///
+/// [`pending_at_submitter_exit`]: Self::pending_at_submitter_exit
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThreadAgnosticism {
-    /// The submitting thread had exited before the completion was collected.
-    pub submitter_exited: bool,
+    /// The operation was still outstanding when its submitting thread ended.
+    ///
+    /// Observed from the submitting thread itself, immediately before it
+    /// returns, by checking that no completion is available yet.
+    pub pending_at_submitter_exit: bool,
     /// The operation's result code.
     pub result_code: i32,
+    /// The read actually transferred the fixture's fill byte.
+    ///
+    /// A success code alone would also be reported by a read that transferred
+    /// nothing, leaving the caller inspecting the zero-filled buffer it
+    /// allocated.
+    pub filled: bool,
 }
 
 impl ThreadAgnosticism {
     /// An operation outlived the thread that submitted it.
+    ///
+    /// False when the operation completed before its submitter ended, because
+    /// then nothing outlived anything.
     #[must_use]
     pub fn survives_submitter_exit(self) -> bool {
-        self.submitter_exited && self.result_code >= 0
+        self.pending_at_submitter_exit && self.result_code >= 0 && self.filled
     }
 }
 
@@ -405,14 +535,15 @@ pub fn measure_thread_agnosticism() -> IoRingSupport<ThreadAgnosticism> {
         return IoRingSupport::Unavailable;
     };
 
-    let fixture = Fixture::new("thread-agnostic");
-    let file = fixture.open();
-    let mut buffer = vec![0_u8; 512];
+    // A pipe rather than a file, so the read is still outstanding when the
+    // submitter ends -- see `PipePair`.
+    let mut pipe = PipePair::new("thread-agnostic");
+    let mut buffer = vec![0_u8; READ_LEN as usize];
 
     /// The handle and buffer address the submitting thread needs.
     ///
     /// Raw pointers are not `Send`, and rightly so in general -- but these two
-    /// point at a file and a buffer this function owns for the whole span
+    /// point at a pipe and a buffer this function owns for the whole span
     /// including the join, so they outlive every use on the other thread.
     struct Borrowed {
         handle: *mut c_void,
@@ -424,13 +555,13 @@ pub fn measure_thread_agnosticism() -> IoRingSupport<ThreadAgnosticism> {
     unsafe impl Send for Borrowed {}
 
     let borrowed = Borrowed {
-        handle: file.as_raw_handle().cast::<c_void>(),
+        handle: pipe.server_handle(),
         address: buffer.as_mut_ptr().cast::<c_void>(),
     };
 
-    // Build and submit on a thread that then exits. `file` and `buffer` stay
+    // Build and submit on a thread that then exits. `pipe` and `buffer` stay
     // owned here, so they outlive the operation regardless.
-    let ring = std::thread::spawn(move || {
+    let (ring, early) = std::thread::spawn(move || {
         let borrowed = borrowed;
         let file_ref = IORING_HANDLE_REF {
             Kind: IORING_REF_RAW,
@@ -445,29 +576,54 @@ pub fn measure_thread_agnosticism() -> IoRingSupport<ThreadAgnosticism> {
             },
         };
 
-        // SAFETY: the ring is live; the handle and buffer are owned by the
+        // SAFETY: the ring is live; the pipe and buffer are owned by the
         // caller across the join below, so both outlive the operation.
-        let built = unsafe { BuildIoRingReadFile(ring.0, file_ref, buffer_ref, 512, 0, 0, 0) };
+        let built = unsafe { BuildIoRingReadFile(ring.0, file_ref, buffer_ref, READ_LEN, 0, 0, 0) };
         assert!(built >= 0, "build the read");
         assert!(ring.submit_and_wait(0) >= 0, "submit the read");
 
-        ring
+        // Whether the operation is still outstanding, observed here rather
+        // than inferred: this is the submitting thread, and it has not
+        // returned yet. `pop` consumes a completion when one is ready, so the
+        // result is carried out rather than discarded -- dropping it would
+        // leave the collector below waiting for a completion already taken.
+        let early = ring.pop();
+
+        (ring, early)
     })
     .join()
     .expect("the submitter did not panic");
 
-    // The submitting thread is gone; the completion is collected here.
-    let mut completion = None;
-    while completion.is_none() {
-        completion = ring.pop();
-    }
-    let result_code = completion.expect("a completion was popped").ResultCode;
+    // The submitting thread is gone. A completion popped above would mean the
+    // operation did not outlive it; with a pipe that had nothing written to it
+    // yet, that must not happen, and the field records it either way.
+    let pending_at_submitter_exit = early.is_none();
+
+    // Only now does the read become completable -- after its submitter is
+    // gone. This is the measurement: if the platform cancelled the IRP at
+    // thread exit, no completion arrives, or it arrives failed.
+    pipe.fill();
+
+    let completion = early.unwrap_or_else(|| {
+        let mut completion = None;
+        while completion.is_none() {
+            completion = ring.pop();
+        }
+        completion.expect("a completion was popped")
+    });
+
+    // A success code alone is not enough: a read that reported success without
+    // transferring the fill byte would pass on the zero-filled buffer it never
+    // read into, which is the mistake the first completion-port probe made.
+    let transferred = completion.Information;
+    let filled = transferred > 0 && buffer[..transferred].iter().all(|byte| *byte == FILL);
 
     drop(buffer);
-    drop(file);
+    drop(pipe);
 
     IoRingSupport::Measured(ThreadAgnosticism {
-        submitter_exited: true,
-        result_code,
+        pending_at_submitter_exit,
+        result_code: completion.ResultCode,
+        filled,
     })
 }

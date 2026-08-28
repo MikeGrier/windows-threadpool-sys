@@ -204,6 +204,73 @@ open handles -- and a probe reporting a fixture failure *looks like the platform
 refusing something*, which is the worst possible failure mode for a measurement.
 The path now carries a per-instance counter.
 
+## The thread-agnosticism probe measured nothing, twice over
+
+Found by the M24-M27 code review, and worse than the review reported. The
+finding itself survives re-measurement -- an `IoRing` operation really does
+outlive the thread that submitted it -- but neither of the reasons the original
+probe gave for believing it was sound.
+
+### `PopIoRingCompletion` reports an empty queue with a success code
+
+`PopIoRingCompletion` returns `S_FALSE` when the completion queue is empty.
+`S_FALSE` is `1`: a *success* `HRESULT`. The probe's `pop` tested `hr >= 0`,
+the usual shape for an `HRESULT`, so an empty queue was indistinguishable from
+a popped completion -- and the value handed back was the zeroed `IORING_CQE`
+the call had left untouched, whose `ResultCode` field is `0` and therefore
+reads as **a successful operation**.
+
+So the probe submitted a read, immediately popped a phantom completion, read
+`ResultCode == 0`, and reported success. It would have reported exactly that
+without a ring doing any work at all. Measured directly:
+`PopIoRingCompletion` on an empty ring returns `0x00000001` with
+`ResultCode=0x00000000, Information=0`.
+
+`pop` now tests `hr == S_OK`.
+
+### The read had already completed anyway
+
+Independently, the probe read 512 bytes from a small cached temp file. Measured
+on this workspace's hardware, that read completed *inside* `SubmitIoRing` on 8
+runs out of 8, so the operation was already finished before the submitting
+thread returned. Even with a correct `pop`, such a run says nothing about
+thread affinity: a completed operation is collected afterwards however
+thread-affine the platform is.
+
+The probe now reads from a **pipe with nothing written to it**, which cannot
+complete until the probe chooses to write. The sequence is: submit; confirm
+from the submitting thread itself that no completion is available; let that
+thread exit; only then write. The pending state is controlled rather than
+hoped for.
+
+`submitter_exited` -- which was a hard-coded `true`, making the test's own
+guard `assert!(true)` -- is replaced by `pending_at_submitter_exit`, which is
+observed. That the submitter exited was never worth recording: the probe joins
+it, so it is true by construction.
+
+### Re-measured, the finding holds
+
+With both faults fixed: `pending_at_submitter_exit=true`, `result_code=0`,
+and the fill byte actually transferred, on 8 runs out of 8. Sabotaged (by
+filling the pipe *before* submitting, so the read can complete early) the
+probe reports `pending_at_submitter_exit=false` and the test fails -- so the
+new guard is load-bearing rather than decorative.
+
+### The cost of not consulting our own crate
+
+This module calls Win32 directly rather than using `windows-ioring-sys`, on
+the deliberate ground that probing through that crate's safe API would confirm
+our own belief by consulting it. That decision is still right, and this is the
+price of it: `windows-ioring-sys` had already got `S_FALSE` right
+([ring.rs](../windows-ioring-sys/src/ring.rs), `try_pop`) *and* recorded it in
+its own [DESIGN-NOTES.md](../windows-ioring-sys/DESIGN-NOTES.md), and the
+duplicated `pop` here got it wrong regardless.
+
+The lesson is not "consult the crate" -- that would reintroduce the
+circularity. It is that a probe re-implementing a primitive owes that
+primitive the same scrutiny as the platform behaviour it is measuring, because
+a defect in the re-implementation is indistinguishable from a platform finding.
+
 ## The x64 comparison: no finding is architecture-dependent
 
 <a id="d-x64"></a>
@@ -232,12 +299,20 @@ Measured on the two hosts:
 | a worker's critical-error handler | enabled | identical | yes |
 | impersonation changes the device map | letter resolves in our session, not anonymous | identical | yes |
 | `IoRing` registration | replaces the table | identical | yes |
-| `IoRing` thread agnosticism | survives its submitter | identical | yes |
+| `IoRing` thread agnosticism | survives its submitter | identical | **evidence void, see below** |
 | IOCP association vs `IoRing` | forecloses, `0x80070057` | identical | yes |
 | `CreateThreadpoolIo` vs `IoRing` | forecloses the same way | identical | yes |
 
 **Every qualitative finding held.** Nothing in this workspace's designs rests on
 an ARM64 peculiarity.
+
+One row above is marked **evidence void**. The thread-agnosticism probe was
+measuring nothing on *either* architecture when this comparison was run, for
+the two reasons given in the section above, so "identical" recorded only that
+both architectures produced the same phantom completion. The finding was
+re-measured with a corrected probe and holds; what that row cannot claim is
+that the original comparison established it. Rewriting the row to say it did
+would be the kind of tidy history this file exists to prevent.
 
 ### The magnitudes differ, within noise, and the shape is what was asserted
 

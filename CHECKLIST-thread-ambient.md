@@ -549,7 +549,7 @@ a vacuous probe does not merely fail to inform, it launders an unmeasured claim 
 and from there into the design. Two defects of exactly this shape were already found and fixed
 during M25 and M27, so treat this as a recurring class rather than a set of isolated slips.
 
-- [ ] **M28.1** -- Make `submitter_exited` an observation rather than a literal.
+- [x] **M28.1** -- Make `submitter_exited` an observation rather than a literal.
   `measure_thread_agnosticism` hard-codes `submitter_exited: true`
   ([ioring.rs](crates/windows-platform-probes/src/ioring.rs) `:470`), so the test's guard
   "the submitting thread must really be gone, or the probe measures nothing" is `assert!(true)`.

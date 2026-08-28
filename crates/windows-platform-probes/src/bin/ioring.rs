@@ -47,9 +47,14 @@ fn main() {
         IoRingSupport::Unavailable => println!("  (no ring)"),
         IoRingSupport::Measured(observed) => {
             println!(
-                "  submitter exited: {} | result code: {:#010x}",
-                observed.submitter_exited, observed.result_code
+                "  pending at submitter exit: {} | result code: {:#010x} | \
+                 transferred the fill byte: {}",
+                observed.pending_at_submitter_exit, observed.result_code, observed.filled
             );
+            if !observed.pending_at_submitter_exit {
+                println!("  -> the read had ALREADY completed, so this run measured");
+                println!("     nothing about thread affinity either way.");
+            }
             if observed.survives_submitter_exit() {
                 println!("  -> an operation OUTLIVES the thread that submitted it, so a");
                 println!("     design whose threads are transient by construction is safe.");

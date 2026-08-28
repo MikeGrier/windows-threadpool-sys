@@ -413,13 +413,20 @@ fn an_ioring_operation_outlives_the_thread_that_submitted_it() {
         return;
     };
 
+    // The premise, checked rather than assumed: the read must still have been
+    // outstanding when its submitter ended. An operation that had already
+    // completed would be collected afterwards however thread-affine the
+    // platform were, so a run without this establishes nothing. The probe uses
+    // a pipe with nothing written to it precisely so this cannot be false.
     assert!(
-        observed.submitter_exited,
-        "the submitting thread must really be gone, or the probe measures nothing"
+        observed.pending_at_submitter_exit,
+        "the read must still be outstanding at submitter exit, or the probe \
+         measures nothing: {observed:?}"
     );
     assert!(
         observed.survives_submitter_exit(),
-        "the operation must complete after its submitter exited: {observed:?}"
+        "the operation must complete, and transfer real bytes, after its \
+         submitter exited: {observed:?}"
     );
 }
 
