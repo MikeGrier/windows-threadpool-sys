@@ -411,11 +411,11 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   entry the audit identified as having the strongest offload evidence, since Globazog performs it on its
   submitting thread today.
 
-- [ ] **M26.4** -- The `GetVolumeInformationByHandleW` entry, returning volume label, serial, and
+- [x] **M26.4** -- The `GetVolumeInformationByHandleW` entry, returning volume label, serial, and
   filesystem name. Handle-based; the path-based `GetVolumeInformationW` is deliberately not in round one
   because no audited consumer calls it.
 
-- [ ] **M26.5** -- The `GetFullPathNameW` entry. Lexical only: it resolves relative components and `.`/`..`
+- [x] **M26.5** -- The `GetFullPathNameW` entry. Lexical only: it resolves relative components and `.`/`..`
   and never expands a drive letter, so it does **not** close the session-relative hazard from M20.1, and
   its documentation must say which problem it solves and which it leaves standing.
 
