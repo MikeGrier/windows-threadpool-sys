@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::ERROR_NO_TOKEN;
 
+use crate::completion_port::measure as measure_completion_port;
 use crate::device_map::{free_drive_letter, measure_with_subst};
 use crate::ioring::{measure_registration, measure_thread_agnosticism};
 use crate::pool_growth::{measure_growth, measure_raise_while_saturated};
@@ -419,5 +420,95 @@ fn an_ioring_operation_outlives_the_thread_that_submitted_it() {
     assert!(
         observed.survives_submitter_exit(),
         "the operation must complete after its submitter exited: {observed:?}"
+    );
+}
+
+// -- completion-port fork (Probe D) --------------------------------------
+
+#[test]
+#[ignore = "needs a recent Windows build with IoRing; environment-dependent"]
+fn iocp_association_forecloses_ioring_use_of_the_same_handle() {
+    // The evidence for windows-namespace-request-sys returning an opened handle
+    // plain and unassociated: the association is irreversible, so making it on
+    // a caller's behalf silently removes a capability.
+    let Some(finding) = measure_completion_port().measured() else {
+        return;
+    };
+
+    assert!(
+        finding.is_valid(),
+        "the controls must hold first, or the probe is broken rather than the \
+         platform answering: {finding:?}"
+    );
+    assert!(
+        finding.association_forecloses_ioring(),
+        "association must foreclose the ring path: {finding:?}"
+    );
+}
+
+#[test]
+#[ignore = "needs a recent Windows build with IoRing; environment-dependent"]
+fn the_associated_handle_is_still_healthy_through_its_port() {
+    // The control that makes the finding precise. Without it, "the ring read
+    // failed" could mean the handle was broken outright rather than the ring
+    // path specifically being refused -- a materially different claim.
+    let Some(finding) = measure_completion_port().measured() else {
+        return;
+    };
+
+    assert!(
+        finding.port_still_works,
+        "the associated handle must still complete through the port: {finding:?}"
+    );
+}
+
+#[test]
+#[ignore = "needs a recent Windows build with IoRing; environment-dependent"]
+fn a_failed_ring_read_is_judged_on_more_than_where_the_completion_arrived() {
+    // The regression this probe exists because of. The first version declared
+    // COEXIST on seeing a completion arrive on the ring, while its result code
+    // was ERROR_INVALID_PARAMETER and its byte count zero -- it checked *where*
+    // the completion landed rather than *whether the operation succeeded*.
+    //
+    // This pins that a refused read is refused on every field, so the same
+    // mistake cannot be made again without failing here.
+    let Some(finding) = measure_completion_port().measured() else {
+        return;
+    };
+
+    let refused = finding.after_iocp_association;
+    assert!(
+        !refused.succeeded(),
+        "the read must be refused: {refused:?}"
+    );
+    assert!(
+        refused.result_code < 0,
+        "and refused by its result code, not merely by its payload: {refused:?}"
+    );
+    assert_eq!(refused.bytes, 0, "with no bytes transferred: {refused:?}");
+    assert_eq!(
+        refused.first_byte, 0,
+        "and nothing landed in the buffer -- which a zero-filled fixture could \
+         not have distinguished, hence the non-zero fill byte: {refused:?}"
+    );
+}
+
+#[test]
+#[ignore = "needs a recent Windows build with IoRing; environment-dependent"]
+fn create_threadpool_io_forecloses_ioring_the_same_way() {
+    // Measured rather than assumed to follow from the raw-IOCP case, because
+    // CreateThreadpoolIo is the path this workspace actually uses -- so the
+    // consequence lands on windows-threadpool-sys's own users.
+    let Some(finding) = measure_completion_port().measured() else {
+        return;
+    };
+
+    assert!(
+        finding.before_threadpool_io.succeeded(),
+        "the before-case must pass, or the after-case proves nothing: {finding:?}"
+    );
+    assert!(
+        finding.threadpool_io_forecloses_ioring(),
+        "CreateThreadpoolIo must foreclose the ring path too: {finding:?}"
     );
 }

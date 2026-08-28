@@ -42,9 +42,21 @@ choose what an opened handle is for.
 
 So an opened handle comes back **plain and unassociated**. Associating a handle
 with a completion port -- including via `CreateThreadpoolIo` -- permanently
-prevents `IoRing` use of it, measured, and the choice must be made before
-association by a layer that knows the destination. An entry that associated on
-the caller's behalf would foreclose a fork it has no standing to decide.
+prevents `IoRing` use of it, and the choice must be made before association by a
+layer that knows the destination. An entry that associated on the caller's
+behalf would foreclose a fork it has no standing to decide.
+
+That is measured, and the measurement is now executable rather than a claim in
+prose: see
+[windows-platform-probes](../windows-platform-probes/DESIGN-NOTES.md) ->
+`d-completion-port`, and `cargo run -p windows-platform-probes --bin
+probe-completion-port`. Worth knowing how close it came to being recorded
+backwards -- the first version of that probe concluded the *opposite*, because
+it checked where the completion arrived rather than whether the operation
+succeeded, and so read a refusal (`ERROR_INVALID_PARAMETER`, zero bytes) as a
+success. The corrected probe judges a read on its result code, its byte count,
+and the bytes it actually landed, and carries the negative controls that make a
+failure attributable.
 
 "Faithfully" also constrains how an entry reports failure -- the raw code
 preserved unaltered, and snapshotted before any cleanup can overwrite it. That

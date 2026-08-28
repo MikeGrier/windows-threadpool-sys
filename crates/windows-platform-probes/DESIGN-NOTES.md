@@ -145,3 +145,61 @@ pinned to them would fail on the next machine for no useful reason. The *shape*
 is what survives a change of host, so the test asserts that there is a burst
 followed by a visibly slower regime, and `probe-pool-growth` prints the
 magnitudes for a human to read.
+
+## The completion-port fork: two probes disagreed, and the corrected one was right
+
+<a id="d-completion-port"></a>
+
+M27.6 was split out of the migration because the original Probe D exists in two
+versions that reach opposite conclusions. Settling it was measurement work, not
+a port, and the result is worth recording in full because a shipped decision
+rests on it.
+
+The first version declared **COEXIST** on seeing a completion arrive on the
+ring. That completion's result code was `ERROR_INVALID_PARAMETER` and its byte
+count was zero. It had checked *where the completion arrived* rather than
+*whether the operation succeeded*, and so read a clean refusal as a success.
+
+Measured on Windows 11 Enterprise 10.0.28000, `aarch64-pc-windows-msvc`, the
+corrected reading holds:
+
+| Case | Result |
+|---|---|
+| control: no association | `0x00000000`, 4096 bytes, fill byte -- **pass** |
+| after `CreateIoCompletionPort` | `0x80070057`, 0 bytes -- **refused** |
+| before a late association | pass |
+| after that late association | `0x80070057`, 0 bytes -- **refused** |
+| control: overlapped read via the port | pass -- the handle is still healthy |
+| before `CreateThreadpoolIo` | pass |
+| after `CreateThreadpoolIo` | `0x80070057`, 0 bytes -- **refused** |
+
+So association forecloses `IoRing` use of the handle, and the port control shows
+it is the ring path specifically that is refused rather than the handle being
+broken. **`CreateThreadpoolIo` does the same**, which matters more than the raw
+`CreateIoCompletionPort` case because it is the path this workspace actually
+uses -- the consequence lands on `windows-threadpool-sys`'s own users.
+
+This is the evidence behind `windows-namespace-request-sys` returning an opened
+handle plain and unassociated: the association cannot be undone, so a layer that
+made it on a caller's behalf would silently remove a capability.
+
+### A read is judged on three fields, and the fixture is not zero-filled
+
+Both choices exist because of how the first version failed. A read passes only
+when the result code is success, the byte count is the full length, **and** the
+buffer holds the fill byte -- and the fixture is filled with `0xAB` rather than
+zeros precisely so "nothing was written" cannot be mistaken for "zeros were
+read". A zero-filled fixture would make the third check vacuous.
+
+`a_failed_ring_read_is_judged_on_more_than_where_the_completion_arrived` pins
+this: it asserts the refusal is visible in every field, so the original mistake
+cannot be repeated without failing a test.
+
+### Probe fixtures are unique per instance, not per label
+
+Migrating this found a latent fault in the shared `IoRing` fixture: its path was
+keyed by process id and label, so two tests running concurrently in one process
+shared a file. The second's write hit a sharing violation against the first's
+open handles -- and a probe reporting a fixture failure *looks like the platform
+refusing something*, which is the worst possible failure mode for a measurement.
+The path now carries a per-instance counter.

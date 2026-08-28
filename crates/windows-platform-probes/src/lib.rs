@@ -74,6 +74,7 @@
 //! | [`device_map::measure_with_subst`] | ignored | impersonation changes which DOS device map a drive letter resolves in |
 //! | [`ioring::measure_registration`] | ignored | `BuildIoRingRegisterFileHandles` replaces the file table rather than appending |
 //! | [`ioring::measure_thread_agnosticism`] | ignored | an `IoRing` operation outlives the thread that submitted it |
+//! | [`completion_port::measure`] | ignored | IOCP association, and `CreateThreadpoolIo`, foreclose `IoRing` use of a handle |
 //! | [`cancel_io::cancel_against_idle_thread`] | binary only | `CancelSynchronousIo` is point-in-time against an idle thread |
 //! | [`cancel_io::cancel_against_busy_thread`] | binary only | it can block indefinitely against a thread re-entering synchronous I/O |
 
@@ -82,6 +83,7 @@
 #![warn(missing_docs)]
 
 pub mod cancel_io;
+pub mod completion_port;
 pub mod device_map;
 pub mod error_mode;
 pub mod handle_state;

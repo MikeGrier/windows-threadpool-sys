@@ -32,6 +32,10 @@ name = "probe-cancel-io"
 path = "src/bin/cancel_io.rs"
 
 [[bin]]
+name = "probe-completion-port"
+path = "src/bin/completion_port.rs"
+
+[[bin]]
 name = "probe-device-map"
 path = "src/bin/device_map.rs"
 

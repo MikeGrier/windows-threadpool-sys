@@ -39,6 +39,7 @@
 use std::ffi::c_void;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
@@ -50,6 +51,16 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 /// How long a submit may wait for its completions.
 const SUBMIT_TIMEOUT_MS: u32 = 5_000;
+
+/// The byte every fixture is filled with.
+///
+/// A read that reports success must also return *this*, so a probe cannot pass
+/// on a zero-filled buffer it never actually read into. That is the specific
+/// mistake the first completion-port probe made.
+pub(crate) const FILL: u8 = 0xAB;
+
+/// How large each fixture is, and how much each probe read asks for.
+pub(crate) const FIXTURE_LEN: usize = 4096;
 
 /// Whether this host can answer these questions at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,7 +86,7 @@ impl<T> IoRingSupport<T> {
 }
 
 /// An owned ring, closed on drop.
-struct Ring(HIORING);
+pub(crate) struct Ring(pub(crate) HIORING);
 
 // SAFETY: moving a ring between threads is exactly what the thread-agnosticism
 // probe measures. This impl makes the measurement expressible; the probe is the
@@ -84,7 +95,7 @@ unsafe impl Send for Ring {}
 
 impl Ring {
     /// Creates a ring, or reports that the platform has none.
-    fn new() -> Option<Self> {
+    pub(crate) fn new() -> Option<Self> {
         let mut handle: HIORING = std::ptr::null_mut();
         // SAFETY: `handle` is a writable destination and the remaining
         // arguments are plain values.
@@ -102,14 +113,14 @@ impl Ring {
     }
 
     /// Submits, waiting for `operations` completions.
-    fn submit_and_wait(&self, operations: u32) -> i32 {
+    pub(crate) fn submit_and_wait(&self, operations: u32) -> i32 {
         let mut submitted = 0_u32;
         // SAFETY: the ring is live and `submitted` is writable.
         unsafe { SubmitIoRing(self.0, operations, SUBMIT_TIMEOUT_MS, &raw mut submitted) }
     }
 
     /// Pops one completion, or `None` when the queue is empty.
-    fn pop(&self) -> Option<IORING_CQE> {
+    pub(crate) fn pop(&self) -> Option<IORING_CQE> {
         let mut cqe = unsafe { std::mem::zeroed::<IORING_CQE>() };
         // SAFETY: the ring is live and `cqe` is writable.
         let popped = unsafe { PopIoRingCompletion(self.0, &raw mut cqe) };
@@ -132,22 +143,46 @@ pub fn is_available() -> bool {
 }
 
 /// A temporary file the probes read from, removed on drop.
-struct Fixture {
+pub(crate) struct Fixture {
     path: PathBuf,
 }
 
 impl Fixture {
-    fn new(label: &str) -> Self {
+    pub(crate) fn new(label: &str) -> Self {
+        // Unique per instance, not merely per label: two tests running
+        // concurrently in one process would otherwise share a path, and the
+        // second's write would hit a sharing violation against the first's open
+        // handles. That failure looks like the platform refusing something,
+        // which is exactly the wrong thing for a probe to report.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+
         let path = std::env::temp_dir().join(format!(
-            "windows-platform-probes-ioring-{}-{label}.tmp",
+            "windows-platform-probes-ioring-{}-{label}-{unique}.tmp",
             std::process::id()
         ));
-        std::fs::write(&path, vec![b'x'; 4096]).expect("write the probe fixture");
+        std::fs::write(&path, vec![FILL; FIXTURE_LEN]).expect("write the probe fixture");
         Self { path }
     }
 
-    fn open(&self) -> std::fs::File {
+    pub(crate) fn open(&self) -> std::fs::File {
         std::fs::File::open(&self.path).expect("open the probe fixture")
+    }
+
+    /// Opens the fixture with `FILE_FLAG_OVERLAPPED`.
+    ///
+    /// The completion-port probe needs this: a handle cannot be associated with
+    /// a port unless it was opened for overlapped I/O, so a probe using an
+    /// ordinary handle would be measuring a refusal it caused itself.
+    pub(crate) fn open_overlapped(&self) -> std::fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
+
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OVERLAPPED)
+            .open(&self.path)
+            .expect("open the probe fixture for overlapped use")
     }
 }
 
@@ -244,6 +279,57 @@ fn read_through_index(ring: &Ring, index: u32) -> i32 {
     }
 
     ring.pop().map_or(i32::MIN, |cqe| cqe.ResultCode)
+}
+
+/// Reads the whole fixture through a raw handle on a fresh ring.
+///
+/// Returns the completion's result code, the bytes it reported, and the first
+/// byte actually landed in the buffer. **All three matter**: a probe that
+/// checked only where the completion arrived would call a failure a success,
+/// which is exactly what the first completion-port probe did.
+pub(crate) fn read_raw_handle(handle: HANDLE) -> (i32, usize, u8) {
+    let Some(ring) = Ring::new() else {
+        return (i32::MIN, 0, 0);
+    };
+    let mut buffer = vec![0_u8; FIXTURE_LEN];
+
+    let file_ref = IORING_HANDLE_REF {
+        Kind: IORING_REF_RAW,
+        Handle: IORING_HANDLE_REF_0 { Handle: handle },
+    };
+    let buffer_ref = IORING_BUFFER_REF {
+        Kind: IORING_REF_RAW,
+        Buffer: IORING_BUFFER_REF_0 {
+            Address: buffer.as_mut_ptr().cast::<c_void>(),
+        },
+    };
+
+    // SAFETY: the ring is live; the buffer is writable for FIXTURE_LEN bytes
+    // and outlives the wait below, which drains the operation.
+    let built = unsafe {
+        BuildIoRingReadFile(
+            ring.0,
+            file_ref,
+            buffer_ref,
+            u32::try_from(FIXTURE_LEN).expect("a small length fits a u32"),
+            0,
+            0,
+            0,
+        )
+    };
+    if built < 0 {
+        return (built, 0, 0);
+    }
+
+    let submitted = ring.submit_and_wait(1);
+    if submitted < 0 {
+        return (submitted, 0, 0);
+    }
+
+    match ring.pop() {
+        Some(cqe) => (cqe.ResultCode, cqe.Information, buffer[0]),
+        None => (i32::MIN, 0, 0),
+    }
 }
 
 /// Registers two handles, then one, and reports which indices still work.

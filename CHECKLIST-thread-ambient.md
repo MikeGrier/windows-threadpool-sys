@@ -501,6 +501,7 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   cargo run  -p windows-platform-probes --bin probe-pool-growth
   cargo run  -p windows-platform-probes --bin probe-device-map
   cargo run  -p windows-platform-probes --bin probe-ioring
+  cargo run  -p windows-platform-probes --bin probe-completion-port
   cargo run  -p windows-platform-probes --bin probe-cancel-io
   ```
 
@@ -521,13 +522,15 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   | device map | `subst` letter resolves in our session (LUID `fd80c`), not in anonymous (`3e6`) |
   | `IoRing` registration | **replaces**: index 0 usable, index 1 not, after re-registering one handle |
   | `IoRing` thread agnosticism | operation completed with result `0x00000000` after its submitter exited |
+  | IOCP association vs `IoRing` | refused: `0x80070057`, 0 bytes; the port control still passes |
+  | `CreateThreadpoolIo` vs `IoRing` | refused the same way |
   | `CancelSynchronousIo`, idle thread | returned `ERROR_NOT_FOUND` (1168) -- point-in-time |
   | `CancelSynchronousIo`, busy thread | 4 attempts all returned; **no wedge on this run**, though the original spike wedged for 12s |
 
   The last row is the one to treat carefully: it is **nondeterministic**, which is exactly why that probe is
   binary-only. A clean x64 run does not clear the design, and the probe's own output says so.
 
-- [ ] **M27.6** -- Migrate the completion-port fork measurement (Probe D): does associating a handle with
+- [x] **M27.6** -- Migrate the completion-port fork measurement (Probe D): does associating a handle with
   an IOCP foreclose `IoRing` use of it? This is the evidence for `windows-namespace-request-sys` returning
   an opened handle **plain and unassociated**, so it is load-bearing for a shipped decision rather than a
   curiosity. It was split out of M27.4 because the original probe exists in two versions that disagree --
@@ -537,6 +540,21 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   association rather than to the probe. Migrating it therefore requires deciding which reading is correct,
   which is a fresh measurement rather than a port. Belongs in the ignored tier alongside the other
   `IoRing` probes, and must carry the negative control.
+
+  **Settled: the corrected reading is right.** Measured on Windows 11 Enterprise 10.0.28000,
+  `aarch64-pc-windows-msvc`: an unassociated handle reads fine (`0x00000000`, 4096 bytes, fill byte),
+  and after `CreateIoCompletionPort` the same read is refused with `0x80070057`
+  (`ERROR_INVALID_PARAMETER`) and zero bytes -- which is exactly the value the first version saw and
+  misread as success. Both negative controls hold: the before-association read passes, and the associated
+  handle still completes an overlapped read through its port, so it is the `IoRing` path specifically that
+  is refused rather than the handle being broken. **`CreateThreadpoolIo` forecloses it the same way**,
+  which matters more than the raw-IOCP case because it is the path this workspace actually uses.
+
+  Recorded in [crates/windows-platform-probes/DESIGN-NOTES.md](crates/windows-platform-probes/DESIGN-NOTES.md)
+  -> `d-completion-port`. Migrating it also found a latent fault in the shared `IoRing` fixture: its path
+  was keyed only by process id and label, so concurrent tests collided and the resulting sharing violation
+  **looked like the platform refusing something** -- the worst failure mode a probe can have. Fixtures are
+  now unique per instance.
 
 ## M26+ -- Gated on the namespace-facility design branch landing
 
