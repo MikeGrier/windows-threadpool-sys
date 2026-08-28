@@ -265,7 +265,7 @@ assumed:
   not permitted to become permanent by default: `path.rs` carries a provenance comment naming its source
   and commit, D-9 records the reasoning, and the merge-or-delete decision is scheduled as **M26+.3**, gated
   on this crate's first release.
-- [ ] **M24.5** -- Establish the faithful-execution contract that every entry then follows: an entry
+- [x] **M24.5** -- Establish the faithful-execution contract that every entry then follows: an entry
   returns its result or the raw Win32 code **unaltered**, and `GetLastError` is captured before any
   restoration runs so nothing in between overwrites it. Preserving the code is a constraint from a real
   consumer rather than a stylistic choice -- `ERROR_FILE_NOT_FOUND` means a missing directory from an open,

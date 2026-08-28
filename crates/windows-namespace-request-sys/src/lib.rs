@@ -32,9 +32,12 @@
 //! An entry reports the raw Win32 outcome. `ERROR_FILE_NOT_FOUND` means a
 //! missing directory from an open, an empty directory from a first query, and a
 //! genuine failure from a later one; only a consumer can tell those apart, so
-//! nothing here normalises or reclassifies. `GetLastError` is read before any
-//! restoration runs, so the error is an output of the operation rather than
-//! something left on a thread.
+//! nothing here normalises or reclassifies.
+//!
+//! The code is also snapshotted before any cleanup can overwrite it, because
+//! `GetLastError` is volatile thread state that a `Drop` or a buffer release
+//! will happily clobber. That guarantee is a primitive rather than a rule each
+//! entry remembers: see [`outcome`].
 //!
 //! # A path is copied; a handle is duplicated
 //!
@@ -65,11 +68,13 @@
 
 pub mod buffer;
 pub mod handle;
+pub mod outcome;
 pub mod path;
 pub mod security;
 
 pub use buffer::AlignedBuffer;
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
+pub use outcome::{Outcome, Win32Error};
 pub use path::{PathError, PathFailure, PreparedPath, prepare};
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,

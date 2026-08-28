@@ -46,15 +46,9 @@ prevents `IoRing` use of it, measured, and the choice must be made before
 association by a layer that knows the destination. An entry that associated on
 the caller's behalf would foreclose a fork it has no standing to decide.
 
-Two consequences of "faithfully":
-
-- **The raw Win32 code is preserved unaltered.** `ERROR_FILE_NOT_FOUND` means a
-  missing directory from an open, an empty directory from a first query, and a
-  genuine failure from a later one. Only the consumer can disambiguate, so the
-  crate must not normalise, reclassify, or map to a portable error.
-- **`GetLastError` is read before any restoration runs.** The error is an
-  *output* of the operation, carried in its result, never left on a thread for
-  someone else to pick up.
+"Faithfully" also constrains how an entry reports failure -- the raw code
+preserved unaltered, and snapshotted before any cleanup can overwrite it. That
+is stated once, with its mechanism, in [D-10](#d-10) rather than repeated here.
 
 ## <a id="d-3"></a>D-3: One entry per Win32 call
 
@@ -268,6 +262,43 @@ and the **merge-or-delete decision is scheduled**, not left to be rediscovered:
 see `M26+.3` in
 [CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md), gated on this
 crate's first release. Until then, a fix to either copy must be applied to both.
+
+## <a id="d-10"></a>D-10: The faithful-execution contract is a primitive entries bind to, not a rule they restate
+
+Every entry reports what Windows reported: the raw code, unaltered, never
+normalised or reclassified. `ERROR_FILE_NOT_FOUND` means a missing directory
+from an open, an **empty** directory from a first query, and a genuine failure
+from a later one -- only a consumer holding that context can tell them apart,
+so any interpretation here destroys information no layer above can rebuild.
+
+The harder half is *when* the code is read. `GetLastError` is volatile thread
+state: almost any subsequent Win32 call overwrites it, including cleanup nobody
+thinks of as a call -- a `CloseHandle` in a `Drop`, a buffer release, a
+restoration guard unwinding. Reading it a few statements after the failure is a
+race against the entry's own tidying up.
+
+So it is **not left to each entry's discipline.** `outcome::perform` takes the
+call as a closure and snapshots the code in the statement after it returns,
+with the convention-specific forms (`perform_bool`, `perform_handle`,
+`perform_nonnull_handle`, `perform_nonzero`) layered on it. An entry binds to
+that function; it does not re-implement the rule. This is the
+derived-rather-than-restated posture the repository's contract-integrity rule
+asks for, applied to the one guarantee every entry in the catalogue shares.
+
+Two consequences worth stating because they are easy to get backwards:
+
+- **Success never consults `GetLastError`.** Many Win32 calls leave a non-zero
+  last error behind on success, so an entry that checked the error slot rather
+  than the return value would invent failures. The return value decides.
+- **The two handle conventions are both real and are not interchangeable.**
+  `CreateFileW` fails with `INVALID_HANDLE_VALUE`; other calls fail with null.
+  Both forms exist by name because using one where the other belongs turns a
+  failure into a plausible-looking handle.
+
+Capture failures are *not* governed by this. `handle`, `security`, and `path`
+report a named stage plus a code, because there the useful question is which
+part of building the request went wrong, and that is answered on the calling
+thread before any entry runs.
 
 ## Open, and inherited rather than introduced
 
