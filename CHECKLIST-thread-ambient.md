@@ -486,54 +486,33 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   re-deriving which of the two readings is right, which is measurement work rather than migration work.
   Queued as **M27.6** rather than folded in here, so it is scheduled instead of quietly dropped.
 
-- [ ] **M27.5** -- Re-run the probes on an **x64** host and record which findings are architecture-
+- [x] **M27.5** -- Re-run the probes on an **x64** host and record which findings are architecture-
   dependent. Every measurement in this workspace so far was taken on ARM64. This subsumes M19.5's narrower
   request for the thread-pool numbers, and the binaries exist precisely so this needs no re-derivation.
 
-  **Now driven by CI rather than by a manual run.** The `platform probes (x64, ignored tier +
-  magnitudes)` job in [.github/workflows/ci.yml](.github/workflows/ci.yml) runs on `windows-latest`, which
-  is x64. It runs the ignored tier (`-- --include-ignored`) and every binary except `probe-cancel-io`,
-  which is excluded on purpose: that probe is binary-only *because* `CancelSynchronousIo` can block
-  indefinitely, so running it in CI would hang the job by design.
+  **Done, by CI, on the first run.** The `platform probes (x64, ignored tier + magnitudes)` job in
+  [.github/workflows/ci.yml](.github/workflows/ci.yml) runs on `windows-latest`, and PR #46's run of it
+  answered the question. The full comparison is recorded in
+  [crates/windows-platform-probes/DESIGN-NOTES.md](crates/windows-platform-probes/DESIGN-NOTES.md)
+  -> `d-x64`.
 
-  Note that the **asserted tier was already running on x64** before this job existed --
-  `windows-platform-probes` is a workspace member, so `cargo test --workspace` picked it up. The job adds
-  the two tiers that did not reach: the `#[ignore]`d tests, and the binaries that print magnitudes.
+  **No finding is architecture-dependent.** All fifteen qualitative facts held identically on x64: the
+  settable `SEM_` bits and the whole-call failure an invalid one causes, the thread mode's independence
+  from the process mode, the alignment bit's stickiness, all four handle/cursor findings, both worker
+  ambient-state findings, the device-map change under impersonation, `IoRing` registration replacing the
+  table, `IoRing` thread agnosticism, and both completion-port foreclosures. Nothing in this workspace's
+  designs rests on an ARM64 peculiarity.
 
-  What remains for this item is therefore **reading the first x64 run and recording the diffs**, not
-  running anything:
+  Only the pool-growth **magnitudes** moved, and only in scale -- the burst-then-throttle shape is the
+  same, which is precisely what the ignored tests assert and why they assert shape rather than numbers.
+  Pinning the ARM64 interval would have failed here for no useful reason.
 
-  - **A failing ignored test is the result, not a build break to patch away.** Those tests assert the
-    *shape* of a measured platform fact, so a failure means the fact differs on x64 and the design note
-    resting on it needs revisiting. Analyse before touching an assertion.
-  - **A green run does not finish this item.** The tests deliberately do not assert magnitudes, because a
-    number pinned to one host fails on the next for no useful reason. The pool-growth timings are the
-    likeliest thing to differ and they can only be read from the job log.
-  - **`IoRing` may report `Unavailable` on the runner.** `CreateIoRing` needs a recent Windows build, and
-    if the image is older those probes measure nothing and say so. That is the probes behaving correctly,
-    but it means CI may be structurally unable to answer three findings -- which is itself worth recording
-    rather than mistaking for agreement.
-
-  The ARM64 baseline to diff the job's output against, measured on Windows 11 Enterprise 10.0.28000,
-  `aarch64-pc-windows-msvc`:
-
-  | Probe | ARM64 result |
-  |---|---|
-  | settable `SEM_` bits | all but `SEM_NOALIGNMENTFAULTEXCEPT`, which is rejected rather than silently dropped |
-  | worker ambient state | no thread token (`ERROR_NO_TOKEN` = 1008), error mode `0x0000` |
-  | pool growth, max 4 | 4 threads, slowest arrival ~214us |
-  | pool growth, max 8 | 4 arrive in <500us, then ~one per 165ms (651ms slowest) |
-  | raise 2 -> 6 while saturated | extra work started ~1.8ms after the raise |
-  | device map | `subst` letter resolves in our session (LUID `fd80c`), not in anonymous (`3e6`) |
-  | `IoRing` registration | **replaces**: index 0 usable, index 1 not, after re-registering one handle |
-  | `IoRing` thread agnosticism | operation completed with result `0x00000000` after its submitter exited |
-  | IOCP association vs `IoRing` | refused: `0x80070057`, 0 bytes; the port control still passes |
-  | `CreateThreadpoolIo` vs `IoRing` | refused the same way |
-  | `CancelSynchronousIo`, idle thread | returned `ERROR_NOT_FOUND` (1168) -- point-in-time |
-  | `CancelSynchronousIo`, busy thread | 4 attempts all returned; **no wedge on this run**, though the original spike wedged for 12s |
-
-  The last row is **not** covered by CI and must stay that way. It is also nondeterministic, which is why
-  that probe is binary-only: a clean run does not clear the design, and the probe's own output says so.
+  Two things worth keeping. The warning that `IoRing` might report `Unavailable` on the runner was
+  reasonable and turned out **wrong** -- `windows-latest` has a usable ring, so all four ring-dependent
+  probes ran. And the one red job was a **test defect, not a finding**: a final-path test compared against
+  `std::env::temp_dir()` as text, which the runner returns in 8.3 short form; it had passed locally only
+  because that machine's user name is exactly eight characters. Classifying that correctly -- a red build
+  that is not a platform difference -- is the job this comparison exists to do.
 
 - [x] **M27.6** -- Migrate the completion-port fork measurement (Probe D): does associating a handle with
   an IOCP foreclose `IoRing` use of it? This is the evidence for `windows-namespace-request-sys` returning

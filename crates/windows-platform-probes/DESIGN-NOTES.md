@@ -203,3 +203,78 @@ shared a file. The second's write hit a sharing violation against the first's
 open handles -- and a probe reporting a fixture failure *looks like the platform
 refusing something*, which is the worst possible failure mode for a measurement.
 The path now carries a per-instance counter.
+
+## The x64 comparison: no finding is architecture-dependent
+
+<a id="d-x64"></a>
+
+Every measurement in this workspace was originally taken on ARM64, which left a
+standing question: how much of it was a property of Windows, and how much a
+property of that machine? The `platform probes (x64, ...)` CI job answered it on
+the first run.
+
+Measured on the two hosts:
+
+- **ARM64** -- Windows 11 Enterprise 10.0.28000, `aarch64-pc-windows-msvc`.
+- **x64** -- GitHub `windows-latest` runner, `x86_64-pc-windows-msvc`.
+
+| Finding | ARM64 | x64 | Same? |
+|---|---|---|---|
+| settable `SEM_` bits | all but the alignment bit, rejected with error 87 | identical | yes |
+| an invalid bit costs every valid bit | whole call fails, nothing installed | identical | yes |
+| thread vs process error mode | independent storage | identical | yes |
+| the alignment bit is sticky at process scope | restore ignored | identical | yes |
+| a duplicate shares the enumeration cursor | continues where the source stopped | identical | yes |
+| control: separate opens are independent | second open restarts | identical | yes |
+| closing a duplicate | source keeps enumerating | identical | yes |
+| interleaved single-shot queries | all four undisturbed | identical | yes |
+| a worker inherits no token | `ERROR_NO_TOKEN` | identical | yes |
+| a worker's critical-error handler | enabled | identical | yes |
+| impersonation changes the device map | letter resolves in our session, not anonymous | identical | yes |
+| `IoRing` registration | replaces the table | identical | yes |
+| `IoRing` thread agnosticism | survives its submitter | identical | yes |
+| IOCP association vs `IoRing` | forecloses, `0x80070057` | identical | yes |
+| `CreateThreadpoolIo` vs `IoRing` | forecloses the same way | identical | yes |
+
+**Every qualitative finding held.** Nothing in this workspace's designs rests on
+an ARM64 peculiarity.
+
+### The magnitudes differ, within noise, and the shape is what was asserted
+
+Only the pool-growth timings moved, and only in scale:
+
+| Measure | ARM64 | x64 |
+|---|---|---|
+| burst arrivals (max 8) | 249, 393, 468, 483 us | 212, 315, 460, 538 us |
+| throttled gaps | ~158-167 ms | ~163-252 ms |
+| slowest arrival (max 8) | 651 ms | 751 ms |
+| raise 2 -> 6 while saturated | ~1.8 ms | ~1.6 ms |
+
+The two-regime shape -- a burst of roughly four, then one thread per throttle
+interval -- is identical, which is exactly what the ignored tests assert and why
+they assert shape rather than numbers. Pinning the 165 ms would have failed here
+for no useful reason; the x64 host is a shared CI runner, so slower and noisier
+tails are expected rather than interesting.
+
+### One prediction was wrong, and it is worth recording
+
+The checklist warned that `IoRing` might report `Unavailable` on the runner --
+`CreateIoRing` needs a recent build, and an older image would leave three
+findings unanswerable. It did not: `windows-latest` has a usable ring, and all
+four `IoRing`-dependent probes ran and agreed. The caution was reasonable and
+the outcome was better than it.
+
+### The one CI failure was a test defect, not a platform difference
+
+`build + test` went red on
+`final_path::tests::a_directory_resolves_to_its_own_path`, which compared a
+resolved path against `std::env::temp_dir()` as text. The runner's temp path
+comes back in 8.3 short form (`C:\Users\RUNNER~1\...`) while
+`GetFinalPathNameByHandleW` with `FILE_NAME_NORMALIZED` returns the long form.
+Same directory, different strings.
+
+It had passed locally only because that machine's user name is exactly eight
+characters, so no mangling occurred -- an accident of environment, not of
+architecture. It would fail on any host with a longer user name, on either
+architecture. Recorded here because it is exactly the kind of result this
+comparison exists to classify correctly: a red build that is **not** a finding.
