@@ -85,7 +85,9 @@ with no initial drain, while its rustdoc claimed delivery covered completions "a
 `ring` was handed over". Rule 2's attach case makes that false: a ring handed over with a non-empty CQ
 stranded those completions permanently, because nothing would drain the queue back to empty and no
 later completion could signal. The existing M4 test only ever handed over a *fresh* ring, which is why
-it passed. Fixed in M11.1, with the repro kept as a regression test.
+it passed. Fixed in M11.3, in the same change that re-expresses `EventDelivery` on top of
+`completion_event` -- the signal-once-on-attach in D-20 is what closes it -- with the repro kept as a
+regression test.
 
 ## Specifying this contract: the ten gap categories
 
