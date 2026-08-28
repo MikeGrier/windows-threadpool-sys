@@ -108,6 +108,7 @@
 
 pub mod buffer;
 pub mod close;
+pub mod file_info;
 pub mod handle;
 pub mod open;
 pub mod open_by_id;
@@ -120,6 +121,7 @@ pub mod watch;
 
 pub use buffer::AlignedBuffer;
 pub use close::{CloseFn, CloseRequest};
+pub use file_info::QueryFileInformationByHandle;
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
 pub use open::OpenFile;
 pub use open_by_id::{FileIdentifier, OpenFileByIdentifier};
