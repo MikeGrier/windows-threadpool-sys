@@ -627,7 +627,7 @@ handle or memory defects that CI now executes on every run since M27.5 added the
   `:286`-`:322`); `Drop for ThreadpoolWork` then waits rather than cancels, deadlocking the
   process permanently. Open the gate from a drop guard so unwinding releases the workers.
 
-- [ ] **M29.5** -- Close the `TP_IO` before its file.
+- [x] **M29.5** -- Close the `TP_IO` before its file.
   `CreateThreadpoolIo`'s `PTP_IO` is never passed to `CloseThreadpoolIo`, leaking one object per
   `measure()` call, and the file handle is closed while the still-live `TP_IO` references it --
   the inverse of the required teardown order

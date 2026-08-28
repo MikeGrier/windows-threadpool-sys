@@ -56,7 +56,7 @@ use std::os::windows::io::AsRawHandle;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::IO::{CreateIoCompletionPort, OVERLAPPED};
 use windows_sys::Win32::System::Threading::{
-    CreateThreadpoolIo, PTP_CALLBACK_INSTANCE, PTP_IO, TP_CALLBACK_ENVIRON_V3,
+    CloseThreadpoolIo, CreateThreadpoolIo, PTP_CALLBACK_INSTANCE, PTP_IO, TP_CALLBACK_ENVIRON_V3,
 };
 
 use crate::ioring::{FILL, FIXTURE_LEN, Fixture, IoRingSupport, Ring, read_raw_handle};
@@ -157,6 +157,31 @@ unsafe extern "system" fn unused_io_callback(
 ) {
 }
 
+/// Owns a `TP_IO` and closes it exactly once.
+///
+/// # Why this must outlive nothing and be dropped before its file
+///
+/// A `TP_IO` holds a reference to the file handle it was created on. Closing
+/// the file first leaves a live thread-pool I/O object pointing at a closed
+/// handle, which is the inverse of the required teardown order -- so this
+/// guard is declared *after* the file it was created from, and therefore
+/// dropped before it.
+///
+/// The previous code never called `CloseThreadpoolIo` at all, leaking one
+/// object per `measure()` call, and closed the file underneath it. Every other
+/// handle in this crate is closed exactly once through `Drop`; this one was
+/// the exception.
+struct PoolIo(PTP_IO);
+
+impl Drop for PoolIo {
+    fn drop(&mut self) {
+        // No I/O was ever started through this object, so there is nothing
+        // outstanding to wait for and closing is immediate.
+        // SAFETY: the object is live and closed exactly once.
+        unsafe { CloseThreadpoolIo(self.0) };
+    }
+}
+
 fn attempt(handle: HANDLE) -> ReadAttempt {
     let (result_code, bytes, first_byte) = read_raw_handle(handle);
     ReadAttempt {
@@ -224,7 +249,11 @@ pub fn measure() -> IoRingSupport<CompletionPortFinding> {
         )
     };
     assert_ne!(pooled_io, 0, "create a threadpool I/O object");
+    // Declared after `pooled` so it is dropped before it. See PoolIo.
+    let pooled_io = PoolIo(pooled_io);
     let after_threadpool_io = attempt(pooled_raw);
+    // Closed before `pooled`, which the TP_IO references. See PoolIo.
+    drop(pooled_io);
 
     // SAFETY: the port handles are owned here and closed once each.
     unsafe {
