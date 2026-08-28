@@ -172,7 +172,7 @@ fn a_worker_does_not_inherit_an_impersonating_submitters_token() {
     let observed = observe_on_worker_while_impersonating();
 
     assert!(
-        observed.is_unimpersonated(),
+        observed.worker.is_unimpersonated(),
         "a worker must not inherit the submitter's token, got {observed:?}"
     );
 }
@@ -199,17 +199,24 @@ fn the_submitting_thread_and_its_worker_disagree_about_identity() {
     // The control that gives the inheritance test its meaning: if the submitter
     // were not actually impersonating, "the worker has no token" would prove
     // nothing at all.
-    let submitter_had_token = {
-        let observed = observe_on_worker_while_impersonating();
-        // observe_on_worker_while_impersonating asserts internally that the
-        // submitter genuinely held a token before submitting; this records the
-        // resulting asymmetry as the finding.
-        observed.is_unimpersonated()
-    };
+    let observed = observe_on_worker_while_impersonating();
 
+    // Both sides, from the same run. Reading the worker's state twice -- which
+    // an earlier version of this test did, by binding `submitter_had_token` to
+    // the worker's `is_unimpersonated()` -- asserts the inheritance finding a
+    // second time and checks no asymmetry at all.
     assert!(
-        submitter_had_token,
-        "the submitter impersonated and the worker did not inherit it"
+        observed.submitter.has_thread_token,
+        "the submitting thread must hold a token, or there is no asymmetry to \
+         observe: {observed:?}"
+    );
+    assert!(
+        observed.worker.is_unimpersonated(),
+        "the worker must hold none: {observed:?}"
+    );
+    assert!(
+        observed.disagree(),
+        "the submitter impersonated and the worker did not inherit it: {observed:?}"
     );
 }
 

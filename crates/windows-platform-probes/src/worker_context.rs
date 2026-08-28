@@ -64,6 +64,31 @@ impl WorkerContext {
     }
 }
 
+/// What the submitter and its worker each saw, at the same moment.
+///
+/// The asymmetry is the finding, so both sides are returned. Reporting only
+/// the worker would leave "the submitter really was impersonating" to an
+/// assertion buried inside the probe, which a test cannot observe -- and a
+/// test that cannot observe its own control is asserting the conclusion twice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdentityAsymmetry {
+    /// What the submitting thread saw about itself while impersonating.
+    pub submitter: WorkerContext,
+    /// What the worker that ran its callback saw.
+    pub worker: WorkerContext,
+}
+
+impl IdentityAsymmetry {
+    /// The submitter held a token and the worker did not.
+    ///
+    /// Both halves matter: without the first, "the worker has no token"
+    /// proves nothing, because nobody had one.
+    #[must_use]
+    pub fn disagree(self) -> bool {
+        self.submitter.has_thread_token && self.worker.is_unimpersonated()
+    }
+}
+
 /// Reads the calling thread's ambient state.
 fn observe_here() -> WorkerContext {
     let mut token: HANDLE = std::ptr::null_mut();
@@ -149,7 +174,7 @@ pub fn observe_on_worker() -> WorkerContext {
 /// Panics if the process token cannot be duplicated or applied, or if the
 /// worker never reports.
 #[must_use]
-pub fn observe_on_worker_while_impersonating() -> WorkerContext {
+pub fn observe_on_worker_while_impersonating() -> IdentityAsymmetry {
     let mut process_token: HANDLE = std::ptr::null_mut();
     // SAFETY: GetCurrentProcess returns a pseudo-handle; `process_token` is
     // writable.
@@ -186,13 +211,16 @@ pub fn observe_on_worker_while_impersonating() -> WorkerContext {
     let applied = unsafe { SetThreadToken(std::ptr::null(), impersonation) };
     assert_ne!(applied, 0, "impersonate on the submitting thread");
 
-    // The submitter is now genuinely impersonating, which is the premise.
+    // The submitter is now genuinely impersonating, which is the premise. It is
+    // both asserted here -- so the probe fails fast rather than reporting a
+    // meaningless asymmetry -- and returned, so a caller can assert it too.
+    let submitter = observe_here();
     assert!(
-        observe_here().has_thread_token,
+        submitter.has_thread_token,
         "the submitting thread must actually hold a token, or the probe proves nothing"
     );
 
-    let observed = observe_on_worker();
+    let worker = observe_on_worker();
 
     // SAFETY: restores the thread to its own identity; the token handle is then
     // no longer needed.
@@ -201,5 +229,5 @@ pub fn observe_on_worker_while_impersonating() -> WorkerContext {
         CloseHandle(impersonation);
     }
 
-    observed
+    IdentityAsymmetry { submitter, worker }
 }

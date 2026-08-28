@@ -26,17 +26,26 @@ fn main() {
     );
 
     let impersonating = observe_on_worker_while_impersonating();
-    println!("\nsubmitted WHILE the submitter impersonates:");
-    println!("  has thread token   : {}", impersonating.has_thread_token);
-    println!("  OpenThreadToken err: {}", impersonating.open_token_error);
-    println!("  thread error mode  : {:#06x}", impersonating.error_mode);
+    let worker = impersonating.worker;
     println!(
-        "  -> unimpersonated  : {}",
-        impersonating.is_unimpersonated()
+        "
+submitted WHILE the submitter impersonates:"
     );
+    println!(
+        "  submitter has token: {}",
+        impersonating.submitter.has_thread_token
+    );
+    println!("  worker has token   : {}", worker.has_thread_token);
+    println!("  OpenThreadToken err: {}", worker.open_token_error);
+    println!("  thread error mode  : {:#06x}", worker.error_mode);
+    println!("  -> unimpersonated  : {}", worker.is_unimpersonated());
+    println!("  -> they disagree   : {}", impersonating.disagree());
 
-    println!("\nconclusion:");
-    if impersonating.is_unimpersonated() {
+    println!(
+        "
+conclusion:"
+    );
+    if impersonating.disagree() {
         println!("  a worker does NOT inherit the submitter's token, so identity");
         println!("  must be captured and applied explicitly.");
     } else {

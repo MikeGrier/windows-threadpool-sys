@@ -568,7 +568,7 @@ during M25 and M27, so treat this as a recurring class rather than a set of isol
   distinguishes "the raise took effect after D" from "the settle window expired". Note the
   function's doc-comment already claims a panic that neither it nor `measure_growth` performs.
 
-- [ ] **M28.3** -- Make the identity-asymmetry test assert the asymmetry it names.
+- [x] **M28.3** -- Make the identity-asymmetry test assert the asymmetry it names.
   `the_submitting_thread_and_its_worker_disagree_about_identity`
   ([tests.rs](crates/windows-platform-probes/src/tests.rs) `:202`-`:213`) binds
   `submitter_had_token` to `observed.is_unimpersonated()`, which is a property of the **worker**,
