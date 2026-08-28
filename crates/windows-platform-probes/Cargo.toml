@@ -28,6 +28,18 @@ name = "probe-worker-context"
 path = "src/bin/worker_context.rs"
 
 [[bin]]
+name = "probe-cancel-io"
+path = "src/bin/cancel_io.rs"
+
+[[bin]]
+name = "probe-device-map"
+path = "src/bin/device_map.rs"
+
+[[bin]]
+name = "probe-ioring"
+path = "src/bin/ioring.rs"
+
+[[bin]]
 name = "probe-pool-growth"
 path = "src/bin/pool_growth.rs"
 

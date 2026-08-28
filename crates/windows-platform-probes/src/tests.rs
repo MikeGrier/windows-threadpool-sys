@@ -16,6 +16,8 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::ERROR_NO_TOKEN;
 
+use crate::device_map::{free_drive_letter, measure_with_subst};
+use crate::ioring::{measure_registration, measure_thread_agnosticism};
 use crate::pool_growth::{measure_growth, measure_raise_while_saturated};
 
 use crate::worker_context::{observe_on_worker, observe_on_worker_while_impersonating};
@@ -321,5 +323,101 @@ fn raising_the_maximum_while_saturated_releases_more_work() {
     assert!(
         delay < Duration::from_secs(1),
         "raising the maximum took {delay:?} to take effect"
+    );
+}
+
+// -- device map (Probe DM) -----------------------------------------------
+
+#[test]
+#[ignore = "defines and removes a drive letter, which is process-visible state; run deliberately"]
+fn impersonation_changes_which_device_map_a_drive_letter_resolves_in() {
+    // The measurement behind the session-relative drive-letter hazard that
+    // windows-namespace-request-sys documents and deliberately does not close.
+    let Some(letter) = free_drive_letter() else {
+        panic!("no free drive letter on this host, so the probe cannot run");
+    };
+
+    let finding = measure_with_subst(&letter, r"\Device\HarddiskVolume1");
+
+    assert!(
+        finding.sessions_differ(),
+        "the control must hold first: the two contexts must really be \
+         different logon sessions, or a disappearing letter proves nothing. {finding:?}"
+    );
+    assert!(
+        finding.impersonation_changes_the_map(),
+        "the same letter on the same thread must resolve differently under a \
+         different token: {finding:?}"
+    );
+}
+
+#[test]
+#[ignore = "defines and removes a drive letter, which is process-visible state; run deliberately"]
+fn the_subst_letter_really_was_visible_before_impersonating() {
+    // The fixture check. A letter that never resolved in our own session would
+    // make the whole finding vacuous -- "not found while impersonating" would
+    // be true of any letter at all.
+    let Some(letter) = free_drive_letter() else {
+        panic!("no free drive letter on this host, so the probe cannot run");
+    };
+
+    let finding = measure_with_subst(&letter, r"\Device\HarddiskVolume1");
+
+    assert!(
+        finding.own_session.is_found(),
+        "the subst drive must exist in our own map, or the probe measured nothing: {finding:?}"
+    );
+    assert_eq!(
+        finding.own_session.target.as_deref(),
+        Some(r"\Device\HarddiskVolume1"),
+        "and it must point where we put it: {finding:?}"
+    );
+}
+
+// -- IoRing (Probes A, A2, B) --------------------------------------------
+
+#[test]
+#[ignore = "needs a recent Windows build with IoRing; environment-dependent"]
+fn ioring_registration_replaces_the_table_rather_than_appending() {
+    // windows-ioring-sys asserts this and refuses a second registration on the
+    // strength of it, with the assertion recorded as explicitly UNVERIFIED.
+    // This is the verification -- and it deliberately calls Win32 directly,
+    // because probing through that crate's guard would confirm our own belief
+    // by consulting it.
+    let Some(observed) = measure_registration().measured() else {
+        // A host without a ring cannot answer, which is not the same as the
+        // answer being no.
+        return;
+    };
+
+    assert!(
+        observed.index_zero_usable_after_second,
+        "the control must hold: index 0 is valid under either semantics, so its \
+         failure means the probe broke rather than the table shrank. {observed:?}"
+    );
+    assert!(
+        observed.replaces(),
+        "registration must replace the whole table, or windows-ioring-sys's index \
+         bookkeeping is wrong and its refusal a needless restriction. {observed:?}"
+    );
+    assert!(!observed.appends(), "and it must not append: {observed:?}");
+}
+
+#[test]
+#[ignore = "needs a recent Windows build with IoRing; environment-dependent"]
+fn an_ioring_operation_outlives_the_thread_that_submitted_it() {
+    // Every thread in the proposed design is transient by construction, so a
+    // thread-bound IRP would fail only under load.
+    let Some(observed) = measure_thread_agnosticism().measured() else {
+        return;
+    };
+
+    assert!(
+        observed.submitter_exited,
+        "the submitting thread must really be gone, or the probe measures nothing"
+    );
+    assert!(
+        observed.survives_submitter_exit(),
+        "the operation must complete after its submitter exited: {observed:?}"
     );
 }

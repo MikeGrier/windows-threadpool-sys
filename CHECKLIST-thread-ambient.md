@@ -461,7 +461,7 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   rather than a silent pass. Verify the binding by sabotage -- change a fact and confirm a test actually
   fails -- since a guard only ever seen to pass is untested.
 
-- [ ] **M27.4** -- Migrate the nine earlier measurements' probes, which currently exist only in the
+- [x] **M27.4** -- Migrate the nine earlier measurements' probes, which currently exist only in the
   git-ignored `.scratch/` directory and a previous session's private state, and are therefore one machine
   failure away from being lost. They are the evidence for the `IoRing` registration, thread-agnosticism,
   completion-port fork, token inheritance, `CancelSynchronousIo`, thread-pool growth, and device-map
@@ -470,9 +470,36 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   a second logon session. Deliberately **not** done alongside M27.1-M27.3, which established the scheme on
   two cheap probes first.
 
+  Landed as `worker_context` (asserted), `pool_growth`, `device_map` and `ioring` (ignored), and
+  `cancel_io` (binary only). Two corrections were made in the move, recorded in
+  [crates/windows-platform-probes/DESIGN-NOTES.md](crates/windows-platform-probes/DESIGN-NOTES.md): the
+  device-map **control could never have passed** (it read a thread token the non-impersonating side does
+  not have, so it always reported "same session"), and the `IoRing` registration probe must **not** use
+  `windows-ioring-sys`, whose guard exists because of the very assumption being measured -- probing through
+  it would confirm our own belief by consulting it. Calling Win32 directly also closes a standing gap: that
+  crate recorded its replace-not-append assumption as explicitly *unverified*, and it is now measured and
+  holds.
+
+  **The completion-port fork is not migrated, and is not deferred for lack of need.** The original Probe D
+  was superseded by its own corrected rewrite after the first version checked the wrong field and declared
+  coexistence while its result code was `ERROR_INVALID_PARAMETER`. Re-establishing that measurement means
+  re-deriving which of the two readings is right, which is measurement work rather than migration work.
+  Queued as **M27.6** rather than folded in here, so it is scheduled instead of quietly dropped.
+
 - [ ] **M27.5** -- Re-run the probes on an **x64** host and record which findings are architecture-
   dependent. Every measurement in this workspace so far was taken on ARM64. This subsumes M19.5's narrower
   request for the thread-pool numbers, and the binaries exist precisely so this needs no re-derivation.
+
+- [ ] **M27.6** -- Migrate the completion-port fork measurement (Probe D): does associating a handle with
+  an IOCP foreclose `IoRing` use of it? This is the evidence for `windows-namespace-request-sys` returning
+  an opened handle **plain and unassociated**, so it is load-bearing for a shipped decision rather than a
+  curiosity. It was split out of M27.4 because the original probe exists in two versions that disagree --
+  the first declared coexistence while checking the wrong field, with a result code of
+  `ERROR_INVALID_PARAMETER` and a zero byte count; the second checks the result and adds the negative
+  control (the identical read on a non-associated handle) so a failure can be attributed to the
+  association rather than to the probe. Migrating it therefore requires deciding which reading is correct,
+  which is a fresh measurement rather than a port. Belongs in the ignored tier alongside the other
+  `IoRing` probes, and must carry the negative control.
 
 ## M26+ -- Gated on the namespace-facility design branch landing
 

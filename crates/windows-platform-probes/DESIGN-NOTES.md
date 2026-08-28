@@ -81,3 +81,67 @@ Measurements of **platform** behaviour that a design decision rests on. Not a
 test suite for this workspace's crates: a probe answers "what does Windows do?",
 never "does our code work?". A probe that starts asserting our own behaviour
 belongs in the crate that owns that behaviour.
+
+## The earlier probes are migrated, and two of them corrected in the move
+
+<a id="d-migration"></a>
+
+M27.4 moved the nine measurements that existed only in a git-ignored
+`.scratch/` directory. They are now `worker_context`, `pool_growth`,
+`device_map`, `cancel_io`, and `ioring`, alongside the `error_mode` and
+`handle_state` probes that established the scheme.
+
+Two things changed in the move, and both are worth recording because they were
+defects in the originals rather than translation choices.
+
+**The device-map control could not have passed.** It compared the logon-session
+LUID of the two contexts, reading the *thread* token -- which the
+non-impersonating side does not have. So the control reported "these are not
+different sessions" no matter what, and a reader checking it would have been
+misled into distrusting a correct finding. It now falls back to the process
+token, and the two LUIDs differ as they should. A control that cannot succeed is
+worse than no control, because it looks like one.
+
+**The `IoRing` registration probe must not use `windows-ioring-sys`.** That
+crate refuses a second registration *because of* the assumption being measured,
+so probing through its safe API would test the guard rather than the platform --
+confirming our own belief by consulting it. The probe therefore calls the Win32
+entry points directly. This is the same circularity the contract-integrity rule
+names, in the one place where it would have been easiest to miss: the code under
+test and the thing asserting it would have been the same claim.
+
+That probe also closes a standing gap. `windows-ioring-sys` recorded its
+replace-not-append assumption as explicitly **unverified**; it is now measured,
+and it holds.
+
+## "Cannot measure" is a third answer, and is not "no"
+
+<a id="d-cannot-measure"></a>
+
+Several probes need something a host may not have: an `IoRing`, a free drive
+letter. Each reports that it could not run rather than returning a negative,
+because conflating the two is exactly how a design note ends up citing a
+measurement that never happened.
+
+The distinction has teeth in the ignored tier. A test that cannot set up its
+fixture returns early; a test whose fixture *is* set up but does not exhibit the
+behaviour **fails**. `the_subst_letter_really_was_visible_before_impersonating`
+is that check written down: if the drive never resolved in our own session, then
+"not found while impersonating" would be true of any letter at all, and the
+finding would be vacuous.
+
+## Binaries print magnitudes; tests assert shape
+
+<a id="d-shape-not-magnitude"></a>
+
+The pool-growth migration made the reason concrete. Growth is **not uniform**:
+on the measuring host an initial burst of workers arrives in under 500
+microseconds, and beyond that the pool adds roughly one thread per 165
+milliseconds. A design sizing a stall threshold from the burst would be badly
+wrong about the tail.
+
+Neither number belongs in an assertion -- both are host-specific, and a test
+pinned to them would fail on the next machine for no useful reason. The *shape*
+is what survives a change of host, so the test asserts that there is a burst
+followed by a visibly slower regime, and `probe-pool-growth` prints the
+magnitudes for a human to read.
