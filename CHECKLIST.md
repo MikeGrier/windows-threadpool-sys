@@ -12,8 +12,8 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-11.** Complete the failure and capability
-> taxonomy the contract settled.
+> **NEXT ACTIONABLE ITEM: FE-12.** Complete cancellation, abandonment, and
+> teardown around the live engine.
 
 ## M6 -- Native enumeration engine
 
@@ -31,17 +31,7 @@ and the submission-ring servicer the sole registry authority (D-16, D-17).
 
 - [x] **FE-10** -- Bound each quantum and make backpressure lossless. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-10)
 
-- [ ] **FE-11** -- Complete the failure and capability taxonomy the contract
-  settled. Classify `ERROR_INVALID_FUNCTION`, `ERROR_NOT_SUPPORTED`, and
-  `ERROR_INVALID_PARAMETER` as `UnsupportedExtendedDirectoryInfo` only after
-  asserting the stated preconditions -- crate-opened live handle, valid information
-  class, non-null 8-byte-aligned base, effective capacity at least 1 KiB that is an
-  8-byte multiple and `u32`-representable -- so the crate never reports its own bug
-  as a filesystem incapability. Map `ERROR_MORE_DATA`, `ERROR_INSUFFICIENT_BUFFER`,
-  and `ERROR_BAD_LENGTH` before one complete record to `RecordTooLarge` carrying the
-  effective capacity, parsing no bytes from a failed refill. Report malformed
-  records with their detail. A late failure truncates rather than retracts: entries
-  already queued stay, followed by one `Failed` terminal.
+- [x] **FE-11** -- Complete the failure and capability taxonomy the contract settled. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-11)
 
 - [ ] **FE-12** -- Complete cancellation, abandonment, and teardown around the live
   engine. Cancellation cannot preempt an executing refill; once observed it discards

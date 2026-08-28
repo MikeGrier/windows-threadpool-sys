@@ -994,3 +994,45 @@ resume without losing or duplicating the pending entry.
 296 unit tests plus the crate doctest pass, stable across twenty consecutive
 runs and leaving no scratch directories behind; targeted all-target Clippy and
 `cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration failure and capability taxonomy
+
+### <a id="fe-11"></a>FE-11 -- Complete the failure and capability taxonomy the contract settled. *(completed 2026-08-27 21:49:52 UTC-04:00)*
+
+Most of the taxonomy this item names was already in place from FE-8/FE-9:
+`classify_refill_failure` in [native.rs](crates/windows-file-enumeration-sys/src/native.rs)
+already mapped `ERROR_INVALID_FUNCTION`/`ERROR_NOT_SUPPORTED`/`ERROR_INVALID_PARAMETER`
+to `UnsupportedExtendedDirectoryInfo` and `ERROR_MORE_DATA`/`ERROR_INSUFFICIENT_BUFFER`/
+`ERROR_BAD_LENGTH` to `RecordTooLarge`; malformed records were already reported
+with their [`MalformedRecord`](crates/windows-file-enumeration-sys/src/error.rs)
+detail; and "a late failure truncates rather than retracts" was already proven
+by the state-machine model's `a_failed_quantum_delivers_a_failed_terminal`.
+
+What was missing was the assertion half of the contract: the unsupported-class
+mapping is safe to trust only when the crate's own preconditions -- a live
+crate-opened handle, a valid information class, a non-null 8-byte-aligned
+buffer base, and an effective capacity that is at least
+`MINIMUM_BUFFER_CAPACITY`, an 8-byte multiple, and `u32`-representable -- all
+hold, and nothing checked that. `refill` now `debug_assert`s every one of them
+immediately before the call whose failure `classify_refill_failure` reads,
+so a future regression in handle, class, or buffer handling would be caught as
+this crate's own bug rather than silently reported as a filesystem
+incapability. None are independently reachable through the crate's public
+API -- the type system and `NativeBuffer::try_new`'s own assertion already
+rule out every violation -- so this is a regression guard, not new externally
+observable behaviour, and the full existing suite passing unchanged confirms
+none of them ever fire.
+
+A new engine-level test, `a_late_malformed_record_truncates_rather_than_retracts`,
+proves the truncation property against the real parser rather than the
+scripted model: it parks an enumeration on a full ring, frees exactly one slot,
+corrupts the still-retained record's `NextEntryOffset` directly in the native
+buffer, and confirms the resulting failure leaves the one entry still queued
+untouched.
+
+Recorded in [DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md)
+(D-13's section, "Error taxonomy and capability failures").
+
+297 unit tests plus the crate doctest pass, stable across twenty consecutive
+runs and leaving no scratch directories behind; targeted all-target Clippy and
+`cargo fmt --check` are clean.

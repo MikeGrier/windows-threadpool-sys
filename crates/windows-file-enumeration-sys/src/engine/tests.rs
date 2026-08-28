@@ -400,3 +400,71 @@ fn a_still_full_ring_parks_again_without_losing_the_pending_entry() {
     names.sort();
     assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
 }
+
+// -- failure and capability taxonomy (FE-11) -----------------------------
+
+/// Corrupt the `NextEntryOffset` at `offset` within `engine`'s buffer so the
+/// record starting there fails validation, without needing to know anything
+/// about its other fields.
+fn corrupt_next_entry_offset(engine: &mut EngineState, offset: usize) {
+    // SAFETY: `offset` is a cursor this same engine reported, which is always
+    // within its buffer; four bytes are written, matching `NextEntryOffset`'s
+    // width and position at a record's very start.
+    unsafe {
+        let base = engine.buffer.as_mut_ptr().cast::<u8>();
+        base.add(offset).cast::<u32>().write_unaligned(u32::MAX);
+    }
+}
+
+#[test]
+fn a_late_malformed_record_truncates_rather_than_retracts() {
+    // A ring just large enough to force a park after two deliveries, so a
+    // third real record is left retained at the cursor rather than parsed.
+    let scratch = Scratch::with_files(&["a.txt", "b.txt", "c.txt"]);
+    let mut engine = engine_for(scratch.path(), FileIdentityMode::Omit);
+    let completions = CompletionRing::new(MINIMUM_COMPLETION_CAPACITY);
+
+    let parked = advance(&mut engine, ENUMERATION, &completions);
+    assert!(matches!(parked, QuantumOutcome::Parked), "{parked:?}");
+    assert_eq!(completions.len(), MINIMUM_COMPLETION_CAPACITY);
+
+    // Take both delivered records out to see what they were, then put one
+    // back: exactly what a receiver would leave behind after consuming one of
+    // two, which is what frees the room the parked record is waiting for.
+    let first = completions.try_take().expect("first entry");
+    let second = completions.try_take().expect("second entry");
+    let (kept_name, put_back) = match (first, second) {
+        (Completion::Entry { .. }, Completion::Entry { entry: b, .. }) => (
+            b.name().to_string_lossy(),
+            Completion::Entry {
+                enumeration: ENUMERATION,
+                entry: b,
+            },
+        ),
+        other => panic!("expected two entries, got {other:?}"),
+    };
+    completions
+        .try_send_entry(put_back)
+        .expect("room for the one being kept");
+    assert_eq!(completions.len(), 1);
+
+    let cursor = engine
+        .cursor
+        .expect("the parked record is still retained, not lost");
+    corrupt_next_entry_offset(&mut engine, cursor);
+
+    let outcome = terminal(advance(&mut engine, ENUMERATION, &completions));
+    let failure = outcome.failure().expect("a failure");
+    assert!(
+        matches!(failure, EnumerationError::MalformedRecord(_)),
+        "{failure:?}"
+    );
+
+    // The entry left queued is untouched: a late failure truncates the
+    // listing, it does not retract what was already queued.
+    assert_eq!(completions.len(), 1);
+    let Some(Completion::Entry { entry, .. }) = completions.try_take() else {
+        panic!("the kept entry should still be queued");
+    };
+    assert_eq!(entry.name().to_string_lossy(), kept_name);
+}

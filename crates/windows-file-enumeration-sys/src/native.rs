@@ -46,6 +46,7 @@ use wtf_string::Wtf16Str;
 
 use crate::buffer::NativeBuffer;
 use crate::error::{EnumerationError, Win32Error};
+use crate::request::{MINIMUM_BUFFER_CAPACITY, RECORD_ALIGNMENT};
 
 /// The access an enumeration needs, and no more.
 ///
@@ -205,8 +206,16 @@ pub(crate) enum RefillOutcome {
 ///
 /// # Panics
 ///
-/// Never; a failure is reported as [`RefillOutcome::Failed`] so a caller cannot
-/// forget to classify it.
+/// Never in a release build; a failure is reported as [`RefillOutcome::Failed`]
+/// so a caller cannot forget to classify it. In a debug build, panics if this
+/// crate's own preconditions for that classification do not hold: a live
+/// crate-opened handle, a valid information class, a non-null 8-byte-aligned
+/// buffer base, and an effective capacity that is at least
+/// [`MINIMUM_BUFFER_CAPACITY`], an 8-byte multiple, and `u32`-representable.
+/// Every path that reaches this function already establishes all of these
+/// before calling it; a violation would be a bug in this crate, not a
+/// filesystem incapability, which is exactly what
+/// [`classify_refill_failure`] must never confuse the two for.
 pub(crate) fn refill(
     directory: &OwnedHandle,
     buffer: &mut NativeBuffer,
@@ -217,17 +226,45 @@ pub(crate) fn refill(
         Refill::Next => FileIdExtdDirectoryInfo,
     };
     let capacity = buffer.capacity();
+
+    // Asserted here, once, immediately before the call whose
+    // `ERROR_INVALID_FUNCTION` / `ERROR_NOT_SUPPORTED` / `ERROR_INVALID_PARAMETER`
+    // failure `classify_refill_failure` reads as "this filesystem cannot do
+    // extended directory information". Every one of these is already true by
+    // construction on every path that reaches this function; asserting them is
+    // what stops a future regression in handle, class, or buffer handling from
+    // being silently misreported as a filesystem incapability instead of
+    // caught as this crate's own bug.
+    let handle = directory.as_raw_handle() as HANDLE;
+    debug_assert!(
+        !handle.is_null() && handle != INVALID_HANDLE_VALUE,
+        "the directory handle must be a live handle this crate opened"
+    );
+    debug_assert!(
+        class == FileIdExtdDirectoryRestartInfo || class == FileIdExtdDirectoryInfo,
+        "the information class must be one this crate's refill actually requests"
+    );
+    let base = buffer.as_mut_ptr();
+    debug_assert!(!base.is_null(), "the buffer base must not be null");
+    debug_assert_eq!(
+        (base as usize) % RECORD_ALIGNMENT,
+        0,
+        "the buffer base must be 8-byte aligned"
+    );
+    debug_assert!(
+        capacity as usize >= MINIMUM_BUFFER_CAPACITY,
+        "the effective capacity must be at least the minimum buffer capacity"
+    );
+    debug_assert_eq!(
+        capacity as usize % RECORD_ALIGNMENT,
+        0,
+        "the effective capacity must be an 8-byte multiple"
+    );
+
     // SAFETY: `directory` is a live directory handle; the buffer is a live,
     // 8-byte-aligned allocation of exactly `capacity` bytes, which is what the
     // directory-information classes write into.
-    let ok = unsafe {
-        GetFileInformationByHandleEx(
-            directory.as_raw_handle() as HANDLE,
-            class,
-            buffer.as_mut_ptr(),
-            capacity,
-        )
-    };
+    let ok = unsafe { GetFileInformationByHandleEx(handle, class, base, capacity) };
     if ok != 0 {
         return RefillOutcome::Batch;
     }
@@ -242,9 +279,10 @@ pub(crate) fn refill(
 ///
 /// The preconditions the unsupported-class mapping depends on -- a live handle
 /// this crate opened, a valid class, an 8-byte-aligned non-null base, and a
-/// clamped, aligned, `u32`-representable capacity -- are all established before
-/// the call, which is what makes it safe to read those codes as "the filesystem
-/// cannot do this" rather than "this crate asked wrongly".
+/// clamped, aligned, `u32`-representable capacity -- are asserted in
+/// [`refill`], the caller, immediately before the call whose failure this
+/// classifies, which is what makes it safe to read those codes as "the
+/// filesystem cannot do this" rather than "this crate asked wrongly".
 fn classify_refill_failure(
     code: Win32Error,
     which: Refill,

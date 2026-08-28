@@ -268,7 +268,11 @@ verified to be a directory*, a valid information class, a non-null
 effective capacity of at least 1 KiB that is both an 8-byte multiple and
 representable as `u32`, `ERROR_INVALID_FUNCTION`, `ERROR_NOT_SUPPORTED`, and
 `ERROR_INVALID_PARAMETER` are classified as
-`UnsupportedExtendedDirectoryInfo`. The classification is crate-owned and the
+`UnsupportedExtendedDirectoryInfo`. Every one of those preconditions is
+`debug_assert`ed immediately before the call whose failure this classifies,
+so a future regression in handle, class, or buffer handling is caught as this
+crate's own bug rather than silently reported as a filesystem incapability.
+The classification is crate-owned and the
 raw code remains available. The crate does not silently switch to find-first/
 find-next because that would remove change time, allocation size, extended-
 attribute size, and the 128-bit file ID from the promised level platform.
