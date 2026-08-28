@@ -71,7 +71,7 @@ namespace operation is.
   keeping both available here is what stops this crate encoding one consumer's policy. Depends on M22.2 for
   the accepted bit set.
 
-- [ ] **M22.5** -- Implement the impersonation aspect by consuming
+- [x] **M22.5** -- Implement the impersonation aspect by consuming
   [windows-impersonation-token-sys](crates/windows-impersonation-token-sys/DESIGN-NOTES.md) rather than
   reimplementing capture, transport, or restoration. Its restore failure is fail-fast and that semantics is
   inherited unchanged; note in the crate notes that its capture never yields an absent token, because it

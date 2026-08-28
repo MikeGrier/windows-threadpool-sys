@@ -46,6 +46,10 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+pub mod captured;
 pub mod error_mode;
+pub mod impersonation;
 
+pub use captured::Captured;
 pub use error_mode::ThreadErrorMode;
+pub use windows_impersonation_token_sys::ImpersonationToken;
