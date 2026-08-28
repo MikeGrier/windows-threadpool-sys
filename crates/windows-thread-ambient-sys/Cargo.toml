@@ -27,6 +27,13 @@ targets = ["x86_64-pc-windows-msvc"]
 [dependencies]
 windows-impersonation-token-sys = { version = "0.1.1", path = "../windows-impersonation-token-sys" }
 
+# Test-only. The crate deliberately does not depend on the thread pool -- it is a
+# platform layer for thread state, not for scheduling -- but the behaviour it
+# exists for was measured on a real pool worker, so the acceptance test runs
+# there rather than on an ordinary spawned thread.
+[dev-dependencies]
+windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys" }
+
 [dependencies.windows-sys]
 version = "0.61.2"
 default-features = false

@@ -110,13 +110,28 @@ let refused = ThreadErrorMode::from_bits(0x0001 | 0x0004)
 assert_eq!(refused.bits(), 0x0004);
 ```
 
+## What is carried
+
+| Aspect | How it relates to the caller | Notes |
+|---|---|---|
+| Impersonation | captured | Consumed from [windows-impersonation-token-sys](../windows-impersonation-token-sys/README.md); its fail-fast restore is inherited unchanged |
+| Thread error mode | captured **and** declarable | The only aspect in both sets, so a consumer may transplant it or impose its own |
+| TxF transaction | captured | Outside the default set: deprecated, and a captured transaction can be committed or rolled back beneath the worker |
+| WOW64 redirection | declared | Has no getter at all, so there is nothing to capture |
+| Memory priority | declared | Readable, but remoting a caller's priority without being asked is a policy choice |
+| Background mode | declared | Moves CPU, I/O and memory priority together, which the name says out loud |
+
 ## Status
 
-Early. The design decisions are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md);
-the implementation is in progress against milestones M22 and M23 of
-[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md). The aspects
-are complete; the composite that applies them together is not. Not yet ready for
-a crates.io release.
+The aspects and the composite are complete: capture, declaration, ordered
+application, exact-reverse release, and the restore report. Milestones M22 and
+M23 of [CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md) are
+finished; the design decisions behind them are in
+[DESIGN-NOTES.md](DESIGN-NOTES.md). Not yet released to crates.io.
 
 The examples above are compiled as doctests, so a contract change breaks the
-build rather than leaving the README teaching the old answer.
+build rather than leaving the README teaching the old answer. The composite is
+additionally proved on a real Windows thread-pool worker in
+[tests/thread_pool.rs](tests/thread_pool.rs) -- including the negative that
+motivates the crate, that an aspect which was *not* captured does not arrive on
+the worker.

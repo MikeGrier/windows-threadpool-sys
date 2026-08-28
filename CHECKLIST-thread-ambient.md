@@ -115,7 +115,7 @@ namespace operation is.
   rather than chosen; for the other aspects it is reported rather than fatal, and the report must reach the
   caller instead of being dropped on the floor.
 
-- [ ] **M23.4** -- Prove the *composite* across a real thread boundary rather than only in-process (the
+- [x] **M23.4** -- Prove the *composite* across a real thread boundary rather than only in-process (the
   per-aspect cross-thread cases already landed with M22.4-M22.7, and the aspect documentation with M22.8):
   capture on
   one thread, apply on a thread-pool worker, and assert each aspect took effect there and was restored
