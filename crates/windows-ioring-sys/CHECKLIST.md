@@ -145,3 +145,60 @@ assumption), and the previously-unstated completion-ordering rule. Categories 1,
 - [ ] **M10.3** -- Resolve or re-record D-14's unverified registration-index continuity assumption. It is a
   cross-message invariant a consumer can silently depend on; either establish it by measurement (the spike's
   precedent) or state plainly on the public API that index continuity is not guaranteed.
+
+## M11 -- The completion event as a ring primitive (external consumer proposal, 2026-08-28)
+
+Prompted by a consumer proposal and the spike that answered it; the exchange is recorded in
+[DESIGN-SESSION-2026-08-28-completion-event-multiplexing.md](design-sessions/DESIGN-SESSION-2026-08-28-completion-event-multiplexing.md),
+and the decisions are [D-19](DESIGN-NOTES.md#d-19) through [D-22](DESIGN-NOTES.md#d-22).
+
+M11.1 is a correctness fix against shipped 0.1.2 behaviour and is deliberately first and independent:
+it must not wait on the API work behind it.
+
+- [ ] **M11.1** -- Fix `EventDelivery`'s stranded-backlog bug ([D-19](DESIGN-NOTES.md#d-19)). A ring handed
+  to `EventDelivery::new` with completions already in its CQ never delivers them: the attach does not
+  signal (the queue was already non-empty), and nothing afterwards signals either, because the queue never
+  returns to empty. Its rustdoc claims the opposite ("including any that were already queued when `ring`
+  was handed over"), so the doc is wrong as well as the behaviour. Land the repro from the spike as an
+  integration test first (submit, let the completion land, *then* hand the ring over, assert the callback
+  runs), then fix by signalling the event once after `wait.arm(..)` -- the drain/re-arm/drain callback body
+  is already correct and needs no change. The existing M4 test only ever hands over a fresh ring, which is
+  why this passed CI.
+
+- [ ] **M11.2** -- Add `IoRing::completion_event(&mut self) -> io::Result<OwnedHandle>`
+  ([D-20](DESIGN-NOTES.md#d-20)): capability-check `IORING_FEATURE_SET_COMPLETION_EVENT`, create and own an
+  auto-reset event, `SetIoRingCompletionEvent`, signal it once, and return a duplicate handle. Idempotent --
+  repeat calls return another duplicate of the same event rather than attaching a new one. The rustdoc
+  states the [D-19](DESIGN-NOTES.md#d-19) contract in full: signalled on empty -> non-empty, drain to empty
+  before waiting again, a wake with nothing to pop is normal.
+
+- [ ] **M11.3** -- Tests for the M11.2 contract, written against the *stated* rules rather than against
+  current behaviour: the backlog case (submit, let completions land, call `completion_event`, assert the
+  returned handle signals), the setup-signal case, the idempotence case, and a multiplexed-wait case that
+  waits on the ring's event alongside an unrelated event and asserts the ring still wakes after the
+  unrelated one fires. This last one is the configuration that makes an edge-trigger violation observable
+  at all, and its absence is why M11.1's bug survived.
+
+- [ ] **M11.4** -- Re-express `EventDelivery::new` on top of `IoRing::completion_event`, removing the
+  second `SetIoRingCompletionEvent` call site ([D-20](DESIGN-NOTES.md#d-20)). `ThreadpoolWait` needs an
+  owned waitable, which the returned duplicate satisfies. M11.1's regression test must still pass
+  unchanged -- it is the check that the consolidation preserved the fix rather than reintroducing the bug
+  behind a new seam.
+
+- [ ] **M11.5** -- Gate `windows-threadpool-sys` behind a default-on `threadpool` feature
+  ([D-22](DESIGN-NOTES.md#d-22)), with `EventDelivery` and its tests behind the same gate, and extend CI to
+  build and test **both** feature combinations. The second combination is the whole point: without it the
+  `default-features = false` path rots silently.
+
+- [ ] **M11.6** -- Document the wakeup shapes and both contract gaps across every place that states them --
+  `lib.rs`'s "Choosing a delivery architecture", `README.md`, and the "Two delivery architectures" section
+  of [DESIGN-NOTES.md](DESIGN-NOTES.md). Two facts to state: that Model B's wakeup source is separable from
+  Model B's identity (a caller may own its ring and still wait on it alongside other handles), and that
+  `drain_preceding`'s barrier stops at the ring's edge. Per CONTRACT INTEGRITY this is a blast-radius
+  sweep, not a single edit: grep `drain_preceding`, "two delivery", and "completion event" across `src/`,
+  `tests/`, `examples/`, and `*.md`, and fix or account for every hit.
+
+- [ ] **M11.7** -- An example putting the multiplexed wait together end to end: a caller-owned ring whose
+  completion event is waited on via `WaitForMultipleObjects` alongside a shutdown event, draining to empty
+  on every pass. This is the shape the requesting consumer is building, and an example is what stops the
+  next consumer from rediscovering [D-19](DESIGN-NOTES.md#d-19) the hard way.
