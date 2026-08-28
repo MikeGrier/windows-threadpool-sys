@@ -1161,12 +1161,45 @@ is the first shipped inhabitant of this plane, and it independently arrived at
 much of the same shape: a bounded submission and completion ring pair, a
 worker that reports rather than mutates shared authority, finite work quanta,
 and a directory opened under an explicitly captured token. It is a
-*specialization* -- one directory per request, with streaming delivery -- and
-its directory open is one entry of the catalogue this facility would generalize.
-Whether that open eventually moves to the general facility or stays where it is
-remains an open merge-or-delete decision, tracked in [CHECKLIST.md](CHECKLIST.md)
-rather than left to be noticed later. Duplication between them is expected and
-correct while the general facility is unproven.
+*specialization* -- one directory per request, with streaming delivery.
+
+**Replacing its directory open is intended, not an open question.** That crate's
+`open_directory` is the committed first consumer of this facility's catalogue,
+and the direction is settled: the general operation replaces the inline one. Only
+the *timing* is conditional, in the ordinary duplicate-then-decide way -- the
+inline path stays until the general one is proven, so the shipped crate is never
+destabilised by speculative work. The item that carries it out is in
+[CHECKLIST.md](CHECKLIST.md), so a transitional duplication cannot quietly become
+permanent.
+
+Having a committed consumer before the facility exists is worth more than it
+might appear: it supplies a real acceptance test rather than a hypothetical one,
+and it has already corrected this design once, by establishing that an
+unassociated handle is a first-class destination rather than a degenerate case.
+Four further constraints follow from what that consumer actually does, and the
+facility's catalogue has to satisfy all of them:
+
+- **Arbitrary access, share mode, and flags.** It opens with
+  `FILE_LIST_DIRECTORY` rather than `GENERIC_READ`, so a directory a caller may
+  list but not read attributes of still opens, and with
+  `FILE_FLAG_BACKUP_SEMANTICS`, without which `CreateFileW` cannot return a
+  directory handle at all. An open operation that fixes any of these is unusable
+  here.
+- **The raw Win32 code is preserved unaltered.** `ERROR_FILE_NOT_FOUND` means a
+  missing directory from the open, an empty directory from the first query, and
+  a genuine failure from a later one. Only the consumer can disambiguate, so the
+  facility must not normalise or reclassify.
+- **`GetLastError` is captured before the context is restored.** The shipped code
+  reads the error inside the impersonation guard precisely so that nothing in
+  between overwrites it. The facility must do the same: the error is an *output*
+  of the operation, carried in its completion, never left on a thread.
+- **Classification after opening is itself a blocking namespace call.** That
+  crate follows its open with a `FileBasicInfo` query to establish
+  directory-ness, because the refill failure codes cannot tell "you named a file"
+  from "this filesystem lacks extended directory information". Remoting the open
+  while leaving that query inline would still leave a blocking call on the
+  consumer's worker, so the facility owes either a compound open-and-classify
+  operation or a second catalogue entry.
 
 ### A handle is either a completion-port handle or an `IoRing` handle, never both
 
@@ -1178,9 +1211,16 @@ poisons a handle identically, because it performs the same association.
 
 This is a fork, not a defect, and it is **irreversible**. Three consequences:
 
-- An opened handle offers its two destinations -- the overlapped/`TP_IO` path and
-  the `IoRing` path -- as mutually exclusive consuming transitions, not as two
-  available methods.
+- An opened handle offers its destinations as mutually exclusive consuming
+  transitions, not as available methods. There are **three**, not two: the
+  overlapped/`TP_IO` path, the `IoRing` path, and *no association at all* -- a
+  plain synchronous handle. The third is not a degenerate case: it is what a
+  consumer needs for the synchronous-only APIs this facility exists to serve,
+  `GetFileInformationByHandleEx` among them, and
+  [crates/windows-file-enumeration-sys](crates/windows-file-enumeration-sys/DESIGN-NOTES.md)
+  requires exactly it. An earlier statement of this decision listed only two
+  destinations, which would have made the facility unable to serve its own first
+  consumer.
 - The destination must be declared in the open request, because the choice has
   to be made before association and the opening thread is gone by the time a
   caller sees the handle. This makes request-declared handle shaping a
@@ -1233,20 +1273,75 @@ contaminated worker to shared infrastructure is worse than dying.
 [crates/windows-impersonation-token-sys](crates/windows-impersonation-token-sys/DESIGN-NOTES.md)
 already owns that layer -- capture, transport, thread-bound application, and
 exact restoration with a fail-fast guard -- and the facility consumes it rather
-than growing a second implementation. What the facility adds is the *rest* of
-the thread-affine set the measurements above expose, which impersonation alone
-does not cover: the thread error mode (captured then hardened, below), WOW64
-filesystem redirection, and I/O and memory priority. Priority is an explicit
-request field rather than sniffed ambient state, because it is only partially
-queryable through documented API and a caller running in a background-priority
-mode would otherwise have its I/O silently promoted by the remoting.
+than growing a second implementation.
 
-The error mode is captured **and then hardened**: `SEM_FAILCRITICALERRORS` is
-forced regardless of what was captured. This is a deliberate divergence from
-synchronous semantics, taken because the pool thread is shared and is not ours to
-hang. Per this repository's rule that behaviour is owned rather than inherited
-from dependencies, matching the synchronous call would be the wrong
-specification here.
+#### The context is a composite that *contains* an impersonation token
+
+`ImpersonationToken` does not grow to carry the rest of the thread state. The
+facility defines a separate composite holding each aspect independently, one
+field of which is an optional `ImpersonationToken`. Four reasons, and the first
+is mechanical rather than stylistic:
+
+- **The aspects have different application windows.** The shipped consumer
+  applies impersonation *only* around the open and reverts immediately, because
+  later queries use the already-open handle and need no token. The error mode
+  must hold for the whole callback, since any blocking call can raise a hard
+  error. A single type implies a single application window, which is wrong for
+  at least one aspect whichever window is chosen -- and the narrow impersonation
+  window is deliberate.
+- **They have different failure semantics.** Impersonation restore failure is
+  fail-fast, because returning a shared worker under an unknown identity is a
+  process security failure. An error-mode restore failure is not remotely that
+  severe. One type would either impose the strictest semantics on everything or
+  carry per-aspect semantics internally, which is the composite in disguise.
+- **They differ in whether they can be captured at all.** A thread token may
+  legitimately be absent; the error mode is always readable; I/O priority is only
+  partially queryable through documented API.
+- **Layering.** That crate is independently published and is a platform layer for
+  one Windows concept. Folding unrelated thread state into it would collapse a
+  layer boundary for convenience and would tax its existing standalone consumer,
+  which wants impersonation alone.
+
+Applying the composite produces a **composition of per-aspect guards**, applied
+outermost-first and released in exact reverse: error mode outermost, so it is
+already in force while impersonation is being applied; WOW64 redirection next;
+impersonation innermost, because its window is narrowest and its restoration is
+the one that must not be delayed. Applying a subset stays expressible, which is
+what the differing windows require.
+
+The composite lives in the facility's crate and is re-exported. It becomes a
+genuine cross-crate contract once the enumeration crate's open moves onto it, and
+may be extracted then; it is not extracted preemptively.
+
+#### Three relationships to the caller, not one
+
+"Captured context" names only part of what the composite carries, because the
+aspects do not all relate to the submitting thread the same way:
+
+| Category | Aspect | Behaviour |
+|---|---|---|
+| **Transplanted** | impersonation, WOW64 filesystem redirection | the submitter's captured value is applied on the worker |
+| **Overridden** | thread error mode | the facility's policy is applied *regardless* of what the caller had |
+| **Declared** | I/O and memory priority | supplied by the request; never captured |
+
+Consequences worth stating, because each is easy to get wrong:
+
+- **"Restore" means the worker's prior state in every case**, but what was
+  applied differs. A transplanted aspect installs the submitter's value; an
+  overridden one installs ours. Both are undone on the way out.
+- **The error mode is overridden, not transplanted.** `SEM_FAILCRITICALERRORS`
+  and `SEM_NOOPENFILEERRORBOX` are forced, because a hard error on a shared pool
+  thread can raise a modal dialog and hang process-wide infrastructure. This is a
+  deliberate divergence from synchronous semantics: per this repository's rule
+  that behaviour is owned rather than inherited, matching the synchronous call
+  would be the wrong specification. Whether the caller's error mode is *captured*
+  at all -- for diagnostics, or not at all as dead weight -- and whether the
+  non-dialog bits are transplantable, is not yet settled; see
+  [CHECKLIST.md](CHECKLIST.md).
+- **Priority is declared rather than sniffed.** It is only partially queryable,
+  and a caller running under a background-priority mode would otherwise have its
+  I/O silently promoted by the remoting -- a correctness regression a naive
+  implementation ships without noticing.
 
 ### Path resolution follows the impersonation token's logon session
 

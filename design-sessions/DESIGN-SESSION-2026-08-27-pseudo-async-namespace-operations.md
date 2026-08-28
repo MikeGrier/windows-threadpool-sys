@@ -21,9 +21,19 @@ The first owns the impersonation component of the captured context, so the
 facility consumes it rather than reimplementing capture. The second is the first
 shipped inhabitant of the namespace plane and independently reached much of the
 same shape -- bounded submission and completion rings, a reporting worker,
-finite quanta, a captured-token directory open. The overlap is real and is
-tracked as a merge-or-delete decision (M21.1) rather than resolved by
-assumption.
+finite quanta, a captured-token directory open.
+
+**Replacing that directory open was the intent all along.** This was recorded
+first as an open merge-or-delete question and corrected by the engineer: the
+direction is committed, and only the timing is conditional in the ordinary
+duplicate-then-decide way. Having a committed consumer before the facility exists
+already paid for itself by correcting the design -- it established that an
+**unassociated** handle is a first-class destination, where this session had
+described the open as forking two ways (completion port or ring) when it forks
+three. `GetFileInformationByHandleEx` is synchronous and has no overlapped form,
+so the consumer needs a plain handle, and a two-destination design could not have
+served its own first consumer. The replacement is M21.3 in
+[CHECKLIST.md](../CHECKLIST.md).
 
 ---
 
@@ -299,13 +309,22 @@ In brief:
 3. **A quarantined worker has affinity to the operation, not the client**, which
    forces `Arc`-shared domain internals so a wedged worker can outlive its
    owner.
-4. **The captured context is a named, exhaustively enumerated type**, not an
-   implicit side effect of submission. Capture fails synchronously at admission;
-   apply and restore on the worker are fail-fast on every path including unwind.
-5. **The thread error mode is captured and then hardened.** Forcing
-   `SEM_FAILCRITICALERRORS` is a deliberate divergence from synchronous
-   semantics: the pool thread is shared and is not ours to hang on a modal
-   dialog.
+4. **The context is a named, exhaustively enumerated composite that *contains*
+   an `ImpersonationToken`** rather than an impersonation token grown to carry
+   everything else. The aspects have different application windows (impersonation
+   is applied only around the open and reverted immediately; the error mode must
+   hold for the whole callback), different failure semantics (impersonation
+   restore failure is fail-fast, an error-mode restore failure is not), and
+   different capturability. Application composes per-aspect guards outermost-first
+   and releases in exact reverse. Capture fails synchronously at admission; apply
+   and restore are fail-fast on every path including unwind.
+5. **The aspects relate to the caller in three different ways**, so "captured
+   context" names only part of it: impersonation and WOW64 redirection are
+   *transplanted* from the submitter; the thread error mode is *overridden* with
+   the facility's own policy, because a hard error on a shared pool thread can
+   raise a modal dialog; and I/O and memory priority is *declared* in the request,
+   never captured, because it is only partially queryable and remoting would
+   otherwise silently promote a background caller's I/O.
 6. **The path is resolved at submission**, because the process CWD is mutable by
    any thread and even perfect remoting would be racy. Long paths are not
    silently prefixed with the extended-length marker.
@@ -340,6 +359,12 @@ In brief:
   performs quarantine-and-replace itself, and M-6 showed mid-flight cancellation
   is unsafe on a shared worker regardless. It remains the *only* shape in which
   mid-flight cancellation could work, so it is recorded rather than discarded.
+- **Growing `ImpersonationToken` to carry the whole thread context.** Rejected on
+  mechanism before layering: the aspects have different application windows, so a
+  single type implies a single window that is wrong for at least one of them.
+  Also rejected because it would impose impersonation's fail-fast restore
+  semantics on aspects that do not warrant them, and would tax the crate's
+  existing standalone consumer, which wants impersonation alone.
 - **Thread-lifetime `thread_local!` ownership of a domain.** Rejected on three
   mechanical grounds: callers run on shared pool threads, so a domain would be
   stranded on process-shared infrastructure; TLS destructors are unreliable on

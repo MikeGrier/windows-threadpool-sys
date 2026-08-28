@@ -73,18 +73,37 @@ PR #44 landed `windows-impersonation-token-sys` and `windows-file-enumeration-sy
 session was in progress. Both are inhabitants of the plane the session scoped, so the relationship has to
 be settled rather than discovered later.
 
-- [ ] **M21.1** -- Record the merge-or-delete decision for the captured-token directory open. The
-  enumeration crate opens a directory under an explicitly captured token inline (its D-4); the planned
-  facility would generalize that as one entry of its operation catalogue. Duplication is correct while the
-  general facility is unproven -- this item exists so the decision is made deliberately when it is proven,
-  rather than a duplicated path silently becoming permanent because nobody circled back. Decide: move the
-  open to the general facility, keep it specialized, or keep both with the boundary stated.
-
-- [ ] **M21.2** -- Sweep the workspace design notes for prose that says the impersonation and enumeration
+- [ ] **M21.1** -- Sweep the workspace design notes for prose that says the impersonation and enumeration
   crates *will be* added, now that both have shipped. The "Captured impersonation is a separate platform
   layer" section still opens "The workspace will add ...". This is the blast-radius half of a correction:
   the fact changed, and the statements of it have to be swept rather than the one site a reader happened
   to notice.
+
+- [ ] **M21.2** -- Settle the two open sub-questions in the context decomposition: whether the caller's
+  thread error mode is captured at all (for diagnostics) or not captured as dead weight, given that the
+  facility overrides rather than transplants it; and whether the non-dialog error-mode bits
+  (`SEM_NOALIGNMENTFAULTEXCEPT`, `SEM_NOGPFAULTERRORBOX`) are transplantable while the dialog-suppressing
+  bits stay forced. Note `SEM_NOALIGNMENTFAULTEXCEPT`'s behaviour is architecture-dependent, so this needs
+  measurement on both ARM64 and x64 rather than reasoning.
+
+- [ ] **M21.3** -- Replace `windows-file-enumeration-sys`'s inline `open_directory` with the general
+  facility's catalogue operation. The direction is settled, not open: that open is the committed first
+  consumer, and the inline path exists only until the general one is proven. The replacement must preserve
+  everything the shipped open already gets right, each of which is a constraint on the catalogue rather
+  than an implementation detail: arbitrary access, share mode and flags (it opens with
+  `FILE_LIST_DIRECTORY`, not `GENERIC_READ`, and requires `FILE_FLAG_BACKUP_SEMANTICS` to obtain a
+  directory handle at all); an **unassociated** handle, since `GetFileInformationByHandleEx` is
+  synchronous; the raw Win32 code unaltered, because `ERROR_FILE_NOT_FOUND` means three different things
+  across the open and the first and later queries and only the consumer can disambiguate; and
+  `GetLastError` captured *before* the context is restored, which the shipped code does deliberately.
+  Its D-15 Globazog acceptance gate must still pass afterwards.
+
+- [ ] **M21.4** -- Decide whether the post-open `FileBasicInfo` directory-ness check becomes a compound
+  open-and-classify operation or a second catalogue entry. The enumeration crate performs it because the
+  refill failure codes cannot distinguish "you named a file" from "this filesystem lacks extended
+  directory information". It is itself a blocking namespace call, so remoting the open while leaving the
+  classification inline would leave a blocking call on the consumer's worker and only half-solve the
+  problem this facility exists for. Depends on M21.3.
 
 ## M-inf -- Parked
 
