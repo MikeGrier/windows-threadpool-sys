@@ -211,10 +211,36 @@ impl QueryVolumeInformation {
 ///
 /// `buffer` must have capacity for `capacity` characters, and Win32 must have
 /// written a NUL-terminated string within it.
+///
+/// Note what this deliberately does **not** require: that all `capacity`
+/// characters are initialised. Win32 writes only the string it produced plus a
+/// terminator, so most of the buffer is untouched -- which is why the scan
+/// below reads one element at a time through a raw pointer rather than forming
+/// a slice over the whole capacity. A `&[u16]` spanning uninitialised elements
+/// would be undefined behaviour the moment it was created, before `position`
+/// ever short-circuited at the terminator.
 unsafe fn set_len_to_terminator(buffer: &mut Wtf16String, capacity: usize) {
-    // SAFETY: the caller guarantees `capacity` initialised characters.
-    let written = unsafe { std::slice::from_raw_parts(buffer.as_mut_ptr(), capacity) };
-    let length = written.iter().position(|unit| *unit == 0).unwrap_or(0);
+    let base = buffer.as_mut_ptr();
+    let mut length = 0;
+
+    while length < capacity {
+        // SAFETY: `base` is valid for `capacity` characters of storage, and
+        // every element up to and including the terminator was written by
+        // Win32 per this function's contract, so each read is of an
+        // initialised element.
+        if unsafe { base.add(length).read() } == 0 {
+            break;
+        }
+        length += 1;
+    }
+
+    // A terminator at the very end would mean Win32 filled the buffer without
+    // room for one, which its contract forbids; treating that as an empty
+    // string keeps the invariant rather than reporting content that was never
+    // terminated.
+    if length == capacity {
+        length = 0;
+    }
 
     // SAFETY: `length` is the terminator's index, so that many content
     // characters were written and it is within capacity.
