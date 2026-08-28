@@ -81,11 +81,17 @@ be settled rather than discovered later.
 
 - [ ] **M21.2** -- Settle the two open sub-questions in the context decomposition: whether the caller's
   thread error mode is captured at all (for diagnostics) or not captured as dead weight, given that the
-  facility overrides rather than transplants it; and whether the non-dialog error-mode bits
-  (`SEM_NOALIGNMENTFAULTEXCEPT`, `SEM_NOGPFAULTERRORBOX`) are transplantable while the dialog-suppressing
-  bits stay forced. Note `SEM_NOALIGNMENTFAULTEXCEPT`'s behaviour is architecture-dependent, so this needs
-  measurement on both ARM64 and x64 rather than reasoning.
-
+  facility overrides rather than transplants it; and whether the non-dialog error-mode bits are
+  transplantable while the dialog-suppressing bits stay forced.
+  **Narrowed by M22.2, which measured the settable set rather than reasoning about it.**
+  `SEM_NOALIGNMENTFAULTEXCEPT` is out of the question entirely: `SetThreadErrorMode` **rejects** it with
+  `ERROR_INVALID_PARAMETER`, so it is not transplantable by anyone, and the anticipated ARM64/x64 pair is
+  not needed for it. What remains is `SEM_NOGPFAULTERRORBOX`, which is settable and is therefore a genuine
+  policy question. Note also the measured trap that constrains any answer: an invalid bit fails the whole
+  call, so a forced-plus-transplanted combination installs **nothing** if the transplanted part is invalid.
+  The capture-versus-override half is likewise now a policy choice rather than a capability question, since
+  [windows-thread-ambient-sys](crates/windows-thread-ambient-sys/DESIGN-NOTES.md) offers the error mode for
+  both capture and declaration and leaves the choice to the consumer.
 - [ ] **M21.3** -- Replace `windows-file-enumeration-sys`'s inline `open_directory` with the general
   facility's catalogue operation. The direction is settled, not open: that open is the committed first
   consumer, and the inline path exists only until the general one is proven. The replacement must preserve
@@ -134,11 +140,19 @@ namespace operation is.
   correction's authoritative statement links to the new crate's `DESIGN-NOTES.md`, so writing it before the
   crate existed would have created a broken cross-reference. Sequencing M22.3 first would have been the
   correct plan.
-- [ ] **M22.2** -- Measure which `SEM_` bits `SetThreadErrorMode` actually accepts, because it decides
+- [x] **M22.2** -- Measure which `SEM_` bits `SetThreadErrorMode` actually accepts, because it decides
   which bits this crate can offer as declarable. The documented set is three bits and excludes
   `SEM_NOALIGNMENTFAULTEXCEPT`, which is process-scoped and sticky once set. If measurement confirms that,
   M21.2's second sub-question dissolves rather than needing an ARM64/x64 pair, and M21.2 is updated to say
   so. Reason it from measurement, not from the documentation.
+  **Measured.** Settable: `SEM_FAILCRITICALERRORS`, `SEM_NOGPFAULTERRORBOX`, `SEM_NOOPENFILEERRORBOX`.
+  `SEM_NOALIGNMENTFAULTEXCEPT` is **rejected** with `ERROR_INVALID_PARAMETER` -- loudly, not silently
+  dropped, which is what the probe read every value back to distinguish. Two findings beyond the documented
+  list: an invalid bit fails the **whole** call, installing none of the valid bits alongside it, so the
+  declarable type must be unable to represent it rather than validating it at runtime; and M21.2 is
+  narrowed rather than closed, since `SEM_NOGPFAULTERRORBOX` is settable and remains a real policy
+  question. Recorded in
+  [crates/windows-thread-ambient-sys/DESIGN-NOTES.md](crates/windows-thread-ambient-sys/DESIGN-NOTES.md).
 
 - [x] **M22.3** -- Create the crate: `Cargo.toml`, workspace membership, `README.md`, a `CHANGELOG.md`
   baseline, a row in [PLANS.md](PLANS.md), and a crate `DESIGN-NOTES.md` recording the shape decisions

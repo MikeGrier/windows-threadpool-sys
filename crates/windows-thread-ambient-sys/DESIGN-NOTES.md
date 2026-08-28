@@ -171,8 +171,38 @@ optional and out of any minimal default, not a reason to omit it.
 
 ### Thread error mode
 
-Which `SEM_` bits are actually settable per-thread decides which bits this crate
-can offer as declarable. The documented set for `SetThreadErrorMode` is three
-bits and excludes `SEM_NOALIGNMENTFAULTEXCEPT`, which is process-scoped and
-sticky once set. That is measured rather than read off the documentation; see the
-workspace [CHECKLIST.md](../../CHECKLIST.md), M22.2.
+<a id="d-error-mode-bits"></a>
+
+Which `SEM_` bits are settable per-thread decides which bits this crate can offer
+as declarable, so it was measured rather than read off the documentation.
+Measured on Windows 11 Enterprise 10.0.28000, `aarch64-pc-windows-msvc`,
+Snapdragon X2 Elite, 12 logical processors, rustc 1.98.0. Each bit was set alone
+and then **read back** with `GetThreadErrorMode`, because the dangerous outcome
+is not rejection but silent acceptance of a bit that is not installed:
+
+| Bit | Result |
+|---|---|
+| `SEM_FAILCRITICALERRORS` (0x0001) | settable, reads back |
+| `SEM_NOGPFAULTERRORBOX` (0x0002) | settable, reads back |
+| `SEM_NOOPENFILEERRORBOX` (0x8000) | settable, reads back |
+| `SEM_NOALIGNMENTFAULTEXCEPT` (0x0004) | **rejected**, `ERROR_INVALID_PARAMETER` |
+
+Two findings beyond confirming the documented list.
+
+**The rejection is loud, not silent.** `SEM_NOALIGNMENTFAULTEXCEPT` returns
+failure rather than succeeding and dropping the bit, which is the outcome the
+probe was built to distinguish. Had it been dropped silently, this crate could
+have reported installing a value it had not installed.
+
+**An invalid bit poisons the whole call.** Setting all four at once
+(`0x8007`) failed outright and installed **nothing** -- not the three valid bits.
+So passing the alignment bit through alongside valid ones would cost the caller
+the entire error-mode change, not just that bit. The declarable type therefore
+must not be able to represent it: this is a case for a type that cannot express
+the invalid state rather than a runtime check that returns an error nobody
+expected.
+
+Recorded on this rig only. Unlike the numeric thread-pool results elsewhere in
+the workspace, this one is not expected to be architecture-dependent -- the bit
+is a *process*-scoped setting and is rejected on that basis rather than on any
+alignment-handling grounds -- but it has not been confirmed on x64.
