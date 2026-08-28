@@ -207,6 +207,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-platform-probes"
+version = "0.0.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "windows-result"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -333,6 +333,44 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   in-repository crates and Globazog -- rather than the most convenient one. Complete the API documentation
   and README examples.
 
+## M27 -- `windows-platform-probes`: keep the measurements executable
+
+Several decisions in this workspace rest on measurements of undocumented Windows behaviour. Recorded only
+in prose, a measurement decays silently -- the claim stays in the design note while the platform, or our
+reading of it, moves. This milestone gives them a durable home that an ordinary build keeps alive.
+
+- [x] **M27.1** -- Create `windows-platform-probes` as an unpublished workspace member, with each probe's
+  logic in a library function that **returns** its observation, so the binaries print it and the tests
+  assert it from one implementation. Writing the check twice -- once to print, once to assert -- would make
+  the test a check of the copy rather than of the platform, which is the restatement failure this
+  repository has already paid for.
+
+- [x] **M27.2** -- Adopt three tiers, because "run all the probes" is not a safe instruction: **asserted**
+  (a real test), **ignored** (assertable but slow, heavy, or environment-dependent), and **binary only**
+  (cannot be a test -- it hangs by design, mutates the process irreversibly, or needs privileges a test run
+  must not assume). Every tier is compiled by an ordinary build, which is the floor. Record the tier of
+  each probe and why, so a later contributor does not promote a hostile probe into the test path.
+
+- [x] **M27.3** -- Migrate this session's measurements into the crate as asserted tests: the settable
+  `SEM_` bit set, the whole-call failure an invalid bit causes, the independence of the thread error mode
+  from the process error mode, and the four handle/cursor findings. Include the controls as their own
+  assertions rather than as prose, and make a fixture that cannot exhibit the behaviour a **failure**
+  rather than a silent pass. Verify the binding by sabotage -- change a fact and confirm a test actually
+  fails -- since a guard only ever seen to pass is untested.
+
+- [ ] **M27.4** -- Migrate the nine earlier measurements' probes, which currently exist only in the
+  git-ignored `.scratch/` directory and a previous session's private state, and are therefore one machine
+  failure away from being lost. They are the evidence for the `IoRing` registration, thread-agnosticism,
+  completion-port fork, token inheritance, `CancelSynchronousIo`, thread-pool growth, and device-map
+  findings recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md). Most belong in the ignored or binary-only tiers:
+  one never returns by design, one moves 512 MiB, one spawns 512 threads, and one needs `subst` drives and
+  a second logon session. Deliberately **not** done alongside M27.1-M27.3, which established the scheme on
+  two cheap probes first.
+
+- [ ] **M27.5** -- Re-run the probes on an **x64** host and record which findings are architecture-
+  dependent. Every measurement in this workspace so far was taken on ARM64. This subsumes M19.5's narrower
+  request for the thread-pool numbers, and the binaries exist precisely so this needs no re-derivation.
+
 ## M26+ -- Gated on the namespace-facility design branch landing
 
 - [ ] **M26+.1** -- Reconcile the duplicated design background. This branch imported
@@ -351,3 +389,4 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   this item, without which `main` would carry a request to measure something already measured. Record the
   measured trap in the same edit: an invalid bit fails the whole `SetThreadErrorMode` call, so a
   forced-plus-transplanted combination installs nothing if the transplanted part is invalid.
+

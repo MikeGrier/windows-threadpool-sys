@@ -1,0 +1,35 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-platform-probes"
+version = "0.0.0"
+publish = false
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Executable probes for the undocumented Windows behaviour this workspace's designs rest on."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "probe-error-mode"
+path = "src/bin/error_mode.rs"
+
+[[bin]]
+name = "probe-handle-state"
+path = "src/bin/handle_state.rs"
+
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_Storage_FileSystem",
+	"Win32_System_Diagnostics_Debug",
+	"Win32_System_Threading",
+]
