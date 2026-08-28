@@ -1036,3 +1036,53 @@ Recorded in [DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.m
 297 unit tests plus the crate doctest pass, stable across twenty consecutive
 runs and leaving no scratch directories behind; targeted all-target Clippy and
 `cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration cancellation, abandonment, and teardown
+
+### <a id="fe-12"></a>FE-12 -- Complete cancellation, abandonment, and teardown around the live engine. *(completed 2026-08-27 22:14:30 UTC-04:00)*
+
+The architecture this item names was already in place from FE-7 (D-16
+through D-18) and already proven, abstractly, by the state-machine model:
+cancellation cannot preempt a quantum in flight because `report_quantum`
+only overrides its outcome (`_ if state.cancelled => Cancelled`) after the
+quantum returns; a quiescent cancellation or abandonment removes and
+releases a registry entry immediately, without a thread-pool object to wait
+on; and a stale ready-queue id left behind by a removed entry is a
+documented, harmless no-op for `claim_next` to skip. Auditing the code
+found no defect in any of it.
+
+What FE-12 adds is proof against the *real* engine -- real files, real
+refills, the real completion ring -- rather than only the scripted model,
+plus a repeated-cycle audit that would catch a leak the model's one-shot
+scenarios could not:
+
+- [session/tests.rs](crates/windows-file-enumeration-sys/src/session/tests.rs)
+  gained `cancelling_a_yielded_real_enumeration_preserves_entries_and_ends_the_stream`
+  (a real quiescent cancellation, driven deterministically with a suppressed
+  pool) and `cancellation_observed_while_a_worker_holds_the_engine_is_deferred_behind_its_report`
+  (the engine claimed and mid-quantum when cancellation is serviced, proving
+  the quantum itself runs to its natural conclusion with no knowledge of it).
+  Both assert, via a new `drain_ordered` helper, that no entry ever follows a
+  terminal and that at most one terminal arrives.
+- `repeated_cycles_through_every_terminal_kind_leak_no_reservation` runs
+  thirty cycles of success, failure, and cancellation on a session sized to
+  the bare minimum (`MINIMUM_SUBMISSION_CAPACITY`,
+  `MINIMUM_COMPLETION_RING_CAPACITY`): any leaked cancel, retire, or terminal
+  reservation would exhaust that room long before the thirtieth repeat.
+- `abandonment_does_not_wait_on_a_directory_query` and
+  `dropping_every_handle_while_a_real_enumeration_is_running_does_not_hang`
+  exercise the live thread pool directly: the first times the receiver's
+  drop against four real, running enumerations; the second's entire
+  assertion is that dropping every handle mid-enumeration completes at all,
+  which is exactly what a self-wait in the worker-reports design would
+  violate.
+
+Two test-construction bugs surfaced and were fixed, not production defects:
+a live test undersized its completion ring against real entries a worker
+delivers before the test ever drains them, and a worker-reports scenario
+was missing the second `drain_submissions` call that applies the retire
+message `report_quantum` posts but does not itself service.
+
+302 unit tests plus the crate doctest pass, stable across thirty consecutive
+runs and leaving no scratch directories behind; targeted all-target Clippy
+and `cargo fmt --check` are clean. This completes M6.

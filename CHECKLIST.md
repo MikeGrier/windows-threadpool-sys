@@ -12,8 +12,8 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-12.** Complete cancellation, abandonment, and
-> teardown around the live engine.
+> **NEXT ACTIONABLE ITEM: FE-13.** Build the real-Windows integration suite.
+> M6 is complete.
 
 ## M6 -- Native enumeration engine
 
@@ -33,14 +33,7 @@ and the submission-ring servicer the sole registry authority (D-16, D-17).
 
 - [x] **FE-11** -- Complete the failure and capability taxonomy the contract settled. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-11)
 
-- [ ] **FE-12** -- Complete cancellation, abandonment, and teardown around the live
-  engine. Cancellation cannot preempt an executing refill; once observed it discards
-  unparsed native records, preserves already queued entries, and produces one
-  ordered cancelled terminal. Receiver abandonment produces no terminal and must not
-  wait on a directory query from the servicer. Prove that no entry follows a
-  terminal and that every token, handle, buffer, reservation, registry entry, ready-
-  set membership, and work object is released exactly once across success, failure,
-  cancellation, abandonment, and session teardown.
+- [x] **FE-12** -- Complete cancellation, abandonment, and teardown around the live engine. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-12)
 
 ## M7 -- Verification, Globazog acceptance, and publication
 

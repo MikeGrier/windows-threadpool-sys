@@ -459,6 +459,230 @@ fn real_entries_are_delivered_before_the_terminal_end_to_end() {
     assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
 }
 
+// -- cancellation and abandonment around the live engine (FE-12) --------
+
+/// Drain every record queued right now, asserting no entry follows a
+/// terminal and that at most one terminal is present. Returns the names
+/// delivered (in queue order) and the terminal, if one arrived.
+fn drain_ordered(receiver: &Receiver) -> (Vec<String>, Option<TerminalOutcome>) {
+    let mut names = Vec::new();
+    let mut terminal = None;
+    while let Some(record) = receiver.try_recv() {
+        match record {
+            Completion::Entry { entry, .. } => {
+                assert!(terminal.is_none(), "an entry arrived after the terminal");
+                names.push(entry.name().to_string_lossy());
+            }
+            Completion::Terminal { outcome, .. } => {
+                assert!(terminal.is_none(), "more than one terminal");
+                terminal = Some(outcome);
+            }
+        }
+    }
+    (names, terminal)
+}
+
+#[test]
+fn cancelling_a_yielded_real_enumeration_preserves_entries_and_ends_the_stream() {
+    // A quiescent real enumeration between quanta -- the state a live
+    // cancellation lands in whenever it beats the worker back to the pool.
+    let scratch = Scratch::with_files(&["a.txt", "b.txt", "c.txt"]);
+    let (session, receiver) = session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    service(&session);
+
+    // One real quantum: opens the directory, reads its one small batch, and
+    // delivers every real entry in it. `.` and `..` leave nothing to skip
+    // past, so the enumeration is left `Yielded` -- quiescent, not finished --
+    // waiting on the refill that would discover exhaustion.
+    session.shared.run_engine_quantum();
+
+    handle.cancel();
+    service(&session);
+
+    let (mut names, terminal) = drain_ordered(&receiver);
+    names.sort();
+    assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
+    assert!(
+        matches!(terminal, Some(TerminalOutcome::Cancelled)),
+        "{terminal:?}"
+    );
+    assert_eq!(session.enumerations(), 0);
+
+    // The ready-queue entry `Yielded` left behind is now stale: claiming must
+    // skip it harmlessly rather than double-process an enumeration that no
+    // longer exists.
+    session.shared.run_engine_quantum();
+    assert_eq!(session.shared.ready(), 0);
+}
+
+#[test]
+fn cancellation_observed_while_a_worker_holds_the_engine_is_deferred_behind_its_report() {
+    // A refill in flight cannot be preempted: cancellation observed while a
+    // worker holds the engine only records the intention, and the quantum
+    // already running finishes exactly as if it had never been cancelled.
+    let scratch = Scratch::with_files(&["a.txt"]);
+    let (session, receiver) = session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    service(&session);
+
+    let (claimed, mut engine) = session.shared.claim_next().expect("ready to claim");
+    assert_eq!(claimed, enumeration);
+
+    handle.cancel();
+    service(&session);
+    assert_eq!(
+        session.enumerations(),
+        1,
+        "still registered: the worker owns it"
+    );
+
+    let outcome = crate::engine::advance(&mut engine, enumeration, &session.shared.completions);
+    assert!(
+        matches!(outcome, QuantumOutcome::Yielded),
+        "the quantum itself knows nothing of the cancellation: {outcome:?}"
+    );
+    session.shared.report_quantum(enumeration, engine, outcome);
+    service(&session); // process the retire the worker's report posted
+
+    let (names, terminal) = drain_ordered(&receiver);
+    assert_eq!(names, ["a.txt"]);
+    assert!(
+        matches!(terminal, Some(TerminalOutcome::Cancelled)),
+        "{terminal:?}"
+    );
+    assert_eq!(session.enumerations(), 0);
+}
+
+#[test]
+fn repeated_cycles_through_every_terminal_kind_leak_no_reservation() {
+    // The smallest possible rings: if any token, reservation, registry entry,
+    // or ready-set membership survived a cycle, the very next `try_begin`
+    // would find no room and this would fail long before thirty repeats.
+    let (session, receiver) = session_with(
+        MINIMUM_SUBMISSION_CAPACITY,
+        MINIMUM_COMPLETION_RING_CAPACITY,
+    );
+    let scratch = Scratch::empty();
+
+    for cycle in 0..30 {
+        // Success.
+        let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+        let handle = session
+            .try_begin(request)
+            .unwrap_or_else(|error| panic!("cycle {cycle}, success: {error}"));
+        handle.detach();
+        service(&session);
+        for _ in 0..64 {
+            session.shared.run_engine_quantum();
+            service(&session);
+            if session.enumerations() == 0 {
+                break;
+            }
+        }
+        let (_, terminal) = drain_ordered(&receiver);
+        assert!(
+            matches!(terminal, Some(TerminalOutcome::Completed)),
+            "cycle {cycle}: {terminal:?}"
+        );
+
+        // Failure.
+        let request = EnumerationRequest::for_path(&scratch.child("absent")).expect("resolvable");
+        let handle = session
+            .try_begin(request)
+            .unwrap_or_else(|error| panic!("cycle {cycle}, failure: {error}"));
+        handle.detach();
+        service(&session);
+        session.shared.run_engine_quantum();
+        service(&session);
+        let (_, terminal) = drain_ordered(&receiver);
+        assert!(
+            matches!(terminal, Some(TerminalOutcome::Failed(_))),
+            "cycle {cycle}: {terminal:?}"
+        );
+
+        // Cancellation, quiescent (before any quantum runs).
+        let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+        let handle = session
+            .try_begin(request)
+            .unwrap_or_else(|error| panic!("cycle {cycle}, cancel: {error}"));
+        service(&session);
+        handle.cancel();
+        service(&session);
+        let (_, terminal) = drain_ordered(&receiver);
+        assert!(
+            matches!(terminal, Some(TerminalOutcome::Cancelled)),
+            "cycle {cycle}: {terminal:?}"
+        );
+
+        assert_eq!(session.enumerations(), 0, "cycle {cycle}");
+    }
+}
+
+#[test]
+fn abandonment_does_not_wait_on_a_directory_query() {
+    // A live session with several enumerations actually running, so at least
+    // one worker plausibly holds an engine when the receiver drops. The
+    // property under test holds unconditionally either way: abandonment posts
+    // a message and returns, never waiting for a worker's directory query.
+    //
+    // The completion ring is sized to outlast every entry all four
+    // directories could possibly deliver before the receiver ever drains one:
+    // real workers start delivering immediately, and this test's subject is
+    // abandonment's timing, not backpressure.
+    let names: Vec<String> = (0..20).map(|index| format!("f{index:03}.txt")).collect();
+    let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+    let scratch = Scratch::with_files(&borrowed);
+    let (session, receiver) = Session::new(16, 128).expect("a session with room");
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+        handles.push(session.try_begin(request).expect("room"));
+    }
+    for handle in handles {
+        handle.detach();
+    }
+
+    let started = std::time::Instant::now();
+    drop(receiver);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "abandonment must not block on a directory query: {elapsed:?}"
+    );
+
+    for _ in 0..2000 {
+        if session.enumerations() == 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("abandoned enumerations were never released");
+}
+
+#[test]
+fn dropping_every_handle_while_a_real_enumeration_is_running_does_not_hang() {
+    // The pass/fail signal here is completion, not an assertion: the last
+    // handle dropped is what releases the session's pool objects, and that
+    // must finish rather than wait out a callback that is -- circularly --
+    // waiting on this drop. FE-7 removed the hazard structurally by making a
+    // worker report instead of act; this proves it holds against the live
+    // engine actually mid-enumeration, not just an empty directory.
+    let names: Vec<String> = (0..40).map(|index| format!("f{index:03}.txt")).collect();
+    let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+    let scratch = Scratch::with_files(&borrowed);
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    handle.detach();
+
+    drop(receiver);
+    drop(session);
+}
+
 #[test]
 fn a_missing_directory_fails_end_to_end() {
     let scratch = Scratch::empty();
