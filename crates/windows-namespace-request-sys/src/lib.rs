@@ -109,6 +109,7 @@
 pub mod buffer;
 pub mod handle;
 pub mod open;
+pub mod open_by_id;
 pub mod outcome;
 pub mod path;
 pub mod security;
@@ -116,6 +117,7 @@ pub mod security;
 pub use buffer::AlignedBuffer;
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
 pub use open::OpenFile;
+pub use open_by_id::{FileIdentifier, OpenFileByIdentifier};
 pub use outcome::{Outcome, Win32Error};
 pub use path::{PathError, PathFailure, PreparedPath, prepare};
 /// Compiles the README's examples, so a contract change breaks the build

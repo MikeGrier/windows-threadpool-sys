@@ -295,7 +295,7 @@ Entries 1-4 of the audited list. Each depends on M24's foundations and on nothin
   destined for a completion port and the other two are not, and that difference is a request field rather
   than something the crate decides.
 
-- [ ] **M25.2** -- The `OpenFileById` entry. It is a second open primitive, not a `CreateFileW` variant: it
+- [x] **M25.2** -- The `OpenFileById` entry. It is a second open primitive, not a `CreateFileW` variant: it
   takes a volume-hint handle and a `FILE_ID_DESCRIPTOR` and has no creation disposition. One entry per
   Win32 call means it is its own entry, and it is the first consumer of M24.2's owned handle on the input
   side.
