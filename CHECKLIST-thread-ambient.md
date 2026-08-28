@@ -221,7 +221,7 @@ assumed:
   duplicates of any handle it names. Record the audited entry list above as the round-one scope, with its
   provenance, so a later reader can tell a deliberate omission from an unexamined one.
 
-- [ ] **M24.2** -- Implement owned handle references: duplicate at capture with `DuplicateHandle`, own the
+- [x] **M24.2** -- Implement owned handle references: duplicate at capture with `DuplicateHandle`, own the
   duplicate for the request's life, and close it with the request. This is the shared primitive behind both
   `hTemplateFile` and the five handle-taking entries, so it lands before any of them. Cover the case the
   audit makes unavoidable -- a source handle that is already closed, or is a pseudo-handle -- and decide

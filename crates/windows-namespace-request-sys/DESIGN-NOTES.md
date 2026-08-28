@@ -159,6 +159,42 @@ why an unassociated handle had to become a first-class destination at all.
 A catalogue selected by implementation difficulty would be a catalogue shaped by
 our convenience rather than by consumer need.
 
+## <a id="d-7"></a>D-7: A handle that cannot be captured fails at construction
+
+Handle capture validates the source and duplicates it on the **calling** thread,
+and every way that can go wrong is a construction error. The alternative --
+storing the caller's raw value and discovering the problem when the entry runs
+-- would report a caller's mistake on a worker, to code holding neither the
+source handle nor any way to correct it. Capture happens where the caller can
+still do something about it.
+
+Three inputs are refused before `DuplicateHandle` is reached, and the reason is
+not tidiness:
+
+- **Null.** Never a handle.
+- **`INVALID_HANDLE_VALUE`.** This is the trap that makes validation load-bearing
+  rather than defensive. `INVALID_HANDLE_VALUE` and the current-process
+  pseudo-handle are the **same value**, `-1`, so `DuplicateHandle` accepts it and
+  returns a perfectly valid handle -- to the current process. An unchecked
+  `CreateFileW` failure passed straight into capture would therefore *succeed*,
+  and the request would carry a process handle where a file handle was meant.
+- **The remaining pseudo-handles** (`-2` through `-6`: current thread, the three
+  token forms, and the reserved `-3`). A pseudo-handle is not a reference to a
+  kernel object; it is a constant the *using* thread resolves against itself. Its
+  meaning would therefore change when the request moved to a worker, which is
+  precisely what this crate exists to prevent.
+
+Everything else reaches `DuplicateHandle` and is judged by Windows.
+An already-closed handle fails there, with `ERROR_INVALID_HANDLE`.
+
+The duplicate is taken with `DUPLICATE_SAME_ACCESS`, because a request must be
+able to perform exactly the call its caller opened the handle for, and
+non-inheritable, so capturing a handle never widens what a child process
+reaches.
+
+Duplication is fallible, so the type offers `try_clone` rather than `Clone`. The
+result refers to the same kernel object, with everything D-4 says about that.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the

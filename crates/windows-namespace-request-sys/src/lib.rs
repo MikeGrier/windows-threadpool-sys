@@ -62,3 +62,7 @@
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
+
+pub mod handle;
+
+pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
