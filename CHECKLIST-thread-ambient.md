@@ -113,59 +113,170 @@ namespace operation is.
   arrive on the worker -- since a test suite that only ever sees capture succeed cannot tell the two apart.
   Complete the API documentation, the README examples, and the changelog baseline.
 
-## M24 -- `windows-namespace-request-sys`: marshalable namespace call parameter sets
+## M24 -- `windows-namespace-request-sys`: foundations
 
 A sibling crate, not a layer above M22-M23: a request carries no ambient context, and a context is useful
 to work that never opens a file. The submission site pairs them, which is what keeps both independently
 reusable. This crate is the catalogue-plus-faithful-execution layer -- synchronous, testable with no ring,
-pool, or async anywhere near it. `CreateFileW` is its first entry and the family grows by one entry per
-Win32 call.
+pool, or async anywhere near it. The family grows by one entry per Win32 call.
 
-- [ ] **M24.1** -- Create the crate, with a `DESIGN-NOTES.md` recording the three boundary decisions before
+**The round-one entry list is audited, not guessed.** It is the union of what three real consumers call:
+[windows-file-watcher](crates/windows-file-watcher/src/directory.rs) and
+[windows-file-enumeration-sys](crates/windows-file-enumeration-sys/src/native.rs) in this repository, and
+`MikeGrier/Globazog-rs` at commit `55a0b1ae`.
+
+| # | Entry | Needed by | Shape observed |
+|---|---|---|---|
+| 1 | `CreateFileW` | all three | `FILE_LIST_DIRECTORY`, share `R\|W\|D`, `OPEN_EXISTING`, `FILE_FLAG_BACKUP_SEMANTICS`; the watcher adds `FILE_FLAG_OVERLAPPED` (port branch), the other two omit it (unassociated branch) |
+| 2 | `OpenFileById` | watcher | volume-hint handle + `FILE_ID_DESCRIPTOR`; no creation disposition |
+| 3 | `FindFirstChangeNotificationW` | watcher | path, subtree flag, `FILE_NOTIFY_CHANGE_*` mask; handle-producing |
+| 4 | `CloseHandle` and variant close routines | all three | `FindCloseChangeNotification` is **not** `CloseHandle` |
+| 5 | `GetFileInformationByHandleEx` | all three | five classes: `FileBasicInfo`, `FileIdInfo`, `FileCaseSensitiveInfo`, `FileIdExtdDirectoryInfo`, `FileIdExtdDirectoryRestartInfo` |
+| 6 | `GetFileInformationByHandle` (non-Ex) | watcher | `BY_HANDLE_FILE_INFORMATION`; a distinct call, not a class of entry 5 |
+| 7 | `GetFinalPathNameByHandleW` | watcher directly, Globazog via `std::fs::canonicalize` | `VOLUME_NAME_DOS \| FILE_NAME_NORMALIZED` |
+| 8 | `GetVolumeInformationByHandleW` | watcher | handle-based, not the path-based `GetVolumeInformationW` |
+| 9 | `GetFullPathNameW` | enumeration | lexical only |
+
+Four audit findings that shape the milestones below, recorded because each contradicts an assumption the
+first draft of this plan was written on.
+
+**Five of the nine entries take a handle, not a path.** The first draft assumed a request owns everything
+it names. Decided: a request **owns a duplicate**, taken with `DuplicateHandle` at capture, so it is
+self-contained and cannot be left referencing a handle its originator has closed. That makes handle
+ownership a shared primitive rather than an `hTemplateFile` detail.
+
+**No consumer passes a security descriptor or a template file, and none creates a file.** Every audited
+open is `OPEN_EXISTING` against a directory with a null `lpSecurityAttributes` and a null `hTemplateFile`.
+Those parts of the `CreateFileW` entry are kept anyway: an entry that cannot express two of its own
+parameters is a *narrowed* `CreateFileW`, and narrowing a platform entry to fit currently visible consumers
+is the anti-pattern this repository's platform-integrity rule names. This is recorded so a later reader does
+not mistake the absence of a consumer for an oversight.
+
+**The strongest offload evidence is not an open.** Globazog's `QueryBuilder::submit()` calls
+`std::fs::canonicalize` on the **caller's** thread, once per root -- a full `CreateFileW` plus
+`GetFinalPathNameByHandleW` plus `CloseHandle` with unbounded latency on a network path -- and
+`escapes_confinement()` repeats it per reparse-point candidate on a worker. Entry 7 is therefore
+first-class, not second-tier.
+
+**Globazog uses no ambient thread state at all.** No impersonation, error mode, WOW64, or transaction API
+appears in it. `windows-thread-ambient-sys`'s consumers remain the enumeration crate and the independent
+work that motivated the extraction; this is not evidence against that crate, but it is evidence that the
+two crates are genuinely siblings rather than a stack.
+
+- [ ] **M24.1** -- Create the crate, with a `DESIGN-NOTES.md` recording the boundary decisions before
   implementation: a request excludes ambient context; a request captures parameters and performs the call
-  faithfully, but does not choose a delivery model, so the handle-destination fork stays out and an opened
-  handle comes back plain and unassociated; and the family grows one entry per Win32 call.
+  faithfully but does not choose a delivery model, so the handle-destination fork stays out and an opened
+  handle comes back plain and unassociated; the family grows one entry per Win32 call; and a request owns
+  duplicates of any handle it names. Record the audited entry list above as the round-one scope, with its
+  provenance, so a later reader can tell a deliberate omission from an unexamined one.
 
-- [ ] **M24.2** -- Capture the security attributes. This is the substance of the crate: a caller's
-  descriptor may be **absolute**, holding raw pointers to owner SID, group SID, DACL and SACL that are
-  quite possibly on the caller's stack, so capture normalises to **self-relative** and owns the resulting
-  contiguous blob. Two traps must be handled rather than discovered: a self-relative descriptor requires
-  DWORD alignment, which a plain boxed byte slice does not guarantee; and *no descriptor*, *a descriptor
-  with a NULL DACL*, and *a descriptor with an empty DACL* are three different security outcomes that the
-  type must keep distinct. Validate on capture, so an invalid descriptor fails at the caller rather than on
-  the worker.
+- [ ] **M24.2** -- Implement owned handle references: duplicate at capture with `DuplicateHandle`, own the
+  duplicate for the request's life, and close it with the request. This is the shared primitive behind both
+  `hTemplateFile` and the five handle-taking entries, so it lands before any of them. Cover the case the
+  audit makes unavoidable -- a source handle that is already closed, or is a pseudo-handle -- and decide
+  whether duplication failure is a construction error (it is: capture fails on the caller's thread, where
+  the caller can still do something about it).
 
-- [ ] **M24.3** -- Own the template file handle by duplicating it at capture, so the request does not
-  depend on the caller keeping its handle open, and the duplicate is closed with the request.
+- [ ] **M24.3** -- Capture the security attributes. A caller's descriptor may be **absolute**, holding raw
+  pointers to owner SID, group SID, DACL and SACL that are quite possibly on the caller's stack, so capture
+  normalises to **self-relative** and owns the resulting contiguous blob. Two traps must be handled rather
+  than discovered: a self-relative descriptor requires DWORD alignment, which a plain boxed byte slice does
+  not guarantee; and *no descriptor*, *a descriptor with a NULL DACL*, and *a descriptor with an empty
+  DACL* are three different security outcomes the type must keep distinct. Validate on capture, so an
+  invalid descriptor fails at the caller rather than on the worker.
 
-- [ ] **M24.4** -- Assemble the `CreateFileW` request over the owned parameter set, resolving the path on
-  the calling thread at construction because the process current directory is mutable by any thread. Bind
-  to the shipped precedent in
+- [ ] **M24.4** -- Implement path preparation: resolve on the calling thread at construction, because the
+  process current directory is mutable by any thread. Bind to the shipped precedent in
   [crates/windows-file-enumeration-sys/src/path.rs](crates/windows-file-enumeration-sys/src/path.rs)
-  rather than writing a second path preparation. The request inherits M20.1: until the
-  session-independent path form is decided, a session-relative drive letter is a documented hazard on this
-  type, and the documentation must say so rather than imply the resolution is complete.
+  rather than writing a second path preparation. The result inherits M20.1: until the session-independent
+  path form is decided, a session-relative drive letter is a documented hazard on these types, and the
+  documentation must say so rather than imply the resolution is complete.
 
-- [ ] **M24.5** -- Execute the request faithfully and synchronously, returning an owned handle or the raw
-  Win32 code **unaltered**. Preserving the code is a constraint from a real consumer, not a stylistic
-  choice: `ERROR_FILE_NOT_FOUND` means different things across an open and its follow-up queries, and only
-  the consumer can disambiguate, so the crate must not normalise or reclassify. Capture `GetLastError`
-  before any restoration runs, so nothing in between overwrites it.
+- [ ] **M24.5** -- Establish the faithful-execution contract that every entry then follows: an entry
+  returns its result or the raw Win32 code **unaltered**, and `GetLastError` is captured before any
+  restoration runs so nothing in between overwrites it. Preserving the code is a constraint from a real
+  consumer rather than a stylistic choice -- `ERROR_FILE_NOT_FOUND` means a missing directory from an open,
+  an empty directory from a first query, and a genuine failure from a later one, and only the consumer can
+  disambiguate.
 
-- [ ] **M24.6** -- Test the security-descriptor path against descriptors that are absolute, self-relative,
-  null, empty-DACL, and invalid, and prove a captured request survives the caller dropping every input it
-  was built from. Complete the API documentation, README examples, and changelog baseline.
+- [ ] **M24.6** -- Test the foundations: security descriptors that are absolute, self-relative, null,
+  empty-DACL, and invalid; handle duplication against a live handle, a closed handle, and a pseudo-handle;
+  and the property that binds the whole crate together -- a captured request survives the caller dropping
+  every input it was built from, including the source handle. Complete the API documentation and the
+  changelog baseline.
 
-## M24+ -- Gated on the namespace-facility design branch landing
+## M25 -- `windows-namespace-request-sys`: the handle-producing entries
 
-- [ ] **M24+.1** -- Reconcile the duplicated design background. This branch imported
+Entries 1-4 of the audited list. Each depends on M24's foundations and on nothing else.
+
+- [ ] **M25.1** -- The `CreateFileW` entry, over the complete parameter set: path, desired access, share
+  mode, security attributes, creation disposition, flags and attributes, and template file. It must express
+  all three audited flag shapes, including the `FILE_FLAG_OVERLAPPED` split -- the watcher's open is
+  destined for a completion port and the other two are not, and that difference is a request field rather
+  than something the crate decides.
+
+- [ ] **M25.2** -- The `OpenFileById` entry. It is a second open primitive, not a `CreateFileW` variant: it
+  takes a volume-hint handle and a `FILE_ID_DESCRIPTOR` and has no creation disposition. One entry per
+  Win32 call means it is its own entry, and it is the first consumer of M24.2's owned handle on the input
+  side.
+
+- [ ] **M25.3** -- The `FindFirstChangeNotificationW` entry. Path, subtree flag, and notification filter,
+  producing a handle that is **not** closed with `CloseHandle`.
+
+- [ ] **M25.4** -- The close entries. `CloseHandle` belongs in the catalogue because it blocks on
+  outstanding I/O and can block hard on a dead network path, which is the whole reason this facility
+  exists. The audit shows a close entry cannot assume its routine: `FindCloseChangeNotification` closes
+  M25.3's handle and `CloseHandle` is wrong for it. A handle therefore carries its close routine rather
+  than the entry assuming one -- the same shape
+  [windows-threadpool-sys](crates/windows-threadpool-sys/README.md) already needed for wait targets.
+
+- [ ] **M25.5** -- Prove the handle-producing entries against real directories, including the three flag
+  shapes the audit found, the non-`CloseHandle` close routine, and a reopen-by-id that survives its source
+  handle being closed first.
+
+## M26 -- `windows-namespace-request-sys`: the query entries
+
+Entries 5-9 of the audited list. All but the last take a handle, so all but the last depend on M24.2.
+
+- [ ] **M26.1** -- The `GetFileInformationByHandleEx` entry: one entry with the info class as a request
+  field, per the one-entry-per-Win32-call rule. The design problem is that the five audited classes have
+  **two result shapes** -- `FileBasicInfo`, `FileIdInfo` and `FileCaseSensitiveInfo` are fixed-size
+  out-params, while `FileIdExtdDirectoryInfo` and `FileIdExtdDirectoryRestartInfo` are variable-length
+  batch enumerations with caller-sized buffers. The completion type must carry both without collapsing
+  them into a lowest common denominator.
+
+- [ ] **M26.2** -- The `GetFileInformationByHandle` entry, returning `BY_HANDLE_FILE_INFORMATION`. It is a
+  distinct Win32 call rather than a class of M26.1, and the watcher uses it where the Ex form would not do.
+
+- [ ] **M26.3** -- The `GetFinalPathNameByHandleW` entry, including the flags the watcher relies on
+  (`VOLUME_NAME_DOS | FILE_NAME_NORMALIZED`) and the grow-the-buffer retry the call requires. This is the
+  entry the audit identified as having the strongest offload evidence, since Globazog performs it on its
+  submitting thread today.
+
+- [ ] **M26.4** -- The `GetVolumeInformationByHandleW` entry, returning volume label, serial, and
+  filesystem name. Handle-based; the path-based `GetVolumeInformationW` is deliberately not in round one
+  because no audited consumer calls it.
+
+- [ ] **M26.5** -- The `GetFullPathNameW` entry. Lexical only: it resolves relative components and `.`/`..`
+  and never expands a drive letter, so it does **not** close the session-relative hazard from M20.1, and
+  its documentation must say which problem it solves and which it leaves standing.
+
+- [ ] **M26.6** -- Acceptance: re-express each audited call site from the three consumers against the
+  catalogue and confirm every parameter shape they use is reachable. This is the test that the entry list
+  was derived from real consumers rather than from taste, and it must be run against all three -- the two
+  in-repository crates and Globazog -- rather than the most convenient one. Complete the API documentation
+  and README examples.
+
+## M26+ -- Gated on the namespace-facility design branch landing
+
+- [ ] **M26+.1** -- Reconcile the duplicated design background. This branch imported
   [DESIGN-NOTES.md](DESIGN-NOTES.md)'s namespace-plane section and its design session byte-identical from
   `mikegrier/pseudo-async-file-ops` so the merge would resolve automatically, then corrected part of it
   under M22.1. Once both branches are on `main`, verify that exactly one statement of each fact survived
   the merge and that the corrected statements won, since an automatic resolution of near-identical text is
   precisely how a superseded statement survives unnoticed.
 
-- [ ] **M24+.2** -- Apply the M22.2 narrowing to M21.2 in [CHECKLIST.md](CHECKLIST.md). That item still
+- [ ] **M26+.2** -- Apply the M22.2 narrowing to M21.2 in [CHECKLIST.md](CHECKLIST.md). That item still
   says the error-mode sub-question "needs measurement on both ARM64 and x64 rather than reasoning", which
   M22.2 has since performed: `SEM_NOALIGNMENTFAULTEXCEPT` is rejected by `SetThreadErrorMode` outright, so
   it drops out of the question entirely and needs no architecture pair, and only `SEM_NOGPFAULTERRORBOX`

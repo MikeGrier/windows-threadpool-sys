@@ -10,4 +10,4 @@ source-component. That file is not the workspace
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [../../CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md) | in progress | M22: the extraction decision, the WOW64 reclassification, and the per-aspect primitives. M23: the composite -- capture set, capture, guard composition, and the cross-thread test matrix. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [../../CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md) | in progress | M22: the extraction decision, the WOW64 reclassification, and the per-aspect primitives. M23: the composite -- capture set, capture, guard composition, and the cross-thread test matrix. M24-M26 in the same file cover the sibling `windows-namespace-request-sys` crate. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
