@@ -1126,3 +1126,410 @@ running the audit is what created several of the copies.
 written into the *audit table* while the decision row it contradicted still said the opposite. An audit
 finding is not discharged by being recorded in the audit. It is discharged when the statement it contradicted
 has changed.
+
+## <a id="remoting-synchronous-namespace-operations"></a>Remoting synchronous namespace operations: the measured platform
+
+A planned facility makes synchronous-only Win32 operations available
+asynchronously, by remoting them to thread-pool workers with the caller's
+context captured explicitly. The design discussion, its rejected alternatives,
+and the full measurement transcripts are in
+[DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md](design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md).
+This section records what was decided and the platform facts that force it.
+
+Every measurement below was taken on Windows 11 build 10.0.28000,
+`aarch64-pc-windows-msvc`, 12 logical processors. Numbers that look like
+platform constants rather than semantic facts are flagged as needing an x64
+re-check; the semantic results are architecture-independent.
+
+### The division of labour is the data plane versus the namespace plane
+
+Win32 *is* asynchronous on the **data plane** -- overlapped
+`ReadFile`/`WriteFile`/`DeviceIoControl`, and `IoRing` -- and those are owned by
+[crates/windows-overlapped-io-sys](crates/windows-overlapped-io-sys/DESIGN-NOTES.md)
+and [crates/windows-ioring-sys](crates/windows-ioring-sys/DESIGN-NOTES.md).
+
+What is synchronous-only is the **namespace and metadata plane**: open, close,
+delete, rename, attributes, times, security, links, volume and path queries,
+directory enumeration. That is a consequence of the object manager's design, not
+of API vintage, and it is the scope of the planned facility. Stating the
+division this way gives a principled inclusion test rather than a taste-based
+one. `CloseHandle` belongs in the catalogue: it blocks on outstanding I/O and
+can block hard on a dead network path.
+
+[crates/windows-file-enumeration-sys](crates/windows-file-enumeration-sys/DESIGN-NOTES.md)
+is the first shipped inhabitant of this plane, and it independently arrived at
+much of the same shape: a bounded submission and completion ring pair, a
+worker that reports rather than mutates shared authority, finite work quanta,
+and a directory opened under an explicitly captured token. It is a
+*specialization* -- one directory per request, with streaming delivery.
+
+**Replacing its directory open is intended, not an open question.** That crate's
+`open_directory` is the committed first consumer of this facility's catalogue,
+and the direction is settled: the general operation replaces the inline one. Only
+the *timing* is conditional, in the ordinary duplicate-then-decide way -- the
+inline path stays until the general one is proven, so the shipped crate is never
+destabilised by speculative work. The item that carries it out is in
+[CHECKLIST.md](CHECKLIST.md), so a transitional duplication cannot quietly become
+permanent.
+
+Having a committed consumer before the facility exists is worth more than it
+might appear: it supplies a real acceptance test rather than a hypothetical one,
+and it has already corrected this design once, by establishing that an
+unassociated handle is a first-class destination rather than a degenerate case.
+Four further constraints follow from what that consumer actually does, and the
+facility's catalogue has to satisfy all of them:
+
+- **Arbitrary access, share mode, and flags.** It opens with
+  `FILE_LIST_DIRECTORY` rather than `GENERIC_READ`, so a directory a caller may
+  list but not read attributes of still opens, and with
+  `FILE_FLAG_BACKUP_SEMANTICS`, without which `CreateFileW` cannot return a
+  directory handle at all. An open operation that fixes any of these is unusable
+  here.
+- **The raw Win32 code is preserved unaltered.** `ERROR_FILE_NOT_FOUND` means a
+  missing directory from the open, an empty directory from the first query, and
+  a genuine failure from a later one. Only the consumer can disambiguate, so the
+  facility must not normalise or reclassify.
+- **`GetLastError` is captured before the context is restored.** The shipped code
+  reads the error inside the impersonation guard precisely so that nothing in
+  between overwrites it. The facility must do the same: the error is an *output*
+  of the operation, carried in its completion, never left on a thread.
+- **Classification after opening is itself a blocking namespace call.** That
+  crate follows its open with a `FileBasicInfo` query to establish
+  directory-ness, because the refill failure codes cannot tell "you named a file"
+  from "this filesystem lacks extended directory information". Remoting the open
+  while leaving that query inline would still leave a blocking call on the
+  consumer's worker, so the query is a catalogue entry of its own, which the
+  consumer sequences itself -- see the granularity rule below.
+
+### A handle is either a completion-port handle or an `IoRing` handle, never both
+
+Measured, with a positive control and a before/after pair on one handle:
+associating a handle with a completion port makes every subsequent `IoRing`
+operation on it fail with `ERROR_INVALID_PARAMETER` and zero bytes, while the
+same handle continues to work perfectly through the port. `CreateThreadpoolIo`
+poisons a handle identically, because it performs the same association.
+
+This is a fork, not a defect, and it is **irreversible**. Three consequences:
+
+- An opened handle offers its destinations as mutually exclusive consuming
+  transitions, not as available methods. There are **three**, not two: the
+  overlapped/`TP_IO` path, the `IoRing` path, and *no association at all* -- a
+  plain synchronous handle. The third is not a degenerate case: it is what a
+  consumer needs for the synchronous-only APIs this facility exists to serve,
+  `GetFileInformationByHandleEx` among them, and
+  [crates/windows-file-enumeration-sys](crates/windows-file-enumeration-sys/DESIGN-NOTES.md)
+  requires exactly it. An earlier statement of this decision listed only two
+  destinations, which would have made the facility unable to serve its own first
+  consumer.
+- The destination must be declared in the open request, because the choice has
+  to be made before association and the opening thread is gone by the time a
+  caller sees the handle. This makes request-declared handle shaping a
+  correctness requirement rather than a round-trip optimisation.
+- Any unified consumption of both populations must join at the *wait*, never by
+  draining one into the other.
+
+### Thread-agnostic I/O comes from port association, and `IoRing` has it inherently
+
+An `IoRing` operation submitted by a thread that then exits completes normally:
+measured five times out of five, each verified still outstanding at thread exit.
+A control on the same machine confirms this is a real property and not an
+untestable one -- an overlapped `ReadFile` on a handle **not** associated with a
+completion port, issued from a thread that then exited, came back
+`ERROR_OPERATION_ABORTED`.
+
+So thread-bound I/O cancellation is live on current Windows, and
+`FILE_FLAG_OVERLAPPED` alone does not avoid it: **completion port association is
+what confers thread agnosticism.** Combined with the fork above, this produces a
+trap worth stating outright: a ring-destined handle is by definition *not*
+port-associated, so an ordinary overlapped operation issued on it from a
+transient worker is thread-bound and dies with that worker.
+
+This matters more here than in ordinary code because every thread in this design
+is transient by construction -- the pool retires idle threads -- so a
+thread-bound operation fails only at *low* load, passing every stress test.
+
+### A pool worker inherits no impersonation token, and can raise a modal dialog
+
+Two facts about a callback's ambient state, both measured while the submitting
+thread genuinely held a thread token:
+
+- `OpenThreadToken` on the worker returns `ERROR_NO_TOKEN`. **The worker does not
+  inherit the submitter's impersonation context**, so explicit capture is
+  necessary rather than merely prudent.
+- The worker's thread error mode is `0`, meaning `SEM_FAILCRITICALERRORS` is
+  **clear** and the critical-error handler is enabled. A hard error -- the
+  classic absent-removable-drive case -- can therefore put a **modal dialog on a
+  shared thread-pool thread**, hanging process-wide infrastructure rather than
+  merely one operation.
+
+The captured context is therefore a named, exhaustively enumerated value type
+rather than an implicit side effect of submission, because its field list is
+contract surface and every later addition would otherwise be a silent semantic
+change. Capture fails synchronously at admission; apply and restore on the
+worker are fail-fast on every path including unwind, because returning a
+contaminated worker to shared infrastructure is worse than dying.
+
+**Its impersonation component is not built here.**
+[crates/windows-impersonation-token-sys](crates/windows-impersonation-token-sys/DESIGN-NOTES.md)
+already owns that layer -- capture, transport, thread-bound application, and
+exact restoration with a fail-fast guard -- and the facility consumes it rather
+than growing a second implementation.
+
+#### One catalogue entry per Win32 call, and the client sequences them
+
+A catalogue entry corresponds to **one** Win32 call. Where a consumer needs two
+calls, it makes two requests: it submits the first, receives its completion,
+decides what to do, and submits the second. The default is never a compound
+operation, and a compound entry is only ever added under a **measured**
+performance argument -- not because two calls happen to appear together at one
+call site today.
+
+**The sequencing is logical, and lives on the client side.** Each request is
+independent; the ordering comes from the client not submitting the second until
+it has observed the first's completion, and the facility does not represent the
+pair. Keeping it there is what avoids inventing answers the client already has
+for its own case -- what becomes of the remaining steps when one fails, how one
+step's output names the next step's input, and whether a partially-executed
+sequence can be cancelled.
+
+This is a statement about **request granularity**, and only that. It says nothing
+about how the facility might later present itself to Rust coroutines, which is a
+separate question, deliberately out of scope here, and not foreclosed by
+anything above.
+
+Two consequences worth stating outright:
+
+- **A compound entry is a fusion, never a new capability.** Whatever it does must
+  remain expressible as the sequence of its parts, so adding one can only ever
+  change performance -- never semantics, and never what is possible.
+- **The cost of *not* fusing is a real completion round trip**, and that cost is
+  inherent to remoting rather than particular to this rule: for a *single*
+  operation the remoted form is always slower than the synchronous one, because
+  the win is concurrency and thread-freedom rather than latency. The same shape
+  appears at the data-plane seam, where an async open followed by a ring read is
+  necessarily two round trips -- Windows `IoRing` has no link flag, and a read
+  cannot be submitted for a handle that does not exist yet. That is the honest
+  trade, and it is what a measurement would have to overturn before a compound
+  entry is justified.
+
+#### The context is a composite that *contains* an impersonation token
+
+`ImpersonationToken` does not grow to carry the rest of the thread state. The
+facility defines a separate composite holding each aspect independently, one
+field of which is an optional `ImpersonationToken`. Four reasons, and the first
+is mechanical rather than stylistic:
+
+- **The aspects have different application windows.** The shipped consumer
+  applies impersonation *only* around the open and reverts immediately, because
+  later queries use the already-open handle and need no token. The error mode
+  must hold for the whole callback, since any blocking call can raise a hard
+  error. A single type implies a single application window, which is wrong for
+  at least one aspect whichever window is chosen -- and the narrow impersonation
+  window is deliberate.
+- **They have different failure semantics.** Impersonation restore failure is
+  fail-fast, because returning a shared worker under an unknown identity is a
+  process security failure. An error-mode restore failure is not remotely that
+  severe. One type would either impose the strictest semantics on everything or
+  carry per-aspect semantics internally, which is the composite in disguise.
+- **They differ in whether they can be captured at all.** A thread token may
+  legitimately be absent; the error mode is always readable; I/O priority is only
+  partially queryable through documented API.
+- **Layering.** That crate is independently published and is a platform layer for
+  one Windows concept. Folding unrelated thread state into it would collapse a
+  layer boundary for convenience and would tax its existing standalone consumer,
+  which wants impersonation alone.
+
+Applying the composite produces a **composition of per-aspect guards**, applied
+outermost-first and released in exact reverse: error mode outermost, so it is
+already in force while impersonation is being applied; WOW64 redirection next;
+impersonation innermost, because its window is narrowest and its restoration is
+the one that must not be delayed. Applying a subset stays expressible, which is
+what the differing windows require.
+
+The composite lives in the facility's crate and is re-exported. It becomes a
+genuine cross-crate contract once the enumeration crate's open moves onto it, and
+may be extracted then; it is not extracted preemptively.
+
+#### Three relationships to the caller, not one
+
+"Captured context" names only part of what the composite carries, because the
+aspects do not all relate to the submitting thread the same way:
+
+| Category | Aspect | Behaviour |
+|---|---|---|
+| **Transplanted** | impersonation, WOW64 filesystem redirection | the submitter's captured value is applied on the worker |
+| **Overridden** | thread error mode | the facility's policy is applied *regardless* of what the caller had |
+| **Declared** | I/O and memory priority | supplied by the request; never captured |
+
+Consequences worth stating, because each is easy to get wrong:
+
+- **"Restore" means the worker's prior state in every case**, but what was
+  applied differs. A transplanted aspect installs the submitter's value; an
+  overridden one installs ours. Both are undone on the way out.
+- **The error mode is overridden, not transplanted.** `SEM_FAILCRITICALERRORS`
+  and `SEM_NOOPENFILEERRORBOX` are forced, because a hard error on a shared pool
+  thread can raise a modal dialog and hang process-wide infrastructure. This is a
+  deliberate divergence from synchronous semantics: per this repository's rule
+  that behaviour is owned rather than inherited, matching the synchronous call
+  would be the wrong specification. Whether the caller's error mode is *captured*
+  at all -- for diagnostics, or not at all as dead weight -- and whether the
+  non-dialog bits are transplantable, is not yet settled; see
+  [CHECKLIST.md](CHECKLIST.md).
+- **Priority is declared rather than sniffed.** It is only partially queryable,
+  and a caller running under a background-priority mode would otherwise have its
+  I/O silently promoted by the remoting -- a correctness regression a naive
+  implementation ships without noticing.
+
+### Path resolution follows the impersonation token's logon session
+
+Drive letters are symbolic links in the object manager namespace. Real local
+volumes live in the machine-wide `\GLOBAL??` directory; `subst` drives and
+mapped network drives live in a **per-logon-session** directory keyed by the
+token's authentication id. Lookup checks the session-local directory first and
+falls back to global, which is why `C:` behaves as though it were global -- it
+is -- while a mapped `Z:` does not.
+
+Measured with a `subst` drive and a token minted by `LogonUserW` with
+`LOGON32_LOGON_NEW_CREDENTIALS`, which creates a new logon session while keeping
+the caller's local identity and access: under that token the global `C:` still
+resolved while the session-local subst letter did **not**. The same result was
+reproduced on a thread-pool worker.
+
+**A worker impersonating a captured token resolves drive letters in the
+impersonated token's logon session**, so the same string can name a different
+device, or nothing at all.
+
+Two corollaries that decide the design:
+
+- **Submission-time canonicalisation does not close this.** The path must be
+  resolved on the calling thread at submission, because the process current
+  directory is mutable by any thread and even perfect remoting would be racy --
+  but `GetFullPathNameW` is *lexical*. It resolves relative components and
+  `.`/`..` and never expands a drive letter, so the "canonical" path still
+  carries a session-relative reference.
+- **The extended-length prefix does not help.** `\\?\Z:\dir` still resolves `Z:`
+  through the device map; the prefix skips Win32 normalisation, not
+  object-manager resolution. Only UNC, `\\?\Volume{GUID}\`, and
+  `\\?\GLOBALROOT\Device\...` bypass it. A long path is therefore never silently
+  given a `\\?\` prefix: that is a semantic change, not a transparent one.
+
+`QueryDosDeviceW` distinguishes the cases cheaply -- a real local volume reports
+`\Device\HarddiskVolumeN`, a `subst` reports another path, and a network mapping
+reports a redirector device -- so session-relative letters are detectable at
+admission. Which session-independent form to substitute, if any, is not yet
+decided; see [CHECKLIST.md](CHECKLIST.md).
+
+### `CancelSynchronousIo` blocks until the target leaves synchronous I/O
+
+Measured, after a noninvasive debugger attach showed the *canceller* parked in
+`ntdll!NtCancelSynchronousIoFile` at zero CPU while its target sat in its next
+`NtReadFile`:
+
+- Against a thread with nothing outstanding it returns `ERROR_NOT_FOUND`
+  immediately, and an operation that thread starts later is untouched. **The
+  cancel is point-in-time; it does not linger onto a later operation.**
+- Against a thread that then *leaves* synchronous I/O it returns in
+  microseconds.
+- Against a thread that immediately re-enters synchronous I/O it **never
+  returns** -- on the same handle or a different one, tightly looped or spaced.
+  The cancel still takes effect; the target records its abort. Effect and return
+  are decoupled.
+- Against a thread whose next operation completes after a known delay, it
+  returns at that moment, confirming the rule to within a millisecond.
+
+The consequence is that this mechanism cannot be used to rescue a wedged worker.
+The canceller in this design is the control-plane authority, and the target is a
+shared worker whose job is running blocking operations back to back: cancelling
+would block the control plane until that worker stops doing I/O, turning one
+stuck operation into a wedged session. **v1 cancellation is therefore
+pre-execution only** -- a cancel observed before a worker claims an operation
+prevents it; once started, it runs to completion.
+
+Mid-flight cancellation is not impossible, but its precondition is now known: the
+target must be a thread that will stop doing synchronous I/O, which means a
+dedicated quarantinable thread rather than a shared pool worker.
+
+### `SetThreadpoolCallbackRunsLong` is the growth mechanism, not a hint
+
+Reaching 16 concurrent blocked callbacks with a maximum of 16 took **1.94
+seconds** without the runs-long flag and **1 millisecond** with it. The
+per-arrival shape shows why: four threads are created immediately, and growth
+beyond that is throttled to roughly one thread per **166 ms** -- stable to within
+1 ms across five runs. The free count and the interval are both likely functions
+of processor count and need an x64 re-check before being treated as constants.
+
+Three further measurements on the same rig:
+
+- **Raising the maximum while saturated works promptly.** With every thread
+  parked and work queued behind them, raising the maximum released the queue in
+  1.1 to 1.6 ms.
+- **The default maximum is 512.** Blocked callbacks plateaued at exactly 512
+  with 512 distinct threads. This repository previously and deliberately
+  declined to guess this number; it is now measured.
+- **The ceiling holds.** A maximum of 16 with 32 submissions ran exactly 16
+  concurrently with no overshoot. The overshoot recorded under
+  [conflicting thread limits](#conflicting-thread-limits-are-refused-because-win32-resolves-them-silently)
+  required a *minimum* to have been set, which this facility never does.
+
+Decisions that follow:
+
+- **The facility owns no threads.** A private pool, `runs_long` mandatory, and
+  **never a thread minimum** -- a minimum creates threads eagerly and they are
+  not retired promptly, which would forfeit the zero-idle-thread property the
+  workspace exists to provide. An armed `TP_WAIT` costs no thread at all, since
+  wait multiplexing is performed by the kernel rather than by user-mode waiter
+  threads.
+- **A wedged worker is quarantined, and the pool replaces it.** A Windows
+  thread-pool thread cannot be reclaimed, so a wedged callback consumes its slot
+  permanently; `runs_long` already makes the pool create a replacement. Capacity
+  is bounded by a hard ceiling, above which admission fails with a typed error
+  rather than stalling silently.
+- **Concurrency is bounded by an admission counter, not by moving the maximum at
+  runtime.** The pool exposes no getter for its thread count, so "the pool is
+  full" is not observable; the facility's own bookkeeping is exact. The maximum
+  is set once to the ceiling and never touched, which also avoids the
+  void-returning setter and the measured last-call-wins hazard.
+- **The stall response is memoryless and evaluated lazily at admission.** The
+  effective limit is `base + count(in flight and older than T)`, clamped to the
+  ceiling, so capacity falls back on its own as a wedged operation completes --
+  derived rather than latched. It is evaluated only when there is work that
+  cannot be dispatched, which needs no periodic timer and keeps an idle facility
+  at zero threads.
+- **`T` must exceed the pool's injection interval**, or the supervisor reads the
+  pool's own throttle as evidence of stuck workers and ratchets to the ceiling
+  under ordinary load. With `runs_long` that interval is microseconds. This is
+  the numeric link between the two knobs and a further reason `runs_long` is
+  mandatory rather than advisory.
+- **Ages are measured with an unbiased counter** -- `QueryUnbiasedInterruptTime`
+  -- because `GetTickCount64` includes time the machine was asleep, so a resumed
+  laptop would see every in-flight operation as ancient and expand immediately.
+  This is the same distinction recorded for timers, where relative times exclude
+  sleep and absolute times include it.
+- **The age is taken at callback entry, not at admission.** An operation that is
+  admitted but not yet started occupies no thread, so counting it would expand
+  the pool in response to the pool doing exactly what was asked.
+- **A quarantined worker has affinity to the operation, not to the client**, so
+  it can finish safely against an owner that no longer exists. This forces
+  shared ownership of the facility's internals, and it is what keeps teardown
+  from blocking on a dead network path.
+
+### Ambient state is derived from an explicit binding, never the origin of one
+
+The ergonomic goal is that obtaining a handle and then operating on it requires
+no thought about wiring. That comes from the type only offering the legal next
+steps, in the same way that cleanup-group member use-after-release is a compile
+error -- not from ambient lookup.
+
+Where an ambient projection is wanted, it is derived. The callback context is the
+substrate, because every thread-pool object here already owns one and it names
+the correct instance unambiguously. A trampoline may then publish that binding
+into thread-local storage for the duration of its own callback, restoring it on
+exit -- an obligation the trampoline already has, since a callback must restore
+thread-local state before returning to the pool. Suppression and restoration use
+a depth count rather than a flag, for the reason recorded for `stop_and_drain`.
+
+Thread-lifetime thread-local ownership is rejected: callers run on shared pool
+threads, so a resident value would be stranded on process-shared infrastructure;
+thread-local destructors are unreliable on Windows, so a value whose `Drop` must
+run cannot live there; and submission and completion happen on different threads
+by construction, so the binding would be absent exactly where completion occurs.
