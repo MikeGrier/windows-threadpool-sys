@@ -882,3 +882,45 @@ drove explicitly; they now use suppressed sessions, and the tests whose subject
 *is* the pool use live ones. 234 unit tests plus the crate doctest pass, stable
 across fifteen consecutive runs; targeted all-target Clippy and
 `cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration native open and first read
+
+### <a id="fe-8"></a>FE-8 -- Allocate the fixed native buffer and get one directory open and reading. *(completed 2026-08-27 20:12:34 UTC-04:00)*
+
+[buffer.rs](crates/windows-file-enumeration-sys/src/buffer.rs) allocates the
+staging buffer at admission, fallibly and as `u64` words so its base address is
+8-byte aligned by construction rather than by hope; the ordinary growable-vector
+path would abort the process on failure and guarantee only byte alignment.
+`BeginFailure::BufferAllocation` reports it, and the buffer travels with the
+engine state rather than the request, per D-19.
+
+[native.rs](crates/windows-file-enumeration-sys/src/native.rs) holds the three
+documented Win32 calls: open under the submitted token with
+`FILE_FLAG_BACKUP_SEMANTICS`, the optional `FileIdInfo` volume query, and the
+`FileIdExtdDirectoryRestartInfo` / `FileIdExtdDirectoryInfo` refill. Only the
+open runs impersonated; the sibling crate's guard restores the worker's exact
+prior token on every path including failure and unwind.
+[engine.rs](crates/windows-file-enumeration-sys/src/engine.rs) sequences those
+into a quantum that leaves the registry while it runs, so a blocking directory
+query never holds the session's lock.
+
+Two contract corrections came from the filesystem itself. A file opens
+successfully with `FILE_LIST_DIRECTORY` -- it is the same bit as
+`FILE_READ_DATA` -- so directory-ness is now established at the open via
+`FILE_ATTRIBUTE_DIRECTORY` and reported as `DirectoryOpen(ERROR_DIRECTORY)`;
+left to the first refill it would have surfaced through codes indistinguishable
+from an unsupported filesystem. And an empty *subdirectory* still contains `.`
+and `..`, so it returns a batch and exhausts on its second query: the
+first-query-empty rule is correct but reachable only where a directory has no
+records at all. Both are recorded in
+[DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+
+That second correction also required `QuantumOutcome::Yielded`, one item ahead
+of FE-10 which specifies it: without a way to say "one refill done, ask me
+again", no directory holding records could reach its end. FE-9 replaces the
+current read-and-pass-over with real parsing.
+
+269 unit tests plus the crate doctest pass, stable across ten consecutive runs
+and leaving no scratch directories behind; targeted all-target Clippy and
+`cargo fmt --check` are clean.

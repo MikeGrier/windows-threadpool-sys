@@ -314,18 +314,25 @@ fn abandonment_reaches_the_servicer_through_the_thread_pool() {
 
 #[test]
 fn admission_reaches_the_servicer_through_the_thread_pool() {
-    let (session, _receiver) = live_session();
-    let handle = session.try_begin(request()).expect("room");
+    // Registration is now transient -- the enumeration runs and retires on its
+    // own -- so the stable observation is that its terminal arrives.
+    let scratch = crate::scratch::Scratch::empty();
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
     let id = handle.id();
     handle.detach();
 
-    for _ in 0..1000 {
-        if session.shared.contains(id) {
-            return;
+    for _ in 0..2000 {
+        while let Some(record) = receiver.try_recv() {
+            if record.is_terminal() {
+                assert_eq!(record.enumeration(), id);
+                return;
+            }
         }
         std::thread::sleep(Duration::from_millis(2));
     }
-    panic!("the servicer never registered the enumeration");
+    panic!("the enumeration never reached the servicer");
 }
 
 #[test]

@@ -29,11 +29,9 @@
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
 
-use windows_impersonation_token_sys::ImpersonationToken;
-
 use crate::completion::EnumerationId;
 use crate::completion_ring::TerminalSlot;
-use crate::request::EnumerationRequest;
+use crate::engine::EngineState;
 
 /// Everything an accepted begin carries into the session.
 ///
@@ -42,8 +40,9 @@ use crate::request::EnumerationRequest;
 /// enumeration's ability to report how it ended is already guaranteed.
 pub(crate) struct BeginMessage {
     pub(crate) enumeration: EnumerationId,
-    pub(crate) request: EnumerationRequest,
-    pub(crate) token: ImpersonationToken,
+    /// Everything the worker needs: the request, the captured context, and the
+    /// staging buffer, all secured before the begin became visible.
+    pub(crate) engine: EngineState,
     pub(crate) terminal: TerminalSlot,
     /// The slot this enumeration will use to report itself finished. Claimed at
     /// admission for the same reason the terminal is: a worker that could not
@@ -58,7 +57,7 @@ impl std::fmt::Debug for BeginMessage {
         // reader wants here, and the token deliberately hides its handle.
         f.debug_struct("BeginMessage")
             .field("enumeration", &self.enumeration)
-            .field("path", &self.request.path().to_string_lossy())
+            .field("engine", &self.engine)
             .finish_non_exhaustive()
     }
 }

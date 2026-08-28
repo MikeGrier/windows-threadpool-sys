@@ -52,6 +52,7 @@ use windows_threadpool_sys::work::ThreadpoolWork;
 use crate::admission::{self, EnumerationHandle};
 use crate::completion::{Completion, EnumerationId, TerminalOutcome};
 use crate::completion_ring::{CompletionRing, MINIMUM_COMPLETION_CAPACITY};
+use crate::engine::{self, EngineState};
 use crate::error::{BeginError, SessionError, SessionFailure};
 use crate::registry::{EnumerationState, Registry};
 use crate::request::EnumerationRequest;
@@ -85,6 +86,12 @@ pub const MINIMUM_COMPLETION_RING_CAPACITY: usize = MINIMUM_COMPLETION_CAPACITY;
 pub(crate) enum QuantumOutcome {
     /// Nothing to do. The enumeration stays registered and idle.
     Idle,
+    /// Progress was made and there is more to do.
+    ///
+    /// A quantum performs at most one refill and then hands the worker back,
+    /// which puts a scheduling point at every place a synchronous directory
+    /// query could have blocked.
+    Yielded,
     /// Stopped for want of completion-ring room; resume on consumer progress.
     Parked,
     /// The enumeration is over, with this outcome.
@@ -247,14 +254,14 @@ impl SessionShared {
                 // released, because releasing takes the other rings' locks.
                 drop(registry);
                 self.retire_state(
-                    EnumerationState::new(begin.request, begin.token, begin.terminal, begin.retire),
+                    EnumerationState::new(begin.engine, begin.terminal, begin.retire),
                     None,
                 );
                 return;
             }
             registry.insert(
                 enumeration,
-                EnumerationState::new(begin.request, begin.token, begin.terminal, begin.retire),
+                EnumerationState::new(begin.engine, begin.terminal, begin.retire),
             );
         }
         self.schedule(enumeration);
@@ -344,24 +351,24 @@ impl SessionShared {
     /// an enumeration already held by another worker is skipped rather than run
     /// twice over the same buffer and cursor.
     pub(crate) fn run_engine_quantum(&self) {
-        let Some(enumeration) = self.claim_next() else {
+        let Some((enumeration, mut engine)) = self.claim_next() else {
             return;
         };
-        let outcome = self.advance(enumeration);
-        self.report_quantum(enumeration, outcome);
+        let outcome = self.advance(&mut engine);
+        self.report_quantum(enumeration, engine, outcome);
     }
 
-    /// Claim the next runnable enumeration for this worker.
-    pub(crate) fn claim_next(&self) -> Option<EnumerationId> {
+    /// Claim the next runnable enumeration, taking its engine state with it.
+    pub(crate) fn claim_next(&self) -> Option<(EnumerationId, EngineState)> {
         self.registry().claim_next()
     }
 
     /// Advance one enumeration by one bounded quantum.
     ///
-    /// The native engine lands here in FE-8. Until then an enumeration that is
-    /// not cancelled simply has nothing to do, so it is claimed, found idle, and
-    /// released.
-    fn advance(&self, enumeration: EnumerationId) -> QuantumOutcome {
+    /// Runs with no lock held, because a quantum performs a synchronous
+    /// directory query. A scripted outcome takes precedence so the
+    /// state-machine model can drive the shell without touching a filesystem.
+    fn advance(&self, engine: &mut EngineState) -> QuantumOutcome {
         #[cfg(test)]
         if let Some(scripted) = self
             .scripted
@@ -371,25 +378,37 @@ impl SessionShared {
         {
             return scripted;
         }
-        let _ = enumeration;
-        QuantumOutcome::Idle
+        engine::advance(engine)
     }
 
-    /// Hand the claim back and apply whatever the quantum decided.
-    pub(crate) fn report_quantum(&self, enumeration: EnumerationId, outcome: QuantumOutcome) {
+    /// Hand the claim back, engine state and all, and apply whatever the
+    /// quantum decided.
+    pub(crate) fn report_quantum(
+        &self,
+        enumeration: EnumerationId,
+        engine: EngineState,
+        outcome: QuantumOutcome,
+    ) {
+        let mut resume = false;
         let finish = {
             let mut registry = self.registry();
             let Some(state) = registry.get_mut(enumeration) else {
                 // Removed while this worker held it, which is what abandonment
-                // does. Nothing is owed and nothing is left to release.
+                // does. Nothing is owed; dropping the engine state here is what
+                // releases its directory handle and buffer.
                 return;
             };
             state.running = false;
+            state.engine = Some(engine);
             match outcome {
                 // The worker reached a real conclusion, which wins over a
                 // cancellation that arrived while it was doing so.
                 QuantumOutcome::Finished(outcome) => Some(outcome),
                 _ if state.cancelled => Some(TerminalOutcome::Cancelled),
+                QuantumOutcome::Yielded => {
+                    resume = true;
+                    None
+                }
                 QuantumOutcome::Parked => {
                     state.parked = true;
                     None
@@ -399,6 +418,9 @@ impl SessionShared {
         };
         if let Some(outcome) = finish {
             self.finish_from_worker(enumeration, outcome);
+        } else if resume {
+            // Outside the lock: scheduling takes it again.
+            self.schedule(enumeration);
         }
     }
 

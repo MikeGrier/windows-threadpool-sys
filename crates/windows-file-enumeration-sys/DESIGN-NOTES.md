@@ -118,6 +118,20 @@ the first-query-empty form and produces `Completed`. The same code from
 `CreateFileW` remains a directory-open failure, and from a later refill remains a
 query failure. Neither clean-exhaustion case becomes an `EnumerationError`.
 
+The first-query-empty form is rarer than "an empty directory" suggests, which is
+why the rule is stated in terms of the query rather than in terms of emptiness:
+an empty *subdirectory* still contains `.` and `..`, so it returns a batch and
+exhausts on its second query. Only a directory with no records at all -- an empty
+volume root, for instance -- has nothing for its first query to return.
+
+Directory-ness is established at the open, not inferred from a refill.
+`FILE_LIST_DIRECTORY` is the same bit as `FILE_READ_DATA`, so opening an ordinary
+file with it succeeds; the crate therefore checks `FILE_ATTRIBUTE_DIRECTORY` on
+the opened handle and reports `DirectoryOpen(ERROR_DIRECTORY)`. Leaving it to the
+first refill would surface "you named a file" through error codes that cannot be
+distinguished from "this filesystem does not support extended directory
+information", turning a caller's mistake into a reported capability failure.
+
 For one `EnumerationId`, accepted entries retain the order in which the native
 record chain supplies them and the terminal follows every queued entry. `.` and
 `..` records are examined for work budgeting but are removed before predicate
@@ -224,8 +238,9 @@ out-of-bounds name, and negative size. A late query or parse failure does not
 retract entries already queued: those entries are followed by exactly one
 `Failed` terminal.
 
-On an extended-directory query made with a live directory handle opened by this
-crate, a valid information class, a non-null 8-byte-aligned buffer base, and an
+On an extended-directory query made with a live handle this crate opened *and
+verified to be a directory*, a valid information class, a non-null
+8-byte-aligned buffer base, and an
 effective capacity of at least 1 KiB that is both an 8-byte multiple and
 representable as `u32`, `ERROR_INVALID_FUNCTION`, `ERROR_NOT_SUPPORTED`, and
 `ERROR_INVALID_PARAMETER` are classified as

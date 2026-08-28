@@ -321,16 +321,16 @@ fn abandonment_frees_the_completion_reservations_it_released() {
 #[test]
 fn the_doorbell_drains_the_ring_on_a_pool_thread() {
     // The end-to-end path: submit, ring, and let the thread pool service it.
-    let (session, _receiver) = live_session();
-    let enumeration = admit(&session);
+    // Registration is transient now that a quantum runs the enumeration to its
+    // end, so the stable observation is the terminal that follows.
+    let scratch = Scratch::empty();
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
 
-    for _ in 0..1000 {
-        if session.shared.contains(enumeration) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    panic!("the servicer never registered the enumeration");
+    assert!(await_terminal(&receiver, enumeration).is_completed());
 }
 
 #[test]
@@ -385,4 +385,98 @@ fn debug_output_names_the_bounds() {
     assert!(rendered.contains('4'), "{rendered}");
     let rendered = format!("{receiver:?}");
     assert!(rendered.contains('5'), "{rendered}");
+}
+
+// -- native engine -------------------------------------------------------
+//
+// FE-8 gave a quantum something real to do, so these drive a session against
+// actual directories rather than scripted outcomes.
+
+use crate::scratch::Scratch;
+
+/// Drive a session with the live thread pool until `enumeration` reports a
+/// terminal, or give up.
+fn await_terminal(receiver: &Receiver, enumeration: EnumerationId) -> TerminalOutcome {
+    for _ in 0..2000 {
+        while let Some(record) = receiver.try_recv() {
+            if let Completion::Terminal {
+                enumeration: id,
+                outcome,
+            } = record
+            {
+                assert_eq!(id, enumeration);
+                return outcome;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("no terminal arrived for {enumeration}");
+}
+
+#[test]
+fn an_empty_directory_completes_end_to_end() {
+    let scratch = Scratch::empty();
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let outcome = await_terminal(&receiver, enumeration);
+    assert!(outcome.is_completed(), "{outcome:?}");
+}
+
+#[test]
+fn a_missing_directory_fails_end_to_end() {
+    let scratch = Scratch::empty();
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(&scratch.child("absent")).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let outcome = await_terminal(&receiver, enumeration);
+    let failure = outcome.failure().expect("a failure");
+    assert!(
+        matches!(failure, crate::error::EnumerationError::DirectoryOpen(_)),
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn a_file_fails_end_to_end_as_an_open_failure() {
+    let scratch = Scratch::with_files(&["plain.txt"]);
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(&scratch.child("plain.txt")).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let outcome = await_terminal(&receiver, enumeration);
+    let failure = outcome.failure().expect("a failure");
+    assert!(
+        matches!(failure, crate::error::EnumerationError::DirectoryOpen(_)),
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn a_finished_enumeration_is_retired_without_a_client_touching_it() {
+    // The worker reports and the servicer retires, both on the pool: a client
+    // that only drains sees the session return to empty on its own.
+    let scratch = Scratch::empty();
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+    assert!(await_terminal(&receiver, enumeration).is_completed());
+
+    for _ in 0..2000 {
+        if session.enumerations() == 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("the enumeration was never retired");
 }

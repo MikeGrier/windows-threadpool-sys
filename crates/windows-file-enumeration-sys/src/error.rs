@@ -197,6 +197,11 @@ pub enum BeginFailure {
     Abandoned,
     /// The caller's security context could not be captured.
     TokenCapture,
+    /// The enumeration's fixed native buffer could not be allocated.
+    ///
+    /// Reported rather than aborting the process, which is what the ordinary
+    /// growable-vector path would do.
+    BufferAllocation,
 }
 
 impl BeginFailure {
@@ -208,6 +213,7 @@ impl BeginFailure {
             }
             BeginFailure::Abandoned => "the session has been abandoned by its receiver",
             BeginFailure::TokenCapture => "the caller's security context could not be captured",
+            BeginFailure::BufferAllocation => "the native buffer could not be allocated",
         }
     }
 }

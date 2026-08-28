@@ -39,7 +39,9 @@
 
 use windows_impersonation_token_sys::{CaptureError, ImpersonationToken};
 
+use crate::buffer::NativeBuffer;
 use crate::completion::EnumerationId;
+use crate::engine::EngineState;
 use crate::error::{BeginError, BeginFailure};
 use crate::request::EnumerationRequest;
 use crate::session::SessionShared;
@@ -194,11 +196,24 @@ pub(crate) fn try_begin_with_token(
             Some(token),
         ));
     };
+    // The last thing that can fail. Allocated here rather than in the request
+    // because the buffer belongs to the enumeration it serves: a request is a
+    // cheap, clonable, comparable description that may be submitted more than
+    // once and is handed straight back when a begin is refused.
+    let Some(buffer) = NativeBuffer::try_new(request.buffer_capacity()) else {
+        release_cancel_slot(&shared.submissions, cancel);
+        release_retire_slot(&shared.submissions, retire);
+        drop(terminal);
+        return Err(BeginError::rejected(
+            BeginFailure::BufferAllocation,
+            request,
+            Some(token),
+        ));
+    };
 
     let message = ControlMessage::Begin(Box::new(BeginMessage {
         enumeration,
-        request,
-        token,
+        engine: EngineState::new(request, token, buffer),
         terminal,
         retire,
     }));
@@ -220,7 +235,9 @@ pub(crate) fn try_begin_with_token(
                 ControlMessage::Begin(begin) => {
                     let begin = *begin;
                     release_retire_slot(&shared.submissions, begin.retire);
-                    (begin.request, begin.token)
+                    // The buffer goes with the engine state, which is dropped
+                    // here: nothing was accepted, so nothing keeps it.
+                    begin.engine.into_parts()
                 }
                 _ => unreachable!("the message pushed above is always a begin"),
             };

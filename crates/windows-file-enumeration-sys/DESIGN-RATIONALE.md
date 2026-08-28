@@ -190,6 +190,27 @@ fail does so on the caller's own thread. The allocation must be fallible and
 8-byte aligned, and neither comes free: the ordinary growable vector aborts the
 process on allocation failure and guarantees only byte alignment.
 
+## Why directory-ness is checked rather than inferred (FE-8)
+
+Two things the filesystem taught us during FE-8, both of which the contract had
+described in a way that reads correctly but implements wrongly.
+
+The first: `FILE_LIST_DIRECTORY` is the same bit as `FILE_READ_DATA`, so opening
+an ordinary file with it succeeds. Left to the first refill, "you named a file"
+would arrive as one of the same codes that mean "this filesystem does not support
+extended directory information" -- and the crate would report a caller's mistake
+as a capability failure, which is precisely what the unsupported-class
+preconditions exist to prevent. Checking `FILE_ATTRIBUTE_DIRECTORY` on the opened
+handle costs one query per enumeration and makes the distinction structural.
+
+The second: an empty subdirectory is not an empty listing. It contains `.` and
+`..`, so it returns a batch and exhausts on its *second* query. The
+first-query-empty rule is still needed and still correct -- an empty volume root
+reaches it -- but stating it as "an empty directory completes immediately" would
+have been wrong, and a test written to that phrasing fails against any real
+filesystem. The rule is therefore stated in terms of which query reported the
+code, which is what it always depended on.
+
 ## Why this remains a Globazog replacement
 
 Globazog's existing Windows backend demonstrates the minimum viable native

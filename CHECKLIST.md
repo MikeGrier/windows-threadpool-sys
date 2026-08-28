@@ -12,8 +12,8 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-8.** Open the directory on a worker under the
-> submitted token.
+> **NEXT ACTIONABLE ITEM: FE-9.** Parse the batches the engine is already
+> reading, and deliver entries.
 
 ## M6 -- Native enumeration engine
 
@@ -25,20 +25,7 @@ and the submission-ring servicer the sole registry authority (D-16, D-17).
 
 - [x] **FE-7** -- Make the worker a reporter and the servicer the sole registry authority, and give the session something to run work on. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-7)
 
-- [ ] **FE-8** -- Allocate the fixed native buffer and get one directory open and
-  reading. Allocation happens at admission, is fallible rather than aborting, and
-  produces a base address aligned to at least 8 bytes (D-19). Open the directory on
-  a worker under the submitted `ImpersonationToken`, restoring the worker's exact
-  prior token immediately after the open on every path including failure and
-  unwind. Query the per-directory volume serial only when `FileIdentityMode` asks
-  for it, failing a `Required` request before its first entry. Classify open
-  failures as `DirectoryOpen` with their raw code -- `ERROR_FILE_NOT_FOUND` from
-  `CreateFileW` is an open failure, never exhaustion. Perform the first
-  `FileIdExtdDirectoryRestartInfo` refill and apply the phase-specific exhaustion
-  rule: `ERROR_NO_MORE_FILES` from any refill, and `ERROR_FILE_NOT_FOUND` from that
-  initial refill before any batch, are `Completed`. Deliver the terminal into the
-  enumeration's own reserved slot and then report retirement. Test against real
-  directories: empty, missing, not-a-directory, and inaccessible.
+- [x] **FE-8** -- Allocate the fixed native buffer and get one directory open and reading. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-8)
 
 - [ ] **FE-9** -- Parse what the buffer returns and deliver entries.
   Parse `FILE_ID_EXTD_DIR_INFO`

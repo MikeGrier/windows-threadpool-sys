@@ -50,6 +50,8 @@ use crate::testing::named_file;
 pub(crate) enum Quantum {
     /// Nothing to do.
     Idle,
+    /// Progress was made and there is more to do.
+    Yielded,
     /// Out of completion-ring room.
     Parked,
     /// The directory was enumerated to exhaustion.
@@ -64,6 +66,7 @@ impl Quantum {
     fn into_outcome(self) -> QuantumOutcome {
         match self {
             Quantum::Idle => QuantumOutcome::Idle,
+            Quantum::Yielded => QuantumOutcome::Yielded,
             Quantum::Parked => QuantumOutcome::Parked,
             Quantum::Completed => QuantumOutcome::Finished(TerminalOutcome::Completed),
             Quantum::Cancelled => QuantumOutcome::Finished(TerminalOutcome::Cancelled),
@@ -142,8 +145,9 @@ pub(crate) struct Model {
     finished: HashSet<EnumerationId>,
     /// Entries the ring refused, which is backpressure rather than loss.
     refused: usize,
-    /// Enumerations claimed but not yet reported, newest last.
-    held: Vec<EnumerationId>,
+    /// Enumerations claimed but not yet reported, newest last, each with the
+    /// engine state its claim took out.
+    held: Vec<(EnumerationId, crate::engine::EngineState)>,
     /// What the last [`Op::Claim`] returned, including when it returned nothing.
     last_claim: Option<EnumerationId>,
     completion_capacity: usize,
@@ -262,18 +266,21 @@ impl Model {
             }
             Op::Claim => {
                 // A claim that finds nothing must not disturb one already held:
-                // the two are different questions.
+                // the two are different questions. The engine state comes out
+                // with the claim and is held until the matching report.
                 let claimed = self.session().shared.claim_next();
-                self.last_claim = claimed;
-                if let Some(enumeration) = claimed {
-                    self.held.push(enumeration);
+                self.last_claim = claimed.as_ref().map(|(enumeration, _)| *enumeration);
+                if let Some(claim) = claimed {
+                    self.held.push(claim);
                 }
             }
             Op::Report(quantum) => {
-                if let Some(enumeration) = self.held.pop() {
-                    self.session()
-                        .shared
-                        .report_quantum(enumeration, quantum.into_outcome());
+                if let Some((enumeration, engine)) = self.held.pop() {
+                    self.session().shared.report_quantum(
+                        enumeration,
+                        engine,
+                        quantum.into_outcome(),
+                    );
                 }
             }
             Op::RunEngine(quantum) => {

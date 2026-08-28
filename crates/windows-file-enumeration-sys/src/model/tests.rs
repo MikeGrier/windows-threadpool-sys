@@ -689,3 +689,41 @@ fn the_minimum_submission_ring_covers_cancel_and_retire() {
     ]);
     assert_eq!(model.registered(), 1);
 }
+
+/// A yielding quantum re-queues itself, which is how one refill per callback
+/// still gets through a whole directory.
+#[test]
+fn a_yielding_quantum_is_re_queued() {
+    let mut model = Model::new(8, 8);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        Op::Claim,
+        Op::Report(Quantum::Yielded),
+    ]);
+    assert_eq!(model.ready(), 1, "yielding asks for another turn");
+
+    model.run(&[Op::Claim, Op::Report(Quantum::Idle)]);
+    assert_eq!(model.ready(), 0, "an idle quantum does not");
+    model.run(&[Op::Detach(0)]);
+}
+
+/// Cancellation outranks a yield, so a cancelled enumeration stops rather than
+/// scheduling itself forever.
+#[test]
+fn a_cancelled_enumeration_does_not_yield_again() {
+    let mut model = Model::new(8, 8);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        Op::Claim,
+        Op::Cancel(0),
+        Op::Service,
+        Op::Report(Quantum::Yielded),
+        Op::Service,
+        Op::DrainReceiver,
+    ]);
+    assert_eq!(model.terminal(0), Some("cancelled"));
+    assert_eq!(model.ready(), 0);
+    assert_eq!(model.registered(), 0);
+}

@@ -23,25 +23,18 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use windows_impersonation_token_sys::ImpersonationToken;
-
 use crate::completion::EnumerationId;
 use crate::completion_ring::TerminalSlot;
-use crate::request::EnumerationRequest;
+use crate::engine::EngineState;
 use crate::submission_ring::RetireSlot;
 
 /// One enumeration the session is carrying.
 pub(crate) struct EnumerationState {
-    /// What to enumerate, and how.
+    /// The native state a worker takes out while it runs a quantum.
     ///
-    /// Read by the native engine (M6), which opens the path and evaluates the
-    /// predicate; the shell only carries it.
-    #[allow(dead_code, reason = "FE-8 opens the path this describes")]
-    pub(crate) request: EnumerationRequest,
-    /// The submitter's captured security context, applied only while the
-    /// directory handle is opened.
-    #[allow(dead_code, reason = "FE-8 opens the directory with this")]
-    pub(crate) token: ImpersonationToken,
+    /// None exactly while a worker holds it, which is also exactly while the
+    /// enumeration is running -- so the two never disagree.
+    pub(crate) engine: Option<EngineState>,
     /// The reserved completion slot this enumeration's terminal will use.
     ///
     /// Taken by whichever authority delivers the outcome, which is the worker
@@ -66,15 +59,9 @@ pub(crate) struct EnumerationState {
 }
 
 impl EnumerationState {
-    pub(crate) fn new(
-        request: EnumerationRequest,
-        token: ImpersonationToken,
-        terminal: TerminalSlot,
-        retire: RetireSlot,
-    ) -> Self {
+    pub(crate) fn new(engine: EngineState, terminal: TerminalSlot, retire: RetireSlot) -> Self {
         Self {
-            request,
-            token,
+            engine: Some(engine),
             terminal: Some(terminal),
             retire: Some(retire),
             cancelled: false,
@@ -176,8 +163,11 @@ impl Registry {
     /// Claim the next runnable enumeration for one worker.
     ///
     /// Skips ids that have since been removed or claimed, so a stale queue entry
-    /// costs a pop rather than a wrong answer.
-    pub(crate) fn claim_next(&mut self) -> Option<EnumerationId> {
+    /// costs a pop rather than a wrong answer. The engine state comes out with
+    /// the claim: a quantum blocks on directory queries, and holding the
+    /// registry lock across those would stall every control operation in the
+    /// session behind one slow volume.
+    pub(crate) fn claim_next(&mut self) -> Option<(EnumerationId, EngineState)> {
         while let Some(enumeration) = self.ready.pop_front() {
             let Some(state) = self.entries.get_mut(&enumeration) else {
                 continue;
@@ -186,9 +176,15 @@ impl Registry {
             if state.running {
                 continue;
             }
+            let Some(engine) = state.engine.take() else {
+                // Only a running enumeration has its engine out, and that was
+                // just ruled out; treat anything else as unclaimable rather
+                // than handing out a second view of the same buffer.
+                continue;
+            };
             state.running = true;
             state.parked = false;
-            return Some(enumeration);
+            return Some((enumeration, engine));
         }
         None
     }

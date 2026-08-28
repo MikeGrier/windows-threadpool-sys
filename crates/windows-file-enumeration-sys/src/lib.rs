@@ -64,10 +64,13 @@
 #![warn(missing_docs)]
 
 mod admission;
+mod buffer;
 mod completion;
 mod completion_ring;
+mod engine;
 mod entry;
 mod error;
+mod native;
 mod path;
 mod pattern;
 mod predicate;
@@ -79,6 +82,8 @@ mod timestamp;
 
 #[cfg(test)]
 mod model;
+#[cfg(test)]
+mod scratch;
 #[cfg(test)]
 mod testing;
 
