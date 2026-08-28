@@ -34,8 +34,88 @@ declaration. A consumer running on shared threads will want to force the
 dialog-suppressing error-mode bits; a consumer with a private thread is entitled
 to the opposite choice, and does not have to fight this layer to make it.
 
+## Two sets, because the aspects do not relate to the caller the same way
+
+Aspects that can be **read** off the calling thread are *captured*, and the
+caller chooses which to collect. Aspects that cannot be read -- WOW64
+redirection has no getter at all, and I/O priority has no documented one -- are
+*declared* instead: the caller states the value it wants installed. A declared
+aspect has nothing to collect, so it is not part of any capture set, and leaving
+it unspecified means the target thread's own value is untouched.
+
+## Examples
+
+### Carry a caller's context onto a worker
+
+```rust
+use std::thread;
+
+use windows_thread_ambient_sys::declared::MemoryPriority;
+use windows_thread_ambient_sys::{Declared, ThreadErrorMode, impersonation};
+
+// Captured on the submitting thread, where a failure is still the caller's to
+// see rather than arriving later from a worker.
+let context = impersonation::capture()?;
+
+// Declared by the caller. Unspecified aspects leave the worker alone.
+let declared = Declared::none().with_memory_priority(MemoryPriority::Low);
+
+// A policy this consumer chose, not one the crate imposes.
+let mode = ThreadErrorMode::FAIL_CRITICAL_ERRORS
+    .union(ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX);
+
+let value = thread::spawn(move || {
+    let guard = mode.apply().expect("the error mode installs");
+    let outcome = declared.with_applied(|| {
+        impersonation::with_applied(&context, || "ran as the submitter")
+    });
+    guard.release().expect("the error mode is restored");
+    outcome
+})
+.join()
+.expect("the worker did not panic")??;
+
+assert_eq!(value, "ran as the submitter");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+### Not captured is not the same as captured and absent
+
+```rust
+use windows_thread_ambient_sys::Captured;
+
+let omitted: Captured<u32> = Captured::NotCaptured;
+let asked_and_empty: Captured<u32> = Captured::Absent;
+
+// Both yield nothing, which is what `Option` would collapse them to...
+assert_eq!(omitted.present(), None);
+assert_eq!(asked_and_empty.present(), None);
+
+// ...but only one of them is a decision, and that stays recoverable.
+assert!(!omitted.was_captured());
+assert!(asked_and_empty.was_captured());
+```
+
+### An invalid error-mode bit is not representable
+
+```rust
+use windows_thread_ambient_sys::ThreadErrorMode;
+
+// 0x0004 is SEM_NOALIGNMENTFAULTEXCEPT. Measured, Windows rejects it per
+// thread *and* an invalid bit fails the whole call -- so a caller combining it
+// with valid bits would install none of them. The type refuses it instead.
+let refused = ThreadErrorMode::from_bits(0x0001 | 0x0004)
+    .expect_err("the alignment bit is not settable per thread");
+assert_eq!(refused.bits(), 0x0004);
+```
+
 ## Status
 
 Early. The design decisions are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md);
-the implementation is in progress against milestones M22 and M23 of the workspace
-[CHECKLIST.md](../../CHECKLIST.md). Not yet ready for a crates.io release.
+the implementation is in progress against milestones M22 and M23 of
+[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md). The aspects
+are complete; the composite that applies them together is not. Not yet ready for
+a crates.io release.
+
+The examples above are compiled as doctests, so a contract change breaks the
+build rather than leaving the README teaching the old answer.

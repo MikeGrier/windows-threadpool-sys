@@ -30,6 +30,25 @@
 //! check nobody expected to fail. See
 //! [`windows-platform-probes`](../../windows-platform-probes/DESIGN-NOTES.md),
 //! which pins the measurement as a test.
+//!
+//! # Example
+//!
+//! ```
+//! use windows_thread_ambient_sys::ThreadErrorMode;
+//!
+//! let entry = ThreadErrorMode::capture()?;
+//!
+//! let mode = ThreadErrorMode::FAIL_CRITICAL_ERRORS
+//!     .union(ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX);
+//! let guard = mode.apply()?;
+//! assert!(ThreadErrorMode::capture()?.contains(ThreadErrorMode::FAIL_CRITICAL_ERRORS));
+//!
+//! // Release explicitly. Dropping the guard also restores, but discards any
+//! // failure to do so, because a destructor has no caller to report to.
+//! guard.release()?;
+//! assert_eq!(ThreadErrorMode::capture()?, entry);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use std::fmt;
 use std::io;
@@ -77,6 +96,24 @@ impl ThreadErrorMode {
     /// `SetThreadErrorMode` does not accept. This is a rejection rather than a
     /// mask: silently dropping a bit would report installing a value that was
     /// not installed, which is the failure this type exists to prevent.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use windows_thread_ambient_sys::ThreadErrorMode;
+    ///
+    /// assert_eq!(
+    ///     ThreadErrorMode::from_bits(0x0001),
+    ///     Ok(ThreadErrorMode::FAIL_CRITICAL_ERRORS)
+    /// );
+    ///
+    /// // 0x0004 is SEM_NOALIGNMENTFAULTEXCEPT, which cannot be set per thread.
+    /// // It is refused even beside a valid bit, because Windows would install
+    /// // neither: an invalid bit fails the whole call.
+    /// let refused = ThreadErrorMode::from_bits(0x0001 | 0x0004)
+    ///     .expect_err("the alignment bit is not settable per thread");
+    /// assert_eq!(refused.bits(), 0x0004);
+    /// ```
     pub const fn from_bits(bits: THREAD_ERROR_MODE) -> Result<Self, UnsupportedBits> {
         let unsupported = bits & !SUPPORTED;
         if unsupported == 0 {

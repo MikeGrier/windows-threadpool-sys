@@ -41,6 +41,47 @@
 //! thread, where a modal dialog is its own problem and nobody else's, is
 //! entitled to the opposite choice. Both compose that policy from the primitives
 //! here rather than finding it already decided.
+//!
+//! # Example
+//!
+//! Capture on the submitting thread, where a failure is still the caller's to
+//! see, then reconstruct the context on a worker that inherited none of it:
+//!
+//! ```
+//! use std::thread;
+//!
+//! use windows_thread_ambient_sys::declared::MemoryPriority;
+//! use windows_thread_ambient_sys::{Declared, ThreadErrorMode, impersonation};
+//!
+//! // Captured: the submitter's own security context travels to the worker.
+//! let context = impersonation::capture()?;
+//!
+//! // Declared: stated by the caller, never read from the submitting thread.
+//! // Aspects left unspecified leave the worker's own values alone.
+//! let declared = Declared::none().with_memory_priority(MemoryPriority::Low);
+//!
+//! // Overridden: this is a *consumer's* policy, composed here rather than
+//! // found already decided. A worker on shared infrastructure must not raise a
+//! // modal dialog on a hard device error.
+//! let mode = ThreadErrorMode::FAIL_CRITICAL_ERRORS
+//!     .union(ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX);
+//!
+//! let worker = thread::spawn(move || {
+//!     // Guards apply outermost-first and release in exact reverse; the
+//!     // narrowest window, impersonation, sits innermost.
+//!     let guard = mode.apply().expect("the error mode installs");
+//!     let outcome = declared.with_applied(|| {
+//!         impersonation::with_applied(&context, || "ran as the submitter")
+//!     });
+//!     // Release explicitly: dropping restores too, but discards any failure.
+//!     guard.release().expect("the error mode is restored");
+//!     outcome
+//! });
+//!
+//! let value = worker.join().expect("the worker did not panic")??;
+//! assert_eq!(value, "ran as the submitter");
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
@@ -54,5 +95,11 @@ pub mod transaction;
 
 pub use captured::Captured;
 pub use declared::Declared;
+
+/// Compiles the README's examples, so a contract change breaks the build rather
+/// than silently teaching the old answer.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 pub use error_mode::ThreadErrorMode;
 pub use windows_impersonation_token_sys::ImpersonationToken;

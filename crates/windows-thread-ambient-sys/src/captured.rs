@@ -19,6 +19,23 @@
 /// The shape is uniform across aspects even where [`Absent`](Self::Absent) is
 /// unreachable, because a per-aspect shape would make every consumer remember
 /// which aspects can be absent.
+///
+/// # Example
+///
+/// ```
+/// use windows_thread_ambient_sys::Captured;
+///
+/// let omitted: Captured<u32> = Captured::NotCaptured;
+/// let asked_and_empty: Captured<u32> = Captured::Absent;
+///
+/// // Both yield nothing, which is what `Option` would collapse them to...
+/// assert_eq!(omitted.present(), None);
+/// assert_eq!(asked_and_empty.present(), None);
+///
+/// // ...but only one of them is a decision, and that stays recoverable.
+/// assert!(!omitted.was_captured());
+/// assert!(asked_and_empty.was_captured());
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Captured<T> {
     /// The aspect was not in the capture set, so nothing was read and the

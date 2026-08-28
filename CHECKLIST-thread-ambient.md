@@ -91,6 +91,14 @@ namespace operation is.
   implicitly consents to remoting, and I/O priority has no documented getter and moves only in lockstep
   with CPU priority through background mode. Depends on M22.1 for the reclassification.
 
+- [x] **M22.8** -- Give the aspect surface runnable examples, and compile the README as doctests. Added
+  after M22.7 landed with **zero** doctests, which execution revealed to be a planning error rather than a
+  deferral: M23.4 had scheduled all documentation at the end of the composite, so the aspects would have
+  shipped a whole milestone with examples nothing compiled. Per this repository's rule that prose
+  containing code must compile, the README carries
+  `#[cfg(doctest)] #[doc = include_str!("../README.md")]`, so a contract change breaks the build instead of
+  leaving the README teaching the old answer. Verify by sabotage that the README examples are genuinely
+  executed rather than merely parsed. M23.4 retains the *composite's* documentation.
 ## M23 -- `windows-thread-ambient-sys`: the composite
 
 - [ ] **M23.1** -- Implement the capture set and its named default, covering only the capturable aspects.
@@ -107,7 +115,9 @@ namespace operation is.
   rather than chosen; for the other aspects it is reported rather than fatal, and the report must reach the
   caller instead of being dropped on the floor.
 
-- [ ] **M23.4** -- Prove the crate across a real thread boundary rather than only in-process: capture on
+- [ ] **M23.4** -- Prove the *composite* across a real thread boundary rather than only in-process (the
+  per-aspect cross-thread cases already landed with M22.4-M22.7, and the aspect documentation with M22.8):
+  capture on
   one thread, apply on a thread-pool worker, and assert each aspect took effect there and was restored
   afterwards. Include the negative that motivates the whole crate -- an uncaptured aspect does **not**
   arrive on the worker -- since a test suite that only ever sees capture succeed cannot tell the two apart.

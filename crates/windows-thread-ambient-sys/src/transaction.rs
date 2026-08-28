@@ -46,6 +46,25 @@
 //! TxF is also deprecated by Microsoft. That is a reason to keep this aspect
 //! optional and out of any minimal capture set, not a reason to omit it: a
 //! caller using transacted NTFS today still needs its work remoted correctly.
+//!
+//! # Example
+//!
+//! ```
+//! use windows_thread_ambient_sys::Captured;
+//! use windows_thread_ambient_sys::transaction;
+//!
+//! // An ordinary thread carries no transaction. That is an *answer*, not a
+//! // failure, so it is `Absent` rather than an error.
+//! let captured = transaction::capture()?;
+//! assert!(matches!(captured, Captured::Absent));
+//!
+//! // Applying `Absent` installs "no transaction" rather than leaving the
+//! // running thread's own alone -- the caller asked, and the answer was none,
+//! // so a worker that happened to carry one must not enlist this work in it.
+//! let value = transaction::with_applied(&captured, || 42)?;
+//! assert_eq!(value, 42);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use std::ffi::c_void;
 use std::fmt;

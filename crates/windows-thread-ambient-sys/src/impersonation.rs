@@ -29,6 +29,28 @@
 //! this aspect. The three-state shape is kept anyway, because a per-aspect shape
 //! would oblige every consumer to remember which aspects can be absent -- see
 //! [`Captured`].
+//!
+//! # Example
+//!
+//! ```
+//! use std::thread;
+//!
+//! use windows_thread_ambient_sys::impersonation;
+//!
+//! // Capture on the submitting thread: a failure is reported where the caller
+//! // can still act on it, rather than arriving later from a worker.
+//! let context = impersonation::capture()?;
+//!
+//! let value = thread::spawn(move || {
+//!     // A fresh worker inherits no token, so the context has to be reapplied.
+//!     impersonation::with_applied(&context, || "checked as the submitter")
+//! })
+//! .join()
+//! .expect("the worker did not panic")?;
+//!
+//! assert_eq!(value, "checked as the submitter");
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use windows_impersonation_token_sys::{ApplyError, CaptureError, ImpersonationToken};
 

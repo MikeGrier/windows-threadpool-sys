@@ -38,6 +38,25 @@
 //! call fails. That failure is reported rather than swallowed, because a caller
 //! that asked for redirection to be disabled and silently did not get it would
 //! be reading a different filesystem than it believes.
+//!
+//! # Example
+//!
+//! ```
+//! use windows_thread_ambient_sys::Declared;
+//! use windows_thread_ambient_sys::declared::MemoryPriority;
+//!
+//! let entry = MemoryPriority::current()?;
+//!
+//! // Only what is named is installed; every other aspect is left alone.
+//! let declared = Declared::none().with_memory_priority(MemoryPriority::Low);
+//!
+//! let during = declared.with_applied(MemoryPriority::current)?;
+//! assert_eq!(during?, MemoryPriority::Low);
+//!
+//! // The thread is returned to whatever it had, not to an assumed default.
+//! assert_eq!(MemoryPriority::current()?, entry);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use std::fmt;
 use std::io;
