@@ -490,27 +490,32 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   dependent. Every measurement in this workspace so far was taken on ARM64. This subsumes M19.5's narrower
   request for the thread-pool numbers, and the binaries exist precisely so this needs no re-derivation.
 
-  **Blocked on hardware, not on work.** There is nothing to build first; it needs a machine this branch has
-  not been run on. Everything needed is committed, so it is a run-and-record task:
+  **Now driven by CI rather than by a manual run.** The `platform probes (x64, ignored tier +
+  magnitudes)` job in [.github/workflows/ci.yml](.github/workflows/ci.yml) runs on `windows-latest`, which
+  is x64. It runs the ignored tier (`-- --include-ignored`) and every binary except `probe-cancel-io`,
+  which is excluded on purpose: that probe is binary-only *because* `CancelSynchronousIo` can block
+  indefinitely, so running it in CI would hang the job by design.
 
-  ```text
-  cargo test -p windows-platform-probes -- --include-ignored
-  cargo run  -p windows-platform-probes --bin probe-error-mode
-  cargo run  -p windows-platform-probes --bin probe-handle-state
-  cargo run  -p windows-platform-probes --bin probe-worker-context
-  cargo run  -p windows-platform-probes --bin probe-pool-growth
-  cargo run  -p windows-platform-probes --bin probe-device-map
-  cargo run  -p windows-platform-probes --bin probe-ioring
-  cargo run  -p windows-platform-probes --bin probe-completion-port
-  cargo run  -p windows-platform-probes --bin probe-cancel-io
-  ```
+  Note that the **asserted tier was already running on x64** before this job existed --
+  `windows-platform-probes` is a workspace member, so `cargo test --workspace` picked it up. The job adds
+  the two tiers that did not reach: the `#[ignore]`d tests, and the binaries that print magnitudes.
 
-  A **failing ignored test is the interesting result**, not a problem to fix: those tests assert the shape
-  of a finding, so a failure means the finding is architecture-dependent and the design note resting on it
-  needs revisiting. Record which, and where.
+  What remains for this item is therefore **reading the first x64 run and recording the diffs**, not
+  running anything:
 
-  The ARM64 baseline to diff against, measured on Windows 11 Enterprise 10.0.28000,
-  `aarch64-pc-windows-msvc`, so the comparison has something concrete rather than a memory:
+  - **A failing ignored test is the result, not a build break to patch away.** Those tests assert the
+    *shape* of a measured platform fact, so a failure means the fact differs on x64 and the design note
+    resting on it needs revisiting. Analyse before touching an assertion.
+  - **A green run does not finish this item.** The tests deliberately do not assert magnitudes, because a
+    number pinned to one host fails on the next for no useful reason. The pool-growth timings are the
+    likeliest thing to differ and they can only be read from the job log.
+  - **`IoRing` may report `Unavailable` on the runner.** `CreateIoRing` needs a recent Windows build, and
+    if the image is older those probes measure nothing and say so. That is the probes behaving correctly,
+    but it means CI may be structurally unable to answer three findings -- which is itself worth recording
+    rather than mistaking for agreement.
+
+  The ARM64 baseline to diff the job's output against, measured on Windows 11 Enterprise 10.0.28000,
+  `aarch64-pc-windows-msvc`:
 
   | Probe | ARM64 result |
   |---|---|
@@ -527,8 +532,8 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   | `CancelSynchronousIo`, idle thread | returned `ERROR_NOT_FOUND` (1168) -- point-in-time |
   | `CancelSynchronousIo`, busy thread | 4 attempts all returned; **no wedge on this run**, though the original spike wedged for 12s |
 
-  The last row is the one to treat carefully: it is **nondeterministic**, which is exactly why that probe is
-  binary-only. A clean x64 run does not clear the design, and the probe's own output says so.
+  The last row is **not** covered by CI and must stay that way. It is also nondeterministic, which is why
+  that probe is binary-only: a clean run does not clear the design, and the probe's own output says so.
 
 - [x] **M27.6** -- Migrate the completion-port fork measurement (Probe D): does associating a handle with
   an IOCP foreclose `IoRing` use of it? This is the evidence for `windows-namespace-request-sys` returning
