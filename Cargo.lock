@@ -220,6 +220,7 @@ name = "windows-platform-probes"
 version = "0.0.0"
 dependencies = [
  "windows-sys",
+ "windows-threadpool-sys",
 ]
 
 [[package]]

@@ -53,6 +53,8 @@
 
 pub mod error_mode;
 pub mod handle_state;
+pub mod pool_growth;
+pub mod worker_context;
 
 #[cfg(test)]
 mod tests;
