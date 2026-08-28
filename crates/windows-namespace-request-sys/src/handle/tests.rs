@@ -26,7 +26,7 @@ use super::{CapturedHandle, HandleCaptureFailure, pseudo};
 ///
 /// Read: "I may open handles." Write: "no other test may open a handle while I
 /// reason about a specific handle value."
-fn handle_allocation() -> &'static RwLock<()> {
+pub(crate) fn handle_allocation() -> &'static RwLock<()> {
     static LOCK: OnceLock<RwLock<()>> = OnceLock::new();
     LOCK.get_or_init(|| RwLock::new(()))
 }
@@ -34,14 +34,14 @@ fn handle_allocation() -> &'static RwLock<()> {
 /// A temporary directory holding one file, removed on drop.
 ///
 /// Named per process and per label so concurrent tests cannot collide.
-struct Fixture {
+pub(crate) struct Fixture {
     directory: PathBuf,
 }
 
-const FILE_CONTENTS: &[u8] = b"contents";
+pub(crate) const FILE_CONTENTS: &[u8] = b"contents";
 
 impl Fixture {
-    fn new(label: &str) -> Self {
+    pub(crate) fn new(label: &str) -> Self {
         let directory = std::env::temp_dir().join(format!(
             "windows-namespace-request-sys-{}-{label}",
             std::process::id()
@@ -52,20 +52,20 @@ impl Fixture {
         Self { directory }
     }
 
-    fn directory(&self) -> &Path {
+    pub(crate) fn directory(&self) -> &Path {
         &self.directory
     }
 
-    fn file(&self) -> PathBuf {
+    pub(crate) fn file(&self) -> PathBuf {
         self.directory.join("f.t")
     }
 
-    fn open_file(&self) -> File {
+    pub(crate) fn open_file(&self) -> File {
         File::open(self.file()).expect("open the fixture file")
     }
 
     /// Opens the directory the way every audited consumer does.
-    fn open_directory(&self) -> File {
+    pub(crate) fn open_directory(&self) -> File {
         OpenOptions::new()
             .read(true)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)

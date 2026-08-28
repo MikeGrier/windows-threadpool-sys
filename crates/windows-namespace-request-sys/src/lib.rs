@@ -61,6 +61,46 @@
 //! sequences them itself. The round-one entry list is audited from three real
 //! consumers rather than chosen by taste, and its omissions are deliberate and
 //! written down. See `DESIGN-NOTES.md` in the crate root.
+//!
+//! # Example
+//!
+//! Capture the parameters on the submitting thread, where a failure is still
+//! the caller's to see and the process current directory still means what the
+//! caller thinks it means, then use them on a worker that saw none of it:
+//!
+//! ```
+//! use std::fs;
+//! use std::os::windows::io::AsHandle;
+//! use std::thread;
+//!
+//! use windows_namespace_request_sys::{CapturedHandle, prepare};
+//! use wtf_string::Wtf16String;
+//!
+//! let path = std::env::temp_dir().join(format!("wnrs-doc-{}.tmp", std::process::id()));
+//! fs::write(&path, b"example")?;
+//!
+//! // Resolved here, not on the worker: the process current directory is
+//! // shared mutable state that any thread can change in between.
+//! let text = path.to_str().expect("a temporary path is valid UTF-8");
+//! let prepared = prepare(&Wtf16String::from(text))?;
+//! assert_eq!(prepared.as_wtf16().to_string_lossy(), text);
+//!
+//! // An owned duplicate, so the captured parameters cannot be left pointing
+//! // at a handle the caller has since closed.
+//! let file = fs::File::open(&path)?;
+//! let captured = CapturedHandle::capture(file.as_handle())?;
+//! drop(file);
+//!
+//! let length = thread::spawn(move || {
+//!     fs::File::from(captured.into_owned_handle()).metadata().map(|m| m.len())
+//! })
+//! .join()
+//! .expect("the worker did not panic")?;
+//!
+//! assert_eq!(length, b"example".len() as u64);
+//! # fs::remove_file(&path)?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
@@ -76,6 +116,15 @@ pub use buffer::AlignedBuffer;
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
 pub use outcome::{Outcome, Win32Error};
 pub use path::{PathError, PathFailure, PreparedPath, prepare};
+/// Compiles the README's examples, so a contract change breaks the build
+/// rather than silently teaching the old answer.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
+#[cfg(test)]
+mod tests;
+
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
 };

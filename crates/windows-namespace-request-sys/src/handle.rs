@@ -283,5 +283,7 @@ impl From<CapturedHandle> for OwnedHandle {
     }
 }
 
+// Visible to the crate's own cross-module tests, which reuse this module's
+// fixture rather than standing up a second copy of it.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

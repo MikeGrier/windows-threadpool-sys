@@ -46,7 +46,7 @@ const ONE_ACE_ACL_BYTES: u32 = 256;
 /// This is exactly the shape that makes capture necessary: `descriptor` holds
 /// raw pointers into `sid` and `acl`, so copying the struct alone would copy a
 /// set of references to storage the caller owns.
-struct Absolute {
+pub(crate) struct Absolute {
     descriptor: Box<SECURITY_DESCRIPTOR>,
     _sid: AlignedBuffer,
     _acl: Option<AlignedBuffer>,
@@ -109,7 +109,7 @@ impl Absolute {
     }
 
     /// A descriptor whose DACL grants the World SID everything.
-    fn with_populated_dacl() -> Self {
+    pub(crate) fn with_populated_dacl() -> Self {
         let mut absolute = Self::without_dacl();
         let mut acl = new_acl(ONE_ACE_ACL_BYTES);
         let mut sid = world_sid();
@@ -141,7 +141,7 @@ impl Absolute {
         absolute
     }
 
-    fn as_ptr(&self) -> *const c_void {
+    pub(crate) fn as_ptr(&self) -> *const c_void {
         ptr::from_ref(self.descriptor.as_ref()).cast::<c_void>()
     }
 

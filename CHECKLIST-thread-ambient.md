@@ -272,12 +272,19 @@ assumed:
   an empty directory from a first query, and a genuine failure from a later one, and only the consumer can
   disambiguate.
 
-- [ ] **M24.6** -- Test the foundations: security descriptors that are absolute, self-relative, null,
+- [x] **M24.6** -- Test the foundations: security descriptors that are absolute, self-relative, null,
   empty-DACL, and invalid; handle duplication against a live handle, a closed handle, and a pseudo-handle;
   and the property that binds the whole crate together -- a captured request survives the caller dropping
   every input it was built from, including the source handle. Complete the API documentation and the
   changelog baseline.
 
+  **Re-planned during execution.** The enumerated per-case tests were not deferred to this item: each
+  landed with the item that introduced the behaviour, which is the sequencing the one-item-then-commit
+  loop produces and is better than holding tests back to a trailing test item. What was genuinely left,
+  and is what this item delivered, is the **composite** the per-module tests cannot show -- one value
+  holding a prepared path, two captured handles, and captured security attributes, outliving every input
+  at once and still working on a thread that saw none of them -- plus the crate example, the README
+  example compiled as a doctest, and confirmation that the changelog baseline matches its siblings.
 ## M25 -- `windows-namespace-request-sys`: the handle-producing entries
 
 Entries 1-4 of the audited list. Each depends on M24's foundations and on nothing else.

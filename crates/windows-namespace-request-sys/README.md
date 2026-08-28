@@ -46,6 +46,45 @@ directory enumeration rather than starting its own, closing the duplicate leaves
 the source usable, and single-shot metadata queries disturb nothing. An
 independent traversal needs a fresh open, not a duplicate.
 
+## Example
+
+Capture on the submitting thread, where a failure is still the caller's to see,
+then use the result on a worker that saw none of the inputs:
+
+```rust
+use std::fs;
+use std::os::windows::io::AsHandle;
+use std::thread;
+
+use windows_namespace_request_sys::{CapturedHandle, prepare};
+use wtf_string::Wtf16String;
+
+let path = std::env::temp_dir().join(format!("wnrs-readme-{}.tmp", std::process::id()));
+fs::write(&path, b"example")?;
+
+// Resolved here rather than on the worker: the process current directory is
+// shared mutable state that any thread can change in between.
+let text = path.to_str().expect("a temporary path is valid UTF-8");
+let prepared = prepare(&Wtf16String::from(text))?;
+assert_eq!(prepared.as_wtf16().to_string_lossy(), text);
+
+// An owned duplicate, so the captured parameters cannot be left pointing at a
+// handle the caller has since closed.
+let file = fs::File::open(&path)?;
+let captured = CapturedHandle::capture(file.as_handle())?;
+drop(file);
+
+let length = thread::spawn(move || {
+    fs::File::from(captured.into_owned_handle()).metadata().map(|m| m.len())
+})
+.join()
+.expect("the worker did not panic")?;
+
+assert_eq!(length, b"example".len() as u64);
+# fs::remove_file(&path)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ## Round-one entries
 
 One entry per Win32 call. The list is audited from three real consumers -- this
