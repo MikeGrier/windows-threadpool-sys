@@ -123,6 +123,19 @@ namespace operation is.
   arrive on the worker -- since a test suite that only ever sees capture succeed cannot tell the two apart.
   Complete the API documentation, the README examples, and the changelog baseline.
 
+- [ ] **M23.5** -- Prove the composite against a **many-worker consumer's shape**, which is the audit's
+  second purpose and was not discharged when M23 was closed. The in-repository consumers each apply a
+  captured state on one worker at a time; Globazog takes one capture at `submit()` and shares it across up
+  to 64 concurrent workers for the length of a traversal, and nothing currently tests that. Assert
+  `AmbientState: Sync` -- it holds, but only `Send` was asserted, and `Send` alone would let this design
+  pass its own suite and then fail to compile in the consumer that motivated it. Share one `Arc<AmbientState>`
+  across concurrent pool callbacks, applying and restoring independently on each, and assert every worker
+  saw the captured context and was left clean. Then document the two things a consumer of that shape must
+  know and cannot currently learn from the crate: that applying once around a batch and applying per
+  operation are both expressible and differ by a `SetThreadToken` per operation, so the granularity choice
+  is theirs to make deliberately; and that an impersonation restore failure is fail-fast, which on a shared
+  pool means a process abort rather than one failed operation.
+
 ## M24 -- `windows-namespace-request-sys`: foundations
 
 A sibling crate, not a layer above M22-M23: a request carries no ambient context, and a context is useful
@@ -168,11 +181,39 @@ not mistake the absence of a consumer for an oversight.
 `escapes_confinement()` repeats it per reparse-point candidate on a worker. Entry 7 is therefore
 first-class, not second-tier.
 
-**Globazog uses no ambient thread state at all.** No impersonation, error mode, WOW64, or transaction API
-appears in it. `windows-thread-ambient-sys`'s consumers remain the enumeration crate and the independent
-work that motivated the extraction; this is not evidence against that crate, but it is evidence that the
-two crates are genuinely siblings rather than a stack.
+**Globazog is a prospective consumer of the ambient crate, not evidence against it.** An earlier draft of
+this section recorded that Globazog "uses no ambient thread state at all" and drew a structural conclusion
+from it -- that the two crates are siblings rather than a stack. The observation is accurate about the code
+as it stands and the inference from it was wrong: a consumer that is still synchronous-on-worker-threads
+has not *needed* ambient state yet, which says nothing about whether it will. Globazog's own notes schedule
+the async follow-up (`NtQueryDirectoryFile` plus IOCP), and that is exactly the point at which its work
+moves onto pool workers and the caller's identity has to be marshaled to reach it. Every aspect this
+workspace carries is plausibly live for it: impersonation for identity, the error mode because a traversal
+is precisely what meets a dead network path or an empty removable drive on a shared pool thread, WOW64
+redirection for a 32-bit host, and priority for a background scan. The sibling claim still stands, but on
+its own footing -- a request needs no context and a context needs no request -- and not on this evidence.
 
+**The audit had two purposes and only one was discharged.** Establishing the operation set is the first;
+establishing that the *scenario* is adequately served is the second, and it was not answered. Globazog's
+shape makes the scenario concrete and demanding in a way the in-repository consumers do not: one capture
+taken at `submit()`, shared by up to 64 concurrent workers, applied repeatedly over a traversal that may
+run for minutes. That imposes requirements no existing test covers, which are queued as M23.5 rather than
+assumed:
+
+- **One state, many workers, concurrently.** This needs `AmbientState` to be `Sync` and shareable through
+  an `Arc`, not merely `Send`. It *is* `Sync`, verified, but only `Send` was ever asserted -- and `Send`
+  alone would let a design pass its tests and then fail to compile in the consumer that motivated it.
+- **Granularity is the consumer's choice and has a cost.** Applying the composite once around a batch of
+  directories and applying it per open are both expressible, and they differ by a `SetThreadToken` per
+  operation. Globazog's worker loop processes many directories per invocation, so the choice is real and
+  the crate should say what it costs rather than leave it to be discovered.
+- **Fail-fast has a blast radius on a shared pool.** An impersonation restore failure panics, and a
+  panicking pool callback aborts the process. That is inherited and correct, but a consumer running 64
+  concurrent impersonated workers should learn it from the documentation rather than from an incident.
+- **Path resolution under a captured identity is still open.** Globazog resolves its roots on the
+  *submitting* thread and opens them on workers. Under a token from another logon session, M20.1's
+  session-relative drive letter hazard makes that a genuine divergence rather than a theoretical one, and
+  the namespace-request crate inherits it.
 - [ ] **M24.1** -- Create the crate, with a `DESIGN-NOTES.md` recording the boundary decisions before
   implementation: a request excludes ambient context; a request captures parameters and performs the call
   faithfully but does not choose a delivery model, so the handle-destination fork stays out and an opened
@@ -337,11 +378,22 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   and never expands a drive letter, so it does **not** close the session-relative hazard from M20.1, and
   its documentation must say which problem it solves and which it leaves standing.
 
-- [ ] **M26.6** -- Acceptance: re-express each audited call site from the three consumers against the
-  catalogue and confirm every parameter shape they use is reachable. This is the test that the entry list
-  was derived from real consumers rather than from taste, and it must be run against all three -- the two
-  in-repository crates and Globazog -- rather than the most convenient one. Complete the API documentation
-  and README examples.
+- [ ] **M26.6** -- Acceptance, in **two** parts, because the audit had two purposes and checking only the
+  first is how the coverage question got missed once already.
+
+  *Operation coverage:* re-express each audited call site from the three consumers against the catalogue
+  and confirm every parameter shape they use is reachable. This is the test that the entry list was derived
+  from real consumers rather than from taste, and it must be run against all three -- the two
+  in-repository crates and Globazog -- rather than the most convenient one.
+
+  *Scenario coverage:* confirm the catalogue serves each consumer's actual **shape**, not just its call
+  list. For Globazog specifically that means a request built on one thread and executed on another under a
+  captured context, many such requests in flight across concurrent workers from one shared capture, and a
+  handle opened by one request being carried into a later one -- which is where M24.2's owned duplicate and
+  M26.1's shared enumeration cursor meet, and the one combination no single-entry test exercises. Record
+  any gap as a defect rather than adjusting the scenario to fit what was built.
+
+  Complete the API documentation and README examples.
 
 ## M27 -- `windows-platform-probes`: keep the measurements executable
 
