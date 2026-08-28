@@ -12,8 +12,8 @@
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 
 use super::{
-    Captured, TransactionContext, TransactionFailure, capture, is_supported,
-    system_proc, with_applied,
+    Captured, TransactionContext, TransactionFailure, capture, is_supported, system_proc,
+    with_applied,
 };
 
 type CreateTransactionFn = unsafe extern "system" fn(

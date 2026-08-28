@@ -84,7 +84,7 @@ namespace operation is.
   transaction does not acquire a dependency nothing else in the workspace has. State the hazard the aspect
   cannot remove: the caller may commit or roll the transaction back while the worker is still inside it.
 
-- [ ] **M22.7** -- Implement the declared aspects -- WOW64 filesystem redirection, memory priority, and I/O
+- [x] **M22.7** -- Implement the declared aspects -- WOW64 filesystem redirection, memory priority, and I/O
   priority. Each is unspecified by default, meaning the worker's own value is left untouched. Record why
   each is declared rather than captured, per aspect rather than as one blanket statement: redirection has
   no getter at all, memory priority is readable but is a policy choice rather than something a caller

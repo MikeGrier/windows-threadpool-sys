@@ -47,10 +47,12 @@
 #![warn(missing_docs)]
 
 pub mod captured;
+pub mod declared;
 pub mod error_mode;
 pub mod impersonation;
 pub mod transaction;
 
 pub use captured::Captured;
+pub use declared::Declared;
 pub use error_mode::ThreadErrorMode;
 pub use windows_impersonation_token_sys::ImpersonationToken;
