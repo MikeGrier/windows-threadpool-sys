@@ -14,6 +14,17 @@ design had already been built on.
 Nothing here is implemented yet. The work items this session implies are in
 [CHECKLIST.md](../CHECKLIST.md).
 
+**Landed during this session, after it began:** PR #44 merged
+[windows-impersonation-token-sys](../crates/windows-impersonation-token-sys/DESIGN-NOTES.md) and
+[windows-file-enumeration-sys](../crates/windows-file-enumeration-sys/DESIGN-NOTES.md).
+The first owns the impersonation component of the captured context, so the
+facility consumes it rather than reimplementing capture. The second is the first
+shipped inhabitant of the namespace plane and independently reached much of the
+same shape -- bounded submission and completion rings, a reporting worker,
+finite quanta, a captured-token directory open. The overlap is real and is
+tracked as a merge-or-delete decision (M21.1) rather than resolved by
+assumption.
+
 ---
 
 ## Starting intent

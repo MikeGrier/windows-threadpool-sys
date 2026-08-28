@@ -67,6 +67,25 @@ they are deliberately separate from building the new facility, which cannot star
   needing `\\?\GLOBALROOT\`, and a `subst` becomes another path entirely -- which is the reason this is a
   decision rather than an implementation detail.
 
+## M21 -- Reconcile with the shipped namespace-plane work
+
+PR #44 landed `windows-impersonation-token-sys` and `windows-file-enumeration-sys` while this design
+session was in progress. Both are inhabitants of the plane the session scoped, so the relationship has to
+be settled rather than discovered later.
+
+- [ ] **M21.1** -- Record the merge-or-delete decision for the captured-token directory open. The
+  enumeration crate opens a directory under an explicitly captured token inline (its D-4); the planned
+  facility would generalize that as one entry of its operation catalogue. Duplication is correct while the
+  general facility is unproven -- this item exists so the decision is made deliberately when it is proven,
+  rather than a duplicated path silently becoming permanent because nobody circled back. Decide: move the
+  open to the general facility, keep it specialized, or keep both with the boundary stated.
+
+- [ ] **M21.2** -- Sweep the workspace design notes for prose that says the impersonation and enumeration
+  crates *will be* added, now that both have shipped. The "Captured impersonation is a separate platform
+  layer" section still opens "The workspace will add ...". This is the blast-radius half of a correction:
+  the fact changed, and the statements of it have to be swept rather than the one site a reader happened
+  to notice.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.

@@ -1156,6 +1156,18 @@ division this way gives a principled inclusion test rather than a taste-based
 one. `CloseHandle` belongs in the catalogue: it blocks on outstanding I/O and
 can block hard on a dead network path.
 
+[crates/windows-file-enumeration-sys](crates/windows-file-enumeration-sys/DESIGN-NOTES.md)
+is the first shipped inhabitant of this plane, and it independently arrived at
+much of the same shape: a bounded submission and completion ring pair, a
+worker that reports rather than mutates shared authority, finite work quanta,
+and a directory opened under an explicitly captured token. It is a
+*specialization* -- one directory per request, with streaming delivery -- and
+its directory open is one entry of the catalogue this facility would generalize.
+Whether that open eventually moves to the general facility or stays where it is
+remains an open merge-or-delete decision, tracked in [CHECKLIST.md](CHECKLIST.md)
+rather than left to be noticed later. Duplication between them is expected and
+correct while the general facility is unproven.
+
 ### A handle is either a completion-port handle or an `IoRing` handle, never both
 
 Measured, with a positive control and a before/after pair on one handle:
@@ -1216,6 +1228,18 @@ contract surface and every later addition would otherwise be a silent semantic
 change. Capture fails synchronously at admission; apply and restore on the
 worker are fail-fast on every path including unwind, because returning a
 contaminated worker to shared infrastructure is worse than dying.
+
+**Its impersonation component is not built here.**
+[crates/windows-impersonation-token-sys](crates/windows-impersonation-token-sys/DESIGN-NOTES.md)
+already owns that layer -- capture, transport, thread-bound application, and
+exact restoration with a fail-fast guard -- and the facility consumes it rather
+than growing a second implementation. What the facility adds is the *rest* of
+the thread-affine set the measurements above expose, which impersonation alone
+does not cover: the thread error mode (captured then hardened, below), WOW64
+filesystem redirection, and I/O and memory priority. Priority is an explicit
+request field rather than sniffed ambient state, because it is only partially
+queryable through documented API and a caller running in a background-priority
+mode would otherwise have its I/O silently promoted by the remoting.
 
 The error mode is captured **and then hardened**: `SEM_FAILCRITICALERRORS` is
 forced regardless of what was captured. This is a deliberate divergence from
