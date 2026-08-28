@@ -9,8 +9,9 @@
 //! `windows-file-enumeration-sys`, not a replacement for it. That crate is
 //! released and this one is not, so making it depend here would make it
 //! unpublishable; the copy keeps the working crate untouched while this one is
-//! proven. The merge-or-delete decision is scheduled -- it is not a duplicate
-//! that nobody circled back to.
+//! proven. The de-duplication happens after this branch merges with `main`, and
+//! is scheduled as a checklist item -- it is not a duplicate that nobody
+//! circled back to.
 //!
 //! # A resolved path is not a session-independent path
 //!

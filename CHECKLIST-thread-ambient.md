@@ -474,9 +474,9 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
 - [ ] **M26+.3** -- Make the merge-or-delete decision on the duplicated path preparation. M24.4 copied
   `windows-file-enumeration-sys`'s `path.rs` into `windows-namespace-request-sys` rather than depending on
   it, because that crate is released and this one was not, and this branch exists to reach publication with
-  minimal impact on what already ships. Once `windows-namespace-request-sys` has a release, decide: either
-  make the enumeration crate consume it and delete the older copy, or keep both and record what makes them
-  genuinely separate. Do **not** let the duplication become permanent by nobody circling back -- that is
+  minimal impact on what already ships. **The de-duplication happens after this branch merges with `main`**,
+  which is what gates this item -- not a release of the new crate. Decide then: either make the enumeration
+  crate consume it and delete the older copy, or keep both and record what makes them genuinely separate. Do **not** let the duplication become permanent by nobody circling back -- that is
   the failure mode the duplicate-then-decide procedure exists to prevent, and it is why this item is here
   rather than only in a design note. Until it is settled, a fix to either copy must be applied to both.
   See [crates/windows-namespace-request-sys/DESIGN-NOTES.md](crates/windows-namespace-request-sys/DESIGN-NOTES.md)

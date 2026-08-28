@@ -260,8 +260,9 @@ stable while this one is proven -- not debt incurred by accident. `path.rs`
 carries a provenance comment naming its source and the commit it was taken at,
 and the **merge-or-delete decision is scheduled**, not left to be rediscovered:
 see `M26+.3` in
-[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md), gated on this
-crate's first release. Until then, a fix to either copy must be applied to both.
+[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md). It is gated on
+this branch merging with `main`, which is when the de-duplication happens. Until
+then, a fix to either copy must be applied to both.
 
 ## <a id="d-10"></a>D-10: The faithful-execution contract is a primitive entries bind to, not a rule they restate
 
