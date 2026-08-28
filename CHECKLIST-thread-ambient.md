@@ -328,7 +328,7 @@ Entries 1-4 of the audited list. Each depends on M24's foundations and on nothin
   close look repeatable or make every open look single-use. Prove the seam by writing a fake in a doctest --
   a seam nobody has substituted is a seam nobody knows works.
 
-- [ ] **M25.7** -- Give the public surface **runnable examples**. The crate currently has 6 doctests against
+- [x] **M25.7** -- Give the public surface **runnable examples**. The crate currently has 6 doctests against
   roughly 128 public items, which is thin enough that a contract change could silently invalidate the
   documentation without breaking the build. Every public type gets a worked example, and every method whose
   correct use is not obvious from its signature gets one -- with priority on the ones a caller gets wrong:

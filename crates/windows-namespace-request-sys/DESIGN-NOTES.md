@@ -392,6 +392,30 @@ The traits are object-safe, because a consumer holding heterogeneous requests
 needs that, and a test pins it -- object safety is easy to lose by accident and
 nothing else would notice.
 
+## <a id="d-15"></a>D-15: Examples are compiled, and cover what a caller gets wrong
+
+Every public type carries a runnable example, and so does every method whose
+correct use is not obvious from its signature. They are doctests, so a contract
+change breaks the build rather than leaving the documentation quietly teaching
+the old answer -- the repository's contract-integrity rule applied to this
+crate's prose.
+
+Coverage is chosen by **where a caller goes wrong**, not by what is easy to
+demonstrate:
+
+- the three-way security distinction and the absent/NULL/empty DACL
+  distinction, where collapsing a pair inverts a grant ([D-8](#d-8));
+- the two handle-failure conventions, where using one for the other turns a
+  failure into a plausible-looking handle ([D-10](#d-10));
+- what a duplicated handle does and does not share, which a caller reasoning in
+  value semantics gets backwards ([D-4](#d-4));
+- rearming a notification, without which a waiting loop spins;
+- that a close is one-shot while an open is repeatable ([D-14](#d-14)).
+
+An example that merely shows a constructor being called would satisfy a count
+and teach nothing; these are written to be read by someone about to make the
+mistake.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the

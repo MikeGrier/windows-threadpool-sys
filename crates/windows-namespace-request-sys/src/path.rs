@@ -183,6 +183,37 @@ impl std::error::Error for PathError {
 /// another logon session can therefore still name a different device. That
 /// hazard is open at the workspace level; this type inherits it rather than
 /// resolving it.
+///
+/// # Example
+///
+/// An ordinary path is resolved to its fully qualified form here, on the
+/// calling thread, so the meaning cannot change before a worker opens it:
+///
+/// ```
+/// use windows_namespace_request_sys::prepare;
+/// use wtf_string::Wtf16String;
+///
+/// let prepared = prepare(&Wtf16String::from(r"C:\Windows\.\System32"))?;
+///
+/// // `.` is resolved away, exactly as a later CreateFileW would have done.
+/// assert_eq!(prepared.as_wtf16().to_string_lossy(), r"C:\Windows\System32");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Example: a verbatim path is kept exactly
+///
+/// Win32 disables path parsing for a `\?\` path, so trailing separators and
+/// `.` components are literal name components rather than syntax. Preparation
+/// checks it is fully qualified and otherwise leaves it alone:
+///
+/// ```
+/// use windows_namespace_request_sys::prepare;
+/// use wtf_string::Wtf16String;
+///
+/// let verbatim = prepare(&Wtf16String::from(r"\\?\C:\Windows\"))?;
+/// assert_eq!(verbatim.as_wtf16().to_string_lossy(), r"\\?\C:\Windows\");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PreparedPath {
     units: Wtf16String,
@@ -219,7 +250,32 @@ impl PreparedPath {
 ///
 /// Returns [`PathError`] for an empty path, an interior NUL, a `\?\` path
 /// that is not fully qualified, an ordinary path that exceeds `MAX_PATH` before
-/// or after resolution, or a resolution failure reported by Windows.
+///
+/// # Example
+///
+/// Each rejection names what was wrong, on the calling thread, rather than
+/// producing a path that fails later with a code that explains nothing:
+///
+/// ```
+/// use windows_namespace_request_sys::path::PathFailure;
+/// use windows_namespace_request_sys::prepare;
+/// use wtf_string::Wtf16String;
+///
+/// let empty = prepare(&Wtf16String::new()).expect_err("an empty path names nothing");
+/// assert_eq!(empty.failure(), PathFailure::EmptyPath);
+///
+/// // A verbatim path that is not fully qualified cannot be repaired later,
+/// // because Win32 will not parse it.
+/// // A drive-RELATIVE verbatim path is refused: verbatim parsing would
+/// // treat the whole thing as a literal name rather than the current
+/// // directory on C:, and that cannot be repaired later.
+/// let drive_relative = prepare(&Wtf16String::from(r"\\?\C:relative\path"))
+///     .expect_err("a drive-relative verbatim path is not fully qualified");
+/// assert_eq!(drive_relative.failure(), PathFailure::NotFullyQualified);
+///
+/// // These are decided here, before any Win32 call, so they carry no OS code.
+/// assert_eq!(empty.raw_os_error(), None);
+/// ```/// or after resolution, or a resolution failure reported by Windows.
 pub fn prepare(path: &Wtf16Str) -> Result<PreparedPath, PathError> {
     prepare_units(path).map(|units| PreparedPath { units })
 }

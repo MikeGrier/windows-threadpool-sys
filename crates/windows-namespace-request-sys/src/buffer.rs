@@ -19,6 +19,43 @@ use std::slice;
 /// The alignment is a property of the buffer, not of the first thing written
 /// into it: it holds for the buffer's whole life and is preserved by
 /// [`Clone`].
+///
+/// # Example
+///
+/// ```
+/// use windows_namespace_request_sys::AlignedBuffer;
+///
+/// // A self-relative security descriptor needs DWORD alignment; the directory
+/// // information classes need 8. A `Box<[u8]>` guarantees neither -- its
+/// // alignment is 1.
+/// let mut buffer = AlignedBuffer::zeroed(20, 8);
+///
+/// assert_eq!(buffer.len(), 20);
+/// assert_eq!(buffer.align(), 8);
+/// assert_eq!(buffer.as_ptr() as usize % 8, 0);
+/// assert!(buffer.as_slice().iter().all(|byte| *byte == 0));
+///
+/// // The length need not be a multiple of the alignment: the constraint is on
+/// // the buffer's address, not its size.
+/// buffer.as_mut_slice()[19] = 0xAB;
+/// assert_eq!(buffer.as_slice()[19], 0xAB);
+/// ```
+///
+/// # Example: a clone keeps the guarantee
+///
+/// ```
+/// use windows_namespace_request_sys::AlignedBuffer;
+///
+/// let original = AlignedBuffer::from_bytes(&[1, 2, 3], 4);
+/// let clone = original.clone();
+///
+/// assert_eq!(clone, original);
+/// assert_eq!(clone.as_ptr() as usize % 4, 0);
+/// assert_ne!(clone.as_ptr(), original.as_ptr(), "a copy, not a second view");
+///
+/// // Alignment is part of what the buffer promises, so it is part of equality.
+/// assert_ne!(AlignedBuffer::from_bytes(&[1, 2, 3], 8), original);
+/// ```
 pub struct AlignedBuffer {
     /// Always non-null and aligned to `layout.align()`. When `layout.size()` is
     /// zero this is a dangling-but-aligned pointer that is never dereferenced

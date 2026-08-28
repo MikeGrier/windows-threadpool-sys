@@ -69,6 +69,44 @@ impl ChangeNotification {
     /// # Errors
     ///
     /// Returns the raw Win32 code, unaltered.
+    ///
+    /// # Example
+    ///
+    /// Without the rearm, the second wait returns immediately on the *first*
+    /// change forever, and a consumer's loop spins:
+    ///
+    /// ```
+    /// use std::fs;
+    ///
+    /// use windows_namespace_request_sys::prepare;
+    /// use windows_namespace_request_sys::watch::{NotifyFilter, WatchDirectory};
+    /// use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    /// use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    /// use wtf_string::Wtf16String;
+    ///
+    /// let directory = std::env::temp_dir().join(format!("wnrs-rearm-{}", std::process::id()));
+    /// let _ = fs::remove_dir_all(&directory);
+    /// fs::create_dir_all(&directory)?;
+    ///
+    /// let text = directory.to_str().expect("a temporary path is valid UTF-8");
+    /// let notification = WatchDirectory::new(prepare(&Wtf16String::from(text))?)
+    ///     .with_filter(NotifyFilter::FILE_NAME)
+    ///     .perform()?;
+    ///
+    /// fs::write(directory.join("first.t"), b"x")?;
+    /// // SAFETY: the handle is live for the notification's lifetime.
+    /// assert_eq!(unsafe { WaitForSingleObject(notification.as_raw(), 5_000) }, WAIT_OBJECT_0);
+    ///
+    /// // The handle stays signalled until this runs.
+    /// notification.rearm()?;
+    ///
+    /// fs::write(directory.join("second.t"), b"x")?;
+    /// // SAFETY: as above.
+    /// assert_eq!(unsafe { WaitForSingleObject(notification.as_raw(), 5_000) }, WAIT_OBJECT_0);
+    /// # drop(notification);
+    /// # let _ = fs::remove_dir_all(&directory);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn rearm(&self) -> Outcome<()> {
         // SAFETY: the handle is live for this value's lifetime.
         perform_bool(|| unsafe { FindNextChangeNotification(self.handle) })
@@ -102,6 +140,26 @@ unsafe impl Sync for ChangeNotification {}
 /// value is a bitmask and Windows may define bits this crate has not heard of.
 /// The named constants are provided for convenience; an unknown bit still
 /// reaches Windows unaltered.
+///
+/// # Example
+///
+/// ```
+/// use windows_namespace_request_sys::watch::NotifyFilter;
+///
+/// let combined = NotifyFilter::FILE_NAME | NotifyFilter::DIR_NAME;
+///
+/// assert!(combined.contains(NotifyFilter::FILE_NAME));
+/// assert!(!combined.contains(NotifyFilter::SIZE));
+///
+/// // A bitmask, not an enum: a bit Windows defines and this crate has never
+/// // heard of still reaches it.
+/// let unknown = NotifyFilter::from_bits(0x8000_0000);
+/// assert_eq!(unknown.bits(), 0x8000_0000);
+///
+/// // The empty filter watches nothing, and Windows -- not this crate --
+/// // rejects it at the call.
+/// assert_eq!(NotifyFilter::NONE.bits(), 0);
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct NotifyFilter(FILE_NOTIFY_CHANGE);
 

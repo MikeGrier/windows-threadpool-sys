@@ -156,6 +156,60 @@ impl std::error::Error for HandleCaptureError {
 /// because a request must be able to perform exactly the call the caller opened
 /// the handle for. It is **not inheritable**, so capturing a handle never
 /// widens what a child process can reach.
+///
+/// # Example
+///
+/// The lifetime guarantee, which is the reason this type exists: the capture
+/// keeps working after its source is gone.
+///
+/// ```
+/// use std::fs;
+/// use std::os::windows::io::AsHandle;
+///
+/// use windows_namespace_request_sys::CapturedHandle;
+///
+/// let path = std::env::temp_dir().join(format!("wnrs-dup-{}.tmp", std::process::id()));
+/// fs::write(&path, b"seven..")?;
+///
+/// let captured = {
+///     let file = fs::File::open(&path)?;
+///     CapturedHandle::capture(file.as_handle())?
+///     // `file` is closed here; the duplicate is not.
+/// };
+///
+/// let adopted = fs::File::from(captured.into_owned_handle());
+/// assert_eq!(adopted.metadata()?.len(), 7);
+/// # drop(adopted);
+/// # fs::remove_file(&path)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Example: what a duplicate shares
+///
+/// The distinction a caller reasoning in value semantics gets backwards.
+/// Closing the duplicate leaves the source perfectly usable, because both are
+/// references to one kernel object rather than two copies of it:
+///
+/// ```
+/// use std::fs;
+/// use std::os::windows::io::AsHandle;
+///
+/// use windows_namespace_request_sys::CapturedHandle;
+///
+/// let path = std::env::temp_dir().join(format!("wnrs-dup2-{}.tmp", std::process::id()));
+/// fs::write(&path, b"seven..")?;
+/// let file = fs::File::open(&path)?;
+///
+/// let captured = CapturedHandle::capture(file.as_handle())?;
+/// drop(captured);
+///
+/// // The source is untouched -- which is what makes it safe for a request to
+/// // own a duplicate and drop it.
+/// assert_eq!(file.metadata()?.len(), 7);
+/// # drop(file);
+/// # fs::remove_file(&path)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 #[must_use = "dropping the captured handle closes the duplicate"]
 pub struct CapturedHandle {
@@ -170,6 +224,47 @@ impl CapturedHandle {
     /// Returns a [`HandleCaptureError`] when `source` is null, is
     /// `INVALID_HANDLE_VALUE`, is a Win32 pseudo-handle, or cannot be
     /// duplicated -- which is what an already-closed handle produces.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::fs;
+    /// use std::os::windows::io::{AsHandle, AsRawHandle};
+    ///
+    /// use windows_namespace_request_sys::CapturedHandle;
+    ///
+    /// let path = std::env::temp_dir().join(format!("wnrs-cap-{}.tmp", std::process::id()));
+    /// fs::write(&path, b"x")?;
+    /// let file = fs::File::open(&path)?;
+    ///
+    /// let captured = CapturedHandle::capture(file.as_handle())?;
+    ///
+    /// // A duplicate is a second reference, so it has its own handle value.
+    /// assert_ne!(captured.as_handle().as_raw_handle(), file.as_raw_handle());
+    /// # drop(file);
+    /// # drop(captured);
+    /// # fs::remove_file(&path)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Example: the failure that would otherwise be silent
+    ///
+    /// `INVALID_HANDLE_VALUE` and the current-process pseudo-handle are the
+    /// same value, so an unchecked `CreateFileW` failure passed to
+    /// `DuplicateHandle` would *succeed* and yield a process handle. Capture
+    /// refuses it by name:
+    ///
+    /// ```
+    /// use windows_namespace_request_sys::handle::HandleCaptureFailure;
+    /// use windows_namespace_request_sys::CapturedHandle;
+    /// use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    ///
+    /// // SAFETY: the value is validated, never dereferenced.
+    /// let error = unsafe { CapturedHandle::capture_raw(INVALID_HANDLE_VALUE) }
+    ///     .expect_err("INVALID_HANDLE_VALUE is never a real handle");
+    ///
+    /// assert_eq!(error.failure(), HandleCaptureFailure::InvalidHandleValue);
+    /// ```
     pub fn capture(source: BorrowedHandle<'_>) -> Result<Self, HandleCaptureError> {
         // SAFETY: BorrowedHandle's invariant is that the handle it names stays
         // open for its borrow, which covers this call.
@@ -259,6 +354,36 @@ impl CapturedHandle {
     /// As [`capture`](Self::capture), though only
     /// [`HandleCaptureFailure::DuplicateHandle`] is reachable: the value being
     /// duplicated is already known to be a real, open handle.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::fs;
+    /// use std::os::windows::io::{AsHandle, AsRawHandle};
+    ///
+    /// use windows_namespace_request_sys::CapturedHandle;
+    ///
+    /// let path = std::env::temp_dir().join(format!("wnrs-clone-{}.tmp", std::process::id()));
+    /// fs::write(&path, b"x")?;
+    /// let file = fs::File::open(&path)?;
+    /// let first = CapturedHandle::capture(file.as_handle())?;
+    ///
+    /// let second = first.try_clone()?;
+    ///
+    /// // Two independently owned references to one kernel object, so closing
+    /// // one leaves the other usable.
+    /// assert_ne!(
+    ///     first.as_handle().as_raw_handle(),
+    ///     second.as_handle().as_raw_handle()
+    /// );
+    /// drop(second);
+    /// let adopted = fs::File::from(first.into_owned_handle());
+    /// assert_eq!(adopted.metadata()?.len(), 1);
+    /// # drop(file);
+    /// # drop(adopted);
+    /// # fs::remove_file(&path)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn try_clone(&self) -> Result<Self, HandleCaptureError> {
         Self::capture(self.duplicate.as_handle())
     }

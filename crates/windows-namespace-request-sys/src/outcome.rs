@@ -47,6 +47,24 @@ use windows_sys::Win32::Foundation::{
 ///
 /// Deliberately not an enum: the point of this type is that it carries whatever
 /// Windows said, including codes this crate has never heard of.
+///
+/// # Example
+///
+/// ```
+/// use windows_namespace_request_sys::Win32Error;
+/// use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+///
+/// let error = Win32Error::from_code(ERROR_FILE_NOT_FOUND);
+/// assert_eq!(error.code(), ERROR_FILE_NOT_FOUND);
+///
+/// // The io::Error form is a re-presentation, not a reclassification: the raw
+/// // code survives it.
+/// assert_eq!(error.to_io_error().raw_os_error(), Some(ERROR_FILE_NOT_FOUND as i32));
+///
+/// // A code this crate has never heard of is carried just the same.
+/// let unknown = Win32Error::from_code(0x0BAD_F00D);
+/// assert_eq!(unknown.code(), 0x0BAD_F00D);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Win32Error(WIN32_ERROR);
 
@@ -104,7 +122,38 @@ pub type Outcome<T> = Result<T, Win32Error>;
 /// conventions differ per call and none of them is inferable from the type. The
 /// three the catalogue actually meets have named forms:
 /// [`perform_bool`], [`perform_handle`], and [`perform_nonzero`]. Use this
-/// general form for a call whose convention is none of those.
+///
+/// # Example
+///
+/// The guarantee this function exists for. Cleanup between the failing call and
+/// the read is exactly what destroys a last-error code, and binding to
+/// `perform` closes that window:
+///
+/// ```
+/// use windows_namespace_request_sys::outcome::perform;
+/// use windows_sys::Win32::Foundation::{
+///     ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, SetLastError,
+/// };
+///
+/// let outcome = perform(
+///     || {
+///         // SAFETY: SetLastError writes only this thread's error slot.
+///         unsafe { SetLastError(ERROR_FILE_NOT_FOUND) };
+///         -1_i32
+///     },
+///     |result| *result < 0,
+/// );
+///
+/// // Cleanup runs afterwards and clobbers the thread's error slot -- a Drop, a
+/// // buffer release, a restoration guard. The snapshot is already taken.
+/// // SAFETY: as above.
+/// unsafe { SetLastError(ERROR_ACCESS_DENIED) };
+///
+/// assert_eq!(
+///     outcome.expect_err("a negative result is a failure").code(),
+///     ERROR_FILE_NOT_FOUND
+/// );
+/// ```/// general form for a call whose convention is none of those.
 pub fn perform<T>(call: impl FnOnce() -> T, failed: impl FnOnce(&T) -> bool) -> Outcome<T> {
     let result = call();
 
@@ -137,7 +186,27 @@ pub fn perform_bool(call: impl FnOnce() -> i32) -> Outcome<()> {
 ///
 /// # Errors
 ///
-/// Returns the raw Win32 code when the call returns `INVALID_HANDLE_VALUE`.
+///
+/// # Example
+///
+/// The two handle conventions disagree about the same values, which is why both
+/// exist by name. Using one where the other belongs turns a failure into a
+/// plausible-looking handle:
+///
+/// ```
+/// use std::ptr;
+///
+/// use windows_namespace_request_sys::outcome::{perform_handle, perform_nonnull_handle};
+/// use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+///
+/// // Under the INVALID_HANDLE_VALUE convention, null is a *success*.
+/// assert!(perform_handle(ptr::null_mut).is_ok());
+/// assert!(perform_handle(|| INVALID_HANDLE_VALUE).is_err());
+///
+/// // Under the null convention, the two swap.
+/// assert!(perform_nonnull_handle(|| INVALID_HANDLE_VALUE).is_ok());
+/// assert!(perform_nonnull_handle(ptr::null_mut).is_err());
+/// ```/// Returns the raw Win32 code when the call returns `INVALID_HANDLE_VALUE`.
 pub fn perform_handle(call: impl FnOnce() -> HANDLE) -> Outcome<HANDLE> {
     perform(call, |result| *result == INVALID_HANDLE_VALUE)
 }

@@ -111,6 +111,29 @@ impl std::error::Error for SecurityCaptureError {
 /// The three states that look alike and are not are kept apart here, because
 /// collapsing any pair of them silently changes what the resulting object
 /// permits.
+///
+/// # Example
+///
+/// The pair that matters most: a **NULL** DACL grants everyone complete access
+/// and an **empty** one grants nobody anything. They are opposites, so an
+/// `Option<Acl>` that flattened them would not lose detail -- it would invert
+/// the grant.
+///
+/// ```
+/// use windows_namespace_request_sys::AclState;
+///
+/// let absent = AclState::Absent;
+/// let null = AclState::Null;
+/// let empty = AclState::Empty;
+///
+/// assert_ne!(null, empty, "NULL allows all; empty allows none");
+/// assert_ne!(absent, null);
+/// assert_ne!(absent, empty);
+///
+/// // A populated list also reports how many entries it carries.
+/// assert_eq!(AclState::Populated(1), AclState::Populated(1));
+/// assert_ne!(AclState::Populated(1), AclState::Populated(2));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AclState {
     /// The descriptor carries no list at all. The object takes its default.
@@ -380,6 +403,31 @@ impl SecurityDescriptor {
 ///
 /// and within a descriptor, an absent DACL, a NULL DACL, and an empty DACL are
 /// three further distinct grants, reported by [`SecurityDescriptor::dacl`].
+///
+/// # Example
+///
+/// The distinction a single nullable pointer runs together. Passing no
+/// attributes at all and passing attributes that carry no descriptor are
+/// different requests -- the second still states an inheritance choice:
+///
+/// ```
+/// use windows_namespace_request_sys::SecurityAttributes;
+///
+/// // Attributes with no descriptor: default security, but the caller's
+/// // inheritance choice is still carried.
+/// let inheritable = SecurityAttributes::new(None, true);
+/// assert!(inheritable.descriptor().is_none());
+/// assert!(inheritable.inherit_handle());
+///
+/// let raw = inheritable.to_raw();
+/// assert!(raw.lpSecurityDescriptor.is_null());
+/// assert_ne!(raw.bInheritHandle, 0, "the choice survives into the Win32 struct");
+///
+/// // Passing *no* attributes is the third case, and is spelled `None` where a
+/// // `SecurityAttributes` is expected rather than being confused with this.
+/// let none: Option<SecurityAttributes> = None;
+/// assert!(none.is_none());
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecurityAttributes {
     descriptor: Option<SecurityDescriptor>,

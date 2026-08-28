@@ -48,6 +48,22 @@ use crate::security::SecurityAttributes;
 /// All three forms are supported. Only [`FileId`](Self::FileId) appears in the
 /// audited consumers, but an entry that could express one of its own call's
 /// three identifier kinds would be a narrowed `OpenFileById`.
+///
+/// # Example
+///
+/// The tag is implied by the variant, so it cannot disagree with the payload
+/// the way the raw union permits:
+///
+/// ```
+/// use windows_namespace_request_sys::open_by_id::FileIdentifier;
+/// use windows_sys::Win32::Storage::FileSystem::{
+///     ExtendedFileIdType, FileIdType, ObjectIdType,
+/// };
+///
+/// assert_eq!(FileIdentifier::FileId(7).id_type(), FileIdType);
+/// assert_eq!(FileIdentifier::ObjectId(0x1234).id_type(), ObjectIdType);
+/// assert_eq!(FileIdentifier::ExtendedFileId([0; 16]).id_type(), ExtendedFileIdType);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FileIdentifier {
     /// A 64-bit file reference number, as reported by `FileIdInfo`'s

@@ -73,6 +73,54 @@ pub type CloseFn = unsafe extern "system" fn(HANDLE) -> BOOL;
 /// # fs::remove_file(&path)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+///
+/// # Example: the routine travels with the handle
+///
+/// A change notification is closed with `FindCloseChangeNotification`, and
+/// `CloseHandle` is silently wrong for it. A caller never has to know that,
+/// because the constructor pairs them:
+///
+/// ```
+/// use std::fs;
+///
+/// use windows_namespace_request_sys::close::CloseRequest;
+/// use windows_namespace_request_sys::prepare;
+/// use windows_namespace_request_sys::watch::{NotifyFilter, WatchDirectory};
+/// use wtf_string::Wtf16String;
+///
+/// let directory = std::env::temp_dir().join(format!("wnrs-cr-{}", std::process::id()));
+/// let _ = fs::remove_dir_all(&directory);
+/// fs::create_dir_all(&directory)?;
+/// let text = directory.to_str().expect("a temporary path is valid UTF-8");
+///
+/// let notification = WatchDirectory::new(prepare(&Wtf16String::from(text))?)
+///     .with_filter(NotifyFilter::FILE_NAME)
+///     .perform()?;
+///
+/// let request = CloseRequest::for_change_notification(notification);
+/// assert!(format!("{request:?}").contains("FindCloseChangeNotification"));
+/// request.perform()?;
+/// # let _ = fs::remove_dir_all(&directory);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// # Example: performing consumes the request
+///
+/// This is what makes closing twice through this type impossible -- the second
+/// call does not compile:
+///
+/// ```compile_fail
+/// use std::fs;
+///
+/// use windows_namespace_request_sys::close::CloseRequest;
+///
+/// let path = std::env::temp_dir().join("wnrs-doc-double-close.tmp");
+/// fs::write(&path, b"x").unwrap();
+/// let request = CloseRequest::for_handle(fs::File::open(&path).unwrap().into());
+///
+/// request.perform().unwrap();
+/// request.perform().unwrap(); // error: use of moved value
+/// ```
 #[must_use = "dropping the request closes the handle immediately, on this thread"]
 pub struct CloseRequest {
     /// Live until either `perform` or `Drop` closes it, exactly once.
