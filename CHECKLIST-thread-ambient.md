@@ -178,12 +178,13 @@ two crates are genuinely siblings rather than a stack.
   the caller can still do something about it).
 
 - [ ] **M24.3** -- Capture the security attributes. A caller's descriptor may be **absolute**, holding raw
-  pointers to owner SID, group SID, DACL and SACL that are quite possibly on the caller's stack, so capture
-  normalises to **self-relative** and owns the resulting contiguous blob. Two traps must be handled rather
+  pointers to owner SID, group SID, DACL and SACL that are quite possibly on the caller's stack, so capture  normalises to **self-relative** and owns the resulting contiguous blob. Two traps must be handled rather
   than discovered: a self-relative descriptor requires DWORD alignment, which a plain boxed byte slice does
   not guarantee; and *no descriptor*, *a descriptor with a NULL DACL*, and *a descriptor with an empty
   DACL* are three different security outcomes the type must keep distinct. Validate on capture, so an
-  invalid descriptor fails at the caller rather than on the worker.
+  invalid descriptor fails at the caller rather than on the worker. The alignment requirement is not
+  peculiar to descriptors -- M26.1 needs an 8-byte-aligned buffer for the same underlying reason -- so build
+  it once as an owned aligned buffer primitive rather than twice.
 
 - [ ] **M24.4** -- Implement path preparation: resolve on the calling thread at construction, because the
   process current directory is mutable by any thread. Bind to the shipped precedent in
@@ -239,14 +240,37 @@ Entries 1-4 of the audited list. Each depends on M24's foundations and on nothin
 Entries 5-9 of the audited list. All but the last take a handle, so all but the last depend on M24.2.
 
 - [ ] **M26.1** -- The `GetFileInformationByHandleEx` entry: one entry with the info class as a request
-  field, per the one-entry-per-Win32-call rule. The design problem is that the five audited classes have
-  **two result shapes** -- `FileBasicInfo`, `FileIdInfo` and `FileCaseSensitiveInfo` are fixed-size
-  out-params, while `FileIdExtdDirectoryInfo` and `FileIdExtdDirectoryRestartInfo` are variable-length
-  batch enumerations with caller-sized buffers. The completion type must carry both without collapsing
-  them into a lowest common denominator.
+  field, per the one-entry-per-Win32-call rule. As a *marshaling* problem this is the easiest entry in the
+  catalogue and should be built as such -- its inputs are a handle, a scalar class, and a buffer size, with
+  no pointer into caller memory anywhere, so nothing needs normalising. An earlier draft of this item
+  claimed the design problem was that the five audited classes have two result shapes (fixed-size
+  out-params versus variable-length batches); that was wrong. This crate returns bytes and the unaltered
+  outcome and does not parse, so both shapes collapse to one owned aligned buffer, and per-class parsing
+  stays with the consumer that already owns it.
 
-- [ ] **M26.2** -- The `GetFileInformationByHandle` entry, returning `BY_HANDLE_FILE_INFORMATION`. It is a
-  distinct Win32 call rather than a class of M26.1, and the watcher uses it where the Ex form would not do.
+  The real difficulty is elsewhere, and it falls directly out of M24.2. **The directory classes are
+  stateful on the file object** -- `FileIdExtdDirectoryRestartInfo` rewinds the scan and
+  `FileIdExtdDirectoryInfo` continues it -- and `DuplicateHandle` yields a second handle to the *same* file
+  object. So an owned duplicate gives a request self-containment but **not** isolation: it shares the
+  enumeration cursor with the handle it was duplicated from, and a consumer still enumerating on the
+  original will interleave with it. The entry must state that a duplicate is not an independent
+  enumeration and that an independent traversal needs a fresh open. This is also where the unresolved
+  ordering question binds hardest, since two such requests against one handle are order-dependent in a way
+  two independent opens are not.
+
+  Two constraints that are not negotiable and are already solved in this repository, so bind to the
+  precedent rather than re-deriving it. The buffer must be **8-byte aligned**: a `Vec<u8>` fails the very
+  first query with `ERROR_NOACCESS`, which is why
+  [crates/windows-file-enumeration-sys/src/buffer.rs](crates/windows-file-enumeration-sys/src/buffer.rs)
+  backs its storage with `Vec<u64>`. And the call **reports no written length** -- a batch is walked by its
+  own next-entry offsets -- so the completion returns the whole buffer and the consumer bounds its own
+  reads, rather than the entry inventing a byte count it cannot know.
+
+  Finally, record that this entry needs **no ambient context**: access was checked at the open, which is
+  exactly why the enumeration crate applies impersonation only around `CreateFileW`. It is the clearest
+  case that a request and a context are paired at submission rather than fused.
+
+- [ ] **M26.2** -- The `GetFileInformationByHandle` entry, returning `BY_HANDLE_FILE_INFORMATION`. It is a  distinct Win32 call rather than a class of M26.1, and the watcher uses it where the Ex form would not do.
 
 - [ ] **M26.3** -- The `GetFinalPathNameByHandleW` entry, including the flags the watcher relies on
   (`VOLUME_NAME_DOS | FILE_NAME_NORMALIZED`) and the grow-the-buffer retry the call requires. This is the
