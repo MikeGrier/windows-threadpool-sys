@@ -22,7 +22,7 @@
 //! a new architecture, where the growth timing is exactly what might differ.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
@@ -160,11 +160,45 @@ impl GrowthObservation {
     }
 }
 
+/// Opens the gate when it goes out of scope, including while unwinding.
+///
+/// # Why this exists and where it must be declared
+///
+/// `ThreadpoolWork`'s `Drop` waits for its callback to return rather than
+/// cancelling it, and every callback here parks on the gate. So a panic
+/// anywhere between the first submission and the explicit `gate.open()` would
+/// deadlock the process **permanently** -- not fail the test, and not time
+/// out.
+///
+/// Opening the gate from `Gate`'s own `Drop` would not fix it. Locals are
+/// dropped in reverse declaration order, and the work items are declared
+/// before the gate, so the items would be dropped -- and block -- while the
+/// gate was still alive.
+///
+/// This guard must therefore be declared **after** the work items, so that it
+/// is dropped **before** them. `Gate::open` sets a manual-reset event, so
+/// calling it here as well as on the normal path is harmless.
+struct GateGuard(Arc<Gate>);
+
+impl Drop for GateGuard {
+    fn drop(&mut self) {
+        self.0.open();
+    }
+}
+
 /// Records what each callback saw.
 #[derive(Default)]
 struct Log {
     entries: Mutex<Vec<(u32, u128)>>,
     started: AtomicUsize,
+    /// When submission began, which is the baseline every arrival is measured
+    /// from.
+    ///
+    /// Set once, immediately before the first submission, rather than captured
+    /// when the items were created -- creation is now a separate earlier pass,
+    /// and charging its cost to the arrival offsets would inflate exactly the
+    /// microsecond figures this probe reports.
+    submitted_at: OnceLock<Instant>,
 }
 
 /// Saturates a pool of `maximum` threads with `submissions` blocking callbacks
@@ -201,31 +235,44 @@ pub fn measure_growth(maximum: u32, submissions: usize, runs_long: bool) -> Grow
 
     let gate = Arc::new(Gate::new());
     let log = Arc::new(Log::default());
-    let submitted_at = Instant::now();
 
+    // Creation is a separate pass from submission: nothing is parked on the
+    // gate until the loop below, so a failure here needs no guard.
     let items: Vec<_> = (0..submissions)
         .map(|_| {
             let gate = Arc::clone(&gate);
             let log = Arc::clone(&log);
 
-            let work = ThreadpoolWork::new(
+            ThreadpoolWork::new(
                 move || {
                     // SAFETY: GetCurrentThreadId has no preconditions.
                     let thread = unsafe { GetCurrentThreadId() };
+                    let elapsed = log
+                        .submitted_at
+                        .get()
+                        .map_or(0, |start| start.elapsed().as_micros());
                     log.entries
                         .lock()
                         .expect("the log is not poisoned")
-                        .push((thread, submitted_at.elapsed().as_micros()));
+                        .push((thread, elapsed));
                     log.started.fetch_add(1, Ordering::SeqCst);
                     gate.wait();
                 },
                 Some(&mut environment),
             )
-            .expect("create a work item");
-            work.submit();
-            work
+            .expect("create a work item")
         })
         .collect();
+
+    // Declared after `items` so it is dropped before them. See GateGuard.
+    let _gate_guard = GateGuard(Arc::clone(&gate));
+
+    log.submitted_at
+        .set(Instant::now())
+        .expect("the submission time is set exactly once");
+    for item in &items {
+        item.submit();
+    }
 
     // Let the pool grow. Stop early once it has plainly saturated, so a healthy
     // pool does not pay the whole settle window.
@@ -240,7 +287,7 @@ pub fn measure_growth(maximum: u32, submissions: usize, runs_long: bool) -> Grow
     // Release everything before the pool drops: a callback still parked at
     // teardown would block Drop by design.
     gate.open();
-    for item in items {
+    for item in &items {
         item.wait();
     }
 
@@ -322,22 +369,28 @@ pub fn measure_raise_while_saturated(
     let gate = Arc::new(Gate::new());
     let log = Arc::new(Log::default());
 
+    // Created first, submitted second, for the reason given in measure_growth.
     let items: Vec<_> = (0..submissions)
         .map(|_| {
             let gate = Arc::clone(&gate);
             let log = Arc::clone(&log);
-            let work = ThreadpoolWork::new(
+            ThreadpoolWork::new(
                 move || {
                     log.started.fetch_add(1, Ordering::SeqCst);
                     gate.wait();
                 },
                 Some(&mut environment),
             )
-            .expect("create a work item");
-            work.submit();
-            work
+            .expect("create a work item")
         })
         .collect();
+
+    // Declared after `items` so it is dropped before them. See GateGuard.
+    let _gate_guard = GateGuard(Arc::clone(&gate));
+
+    for item in &items {
+        item.submit();
+    }
 
     // Wait for saturation at the base maximum.
     let deadline = Instant::now() + SETTLE;
@@ -361,7 +414,7 @@ pub fn measure_raise_while_saturated(
     let delay = raised_at.elapsed();
 
     gate.open();
-    for item in items {
+    for item in &items {
         item.wait();
     }
 

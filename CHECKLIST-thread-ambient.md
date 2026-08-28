@@ -621,7 +621,7 @@ handle or memory defects that CI now executes on every run since M27.5 added the
   ignored tier that CI now runs, so it would burn the job's 15-minute ceiling rather than report a
   failure.
 
-- [ ] **M29.4** -- Release the workers on an unwind. `gate.open()` is a plain statement, so any
+- [x] **M29.4** -- Release the workers on an unwind. `gate.open()` is a plain statement, so any
   panic between the first `submit()` and that call skips it
   ([pool_growth.rs](crates/windows-platform-probes/src/pool_growth.rs) `:201`-`:240` and
   `:286`-`:322`); `Drop for ThreadpoolWork` then waits rather than cancels, deadlocking the
