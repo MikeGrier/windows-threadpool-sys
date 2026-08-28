@@ -1126,3 +1126,254 @@ running the audit is what created several of the copies.
 written into the *audit table* while the decision row it contradicted still said the opposite. An audit
 finding is not discharged by being recorded in the audit. It is discharged when the statement it contradicted
 has changed.
+
+## <a id="remoting-synchronous-namespace-operations"></a>Remoting synchronous namespace operations: the measured platform
+
+A planned facility makes synchronous-only Win32 operations available
+asynchronously, by remoting them to thread-pool workers with the caller's
+context captured explicitly. The design discussion, its rejected alternatives,
+and the full measurement transcripts are in
+[DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md](design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md).
+This section records what was decided and the platform facts that force it.
+
+Every measurement below was taken on Windows 11 build 10.0.28000,
+`aarch64-pc-windows-msvc`, 12 logical processors. Numbers that look like
+platform constants rather than semantic facts are flagged as needing an x64
+re-check; the semantic results are architecture-independent.
+
+### The division of labour is the data plane versus the namespace plane
+
+Win32 *is* asynchronous on the **data plane** -- overlapped
+`ReadFile`/`WriteFile`/`DeviceIoControl`, and `IoRing` -- and those are owned by
+[crates/windows-overlapped-io-sys](crates/windows-overlapped-io-sys/DESIGN-NOTES.md)
+and [crates/windows-ioring-sys](crates/windows-ioring-sys/DESIGN-NOTES.md).
+
+What is synchronous-only is the **namespace and metadata plane**: open, close,
+delete, rename, attributes, times, security, links, volume and path queries,
+directory enumeration. That is a consequence of the object manager's design, not
+of API vintage, and it is the scope of the planned facility. Stating the
+division this way gives a principled inclusion test rather than a taste-based
+one. `CloseHandle` belongs in the catalogue: it blocks on outstanding I/O and
+can block hard on a dead network path.
+
+### A handle is either a completion-port handle or an `IoRing` handle, never both
+
+Measured, with a positive control and a before/after pair on one handle:
+associating a handle with a completion port makes every subsequent `IoRing`
+operation on it fail with `ERROR_INVALID_PARAMETER` and zero bytes, while the
+same handle continues to work perfectly through the port. `CreateThreadpoolIo`
+poisons a handle identically, because it performs the same association.
+
+This is a fork, not a defect, and it is **irreversible**. Three consequences:
+
+- An opened handle offers its two destinations -- the overlapped/`TP_IO` path and
+  the `IoRing` path -- as mutually exclusive consuming transitions, not as two
+  available methods.
+- The destination must be declared in the open request, because the choice has
+  to be made before association and the opening thread is gone by the time a
+  caller sees the handle. This makes request-declared handle shaping a
+  correctness requirement rather than a round-trip optimisation.
+- Any unified consumption of both populations must join at the *wait*, never by
+  draining one into the other.
+
+### Thread-agnostic I/O comes from port association, and `IoRing` has it inherently
+
+An `IoRing` operation submitted by a thread that then exits completes normally:
+measured five times out of five, each verified still outstanding at thread exit.
+A control on the same machine confirms this is a real property and not an
+untestable one -- an overlapped `ReadFile` on a handle **not** associated with a
+completion port, issued from a thread that then exited, came back
+`ERROR_OPERATION_ABORTED`.
+
+So thread-bound I/O cancellation is live on current Windows, and
+`FILE_FLAG_OVERLAPPED` alone does not avoid it: **completion port association is
+what confers thread agnosticism.** Combined with the fork above, this produces a
+trap worth stating outright: a ring-destined handle is by definition *not*
+port-associated, so an ordinary overlapped operation issued on it from a
+transient worker is thread-bound and dies with that worker.
+
+This matters more here than in ordinary code because every thread in this design
+is transient by construction -- the pool retires idle threads -- so a
+thread-bound operation fails only at *low* load, passing every stress test.
+
+### A pool worker inherits no impersonation token, and can raise a modal dialog
+
+Two facts about a callback's ambient state, both measured while the submitting
+thread genuinely held a thread token:
+
+- `OpenThreadToken` on the worker returns `ERROR_NO_TOKEN`. **The worker does not
+  inherit the submitter's impersonation context**, so explicit capture is
+  necessary rather than merely prudent.
+- The worker's thread error mode is `0`, meaning `SEM_FAILCRITICALERRORS` is
+  **clear** and the critical-error handler is enabled. A hard error -- the
+  classic absent-removable-drive case -- can therefore put a **modal dialog on a
+  shared thread-pool thread**, hanging process-wide infrastructure rather than
+  merely one operation.
+
+The captured context is therefore a named, exhaustively enumerated value type
+rather than an implicit side effect of submission, because its field list is
+contract surface and every later addition would otherwise be a silent semantic
+change. Capture fails synchronously at admission; apply and restore on the
+worker are fail-fast on every path including unwind, because returning a
+contaminated worker to shared infrastructure is worse than dying.
+
+The error mode is captured **and then hardened**: `SEM_FAILCRITICALERRORS` is
+forced regardless of what was captured. This is a deliberate divergence from
+synchronous semantics, taken because the pool thread is shared and is not ours to
+hang. Per this repository's rule that behaviour is owned rather than inherited
+from dependencies, matching the synchronous call would be the wrong
+specification here.
+
+### Path resolution follows the impersonation token's logon session
+
+Drive letters are symbolic links in the object manager namespace. Real local
+volumes live in the machine-wide `\GLOBAL??` directory; `subst` drives and
+mapped network drives live in a **per-logon-session** directory keyed by the
+token's authentication id. Lookup checks the session-local directory first and
+falls back to global, which is why `C:` behaves as though it were global -- it
+is -- while a mapped `Z:` does not.
+
+Measured with a `subst` drive and a token minted by `LogonUserW` with
+`LOGON32_LOGON_NEW_CREDENTIALS`, which creates a new logon session while keeping
+the caller's local identity and access: under that token the global `C:` still
+resolved while the session-local subst letter did **not**. The same result was
+reproduced on a thread-pool worker.
+
+**A worker impersonating a captured token resolves drive letters in the
+impersonated token's logon session**, so the same string can name a different
+device, or nothing at all.
+
+Two corollaries that decide the design:
+
+- **Submission-time canonicalisation does not close this.** The path must be
+  resolved on the calling thread at submission, because the process current
+  directory is mutable by any thread and even perfect remoting would be racy --
+  but `GetFullPathNameW` is *lexical*. It resolves relative components and
+  `.`/`..` and never expands a drive letter, so the "canonical" path still
+  carries a session-relative reference.
+- **The extended-length prefix does not help.** `\\?\Z:\dir` still resolves `Z:`
+  through the device map; the prefix skips Win32 normalisation, not
+  object-manager resolution. Only UNC, `\\?\Volume{GUID}\`, and
+  `\\?\GLOBALROOT\Device\...` bypass it. A long path is therefore never silently
+  given a `\\?\` prefix: that is a semantic change, not a transparent one.
+
+`QueryDosDeviceW` distinguishes the cases cheaply -- a real local volume reports
+`\Device\HarddiskVolumeN`, a `subst` reports another path, and a network mapping
+reports a redirector device -- so session-relative letters are detectable at
+admission. Which session-independent form to substitute, if any, is not yet
+decided; see [CHECKLIST.md](CHECKLIST.md).
+
+### `CancelSynchronousIo` blocks until the target leaves synchronous I/O
+
+Measured, after a noninvasive debugger attach showed the *canceller* parked in
+`ntdll!NtCancelSynchronousIoFile` at zero CPU while its target sat in its next
+`NtReadFile`:
+
+- Against a thread with nothing outstanding it returns `ERROR_NOT_FOUND`
+  immediately, and an operation that thread starts later is untouched. **The
+  cancel is point-in-time; it does not linger onto a later operation.**
+- Against a thread that then *leaves* synchronous I/O it returns in
+  microseconds.
+- Against a thread that immediately re-enters synchronous I/O it **never
+  returns** -- on the same handle or a different one, tightly looped or spaced.
+  The cancel still takes effect; the target records its abort. Effect and return
+  are decoupled.
+- Against a thread whose next operation completes after a known delay, it
+  returns at that moment, confirming the rule to within a millisecond.
+
+The consequence is that this mechanism cannot be used to rescue a wedged worker.
+The canceller in this design is the control-plane authority, and the target is a
+shared worker whose job is running blocking operations back to back: cancelling
+would block the control plane until that worker stops doing I/O, turning one
+stuck operation into a wedged session. **v1 cancellation is therefore
+pre-execution only** -- a cancel observed before a worker claims an operation
+prevents it; once started, it runs to completion.
+
+Mid-flight cancellation is not impossible, but its precondition is now known: the
+target must be a thread that will stop doing synchronous I/O, which means a
+dedicated quarantinable thread rather than a shared pool worker.
+
+### `SetThreadpoolCallbackRunsLong` is the growth mechanism, not a hint
+
+Reaching 16 concurrent blocked callbacks with a maximum of 16 took **1.94
+seconds** without the runs-long flag and **1 millisecond** with it. The
+per-arrival shape shows why: four threads are created immediately, and growth
+beyond that is throttled to roughly one thread per **166 ms** -- stable to within
+1 ms across five runs. The free count and the interval are both likely functions
+of processor count and need an x64 re-check before being treated as constants.
+
+Three further measurements on the same rig:
+
+- **Raising the maximum while saturated works promptly.** With every thread
+  parked and work queued behind them, raising the maximum released the queue in
+  1.1 to 1.6 ms.
+- **The default maximum is 512.** Blocked callbacks plateaued at exactly 512
+  with 512 distinct threads. This repository previously and deliberately
+  declined to guess this number; it is now measured.
+- **The ceiling holds.** A maximum of 16 with 32 submissions ran exactly 16
+  concurrently with no overshoot. The overshoot recorded under
+  [conflicting thread limits](#conflicting-thread-limits-are-refused-because-win32-resolves-them-silently)
+  required a *minimum* to have been set, which this facility never does.
+
+Decisions that follow:
+
+- **The facility owns no threads.** A private pool, `runs_long` mandatory, and
+  **never a thread minimum** -- a minimum creates threads eagerly and they are
+  not retired promptly, which would forfeit the zero-idle-thread property the
+  workspace exists to provide. An armed `TP_WAIT` costs no thread at all, since
+  wait multiplexing is performed by the kernel rather than by user-mode waiter
+  threads.
+- **A wedged worker is quarantined, and the pool replaces it.** A Windows
+  thread-pool thread cannot be reclaimed, so a wedged callback consumes its slot
+  permanently; `runs_long` already makes the pool create a replacement. Capacity
+  is bounded by a hard ceiling, above which admission fails with a typed error
+  rather than stalling silently.
+- **Concurrency is bounded by an admission counter, not by moving the maximum at
+  runtime.** The pool exposes no getter for its thread count, so "the pool is
+  full" is not observable; the facility's own bookkeeping is exact. The maximum
+  is set once to the ceiling and never touched, which also avoids the
+  void-returning setter and the measured last-call-wins hazard.
+- **The stall response is memoryless and evaluated lazily at admission.** The
+  effective limit is `base + count(in flight and older than T)`, clamped to the
+  ceiling, so capacity falls back on its own as a wedged operation completes --
+  derived rather than latched. It is evaluated only when there is work that
+  cannot be dispatched, which needs no periodic timer and keeps an idle facility
+  at zero threads.
+- **`T` must exceed the pool's injection interval**, or the supervisor reads the
+  pool's own throttle as evidence of stuck workers and ratchets to the ceiling
+  under ordinary load. With `runs_long` that interval is microseconds. This is
+  the numeric link between the two knobs and a further reason `runs_long` is
+  mandatory rather than advisory.
+- **Ages are measured with an unbiased counter** -- `QueryUnbiasedInterruptTime`
+  -- because `GetTickCount64` includes time the machine was asleep, so a resumed
+  laptop would see every in-flight operation as ancient and expand immediately.
+  This is the same distinction recorded for timers, where relative times exclude
+  sleep and absolute times include it.
+- **The age is taken at callback entry, not at admission.** An operation that is
+  admitted but not yet started occupies no thread, so counting it would expand
+  the pool in response to the pool doing exactly what was asked.
+- **A quarantined worker has affinity to the operation, not to the client**, so
+  it can finish safely against an owner that no longer exists. This forces
+  shared ownership of the facility's internals, and it is what keeps teardown
+  from blocking on a dead network path.
+
+### Ambient state is derived from an explicit binding, never the origin of one
+
+The ergonomic goal is that obtaining a handle and then operating on it requires
+no thought about wiring. That comes from the type only offering the legal next
+steps, in the same way that cleanup-group member use-after-release is a compile
+error -- not from ambient lookup.
+
+Where an ambient projection is wanted, it is derived. The callback context is the
+substrate, because every thread-pool object here already owns one and it names
+the correct instance unambiguously. A trampoline may then publish that binding
+into thread-local storage for the duration of its own callback, restoring it on
+exit -- an obligation the trampoline already has, since a callback must restore
+thread-local state before returning to the pool. Suppression and restoration use
+a depth count rather than a flag, for the reason recorded for `stop_and_drain`.
+
+Thread-lifetime thread-local ownership is rejected: callers run on shared pool
+threads, so a resident value would be stranded on process-shared infrastructure;
+thread-local destructors are unreliable on Windows, so a value whose `Drop` must
+run cannot live there; and submission and completion happen on different threads
+by construction, so the binding would be absent exactly where completion occurs.

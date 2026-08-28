@@ -1,11 +1,79 @@
 # Checklist: workspace
 
-Workspace-level and cross-crate work. Completed groups are archived in
+Workspace-level and cross-crate work. Per-crate checklists are listed in
+[PLANS.md](PLANS.md); completed groups are archived in
 [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). The authoritative cross-component
-decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md), their rationale is in
-[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md), and the originating discussion for the
+decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md) and their rationale is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). The originating discussion for the
 M1-M7 work archived below is in
 [design-sessions/DESIGN-SESSION-2026-08-27-async-file-enumeration.md](design-sessions/DESIGN-SESSION-2026-08-27-async-file-enumeration.md).
 
-No pending work. This file reopens when new cross-crate or workspace-level work
-is planned, and a row for it is added to [PLANS.md](PLANS.md).
+The decisions the pending items below implement are in
+[DESIGN-NOTES.md](DESIGN-NOTES.md#remoting-synchronous-namespace-operations); the session that produced
+them, with the full measurement transcripts and the rejected alternatives, is
+[design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md](design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md).
+
+## M19 -- Propagate the 2026-08-27 platform measurements
+
+The design session measured nine platform behaviours, several of which contradict what shipped code
+currently assumes or what shipped documentation currently says. These items propagate those findings;
+they are deliberately separate from building the new facility, which cannot start until they land.
+
+- [ ] **M19.1** -- Discharge `windows-ioring-sys` D-14's unverified registration-index continuity, which
+  [its M10.3](crates/windows-ioring-sys/CHECKLIST.md) records as needing either measurement or a plain
+  statement that continuity is not guaranteed. It is now measured: a second
+  `BuildIoRingRegisterFileHandles` **replaces** the whole table, re-basing indices at zero (a read of index
+  0 returned the second batch's first file, and the old count's index reported `ERROR_INVALID_INDEX`);
+  capacity reached 65536 handles; and an in-flight read against an old index completed with its full byte
+  count after the table was replaced beneath it, so **indices are resolved at submission**. Rewrite D-14
+  from an assumption into a measured statement, and record the replace semantics on the public API.
+
+- [ ] **M19.2** -- Relax `Batch::register_files`'s one-registration-per-ring rule, which is now measurably
+  stronger than the hazard requires. It refuses a second registration outright to prevent silently
+  invalidating handed-out `RegisteredFile` indices; M19.1 shows repeated registration is supported and does
+  not disturb in-flight operations. Carry a table generation on the ring and on every `RegisteredFile`,
+  validate it where `RingId` is already validated, and permit re-registration. Keeps the safety property
+  while removing a restriction that would make a long-lived domain unable to add files. Depends on M19.1.
+
+- [ ] **M19.3** -- State the completion-port/`IoRing` fork on both crates' public surfaces. Associating a
+  handle with a completion port -- including via `CreateThreadpoolIo` -- permanently prevents `IoRing` use
+  of that handle (`ERROR_INVALID_PARAMETER`), while leaving it fully usable through the port. Document it
+  on `UnassociatedEndpoint`'s association transition, on `ThreadpoolIo::new`, and on `Batch`'s file-taking
+  pushes, including the derived trap: a ring-destined handle is not port-associated, so an ordinary
+  overlapped operation issued on it from a transient worker is thread-bound and dies with that worker.
+
+- [ ] **M19.4** -- Correct the thread-pool growth documentation, which currently describes
+  `set_runs_long` as an accounting hint. Measured, it is the difference between reaching 16 concurrent
+  blocked callbacks in 1.94 s and in 1 ms: four threads are created immediately and growth beyond that is
+  throttled to roughly one thread per 166 ms without it. Also record the measured default maximum of 512,
+  which `set_max_threads`' documentation deliberately declines to guess at, and note that both the free
+  count and the injection interval are likely processor-count-dependent and were measured only on ARM64.
+
+- [ ] **M19.5** -- Re-measure M19.4's two numeric findings on x64 and record whichever of them is
+  architecture-dependent. The semantic results from the session (the fork, thread agnosticism, token
+  inheritance, device-map behaviour, `CancelSynchronousIo`'s blocking rule) do not need this; the free
+  thread count, the 166 ms injection interval, and the 512 default do. Depends on M19.4.
+
+## M20 -- Decide the session-independent path form
+
+- [ ] **M20.1** -- Decide what the namespace facility does with a session-relative drive letter, and record
+  it as a decision rather than leaving the absence of one implicit. Path resolution follows the
+  impersonated token's logon session (measured: under a token from another logon session with unchanged
+  local access, the global `C:` resolved and a `subst` letter did not), and `GetFullPathNameW` is lexical
+  so submission-time canonicalisation does not expand the letter. `QueryDosDeviceW` distinguishes a real
+  local volume, a `subst`, and a network mapping cheaply, so detection is settled and only the response is
+  open: expand to a session-independent form at submission, or reject at admission with a typed error.
+  Expansion is not uniform -- a network mapping becomes a UNC path, a local volume becomes a device path
+  needing `\\?\GLOBALROOT\`, and a `subst` becomes another path entirely -- which is the reason this is a
+  decision rather than an implementation detail.
+
+## M-inf -- Parked
+
+Ungated work with no identified predecessor deliverable.
+
+- [ ] **M-inf.1** -- Root-cause the process death when impersonating the UAC-linked token. The device-map
+  probe reached a marker immediately before `ImpersonateLoggedOnUser` on a token obtained via
+  `TokenLinkedToken` and never the marker immediately after, with no panic message. It was removed from the
+  probe because a `LOGON32_LOGON_NEW_CREDENTIALS` token answered the question with a passing control, so
+  the fallback was redundant -- not because the crash was understood. Parked rather than dropped so the
+  unexplained result is not mistaken for a tested one.

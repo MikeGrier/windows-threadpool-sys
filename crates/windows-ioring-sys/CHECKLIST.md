@@ -145,3 +145,11 @@ assumption), and the previously-unstated completion-ordering rule. Categories 1,
 - [ ] **M10.3** -- Resolve or re-record D-14's unverified registration-index continuity assumption. It is a
   cross-message invariant a consumer can silently depend on; either establish it by measurement (the spike's
   precedent) or state plainly on the public API that index continuity is not guaranteed.
+  **The measurement now exists**: the 2026-08-27 session established that a second
+  `BuildIoRingRegisterFileHandles` replaces the whole table and re-bases indices at zero, that a table holds
+  at least 65536 handles, and that an index is resolved at submission so a replacement does not disturb an
+  operation already in flight. Discharge this item against that result rather than re-measuring; the work is
+  scheduled workspace-side as
+  [M19.1](../../CHECKLIST.md), with the relaxation of the one-registration-per-ring rule it enables as
+  M19.2. See
+  [DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md](../../design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md).
