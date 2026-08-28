@@ -658,13 +658,18 @@ pub fn measure_thread_agnosticism() -> IoRingSupport<ThreadAgnosticism> {
     // thread exit, no completion arrives, or it arrives failed.
     pipe.fill();
 
-    let completion = early.unwrap_or_else(|| {
-        let mut completion = None;
-        while completion.is_none() {
-            completion = ring.pop();
-        }
-        completion.expect("a completion was popped")
-    });
+    // Collected through the same bounded-and-rechecked wait every other read
+    // path uses, rather than a bare spin on `pop`. The earlier spin had no
+    // deadline and no yield, so a completion that never arrived burned a core
+    // indefinitely -- in the ignored tier, which CI runs, that would consume
+    // the job's whole time budget instead of reporting anything.
+    //
+    // `collect` still does not give up, because `buffer` is freed below and
+    // the operation owns it until it completes. What it does instead of
+    // spinning is wait inside the kernel.
+    let completion = early
+        .or_else(|| ring.collect(1))
+        .expect("a completion was collected");
 
     // A success code alone is not enough: a read that reported success without
     // transferring the fill byte would pass on the zero-filled buffer it never

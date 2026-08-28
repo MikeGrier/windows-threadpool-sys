@@ -614,7 +614,7 @@ handle or memory defects that CI now executes on every run since M27.5 added the
   drain the completion on the failure path so the buffer outlives the operation in every case,
   not only the happy one.
 
-- [ ] **M29.3** -- Bound the `IoRing` completion spin.
+- [x] **M29.3** -- Bound the `IoRing` completion spin.
   `while completion.is_none() { completion = ring.pop(); }` has no deadline and no yield
   ([ioring.rs](crates/windows-platform-probes/src/ioring.rs) `:460`-`:463`), so a completion that
   never arrives spins a core forever. Every other wait in this crate is bounded. It is in the
