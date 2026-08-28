@@ -123,6 +123,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-file-enumeration-sys"
+version = "0.1.0"
+dependencies = [
+ "windows-impersonation-token-sys",
+ "windows-sys",
+ "windows-threadpool-sys",
+ "wtf-string",
+]
+
+[[package]]
 name = "windows-file-watcher"
 version = "0.1.2"
 dependencies = [
@@ -142,6 +152,13 @@ dependencies = [
  "serde",
  "serde_json",
  "windows-file-watcher",
+]
+
+[[package]]
+name = "windows-impersonation-token-sys"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
 ]
 
 [[package]]

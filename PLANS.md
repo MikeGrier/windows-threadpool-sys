@@ -1,13 +1,15 @@
 # Plans
 
 Master tracker for every active checklist in the repository. Each source-component also keeps its own
-plans tracker: [crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overlapped-io-sys/PLANS.md),
-[crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md),
+plans tracker: [crates/windows-file-enumeration-sys/PLANS.md](crates/windows-file-enumeration-sys/PLANS.md),
 [crates/windows-file-watcher/PLANS.md](crates/windows-file-watcher/PLANS.md),
-[crates/wtf-string/PLANS.md](crates/wtf-string/PLANS.md),
-[crates/windows-ioring-sys/PLANS.md](crates/windows-ioring-sys/PLANS.md), and
-[crates/windows-topology-sys/PLANS.md](crates/windows-topology-sys/PLANS.md). Checklists whose work is
-finished move to [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
+[crates/windows-impersonation-token-sys/PLANS.md](crates/windows-impersonation-token-sys/PLANS.md),
+[crates/windows-ioring-sys/PLANS.md](crates/windows-ioring-sys/PLANS.md),
+[crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overlapped-io-sys/PLANS.md),
+[crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md),
+[crates/windows-topology-sys/PLANS.md](crates/windows-topology-sys/PLANS.md), and
+[crates/wtf-string/PLANS.md](crates/wtf-string/PLANS.md). Checklists whose work is finished move to
+[COMPLETED-PLANS.md](COMPLETED-PLANS.md).
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|

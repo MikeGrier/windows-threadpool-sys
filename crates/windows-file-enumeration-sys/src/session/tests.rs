@@ -1,0 +1,739 @@
+// Copyright (c) 2026 Mike Grier
+//! Tests for the session shell: construction, servicing, and the receiver.
+
+use super::*;
+use crate::completion::TerminalOutcome;
+use crate::error::SessionFailure;
+use crate::testing::named_file;
+use wtf_string::Wtf16String;
+
+/// A session whose pool objects never fire, so a test that drives servicing
+/// explicitly is not racing the thread pool for the same work.
+fn session() -> (Session, Receiver) {
+    let (session, receiver) = Session::new(8, 8).expect("a session with room");
+    session.suppress_pool();
+    (session, receiver)
+}
+
+/// A session that really does use the thread pool, for the tests whose subject
+/// is that the pool eventually runs.
+fn live_session() -> (Session, Receiver) {
+    Session::new(8, 8).expect("a session with room")
+}
+
+/// A suppressed session with explicit bounds.
+fn session_with(submission: usize, completion: usize) -> (Session, Receiver) {
+    let (session, receiver) = Session::new(submission, completion).expect("valid bounds");
+    session.suppress_pool();
+    (session, receiver)
+}
+
+fn request() -> EnumerationRequest {
+    EnumerationRequest::new(&Wtf16String::from(r"C:\Windows")).expect("a resolvable path")
+}
+
+/// Admit one enumeration and let it run: the tests here are about the shell,
+/// not about cancellation.
+fn admit(session: &Session) -> EnumerationId {
+    let handle = session.try_begin(request()).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+    enumeration
+}
+
+/// Drain the submission ring on this thread, so a test observes the servicer's
+/// effects without racing the thread pool.
+fn service(session: &Session) {
+    session.shared.drain_submissions();
+}
+
+#[test]
+fn a_session_reports_the_bounds_it_was_built_with() {
+    let (session, receiver) = Session::new(5, 6).expect("valid bounds");
+    assert_eq!(session.submission_capacity(), 5);
+    assert_eq!(session.completion_capacity(), 6);
+    assert_eq!(receiver.capacity(), 6);
+    assert_eq!(session.enumerations(), 0);
+}
+
+#[test]
+fn a_submission_ring_too_small_for_one_enumeration_is_rejected() {
+    // Three slots are load-bearing: abandon, cancel, and one begin.
+    for capacity in 0..MINIMUM_SUBMISSION_CAPACITY {
+        let error = Session::new(capacity, 8).expect_err("too small");
+        assert_eq!(error.failure(), SessionFailure::SubmissionCapacityTooSmall);
+    }
+    Session::new(MINIMUM_SUBMISSION_CAPACITY, 8).expect("the smallest usable ring");
+}
+
+#[test]
+fn a_completion_ring_too_small_to_keep_one_data_slot_is_rejected() {
+    // A ring of one could hold a reserved terminal or an entry, never both.
+    let error = Session::new(8, 1).expect_err("too small");
+    assert_eq!(error.failure(), SessionFailure::CompletionCapacityTooSmall);
+    Session::new(8, MINIMUM_COMPLETION_RING_CAPACITY).expect("the smallest usable ring");
+}
+
+#[test]
+fn identifiers_are_unique_and_monotonic_within_a_session() {
+    let (session, _receiver) = session();
+    let first = session.shared.next_enumeration_id();
+    let second = session.shared.next_enumeration_id();
+    assert!(first < second);
+    assert_ne!(first, second);
+}
+
+#[test]
+fn a_fresh_session_is_not_abandoned() {
+    let (session, _receiver) = session();
+    assert!(!session.is_abandoned());
+}
+
+#[test]
+fn an_empty_receiver_has_nothing_to_take() {
+    let (_session, receiver) = session();
+    assert!(receiver.is_empty());
+    assert_eq!(receiver.len(), 0);
+    assert!(receiver.try_recv().is_none());
+    assert!(!receiver.is_disconnected());
+}
+
+#[test]
+fn the_receiver_observes_what_the_ring_was_given() {
+    let (session, receiver) = session();
+    session
+        .shared
+        .completions
+        .try_send_entry(Completion::Entry {
+            enumeration: EnumerationId::from_raw(1),
+            entry: named_file("a.txt"),
+        })
+        .expect("room");
+
+    assert_eq!(receiver.len(), 1);
+    let record = receiver.try_recv().expect("a record");
+    assert_eq!(record.enumeration(), EnumerationId::from_raw(1));
+    assert!(receiver.try_recv().is_none());
+}
+
+#[test]
+fn entries_reach_the_receiver_in_the_order_they_were_produced() {
+    let (session, receiver) = session();
+    for name in ["a", "b", "c"] {
+        session
+            .shared
+            .completions
+            .try_send_entry(Completion::Entry {
+                enumeration: EnumerationId::from_raw(1),
+                entry: named_file(name),
+            })
+            .expect("room");
+    }
+    for name in ["a", "b", "c"] {
+        match receiver.try_recv().expect("a record") {
+            Completion::Entry { entry, .. } => assert_eq!(entry.name().to_string_lossy(), name),
+            Completion::Terminal { .. } => panic!("expected an entry"),
+        }
+    }
+}
+
+#[test]
+fn dropping_every_session_handle_ends_the_stream() {
+    let (session, receiver) = session();
+    let clone = session.clone();
+    drop(session);
+    assert!(!receiver.is_disconnected(), "a clone still produces");
+    drop(clone);
+    assert!(receiver.is_disconnected());
+    assert!(receiver.recv().is_none());
+}
+
+#[test]
+fn an_outstanding_enumeration_keeps_the_stream_open_past_the_last_handle() {
+    let (session, receiver) = session();
+    let slot = session
+        .shared
+        .completions
+        .reserve_terminal(EnumerationId::from_raw(1))
+        .expect("room");
+    drop(session);
+    assert!(!receiver.is_disconnected(), "an outcome is still owed");
+    slot.send(TerminalOutcome::Completed);
+    assert!(receiver.is_disconnected());
+    // The terminal is still delivered, and only then does the stream end.
+    let record = receiver.recv().expect("the terminal");
+    assert!(record.is_terminal());
+    assert!(receiver.recv().is_none());
+}
+
+#[test]
+fn a_begin_is_registered_when_the_servicer_reaches_it() {
+    // Deliberately no assertion that it is *not* yet registered: the pool is
+    // live here, so the servicer may already have run. What is guaranteed is
+    // that servicing registers it.
+    let (session, _receiver) = session();
+    let enumeration = admit(&session);
+
+    service(&session);
+    assert_eq!(session.enumerations(), 1);
+    assert!(session.shared.contains(enumeration));
+}
+
+#[test]
+fn several_enumerations_share_one_session() {
+    let (session, _receiver) = session();
+    let first = admit(&session);
+    let second = admit(&session);
+    service(&session);
+    assert_eq!(session.enumerations(), 2);
+    assert!(session.shared.contains(first));
+    assert!(session.shared.contains(second));
+}
+
+#[test]
+fn a_cancellation_finishes_a_quiescent_enumeration_with_one_terminal() {
+    let (session, receiver) = session();
+    let handle = session.try_begin(request()).expect("room");
+    let enumeration = handle.id();
+    service(&session);
+
+    handle.cancel();
+    service(&session);
+
+    assert_eq!(session.enumerations(), 0);
+    let record = receiver.try_recv().expect("a terminal");
+    match record {
+        Completion::Terminal {
+            enumeration: id,
+            outcome,
+        } => {
+            assert_eq!(id, enumeration);
+            assert!(matches!(outcome, TerminalOutcome::Cancelled));
+        }
+        Completion::Entry { .. } => panic!("expected a terminal"),
+    }
+    assert!(receiver.try_recv().is_none(), "exactly one terminal");
+}
+
+#[test]
+fn cancelling_an_unknown_enumeration_is_not_an_error() {
+    // A cancellation that lost the race against completion has nothing to do.
+    let (session, receiver) = session();
+    let handle = session.try_begin(request()).expect("room");
+    service(&session);
+    handle.cancel();
+    service(&session);
+    assert!(receiver.try_recv().is_some(), "the first cancel lands");
+
+    // Servicing a cancel for an enumeration that is already gone is a no-op.
+    let slot = session
+        .shared
+        .submissions
+        .reserve_cancel()
+        .expect("submission room");
+    let outcome = session
+        .shared
+        .submissions
+        .push_cancel(slot, EnumerationId::from_raw(9999));
+    assert_eq!(outcome, PushOutcome::RingDoorbell);
+    service(&session);
+    assert!(receiver.try_recv().is_none());
+}
+
+#[test]
+fn a_cancel_serviced_before_its_begin_leaves_the_begin_to_register_normally() {
+    // Both travel one ordered path, so a cancel queued first is applied first
+    // and simply finds nothing; the later begin then registers.
+    let (session, receiver) = session();
+    let slot = session
+        .shared
+        .submissions
+        .reserve_cancel()
+        .expect("submission room");
+    let _ = session
+        .shared
+        .submissions
+        .push_cancel(slot, EnumerationId::from_raw(1));
+    let enumeration = admit(&session);
+    service(&session);
+
+    assert_eq!(session.enumerations(), 1);
+    assert!(session.shared.contains(enumeration));
+    assert!(receiver.try_recv().is_none());
+}
+
+#[test]
+fn abandonment_releases_every_registered_enumeration_without_a_terminal() {
+    // No observer remains, so no outcome is owed.
+    let (session, receiver) = session();
+    admit(&session);
+    admit(&session);
+    service(&session);
+    assert_eq!(session.enumerations(), 2);
+
+    drop(receiver);
+    service(&session);
+
+    assert_eq!(session.enumerations(), 0);
+}
+
+#[test]
+fn a_begin_is_refused_once_the_session_has_been_abandoned() {
+    let (session, receiver) = session();
+    drop(receiver);
+    assert!(session.is_abandoned());
+
+    session.try_begin(request()).expect_err("abandoned");
+    service(&session);
+    assert_eq!(session.enumerations(), 0);
+}
+
+#[test]
+fn abandonment_frees_the_completion_reservations_it_released() {
+    // The smallest ring makes the accounting visible: one reservation uses the
+    // only reservable slot, and abandonment must give it back.
+    let (session, receiver) = session_with(8, MINIMUM_COMPLETION_RING_CAPACITY);
+    admit(&session);
+    service(&session);
+    assert!(
+        session
+            .shared
+            .completions
+            .reserve_terminal(EnumerationId::from_raw(99))
+            .is_none(),
+        "the only reservable slot is taken"
+    );
+
+    drop(receiver);
+    service(&session);
+
+    assert_eq!(session.shared.completions.len(), 0);
+    assert!(
+        session
+            .shared
+            .completions
+            .reserve_terminal(EnumerationId::from_raw(99))
+            .is_some(),
+        "the slot came back"
+    );
+}
+
+#[test]
+fn the_doorbell_drains_the_ring_on_a_pool_thread() {
+    // The end-to-end path: submit, ring, and let the thread pool service it.
+    // Registration is transient now that a quantum runs the enumeration to its
+    // end, so the stable observation is the terminal that follows.
+    let scratch = Scratch::empty();
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    assert!(await_terminal(&receiver, enumeration).is_completed());
+}
+
+#[test]
+fn a_burst_of_submissions_is_serviced_by_coalesced_drains() {
+    // Room for three concurrent begins: the standing abandon slot, two reserved
+    // control messages each, and three unserviced begin messages.
+    //
+    // An empty directory, deliberately: this test counts completions and
+    // expects exactly three, one per cancelled enumeration. A directory with
+    // real entries could interleave delivered entries with those terminals
+    // depending on how the cancellation races the worker, which is a
+    // different property than the one this test is about.
+    let (session, receiver) = Session::new(16, 16).expect("a session with room");
+    let scratch = Scratch::empty();
+    let mut handles = Vec::new();
+    for _ in 0..3 {
+        let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+        handles.push(session.try_begin(request).expect("room"));
+    }
+    for handle in handles {
+        handle.cancel();
+    }
+
+    let mut terminals = 0;
+    for _ in 0..1000 {
+        while receiver.try_recv().is_some() {
+            terminals += 1;
+        }
+        if terminals == 3 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("expected 3 terminals, saw {terminals}");
+}
+
+#[test]
+fn resuming_parked_enumerations_is_safe_when_none_are_parked() {
+    // The receiver calls this on every successful take, including when nothing
+    // is waiting for room.
+    let (session, receiver) = session();
+    admit(&session);
+    service(&session);
+    session
+        .shared
+        .completions
+        .try_send_entry(Completion::Entry {
+            enumeration: EnumerationId::from_raw(1),
+            entry: named_file("a"),
+        })
+        .expect("room");
+    assert!(receiver.try_recv().is_some());
+    assert_eq!(session.enumerations(), 1);
+}
+
+#[test]
+fn debug_output_names_the_bounds() {
+    let (session, receiver) = Session::new(4, 5).expect("valid");
+    let rendered = format!("{session:?}");
+    assert!(rendered.contains('4'), "{rendered}");
+    let rendered = format!("{receiver:?}");
+    assert!(rendered.contains('5'), "{rendered}");
+}
+
+// -- native engine -------------------------------------------------------
+//
+// FE-8 gave a quantum something real to do, so these drive a session against
+// actual directories rather than scripted outcomes.
+
+use crate::scratch::Scratch;
+
+/// Drive a session with the live thread pool until `enumeration` reports a
+/// terminal, or give up.
+fn await_terminal(receiver: &Receiver, enumeration: EnumerationId) -> TerminalOutcome {
+    for _ in 0..2000 {
+        while let Some(record) = receiver.try_recv() {
+            if let Completion::Terminal {
+                enumeration: id,
+                outcome,
+            } = record
+            {
+                assert_eq!(id, enumeration);
+                return outcome;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("no terminal arrived for {enumeration}");
+}
+
+#[test]
+fn an_empty_directory_completes_end_to_end() {
+    let scratch = Scratch::empty();
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let outcome = await_terminal(&receiver, enumeration);
+    assert!(outcome.is_completed(), "{outcome:?}");
+}
+
+#[test]
+fn real_entries_are_delivered_before_the_terminal_end_to_end() {
+    // The full stack: submission, the live thread pool, native parsing, and
+    // the completion ring, against real files on disk.
+    let scratch = Scratch::with_files(&["a.txt", "b.txt", "c.txt"]);
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let mut names = Vec::new();
+    let outcome = loop {
+        match receiver.recv_timeout(Duration::from_secs(5)) {
+            Some(Completion::Entry { entry, .. }) => names.push(entry.name().to_string_lossy()),
+            Some(Completion::Terminal { outcome, .. }) => break outcome,
+            None => panic!("no completion arrived for {enumeration}"),
+        }
+    };
+
+    assert!(outcome.is_completed(), "{outcome:?}");
+    names.sort();
+    assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
+}
+
+// -- cancellation and abandonment around the live engine (FE-12) --------
+
+/// Drain every record queued right now, asserting no entry follows a
+/// terminal and that at most one terminal is present. Returns the names
+/// delivered (in queue order) and the terminal, if one arrived.
+fn drain_ordered(receiver: &Receiver) -> (Vec<String>, Option<TerminalOutcome>) {
+    let mut names = Vec::new();
+    let mut terminal = None;
+    while let Some(record) = receiver.try_recv() {
+        match record {
+            Completion::Entry { entry, .. } => {
+                assert!(terminal.is_none(), "an entry arrived after the terminal");
+                names.push(entry.name().to_string_lossy());
+            }
+            Completion::Terminal { outcome, .. } => {
+                assert!(terminal.is_none(), "more than one terminal");
+                terminal = Some(outcome);
+            }
+        }
+    }
+    (names, terminal)
+}
+
+#[test]
+fn cancelling_a_yielded_real_enumeration_preserves_entries_and_ends_the_stream() {
+    // A quiescent real enumeration between quanta -- the state a live
+    // cancellation lands in whenever it beats the worker back to the pool.
+    let scratch = Scratch::with_files(&["a.txt", "b.txt", "c.txt"]);
+    let (session, receiver) = session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    service(&session);
+
+    // One real quantum: opens the directory, reads its one small batch, and
+    // delivers every real entry in it. `.` and `..` leave nothing to skip
+    // past, so the enumeration is left `Yielded` -- quiescent, not finished --
+    // waiting on the refill that would discover exhaustion.
+    session.shared.run_engine_quantum();
+
+    handle.cancel();
+    service(&session);
+
+    let (mut names, terminal) = drain_ordered(&receiver);
+    names.sort();
+    assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
+    assert!(
+        matches!(terminal, Some(TerminalOutcome::Cancelled)),
+        "{terminal:?}"
+    );
+    assert_eq!(session.enumerations(), 0);
+
+    // The ready-queue entry `Yielded` left behind is now stale: claiming must
+    // skip it harmlessly rather than double-process an enumeration that no
+    // longer exists.
+    session.shared.run_engine_quantum();
+    assert_eq!(session.shared.ready(), 0);
+}
+
+#[test]
+fn cancellation_observed_while_a_worker_holds_the_engine_is_deferred_behind_its_report() {
+    // A refill in flight cannot be preempted: cancellation observed while a
+    // worker holds the engine only records the intention, and the quantum
+    // already running finishes exactly as if it had never been cancelled.
+    let scratch = Scratch::with_files(&["a.txt"]);
+    let (session, receiver) = session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    service(&session);
+
+    let (claimed, mut engine) = session.shared.claim_next().expect("ready to claim");
+    assert_eq!(claimed, enumeration);
+
+    handle.cancel();
+    service(&session);
+    assert_eq!(
+        session.enumerations(),
+        1,
+        "still registered: the worker owns it"
+    );
+
+    let outcome = crate::engine::advance(&mut engine, enumeration, &session.shared.completions);
+    assert!(
+        matches!(outcome, QuantumOutcome::Yielded),
+        "the quantum itself knows nothing of the cancellation: {outcome:?}"
+    );
+    session.shared.report_quantum(enumeration, engine, outcome);
+    service(&session); // process the retire the worker's report posted
+
+    let (names, terminal) = drain_ordered(&receiver);
+    assert_eq!(names, ["a.txt"]);
+    assert!(
+        matches!(terminal, Some(TerminalOutcome::Cancelled)),
+        "{terminal:?}"
+    );
+    assert_eq!(session.enumerations(), 0);
+}
+
+#[test]
+fn repeated_cycles_through_every_terminal_kind_leak_no_reservation() {
+    // The smallest possible rings: if any token, reservation, registry entry,
+    // or ready-set membership survived a cycle, the very next `try_begin`
+    // would find no room and this would fail long before thirty repeats.
+    let (session, receiver) = session_with(
+        MINIMUM_SUBMISSION_CAPACITY,
+        MINIMUM_COMPLETION_RING_CAPACITY,
+    );
+    let scratch = Scratch::empty();
+
+    for cycle in 0..30 {
+        // Success.
+        let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+        let handle = session
+            .try_begin(request)
+            .unwrap_or_else(|error| panic!("cycle {cycle}, success: {error}"));
+        handle.detach();
+        service(&session);
+        for _ in 0..64 {
+            session.shared.run_engine_quantum();
+            service(&session);
+            if session.enumerations() == 0 {
+                break;
+            }
+        }
+        let (_, terminal) = drain_ordered(&receiver);
+        assert!(
+            matches!(terminal, Some(TerminalOutcome::Completed)),
+            "cycle {cycle}: {terminal:?}"
+        );
+
+        // Failure.
+        let request = EnumerationRequest::for_path(&scratch.child("absent")).expect("resolvable");
+        let handle = session
+            .try_begin(request)
+            .unwrap_or_else(|error| panic!("cycle {cycle}, failure: {error}"));
+        handle.detach();
+        service(&session);
+        session.shared.run_engine_quantum();
+        service(&session);
+        let (_, terminal) = drain_ordered(&receiver);
+        assert!(
+            matches!(terminal, Some(TerminalOutcome::Failed(_))),
+            "cycle {cycle}: {terminal:?}"
+        );
+
+        // Cancellation, quiescent (before any quantum runs).
+        let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+        let handle = session
+            .try_begin(request)
+            .unwrap_or_else(|error| panic!("cycle {cycle}, cancel: {error}"));
+        service(&session);
+        handle.cancel();
+        service(&session);
+        let (_, terminal) = drain_ordered(&receiver);
+        assert!(
+            matches!(terminal, Some(TerminalOutcome::Cancelled)),
+            "cycle {cycle}: {terminal:?}"
+        );
+
+        assert_eq!(session.enumerations(), 0, "cycle {cycle}");
+    }
+}
+
+#[test]
+fn abandonment_does_not_wait_on_a_directory_query() {
+    // A live session with several enumerations actually running, so at least
+    // one worker plausibly holds an engine when the receiver drops. The
+    // property under test holds unconditionally either way: abandonment posts
+    // a message and returns, never waiting for a worker's directory query.
+    //
+    // The completion ring is sized to outlast every entry all four
+    // directories could possibly deliver before the receiver ever drains one:
+    // real workers start delivering immediately, and this test's subject is
+    // abandonment's timing, not backpressure.
+    let names: Vec<String> = (0..20).map(|index| format!("f{index:03}.txt")).collect();
+    let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+    let scratch = Scratch::with_files(&borrowed);
+    let (session, receiver) = Session::new(16, 128).expect("a session with room");
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+        handles.push(session.try_begin(request).expect("room"));
+    }
+    for handle in handles {
+        handle.detach();
+    }
+
+    let started = std::time::Instant::now();
+    drop(receiver);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "abandonment must not block on a directory query: {elapsed:?}"
+    );
+
+    for _ in 0..2000 {
+        if session.enumerations() == 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("abandoned enumerations were never released");
+}
+
+#[test]
+fn dropping_every_handle_while_a_real_enumeration_is_running_does_not_hang() {
+    // The pass/fail signal here is completion, not an assertion: the last
+    // handle dropped is what releases the session's pool objects, and that
+    // must finish rather than wait out a callback that is -- circularly --
+    // waiting on this drop. FE-7 removed the hazard structurally by making a
+    // worker report instead of act; this proves it holds against the live
+    // engine actually mid-enumeration, not just an empty directory.
+    let names: Vec<String> = (0..40).map(|index| format!("f{index:03}.txt")).collect();
+    let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+    let scratch = Scratch::with_files(&borrowed);
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    handle.detach();
+
+    drop(receiver);
+    drop(session);
+}
+
+#[test]
+fn a_missing_directory_fails_end_to_end() {
+    let scratch = Scratch::empty();
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(&scratch.child("absent")).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let outcome = await_terminal(&receiver, enumeration);
+    let failure = outcome.failure().expect("a failure");
+    assert!(
+        matches!(failure, crate::error::EnumerationError::DirectoryOpen(_)),
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn a_file_fails_end_to_end_as_an_open_failure() {
+    let scratch = Scratch::with_files(&["plain.txt"]);
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(&scratch.child("plain.txt")).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let outcome = await_terminal(&receiver, enumeration);
+    let failure = outcome.failure().expect("a failure");
+    assert!(
+        matches!(failure, crate::error::EnumerationError::DirectoryOpen(_)),
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn a_finished_enumeration_is_retired_without_a_client_touching_it() {
+    // The worker reports and the servicer retires, both on the pool: a client
+    // that only drains sees the session return to empty on its own.
+    let scratch = Scratch::empty();
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+    assert!(await_terminal(&receiver, enumeration).is_completed());
+
+    for _ in 0..2000 {
+        if session.enumerations() == 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("the enumeration was never retired");
+}

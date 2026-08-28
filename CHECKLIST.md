@@ -1,9 +1,11 @@
 # Checklist: workspace
 
-Workspace-level and cross-cutting work. Per-crate work is tracked in
-[crates/windows-overlapped-io-sys/CHECKLIST.md](crates/windows-overlapped-io-sys/CHECKLIST.md) and
-[crates/windows-threadpool-sys/CHECKLIST.md](crates/windows-threadpool-sys/CHECKLIST.md). Completed groups are
-archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
+Workspace-level and cross-crate work. Completed groups are archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). The authoritative cross-component
+decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md), their rationale is in
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md), and the originating discussion for the
+M1-M7 work archived below is in
+[design-sessions/DESIGN-SESSION-2026-08-27-async-file-enumeration.md](design-sessions/DESIGN-SESSION-2026-08-27-async-file-enumeration.md).
 
-No workspace-level milestones are currently pending. Add future cross-cutting workspace work here as new
-milestones.
+No pending work. This file reopens when new cross-crate or workspace-level work
+is planned, and a row for it is added to [PLANS.md](PLANS.md).

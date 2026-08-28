@@ -11,6 +11,10 @@
         "cargo-workspace"
     ],
     "packages": {
+        "crates/windows-file-enumeration-sys": {
+            "package-name": "windows-file-enumeration-sys",
+            "component": "windows-file-enumeration-sys"
+        },
         "crates/windows-file-watcher": {
             "package-name": "windows-file-watcher",
             "component": "windows-file-watcher"
@@ -18,6 +22,10 @@
         "crates/windows-file-watcher-example-test-harness": {
             "package-name": "windows-file-watcher-example-test-harness",
             "component": "windows-file-watcher-example-test-harness"
+        },
+        "crates/windows-impersonation-token-sys": {
+            "package-name": "windows-impersonation-token-sys",
+            "component": "windows-impersonation-token-sys"
         },
         "crates/windows-ioring-sys": {
             "package-name": "windows-ioring-sys",

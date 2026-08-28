@@ -535,6 +535,823 @@ overshoot window unreachable through the safe API, which removed the flake at it
 the assertion. The superseded claim is marked in [DESIGN-NOTES.md](DESIGN-NOTES.md) and the new decision recorded
 beside it.
 
+## Moved 2026-08-27 -- windows-impersonation-token-sys scaffold
+
+### <a id="it-1"></a>IT-1 -- Scaffold and register the publishable `windows-impersonation-token-sys` workspace crate. *(completed 2026-08-27 16:10:13 UTC-04:00)*
+
+Scaffold `crates/windows-impersonation-token-sys` as a publishable Windows-only
+workspace crate. Its manifest inherits the workspace authors, edition, Rust version,
+license, repository, and homepage; declares version `0.1.0` with the
+release-please marker; provides crates.io description, README, documentation URL,
+keywords, categories, and Windows docs.rs target metadata; and selects only the
+`windows-sys` foundation, security, and threading features. The crate is registered
+in the workspace, [release-please-config.json](release-please-config.json),
+[.release-please-manifest.json](.release-please-manifest.json), and every crate-name
+surface in
+[.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml),
+including tag triggers, manual dispatch, and sibling-dependency recognition. Its
+local Tier 1 and Tier 2 design records, plans, completed-plans, changelog, README,
+manifest, and source skeleton are present with required copyright headers.
+
+Cargo metadata discovers the package as version `0.1.0`, the targeted package check
+passes, the package's empty unit and documentation test harnesses pass, and the
+crate name was unclaimed on crates.io when the scaffold was completed.
+
+## Moved 2026-08-27 -- captured impersonation token
+
+### <a id="it-2"></a>IT-2 -- Implement the opaque, owned, clonable `ImpersonationToken` capture type. *(completed 2026-08-27 16:23:53 UTC-04:00)*
+
+The public `ImpersonationToken::capture` operation synchronously opens the calling
+thread's effective real token with `OpenAsSelf`, explicitly falls back to the
+process token when the thread has none, and duplicates that context into a
+non-inheritable `TokenImpersonation` handle with only `TOKEN_IMPERSONATE` access.
+Existing identification, impersonation, and delegation levels are preserved;
+process context becomes `SecurityImpersonation`; and anonymous context plus every
+native failure stage is reported through `CaptureError` and `CaptureFailure`.
+
+The captured handle is private, owned by `OwnedHandle`, and shared across clones
+through `Arc`, so source-handle lifetime, pseudo-handle transport, mutation rights,
+and rights expansion cannot invalidate the captured-context invariant. The exact
+mechanics and rationale are recorded in the crate
+[DESIGN-NOTES.md](crates/windows-impersonation-token-sys/DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](crates/windows-impersonation-token-sys/DESIGN-RATIONALE.md).
+The targeted all-target check and Clippy pass without warnings, and the package
+test and documentation-test harnesses pass.
+
+## Moved 2026-08-27 -- impersonation token test matrix
+
+### <a id="it-4"></a>IT-4 -- Add deterministic capture, application, restoration, and failure-path tests. *(completed 2026-08-27 17:07:20 UTC-04:00)*
+
+The sibling unit module
+[src/tests.rs](crates/windows-impersonation-token-sys/src/tests.rs) contains nine
+strictly in-memory tests for capture-error classification, application failure,
+closure success and error propagation, unwind drop behavior, positive
+`ImpersonationToken` traits, and compile-time proof that the private application
+guard is neither `Send` nor `Sync`. These tests finish in 0.00 seconds.
+
+The real-Windows
+[tests/impersonation.rs](crates/windows-impersonation-token-sys/tests/impersonation.rs)
+target contains fourteen tests covering no thread token, impersonated capture,
+cross-thread transport, repeated reuse, nested scopes, exact prior-token-object
+restoration, closure success, closure error, unwind restoration, source-handle
+lifetime independence, concurrent use, identification-level preservation,
+delegation-level preservation, and anonymous rejection. Exact restoration is
+verified with the prior token's `TOKEN_STATISTICS.TokenId`, so clearing to process
+identity or substituting a duplicate cannot pass.
+
+The `restoration_failure_panics_with_the_native_error` and
+`restoration_failure_during_unwind_aborts_the_process` unit tests in
+[src/tests.rs](crates/windows-impersonation-token-sys/src/tests.rs) verify
+that restoration failure panics with the native error and that a
+restoration panic during existing unwind aborts in a bounded child process
+(re-executing the unit-test binary itself, not a separate integration test
+target). Both tests call the same production panic helper in
+[src/restore.rs](crates/windows-impersonation-token-sys/src/restore.rs).
+
+All 25 tests pass: nine unit tests in 0.00 seconds, fourteen real-token tests in
+0.00 seconds, and two restoration subprocess tests in 1.69 seconds. Targeted
+all-target Clippy and documentation tests also pass without warnings. (The two
+restoration subprocess tests were later moved from a separate integration test
+target into `src/tests.rs` as ordinary unit tests, addressing a Copilot PR #44
+review finding that the integration test's `#[path]` inclusion of `src/restore.rs`
+bypassed the crate's real compiled module graph.)
+
+## Moved 2026-08-27 -- scoped impersonation application
+
+### <a id="it-3"></a>IT-3 -- Implement scoped application of an `ImpersonationToken` with exact prior-token restoration. *(completed 2026-08-27 16:41:44 UTC-04:00)*
+
+`ImpersonationToken::with_impersonation` opens a `TOKEN_IMPERSONATE` handle to
+the exact thread token present at scope entry, or records explicit no-token
+process context. It applies the captured token with `SetThreadToken`, runs the
+closure without interpreting its return value, and restores the saved state
+before ordinary return and during unwind. Restoration reuses the same opened
+token handle; it does not duplicate or normalize the token and does not call
+`RevertToSelf`. A null token is used only when entry had no thread token.
+
+The private application guard carries an `Rc` marker so it is `!Send` and
+`!Sync`, and the closure-only public API prevents safe callers from forgetting
+it. If `SetThreadToken` cannot restore the saved state, the guard's `Drop`
+panics; restoration failure during an existing unwind triggers Rust's
+double-panic abort behavior. Application failures before the closure are
+reported synchronously through `ApplyError` and `ApplyFailure`.
+
+The exact mechanics and rationale are recorded in the workspace
+[DESIGN-NOTES.md](DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md), and in the crate
+[DESIGN-NOTES.md](crates/windows-impersonation-token-sys/DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](crates/windows-impersonation-token-sys/DESIGN-RATIONALE.md).
+The targeted all-target check and Clippy pass without warnings, and the package
+test and documentation-test harnesses pass.
+
+## Moved 2026-08-27 -- impersonation token documentation and publication readiness
+
+### <a id="it-5"></a>IT-5 -- Complete documentation and publication validation for the reusable impersonation-token layer. *(completed 2026-08-27 17:15:19 UTC-04:00)*
+
+The crate-level documentation and
+[README.md](crates/windows-impersonation-token-sys/README.md) now state the
+capture contract, nested-result behavior, cross-thread use, owned-handle and
+rights guarantees, exact prior-token restoration, and restoration-failure panic
+policy. The public surface is guarded by the `missing_docs` lint, the README
+contains ordinary and cross-thread examples, and
+[CHANGELOG.md](crates/windows-impersonation-token-sys/CHANGELOG.md) has the
+release-please baseline.
+
+The package manifest retains the Windows docs.rs target, complete crates.io
+metadata, version `0.1.0`, and only `windows-sys 0.61.2` with the Foundation,
+Security, and Threading features. The crate is registered consistently in
+[release-please-config.json](release-please-config.json),
+[.release-please-manifest.json](.release-please-manifest.json), and
+[publish-crate.yml](.github/workflows/publish-crate.yml).
+
+`cargo publish --dry-run` packages and verifies all 15 expected files as a
+55.5 KiB crate (14.0 KiB compressed). The 25 unit and integration tests and the
+crate doctest pass, rustdoc and targeted all-target Clippy are warning-free, and
+the default workspace passes all-target checks in debug and release modes.
+
+> **-> CROSS-COMPONENT HANDOFF:** next work is in component
+> `crates/windows-file-enumeration-sys` -> M5 -> **FE-1** (publishable enumeration
+> crate scaffold). See [CHECKLIST.md](CHECKLIST.md).
+
+## Moved 2026-08-27 -- windows-file-enumeration-sys scaffold
+
+### <a id="fe-1"></a>FE-1 -- Scaffold and register the publishable `windows-file-enumeration-sys` workspace crate. *(completed 2026-08-27 17:23:34 UTC-04:00)*
+
+The new Windows-only
+[Cargo.toml](crates/windows-file-enumeration-sys/Cargo.toml) inherits the
+workspace authors, edition, Rust version, license, repository, and homepage;
+declares version `0.1.0` with the release-please marker; and provides complete
+crates.io metadata plus a Windows docs.rs target. Its path-plus-version
+dependencies are `windows-impersonation-token-sys 0.1.0`,
+`windows-threadpool-sys 0.1.2`, and `wtf-string 0.1.0`. Its direct
+`windows-sys 0.61.2` dependency enables only Foundation, Storage FileSystem,
+and System Threading for directory enumeration and CQ event signaling.
+
+The workspace manifest and lockfile include the crate. Release automation
+recognizes its component and `0.1.0` baseline, and
+[publish-crate.yml](.github/workflows/publish-crate.yml) accepts its tags,
+manual selection, and sibling-dependency ordering. The `file-enumeration`
+Conventional Commit scope is recorded in
+[copilot-instructions.md](.github/copilot-instructions.md).
+
+The crate has its copyright-bearing library scaffold,
+[README.md](crates/windows-file-enumeration-sys/README.md),
+[CHANGELOG.md](crates/windows-file-enumeration-sys/CHANGELOG.md), local
+[PLANS.md](crates/windows-file-enumeration-sys/PLANS.md) and
+[COMPLETED-PLANS.md](crates/windows-file-enumeration-sys/COMPLETED-PLANS.md),
+and Tier 1/Tier 2
+[DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+The local design record mirrors settled workspace decisions while explicitly
+leaving FE-2's public-contract questions unresolved.
+
+The package all-target check, test harness, documentation tests, rustdoc, and
+Clippy pass without warnings.
+
+> **CROSS-COMPONENT PREREQUISITE SATISFIED:** component
+> `crates/windows-impersonation-token-sys` -> M4 -> **IT-5** completed before
+> this scaffold. See [CHECKLIST.md](CHECKLIST.md).
+
+## Moved 2026-08-27 -- file-enumeration v1 public contract
+
+### <a id="fe-2"></a>FE-2 -- Close and record the remaining v1 public-contract decisions before implementing them. *(completed 2026-08-27 17:39:09 UTC-04:00)*
+
+FE-2 settles caller-time ordinary-path snapshotting and explicit `\\?\`
+long-path handling, native unspecified ordering, the two-record CQ and embedded
+failed terminal, always-present defined inline metadata, native Windows
+timestamps, selected volume qualification, the extensible query-by-example
+predicate, synchronous versus accepted error boundaries, typed unsupported-
+capability behavior, and the fixed aligned buffer's typed oversize-record
+outcome.
+
+The authoritative contract is in the enumeration crate's
+[DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md), with
+alternatives and constraints in
+[DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+The cross-component summary is in the workspace
+[DESIGN-NOTES.md](DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md). Globazog replacement remains a
+mandatory publication gate: its native metadata and predicate capability must
+remain obtainable without per-entry opens.
+
+## Moved 2026-08-27 -- file-enumeration public value types
+
+### <a id="fe-3"></a>FE-3 -- Implement the public request, predicate, result, error, terminal, and `EnumerationId` types. *(completed 2026-08-27 18:18:50 UTC-04:00)*
+
+The crate now carries the settled v1 value surface.
+[request.rs](crates/windows-file-enumeration-sys/src/request.rs) owns
+`EnumerationRequest`, whose path is validated and resolved at construction by
+[path.rs](crates/windows-file-enumeration-sys/src/path.rs): `\\?\` inputs are
+checked for full qualification and kept verbatim, every other form (including
+`\\.\`) is resolved through `GetFullPathNameW` and held to `MAX_PATH` so
+behaviour does not depend on the host's `longPathAware` manifest. Buffer
+capacity defaults to 64 KiB, clamps up to 1 KiB, rounds to the 8-byte record
+alignment, and rejects a value that cannot reach Win32 as a `u32`.
+
+[predicate.rs](crates/windows-file-enumeration-sys/src/predicate.rs) and
+[pattern.rs](crates/windows-file-enumeration-sys/src/pattern.rs) implement the
+data-only query-by-example predicate: a non-exhaustive `EntryPredicate` seam
+over a validating `QueryByExample`, ten clause forms, six comparison operators,
+and a compiled single-segment name matcher whose insensitive comparison uses
+`CompareStringOrdinal`. Vacuous clauses -- a zero attribute mask, an empty name
+set -- are rejected when the query is built.
+
+[entry.rs](crates/windows-file-enumeration-sys/src/entry.rs) and
+[timestamp.rs](crates/windows-file-enumeration-sys/src/timestamp.rs) hold every
+inline record field in native units, suppress a reparse tag the attributes do
+not justify, and keep times as signed Windows ticks with `FILETIME` interop.
+[error.rs](crates/windows-file-enumeration-sys/src/error.rs) splits synchronous
+build failures from accepted-enumeration failures and retains every raw Win32
+code, and
+[completion.rs](crates/windows-file-enumeration-sys/src/completion.rs) defines
+the two-record completion surface with the failure carried inside its terminal.
+
+118 unit tests plus the crate doctest pass; targeted all-target Clippy and
+`cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration two-ring session and admission
+
+FE-4 and FE-5 land in one commit. They are not independent as written: FE-4's
+rings, reservations, registry, and servicer have no reachable producer until
+FE-5's admission path exists, so FE-4 alone cannot build without pervasive
+dead-code suppression that FE-5 would immediately remove. Committing them
+together is the acknowledged-coupling response rather than disguising it with
+temporary lint allowances.
+
+### <a id="fe-4"></a>FE-4 -- Implement the bounded two-ring session shell with its `Session`, submission, and receiver types. *(completed 2026-08-27 18:49:34 UTC-04:00)*
+
+[completion_ring.rs](crates/windows-file-enumeration-sys/src/completion_ring.rs)
+is the bounded single-receiver ring: reserved terminal slots that never consume
+the last data slot, best-effort entry sends that hand a refused record straight
+back rather than dropping it, and a lazily created manual-reset doorbell whose
+signalled state is re-established under the ring lock at the end of every
+mutation.
+[submission_ring.rs](crates/windows-file-enumeration-sys/src/submission_ring.rs)
+is the bounded multi-producer control ring, with reserved cancellation and
+abandon slots and the coalescing drain flag that keeps a burst of submissions
+from queueing a burst of empty drains.
+
+[session.rs](crates/windows-file-enumeration-sys/src/session.rs) owns both rings
+plus the [registry.rs](crates/windows-file-enumeration-sys/src/registry.rs)
+of live enumerations, and drains the submission ring in FIFO order from one
+`ThreadpoolWork` callback. The work object is deliberately owned by the
+client-side handles rather than by the state its callback touches, so a callback
+can never drop the work object it is running inside.
+
+### <a id="fe-5"></a>FE-5 -- Implement begin and cancellation admission and the affine enumeration handle. *(completed 2026-08-27 18:49:34 UTC-04:00)*
+
+[admission.rs](crates/windows-file-enumeration-sys/src/admission.rs) secures the
+captured security context, the completion-ring terminal slot, and the
+submission-ring cancellation slot before a begin becomes visible, so a begin is
+either fully accepted or fully refused with the request and token handed back.
+`Session::try_begin` captures the submitter's context synchronously;
+`try_begin_with_token` takes an already-captured one for a traversal layer.
+`EnumerationHandle` is affine: cancelling or dropping it spends the reservation
+exactly once, and `detach` returns it so an enumeration can outlive its handle.
+Dropping the `Receiver` spends the standing abandon reservation, which stops
+further starts and releases every carried enumeration without a terminal.
+
+199 unit tests plus the crate doctest pass; targeted all-target Clippy and
+`cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration session model tests (M5 complete)
+
+This group completes M5. The FE-1 through FE-5 stubs migrate with it; their
+archived entries above remain the record.
+
+### <a id="fe-6"></a>FE-6 -- Build a deterministic state-machine/model test suite for the two rings and the session. *(completed 2026-08-27 19:01:30 UTC-04:00)*
+
+[model.rs](crates/windows-file-enumeration-sys/src/model.rs) applies scripted
+operation sequences to a real session and re-checks every invariant after each
+step: ring accounting stays within the bound, reservations never take the last
+slot, the doorbell agrees exactly with what the receiver can observe, each
+enumeration's delivered entries are an in-order prefix of what was offered, no
+entry follows a terminal, and no enumeration terminates twice.
+
+Determinism required one addition: admission rings the servicer's doorbell, so
+the thread pool would otherwise race every scripted step. The model suppresses
+the ring and drains through the same code path the callback uses, while the
+thread-pool path keeps its own eventual-consistency tests. Modelling the engine
+also required the shell-side quantum transitions (`enter_quantum`,
+`leave_quantum`, `complete`) that the native engine will drive in M6.
+
+[model/tests.rs](crates/windows-file-enumeration-sys/src/model/tests.rs) covers
+twenty interleavings, including completion, two enumerations sharing a session,
+quiescent cancellation, handle drop, cancellation during a running quantum
+(the terminal lands behind that quantum's entries), a quantum scheduled after
+cancellation, cancellation of an unknown enumeration, backpressure with retry,
+backpressure shared across enumerations, parking and resumption, a terminal
+delivered into a ring with no ordinary room, abandonment with and without a
+running quantum, cancelling an already-completed enumeration, detachment,
+session drop with an owed terminal, both minimum bounds, the completion ring's
+reservation boundary, rejection of a completion ring of one, repeated cycles,
+and redundant servicing and draining.
+
+221 unit tests plus the crate doctest pass; targeted all-target Clippy and
+`cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration worker/servicer split
+
+### <a id="fe-7"></a>FE-7 -- Make the worker a reporter and the servicer the sole registry authority, and give the session something to run work on. *(completed 2026-08-27 19:56:15 UTC-04:00)*
+
+The session now owns two thread-pool objects rather than one: a servicer that
+stays responsive, and an engine created with a runs-long callback environment
+because any quantum may block on a directory query.
+[session.rs](crates/windows-file-enumeration-sys/src/session.rs) holds both in
+the shared state and hands them to the *last client handle* to release on its
+own thread, so no callback can ever hold the last reference to something whose
+release would wait on that callback.
+
+`EnumerationState::work` is gone. Runnability lives in a ready set inside
+[registry.rs](crates/windows-file-enumeration-sys/src/registry.rs), and
+`claim_next` is single-flight: an enumeration already held is skipped rather
+than run twice over the same buffer and cursor. Scheduling is idempotent and
+never queues a claimed enumeration underneath its worker.
+
+A worker now delivers its own terminal into the slot it reserved and reports
+retirement through the new `Retire` control message, which every accepted
+enumeration claims at admission alongside its cancellation -- raising
+`MINIMUM_SUBMISSION_CAPACITY` to four. Only the servicer removes an entry, and
+it returns any unspent cancellation or retirement reservation rather than
+leaking it. Abandonment now releases entries that own no thread-pool object, so
+receiver-drop teardown never waits on a directory query.
+
+The state-machine model gained `Claim`, `Report`, `RunEngine`, and `Schedule`
+operations plus twelve scenarios for the new control path: worker-reports-then-
+servicer-retires, a retire serviced after abandonment, a report whose
+enumeration is already gone, single-flight claiming, idempotent scheduling, a
+finished quantum outranking a concurrent cancellation, failed and cancelled
+quantum outcomes, park-and-resume through the ready set, and the minimum ring
+covering both reserved control messages.
+
+Three pre-existing tests were racing the live thread pool for work they also
+drove explicitly; they now use suppressed sessions, and the tests whose subject
+*is* the pool use live ones. 234 unit tests plus the crate doctest pass, stable
+across fifteen consecutive runs; targeted all-target Clippy and
+`cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration native open and first read
+
+### <a id="fe-8"></a>FE-8 -- Allocate the fixed native buffer and get one directory open and reading. *(completed 2026-08-27 20:12:34 UTC-04:00)*
+
+[buffer.rs](crates/windows-file-enumeration-sys/src/buffer.rs) allocates the
+staging buffer at admission, fallibly and as `u64` words so its base address is
+8-byte aligned by construction rather than by hope; the ordinary growable-vector
+path would abort the process on failure and guarantee only byte alignment.
+`BeginFailure::BufferAllocation` reports it, and the buffer travels with the
+engine state rather than the request, per D-19.
+
+[native.rs](crates/windows-file-enumeration-sys/src/native.rs) holds the three
+documented Win32 calls: open under the submitted token with
+`FILE_FLAG_BACKUP_SEMANTICS`, the optional `FileIdInfo` volume query, and the
+`FileIdExtdDirectoryRestartInfo` / `FileIdExtdDirectoryInfo` refill. Only the
+open runs impersonated; the sibling crate's guard restores the worker's exact
+prior token on every path including failure and unwind.
+[engine.rs](crates/windows-file-enumeration-sys/src/engine.rs) sequences those
+into a quantum that leaves the registry while it runs, so a blocking directory
+query never holds the session's lock.
+
+Two contract corrections came from the filesystem itself. A file opens
+successfully with `FILE_LIST_DIRECTORY` -- it is the same bit as
+`FILE_READ_DATA` -- so directory-ness is now established at the open via
+`FILE_ATTRIBUTE_DIRECTORY` and reported as `DirectoryOpen(ERROR_DIRECTORY)`;
+left to the first refill it would have surfaced through codes indistinguishable
+from an unsupported filesystem. And an empty *subdirectory* still contains `.`
+and `..`, so it returns a batch and exhausts on its second query: the
+first-query-empty rule is correct but reachable only where a directory has no
+records at all. Both are recorded in
+[DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md) and
+[DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+
+That second correction also required `QuantumOutcome::Yielded`, one item ahead
+of FE-10 which specifies it: without a way to say "one refill done, ask me
+again", no directory holding records could reach its end. FE-9 replaces the
+current read-and-pass-over with real parsing.
+
+269 unit tests plus the crate doctest pass, stable across ten consecutive runs
+and leaving no scratch directories behind; targeted all-target Clippy and
+`cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration record parsing
+
+### <a id="fe-9"></a>FE-9 -- Parse what the buffer returns and deliver entries. *(completed 2026-08-27 20:42:04 UTC-04:00)*
+
+[record.rs](crates/windows-file-enumeration-sys/src/record.rs) is a new module
+that walks a `FILE_ID_EXTD_DIR_INFO` chain over the batch buffer, validating
+alignment, fixed-field extent, next-entry-offset advance -- which now also
+rejects an offset that lands inside the current record's own extent, not just
+one past the batch -- name byte-length parity, name bounds, and size sign
+before any field is trusted. Every field is read once, from a byte slice via
+`from_ne_bytes`/`as_chunks`, never a pointer cast: later records in a batch are
+only ever known to be 8-byte aligned as a whole, not individually.
+
+[engine.rs](crates/windows-file-enumeration-sys/src/engine.rs)'s quantum now
+refills at most once and then parses the loaded batch in the same quantum,
+tracking a `cursor: Option<usize>` that survives across quanta exactly as D-3
+specifies. `.` and `..` are dropped before the predicate ever sees them; a
+match is offered to the completion ring via `try_send_entry`. A refusal parks
+the quantum with the cursor left at the unparsed record -- not past it -- so
+the next quantum re-parses and re-offers exactly what could not be delivered,
+losing nothing. `QuantumOutcome::Idle` is now the only variant the native
+engine never produces itself; its `dead_code` allow moved from the whole enum
+to that one variant.
+
+A pre-existing live-session test enumerated `C:\Windows` and counted every
+completion as a terminal; now that quanta really do deliver entries, a
+cancellation racing a worker could let real entries interleave with the three
+expected terminals, occasionally letting the count of "3" never appear on a
+run with parallel load. It now targets an empty scratch directory, which can
+never produce an entry regardless of that race, matching what the test is
+actually about.
+
+290 unit tests plus the crate doctest pass, stable across fifteen consecutive
+runs; targeted all-target Clippy and `cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration quantum budgets
+
+### <a id="fe-10"></a>FE-10 -- Bound each quantum and make backpressure lossless. *(completed 2026-08-27 21:32:24 UTC-04:00)*
+
+[engine.rs](crates/windows-file-enumeration-sys/src/engine.rs)'s quantum now
+bounds its own progress with two independent budgets, checked every record:
+`MAX_RECORDS_PER_QUANTUM` (256) and `MAX_QUANTUM_DURATION` (2ms, a plain
+monotonic `Instant`). A dropped `.`/`..`, a predicate reject, and a delivered
+entry all count the same against the record budget, so a predicate that
+matches nothing still yields back to the scheduler instead of running an
+enormous batch to its end in one callback. Neither budget can stall an
+enumeration completely: a quantum's first record is never gated by either one.
+Both budgets are pure functions of `(examined, elapsed)`, unit tested directly
+with synthetic values rather than real sleeping.
+
+Completion-ring backpressure remains a separate concern, refined rather than
+replaced: `EngineState::awaiting_room` remembers that the record retained at
+the cursor is already known to need delivery, so a quantum resuming into a
+still-full ring asks `CompletionRing::has_data_room` -- one cheap call -- and
+parks again immediately rather than reparsing, rebuilding, and re-evaluating a
+predicate against a record whose fate is already decided.
+
+Recorded as D-20 in [DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md)
+and [DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+
+New tests cover: the record budget stopping a quantum mid-batch on a directory
+larger than the budget, with every entry still delivered exactly once across
+the quanta that follow; a directory needing several physical refills
+delivering every entry once; and a still-full ring parking again on a second
+resume without losing or duplicating the pending entry.
+
+296 unit tests plus the crate doctest pass, stable across twenty consecutive
+runs and leaving no scratch directories behind; targeted all-target Clippy and
+`cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration failure and capability taxonomy
+
+### <a id="fe-11"></a>FE-11 -- Complete the failure and capability taxonomy the contract settled. *(completed 2026-08-27 21:49:52 UTC-04:00)*
+
+Most of the taxonomy this item names was already in place from FE-8/FE-9:
+`classify_refill_failure` in [native.rs](crates/windows-file-enumeration-sys/src/native.rs)
+already mapped `ERROR_INVALID_FUNCTION`/`ERROR_NOT_SUPPORTED`/`ERROR_INVALID_PARAMETER`
+to `UnsupportedExtendedDirectoryInfo` and `ERROR_MORE_DATA`/`ERROR_INSUFFICIENT_BUFFER`/
+`ERROR_BAD_LENGTH` to `RecordTooLarge`; malformed records were already reported
+with their [`MalformedRecord`](crates/windows-file-enumeration-sys/src/error.rs)
+detail; and "a late failure truncates rather than retracts" was already proven
+by the state-machine model's `a_failed_quantum_delivers_a_failed_terminal`.
+
+What was missing was the assertion half of the contract: the unsupported-class
+mapping is safe to trust only when the crate's own preconditions -- a live
+crate-opened handle, a valid information class, a non-null 8-byte-aligned
+buffer base, and an effective capacity that is at least
+`MINIMUM_BUFFER_CAPACITY`, an 8-byte multiple, and `u32`-representable -- all
+hold, and nothing checked that. `refill` now `debug_assert`s every one of them
+immediately before the call whose failure `classify_refill_failure` reads,
+so a future regression in handle, class, or buffer handling would be caught as
+this crate's own bug rather than silently reported as a filesystem
+incapability. None are independently reachable through the crate's public
+API -- the type system and `NativeBuffer::try_new`'s own assertion already
+rule out every violation -- so this is a regression guard, not new externally
+observable behaviour, and the full existing suite passing unchanged confirms
+none of them ever fire.
+
+A new engine-level test, `a_late_malformed_record_truncates_rather_than_retracts`,
+proves the truncation property against the real parser rather than the
+scripted model: it parks an enumeration on a full ring, frees exactly one slot,
+corrupts the still-retained record's `NextEntryOffset` directly in the native
+buffer, and confirms the resulting failure leaves the one entry still queued
+untouched.
+
+Recorded in [DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md)
+(D-13's section, "Error taxonomy and capability failures").
+
+297 unit tests plus the crate doctest pass, stable across twenty consecutive
+runs and leaving no scratch directories behind; targeted all-target Clippy and
+`cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration cancellation, abandonment, and teardown
+
+### <a id="fe-12"></a>FE-12 -- Complete cancellation, abandonment, and teardown around the live engine. *(completed 2026-08-27 22:14:30 UTC-04:00)*
+
+The architecture this item names was already in place from FE-7 (D-16
+through D-18) and already proven, abstractly, by the state-machine model:
+cancellation cannot preempt a quantum in flight because `report_quantum`
+only overrides its outcome (`_ if state.cancelled => Cancelled`) after the
+quantum returns; a quiescent cancellation or abandonment removes and
+releases a registry entry immediately, without a thread-pool object to wait
+on; and a stale ready-queue id left behind by a removed entry is a
+documented, harmless no-op for `claim_next` to skip. Auditing the code
+found no defect in any of it.
+
+What FE-12 adds is proof against the *real* engine -- real files, real
+refills, the real completion ring -- rather than only the scripted model,
+plus a repeated-cycle audit that would catch a leak the model's one-shot
+scenarios could not:
+
+- [session/tests.rs](crates/windows-file-enumeration-sys/src/session/tests.rs)
+  gained `cancelling_a_yielded_real_enumeration_preserves_entries_and_ends_the_stream`
+  (a real quiescent cancellation, driven deterministically with a suppressed
+  pool) and `cancellation_observed_while_a_worker_holds_the_engine_is_deferred_behind_its_report`
+  (the engine claimed and mid-quantum when cancellation is serviced, proving
+  the quantum itself runs to its natural conclusion with no knowledge of it).
+  Both assert, via a new `drain_ordered` helper, that no entry ever follows a
+  terminal and that at most one terminal arrives.
+- `repeated_cycles_through_every_terminal_kind_leak_no_reservation` runs
+  thirty cycles of success, failure, and cancellation on a session sized to
+  the bare minimum (`MINIMUM_SUBMISSION_CAPACITY`,
+  `MINIMUM_COMPLETION_RING_CAPACITY`): any leaked cancel, retire, or terminal
+  reservation would exhaust that room long before the thirtieth repeat.
+- `abandonment_does_not_wait_on_a_directory_query` and
+  `dropping_every_handle_while_a_real_enumeration_is_running_does_not_hang`
+  exercise the live thread pool directly: the first times the receiver's
+  drop against four real, running enumerations; the second's entire
+  assertion is that dropping every handle mid-enumeration completes at all,
+  which is exactly what a self-wait in the worker-reports design would
+  violate.
+
+Two test-construction bugs surfaced and were fixed, not production defects:
+a live test undersized its completion ring against real entries a worker
+delivers before the test ever drains them, and a worker-reports scenario
+was missing the second `drain_submissions` call that applies the retire
+message `report_quantum` posts but does not itself service.
+
+302 unit tests plus the crate doctest pass, stable across thirty consecutive
+runs and leaving no scratch directories behind; targeted all-target Clippy
+and `cargo fmt --check` are clean. This completes M6.
+
+## Moved 2026-08-27 -- file-enumeration real-Windows integration suite
+
+### <a id="fe-13"></a>FE-13 -- Build the real-Windows integration suite. *(completed 2026-08-27 22:33:56 UTC-04:00)*
+
+A new integration test crate under
+[tests/integration/](crates/windows-file-enumeration-sys/tests/integration/)
+(`main.rs` plus eight scenario modules, using the `tests/<name>/main.rs`
+layout so `mod` declarations resolve). Built entirely on the crate's public
+API, since an integration test is a separate crate and cannot reach
+`src/scratch.rs` or `src/testing.rs` (both `pub(crate)`); a dedicated
+`support.rs` supplies its own self-deleting `Scratch` fixture and drain
+helpers, including `drain_many` for scenarios running several enumerations
+concurrently on a shared receiver.
+
+- `directories.rs` -- ten independent ordinary directories on one session,
+  an empty directory, a single-entry directory, and files mixed with
+  subdirectories reported with the right `EntryType`.
+- `scale.rs` -- 4,000 entries in one directory (forcing multi-refill),
+  a completion ring at `MINIMUM_COMPLETION_RING_CAPACITY` against 500 entries
+  (forcing sustained park/resume), and `MINIMUM_BUFFER_CAPACITY` /
+  `DEFAULT_BUFFER_CAPACITY` agreeing on the same directory.
+- `cancellation.rs` -- cancel before any quantum runs, cancel racing a real
+  4,000-entry enumeration on the live pool, cancel after completion (no
+  second terminal), and receiver drop against a live running enumeration.
+- `paths.rs` -- a missing directory, a file opened as a directory, a
+  present-but-often-restricted system directory (accepting either outcome,
+  since the test host's ACL is not this crate's to assume), a `\\?\` path
+  built to exceed 260 characters, an ordinary path rejected for exceeding it,
+  and a filename holding an unpaired UTF-16 surrogate built via
+  `OsStringExt::from_wide`, round-tripped byte-for-byte.
+- `reparse.rs` -- a real directory junction (via `mklink /J`, needing no
+  elevated privilege, unlike a symlink), confirming the reparse attribute,
+  `is_reparse_point()`, and `IO_REPARSE_TAG_MOUNT_POINT`.
+- `predicates.rs` -- all six `ComparisonOperator` variants against known file
+  sizes; both `CaseSensitivity` modes; `IsType`, `NameInSet`, a wildcard
+  `AnyRun` pattern, `AttributesAllSet`/`AttributesAllClear` against a real
+  read-only file, `IsReparsePoint` negated, and all four `TimestampField`
+  variants.
+- `metadata.rs` -- logical size cross-checked against `std::fs::metadata`,
+  every inline field reachable for both a file and a directory,
+  `BestEffort` identity volume-qualified on a local disk, and two real files'
+  identities sharing one volume serial while carrying distinct file IDs.
+- `capability.rs` -- documents, per the user's explicit decision, that
+  `UnsupportedExtendedDirectoryInfo` and `RecordTooLarge` are proven only at
+  the unit level (FE-11, synthetic Win32 codes): no incompatible filesystem
+  or redirector is available in this environment to reach either
+  organically, and `MINIMUM_BUFFER_CAPACITY` structurally rules out the
+  latter through the crate's own public buffer sizing regardless. Tests that
+  a below-minimum buffer clamps up rather than ever reaching it.
+
+One test-construction issue surfaced while writing `directories.rs`: the
+ten-concurrent-enumerations scenario shares one receiver across enumerations
+that interleave arbitrarily, which a single-enumeration-only drain helper
+cannot assume; `drain_many` was added rather than weakening
+`drain_to_terminal`'s per-enumeration ordering check, which every
+single-enumeration scenario still depends on.
+
+302 crate unit tests, 31 new integration tests, and the crate doctest pass;
+stable across eight consecutive integration runs (~1s each) and leaving no
+scratch directories behind. Targeted all-target Clippy and
+`cargo fmt --check` are clean.
+
+
+## Moved 2026-08-27 -- file-enumeration Globazog adapter demonstration
+
+### <a id="fe-14"></a>FE-14 -- Discharge the D-15 Globazog acceptance gate with a real adapter demonstration, not a metadata cross-check. *(completed 2026-08-27 22:54:47 UTC-04:00)*
+
+A hand-reconstructed adapter under
+[tests/integration/globazog_adapter/](crates/windows-file-enumeration-sys/tests/integration/globazog_adapter.rs)
+reimplements Globazog's real Windows one-directory backend's public value
+types and predicate vocabulary and exercises the live native engine through
+it. Globazog is never an actual dependency of this workspace -- it is meant
+to consume this crate, not the reverse -- so every reconstructed type carries
+a doc comment citing the exact file it was copied from at `MikeGrier/globazog-rs`
+commit `55a0b1aec7a93051a675852636ab41a6437440fb`
+(`crates/globazog/src/{sys,sys/win,predicate,syntax,syntax/decode,error}.rs`):
+
+- `types.rs` -- `DirEntry`, `DirScan`, `EntryFailure`, `EnumPlan`, `FileId`,
+  `decode_utf16` (ported verbatim to preserve Globazog's unpaired-surrogate
+  handling), its inverse `encode_codepoint_to_wtf16` (written from scratch,
+  Globazog never needs that direction), and the FILETIME-to-Unix-nanos
+  conversion Globazog's real backend uses.
+- `predicate_types.rs` -- `CaseSensitivity`, `Token`, `Segment`, `Cmp`,
+  `TimeField`, `Leaf`, with `Leaf::Depth` deliberately excluded: it is a
+  property of Globazog's own recursive multi-directory traversal engine, not
+  something a one-directory backend can ever be asked to answer.
+- `translate.rs` -- `translate_leaf`/`translate_segment`/`translate_leaves`,
+  including the `EntryType::Other` case: Windows has no third entry kind, so
+  a non-negated `IsType{ty:Other}` translates to a self-contradictory
+  attribute-clause pair (the directory bit required both set and clear in
+  the same conjunction) rather than being silently dropped.
+- `adapter.rs` -- `enumerate_dir_native_via_wfe(_with_predicate)`,
+  `translate_entry`, and `finish_scan` as a pure function separated from live
+  I/O specifically so the error-shape contract can be unit-tested without a
+  live filesystem fault.
+
+Two properties D-15 requires could not be reached organically in this
+environment, and both are narrowed to a proof that still covers the
+contract, matching the precedent FE-13's `capability.rs` set:
+
+- A genuine live late-failure (`TerminalOutcome::Failed` arriving after some
+  entries were already delivered) needs a filesystem or redirector fault this
+  environment cannot manufacture on demand -- proven instead via
+  `tests_errors.rs` calling `finish_scan` directly with hand-built
+  `TerminalOutcome::Failed` values, both with and without prior entries.
+- "No path opens an individual entry" (inherited from D-3) is proven via
+  `tests_no_per_entry_open.rs`: a directory junction whose target does not
+  exist is still listed successfully by the batched directory query, which
+  would not hold if entries were resolved individually.
+
+Two test-construction bugs surfaced while writing `tests_metadata.rs`, not
+production defects: a `target` directory created as a junction's destination
+was itself a fourth top-level listable entry alongside the three the test
+expected, fixed by nesting it under a subdirectory; and passing a compound
+slash-containing string (`"plain-dir/target"`) to the shared `Scratch::subdir`
+helper produced a path `cmd.exe`'s own command-line re-parsing of the
+`mklink /J` invocation mis-tokenized around, fixed by composing the nested
+path with `PathBuf::join` instead so every component keeps native `\`
+separators.
+
+53 new integration tests pass alongside the existing 302 unit tests and the
+crate doctest, stable across ten consecutive integration runs and leaving no
+scratch directories or junctions behind. Targeted all-target Clippy and
+`cargo fmt --check` are clean. `DESIGN-NOTES.md`'s Globazog replacement gate
+section and `DESIGN-RATIONALE.md` record the discharge and both acknowledged
+limitations.
+
+
+## Moved 2026-08-27 -- file-enumeration API documentation and changelog baseline
+
+### <a id="fe-15"></a>FE-15 -- Complete crate-level API and safety documentation, README examples covering ordinary and traversal-style submission, and the changelog baseline. *(completed 2026-08-27 23:03:43 UTC-04:00)*
+
+Removed the stale M5/M6 shell caveat from `lib.rs`'s top doc comment (it said
+the session and native engine were "scheduled by M5 and M6," both long since
+implemented) and replaced it with a `# Safety` section stating the actual
+guarantee: the public surface is entirely safe, every native call is confined
+to one caller-owned size-checked buffer, no entry is ever opened
+individually, and a submitted enumeration's security context is captured
+synchronously on the submitter's own thread before the request becomes
+visible to any worker -- with a pointer to `DESIGN-NOTES.md`/
+`DESIGN-RATIONALE.md` for the unsafe internals that make it true.
+
+Added two new doctested examples to `lib.rs` alongside the existing
+predicate-building one: "Running an enumeration" (`Session::new`,
+`try_begin`, draining to `Completion::Terminal`) and "Traversal-style
+submission" (`ImpersonationToken::capture` once, reused via
+`try_begin_with_token` across several directories instead of a fresh capture
+per directory). Both compile under `cargo test --doc` (3 doctests, up from
+1).
+
+`README.md`'s "Status" section, which still named FE-3 through FE-11 as in
+progress, now states the public API, session, native engine, and Globazog
+adapter demonstration are complete, with only FE-16 (publication validation)
+remaining. Added a matching "Examples" section mirroring both `lib.rs`
+doctests for a reader who only opens the README.
+
+`CHANGELOG.md` was empty (just a heading); gave it the same boilerplate
+release-please baseline every other not-yet-released crate in this
+workspace carries (`windows-impersonation-token-sys`'s, verbatim).
+
+302 unit tests, 53 integration tests, and now 3 doctests pass. Targeted
+all-target Clippy and `cargo fmt --check` are clean; `missing_docs` remains
+warning-free with no new suppressions needed.
+
+
+## Moved 2026-08-27 -- file-enumeration publication validation
+
+### <a id="fe-16"></a>FE-16 -- Validate publication: packaged contents, docs.rs metadata, release automation, sibling-dependency version ordering against crates.io, and `cargo publish --dry-run`. *(completed 2026-08-27 23:30:48 UTC-04:00)*
+
+`cargo package --list` confirms the packaged contents: 71 files -- every
+git-tracked file under the crate (`Cargo.toml`, `README.md`, `CHANGELOG.md`,
+`PLANS.md`/`COMPLETED-PLANS.md`, `DESIGN-NOTES.md`/`DESIGN-RATIONALE.md`,
+every `src/*.rs` including the sibling `tests.rs` modules, every
+`tests/integration/**/*.rs`) plus the three files Cargo generates for every
+package (`.cargo_vcs_info.json`, `Cargo.lock`, `Cargo.toml.orig`). Nothing
+unexpected is included or missing.
+
+`Cargo.toml`'s `[package.metadata.docs.rs]` pins `x86_64-pc-windows-msvc` as
+both the default and only target -- required because the crate is
+`cfg(windows)`-only and docs.rs's default Linux target would otherwise render
+an empty crate. `description`, `keywords`, `categories`, `readme`,
+`documentation`, `repository`, and `homepage` are all present and accurate.
+
+Release automation is registered consistently in
+[release-please-config.json](release-please-config.json),
+[.release-please-manifest.json](.release-please-manifest.json), and
+[.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml)
+(both the tag trigger and the `workflow_dispatch` crate list), matching every
+sibling crate's entry shape exactly.
+
+Sibling-dependency version requirements were checked against what is actually
+live on crates.io: `windows-threadpool-sys = "0.1.2"` is satisfied by the
+published `0.1.3`; `wtf-string = "0.1.0"` is satisfied by the published
+`0.1.0`. `windows-impersonation-token-sys = "0.1.0"` is **not yet
+satisfiable** -- the crate has never been published (confirmed via the
+crates.io API returning 404, `gh release list` showing no
+`windows-impersonation-token-sys-v*` release, and no matching tag in this
+repository) -- because this entire feature branch, which introduces both
+`windows-impersonation-token-sys` and `windows-file-enumeration-sys`, has not
+yet merged to `main`, so release-please has never run a release cycle for
+either crate. `origin/main` has independently advanced its own release cycle
+in the meantime (`windows-threadpool-sys` to `0.1.3`, `windows-overlapped-io-sys`
+to `0.1.3`, `windows-ioring-sys` to `0.1.2`, `windows-file-watcher` to `0.1.2`),
+which is expected and does not affect this crate's dependency requirements.
+
+`cargo publish --dry-run` therefore fails at the dependency-resolution step
+with `no matching package named windows-impersonation-token-sys found`. This
+was confirmed to be exactly that -- and not a packaging defect -- by cross-
+checking against `cargo package --list` (which succeeds with the full,
+correct 71-file list above) and by inspecting the partial archive cargo
+leaves behind in `target/package/tmp-crate/` when the dependency-resolution
+step aborts mid-write: an incomplete 3-file fragment, not a real content gap.
+This is the user-acknowledged, explicitly recorded blocker for this item: a
+full `cargo publish --dry-run` cannot go green until this branch merges to
+`main` and a release-please release ships `windows-impersonation-token-sys`
+to crates.io first. `publish-crate.yml`'s existing "wait for workspace-sibling
+dependencies on crates.io" step already makes the real publish order robust
+to this exact ordering constraint (it polls the sparse index and blocks a
+dependent crate's tag-triggered publish until every workspace-sibling
+dependency it declares is live at the required version), so no workflow
+change is needed -- only time, and the merge this branch is waiting on.
+
+Everything else validated cleanly: the default workspace's all-target check
+passes with no warnings in both debug and release, and the crate's own
+suite -- 302 unit tests, 53 integration tests, and 3 doctests -- passes,
+with targeted all-target Clippy and `cargo fmt --check` clean. This completes
+M7, and with it the whole M1-M7 arc this checklist file tracked.
+
+## Moved 2026-08-27 -- M6 and M7 milestone index archived
+
+The native enumeration engine (M6) and verification/Globazog
+acceptance/publication (M7) milestone headings and item indexes, relocated
+from [CHECKLIST.md](CHECKLIST.md) now that every item in both is complete and
+has its own detailed record above (or, for M6, in the earlier "native
+enumeration engine" moved section).
+
+### M6 -- Native enumeration engine
+
+M5's shell left a latent hazard that M6 had to remove before it could install
+a worker: `leave_quantum` and `complete` let a worker mutate the registry and
+drop its own thread-pool object from inside its own callback, which
+self-waits and frees the executing closure. FE-7 closed that by making the
+worker a reporter and the submission-ring servicer the sole registry
+authority (D-16, D-17).
+
+- [x] **FE-7** -- Make the worker a reporter and the servicer the sole registry authority, and give the session something to run work on. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-7)
+- [x] **FE-8** -- Allocate the fixed native buffer and get one directory open and reading. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-8)
+- [x] **FE-9** -- Parse what the buffer returns and deliver entries. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-9)
+- [x] **FE-10** -- Bound each quantum and make backpressure lossless. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-10)
+- [x] **FE-11** -- Complete the failure and capability taxonomy the contract settled. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-11)
+- [x] **FE-12** -- Complete cancellation, abandonment, and teardown around the live engine. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-12)
+
+### M7 -- Verification, Globazog acceptance, and publication
+
+- [x] **FE-13** -- Build the real-Windows integration suite. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-13)
+- [x] **FE-14** -- Discharge the D-15 Globazog acceptance gate with a real adapter demonstration, not a metadata cross-check. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-14)
+- [x] **FE-15** -- Complete crate-level API and safety documentation, README examples covering ordinary and traversal-style submission, and the changelog baseline. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-15)
+- [x] **FE-16** -- Validate publication: packaged contents, docs.rs metadata, release automation, sibling-dependency version ordering against crates.io, and `cargo publish --dry-run`. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-16)
+
 ## <a id="moved-2026-08-27-m1"></a>Moved 2026-08-27 -- M1: amplify PR #42's contract-specification findings across the delivery-contract crates
 
 PR #42 ("Testability: consumer test surface for windows-file-watcher + example test harness crate") took
