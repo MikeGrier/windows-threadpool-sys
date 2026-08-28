@@ -7,6 +7,7 @@
 //! [`CapturedHandle`] is that primitive: it duplicates a caller's handle at
 //! capture, owns the duplicate for its life, and closes it on drop.
 
+use std::ffi::c_void;
 use std::fmt;
 use std::io;
 use std::os::windows::io::{
@@ -268,6 +269,14 @@ impl CapturedHandle {
     #[must_use]
     pub fn into_owned_handle(self) -> OwnedHandle {
         self.duplicate
+    }
+
+    /// The duplicate's raw value, for passing to a Win32 call.
+    ///
+    /// The handle is borrowed, not transferred: it stays owned by this value
+    /// and must not outlive it or be closed by the caller.
+    pub(crate) fn raw(&self) -> HANDLE {
+        self.duplicate.as_raw_handle().cast::<c_void>()
     }
 }
 

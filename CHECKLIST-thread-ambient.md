@@ -289,7 +289,7 @@ assumed:
 
 Entries 1-4 of the audited list. Each depends on M24's foundations and on nothing else.
 
-- [ ] **M25.1** -- The `CreateFileW` entry, over the complete parameter set: path, desired access, share
+- [x] **M25.1** -- The `CreateFileW` entry, over the complete parameter set: path, desired access, share
   mode, security attributes, creation disposition, flags and attributes, and template file. It must express
   all three audited flag shapes, including the `FILE_FLAG_OVERLAPPED` split -- the watcher's open is
   destined for a completion port and the other two are not, and that difference is a request field rather

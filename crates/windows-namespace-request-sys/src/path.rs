@@ -200,6 +200,14 @@ impl PreparedPath {
     pub fn into_wtf16(self) -> Wtf16String {
         self.units
     }
+
+    /// A NUL-terminated pointer to the path, for passing to a Win32 call.
+    ///
+    /// Borrows from this value and must not outlive it. Preparation rejects an
+    /// interior NUL, so the terminator is unambiguous.
+    pub(crate) fn as_wtf16_terminated(&self) -> *const u16 {
+        self.units.as_terminated_ptr()
+    }
 }
 
 /// Validate and, where the contract calls for it, resolve a caller's path.
