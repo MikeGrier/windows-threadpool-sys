@@ -69,6 +69,7 @@
 use std::ffi::c_void;
 use std::fmt;
 use std::io;
+use std::marker::PhantomData;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::OnceLock;
 
@@ -345,14 +346,15 @@ where
 ///
 /// Returns a [`TransactionError`] if the transaction could not be installed, in
 /// which case the thread is untouched.
-pub fn install(
-    captured: &Captured<TransactionContext>,
-) -> Result<TransactionGuard, TransactionError> {
+pub fn install<'captured>(
+    captured: &'captured Captured<TransactionContext>,
+) -> Result<TransactionGuard<'captured>, TransactionError> {
     let desired = match captured {
         Captured::NotCaptured => {
             return Ok(TransactionGuard {
                 previous: None,
                 released: false,
+                captured: PhantomData,
             });
         }
         Captured::Absent => std::ptr::null_mut(),
@@ -367,21 +369,68 @@ pub fn install(
     Ok(TransactionGuard {
         previous: Some(previous),
         released: false,
+        captured: PhantomData,
     })
 }
 
 /// Holds an installed thread transaction until released.
 ///
 /// Not `Send`: it restores the thread it was created on.
+///
+/// # Why it borrows the captured context
+///
+/// The installed value is a raw `HANDLE` owned by the
+/// [`TransactionContext`] the guard was built from. Windows recycles handle
+/// values aggressively, so if that context were dropped while the guard were
+/// still alive, the thread would be left enlisting work in whatever kernel
+/// object had since inherited the value -- silently, and reachable from safe
+/// code.
+///
+/// The lifetime is what forbids it. Owning a duplicate fixes the *capture*
+/// side of that problem (see this module's documentation); this fixes the
+/// *installed* side, which is the same hazard one step later.
+///
+/// # Examples
+///
+/// Keeping the context alive alongside the guard is the correct shape:
+///
+/// ```no_run
+/// use windows_thread_ambient_sys::transaction;
+///
+/// let captured = transaction::capture()?;
+/// let guard = transaction::install(&captured)?;
+/// // ... transacted work happens here ...
+/// guard.release()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// Dropping the context while its handle is still installed would leave the
+/// thread enlisting work in whatever kernel object Windows had since recycled
+/// that handle value onto. The borrow is what forbids it, so this does not
+/// compile:
+///
+/// ```compile_fail,E0597
+/// use windows_thread_ambient_sys::transaction;
+///
+/// let guard = {
+///     let captured = transaction::capture().expect("capture");
+///     transaction::install(&captured).expect("install")
+///     // `captured` is dropped here, closing the handle the guard installed.
+/// };
+/// let _ = guard.release();
+/// ```
 #[must_use = "dropping the guard restores the transaction but discards any failure to do so"]
 #[derive(Debug)]
-pub struct TransactionGuard {
+pub struct TransactionGuard<'captured> {
     /// `None` when nothing was installed, so nothing is restored either.
     previous: Option<HANDLE>,
     released: bool,
+    /// Keeps the installed handle's owner alive for as long as it is
+    /// installed. Carries no data.
+    captured: PhantomData<&'captured Captured<TransactionContext>>,
 }
 
-impl TransactionGuard {
+impl TransactionGuard<'_> {
     /// Restore the thread's entry transaction, including "none".
     ///
     /// # Errors
@@ -405,7 +454,7 @@ impl TransactionGuard {
     }
 }
 
-impl Drop for TransactionGuard {
+impl Drop for TransactionGuard<'_> {
     fn drop(&mut self) {
         if !self.released {
             // Best effort: a destructor has no caller to report to.
