@@ -45,6 +45,86 @@ runs a continuation), this crate exposes the mechanism and documents the trade-o
 | <a id="d-20"></a>D-20 | **The completion event is reachable without surrendering the ring, via `IoRing::completion_event() -> io::Result<OwnedHandle>`: the ring creates and owns the event, and hands the caller a duplicate.** This opens the shape D-3 accidentally closed off -- a caller that owns its ring *and* can wait on the ring alongside other handles (`WaitForMultipleObjects`), which is what any consumer mixing ring I/O with non-ring I/O needs, since `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` orders SQEs against SQEs only and cannot order across the two paths. This is not a third delivery architecture: it is **Model B with a multiplexed wakeup source**, changing only what the domain thread blocks on, never who owns, submits, or drains. Rejected: taking a caller-supplied `BorrowedHandle<'_>` (the borrow ends at return but the kernel retains the handle for the ring's life -- a use-after-free reachable from safe code), and promoting `raw_handle()` to `pub` (exports the handle for arbitrary use, moves the capability check out of the crate, and pushes `unsafe` onto every consumer -- while also forfeiting the D-19 protections below). The event is signalled once before the method returns, so a caller that had already submitted never misses the backlog; the cost is one spurious wakeup at setup, which the contract requires callers to tolerate anyway. `EventDelivery` is re-expressed on top of this rather than remaining the only route to it. |
 | <a id="d-21"></a>D-21 | **Auto-reset, and exactly one waiter per ring.** Forced by D-19 rather than chosen: a manual-reset event would stay signalled after the drain and spin the waiter, and two threads waiting on one ring's event cannot be made correct, because the drain that restores the empty state -- and therefore re-arms the edge -- must run to empty exactly once. The consumer whose request prompted this confirmed a single waiter, serialized behind their own lock, and separately flagged that a future move to less serialization on their side would reopen the question. Recorded so that a later multi-waiter request is recognised as a genuine design change rather than a flag. No work is scheduled against that possibility. |
 | <a id="d-22"></a>D-22 | **`windows-threadpool-sys` becomes an optional dependency behind a default-on `threadpool` feature.** `EventDelivery` is its only consumer, so a Model B consumer currently links a thread pool it never uses. Default-on keeps the change additive: no existing consumer is affected, and a caller opts out with `default-features = false`. Recorded with its rationale corrected: the requesting consumer argued a runtime "correctness-of-posture" cost, and that is false -- linking the crate creates no threads, since the Win32 default pool is a process-wide facility instantiated lazily on first use. The gate is justified on layering alone (a ring wrapper does not intrinsically depend on a thread pool), and its real cost is that CI must build and test both feature combinations or the `default-features = false` path rots silently. |
+| <a id="d-23"></a>D-23 | **A flush is not a durability barrier unless it carries `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`. Measured.** A flush pushed after a batch of writes, with no barrier flag, routinely completes while many of those writes are still outstanding -- observed at 17 of 32 and 23 of 32 writes finishing *after* the flush's own completion. So the natural spelling, "push the writes, then push a flush", silently does not make those writes durable. See "Durability on the ring" below. This is a property of the operation, not of any wrapper, and it is the single most dangerous undocumented fact this crate has found: the failure is invisible except after power loss. |
+| <a id="d-24"></a>D-24 | **`IOSQE_FLAGS_DRAIN_PRECEDING_OPS` is a full, ring-wide barrier that spans submissions -- not a one-sided wait, and not scoped to a file. Measured.** Operations pushed *after* a drained op are held until it completes, even when they target an entirely different file, which rules out filesystem-level serialization as the cause. The barrier also reaches every outstanding operation on the ring rather than only the current submission batch: results were identical whether the sequence went in one `submit()` or three. This matches `io_uring`'s `IOSQE_IO_DRAIN` and it means **cross-epoch pipelining through a single ring is not available** -- a consumer that closes an epoch with a drained flush stalls the whole ring for its duration. The alternatives, and their costs, are in "Durability on the ring" below. |
+| <a id="d-25"></a>D-25 | **Every durability parameter the kernel exposes is exposed by this crate, and the barrier decision is never taken by default.** `BuildIoRingWriteFile` takes `FILE_WRITE_FLAGS` and `BuildIoRingFlushFile` takes a `FILE_FLUSH_MODE`; this crate hardcoded `FILE_WRITE_FLAGS_NONE` and `FILE_FLUSH_DEFAULT`, so a consumer reading the API saw ordering but no way to express durability at all, and reasonably concluded the ring could not express it. That is a PLATFORM INTEGRITY failure -- the platform narrowed to what the crate's own examples needed -- and it is the second instance found in one review cycle, which makes it a pattern rather than an accident. Given [D-23](#d-23), `Batch::flush` additionally must not have a default spelling that produces a non-covering flush: the barrier decision is made explicit at the call site rather than inherited from `PushOptions::default()`. Queued as M12. |
+| <a id="d-26"></a>D-26 | **Windows mechanism belongs in this crate; durability policy belongs to the consumer; an example is how the knowledge crosses between them.** The dividing test is whether the answer depends on *how Windows behaves* or on *the consumer's workload and contract*. Ours: exposing the kernel's parameters, stating the measured contracts ([D-19](#d-19), [D-23](#d-23), [D-24](#d-24)), and making the footguns hard to hold. Theirs: epoch bookkeeping, which barrier strategy to pay for, how durability is reported, and how non-ring operations are sequenced against ring ones -- all of which depend on epoch sizes and latency targets, and so would be policy baked into a primitive ([D-8](#d-8) refuses exactly this). The residue is that a consumer must otherwise rediscover the same composition, so the transfer vehicle is a worked example (M13/M14), not a library: it demonstrates the pattern without this crate owning the policy. |
+| <a id="d-27"></a>D-27 | **One ring per thread is userspace's proxy for one ring per CPU, and pinning is what makes the proxy real.** Kernels affine hot structures to *CPUs*, not threads, because per-CPU exclusion is free (disable preemption, or raise IRQL) and because interrupt context has no meaningful owning thread. The hardware agrees: NVMe queue pairs are per-CPU with their completion interrupt vector routed to that CPU. Userspace has no per-CPU primitive and cannot disable preemption, so the only durable ownership unit available is the thread -- which is why the SPDK/Seastar discipline pins one. This is the reason under guidance this crate already gives ([D-8](#d-8), and the L3-domain advice): an *unpinned* per-thread ring still gets the single-producer safety the SQ/CQ protocol requires, but none of the locality that motivated the structure, and the interesting count is therefore cores or LLC domains rather than threads. |
+
+## Durability on the ring
+
+Written for consumers, like the two sections that follow it, and for the same reason: the default
+spelling is wrong and the failure is invisible until power is lost.
+
+### What the ring offers
+
+Three separate things, which are routinely conflated and must not be:
+
+| Concept | Meaning | On this ring |
+|---|---|---|
+| **Ordering** | does B start after A completes | `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` only |
+| **Durability** | data is on non-volatile media | the flush operation only |
+| **Atomicity** | a torn write is impossible across power loss | not exposed; a device property (NVMe `AWUN`/`AWUPF`) |
+
+**There is no FUA.** `BuildIoRingWriteFile`'s entire flag set is `{FILE_WRITE_FLAGS_NONE,
+FILE_WRITE_FLAGS_WRITE_THROUGH}`, and write-through is a cache-bypass directive to the OS, not a
+device-level durability guarantee -- whether it becomes a Force Unit Access bit on the underlying
+command depends on the driver, the volume, and whether the device's write cache is enabled. It is
+useful as a latency-shaping knob (data already at the device shortens the subsequent flush) and must
+never be treated as a durability marker.
+
+**So the flush operation is the only durability primitive the ring has.** That is a narrowing
+constraint, and it is worth stating plainly rather than leaving a consumer to discover it by
+elimination.
+
+### The two measured facts
+
+[D-23](#d-23): **an unflagged flush does not cover preceding writes.** It is an ordinary operation
+competing with them, and it frequently wins.
+
+[D-24](#d-24): **the barrier that fixes that is a full ring-wide stall.** Operations pushed after a
+drained flush are held until it completes, even against unrelated files.
+
+Together these mean the correct durability construction is also the expensive one, and a consumer
+must choose deliberately how to pay for it.
+
+### The construction this implies
+
+Durability is a property of an **epoch**, never of an individual write, because there is no per-write
+primitive to make it one:
+
+1. Writes stream with no durability flag and are tagged with an epoch number.
+2. Closing epoch *N* pushes a flush **with `drain_preceding`**, carrying *N* as its identity.
+3. When that flush's completion is observed, every write in epochs `<= N` is durable.
+4. Callers wait on epochs, not on writes.
+
+One expensive operation amortized over many writes -- the group-commit shape every write-ahead log
+uses. Note that step 2's barrier is not optional decoration: without it, step 3 is false.
+
+### Paying for the barrier
+
+Because [D-24](#d-24) makes the drained flush a ring-wide stall, there are three strategies and no
+free one. Which is right depends on epoch size and latency target, which is why this crate exposes
+the mechanism and declines to choose ([D-8](#d-8), [D-26](#d-26)):
+
+| Strategy | Cost | Suits |
+|---|---|---|
+| **Drained flush** | ring stalls for the flush's duration | large epochs, where the stall amortizes |
+| **Host sequencing** -- observe the epoch's write completions, then push an unflagged flush | one userspace round trip per epoch (completion must reach your thread: wake, schedule, syscall) | any epoch big enough that ~tens of microseconds is noise |
+| **Alternating rings** -- one drains while the other fills | doubled registration, split buffer pools, two completion events to wait on | latency-sensitive work that cannot tolerate either |
+
+Host sequencing looks worst per-operation and is often right per-epoch: group commit means one
+ordering point per epoch rather than per write.
+
+### Two device facts worth querying before doing any of this
+
+- **Volatile write cache disabled?** Then writes are already durable and flushes are unnecessary. A
+  consumer that flushes anyway is paying commit latency for nothing.
+- **Atomic write unit.** A write larger than the device's power-fail atomic unit can tear, which
+  decides how large a commit record can be before it needs its own checksum and replay.
+
+Neither is exposed by this crate today, and neither is reachable through the ring API; a consumer
+that needs them queries the device directly.
 
 ## The completion event is an edge, not a level
 
@@ -186,6 +266,48 @@ race, because there is nothing to re-arm.
 **IoRing is shaped for Model B.** The submission queue not being thread-safe, registration being per-ring,
 and there being exactly one completion event per ring are not limitations to work around; they are the API
 assuming a shared-nothing consumer.
+
+### Why per-thread, and why pinning is not optional ([D-27](#d-27))
+
+Model B's "one ring per thread" is usually presented as a convention. It is not -- it is userspace
+reconstructing a discipline that exists one layer down, and knowing that changes how you size it.
+
+**Kernels affine hot structures to CPUs, not threads.** Per-CPU state gets mutual exclusion for free
+(disable preemption on Linux, raise IRQL on Windows) with no atomics and no contended cache line, and much
+of the hot work has no owning thread to speak of -- an interrupt or DPC runs in whatever context the CPU
+was in. Hence per-CPU run queues, per-CPU allocator caches, per-CPU deferred-work queues.
+
+**The hardware agrees.** NVMe queue pairs are per-CPU, with each pair's completion interrupt routed by its
+own MSI-X vector to that same CPU, so a completion lands where the command was submitted and the context is
+still cache-warm. The affinity that produces the benefit is CPU-to-queue-to-interrupt-vector, established
+in the device's programming. Threads are nowhere in it.
+
+**Userspace has no per-CPU primitive.** It cannot disable preemption and its threads migrate. The only
+durable ownership unit available is the thread -- so a *pinned* thread is the best available proxy for a
+CPU, and that is the whole content of the SPDK/Seastar discipline.
+
+Two consequences follow, and they are why this matters beyond terminology:
+
+- **An unpinned per-thread ring keeps the safety and loses the point.** The SQ/CQ head/tail protocol is
+  single-producer, and per-thread ownership satisfies that whether or not the thread is pinned. But the
+  cache and NUMA locality that motivated the whole structure comes from the pinning, not from the
+  per-thread split. This is a configuration people ship by accident.
+- **The interesting count is cores, or LLC domains -- not threads.** Which is exactly what
+  [D-8](#d-8) and the L3-domain guidance below already recommend; this is the reason underneath them.
+
+### The two models are Windows' own two completion mechanisms
+
+Worth noting because it makes the taxonomy less arbitrary than it looks. Windows has long had exactly two
+ways to finish an I/O:
+
+- **A special kernel APC delivered to the originating thread** -- work returns to the thread that issued
+  it. That is Model B's shape, and it is the direct analogue of Linux's `task_work`.
+- **A completion packet posted to an I/O completion port's queue**, taken by whichever pool thread is
+  available. That is Model A, and it is why [D-9](#d-9) is right that the device-to-CPU association is
+  already gone by the time a packet enters the port.
+
+So Model A and Model B are not this crate's invention, nor `io_uring`'s. They are the two shapes the
+platform has always had, showing up again at the ring.
 
 ### Why the three-way tension dissolves in Model B
 

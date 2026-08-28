@@ -9,8 +9,8 @@ Amends [D-3](../DESIGN-NOTES.md#d-3). Work queued as M11 in [CHECKLIST.md](../CH
 
 ## How it started
 
-An external consumer -- a storage substrate building a Windows backend over `IoRing` -- sent a
-proposal against published 0.1.2 titled "A third delivery shape". Their claim: the crate pairs
+An external consumer building a Windows backend over `IoRing` sent a proposal against published
+0.1.2 titled "A third delivery shape". Their claim: the crate pairs
 *who owns the ring* with *whether the completion event is reachable*, and the combination they
 need (caller owns the ring, caller waits on the event) is unreachable. They named the three
 source facts that close it off:
@@ -20,10 +20,11 @@ source facts that close it off:
 - `IoRing::raw_handle()` is `pub(crate)`.
 
 All three verified. Their motivating case is real and is one this crate's own scope statement
-already concedes: they issue `FSCTL_SET_ZERO_DATA` / `FSCTL_FILE_LEVEL_TRIM` through
-`DeviceIoControl` because the op table has no ioctl, and must order those against ring writes.
-`IOSQE_FLAGS_DRAIN_PRECEDING_OPS` cannot express that ordering, so it has to be enforced in host
-code -- and doing so without blocking requires waiting on both completion sources at once.
+already concedes: some of the operations they need have no entry in the ring's fixed op table, so
+they must be issued through `DeviceIoControl` and then ordered against ring writes.
+`IOSQE_FLAGS_DRAIN_PRECEDING_OPS` cannot express that ordering -- it orders SQEs against SQEs, and
+an overlapped completion is not an SQE -- so it has to be enforced in host code, and doing so
+without blocking requires waiting on both completion sources at once.
 
 ## The reframing
 

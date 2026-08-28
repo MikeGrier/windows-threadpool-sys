@@ -201,3 +201,133 @@ would mean writing a `SetEvent`-after-arm patch that M11.3 immediately deletes.
   completion event is waited on via `WaitForMultipleObjects` alongside a shutdown event, draining to empty
   on every pass. This is the shape the requesting consumer is building, and an example is what stops the
   next consumer from rediscovering [D-19](DESIGN-NOTES.md#d-19) the hard way.
+
+## M12 -- Durability: expose it, and stop defaulting it wrong
+
+The kernel exposes a durability parameter on writes (`FILE_WRITE_FLAGS`) and on flushes
+(`FILE_FLUSH_MODE`); this crate hardcodes both, so a consumer sees ordering but no way to express
+durability at all. Worse, [D-23](DESIGN-NOTES.md#d-23) measured that an unflagged flush does *not*
+cover preceding writes -- which makes `Batch::flush(&file, PushOptions::default())`, the obvious
+spelling, a silent data-loss bug rather than a missing feature.
+
+Decisions: [D-23](DESIGN-NOTES.md#d-23) through [D-25](DESIGN-NOTES.md#d-25). Measurements are
+reproduced by the drain spike recorded in
+[DESIGN-SESSION-2026-08-28-external-consumer-correspondence.md](design-sessions/DESIGN-SESSION-2026-08-28-external-consumer-correspondence.md).
+
+M12.1 is first because it is a correctness defect in shipped 0.1.2, not an enhancement.
+
+- [ ] **M12.1** -- Make the barrier decision explicit for flushes ([D-23](DESIGN-NOTES.md#d-23),
+  [D-25](DESIGN-NOTES.md#d-25)). Today `Batch::flush`/`flush_raw` accept `PushOptions`, whose default
+  carries no barrier, so the natural call produces a flush that can complete while the writes it is
+  meant to cover are still outstanding. Remove the ability to express that by accident: the flush
+  entry points take the barrier decision as a required argument (a two-variant type -- "covers
+  preceding operations" versus "unordered" -- not a `bool`, so the call site reads correctly), with
+  the unordered form documented as almost never what a caller wants. Rustdoc states the measured
+  contract and links [D-23](DESIGN-NOTES.md#d-23).
+
+- [ ] **M12.2** -- A test proving the contract rather than the implementation: writes plus an
+  *unordered* flush must be observable completing out of order (the spike sees 17-23 of 32), while
+  writes plus a *covering* flush must always place the flush last. Needs the spike's conditions --
+  `FILE_FLAG_NO_BUFFERING` over a pre-written extent -- because buffered or extending writes complete
+  in submission order and make the test vacuous. Guard it so that a machine where the control shows
+  no reordering skips rather than falsely passing.
+
+- [ ] **M12.3** -- Expose `FILE_WRITE_FLAGS` on the write entry points
+  ([D-25](DESIGN-NOTES.md#d-25)), as a typed option rather than a raw flag word. Rustdoc must state
+  what write-through is and is not: a first-level cache directive that shortens a later flush, **not**
+  a durability guarantee and **not** FUA -- the conflation that cost this exchange a wrong
+  recommendation.
+
+- [ ] **M12.4** -- Expose `FILE_FLUSH_MODE` on the flush entry points
+  ([D-25](DESIGN-NOTES.md#d-25)) as a typed enum (`Default`, `Data`, `MinMetadata`, `NoSync`).
+  `NoSync` needs the loudest documentation in the crate: it skips the device sync, so it is the one
+  mode that does not make anything durable. Note in passing that the existence of `NoSync` as a
+  distinct mode is the evidence that the other three do issue the sync.
+
+- [ ] **M12.5** -- Document durability across every place that states it, as a CONTRACT INTEGRITY
+  blast-radius sweep rather than a single edit: `lib.rs`, `README.md`, the flush and write rustdoc,
+  and the "Durability on the ring" section of [DESIGN-NOTES.md](DESIGN-NOTES.md). Three facts must
+  appear wherever durability is discussed -- the ring has no FUA, the flush is the only durability
+  primitive, and a flush without the barrier covers nothing. Grep `flush`, `durab`, `write_through`,
+  and `drain_preceding` across `src/`, `tests/`, `examples/`, and `*.md`.
+
+## M13 -- Worked example: consumer-side durability (an epoch-committed log)
+
+[D-26](DESIGN-NOTES.md#d-26) puts durability *policy* with the consumer and Windows *mechanism*
+here, which leaves a gap: without a demonstration, every consumer rediscovers the same composition,
+and the three measured contracts ([D-19](DESIGN-NOTES.md#d-19), [D-23](DESIGN-NOTES.md#d-23),
+[D-24](DESIGN-NOTES.md#d-24)) are exactly the kind that are learned by deadlock or by data loss.
+This milestone closes that gap with a worked example, not a library -- it demonstrates the pattern
+without this crate owning the policy.
+
+The example is a miniature write-ahead log: records appended through the ring, made durable by
+group commit, with durability reported by epoch. It is deliberately the shape a real consumer
+needs, and it exercises `windows-ioring-sys` and `windows-threadpool-sys` together.
+
+**Depends on M11.1** (`IoRing::completion_event`) and **M12.1** (explicit flush barrier). Do not
+start before both have landed; the example cannot be written correctly against the current surface.
+
+- [ ] **M13.1** -- Scaffolding under `examples/epoch_log/`, and the example's **own** durability
+  contract written down first, in its own words, per the Design Autonomy rule: *a record is durable
+  when the commit of the epoch containing it has completed*. State equally plainly what it does not
+  guarantee -- no per-record durability, no ordering between records within an epoch, and no
+  atomicity for a record larger than the device's power-fail atomic write unit. The contract is the
+  deliverable of this item; the code that follows implements it.
+
+- [ ] **M13.2** -- The append path: a record format with a length, a sequence number, and a checksum
+  (so a torn tail is detectable at replay), written into registered buffers and pushed via `Batch`.
+  Uses `register_buffers` and `write_registered` deliberately rather than the owned-`Vec` form,
+  since an externally-managed buffer arena is what a real consumer has.
+
+- [ ] **M13.3** -- Epoch bookkeeping and group commit: records join the currently open epoch; closing
+  epoch *N* pushes a **covering** flush (M12.1) carrying *N* as its identity; observing that flush's
+  completion marks every epoch `<= N` durable and releases anything waiting on them. This is the
+  construction in "Durability on the ring", and the item is complete when a caller can await
+  "epoch *N* is durable" and get a truthful answer.
+
+- [ ] **M13.4** -- The event loop: a caller-owned ring whose `completion_event` (M11.1) is waited on
+  by `WaitForMultipleObjects` alongside a shutdown event, draining to empty on **every** pass
+  regardless of which handle woke it. This is [D-19](DESIGN-NOTES.md#d-19) in practice, and the
+  example must make the drain-to-empty rule visually obvious -- it is the part a reader will
+  otherwise get wrong.
+
+- [ ] **M13.5** -- A replay-and-verify pass that reads the log back and checks the contract from
+  M13.1 holds: every record reported durable is present and its checksum validates, while records
+  after the last committed epoch may be absent or torn and the reader tolerates both. This is what
+  turns the example from a demonstration into evidence, and it is the only part of the example that
+  can actually catch a durability bug.
+
+## M14 -- Worked example: crossing the ring boundary, and paying for the barrier
+
+Second half of the example. M13 stays inside the ring; this milestone covers the two things that
+forced the original consumer conversation -- operations the ring cannot express, and the cost of
+[D-24](DESIGN-NOTES.md#d-24)'s full-barrier stall.
+
+**Depends on M13.**
+
+- [ ] **M14.1** -- Order a non-ring operation against ring epochs: an `FSCTL`-class operation issued
+  through [`windows-overlapped-io-sys`](../windows-overlapped-io-sys), sequenced at an epoch
+  boundary, with its completion waited on in the *same* multiplexed wait as the ring's. This is the
+  case `drain_preceding` cannot express at all ([D-24](DESIGN-NOTES.md#d-24) orders SQEs against
+  SQEs), and the reason `completion_event` exists. Add the sibling crate as a dev-dependency.
+
+- [ ] **M14.2** -- A control-plane and background path on `windows-threadpool-sys`: checkpointing or
+  reclamation driven from the pool while the pinned log thread keeps the data path. Demonstrates the
+  hybrid the design notes recommend -- Model B on the hot path, Model A for everything else -- in one
+  program, which nothing in the crate currently shows.
+
+- [ ] **M14.3** -- Implement all three epoch-commit strategies from "Durability on the ring" behind
+  one interface, selectable at run time: covering flush (ring stalls), host sequencing (a userspace
+  round trip per epoch), and alternating rings (neither, at the cost of doubled registration). The
+  point is that [D-24](DESIGN-NOTES.md#d-24) makes this a real fork with no free answer, and a
+  reader needs to see all three to choose.
+
+- [ ] **M14.4** -- Measure the three strategies on the running machine and print the comparison:
+  throughput, commit latency distribution, and ring idle time during the barrier. The example should
+  *demonstrate* the trade-off rather than assert it, and the numbers are machine-specific enough that
+  quoting ours would be misleading.
+
+- [ ] **M14.5** -- Document the example: a module-level walkthrough, a pointer from `README.md` and
+  from the "Durability on the ring" section of [DESIGN-NOTES.md](DESIGN-NOTES.md), and an explicit
+  statement that it is a demonstration of a pattern rather than a supported API -- so that nobody
+  vendors it and then expects this crate to maintain its policy choices.
