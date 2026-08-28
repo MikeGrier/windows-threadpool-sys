@@ -490,6 +490,43 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   dependent. Every measurement in this workspace so far was taken on ARM64. This subsumes M19.5's narrower
   request for the thread-pool numbers, and the binaries exist precisely so this needs no re-derivation.
 
+  **Blocked on hardware, not on work.** There is nothing to build first; it needs a machine this branch has
+  not been run on. Everything needed is committed, so it is a run-and-record task:
+
+  ```text
+  cargo test -p windows-platform-probes -- --include-ignored
+  cargo run  -p windows-platform-probes --bin probe-error-mode
+  cargo run  -p windows-platform-probes --bin probe-handle-state
+  cargo run  -p windows-platform-probes --bin probe-worker-context
+  cargo run  -p windows-platform-probes --bin probe-pool-growth
+  cargo run  -p windows-platform-probes --bin probe-device-map
+  cargo run  -p windows-platform-probes --bin probe-ioring
+  cargo run  -p windows-platform-probes --bin probe-cancel-io
+  ```
+
+  A **failing ignored test is the interesting result**, not a problem to fix: those tests assert the shape
+  of a finding, so a failure means the finding is architecture-dependent and the design note resting on it
+  needs revisiting. Record which, and where.
+
+  The ARM64 baseline to diff against, measured on Windows 11 Enterprise 10.0.28000,
+  `aarch64-pc-windows-msvc`, so the comparison has something concrete rather than a memory:
+
+  | Probe | ARM64 result |
+  |---|---|
+  | settable `SEM_` bits | all but `SEM_NOALIGNMENTFAULTEXCEPT`, which is rejected rather than silently dropped |
+  | worker ambient state | no thread token (`ERROR_NO_TOKEN` = 1008), error mode `0x0000` |
+  | pool growth, max 4 | 4 threads, slowest arrival ~214us |
+  | pool growth, max 8 | 4 arrive in <500us, then ~one per 165ms (651ms slowest) |
+  | raise 2 -> 6 while saturated | extra work started ~1.8ms after the raise |
+  | device map | `subst` letter resolves in our session (LUID `fd80c`), not in anonymous (`3e6`) |
+  | `IoRing` registration | **replaces**: index 0 usable, index 1 not, after re-registering one handle |
+  | `IoRing` thread agnosticism | operation completed with result `0x00000000` after its submitter exited |
+  | `CancelSynchronousIo`, idle thread | returned `ERROR_NOT_FOUND` (1168) -- point-in-time |
+  | `CancelSynchronousIo`, busy thread | 4 attempts all returned; **no wedge on this run**, though the original spike wedged for 12s |
+
+  The last row is the one to treat carefully: it is **nondeterministic**, which is exactly why that probe is
+  binary-only. A clean x64 run does not clear the design, and the probe's own output says so.
+
 - [ ] **M27.6** -- Migrate the completion-port fork measurement (Probe D): does associating a handle with
   an IOCP foreclose `IoRing` use of it? This is the evidence for `windows-namespace-request-sys` returning
   an opened handle **plain and unassociated**, so it is load-bearing for a shipped decision rather than a
