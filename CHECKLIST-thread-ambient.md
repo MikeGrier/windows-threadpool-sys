@@ -177,6 +177,15 @@ two crates are genuinely siblings rather than a stack.
   whether duplication failure is a construction error (it is: capture fails on the caller's thread, where
   the caller can still do something about it).
 
+  State plainly, in the type's own documentation, what a duplicate is and is not, because the distinction
+  is the one a caller reasoning in terms of value semantics will get wrong: **a path is a value and is
+  copied; a handle is a reference to a kernel object, and duplicating it shares that object rather than
+  cloning it.** A request is therefore self-contained with respect to *lifetime* -- it cannot be left
+  pointing at a closed handle -- and **not** isolated with respect to *state*. M26.1 measures where that
+  distinction has teeth. One property this design depends on is measured there and must be asserted here
+  too: closing the duplicate does **not** disturb the source, so a request owning a duplicate and dropping
+  it cannot damage the handle its caller kept.
+
 - [ ] **M24.3** -- Capture the security attributes. A caller's descriptor may be **absolute**, holding raw
   pointers to owner SID, group SID, DACL and SACL that are quite possibly on the caller's stack, so capture  normalises to **self-relative** and owns the resulting contiguous blob. Two traps must be handled rather
   than discovered: a self-relative descriptor requires DWORD alignment, which a plain boxed byte slice does
@@ -248,15 +257,29 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   outcome and does not parse, so both shapes collapse to one owned aligned buffer, and per-class parsing
   stays with the consumer that already owns it.
 
-  The real difficulty is elsewhere, and it falls directly out of M24.2. **The directory classes are
-  stateful on the file object** -- `FileIdExtdDirectoryRestartInfo` rewinds the scan and
-  `FileIdExtdDirectoryInfo` continues it -- and `DuplicateHandle` yields a second handle to the *same* file
-  object. So an owned duplicate gives a request self-containment but **not** isolation: it shares the
-  enumeration cursor with the handle it was duplicated from, and a consumer still enumerating on the
-  original will interleave with it. The entry must state that a duplicate is not an independent
-  enumeration and that an independent traversal needs a fresh open. This is also where the unresolved
-  ordering question binds hardest, since two such requests against one handle are order-dependent in a way
-  two independent opens are not.
+  The real difficulty is elsewhere, and it falls directly out of M24.2. **Measured**, not reasoned: an
+  earlier draft asserted the following from the object-manager model, which is precisely the kind of claim
+  this repository has been burned by. Measured on Windows 11 Enterprise 10.0.28000,
+  `aarch64-pc-windows-msvc`, against a real directory with a deliberately small buffer so the cursor
+  questions actually arise.
+
+  | Question | Measured |
+  |---|---|
+  | Does a duplicated handle share the enumeration cursor? | **Yes** -- the source read `.`, `..`, `f00`; the duplicate returned `f01, f02, f03`, a clean continuation |
+  | Control: do two separate opens share it? | **No** -- the second open restarted from `.`, so the probe can tell the two apart |
+  | Does closing the duplicate disturb the source? | **No** -- the source continued correctly afterwards |
+  | Does an interleaved `FileBasicInfo` disturb the cursor? | **No** |
+  | Does an interleaved `FileIdInfo` disturb it? | **No** |
+  | Does an interleaved non-Ex `GetFileInformationByHandle` disturb it? | **No** |
+  | Does `FileBasicInfo` *on the duplicate* disturb the source's enumeration? | **No** |
+
+  So the contract is **narrower** than the earlier draft claimed, and the difference matters. It is not
+  that handle-taking entries are hazardous in general: **only the two directory-enumeration classes mutate
+  the shared cursor**, and every other query is a pure read that composes freely with an enumeration in
+  progress, on the same handle or on a duplicate. What the entry must state is therefore specific: a
+  duplicate is not an independent enumeration, and an independent traversal needs a fresh open. This is
+  also the one place the unresolved ordering question binds, since two *enumeration* requests against one
+  handle are order-dependent in a way that no other pair of entries is.
 
   Two constraints that are not negotiable and are already solved in this repository, so bind to the
   precedent rather than re-deriving it. The buffer must be **8-byte aligned**: a `Vec<u8>` fails the very
