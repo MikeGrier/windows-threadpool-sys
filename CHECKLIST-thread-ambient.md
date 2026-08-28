@@ -310,10 +310,14 @@ Entries 1-4 of the audited list. Each depends on M24's foundations and on nothin
   than the entry assuming one -- the same shape
   [windows-threadpool-sys](crates/windows-threadpool-sys/README.md) already needed for wait targets.
 
-- [ ] **M25.5** -- Prove the handle-producing entries against real directories, including the three flag
+- [x] **M25.5** -- Prove the handle-producing entries against real directories, including the three flag
   shapes the audit found, the non-`CloseHandle` close routine, and a reopen-by-id that survives its source
-  handle being closed first.
-
+  handle being closed first. Landed as an integration test (`tests/handle_entries/`) rather than more unit
+  tests, because these cross a real filesystem boundary and chain entries together: the per-entry unit tests
+  prove each entry against Windows in isolation, and only a composed test reaches the combination the audit
+  called out -- a handle opened by one request becoming the *input* to a later one. Also covers the whole
+  chain performed on a worker that saw none of its inputs, and many requests across concurrent workers,
+  which is Globazog's shape.
 ## M26 -- `windows-namespace-request-sys`: the query entries
 
 Entries 5-9 of the audited list. All but the last take a handle, so all but the last depend on M24.2.

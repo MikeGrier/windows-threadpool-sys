@@ -301,6 +301,70 @@ report a named stage plus a code, because there the useful question is which
 part of building the request went wrong, and that is answered on the calling
 thread before any entry runs.
 
+## <a id="d-11"></a>D-11: A handle carries its close routine
+
+Closing is a catalogue entry, which surprises people. `CloseHandle` looks like
+bookkeeping, but it is a blocking namespace call: it waits for outstanding I/O
+and can block hard on a dead network path or an ejected device. A consumer that
+carefully moved its opens onto a worker and then closed on its own thread would
+have moved the wrong half.
+
+The audit then showed a close entry **cannot assume its routine**. A
+`FindFirstChangeNotificationW` handle is closed with
+`FindCloseChangeNotification`, and `CloseHandle` is wrong for it *silently* --
+no error, just a leak. So the routine travels with the handle rather than being
+chosen at the call site. This is the same shape
+[windows-threadpool-sys](../windows-threadpool-sys/README.md) already needed for
+wait targets, and adopting it here is deliberate reuse of a solved problem
+rather than a parallel invention.
+
+Two structural consequences:
+
+- **`ChangeNotification` is a type, not an `OwnedHandle`.** `OwnedHandle`'s drop
+  is `CloseHandle`, which is exactly the wrong routine, so returning one from
+  the watch entry would hand every caller a silent leak. The type is what
+  remembers.
+- **Closing happens exactly once, enforced by construction.** `CloseRequest::perform`
+  consumes the request through a `ManuallyDrop` so the destructor cannot close
+  again; both constructors suppress the source value's own drop so it cannot
+  close first; and an unperformed request still closes on drop, because a
+  request that quietly did nothing would leak.
+
+## <a id="d-12"></a>D-12: An entry carries flags verbatim and defaults nothing
+
+Two of the audited consumers open without `FILE_FLAG_OVERLAPPED` and one opens
+with it, because the watcher's handle is destined for a completion port and the
+other two are not. The entry carries that as a **field**. Deciding it would be
+the delivery-model choice [D-2](#d-2) refuses to make.
+
+The same reasoning forbids helpful defaults. `FILE_FLAG_BACKUP_SEMANTICS` is
+mandatory to open a directory at all and every audited consumer passes it -- and
+it is still not implied, because an entry that quietly added a flag would be
+deciding what the caller meant, and the same field is what a caller opening a
+plain file must be able to leave out. Every parameter starts at "the caller said
+nothing"; a plausible-looking default is exactly what a caller cannot see they
+were given.
+
+This extends to values the crate does not recognise. `NotifyFilter` is a newtype
+over a bitmask rather than an enum, so a bit Windows defines and this crate has
+never heard of still reaches it unaltered. Its named constants are bound to the
+platform's own `FILE_NOTIFY_CHANGE_*` values rather than restated as literals,
+so the two cannot drift.
+
+## <a id="d-13"></a>D-13: A tagged union becomes an enum; a dependency's type does not become our surface
+
+`OpenFileById` takes a `FILE_ID_DESCRIPTOR`: a tag plus a union that a caller
+must keep in step by hand. `FileIdentifier` is an enum instead, so the tag is
+implied by the variant and the two cannot disagree. All three identifier kinds
+are supported although only `FileId` appears in the audited consumers, for the
+[D-5](#d-5) reason.
+
+Its object-id variant carries a `u128`, not windows-sys's `GUID`. That type
+implements neither equality nor `Debug`, and a public surface should not be
+shaped by whichever binding crate we happen to build against -- that is
+behavior inherited from a dependency rather than owned. The conversion happens
+at the FFI boundary, where it belongs.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the
