@@ -51,33 +51,34 @@ it unspecified means the target thread's own value is untouched.
 use std::thread;
 
 use windows_thread_ambient_sys::declared::MemoryPriority;
-use windows_thread_ambient_sys::{Declared, ThreadErrorMode, impersonation};
+use windows_thread_ambient_sys::{AmbientState, CaptureSet, Declared};
 
 // Captured on the submitting thread, where a failure is still the caller's to
-// see rather than arriving later from a worker.
-let context = impersonation::capture()?;
+// see rather than arriving later from a worker. Declared aspects are stated
+// rather than read; unspecified ones leave the worker's own values alone.
+let state = AmbientState::capture(CaptureSet::DEFAULT)?
+    .with_declared(Declared::none().with_memory_priority(MemoryPriority::Low));
 
-// Declared by the caller. Unspecified aspects leave the worker alone.
-let declared = Declared::none().with_memory_priority(MemoryPriority::Low);
-
-// A policy this consumer chose, not one the crate imposes.
-let mode = ThreadErrorMode::FAIL_CRITICAL_ERRORS
-    .union(ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX);
-
-let value = thread::spawn(move || {
-    let guard = mode.apply().expect("the error mode installs");
-    let outcome = declared.with_applied(|| {
-        impersonation::with_applied(&context, || "ran as the submitter")
-    });
-    guard.release().expect("the error mode is restored");
-    outcome
+let applied = thread::spawn(move || {
+    // Applied outermost-first and released in exact reverse, with
+    // impersonation innermost because its window is the narrowest.
+    state.with_applied(|| "ran as the submitter")
 })
 .join()
-.expect("the worker did not panic")??;
+.expect("the worker did not panic")?;
 
-assert_eq!(value, "ran as the submitter");
+assert_eq!(*applied.value(), "ran as the submitter");
+
+// A restoration failure does not discard the value; it is reported alongside
+// it, so a caller can retire a contaminated thread without losing the result.
+assert!(applied.restore().is_clean());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+To *override* the error mode rather than transplant it -- forcing the
+dialog-suppressing bits on a shared worker -- leave `CaptureSet::ERROR_MODE` out
+of the capture set and wrap the call in your own `ThreadErrorMode::apply` guard,
+which then sits outermost.
 
 ### Not captured is not the same as captured and absent
 

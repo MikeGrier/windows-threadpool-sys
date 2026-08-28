@@ -108,7 +108,7 @@ namespace operation is.
 - [x] **M23.2** -- Implement composite capture, failing synchronously on the calling thread. A capture that
   cannot be performed is an admission failure, not a deferred one, and the error names which aspect failed.
 
-- [ ] **M23.3** -- Implement application as a composition of per-aspect guards, applied outermost-first and
+- [x] **M23.3** -- Implement application as a composition of per-aspect guards, applied outermost-first and
   released in exact reverse, with the impersonation guard innermost because its window is narrowest and its
   restoration is the one that must not be delayed. Applying a subset must stay expressible, which is what
   the differing application windows require. Restore failure is fail-fast for impersonation, inherited

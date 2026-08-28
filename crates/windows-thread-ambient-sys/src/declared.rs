@@ -346,22 +346,20 @@ impl Declared {
         self
     }
 
-    /// Run `operation` with these aspects installed.
+    /// Install these aspects on the calling thread until the guard is released.
     ///
-    /// Guards are applied in a fixed order and released in exact reverse, so the
+    /// Aspects are installed in a fixed order -- background mode, then memory
+    /// priority, then WOW64 redirection -- and
+    /// [`release`](DeclaredGuard::release) undoes them in exact reverse, so the
     /// thread passes back through each intermediate state rather than being
     /// snapped to an assumed one.
     ///
     /// # Errors
     ///
-    /// Returns [`DeclaredError`] if an aspect could not be installed, in which
-    /// case `operation` did not run and every already-installed aspect is
-    /// released first; or if an aspect could not be restored afterwards, in
-    /// which case it did run and the thread is left contaminated.
-    pub fn with_applied<F, T>(&self, operation: F) -> Result<T, DeclaredError>
-    where
-        F: FnOnce() -> T,
-    {
+    /// Returns [`DeclaredError`] if an aspect could not be installed. Every
+    /// aspect installed before the failing one is released first, so a failed
+    /// install leaves the thread as it found it.
+    pub fn install(&self) -> Result<DeclaredGuard, DeclaredError> {
         let background = match self.background_mode {
             Some(mode) => {
                 mode.install()?;
@@ -388,7 +386,7 @@ impl Declared {
             Some(Wow64Redirection::Disabled) => {
                 let mut old: *mut core::ffi::c_void = std::ptr::null_mut();
                 // SAFETY: `old` is a valid writable destination, and is passed
-                // back verbatim to the revert call below.
+                // back verbatim to the revert call in `release`.
                 let ok = unsafe { Wow64DisableWow64FsRedirection(&mut old) };
                 if ok == 0 {
                     let error = DeclaredError::new(DeclaredAspect::Wow64Redirection);
@@ -401,9 +399,68 @@ impl Declared {
             None => None,
         };
 
-        let outcome = operation();
+        Ok(DeclaredGuard {
+            background,
+            memory,
+            redirection,
+            released: false,
+        })
+    }
 
-        // Exact reverse order.
+    /// Run `operation` with these aspects installed.
+    ///
+    /// A convenience over [`install`](Self::install) for callers that do not
+    /// need the operation's value when restoration fails. **A restore failure
+    /// discards the value**, because there is no room in this signature for
+    /// both; a caller that must keep the value even then should use `install`
+    /// and [`DeclaredGuard::release`] directly, as the composite does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeclaredError`] if an aspect could not be installed, in which
+    /// case `operation` did not run; or if an aspect could not be restored
+    /// afterwards, in which case it did run and its value is discarded.
+    pub fn with_applied<F, T>(&self, operation: F) -> Result<T, DeclaredError>
+    where
+        F: FnOnce() -> T,
+    {
+        let guard = self.install()?;
+        let outcome = operation();
+        guard.release().map(|()| outcome)
+    }
+}
+
+/// Holds declared aspects installed until released.
+///
+/// Not `Send`: it restores the thread it was created on, and the WOW64 revert
+/// token is meaningless anywhere else.
+#[must_use = "dropping the guard restores the aspects but discards any failure to do so"]
+#[derive(Debug)]
+pub struct DeclaredGuard {
+    background: Option<BackgroundMode>,
+    memory: Option<MemoryPriority>,
+    redirection: Option<*mut core::ffi::c_void>,
+    released: bool,
+}
+
+impl DeclaredGuard {
+    /// Restore every installed aspect, in exact reverse order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the **first** [`DeclaredError`] encountered, having still
+    /// attempted every remaining restoration -- stopping early would leave more
+    /// of the thread contaminated than necessary.
+    pub fn release(mut self) -> Result<(), DeclaredError> {
+        self.released = true;
+        Self::restore(self.background, self.memory, self.redirection)
+    }
+
+    fn restore(
+        background: Option<BackgroundMode>,
+        memory: Option<MemoryPriority>,
+        redirection: Option<*mut core::ffi::c_void>,
+    ) -> Result<(), DeclaredError> {
         let mut failure = None;
         if let Some(old) = redirection {
             // SAFETY: `old` is the value the matching disable call produced.
@@ -422,10 +479,18 @@ impl Declared {
         {
             failure = failure.or(Some(error));
         }
-
         match failure {
             Some(error) => Err(error),
-            None => Ok(outcome),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for DeclaredGuard {
+    fn drop(&mut self) {
+        if !self.released {
+            // Best effort: a destructor has no caller to report to.
+            let _ = Self::restore(self.background, self.memory, self.redirection);
         }
     }
 }

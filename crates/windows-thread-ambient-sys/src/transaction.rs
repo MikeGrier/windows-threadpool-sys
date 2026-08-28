@@ -330,8 +330,31 @@ pub fn with_applied<F, T>(
 where
     F: FnOnce() -> T,
 {
+    let guard = install(captured)?;
+    let outcome = operation();
+    guard.release().map(|()| outcome)
+}
+
+/// Install `captured` on the calling thread until the guard is released.
+///
+/// This is the form the composite uses, because it keeps the operation's value
+/// and the restoration outcome separable; [`with_applied`] has no room for both
+/// and discards the value if restoration fails.
+///
+/// # Errors
+///
+/// Returns a [`TransactionError`] if the transaction could not be installed, in
+/// which case the thread is untouched.
+pub fn install(
+    captured: &Captured<TransactionContext>,
+) -> Result<TransactionGuard, TransactionError> {
     let desired = match captured {
-        Captured::NotCaptured => return Ok(operation()),
+        Captured::NotCaptured => {
+            return Ok(TransactionGuard {
+                previous: None,
+                released: false,
+            });
+        }
         Captured::Absent => std::ptr::null_mut(),
         Captured::Present(context) => context.as_raw(),
     };
@@ -341,16 +364,54 @@ where
         source: None,
     })?;
     set_current(desired)?;
+    Ok(TransactionGuard {
+        previous: Some(previous),
+        released: false,
+    })
+}
 
-    let outcome = operation();
+/// Holds an installed thread transaction until released.
+///
+/// Not `Send`: it restores the thread it was created on.
+#[must_use = "dropping the guard restores the transaction but discards any failure to do so"]
+#[derive(Debug)]
+pub struct TransactionGuard {
+    /// `None` when nothing was installed, so nothing is restored either.
+    previous: Option<HANDLE>,
+    released: bool,
+}
 
-    // Restore whatever the thread had, including "none".
-    let restore = set_current(if is_none_sentinel(previous) {
-        std::ptr::null_mut()
-    } else {
-        previous
-    });
-    restore.map(|()| outcome)
+impl TransactionGuard {
+    /// Restore the thread's entry transaction, including "none".
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TransactionError`] if the entry transaction could not be
+    /// restored, leaving the thread contaminated.
+    pub fn release(mut self) -> Result<(), TransactionError> {
+        self.released = true;
+        Self::restore(self.previous)
+    }
+
+    fn restore(previous: Option<HANDLE>) -> Result<(), TransactionError> {
+        let Some(previous) = previous else {
+            return Ok(());
+        };
+        set_current(if is_none_sentinel(previous) {
+            std::ptr::null_mut()
+        } else {
+            previous
+        })
+    }
+}
+
+impl Drop for TransactionGuard {
+    fn drop(&mut self) {
+        if !self.released {
+            // Best effort: a destructor has no caller to report to.
+            let _ = Self::restore(self.previous);
+        }
+    }
 }
 
 #[cfg(test)]

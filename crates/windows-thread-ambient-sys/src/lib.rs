@@ -51,37 +51,35 @@
 //! use std::thread;
 //!
 //! use windows_thread_ambient_sys::declared::MemoryPriority;
-//! use windows_thread_ambient_sys::{Declared, ThreadErrorMode, impersonation};
+//! use windows_thread_ambient_sys::{AmbientState, CaptureSet, Declared};
 //!
-//! // Captured: the submitter's own security context travels to the worker.
-//! let context = impersonation::capture()?;
+//! // Captured here, on the submitting thread, where a failure is still ours to
+//! // see. Declared aspects are stated rather than read from anything.
+//! let state = AmbientState::capture(CaptureSet::DEFAULT)?
+//!     .with_declared(Declared::none().with_memory_priority(MemoryPriority::Low));
 //!
-//! // Declared: stated by the caller, never read from the submitting thread.
-//! // Aspects left unspecified leave the worker's own values alone.
-//! let declared = Declared::none().with_memory_priority(MemoryPriority::Low);
+//! let applied = thread::spawn(move || {
+//!     // Guards apply outermost-first and release in exact reverse, with
+//!     // impersonation innermost because its window is the narrowest.
+//!     state.with_applied(|| "ran as the submitter")
+//! })
+//! .join()
+//! .expect("the worker did not panic")?;
 //!
-//! // Overridden: this is a *consumer's* policy, composed here rather than
-//! // found already decided. A worker on shared infrastructure must not raise a
-//! // modal dialog on a hard device error.
-//! let mode = ThreadErrorMode::FAIL_CRITICAL_ERRORS
-//!     .union(ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX);
+//! assert_eq!(*applied.value(), "ran as the submitter");
 //!
-//! let worker = thread::spawn(move || {
-//!     // Guards apply outermost-first and release in exact reverse; the
-//!     // narrowest window, impersonation, sits innermost.
-//!     let guard = mode.apply().expect("the error mode installs");
-//!     let outcome = declared.with_applied(|| {
-//!         impersonation::with_applied(&context, || "ran as the submitter")
-//!     });
-//!     // Release explicitly: dropping restores too, but discards any failure.
-//!     guard.release().expect("the error mode is restored");
-//!     outcome
-//! });
-//!
-//! let value = worker.join().expect("the worker did not panic")??;
-//! assert_eq!(value, "ran as the submitter");
+//! // A restoration failure does not discard the operation's value; it is
+//! // reported alongside it, so a caller can retire a contaminated thread
+//! // without losing what the work produced.
+//! assert!(applied.restore().is_clean());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! A consumer that wants to *override* the error mode rather than transplant it
+//! -- forcing the dialog-suppressing bits on a shared worker -- leaves
+//! [`CaptureSet::ERROR_MODE`] out of its capture set and wraps the call in its
+//! own [`ThreadErrorMode::apply`] guard, which then sits outermost, exactly
+//! where the ordering puts it.
 
 #![cfg(windows)]
 #![forbid(unsafe_op_in_unsafe_fn)]
@@ -98,7 +96,9 @@ pub mod transaction;
 pub use capture_set::{CapturableAspect, CaptureSet};
 pub use captured::Captured;
 pub use declared::Declared;
-pub use state::{AmbientState, CaptureError, CaptureFailure};
+pub use state::{
+    AmbientState, Applied, ApplyError, ApplyFailure, CaptureError, CaptureFailure, RestoreReport,
+};
 
 /// Compiles the README's examples, so a contract change breaks the build rather
 /// than silently teaching the old answer.

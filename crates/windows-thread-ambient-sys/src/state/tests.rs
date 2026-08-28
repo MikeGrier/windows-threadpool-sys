@@ -203,3 +203,290 @@ fn capture_does_not_disturb_the_thread_it_reads() {
     );
     assert_eq!(thread_has_token(), entry_token);
 }
+
+// --- composition (M23.3) ---------------------------------------------------
+
+use crate::declared::{BackgroundMode, Wow64Redirection};
+use crate::state::ApplyFailure;
+
+#[test]
+fn applying_an_empty_state_runs_the_operation_and_touches_nothing() {
+    let entry_mode = ThreadErrorMode::capture().expect("representable");
+    let entry_priority = MemoryPriority::current().expect("readable");
+
+    let state = AmbientState::capture(CaptureSet::NONE).expect("capture");
+    let applied = state.with_applied(|| 7).expect("apply");
+
+    assert_eq!(*applied.value(), 7);
+    assert!(applied.restore().is_clean());
+    assert_eq!(
+        ThreadErrorMode::capture().expect("representable"),
+        entry_mode
+    );
+    assert_eq!(MemoryPriority::current().expect("readable"), entry_priority);
+}
+
+#[test]
+fn a_captured_error_mode_is_in_force_inside_the_operation() {
+    let entry = ThreadErrorMode::capture().expect("representable");
+    let guard = ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX
+        .apply()
+        .expect("install a distinctive mode to capture");
+    let state = AmbientState::capture(CaptureSet::ERROR_MODE).expect("capture");
+    guard.release().expect("restore before applying");
+
+    let applied = state
+        .with_applied(|| ThreadErrorMode::capture().expect("representable"))
+        .expect("apply");
+
+    assert_eq!(
+        *applied.value(),
+        ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX,
+        "the captured mode was not installed for the operation"
+    );
+    assert_eq!(
+        ThreadErrorMode::capture().expect("representable"),
+        entry,
+        "the thread was not restored"
+    );
+}
+
+#[test]
+fn declared_aspects_are_installed_alongside_captured_ones() {
+    let entry = MemoryPriority::current().expect("readable");
+    let state = AmbientState::capture(CaptureSet::DEFAULT)
+        .expect("capture")
+        .with_declared(Declared::none().with_memory_priority(MemoryPriority::Low));
+
+    let applied = state
+        .with_applied(|| MemoryPriority::current().expect("readable"))
+        .expect("apply");
+
+    assert_eq!(*applied.value(), MemoryPriority::Low);
+    assert_eq!(MemoryPriority::current().expect("readable"), entry);
+}
+
+#[test]
+fn impersonation_is_in_force_innermost() {
+    assert!(!thread_has_token(), "precondition: no thread token");
+    let state = AmbientState::capture(CaptureSet::ALL).expect("capture");
+    let applied = state.with_applied(thread_has_token).expect("apply");
+    assert!(*applied.value(), "the captured context was not applied");
+    assert!(!thread_has_token(), "the thread was left carrying a token");
+}
+
+#[test]
+fn every_aspect_is_restored_after_a_full_application() {
+    let entry_mode = ThreadErrorMode::capture().expect("representable");
+    let entry_priority = MemoryPriority::current().expect("readable");
+    let entry_token = thread_has_token();
+
+    let state = AmbientState::capture(CaptureSet::ALL)
+        .expect("capture")
+        .with_declared(
+            Declared::none()
+                .with_memory_priority(MemoryPriority::VeryLow)
+                .with_background_mode(BackgroundMode::Begin),
+        );
+    let applied = state.with_applied(|| ()).expect("apply");
+
+    assert!(applied.restore().is_clean(), "{}", applied.restore());
+    assert_eq!(
+        ThreadErrorMode::capture().expect("representable"),
+        entry_mode
+    );
+    assert_eq!(MemoryPriority::current().expect("readable"), entry_priority);
+    assert_eq!(thread_has_token(), entry_token);
+}
+
+#[test]
+fn the_error_mode_is_already_in_force_while_inner_aspects_apply() {
+    // The reason the error mode is outermost: a hard error raised while a later
+    // aspect is being installed must already be suppressed. Observed from
+    // inside, which is the only place the ordering is visible.
+    let guard = ThreadErrorMode::FAIL_CRITICAL_ERRORS
+        .apply()
+        .expect("install a distinctive mode to capture");
+    let state = AmbientState::capture(CaptureSet::ALL).expect("capture");
+    guard.release().expect("restore");
+
+    let applied = state
+        .with_applied(|| ThreadErrorMode::capture().expect("representable"))
+        .expect("apply");
+    assert!(
+        applied
+            .value()
+            .contains(ThreadErrorMode::FAIL_CRITICAL_ERRORS),
+        "the error mode was not in force inside the composition"
+    );
+}
+
+#[test]
+fn a_failing_aspect_releases_the_ones_already_installed() {
+    // Redirection is installed after the error mode and the memory priority, and
+    // fails in a 64-bit process. Everything applied before it must come back.
+    if cfg!(not(target_pointer_width = "64")) {
+        eprintln!("skipped: relies on redirection failing");
+        return;
+    }
+    let entry_mode = ThreadErrorMode::capture().expect("representable");
+    let entry_priority = MemoryPriority::current().expect("readable");
+
+    let state = AmbientState::capture(CaptureSet::ERROR_MODE)
+        .expect("capture")
+        .with_declared(
+            Declared::none()
+                .with_memory_priority(MemoryPriority::Low)
+                .with_wow64_redirection(Wow64Redirection::Disabled),
+        );
+
+    let error = state
+        .with_applied(|| ())
+        .expect_err("redirection cannot be disabled in a 64-bit process");
+    assert!(matches!(error.failure(), ApplyFailure::Declared(_)));
+
+    assert_eq!(
+        ThreadErrorMode::capture().expect("representable"),
+        entry_mode,
+        "a failed inner aspect left the error mode installed"
+    );
+    assert_eq!(
+        MemoryPriority::current().expect("readable"),
+        entry_priority,
+        "a failed aspect left an earlier declared aspect installed"
+    );
+}
+
+#[test]
+fn the_operation_does_not_run_when_an_aspect_cannot_be_installed() {
+    if cfg!(not(target_pointer_width = "64")) {
+        eprintln!("skipped: relies on redirection failing");
+        return;
+    }
+    let mut ran = false;
+    let state = AmbientState::capture(CaptureSet::ALL)
+        .expect("capture")
+        .with_declared(Declared::none().with_wow64_redirection(Wow64Redirection::Disabled));
+    let _ = state.with_applied(|| ran = true);
+    assert!(
+        !ran,
+        "the operation ran despite an aspect failing to install"
+    );
+}
+
+#[test]
+fn a_clean_application_yields_its_value_through_into_clean_value() {
+    let state = AmbientState::capture(CaptureSet::DEFAULT).expect("capture");
+    let value = state
+        .with_applied(|| String::from("carried"))
+        .expect("apply")
+        .into_clean_value()
+        .expect("a clean restore");
+    assert_eq!(value, "carried");
+}
+
+#[test]
+fn a_clean_report_says_so() {
+    let state = AmbientState::capture(CaptureSet::NONE).expect("capture");
+    let applied = state.with_applied(|| ()).expect("apply");
+    assert!(applied.restore().is_clean());
+    assert!(applied.restore().error_mode().is_none());
+    assert!(applied.restore().declared().is_none());
+    assert!(applied.restore().transaction().is_none());
+    assert_eq!(
+        applied.restore().to_string(),
+        "the thread was restored cleanly"
+    );
+}
+
+#[test]
+fn a_state_applies_on_the_worker_it_was_carried_to() {
+    // The composite's whole purpose, end to end: capture here, apply there, and
+    // leave the worker as it was found.
+    let state = AmbientState::capture(CaptureSet::ALL).expect("capture");
+    let observed = std::thread::spawn(move || {
+        let inherited = thread_has_token();
+        let applied = state.with_applied(thread_has_token).expect("apply");
+        let clean = applied.restore().is_clean();
+        (inherited, *applied.value(), clean, thread_has_token())
+    })
+    .join()
+    .expect("the worker did not panic");
+
+    assert!(!observed.0, "a fresh worker should inherit no token");
+    assert!(observed.1, "the context did not reach the worker");
+    assert!(observed.2, "the worker was not restored cleanly");
+    assert!(!observed.3, "the worker was left contaminated");
+}
+
+#[test]
+fn applying_the_same_state_twice_is_not_special() {
+    let state = AmbientState::capture(CaptureSet::ALL).expect("capture");
+    for _ in 0..3 {
+        let applied = state.with_applied(thread_has_token).expect("apply");
+        assert!(*applied.value());
+        assert!(applied.restore().is_clean());
+    }
+    assert!(!thread_has_token());
+}
+
+#[test]
+fn nesting_two_states_restores_through_each_layer() {
+    let entry = ThreadErrorMode::capture().expect("representable");
+
+    let outer_guard = ThreadErrorMode::FAIL_CRITICAL_ERRORS
+        .apply()
+        .expect("install");
+    let outer = AmbientState::capture(CaptureSet::ERROR_MODE).expect("capture");
+    outer_guard.release().expect("restore");
+
+    let inner_guard = ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX
+        .apply()
+        .expect("install");
+    let inner = AmbientState::capture(CaptureSet::ERROR_MODE).expect("capture");
+    inner_guard.release().expect("restore");
+
+    let deepest = outer
+        .with_applied(|| {
+            assert_eq!(
+                ThreadErrorMode::capture().expect("representable"),
+                ThreadErrorMode::FAIL_CRITICAL_ERRORS
+            );
+            let deepest = inner
+                .with_applied(|| ThreadErrorMode::capture().expect("representable"))
+                .expect("inner apply")
+                .into_value();
+            assert_eq!(
+                ThreadErrorMode::capture().expect("representable"),
+                ThreadErrorMode::FAIL_CRITICAL_ERRORS,
+                "the inner release skipped the outer state"
+            );
+            deepest
+        })
+        .expect("outer apply")
+        .into_value();
+
+    assert_eq!(deepest, ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX);
+    assert_eq!(ThreadErrorMode::capture().expect("representable"), entry);
+}
+
+#[test]
+fn an_uncaptured_aspect_leaves_the_running_threads_value_alone() {
+    // Subset application: the composite must not impose a default on an aspect
+    // nobody asked about.
+    let installed = ThreadErrorMode::NO_GP_FAULT_ERROR_BOX
+        .apply()
+        .expect("install a mode the state knows nothing about");
+    let state = AmbientState::capture(CaptureSet::IMPERSONATION).expect("capture");
+    let during = state
+        .with_applied(|| ThreadErrorMode::capture().expect("representable"))
+        .expect("apply")
+        .into_value();
+    installed.release().expect("restore");
+
+    assert_eq!(
+        during,
+        ThreadErrorMode::NO_GP_FAULT_ERROR_BOX,
+        "an uncaptured aspect was overwritten instead of left alone"
+    );
+}

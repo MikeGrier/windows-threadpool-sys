@@ -38,22 +38,32 @@
 //! assert_eq!(state.captured_set(), CaptureSet::DEFAULT);
 //! assert!(state.impersonation().was_captured());
 //! assert!(!state.transaction().was_captured());
+//!
+//! // Applying installs every aspect in a fixed order and releases in exact
+//! // reverse. An uncaptured aspect is skipped, leaving the running thread's own
+//! // value alone.
+//! let applied = state.with_applied(|| "work")?;
+//! assert_eq!(*applied.value(), "work");
+//! assert!(applied.restore().is_clean());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 use std::fmt;
 
 use windows_impersonation_token_sys::{
-    CaptureError as ImpersonationCaptureError, ImpersonationToken,
+    ApplyError as ImpersonationApplyError, CaptureError as ImpersonationCaptureError,
+    ImpersonationToken,
 };
 
 use crate::capture_set::{CapturableAspect, CaptureSet};
 use crate::captured::Captured;
-use crate::declared::Declared;
-use crate::error_mode::{ThreadErrorMode, UnsupportedBits};
+use crate::declared::{Declared, DeclaredError};
+use crate::error_mode::{
+    ApplyError as ErrorModeApplyError, ErrorModeGuard, RestoreError as ErrorModeRestoreError,
+    ThreadErrorMode, UnsupportedBits,
+};
 use crate::transaction::{TransactionContext, TransactionError};
 use crate::{impersonation, transaction};
-
 /// Which aspect failed to capture, and why.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -233,6 +243,294 @@ impl AmbientState {
     #[must_use]
     pub const fn declared(&self) -> &Declared {
         &self.declared
+    }
+
+    /// Run `operation` with this state installed on the calling thread.
+    ///
+    /// # Order
+    ///
+    /// Guards are applied outermost-first and released in **exact reverse**, so
+    /// the thread passes back through each intermediate state:
+    ///
+    /// 1. thread error mode -- outermost, so hard-error suppression is already
+    ///    in force while everything else is being applied;
+    /// 2. declared aspects (background mode, memory priority, redirection);
+    /// 3. TxF transaction;
+    /// 4. impersonation -- innermost, because its window is the narrowest and
+    ///    its restoration is the one that must not be delayed.
+    ///
+    /// Applying a subset stays expressible: an aspect that is
+    /// [`Captured::NotCaptured`] or unspecified is skipped entirely, leaving the
+    /// running thread's own value alone.
+    ///
+    /// # Overriding rather than transplanting the error mode
+    ///
+    /// This applies the error mode it *captured*. A consumer that wants to
+    /// impose its own -- forcing the dialog-suppressing bits on a shared worker,
+    /// say -- should leave [`CaptureSet::ERROR_MODE`] out of its capture set and
+    /// wrap this call in its own [`ThreadErrorMode::apply`] guard, which then
+    /// sits outermost, exactly where the order above puts it. Capturing *and*
+    /// overriding would install the captured value inside the override.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApplyError`] if an aspect could not be installed, in which case
+    /// `operation` did not run and every already-installed aspect is released
+    /// first.
+    ///
+    /// A failure to **restore** is different, and does not fail the call: the
+    /// operation ran and its value is kept, with the failures reported through
+    /// [`Applied::restore`]. Discarding a successful operation's value because a
+    /// priority could not be put back would lose more than it protects.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the impersonation context cannot be restored. That semantics is
+    /// inherited from
+    /// [`windows_impersonation_token_sys`](windows_impersonation_token_sys),
+    /// not chosen here: returning a shared worker to a pool under an unknown
+    /// identity is a process-wide security failure, which is a different order
+    /// of hazard from the other aspects.
+    pub fn with_applied<F, T>(&self, operation: F) -> Result<Applied<T>, ApplyError>
+    where
+        F: FnOnce() -> T,
+    {
+        // 1. Error mode, outermost.
+        let error_mode_guard = match self.error_mode.present() {
+            Some(mode) => Some(mode.apply().map_err(|error| ApplyError {
+                failure: ApplyFailure::ErrorMode(error),
+            })?),
+            None => None,
+        };
+
+        // 2. Declared aspects.
+        let declared_guard = match self.declared.install() {
+            Ok(guard) => guard,
+            Err(error) => {
+                release_error_mode(error_mode_guard);
+                return Err(ApplyError {
+                    failure: ApplyFailure::Declared(error),
+                });
+            }
+        };
+
+        // 3. Transaction.
+        let transaction_guard = match transaction::install(&self.transaction) {
+            Ok(guard) => guard,
+            Err(error) => {
+                drop(declared_guard);
+                release_error_mode(error_mode_guard);
+                return Err(ApplyError {
+                    failure: ApplyFailure::Transaction(error),
+                });
+            }
+        };
+
+        // 4. Impersonation, innermost, and closure-scoped by its own crate.
+        let outcome = impersonation::with_applied(&self.impersonation, operation);
+        let value = match outcome {
+            Ok(value) => value,
+            Err(error) => {
+                drop(transaction_guard);
+                drop(declared_guard);
+                release_error_mode(error_mode_guard);
+                return Err(ApplyError {
+                    failure: ApplyFailure::Impersonation(error),
+                });
+            }
+        };
+
+        // Release in exact reverse. Every release is attempted even after one
+        // fails, because stopping early leaves more of the thread contaminated.
+        //
+        // These are separate statements rather than a struct literal on purpose:
+        // the order below *is* the release order, and burying it in field
+        // initialisers would make a later reader's harmless-looking field
+        // reordering silently reorder the releases.
+        let transaction = transaction_guard.release().err();
+        let declared = declared_guard.release().err();
+        let error_mode = match error_mode_guard {
+            Some(guard) => guard.release().err(),
+            None => None,
+        };
+
+        Ok(Applied {
+            value,
+            restore: RestoreReport {
+                error_mode,
+                declared,
+                transaction,
+            },
+        })
+    }
+}
+
+fn release_error_mode(guard: Option<ErrorModeGuard>) {
+    if let Some(guard) = guard {
+        // Best effort: an install failed, so this path already has an error to
+        // report and a second one would displace it.
+        let _ = guard.release();
+    }
+}
+
+/// What an operation produced, and whether the thread was put back.
+#[derive(Debug)]
+#[must_use = "ignoring the restore report discards evidence that the thread is contaminated"]
+pub struct Applied<T> {
+    value: T,
+    restore: RestoreReport,
+}
+
+impl<T> Applied<T> {
+    /// The operation's value.
+    pub const fn value(&self) -> &T {
+        &self.value
+    }
+
+    /// Take the value, deliberately ignoring the restore report.
+    pub fn into_value(self) -> T {
+        self.value
+    }
+
+    /// Which aspects failed to restore, if any.
+    pub const fn restore(&self) -> &RestoreReport {
+        &self.restore
+    }
+
+    /// Take the value only if the thread was restored cleanly.
+    ///
+    /// # Errors
+    ///
+    /// Returns the report when any aspect failed to restore. The value is
+    /// dropped in that case, so a caller that needs both should use
+    /// [`value`](Self::value) and [`restore`](Self::restore) instead.
+    pub fn into_clean_value(self) -> Result<T, RestoreReport> {
+        if self.restore.is_clean() {
+            Ok(self.value)
+        } else {
+            Err(self.restore)
+        }
+    }
+}
+
+/// Which aspects could not be restored after an operation.
+///
+/// Exhaustively enumerated rather than a list, so a reader can see every aspect
+/// that can appear without running anything. Impersonation is absent by
+/// construction: its restore failure is fatal, so it never reaches a report.
+#[derive(Debug, Default)]
+pub struct RestoreReport {
+    error_mode: Option<ErrorModeRestoreError>,
+    declared: Option<DeclaredError>,
+    transaction: Option<TransactionError>,
+}
+
+impl RestoreReport {
+    /// Whether every aspect was restored.
+    #[must_use]
+    pub const fn is_clean(&self) -> bool {
+        self.error_mode.is_none() && self.declared.is_none() && self.transaction.is_none()
+    }
+
+    /// The thread error mode's restore failure, if any.
+    #[must_use]
+    pub const fn error_mode(&self) -> Option<&ErrorModeRestoreError> {
+        self.error_mode.as_ref()
+    }
+
+    /// The declared aspects' restore failure, if any.
+    #[must_use]
+    pub const fn declared(&self) -> Option<&DeclaredError> {
+        self.declared.as_ref()
+    }
+
+    /// The transaction's restore failure, if any.
+    #[must_use]
+    pub const fn transaction(&self) -> Option<&TransactionError> {
+        self.transaction.as_ref()
+    }
+}
+
+impl fmt::Display for RestoreReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_clean() {
+            return f.write_str("the thread was restored cleanly");
+        }
+        f.write_str("the thread is contaminated:")?;
+        if let Some(error) = &self.error_mode {
+            write!(f, " error mode: {error};")?;
+        }
+        if let Some(error) = &self.declared {
+            write!(f, " declared: {error};")?;
+        }
+        if let Some(error) = &self.transaction {
+            write!(f, " transaction: {error};")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for RestoreReport {}
+
+/// Which aspect could not be installed, and why.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ApplyFailure {
+    /// The thread error mode could not be installed.
+    ErrorMode(ErrorModeApplyError),
+    /// A declared aspect could not be installed.
+    Declared(DeclaredError),
+    /// The transaction could not be installed.
+    Transaction(TransactionError),
+    /// The impersonation context could not be applied.
+    Impersonation(ImpersonationApplyError),
+}
+
+/// Applying a composite state failed, so the operation did not run.
+#[derive(Debug)]
+pub struct ApplyError {
+    failure: ApplyFailure,
+}
+
+impl ApplyError {
+    /// The underlying failure, whose variant names the aspect.
+    #[must_use]
+    pub const fn failure(&self) -> &ApplyFailure {
+        &self.failure
+    }
+
+    /// The underlying Win32 code, if the failing aspect reported one.
+    #[must_use]
+    pub fn raw_os_error(&self) -> Option<i32> {
+        match &self.failure {
+            ApplyFailure::ErrorMode(error) => error.raw_os_error(),
+            ApplyFailure::Declared(error) => error.raw_os_error(),
+            ApplyFailure::Transaction(error) => error.raw_os_error(),
+            ApplyFailure::Impersonation(error) => error.raw_os_error(),
+        }
+    }
+}
+
+impl fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("applying the ambient state failed: ")?;
+        match &self.failure {
+            ApplyFailure::ErrorMode(error) => write!(f, "{error}"),
+            ApplyFailure::Declared(error) => write!(f, "{error}"),
+            ApplyFailure::Transaction(error) => write!(f, "{error}"),
+            ApplyFailure::Impersonation(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for ApplyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.failure {
+            ApplyFailure::ErrorMode(error) => Some(error),
+            ApplyFailure::Declared(error) => Some(error),
+            ApplyFailure::Transaction(error) => Some(error),
+            ApplyFailure::Impersonation(error) => Some(error),
+        }
     }
 }
 
