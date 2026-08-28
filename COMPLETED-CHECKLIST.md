@@ -1250,3 +1250,98 @@ workspace carries (`windows-impersonation-token-sys`'s, verbatim).
 302 unit tests, 53 integration tests, and now 3 doctests pass. Targeted
 all-target Clippy and `cargo fmt --check` are clean; `missing_docs` remains
 warning-free with no new suppressions needed.
+
+
+## Moved 2026-08-27 -- file-enumeration publication validation
+
+### <a id="fe-16"></a>FE-16 -- Validate publication: packaged contents, docs.rs metadata, release automation, sibling-dependency version ordering against crates.io, and `cargo publish --dry-run`. *(completed 2026-08-27 23:30:48 UTC-04:00)*
+
+`cargo package --list` confirms the packaged contents: 71 files -- every
+git-tracked file under the crate (`Cargo.toml`, `README.md`, `CHANGELOG.md`,
+`PLANS.md`/`COMPLETED-PLANS.md`, `DESIGN-NOTES.md`/`DESIGN-RATIONALE.md`,
+every `src/*.rs` including the sibling `tests.rs` modules, every
+`tests/integration/**/*.rs`) plus the three files Cargo generates for every
+package (`.cargo_vcs_info.json`, `Cargo.lock`, `Cargo.toml.orig`). Nothing
+unexpected is included or missing.
+
+`Cargo.toml`'s `[package.metadata.docs.rs]` pins `x86_64-pc-windows-msvc` as
+both the default and only target -- required because the crate is
+`cfg(windows)`-only and docs.rs's default Linux target would otherwise render
+an empty crate. `description`, `keywords`, `categories`, `readme`,
+`documentation`, `repository`, and `homepage` are all present and accurate.
+
+Release automation is registered consistently in
+[release-please-config.json](release-please-config.json),
+[.release-please-manifest.json](.release-please-manifest.json), and
+[.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml)
+(both the tag trigger and the `workflow_dispatch` crate list), matching every
+sibling crate's entry shape exactly.
+
+Sibling-dependency version requirements were checked against what is actually
+live on crates.io: `windows-threadpool-sys = "0.1.2"` is satisfied by the
+published `0.1.3`; `wtf-string = "0.1.0"` is satisfied by the published
+`0.1.0`. `windows-impersonation-token-sys = "0.1.0"` is **not yet
+satisfiable** -- the crate has never been published (confirmed via the
+crates.io API returning 404, `gh release list` showing no
+`windows-impersonation-token-sys-v*` release, and no matching tag in this
+repository) -- because this entire feature branch, which introduces both
+`windows-impersonation-token-sys` and `windows-file-enumeration-sys`, has not
+yet merged to `main`, so release-please has never run a release cycle for
+either crate. `origin/main` has independently advanced its own release cycle
+in the meantime (`windows-threadpool-sys` to `0.1.3`, `windows-overlapped-io-sys`
+to `0.1.3`, `windows-ioring-sys` to `0.1.2`, `windows-file-watcher` to `0.1.2`),
+which is expected and does not affect this crate's dependency requirements.
+
+`cargo publish --dry-run` therefore fails at the dependency-resolution step
+with `no matching package named windows-impersonation-token-sys found`. This
+was confirmed to be exactly that -- and not a packaging defect -- by cross-
+checking against `cargo package --list` (which succeeds with the full,
+correct 71-file list above) and by inspecting the partial archive cargo
+leaves behind in `target/package/tmp-crate/` when the dependency-resolution
+step aborts mid-write: an incomplete 3-file fragment, not a real content gap.
+This is the user-acknowledged, explicitly recorded blocker for this item: a
+full `cargo publish --dry-run` cannot go green until this branch merges to
+`main` and a release-please release ships `windows-impersonation-token-sys`
+to crates.io first. `publish-crate.yml`'s existing "wait for workspace-sibling
+dependencies on crates.io" step already makes the real publish order robust
+to this exact ordering constraint (it polls the sparse index and blocks a
+dependent crate's tag-triggered publish until every workspace-sibling
+dependency it declares is live at the required version), so no workflow
+change is needed -- only time, and the merge this branch is waiting on.
+
+Everything else validated cleanly: the default workspace's all-target check
+passes with no warnings in both debug and release, and the crate's own
+suite -- 302 unit tests, 53 integration tests, and 3 doctests -- passes,
+with targeted all-target Clippy and `cargo fmt --check` clean. This completes
+M7, and with it the whole M1-M7 arc this checklist file tracked.
+
+## Moved 2026-08-27 -- M6 and M7 milestone index archived
+
+The native enumeration engine (M6) and verification/Globazog
+acceptance/publication (M7) milestone headings and item indexes, relocated
+from [CHECKLIST.md](CHECKLIST.md) now that every item in both is complete and
+has its own detailed record above (or, for M6, in the earlier "native
+enumeration engine" moved section).
+
+### M6 -- Native enumeration engine
+
+M5's shell left a latent hazard that M6 had to remove before it could install
+a worker: `leave_quantum` and `complete` let a worker mutate the registry and
+drop its own thread-pool object from inside its own callback, which
+self-waits and frees the executing closure. FE-7 closed that by making the
+worker a reporter and the submission-ring servicer the sole registry
+authority (D-16, D-17).
+
+- [x] **FE-7** -- Make the worker a reporter and the servicer the sole registry authority, and give the session something to run work on. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-7)
+- [x] **FE-8** -- Allocate the fixed native buffer and get one directory open and reading. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-8)
+- [x] **FE-9** -- Parse what the buffer returns and deliver entries. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-9)
+- [x] **FE-10** -- Bound each quantum and make backpressure lossless. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-10)
+- [x] **FE-11** -- Complete the failure and capability taxonomy the contract settled. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-11)
+- [x] **FE-12** -- Complete cancellation, abandonment, and teardown around the live engine. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-12)
+
+### M7 -- Verification, Globazog acceptance, and publication
+
+- [x] **FE-13** -- Build the real-Windows integration suite. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-13)
+- [x] **FE-14** -- Discharge the D-15 Globazog acceptance gate with a real adapter demonstration, not a metadata cross-check. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-14)
+- [x] **FE-15** -- Complete crate-level API and safety documentation, README examples covering ordinary and traversal-style submission, and the changelog baseline. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-15)
+- [x] **FE-16** -- Validate publication: packaged contents, docs.rs metadata, release automation, sibling-dependency version ordering against crates.io, and `cargo publish --dry-run`. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-16)

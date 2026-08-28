@@ -13,7 +13,6 @@ plans tracker: [crates/windows-file-enumeration-sys/PLANS.md](crates/windows-fil
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | M4 completed the publishable `windows-impersonation-token-sys` captured-context platform layer; M5 completed the publishable `windows-file-enumeration-sys` flat-directory API, bounded SQ/CQ session, and admission; M6 adds the native enumeration engine and M7 covers real-Windows verification, the Globazog acceptance gate, and publication. | [DESIGN-NOTES.md](DESIGN-NOTES.md); [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md); [design-sessions/DESIGN-SESSION-2026-08-27-async-file-enumeration.md](design-sessions/DESIGN-SESSION-2026-08-27-async-file-enumeration.md) |
 | [crates/windows-ioring-sys/CHECKLIST.md](crates/windows-ioring-sys/CHECKLIST.md) | in progress | Memory-safe Rust over the Windows `IoRing` submission/completion ring, as a new crate. M1-M7 (ring lifecycle through the `ring-copy` topology-aligned sample) are complete and archived. Only the parked, pinned-thread `M6+` work remains. | [crates/windows-ioring-sys/DESIGN-NOTES.md](crates/windows-ioring-sys/DESIGN-NOTES.md) |
 
 Add a row here when new work is planned, against [CHECKLIST.md](CHECKLIST.md) or any crate's.
