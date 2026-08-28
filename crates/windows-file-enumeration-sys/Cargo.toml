@@ -31,7 +31,7 @@ windows-impersonation-token-sys = { version = "0.1.0", path = "../windows-impers
 
 # ThreadpoolWork provides the coalesced SQ doorbell and the per-enumeration
 # synchronous refill workers.
-windows-threadpool-sys = { version = "0.1.2", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys" }
 
 # Paths and returned names remain native-width WTF-16 without lossy conversion.
 wtf-string = { version = "0.1.0", path = "../wtf-string" }

@@ -4,6 +4,7 @@
 use super::*;
 use crate::error::{MalformedRecord, Win32Error};
 use crate::testing::named_file;
+use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 
 #[test]
 fn an_identifier_round_trips_through_its_raw_value() {
@@ -66,11 +67,15 @@ fn a_cancelled_outcome_is_neither_completed_nor_failed() {
 fn a_failed_outcome_carries_its_error_inside_the_terminal() {
     // The failure travels *in* the terminal, which is what makes one reserved
     // slot enough to report it even when the ring is otherwise full.
-    let outcome =
-        TerminalOutcome::Failed(EnumerationError::DirectoryQuery(Win32Error::from_code(5)));
+    let outcome = TerminalOutcome::Failed(EnumerationError::DirectoryQuery(Win32Error::from_code(
+        ERROR_ACCESS_DENIED,
+    )));
     assert!(!outcome.is_completed());
     let failure = outcome.failure().expect("a failed outcome has an error");
-    assert_eq!(failure.code(), Some(Win32Error::from_code(5)));
+    assert_eq!(
+        failure.code(),
+        Some(Win32Error::from_code(ERROR_ACCESS_DENIED))
+    );
 }
 
 #[test]

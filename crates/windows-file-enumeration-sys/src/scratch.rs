@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Distinguishes fixtures created within the same process and millisecond.
+/// Distinguishes fixtures created within the same process.
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// A temporary directory that deletes itself.

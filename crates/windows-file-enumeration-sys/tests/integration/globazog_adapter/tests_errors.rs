@@ -6,6 +6,7 @@
 //! for why a live mid-stream failure cannot be manufactured here.
 
 use windows_file_enumeration_sys::{EnumerationError, TerminalOutcome, Win32Error};
+use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 
 use crate::globazog_adapter::adapter::{enumerate_dir_native_via_wfe, finish_scan};
 use crate::globazog_adapter::tests_support::ascii_name;
@@ -26,7 +27,7 @@ fn a_missing_root_is_a_fatal_error_with_no_dirscan_produced() {
 #[test]
 fn finish_scan_reports_a_fatal_error_when_failure_leaves_no_entries() {
     let outcome = TerminalOutcome::Failed(EnumerationError::DirectoryQuery(Win32Error::from_code(
-        5, // ERROR_ACCESS_DENIED; the specific code is not the point here.
+        ERROR_ACCESS_DENIED,
     )));
     let result = finish_scan(Vec::new(), outcome);
     assert!(
@@ -45,8 +46,9 @@ fn finish_scan_preserves_a_partial_listing_and_reports_one_entry_error() {
     let ok = enumerate_dir_native_via_wfe(scratch.path(), EnumPlan::FULL).expect("a scan");
     assert_eq!(ok.entries.len(), 1);
 
-    let outcome =
-        TerminalOutcome::Failed(EnumerationError::DirectoryQuery(Win32Error::from_code(5)));
+    let outcome = TerminalOutcome::Failed(EnumerationError::DirectoryQuery(Win32Error::from_code(
+        ERROR_ACCESS_DENIED,
+    )));
     let scan = finish_scan(ok.entries, outcome).expect(
         "a failure with entries already collected must truncate the listing, not discard it",
     );

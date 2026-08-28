@@ -5,6 +5,7 @@ use super::*;
 use crate::error::{EnumerationError, Win32Error};
 use crate::testing::named_file;
 use std::os::windows::io::AsHandle;
+use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 
 fn ring(capacity: usize) -> Arc<CompletionRing> {
     Arc::new(CompletionRing::new(capacity))
@@ -87,7 +88,7 @@ fn a_terminal_can_be_delivered_into_a_ring_that_is_otherwise_full() {
     assert!(!ring.has_data_room());
 
     slot.send(TerminalOutcome::Failed(EnumerationError::DirectoryQuery(
-        Win32Error::from_code(5),
+        Win32Error::from_code(ERROR_ACCESS_DENIED),
     )));
 
     // The two entries precede the terminal.

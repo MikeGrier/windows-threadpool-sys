@@ -3,12 +3,16 @@
 
 use super::*;
 use std::error::Error as _;
+use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 
 #[test]
 fn a_win32_code_round_trips_through_io_error() {
-    let code = Win32Error::from_code(5);
-    assert_eq!(code.code(), 5);
-    assert_eq!(code.to_io_error().raw_os_error(), Some(5));
+    let code = Win32Error::from_code(ERROR_ACCESS_DENIED);
+    assert_eq!(code.code(), ERROR_ACCESS_DENIED);
+    assert_eq!(
+        code.to_io_error().raw_os_error(),
+        Some(ERROR_ACCESS_DENIED as i32)
+    );
     assert_eq!(Win32Error::from_io(&code.to_io_error()), code);
 }
 

@@ -15,7 +15,7 @@ use windows_file_enumeration_sys::{Completion, EnumerationId, Receiver, Terminal
 /// thread pool, not a scripted clock.
 const RECV_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Distinguishes fixtures created within the same process and millisecond.
+/// Distinguishes fixtures created within the same process.
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// A temporary directory that deletes itself and everything under it.
@@ -105,10 +105,11 @@ pub fn create_junction(link: &Path, target: &Path) {
 /// Drain a receiver until `enumeration`'s terminal arrives, collecting every
 /// entry delivered for it along the way.
 ///
-/// Panics if no terminal arrives within [`RECV_TIMEOUT`], or if any record
-/// arrives after the terminal, or if more than one terminal arrives for this
-/// enumeration -- the ordering contract every scenario in this suite depends
-/// on holding.
+/// Panics if no terminal arrives within [`RECV_TIMEOUT`], or if a record for a
+/// different enumeration is observed on this receiver. Returns as soon as
+/// `enumeration`'s terminal arrives; it relies on the session's own guarantee
+/// of exactly one terminal per enumeration rather than continuing to drain
+/// afterward to re-verify that guarantee itself.
 pub fn drain_to_terminal(
     receiver: &Receiver,
     enumeration: EnumerationId,
