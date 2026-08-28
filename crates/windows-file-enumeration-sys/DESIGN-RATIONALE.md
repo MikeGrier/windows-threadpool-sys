@@ -304,3 +304,75 @@ The demonstration is 53 integration tests plus the reused unit-level
 `finish_scan` proofs, stable across ten consecutive runs with no leaked
 scratch state, and it satisfies D-15 without turning Globazog into an actual
 dependency of this workspace.
+
+## Why reporting `Parked` re-checks room instead of trusting a wakeup (D-21)
+
+CI found what local runs never did: `scale::a_completion_ring_far_smaller_than_
+the_directory_still_delivers_everything` (500 entries, the smallest ring the
+contract allows) hung for the full receive timeout on GitHub Actions' hosted
+Windows runner, twice in a row, at essentially the same elapsed time both
+times. The first hypothesis was environmental slowness -- the runner's few
+vCPUs and the process-default thread pool's conservative thread-injection
+heuristic under the full workspace's concurrent test load -- and the fix
+tried first was simply a larger receive timeout (30s to 120s). That made no
+difference: the third run still hung for the full 120s. A deterministic
+timeout being hit exactly, twice, at two different ceilings, is not what
+genuine contention-driven slowness looks like (which would vary run to run);
+it is what a permanent stall looks like.
+
+Re-reading `report_quantum`'s `QuantumOutcome::Parked` arm against
+`Receiver::recv`'s `resume_parked` call exposed the real defect: `advance`
+decides `Parked` with no lock held (by design -- D-3 -- since a quantum may
+block on a directory query), and only afterward does `report_quantum` take
+the registry lock to write `state.parked = true`. Nothing stops a receiver
+from draining the very record the worker was blocked on, and calling
+`resume_parked`, inside that gap. `resume_parked` reads the registry
+correctly and finds nothing parked, because nothing was parked yet by any
+definition it can observe -- and once the ring runs dry, nothing will ever
+call `resume_parked` again. The worker then writes `parked = true`
+unconditionally, over room that has already existed for however long the gap
+lasted, and the enumeration is stranded: exactly the deterministic hang
+observed, at whatever the timeout happened to be.
+
+This is an ordinary missed-wakeup race, not specific to Windows or this
+crate's shape, but two things made it fail exactly here and only on CI: the
+smallest ring forces one park/resume round trip per entry rather than
+amortizing many entries per round trip, so five hundred entries meant five
+hundred chances to hit a gap that is normally a handful of instructions wide;
+and GitHub's hosted runner's thinner, more contended scheduling (fewer vCPUs,
+more preemption from the whole workspace's concurrent tests sharing the
+process-default pool) widens that gap enough to make hitting it at least once
+in five hundred tries reliable rather than vanishingly rare. A dev machine
+with more headroom can run the same scenario thousands of times without ever
+landing in the gap, which is exactly why FE-12's local stability loop (30
+consecutive runs) never caught it.
+
+The fix -- re-checking `has_data_room` inside `report_quantum`, under the
+same registry lock `resume_parked` reads under, and resuming immediately
+instead of parking when room is already there -- was chosen over two
+alternatives. Making `resume_parked` retry (poll again after a short delay,
+in case the parked flag was about to be set) would still leave a race, just a
+narrower one, and would trade a correctness bug for a timing-dependent
+band-aid of exactly the kind this investigation started by mistakenly
+reaching for. Moving the room check inside the registry lock everywhere
+(checking room every time any registry field is touched) would couple the
+completion ring's locking to the registry's for no benefit beyond this one
+call site. Re-checking only at the one point that writes `parked = true` is
+the minimal, provably sufficient fix: whichever of the two racing sides --
+the worker's write, or the receiver's drain-and-read -- runs second under
+that single lock is now the side that observes the other's update, so no
+interleaving of the two events can lose the wakeup.
+
+The race was reproduced deterministically, not just inferred, using the
+existing state-machine model (`model.rs`): script filling the ring to
+capacity, claiming the enumeration, draining everything queued with
+`Op::DrainReceiver` -- which is what calls `resume_parked` while the
+worker's claim is still outstanding -- and only then reporting `Parked`.
+Temporarily reverting the fix and running that scenario reproduces the
+stranding exactly (`model.ready()` stays `0` forever); with the fix, the
+enumeration resumes (`model.ready()` becomes `1`) as soon as `Parked` is
+reported, because room was already there. The receive-timeout increase tried
+first was reverted once the actual defect was fixed: the original 30s ceiling
+was never the problem, and inflating it for every integration test would only
+have made a future genuine hang in any other test take four times as long to
+be reported as a failure.

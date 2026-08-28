@@ -35,6 +35,7 @@ making submission, delivery, cancellation, and resource bounds explicit.
 | <a id="d-18"></a>D-18 | **Each accepted enumeration reserves a retirement message as well as a cancellation.** Reporting oneself finished must be as infallible as being cancelled, which raises the minimum submission capacity to four. |
 | <a id="d-19"></a>D-19 | **The native buffer is allocated at admission, fallibly, with an 8-byte-aligned base.** A request stays a cheap, clonable, comparable description; the buffer belongs to the enumeration it serves. |
 | <a id="d-20"></a>D-20 | **A quantum's progress is bounded by both a record count and an elapsed-time budget; whichever is spent first ends it.** A quantum always examines at least one record regardless of either bound. A quantum parked for completion-ring room remembers that its retained record already needs delivery, so resuming re-checks room with one cheap call before reparsing it. |
+| <a id="d-21"></a>D-21 | **Reporting `Parked` re-checks completion-ring room under the same lock `resume_parked` reads.** A quantum decides `Parked` with no lock held, so a receiver can drain the very record it was waiting on, and call `resume_parked`, before the worker ever records that it was waiting -- a missed wakeup that strands the enumeration forever. Re-checking room while reporting closes the window regardless of which side runs last. |
 
 ## Control authority and worker lifetime
 
@@ -87,6 +88,31 @@ while that flag is set asks the ring for room with one cheap call before
 reparsing, rebuilding, and re-evaluating a predicate against a record whose
 fate is already decided -- which is what keeps a sustained full ring from
 paying that cost on every retry.
+
+Deciding `Parked` and recording it are not the same instant: `advance` checks
+room with no lock held (D-3's own reasoning -- a quantum may block on a
+directory query, so the registry lock cannot cover it), and only afterward
+does `report_quantum` take the registry lock to write `state.parked = true`.
+A receiver can drain the record the worker was blocked on, and call
+`resume_parked`, inside that gap -- before the worker has recorded that it is
+waiting at all. `resume_parked` reads the registry under its own lock and
+finds nothing parked, because there is, yet, truthfully nothing parked; it
+does its job correctly and still misses the wakeup, because the wakeup had
+not happened yet by any definition available to it. Nothing else will ever
+call `resume_parked` again once the ring runs dry, so a worker that then
+writes `parked = true` unconditionally strands that enumeration forever --
+reproduced deterministically by scripting exactly that order (offer entries
+to fill the ring, claim, drain everything queued, only then report `Parked`)
+against the state-machine model, and confirmed on GitHub Actions' hosted
+Windows runner, whose thinner, more contended scheduling makes the gap wide
+enough to hit reliably though it is vanishingly rare on a lightly loaded dev
+machine. The fix is for `report_quantum` to re-check `has_data_room` itself
+while still holding the same registry lock `resume_parked` reads under,
+immediately resuming instead of parking when room is already there: whichever
+of the two sides -- the worker recording that it waited, or the receiver
+whose drain created the room -- runs second under that one lock is now the
+side that observes the other's update, so the race has no order left in which
+a wakeup can be lost (D-21).
 
 ## Request path contract
 

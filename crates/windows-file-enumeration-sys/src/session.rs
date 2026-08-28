@@ -412,7 +412,21 @@ impl SessionShared {
                     None
                 }
                 QuantumOutcome::Parked => {
-                    state.parked = true;
+                    // `advance` checked room with no lock held, so a receiver
+                    // may already have drained the record this worker was
+                    // waiting on -- and already called `resume_parked` and
+                    // found nothing, because this worker had not yet reached
+                    // this lock to say it was waiting. Re-checking room here,
+                    // while still holding the same lock `resume_parked` reads
+                    // under, closes that window: whichever of the two sides
+                    // runs last is the one that observes the other's update,
+                    // so the enumeration can never be left parked with room
+                    // already available and nothing left to wake it.
+                    if self.completions.has_data_room() {
+                        resume = true;
+                    } else {
+                        state.parked = true;
+                    }
                     None
                 }
                 QuantumOutcome::Idle => None,

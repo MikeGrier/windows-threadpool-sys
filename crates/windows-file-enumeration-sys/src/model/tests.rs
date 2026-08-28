@@ -241,6 +241,63 @@ fn a_parked_enumeration_is_resumed_by_a_take() {
     assert_eq!(model.terminal(0), Some("completed"));
 }
 
+/// The mirror image of the above: the receiver drains everything the worker
+/// was blocked on *before* the worker ever reports `Parked`, so its
+/// `resume_parked` call finds this enumeration merely running, not parked --
+/// a real missed wakeup, closed only if reporting `Parked` re-checks room
+/// itself rather than trusting a signal that already fired and found nothing.
+#[test]
+fn a_worker_that_parks_after_the_receiver_already_drained_is_not_stranded() {
+    // Capacity 3 with one reserved terminal leaves exactly two entry slots.
+    let mut model = Model::new(8, 3);
+    model.run(&[
+        Op::Begin,
+        Op::Service,
+        Op::Claim,
+        Op::OfferEntry(0, "a"),
+        Op::OfferEntry(0, "b"),
+        // No room for the third; the engine's quantum has decided to park,
+        // but has not yet reported that -- exactly as in production, where
+        // `advance` returns `Parked` with no lock held.
+        Op::OfferEntry(0, "c"),
+    ]);
+    assert_eq!(model.refused(), 1);
+    assert_eq!(
+        model.ready(),
+        0,
+        "the enumeration is still held, not queued"
+    );
+
+    // The receiver drains everything queued -- and therefore calls
+    // `resume_parked` twice -- before the worker ever reports. Both calls
+    // see this enumeration as merely running, not parked, because the
+    // worker has not reached `report_quantum` yet.
+    model.run(&[Op::DrainReceiver]);
+    assert_eq!(model.entries(0), ["a", "b"]);
+
+    // Only now does the worker report what its quantum decided. Room has
+    // been available since the drain above, and nothing will ever call
+    // `resume_parked` again -- no further entry is ever offered -- so
+    // leaving this enumeration parked here would strand it forever.
+    model.run(&[Op::Report(Quantum::Parked)]);
+    assert_eq!(
+        model.ready(),
+        1,
+        "room was already available when the worker reported Parked; it must \
+         resume itself rather than trust a wakeup that already happened"
+    );
+
+    // Finish it off to prove the model's own invariants still hold.
+    model.run(&[
+        Op::RunEngine(Quantum::Completed),
+        Op::Service,
+        Op::Detach(0),
+        Op::DrainReceiver,
+    ]);
+    assert_eq!(model.entries(0), ["a", "b"]);
+    assert_eq!(model.terminal(0), Some("completed"));
+}
+
 /// The terminal is deliverable exactly when there is no ordinary room left,
 /// which is the reason its slot is reserved at admission.
 #[test]
