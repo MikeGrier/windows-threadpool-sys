@@ -42,6 +42,17 @@ fn a_file_resolves_to_a_verbatim_path() {
 
 #[test]
 fn a_directory_resolves_to_its_own_path() {
+    // Deliberately NOT compared against `fixture.directory()` as text. That
+    // path comes from `std::env::temp_dir()`, which can hand back the 8.3 short
+    // form (`C:\Users\RUNNER~1\...`) while this call, with
+    // FILE_NAME_NORMALIZED, returns the long form (`C:\Users\runneradmin\...`).
+    // The two are the same directory and different strings.
+    //
+    // Measured the hard way: the textual version passed on a host whose user
+    // name is exactly eight characters -- so no mangling occurred -- and failed
+    // on CI, where it is longer. That is an environment difference in the
+    // *test*, not a platform finding, and comparing normalised forms is what
+    // makes it go away for the right reason.
     let _allocating = handle_allocation()
         .read()
         .expect("the lock is not poisoned");
@@ -53,16 +64,35 @@ fn a_directory_resolves_to_its_own_path() {
         .expect("resolve the fixture directory")
         .to_string_lossy();
 
-    let expected = fixture
+    // The unique final component survives any short/long-name difference, so it
+    // is the part worth asserting textually.
+    let name = fixture
         .directory()
-        .to_str()
-        .expect("the fixture path is valid UTF-8");
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("the fixture directory has a name");
     assert!(
-        resolved.ends_with(expected.trim_start_matches(r"\\?\")),
-        "resolved {resolved} should end with {expected}"
+        resolved.ends_with(name),
+        "resolved {resolved} should end with {name}"
+    );
+
+    // And the whole path is cross-checked against `std::fs::canonicalize`,
+    // which normalises the same way. This is the substitution the audit found
+    // Globazog making -- it reaches this call through canonicalize -- so the
+    // two agreeing is exactly the property that matters for that consumer.
+    //
+    // Worth stating what it does not prove: canonicalize is itself
+    // GetFinalPathNameByHandleW underneath, so this checks that our flags and
+    // grow-retry reach the same answer, not that the answer is independently
+    // correct. The component check above is the independent half.
+    let canonical =
+        std::fs::canonicalize(fixture.directory()).expect("canonicalize the fixture directory");
+    assert_eq!(
+        resolved,
+        canonical.to_str().expect("a canonical path is valid UTF-8"),
+        "the entry must agree with std::fs::canonicalize"
     );
 }
-
 #[test]
 fn the_buffer_grows_for_a_path_longer_than_the_first_attempt() {
     // The retry, forced rather than assumed. The first attempt uses a MAX_PATH
