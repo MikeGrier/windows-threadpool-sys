@@ -202,7 +202,28 @@ must not be able to represent it: this is a case for a type that cannot express
 the invalid state rather than a runtime check that returns an error nobody
 expected.
 
+**The thread error mode is independent storage, not a view of the process
+mode.** This was measured second, because the first result had a hole in it: if
+a process bit showed through `GetThreadErrorMode`, then capture could observe a
+value the declarable type is unable to hold, and a type that cannot represent a
+state the platform can produce is a bug rather than a safeguard. It does not
+happen. With the process mode set to `0x0005` -- including the alignment bit --
+`GetThreadErrorMode` still returned `0x0000`, and a thread-scoped set worked
+normally alongside it. So a captured thread value can only ever contain settable
+bits, and excluding the alignment bit from the type is safe rather than lossy.
+
+That probe also confirmed the stickiness the documentation asserts, which had
+been taken on trust: restoring the process mode to its prior `0x8001` left it
+reading `0x8005`. The alignment bit, once set at process scope, cannot be
+cleared. Its exclusion from the per-thread API is consistent with that rather
+than arbitrary.
+
 Recorded on this rig only. Unlike the numeric thread-pool results elsewhere in
-the workspace, this one is not expected to be architecture-dependent -- the bit
-is a *process*-scoped setting and is rejected on that basis rather than on any
-alignment-handling grounds -- but it has not been confirmed on x64.
+the workspace, these are not expected to be architecture-dependent -- the bit is
+a *process*-scoped setting and is rejected on that basis rather than on any
+alignment-handling grounds -- but they have not been confirmed on x64.
+
+One incidental observation, recorded because it would otherwise look like a bug
+in a future test: the process error mode is **not** zero at entry under a normal
+Rust binary. It was `0x8001` here, so a test asserting a pristine process mode
+would fail for reasons that have nothing to do with this crate.
