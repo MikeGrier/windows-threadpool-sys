@@ -300,7 +300,7 @@ Entries 1-4 of the audited list. Each depends on M24's foundations and on nothin
   Win32 call means it is its own entry, and it is the first consumer of M24.2's owned handle on the input
   side.
 
-- [ ] **M25.3** -- The `FindFirstChangeNotificationW` entry. Path, subtree flag, and notification filter,
+- [x] **M25.3** -- The `FindFirstChangeNotificationW` entry. Path, subtree flag, and notification filter,
   producing a handle that is **not** closed with `CloseHandle`.
 
 - [ ] **M25.4** -- The close entries. `CloseHandle` belongs in the catalogue because it blocks on

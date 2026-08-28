@@ -113,6 +113,7 @@ pub mod open_by_id;
 pub mod outcome;
 pub mod path;
 pub mod security;
+pub mod watch;
 
 pub use buffer::AlignedBuffer;
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
@@ -132,3 +133,4 @@ mod tests;
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
 };
+pub use watch::{ChangeNotification, NotifyFilter, WatchDirectory};
