@@ -540,6 +540,101 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   **looked like the platform refusing something** -- the worst failure mode a probe can have. Fixtures are
   now unique per instance.
 
+## M28 -- Probes that do not measure what they claim
+
+Found by the M24-M27 code review. Every item here is a probe whose assertion passes without
+establishing the fact it is cited for, which is the one failure mode this crate exists to prevent:
+a vacuous probe does not merely fail to inform, it launders an unmeasured claim into
+[crates/windows-platform-probes/DESIGN-NOTES.md](crates/windows-platform-probes/DESIGN-NOTES.md)
+and from there into the design. Two defects of exactly this shape were already found and fixed
+during M25 and M27, so treat this as a recurring class rather than a set of isolated slips.
+
+- [ ] **M28.1** -- Make `submitter_exited` an observation rather than a literal.
+  `measure_thread_agnosticism` hard-codes `submitter_exited: true`
+  ([ioring.rs](crates/windows-platform-probes/src/ioring.rs) `:470`), so the test's guard
+  "the submitting thread must really be gone, or the probe measures nothing" is `assert!(true)`.
+  The submitter calls `submit_and_wait(0)`, which returns once the SQEs are submitted, so a
+  512-byte read of a cached temp file normally completes before the thread exits -- meaning the
+  run is indistinguishable from one where the IRP genuinely outlived its thread, which is the
+  claim the design rests on. Have the submitting thread record `ring.pop().is_none()` immediately
+  before returning and report that, and force a genuinely pending IRP so the probe can fail.
+
+- [ ] **M28.2** -- Assert the premise in `measure_raise_while_saturated`. Its settle loop exits on
+  saturation **or** timeout, and `before` is then whatever `started` happened to reach
+  ([pool_growth.rs](crates/windows-platform-probes/src/pool_growth.rs) `:304`-`:317`). If the pool
+  reached only 1 of `base_max`, the function times ordinary growth toward the *base* maximum and
+  reports it as the effect of the raise; the `delay < 1s` assertion passes while measuring the
+  wrong thing. Nothing asserts `before == base_max`. Add that assert, and return a value that
+  distinguishes "the raise took effect after D" from "the settle window expired". Note the
+  function's doc-comment already claims a panic that neither it nor `measure_growth` performs.
+
+- [ ] **M28.3** -- Make the identity-asymmetry test assert the asymmetry it names.
+  `the_submitting_thread_and_its_worker_disagree_about_identity`
+  ([tests.rs](crates/windows-platform-probes/src/tests.rs) `:202`-`:213`) binds
+  `submitter_had_token` to `observed.is_unimpersonated()`, which is a property of the **worker**,
+  not the submitter. The test therefore asserts byte-for-byte what
+  `a_worker_does_not_inherit_an_impersonating_submitters_token` already asserts and checks no
+  asymmetry at all. Have `observe_on_worker_while_impersonating` return both observations so the
+  test can assert `submitter.has_thread_token && worker.is_unimpersonated()`.
+
+- [ ] **M28.4** -- Guard the separate-opens control against a vacuous fixture.
+  `restarted()` is `next == source_first`, so if one `enumerate` call ever drained the directory
+  both would be the full listing and the control would report "independent cursors" with no cursor
+  ever left mid-directory ([handle_state.rs](crates/windows-platform-probes/src/handle_state.rs)
+  `:308`-`:312`, test at `:101`). Unlike its sibling tests this path never calls `ground_truth`,
+  which is where the `vacuous fixture` assert lives. It is non-degenerate today only by
+  coincidence of `BUFFER_BYTES` and `FIXTURE_FILES`. This is the same 3-entry-fixture defect
+  already fixed once on this branch, left on the control that gives the duplication finding its
+  meaning.
+
+## M29 -- Probe resource and isolation defects
+
+Also from the M24-M27 review. These do not falsify a recorded claim on their own, but M29.1 can
+manufacture a false negative that looks like the platform refusing something, and the rest are
+handle or memory defects that CI now executes on every run since M27.5 added the ignored tier to
+[.github/workflows/ci.yml](.github/workflows/ci.yml).
+
+- [ ] **M29.1** -- Stop the two `device_map` probes racing for one drive letter.
+  `free_drive_letter` reads `GetLogicalDrives` and returns the first free letter with no
+  reservation ([device_map.rs](crates/windows-platform-probes/src/device_map.rs) `:183`), and both
+  ignored tests then `subst` the **same** target onto it. Under the parallel harness both can pick
+  the same letter before either defines it; without `DDD_EXACT_MATCH_ON_REMOVE` the two targets
+  stack on one letter and each removal pops one. Reported reproduced 7 runs in 8. The dangerous
+  outcome is the second one -- `target: None`, a false negative on the fixture check caused by a
+  sibling test rather than by the platform. Claim the letter atomically, use a distinct target per
+  test, and pass `DDD_EXACT_MATCH_ON_REMOVE`.
+
+- [ ] **M29.2** -- Do not free an `OVERLAPPED` and its buffer while the I/O may be pending.
+  `read_through_port` discards `ReadFile`'s return value; if the read goes pending and
+  `GetQueuedCompletionStatus` times out, the stack `OVERLAPPED` and the heap buffer are destroyed
+  and the port closed with the IRP outstanding, so the kernel later writes into freed memory
+  ([completion_port.rs](crates/windows-platform-probes/src/completion_port.rs) `:251`-`:281`). The
+  same shape exists on the `IoRing` timeout path
+  ([ioring.rs](crates/windows-platform-probes/src/ioring.rs) `:324`-`:332`). `CancelIoEx` and
+  drain the completion on the failure path so the buffer outlives the operation in every case,
+  not only the happy one.
+
+- [ ] **M29.3** -- Bound the `IoRing` completion spin.
+  `while completion.is_none() { completion = ring.pop(); }` has no deadline and no yield
+  ([ioring.rs](crates/windows-platform-probes/src/ioring.rs) `:460`-`:463`), so a completion that
+  never arrives spins a core forever. Every other wait in this crate is bounded. It is in the
+  ignored tier that CI now runs, so it would burn the job's 15-minute ceiling rather than report a
+  failure.
+
+- [ ] **M29.4** -- Release the workers on an unwind. `gate.open()` is a plain statement, so any
+  panic between the first `submit()` and that call skips it
+  ([pool_growth.rs](crates/windows-platform-probes/src/pool_growth.rs) `:201`-`:240` and
+  `:286`-`:322`); `Drop for ThreadpoolWork` then waits rather than cancels, deadlocking the
+  process permanently. Open the gate from a drop guard so unwinding releases the workers.
+
+- [ ] **M29.5** -- Close the `TP_IO` before its file.
+  `CreateThreadpoolIo`'s `PTP_IO` is never passed to `CloseThreadpoolIo`, leaking one object per
+  `measure()` call, and the file handle is closed while the still-live `TP_IO` references it --
+  the inverse of the required teardown order
+  ([completion_port.rs](crates/windows-platform-probes/src/completion_port.rs) `:218`-`:227`).
+  Every other handle in this crate is closed exactly once via `Drop`. Wrap it in an RAII type that
+  closes before the `File` drops.
+
 ## M26+ -- Gated on the namespace-facility design branch landing
 
 - [ ] **M26+.1** -- Reconcile the duplicated design background. This branch imported
