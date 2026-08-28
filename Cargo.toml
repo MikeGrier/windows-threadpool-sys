@@ -8,6 +8,7 @@ members = [
 	"crates/windows-impersonation-token-sys",
 	"crates/windows-ioring-sys",
 	"crates/windows-overlapped-io-sys",
+	"crates/windows-thread-ambient-sys",
 	"crates/windows-threadpool-sys",
 	"crates/windows-topology-sys",
 	"crates/wtf-string",

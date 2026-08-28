@@ -120,7 +120,7 @@ Scope boundary, stated so the crate cannot swell: it carries thread-scoped ambie
 a Win32 call does. It does not carry request parameters, does not open files, and does not know what a
 namespace operation is.
 
-- [ ] **M22.1** -- Record the extraction decision and the WOW64 correction in
+- [x] **M22.1** -- Record the extraction decision and the WOW64 correction in
   [DESIGN-NOTES.md](DESIGN-NOTES.md), sweeping every statement of each rather than the one site a reader
   happens to notice. Two changes. First, the composite is extracted **now**, into
   `windows-thread-ambient-sys`: the imported text says it "lives in the facility's crate" and is "not
@@ -130,14 +130,17 @@ namespace operation is.
   value to transplant, so the transplanted classification was not implementable. That dissolves the WOW64
   half of the session's open question rather than leaving it standing, and the open question must be struck
   in the same commit.
-
+  **Landed together with M22.3, and the coupling is a defect in this plan rather than a convenience:** the
+  correction's authoritative statement links to the new crate's `DESIGN-NOTES.md`, so writing it before the
+  crate existed would have created a broken cross-reference. Sequencing M22.3 first would have been the
+  correct plan.
 - [ ] **M22.2** -- Measure which `SEM_` bits `SetThreadErrorMode` actually accepts, because it decides
   which bits this crate can offer as declarable. The documented set is three bits and excludes
   `SEM_NOALIGNMENTFAULTEXCEPT`, which is process-scoped and sticky once set. If measurement confirms that,
   M21.2's second sub-question dissolves rather than needing an ARM64/x64 pair, and M21.2 is updated to say
   so. Reason it from measurement, not from the documentation.
 
-- [ ] **M22.3** -- Create the crate: `Cargo.toml`, workspace membership, `README.md`, a `CHANGELOG.md`
+- [x] **M22.3** -- Create the crate: `Cargo.toml`, workspace membership, `README.md`, a `CHANGELOG.md`
   baseline, a row in [PLANS.md](PLANS.md), and a crate `DESIGN-NOTES.md` recording the shape decisions
   before any of them are implemented -- the two-set decomposition (a capture set over capturable aspects,
   and declared fields that have nothing to collect and default to leaving the worker's value alone); the

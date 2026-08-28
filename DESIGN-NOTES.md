@@ -1346,9 +1346,23 @@ impersonation innermost, because its window is narrowest and its restoration is
 the one that must not be delayed. Applying a subset stays expressible, which is
 what the differing windows require.
 
-The composite lives in the facility's crate and is re-exported. It becomes a
-genuine cross-crate contract once the enumeration crate's open moves onto it, and
-may be extracted then; it is not extracted preemptively.
+**The composite is extracted into its own crate,
+[crates/windows-thread-ambient-sys](crates/windows-thread-ambient-sys/DESIGN-NOTES.md).**
+An earlier statement of this decision kept it inside the facility and said it was
+"not extracted preemptively", to be extracted only once the enumeration crate's
+open moved onto it. That reasoning is unchanged; its precondition simply
+arrived early, from a direction it did not anticipate. An independent consumer
+needs to carry a caller's ambient state onto another thread with none of this
+facility around it, which is exactly the cross-crate contract the earlier
+statement was waiting for. Extraction is therefore not preemptive, and the
+facility consumes the crate rather than owning the type.
+
+That crate is a **level platform, not this facility's helper**: it offers every
+aspect for capture *and* for explicit declaration, and it encodes none of the
+policy below. The forced error mode in particular is *this facility's* choice,
+composed from primitives the crate provides -- a consumer with a private thread,
+where a modal dialog is its own problem and nobody else's, is entitled to the
+opposite choice and must not have to fight the platform layer to make it.
 
 #### Three relationships to the caller, not one
 
@@ -1357,14 +1371,13 @@ aspects do not all relate to the submitting thread the same way:
 
 | Category | Aspect | Behaviour |
 |---|---|---|
-| **Transplanted** | impersonation, WOW64 filesystem redirection | the submitter's captured value is applied on the worker |
+| **Transplanted** | impersonation | the submitter's captured value is applied on the worker |
 | **Overridden** | thread error mode | the facility's policy is applied *regardless* of what the caller had |
-| **Declared** | I/O and memory priority | supplied by the request; never captured |
+| **Declared** | WOW64 filesystem redirection, I/O and memory priority | supplied by the request; never captured |
 
 Consequences worth stating, because each is easy to get wrong:
 
-- **"Restore" means the worker's prior state in every case**, but what was
-  applied differs. A transplanted aspect installs the submitter's value; an
+- **"Restore" means the worker's prior state in every case**, but what was  applied differs. A transplanted aspect installs the submitter's value; an
   overridden one installs ours. Both are undone on the way out.
 - **The error mode is overridden, not transplanted.** `SEM_FAILCRITICALERRORS`
   and `SEM_NOOPENFILEERRORBOX` are forced, because a hard error on a shared pool
@@ -1375,6 +1388,16 @@ Consequences worth stating, because each is easy to get wrong:
   at all -- for diagnostics, or not at all as dead weight -- and whether the
   non-dialog bits are transplantable, is not yet settled; see
   [CHECKLIST.md](CHECKLIST.md).
+- **WOW64 redirection is declared, not transplanted, because it cannot be
+  captured.** An earlier statement of this table listed it as transplanted. That
+  was not implementable rather than merely debatable: `Wow64DisableWow64FsRedirection`
+  hands back an `OldValue` only as a side effect of *disabling* redirection, and
+  there is no getter, so there is no value to read off the submitting thread and
+  no way to observe the current state without changing it. A design that cannot
+  read an aspect cannot transplant it, so the request states what it wants and the
+  worker is set to that. This is the same shape as priority below and for the same
+  underlying reason -- unreadable ambient state -- which is why the two now share a
+  row.
 - **Priority is declared rather than sniffed.** It is only partially queryable,
   and a caller running under a background-priority mode would otherwise have its
   I/O silently promoted by the remoting -- a correctness regression a naive

@@ -234,6 +234,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-thread-ambient-sys"
+version = "0.0.0"
+dependencies = [
+ "windows-impersonation-token-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "windows-threadpool-sys"
 version = "0.1.3"
 dependencies = [

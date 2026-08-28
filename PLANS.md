@@ -6,6 +6,7 @@ plans tracker: [crates/windows-file-enumeration-sys/PLANS.md](crates/windows-fil
 [crates/windows-impersonation-token-sys/PLANS.md](crates/windows-impersonation-token-sys/PLANS.md),
 [crates/windows-ioring-sys/PLANS.md](crates/windows-ioring-sys/PLANS.md),
 [crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overlapped-io-sys/PLANS.md),
+[crates/windows-thread-ambient-sys/PLANS.md](crates/windows-thread-ambient-sys/PLANS.md),
 [crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md),
 [crates/windows-topology-sys/PLANS.md](crates/windows-topology-sys/PLANS.md), and
 [crates/wtf-string/PLANS.md](crates/wtf-string/PLANS.md). Checklists whose work is finished move to

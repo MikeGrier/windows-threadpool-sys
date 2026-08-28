@@ -1,0 +1,37 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-thread-ambient-sys"
+version = "0.0.0" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/windows-thread-ambient-sys"
+description = "Capture a Windows thread's ambient state and apply it on another thread."
+readme = "README.md"
+keywords = ["windows", "thread", "context", "impersonation", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "concurrency"]
+
+[lib]
+path = "src/lib.rs"
+
+# The crate is Windows-only, so docs.rs must build it on a Windows target or it
+# would render an empty crate.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+[dependencies]
+windows-impersonation-token-sys = { version = "0.1.1", path = "../windows-impersonation-token-sys" }
+
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+	"Win32_Foundation",
+	"Win32_System_Diagnostics_Debug",
+	"Win32_System_Threading",
+]

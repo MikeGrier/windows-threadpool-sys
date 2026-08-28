@@ -325,7 +325,11 @@ In brief:
    raise a modal dialog; and I/O and memory priority is *declared* in the request,
    never captured, because it is only partially queryable and remoting would
    otherwise silently promote a background caller's I/O.
-6. **The path is resolved at submission**, because the process CWD is mutable by
+   **The three-way division stands; the placement of WOW64 redirection in it does
+   not. It was corrected after this session to *declared*, because
+   `Wow64DisableWow64FsRedirection` has no getter and an aspect that cannot be read
+   cannot be transplanted. [DESIGN-NOTES.md](../DESIGN-NOTES.md#remoting-synchronous-namespace-operations)
+   is authoritative.**6. **The path is resolved at submission**, because the process CWD is mutable by
    any thread and even perfect remoting would be racy. Long paths are not
    silently prefixed with the extended-length marker.
 7. **The Win32 ring is not the `IoRing`.** Share the ring type, not the storage;
@@ -432,11 +436,13 @@ In brief:
   workers. With `runs_long` set that interval is microseconds, so any sane `T`
   clears it -- which is a further argument for making `runs_long` mandatory.
 - **Whether `WOW64` filesystem redirection and thread I/O priority can be
-  captured.** Redirection is thread-scoped and would silently change which files
+  captured.** **Resolved for redirection after this session -- it cannot be, so it
+  is now *declared* rather than *transplanted*; see
+  [DESIGN-NOTES.md](../DESIGN-NOTES.md#remoting-synchronous-namespace-operations).**
+  Redirection is thread-scoped and would silently change which files
   a 32-bit process sees. I/O priority is only partially queryable through
   documented API, which is why the design makes priority an explicit request
   field rather than sniffing ambient state.
-
 ## Corrections made during the session
 
 Recorded because each was caught by a control or a debugger rather than by
