@@ -123,6 +123,84 @@ below are the common surface both must satisfy.
 	[crates/windows-overlapped-io-sys/DESIGN-NOTES.md](crates/windows-overlapped-io-sys/DESIGN-NOTES.md) for the
 	overlapped-side realization.
 
+## <a id="specifying-a-delivery-contract"></a>Specifying a delivery contract: the ten gaps prose leaves open
+
+Three crates here publish a contract a consumer builds reliability on: `windows-file-watcher` (notification
+delivery), `windows-overlapped-io-sys` (completion delivery), and `windows-ioring-sys` (ring completion).
+Each states that contract as prose. Prose is the right medium -- these are stateful sequencing rules a
+per-value type cannot carry -- but prose fails in a *specific, repeating* way: it describes the happy path
+exhaustively and everything else **by omission**, and a reader cannot tell an omission that means "never
+happens" from one that means "we did not think to write it down."
+
+This was measured rather than theorized. PR #42 added a consumer test surface to `windows-file-watcher` plus
+an example harness whose generator promised to emit only contract-legal schedules. That promise made the
+harness a **second implementation of the contract**, and it took **19 automated review rounds** to converge:
+the review-response phase (39 commits, 2,077 insertions) exceeded the original implementation (16 commits).
+Eight of those rounds fixed schedules the watcher could never actually emit; five corrected the contract
+prose itself; one found a real shipped reliability defect (see
+[the `has_room` finding](#the-has_room-finding)).
+
+Every one of those findings falls into one of ten categories. **A contract that a consumer is invited to rely
+on must state each of these explicitly, or say plainly that it is unspecified.** Silence is the defect.
+
+| # | Category | The question prose usually leaves unanswered | PR #42 instance (commit) |
+|---|---|---|---|
+| 1 | **Independent options read as one concept** | Two separately-named options exist; are all four combinations legal, or do they co-vary? | `RetryMode::Interactive` and `VolumeChangePolicy::Confirm` are independent `WatchOptions` fields; the generator gated both on one "interactive" flag, so it could not model a confirm-only watch (`3e78dca`) |
+| 2 | **Unconditional read as probabilistic** | When the contract says an event "may" occur, is it *always* emitted in that state, or sometimes? | `enter_fault` asks **every** interactive route on **every** fault, with no probability; the generator gated the question on a chance, producing impossible silent recoveries (`a4d0a9b`) |
+| 3 | **State-dependent legality unenumerated** | The contract lists the modes; which messages is each mode *capable* of emitting? | A Coarse-tier watcher cannot emit `Batch` or `Desync { Overflow }` (the kernel change buffer's overflow, observable only through a detailed read); the generator emitted both after a re-establishment picked Coarse (`4a5a744`). The rest of the causes -- `QueueFull`, `Reestablished`, `Stopped` -- are tier-**in**dependent, and a later round found the generator had over-corrected into excluding a coarse `QueueFull` too (`af0a2bc`): this category cuts both ways, and an under-specified rule is as easily over-applied as ignored |
+| 4 | **Cross-message continuity invariant** | Message N carries a value; must message N+1's field equal it? | `install` stores the confirmed `VolumeIdentity`, so a watch's next `VolumeChanged.previous` must equal its prior `.current`; the generator drew each independently (`dc5cf30`) |
+| 5 | **Cross-field relationship within one message** | Each field is individually valid; are all *combinations* of them reachable? | `VolumeChanged` is only emitted when identity actually differs (D-78) and identity compares by serial alone (D-50), so equal serials are impossible -- but each serial is individually a legal value (`7e5b85c`) |
+| 6 | **Which state a transition is entered *from*** | A transition has a label; can it occur as a first entry, or only as a re-entry? | A live watch's fault always enters as `Arm`; `Open` only ever *re*-enters an already-unresolved bracket, so a standalone `Open` for a live watch is impossible (`867f419`) |
+| 7 | **Branch and terminal paths documented by omission** | The success path is exhaustive; are the failure and retry branches? | `Completion { Failed }` is not only an initial-registration outcome (rekey emits it too, `514df4b`); a question does not always resolve with `Desync { Reestablished }` -- a retry loop can ask again, and `record_stop` can terminate with `Desync { Stopped }` (`1c20ffc`) |
+| 8 | **Values that are deliberately never correlated** | Two related messages arrive; does the layer join them, or is that the consumer's job? | Rename halves are never joined or paired across a buffer (D-9); the generator forced them adjacent (`3056907`) |
+| 9 | **Boundary-type fidelity lost at the consumer** | The type is lossless; does the consumer's *storage of a derived form* stay lossless? | A lone UTF-16 surrogate cannot survive a Rust `String` (`a4e5c96`), and a lossy identity collapses two distinct valid Windows names into one set entry (`7498a3c`) |
+| 10 | **"Valid by construction" overclaimed** | A test builder is valid-by-construction; valid in the type-safety sense, or the *production-domain* sense? | `RelativeName::for_test_units` accepts an interior NUL the kernel never reports -- memory-safe and lossless, but outside the production domain (`20c2e25`) |
+
+Two properties of this list are worth stating outright.
+
+**It is a same-author hazard, not a competence one.** The same person wrote the watcher and the harness. Every
+gap above is a place where the author *knew* what the contract meant and the written contract did not say it,
+so the assumption was silently re-encoded rather than questioned. An independent implementer would have hit
+the same walls and asked; a same-author second implementation just quietly guesses, and guesses consistently
+with the first implementation's accidents as often as with its intent. **Writing a second implementation of
+your own contract is the cheapest way to find out what the contract failed to say** -- and it only works if
+the second implementation is held to the contract rather than to the first implementation's behavior.
+
+**Categories 1-8 are why "we have tests" is not a substitute.** Each is a statement about the *set of legal
+sequences*, and a test asserts one point in that set. The watcher's own 278 tests all passed throughout;
+they were never going to fail, because they test what the watcher does, and the gap was in what the contract
+*permits*. Only something that had to enumerate the legal set -- a generator, a model checker, a second
+implementation -- could surface them.
+
+**Stating a rule correctly is necessary and not sufficient.** This list addresses what a contract fails to
+*say*. It says nothing about whether the places that restate it agree, and running the audit itself creates
+more restatements. That is a separate failure mode with its own remedy -- see
+[Restatement drift](#restatement-drift), which measured five of six findings across three later review
+rounds as corrections that had not propagated rather than as original defects.
+
+### <a id="the-has_room-finding"></a>The `has_room` finding: why this is not a documentation exercise
+
+One review round found a genuine, shipped reliability defect in `windows-file-watcher` 0.1, and it is worth
+recording because it shows the cost is real rather than editorial.
+
+`Sender::has_room()` reported `free() > 0`. But `Sender::send` always flushes every **owed latched desync**
+into the queue *before* considering the caller's own notification, so a freed slot with a latch outstanding
+was never actually available to a new notification. `has_room` therefore returned `true` for a slot the very
+next `send` would consume for the flush.
+
+That is not a cosmetic mismatch, because of *who calls it*: `WatcherInner::arm_locked` gates re-arming on
+`any_route_has_room()`, which is [D-29](crates/windows-file-watcher/DESIGN-NOTES.md)'s entire backpressure
+mechanism. Its own comment states the intent -- "refusing to arm leaves the changes in the kernel's own
+buffer, which is a grace period rather than a loss, where discovering a full queue after the read has
+completed is a batch with nowhere to go." The bug produced exactly the outcome the design exists to prevent:
+the watcher armed a read, the read completed, the flush took the slot, and the batch was dropped and
+re-latched -- the grace period skipped, a loss taken where the design promised none. Fixed in `700e0eb` with
+a regression test; the crate's own test suite had never covered a `has_room` call with a latch outstanding.
+
+The general shape is the transferable part: **an advisory predicate that another subsystem's reliability
+gate depends on is not advisory.** Where one exists, its contract must state the condition it is checked
+under, and it must be tested in that condition rather than in isolation.
+
 ## Downstream directory notification evaluation scenario
 
 A separate future directory notification facility is an evaluation scenario for deciding how fully this crate
@@ -990,3 +1068,61 @@ Primary references:
 - [`ReadDirectoryChangesExW`](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-readdirectorychangesexw)
 - [`CancelIoEx`](https://learn.microsoft.com/windows/win32/api/ioapiset/nf-ioapiset-cancelioex)
 - [`windows-sys::Win32::System::Threading`](https://docs.rs/windows-sys/0.61.2/windows_sys/Win32/System/Threading/)
+
+## <a id="restatement-drift"></a>Restatement drift: why stating a rule correctly is necessary and not sufficient
+
+[The ten gap categories](#specifying-a-delivery-contract) address **under-specification** -- what a contract
+fails to say. PR #42's later review rounds surfaced a second failure mode they have no mechanism for, and it
+produced more findings than the original problem did once the audit was underway.
+
+**Restatement drift** is this: one fact is stated in several independent places, a correction reaches some of
+them, and the rest keep teaching the old answer. It is not a failure to specify. It is a failure of a
+correct specification to *propagate*.
+
+The evidence is unambiguous. Across three consecutive review rounds, **five of six findings were corrections
+of ours that had not propagated** -- not original defects. Measured on the two crates involved: `QueueFull`
+semantics are restated across **13 files**, "`Stopped` is terminal" across **8**. One fact -- whether a
+Coarse-tier watch can report `QueueFull` -- had four independent encodings (an audit table, a decision
+bullet, the workspace taxonomy row, and a generator plus its test) and drifted in *both* directions, first
+excluding a legal cause and later emitting an illegal one.
+
+**Why the taxonomy cannot catch it.** Every category asks a question about the contract's *content*: does it
+state this? The answer can be yes -- correctly, in the authoritative place -- while every copy says something
+else. An audit that verifies the contract is complete says nothing about whether its restatements agree, and
+running the audit is what created several of the copies.
+
+**The three-tier remedy**, ordered by how little it depends on anyone remembering:
+
+1. **Make the fact underivable elsewhere.** A rule that is a predicate over values belongs in code, once,
+   with everything else asking. `DesyncCause::is_terminal()` and `is_reachable_in(WatchMode)` retired the two
+   facts that had drifted; the harness generator now *calls* the second rather than re-encoding it, which is
+   [PLATFORM INTEGRITY](.github/copilot-instructions.md) rule 2 applied to a contract rather than to an
+   API. The test for this must be checked against a sabotaged definition: if changing the crate's rule does
+   not change the *consumer's behavior*, the binding is cosmetic.
+
+   **Sequencing rules are derivable too, and this originally said otherwise.** The first version of this
+   section recorded that ordering, bracket entry states and terminality "are not value-level and stay
+   prose". That was wrong, and building `ContractChecker` (M3) disproved it: what cannot express such rules
+   is the *type system*, not the codebase. Define them once as a shared executable oracle -- a state machine
+   over the observable stream -- placed in the crate that **owns** the contract, and have the generator, the
+   crate's own tests, and consumers' test doubles all bind to it. Give equal care to what the oracle
+   deliberately does *not* check: over-constraining is the same defect as under-specifying. The genuine
+   residue is only what no oracle can observe -- facts about state the stream never carries, such as
+   whether a question is still outstanding when its answer travels a different queue.
+
+2. **Make the restatements compile.** Prose examples rot silently because nothing executes them.
+   `windows-file-watcher`'s TESTING.md and README.md carried five Rust blocks that were never compiled --
+   there was no `include_str!` anywhere -- and one of them was among the four sites that taught the
+   `Stopped` error. Including them under `cfg(doctest)` turns a contract change that invalidates an example
+   into a build failure. This is the cheapest item and the highest yield.
+
+3. **Convention, for what neither covers.** Two rules, both recorded in
+   [.github/copilot-instructions.md](.github/copilot-instructions.md) because that is the channel humans
+   and Copilot both read: an analysis document never restates normative content, it edits the authority and
+   cites it; and any contract correction is preceded by a blast-radius sweep for every other statement of the
+   same fact.
+
+**The deepest lesson is about audits themselves.** Our audit recorded "now stated" for a qualification it had
+written into the *audit table* while the decision row it contradicted still said the opposite. An audit
+finding is not discharged by being recorded in the audit. It is discharged when the statement it contradicted
+has changed.

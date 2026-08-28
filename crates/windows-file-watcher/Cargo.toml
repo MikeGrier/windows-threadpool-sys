@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-file-watcher"
-version = "0.1.1" # x-release-please-version
+version = "0.1.2" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -37,11 +37,29 @@ name = "scenario_stress"
 path = "tests/scenario_stress.rs"
 required-features = ["scenario-tool"]
 
+# The consumer test-surface example (M13.5): builds and runs only with
+# `test-util`, since it uses the feed channel and the `for_test` boundary-type
+# builders.
+[[example]]
+name = "test_your_handler"
+required-features = ["test-util"]
+
+# The consumer test-surface integration test (M13.6): a downstream-style test
+# reachable only through the public API plus `test-util`.
+[[test]]
+name = "consumer_test_surface"
+path = "tests/consumer_test_surface.rs"
+required-features = ["test-util"]
+
 # The crate is Windows-only, so docs.rs must build it on a Windows target or it
 # would resolve to an empty crate and document nothing.
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
+# Without this, docs.rs builds with default features only, so `test-util`'s
+# `channel_with_bound`/`Sender`/`for_test` APIs -- and any intra-doc links to
+# them -- would never appear in the published docs.
+features = ["test-util"]
 
 [features]
 # Enables `src/scenario.rs` (the data-driven stress model/harness, shared by
@@ -51,19 +69,31 @@ targets = ["x86_64-pc-windows-msvc"]
 # crate's semver contract.
 scenario-tool = ["dep:serde", "dep:serde_json"]
 
+# Exposes the consumer test surface (D-81/D-82/D-83): a feedable notification
+# channel (`channel_with_bound`/`Sender`/`Delivery`/`Reservation`, `pub` only
+# inside the private `queue` module until this feature re-exports them) plus
+# valid-by-construction builders for the two boundary types a downstream
+# consumer's test cannot otherwise construct (`RelativeName`, `VolumeIdentity`),
+# so a consumer can drive its own notification-handling code with synthetic
+# notifications fed through the real `Receiver` -- no filesystem, no thread
+# pool. The already-reachable part of the seam (`WatchId::from_raw` and every
+# boundary type) needed no re-export (D-81). Off by default; adds no
+# dependencies.
+test-util = []
+
 [dependencies]
 # The owned overlapped-I/O foundation. Directory reads are issued through its
 # submission seam, and its generation-stamped `OperationId` keeps a stale
 # completion from being misattributed to the next read that reuses the same
 # `OVERLAPPED` across a re-arm. No features are enabled; only the core completion
 # machinery is needed.
-windows-overlapped-io-sys = { version = "0.1.2", path = "../windows-overlapped-io-sys", default-features = false }
+windows-overlapped-io-sys = { version = "0.1.3", path = "../windows-overlapped-io-sys", default-features = false }
 
 # The thread pool the monitor runs on: `ThreadpoolIo` services detailed reads,
 # `ThreadpoolWait` the coarse fallback, `ThreadpoolTimer` the retry backoff, and
 # `ThreadpoolWork` drains the request queue. The monitor owns no threads of its
 # own.
-windows-threadpool-sys = { version = "0.1.2", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys" }
 
 # Relative names decoded from `ReadDirectoryChangesW` are native `u16`, and are
 # handed back to Windows APIs as `u16`. Storing them as `Wtf16String` keeps them

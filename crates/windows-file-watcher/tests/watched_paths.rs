@@ -64,15 +64,28 @@ impl TempDir {
 }
 
 /// Everything a client has drained so far, in arrival order.
+///
+/// Every notification is validated against the delivery contract as it arrives
+/// (see [`ContractChecker`]). Doing it here rather than per test is deliberate:
+/// this is the one funnel every test in this file drains through, so the whole
+/// file asserts that the **real** watcher's output is contract-legal, which
+/// nothing did before. Point assertions test that the right things happened;
+/// this tests that nothing illegal happened alongside them.
 #[derive(Default)]
 struct Drained {
     items: Vec<Notification>,
+    #[cfg(feature = "test-util")]
+    checker: windows_file_watcher::ContractChecker,
 }
 
 impl Drained {
     /// Take everything currently available without blocking.
     fn pump(&mut self, receiver: &Receiver) {
         while let Some(item) = receiver.try_recv() {
+            #[cfg(feature = "test-util")]
+            if let Err(violation) = self.checker.observe(&item) {
+                panic!("the watcher emitted a contract violation: {violation:?} on {item:?}");
+            }
             self.items.push(item);
         }
     }

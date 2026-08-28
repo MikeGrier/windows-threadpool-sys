@@ -107,6 +107,16 @@ extended `ReadDirectoryChangesExW` record format. These are recorded,
 deliberate v1 scope decisions (see [DESIGN-NOTES.md](DESIGN-NOTES.md)), not
 oversights.
 
+## Testing your own code
+
+Building on this crate? The off-by-default `test-util` feature lets you drive
+*your* notification-handling code with synthetic notifications through a real
+`Receiver` you construct yourself -- no filesystem, no thread pool, and
+deterministic because your test is the source of every event. See
+[TESTING.md](TESTING.md) for the full guide, and
+[`examples/test_your_handler.rs`](examples/test_your_handler.rs) for a worked
+example.
+
 ## Stress-testing tool
 
 [`src/bin/run_scenario.rs`](src/bin/run_scenario.rs) replays a persisted JSON scenario file through the

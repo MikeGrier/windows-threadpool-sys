@@ -121,8 +121,11 @@ pub struct WatchId(u64);
 impl WatchId {
     /// Build an identifier from a raw value.
     ///
-    /// M3.4 replaces this with monitor-issued identifiers; it exists so M2 can
-    /// tag records before the monitor exists.
+    /// In production the monitor issues `WatchId`s. This constructor lets a
+    /// downstream consumer mint one to tag a synthetic [`Notification`] when
+    /// testing its own handler against a `Receiver` it drives (D-81); any value
+    /// is a valid identifier, so the pairing between an id and its notifications
+    /// is the consumer's to choose.
     #[must_use]
     pub fn from_raw(value: u64) -> Self {
         Self(value)
@@ -185,7 +188,9 @@ pub enum Notification {
     Desync {
         /// The subscription affected.
         watch: WatchId,
-        /// How the gap arose. Advisory: the response is a re-scan either way.
+        /// How the gap arose. Advisory for the four recoverable causes -- the
+        /// response is a re-scan either way -- but
+        /// [`DesyncCause::Stopped`] is terminal and must be matched on.
         cause: DesyncCause,
     },
     /// A request the client made has been serviced (D-30).
@@ -394,6 +399,26 @@ impl State {
         self.capacity - self.queue.len() - self.reserved
     }
 
+    /// Slots a best-effort notification could actually take *right now*.
+    ///
+    /// [`Sender::send`] flushes every owed latch into the queue before it
+    /// considers the caller's own notification, so a free slot with a latch
+    /// outstanding already belongs to that flush. This is therefore
+    /// `free()` minus what is owed, and it is the **single** definition both
+    /// [`Sender::has_room`] (`> 0`) and [`freed_resumers`]' wake edge (`== 1`)
+    /// are expressed in terms of.
+    ///
+    /// Keeping them derived from one quantity is deliberate: they were
+    /// previously two independent expressions, `free() > latched.len()` and
+    /// `free() == 1`, which disagreed the moment anything was latched -- the
+    /// prod fired one slot too early, the re-check still said "no room", and no
+    /// later drain re-fired it, wedging the watcher permanently
+    /// (PR #42 review). A predicate and the edge that wakes it cannot be
+    /// allowed to drift apart.
+    fn best_effort_room(&self) -> usize {
+        self.free().saturating_sub(self.latched.len())
+    }
+
     /// Whether a receiver has anything to observe.
     ///
     /// Disconnection counts: a client waiting on the doorbell must learn that the
@@ -464,6 +489,12 @@ impl Sender {
     /// *can* fail: a full queue drops the notification and latches a
     /// `Desync { QueueFull }` against its subscription (D-29/D-33). Use
     /// [`Sender::reserve`] for anything whose loss a client cannot recover from.
+    ///
+    /// A downstream consumer may call this on a `Sender` from
+    /// [`channel_with_bound`] to feed its own handler synthetic notifications in
+    /// a test (behind the `test-util` feature); the returned [`Delivery`] reports
+    /// whether the queue accepted the notification or dropped-and-latched it,
+    /// exactly as in production.
     pub fn send(&self, notification: Notification) -> Delivery {
         let watch = notification.watch();
         let delivery = {
@@ -549,8 +580,16 @@ impl Sender {
     /// The observation tier checks this *before* arming a read rather than
     /// discovering it at the enqueue, which is what turns saturation into a
     /// grace period in the kernel's own change buffer instead of a loss (D-29).
+    ///
+    /// Accounts for a pending latched loss: [`Sender::send`] always flushes
+    /// every owed [`Delivery::Latched`] desync into the queue *before*
+    /// considering the caller's own notification, so a freed slot with a
+    /// latch still outstanding is not actually available to it. Without this,
+    /// a caller could see `true` immediately after a slot freed up, then
+    /// still get `Delivery::Latched` back from the very next `send` -- the
+    /// flush consumed the slot this check saw.
     pub fn has_room(&self) -> bool {
-        lock(&self.shared.items).free() > 0
+        lock(&self.shared.items).best_effort_room() > 0
     }
 
     /// Ask to be prodded when a saturated queue frees a slot.
@@ -980,15 +1019,50 @@ impl Receiver {
     ///
     /// Excludes latched losses, which are not queued -- that is the point of the
     /// latch. [`Receiver::latched`] counts those.
+    ///
+    /// **This is not "how much is there to take".** A drained queue with a loss
+    /// still owed reports `0` here while [`Receiver::recv`] would still yield a
+    /// synthesised `Desync { QueueFull }`. Use [`Receiver::has_pending`] to ask
+    /// whether anything is collectable.
     #[must_use]
     pub fn len(&self) -> usize {
         lock(&self.shared.items).queue.len()
     }
 
     /// Whether nothing is queued right now.
+    ///
+    /// **Not the same as "nothing to collect"**, and the difference is a live
+    /// hazard rather than a nicety: this excludes owed latched losses and the
+    /// end of the stream, both of which [`Receiver::recv`] still reports. A
+    /// drain loop written as `while !receiver.is_empty()` therefore exits with a
+    /// `Desync { QueueFull }` still owed -- and, because the doorbell stays
+    /// signalled while a loss is owed (D-41), a client that waits on the
+    /// doorbell and then tests this spins without ever collecting the report it
+    /// was woken for. Use [`Receiver::has_pending`], which is the predicate the
+    /// doorbell is actually signalled on.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Whether a [`Receiver::recv`] would produce something rather than block.
+    ///
+    /// This is *the* predicate the doorbell is signalled on (D-41), so it is the
+    /// one to test after a doorbell wait. "Something to take" is deliberately
+    /// three things, not one:
+    ///
+    /// - a queued notification ([`Receiver::len`]);
+    /// - an **owed latched loss** ([`Receiver::latched`]) -- not in the queue,
+    ///   but still collectable, and synthesised on demand (D-39);
+    /// - the **end of the stream** ([`Receiver::is_disconnected`]) -- a client
+    ///   must learn the stream ended rather than wait for a notification
+    ///   nothing can send.
+    ///
+    /// Prefer this over [`Receiver::is_empty`] anywhere the question is "is
+    /// there anything for me?" rather than "how deep is the queue?".
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        lock(&self.shared.items).pending()
     }
 
     /// How many subscriptions are owed a `Desync { QueueFull }`.
@@ -1088,6 +1162,14 @@ pub(crate) fn channel() -> (Sender, Receiver) {
 /// carry even the desync announcing its own saturation, making the crate's
 /// never-silently-lose guarantee vacuous. Making it unrepresentable rejects it at
 /// construction, where D-11 asks for it, and leaves no error path to handle.
+///
+/// This is also the consumer test seam (D-81/D-82), reachable by a downstream
+/// consumer only under the `test-util` feature: a consumer that wants to test its
+/// own notification-handling code constructs a pair here, pushes synthetic
+/// notifications through the [`Sender`] with [`Sender::send`], and drains the
+/// [`Receiver`] exactly as it would one from
+/// [`Monitor::session`](crate::Monitor::session) -- with no real filesystem or
+/// thread pool. See the crate-level "Testing your consumer code".
 pub fn channel_with_bound(bound: NonZeroUsize) -> (Sender, Receiver) {
     let shared = Arc::new(Shared {
         items: Mutex::new(State {
@@ -1118,8 +1200,13 @@ pub fn channel_with_bound(bound: NonZeroUsize) -> (Sender, Receiver) {
 /// Dead producers are pruned here, which is the only place the list is walked.
 fn freed_resumers(state: &mut State, took_one: bool) -> Vec<Arc<dyn Resume>> {
     // Only on the transition into having room: prodding on every take would put
-    // a wake behind every single notification a client drains.
-    if !took_one || state.resumers.is_empty() || state.free() != 1 {
+    // a wake behind every single notification a client drains. The edge is
+    // expressed in `best_effort_room` -- the same quantity `Sender::has_room`
+    // tests -- so the prod fires exactly when a parked producer's re-check will
+    // now succeed. Every step that frees capacity (taking a queued item,
+    // synthesising a latched one, releasing a reservation) raises it by exactly
+    // one, so `== 1` catches the crossing and cannot be stepped over.
+    if !took_one || state.resumers.is_empty() || state.best_effort_room() != 1 {
         return Vec::new();
     }
     let mut live = Vec::with_capacity(state.resumers.len());

@@ -468,7 +468,7 @@ not pay for):
 - The event backend additionally needs `WaitForSingleObject`, which lives under `Win32_System_Threading`.
 - The published default feature set is empty (`default = []`): the safe endpoint creator
 	([`UnassociatedEndpoint::open`](src/endpoint.rs)) opens overlapped handles through `std::fs::OpenOptions`
-	(`custom_flags(FILE_FLAG_OVERLAPPED | …)`), so the core completion machinery needs no operation-family
+	(`custom_flags(FILE_FLAG_OVERLAPPED | ...)`), so the core completion machinery needs no operation-family
 	`windows-sys` bindings for that -- but the core dependency features are `Win32_Foundation`,
 	`Win32_System_IO`, **and `Win32_Storage_FileSystem`** (not two), because
 	`UnassociatedEndpoint::set_notification_modes` (`SetFileCompletionNotificationModes`) is core, not
@@ -478,13 +478,13 @@ not pay for):
 	all.
 - Operation-family bindings beyond that are gated behind three additive Cargo features so the core stays
 	minimal, one per the families the checklist enumerates:
-	- `fs` → `Win32_Storage_FileSystem` for file read / write and scatter / gather. (That binding is already
+	- `fs` -> `Win32_Storage_FileSystem` for file read / write and scatter / gather. (That binding is already
 		core per the point above; the feature adds no `windows-sys` feature of its own, only gating this crate's
 		own `src/fs.rs` module.)
-	- `socket` → `Win32_Networking_WinSock` — overlapped socket operations, including
+	- `socket` -> `Win32_Networking_WinSock` -- overlapped socket operations, including
 		`AssociatedSocket::set_notification_modes` (M12.2), which needs no further `windows-sys` feature beyond
 		the core `Win32_Storage_FileSystem` either, for the same reason `fs` does not.
-	- `device` → `Win32_System_Ioctl` — device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
+	- `device` -> `Win32_System_Ioctl` -- device control-code (IOCTL / FSCTL) definitions. `DeviceIoControl`
 		itself is already in the always-on core (`Win32_System_IO`); the feature only adds the control-code
 		constants a device family needs.
 	Enabling a family turns on only the `windows-sys` features that family needs beyond the core and never
@@ -521,7 +521,7 @@ submission, `CancelThreadpoolIo` to balance an immediate failure, and reclamatio
 the operation family is known, or `reclaim_overlapped` during object rundown). This crate never links the
 thread-pool functions or references `TP_*`.
 
-### Decision — identities are generation-stamped and validated, not bare addresses
+### Decision -- identities are generation-stamped and validated, not bare addresses
 
 An operation's storage address alone is not a durable name for it. Reclaiming an operation returns that address
 to the allocator, which may hand it to a later operation, so an address retained past its operation's completion
@@ -620,6 +620,73 @@ The alternative -- letting the thread-pool crate define its own identity type --
 shared vocabulary the two crates exist to hold in common, and downstream code composing the backends would have
 to translate between two identical types.
 
+## Specifying this contract: the ten gap categories
+
+This crate publishes a completion contract that consumers build reliability on, so it is exposed to the same
+under-specification failure `windows-file-watcher` measured in PR #42 -- where a contract written as prose was
+true but incomplete, and the gaps stayed invisible until a second implementation had to obey it mechanically.
+The ten gap categories, and the evidence behind them, are recorded once in
+[the workspace design notes](../../DESIGN-NOTES.md#specifying-a-delivery-contract). This section records where
+this crate already sits against them.
+
+**This crate has already paid for two of the categories, before the taxonomy existed to name them.** Both are
+documented above as isolated findings; naming the category is what makes them predictors rather than war
+stories.
+
+- **`Issued` is category 3 (state-dependent legality unenumerated).** The same native return value -- an
+  immediate `TRUE` -- means `Issued::Pending` on a default endpoint and `Issued::Completed` on a skip-mode
+  one, because the endpoint's notification mode changes whether a packet is coming. The notes above call this
+  "the single most misread part of the seam", and the misreading had a cost: an ioctl on a skip-mode endpoint
+  hung rundown until M10.5, because `device::classify_issued` branched on a mode the setter could not reach.
+  The contract's original error was stating what `Issued` *is* without enumerating, per endpoint state, which
+  variant is reachable.
+- **`post` / `post_raw` are category 10 ("valid by construction" overclaimed).** They accept an arbitrary,
+  disconnected completion key, so a test helper can mint a packet production can never produce -- a genuine
+  device completion always carries the key fixed at `CreateIoCompletionPort` association. The notes above
+  already warn that such a packet "will corrupt an unrelated (or nonexistent) counter". That is exactly
+  `windows-file-watcher`'s D-83 finding in a different crate: a test seam whose values are *type-valid* but
+  outside the production domain, with the domain restriction stated nowhere the type can enforce it.
+
+**Two more it got right, and should keep citing as the pattern.** `OperationId`'s generation stamping is
+category 4/5 handled correctly -- an address alone is not a durable name, the failure was *reproduced* (a
+recycled address at cycle 21 of a reclaim loop) rather than argued, and the fix made retaining an identity
+harmless. Removing `from_parts` is category 10 handled correctly: a caller holding `(p, g)` could construct
+`(p, g + 1)`, so the pairing step was removed from safe code rather than documented around.
+
+### Completion ordering is unspecified, and that is a statement this contract has been missing
+
+The most consequential gap this audit found is an omission rather than an error: **nothing in this document
+says whether a consumer may assume completions arrive in submission order.** They may not, and the reasons
+are structural rather than incidental:
+
+- A port serves many endpoints, and `GetQueuedCompletionStatus` hands each queued packet to exactly one
+  caller with no cross-handle ordering guarantee.
+- Multi-threaded draining is explicitly supported ("many workers each dequeue-and-process"), so two
+  operations that completed in one order can be *observed* in the other.
+- `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` removes some completions from the queue entirely, so a synchronous
+  success is observed at submit time while an earlier-submitted pending operation is observed later.
+
+That last point makes the omission actively hazardous, because it means ordering is not merely unguaranteed
+but *mode-dependent* -- category 3 again. A consumer that measured FIFO behaviour on a default endpoint and
+encoded that assumption would have it silently invalidated by an endpoint-level setting made elsewhere.
+
+The reason to state it here rather than leave it to the reader: `windows-file-watcher` builds on this crate
+and **does** promise in-stream ordering to its own clients (its D-12: "a client seeing a `Desync` knows
+exactly which changes preceded it"). It earns that by serializing through a single servicing authority, not
+by inheriting it from here. A reader moving between the two crates has every reason to carry the guarantee
+downward, and nothing in this document currently stops them.
+
+**The contract is therefore: completion observation order is unspecified. An operation is identified by its
+`OperationId`, never by its position in the stream.** A consumer needing order must impose it above this
+layer, as the file watcher does.
+
+### Not yet audited
+
+Categories 1, 2, 6, 8, and 9 have not been examined against this crate's surface, and their absence from the
+list above means "not looked at", not "does not apply" -- which is precisely the omission-versus-silence
+distinction the taxonomy exists to make visible. Queued as
+[CHECKLIST.md](CHECKLIST.md) -> M14.
+
 ## Crate boundary summary
 
 `windows-overlapped-io-sys` exports the endpoint owners, provenance and sealed types, pinned operation storage
@@ -638,7 +705,7 @@ owned-operation prototype must resolve this before any public submission API is 
 decide whether safe submission is generic, requires operation-specific safe adapters (possibly downstream), or
 retains a deliberately narrow unsafe extensibility seam.
 
-### Decision — per-family safe adapters, file family first
+### Decision -- per-family safe adapters, file family first
 
 The Open boundary is resolved for the **file family** by choosing the operation-specific safe-adapter path, in
 this crate behind the `fs` feature, rather than a fully generic safe submission API. The generic problem stays

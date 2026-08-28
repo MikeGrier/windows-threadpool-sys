@@ -431,6 +431,37 @@ fn a_chosen_bound_is_honoured() {
 }
 
 #[test]
+fn has_room_accounts_for_a_pending_latch() {
+    // A freed slot that is already owed to a pending latched desync is not
+    // actually available to a new notification: send() always flushes every
+    // owed latch first, so has_room() must account for that or it reports a
+    // slot as available when the very next send would still be Latched.
+    let (sender, receiver) = bounded(1);
+    let watch = WatchId::from_raw(1);
+    fill(&sender, watch, 1);
+    assert_eq!(
+        sender.send(batch(watch, &["lost.txt"])),
+        Delivery::Latched,
+        "the one slot is already full"
+    );
+    assert!(!sender.has_room(), "the queue is full, no room at all");
+
+    // Draining the queued entry frees a slot, but the latch is still owed.
+    let _ = receiver.recv().expect("the queued entry");
+    assert!(
+        !sender.has_room(),
+        "the freed slot is already earmarked for the pending latch flush"
+    );
+
+    // Confirm: the next send flushes the latch, not this notification.
+    assert_eq!(
+        sender.send(batch(watch, &["new.txt"])),
+        Delivery::Latched,
+        "the freed slot went to the owed desync flush, not this notification"
+    );
+}
+
+#[test]
 fn a_dropped_notification_is_reported_as_a_desync_not_lost_silently() {
     // The crate's central promise (D-12): a change is either delivered or its
     // loss is reported. Never neither.
@@ -1224,4 +1255,196 @@ fn a_client_can_drain_from_its_own_threadpool_wait() {
     assert_eq!(seen.len(), 64, "every notification reached the client");
     let expected: Vec<String> = (0..64).map(|index| format!("f-{index}")).collect();
     assert_eq!(seen, expected);
+}
+
+// --- has_pending: the predicate the doorbell is signalled on (D-41, M14.3) ---
+
+#[test]
+fn a_drained_queue_with_a_loss_owed_is_empty_but_still_has_something_to_take() {
+    // The `has_room` shape (workspace DESIGN-NOTES): a predicate must hold in
+    // the condition its caller actually uses it in. `is_empty` answers "how
+    // deep is the queue", which is not the question a drain loop asks.
+    let (sender, receiver) = bounded(1);
+    let watch = WatchId::from_raw(77);
+    deliver(&sender, batch(watch, &["queued.txt"]));
+    assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
+
+    assert_eq!(
+        names(&receiver.recv().expect("the queued batch")),
+        vec!["queued.txt"]
+    );
+
+    // Drained, but a loss is still owed.
+    assert!(receiver.is_empty(), "nothing is *queued*");
+    assert_eq!(receiver.len(), 0);
+    assert_eq!(receiver.latched(), 1, "but a loss is owed");
+    assert!(
+        receiver.has_pending(),
+        "so there is still something to take -- what `is_empty` cannot say"
+    );
+
+    assert!(matches!(
+        receiver.recv().expect("the synthesised loss report"),
+        Notification::Desync {
+            cause: DesyncCause::QueueFull,
+            ..
+        }
+    ));
+    assert!(!receiver.has_pending(), "now genuinely drained");
+}
+
+#[test]
+fn has_pending_tracks_the_doorbell_exactly_through_a_latched_loss() {
+    // D-41's invariant is that the event is signalled exactly when the receiver
+    // has something to take. `has_pending` is that same predicate made public,
+    // so the two must agree at every step -- including the drained-with-a-loss-
+    // owed state, which is where a client that waits on the doorbell and then
+    // tests `is_empty` would spin without ever collecting the report.
+    let (sender, receiver) = bounded(1);
+    let watch = WatchId::from_raw(78);
+    let doorbell = receiver.doorbell().expect("a doorbell");
+
+    assert_eq!(receiver.has_pending(), is_signalled(doorbell));
+    assert!(!receiver.has_pending());
+
+    deliver(&sender, batch(watch, &["queued.txt"]));
+    assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
+    assert_eq!(receiver.has_pending(), is_signalled(doorbell));
+
+    receiver.recv().expect("the queued batch");
+    assert_eq!(
+        receiver.has_pending(),
+        is_signalled(doorbell),
+        "still agreed while only a latched loss remains"
+    );
+    assert!(is_signalled(doorbell), "the doorbell is still ringing");
+    assert!(receiver.is_empty(), "yet the queue reports itself empty");
+
+    receiver.recv().expect("the loss report");
+    assert_eq!(receiver.has_pending(), is_signalled(doorbell));
+    assert!(!is_signalled(doorbell), "and only now does it stop");
+}
+
+#[test]
+fn a_disconnected_empty_queue_still_has_something_to_take() {
+    // The third arm of "something to take": the end of the stream. A client
+    // must learn the stream ended rather than wait for what cannot arrive.
+    let (sender, receiver) = channel();
+    assert!(!receiver.has_pending());
+    drop(sender);
+
+    assert!(receiver.is_empty());
+    assert_eq!(receiver.latched(), 0);
+    assert!(
+        receiver.has_pending(),
+        "disconnection is collectable: recv returns None rather than blocking"
+    );
+    assert!(receiver.recv().is_none());
+}
+
+// --- the resume edge must agree with has_room (PR #42 review) ---
+
+/// A [`Resume`] that only records how many times it was prodded.
+#[derive(Default)]
+struct CountingResumer {
+    prods: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingResumer {
+    fn count(&self) -> usize {
+        self.prods.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl super::Resume for CountingResumer {
+    fn resume(&self) {
+        self.prods.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_parked_producer_is_prodded_at_the_slot_has_room_actually_becomes_true() {
+    // The wedge: `has_room` is `free() > latched.len()` but the wake edge was
+    // `free() == 1`. With a latch owed, the prod fired one slot too early --
+    // the re-check still said "no room" -- and the next drain moved `free()`
+    // to 2, which was no longer the edge, so no prod ever came again. A bound
+    // greater than one is what exposes it; at capacity 1 the two expressions
+    // coincide.
+    let (sender, receiver) = bounded(4);
+    let watch = WatchId::from_raw(101);
+    let producer = Arc::new(CountingResumer::default());
+    sender.register_resume(&producer);
+
+    fill(&sender, watch, 4);
+    assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
+    assert_eq!(receiver.latched(), 1, "a loss is owed");
+    assert!(!sender.has_room(), "saturated");
+    assert_eq!(producer.count(), 0, "nothing freed yet");
+
+    // free() == 1, latched == 1: the old edge fired here, but has_room is
+    // still false, so a prod now is wasted -- and, worse, it is the *only*
+    // one that ever comes.
+    receiver.recv().expect("first");
+    assert!(
+        !sender.has_room(),
+        "the freed slot is owed to the latch flush, not to a new notification"
+    );
+    assert_eq!(
+        producer.count(),
+        0,
+        "prodding while has_room is still false burns the one wake the \
+         producer was going to get"
+    );
+
+    // free() == 2, latched == 1: has_room becomes true, so the prod must land
+    // here. The old edge skipped it and never fired again.
+    receiver.recv().expect("second");
+    assert!(sender.has_room(), "room genuinely exists now");
+    assert_eq!(
+        producer.count(),
+        1,
+        "the producer must have been prodded at the transition, or it stays \
+         parked forever with room available"
+    );
+}
+
+#[test]
+fn draining_only_latched_reports_still_reaches_the_resume_edge() {
+    // Taking a latched report leaves `free()` untouched and shrinks `latched`,
+    // so the transition can happen without any queued item being taken. An
+    // edge phrased on `free()` alone cannot see this at all.
+    let (sender, receiver) = bounded(2);
+    let producer = Arc::new(CountingResumer::default());
+    sender.register_resume(&producer);
+
+    // Three watches saturate the queue and two more are left owed a report.
+    fill(&sender, WatchId::from_raw(1), 2);
+    for id in [2, 3] {
+        assert_eq!(
+            sender.send(batch(WatchId::from_raw(id), &["lost.txt"])),
+            Delivery::Latched
+        );
+    }
+    assert_eq!(receiver.latched(), 2);
+
+    receiver.recv().expect("first queued");
+    receiver.recv().expect("second queued");
+    // Queue empty, free() == 2, latched == 2: still no room.
+    assert!(!sender.has_room());
+    assert_eq!(producer.count(), 0);
+
+    // Taking one synthesised report is what creates the room.
+    assert!(matches!(
+        receiver.recv().expect("a synthesised loss report"),
+        Notification::Desync {
+            cause: DesyncCause::QueueFull,
+            ..
+        }
+    ));
+    assert!(sender.has_room());
+    assert_eq!(
+        producer.count(),
+        1,
+        "the edge must be reachable by draining latched reports alone"
+    );
 }

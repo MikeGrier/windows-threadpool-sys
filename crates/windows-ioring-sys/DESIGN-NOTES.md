@@ -42,6 +42,70 @@ runs a continuation), this crate exposes the mechanism and documents the trade-o
 | <a id="d-17"></a>D-17 | **Every `Token`, `RegisteredFile`, and `RegisteredBuffers` now carries the identity of the ring that minted it (PR #20 review finding), and every popped `Completion` carries the identity of the ring that produced it, so a value from one ring can never be mistaken for one from another.** `UserData` is a plain counter this crate assigns starting at zero per ring, so two different rings routinely hand out the same value -- a `Token`'s `id == completion.user_data()` check alone cannot tell those apart, and a `RegisteredFile`/`RegisteredBuffers` index is only meaningful against the specific table it was assigned in. `RingId` is a monotonic, process-lifetime-unique counter (`AtomicU64`, starting at 1) rather than the ring's own `HANDLE`: Windows is free to hand a closed ring's numeric handle value to the next object it creates, which would let a stale identity collide with a genuinely new ring. `Token::claim_if` now requires both identities to match; `Batch`'s pushes reject a `FileRef::Registered`/`RegisteredBuffers` argument whose `RingId` differs from `self.ring`'s own with an `InvalidInput` error, checked before any `Build*` call runs (so a rejected push never reserves `UserData` or counts against rundown). |
 | <a id="d-18"></a>D-18 | **`PendingBufferRegistration` now leaks its buffers on an unclaimed drop instead of freeing them, mirroring `Token`/`RegisteredBuffers` (PR #20 review finding).** `Batch::register_buffers` queues `BuildIoRingRegisterBuffers` -- and hands the buffer addresses to the kernel -- the instant it returns, before any completion is ever observed; a caller that drops the returned `PendingBufferRegistration` without matching a completion to it (via `claim_if`) has no proof the kernel is done deciding whether to retain those addresses. Freeing them anyway would risk handing memory the kernel still references back to the allocator, so `buffers` moved behind a `ManuallyDrop` and `PendingBufferRegistration`'s own `Drop` is now deliberately empty, exactly like `Token`'s. `claim_if` explicitly takes the buffers back out of the `ManuallyDrop` once a *matching* completion proves the kernel has decided one way or the other -- success or failure -- so the previously-documented "dropped normally on a failed registration" behavior is unchanged; only the never-observed-a-completion case changed, from an unsound free to a safe leak. |
 
+## Specifying this contract: the ten gap categories
+
+This crate publishes a completion contract consumers build reliability on, so it is exposed to the same
+under-specification failure `windows-file-watcher` measured in PR #42: a contract written as prose is true but
+incomplete, and the gaps stay invisible until something has to obey it mechanically rather than read it. The
+ten categories and the evidence behind them are recorded once in
+[the workspace design notes](../../DESIGN-NOTES.md#specifying-a-delivery-contract). This section records where
+this crate sits against them.
+
+**Two it already got right, and which are worth citing as the pattern rather than treating as routine.**
+
+- **[D-17](#d-17)'s `RingId` is category 4/5 (cross-object identity and cross-field relationship) handled
+  correctly.** `UserData` is a per-ring counter starting at zero, so two rings routinely hand out the same
+  value: a `Token`'s `id == completion.user_data()` check alone cannot distinguish them, and a registered
+  index is only meaningful against the table it was assigned in. Stamping every `Token`, `RegisteredFile`,
+  `RegisteredBuffers`, and `Completion` with the minting ring's identity is exactly the "an identity must be
+  durable, not merely descriptive" rule `windows-overlapped-io-sys` reached independently with generation
+  stamping. Using a monotonic counter rather than the ring's `HANDLE` is the same reasoning one step further:
+  Windows may reissue a closed ring's handle value, so the handle is not durable either.
+- **`Completion::synthetic` being `#[cfg(test)]`-only is category 10 ("valid by construction" overclaimed)
+  handled correctly.** Its own comment states the rule: production code has no legitimate reason to fabricate
+  a completion, because `Token::claim_if`'s safety argument depends on every `Completion` in existence
+  tracing back to a real `IORING_CQE`. That is precisely the restriction `windows-file-watcher`'s D-83 had to
+  learn and `windows-overlapped-io-sys`'s `post`/`post_raw` still lacks -- a test seam confined to test
+  builds, rather than a public one documented as "do not misuse".
+
+**One recorded as an assumption, which is category 4 (cross-message continuity) and is honest about it.**
+[D-14](#d-14) states that registration bookkeeping advances when a `BuildIoRingRegister*` call queues, not
+when its completion is observed, and says outright that this is unverified because neither function takes an
+`IORING_SQE_FLAGS` parameter to force a drain barrier. The continuity rule -- that the next registration's
+base index follows the previous one's -- is exactly the shape of invariant that lives *between* two messages
+and so has no natural home in either. Recording it as an explicitly unverified assumption, with the argument
+for why eager advancement is the safe direction, is the correct handling of a category-4 rule that cannot yet
+be confirmed.
+
+### Completion ordering is unspecified, and a ring invites the opposite assumption
+
+The gap this audit found is an omission: **nothing here says whether completions may be assumed to arrive in
+submission order.** They may not, and this crate is more exposed to the wrong assumption than its siblings,
+because the word *ring* and the `io_uring` comparison in the Intent section both suggest an ordered queue.
+
+- The completion queue is a userspace ring the consumer pops with `try_pop`, but the *order entries enter it*
+  is the kernel's, not the submission order. Nothing in the spike findings established otherwise, and the
+  spike deliberately recorded what it did establish.
+- `drain_preceding` (`IOSQE_FLAGS_DRAIN_PRECEDING_OPS`) exists precisely because ordering is otherwise not
+  guaranteed. Its presence in the API is itself evidence: a barrier flag is only meaningful where there is
+  no order to rely on without it. That inference is currently available to a reader who notices the flag,
+  and to nobody else.
+- Model A and Model B observe completions through different paths (an event-driven drain-to-`S_FALSE` loop
+  versus a pinned thread looping after `submit_and_wait`), and neither imposes an order the other shares.
+
+**The contract is therefore: completion order is unspecified except where `drain_preceding` establishes a
+barrier. An operation is identified by matching its `Token` against a popped `Completion`'s identity, never
+by its position in the completion stream.** This is the same rule `windows-overlapped-io-sys` now states for
+its own stream, reached independently on both sides -- which is the point of writing the category down rather
+than the instance.
+
+### Not yet audited
+
+Categories 1, 2, 3, 6, 8, and 9 have not been examined against this crate's surface. Their absence above means
+"not looked at", not "does not apply" -- the distinction the taxonomy exists to keep visible. Category 3
+(state-dependent legality) is the strongest candidate, given that capability negotiation ([D-6](#d-6)) makes
+the legal op set a per-ring runtime property. Queued as [CHECKLIST.md](CHECKLIST.md) -> M10.
+
 ## Two delivery architectures
 
 This is the section written for consumers rather than for maintainers, and the reason it sits in a design

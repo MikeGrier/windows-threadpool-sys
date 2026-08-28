@@ -4,6 +4,13 @@ Both 0.1.0 and 1.0.0 were yanked from crates.io: the 1.0.0 bump was
 accidental, and this crate is intended to stay pre-1.0 for now. Releases
 resume at 0.1.1, which supersedes both.
 
+## [0.1.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v0.1.2...windows-overlapped-io-sys-v0.1.3) (2026-08-27)
+
+
+### Bug Fixes
+
+* **file-watcher:** derive the resume wake edge from the same quantity has_room tests ([8855e1d](https://github.com/MikeGrier/windows-threadpool-sys/commit/8855e1d4237aa34284f1752f17f1aa937265ed3a))
+
 ## [0.1.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-overlapped-io-sys-v0.1.1...windows-overlapped-io-sys-v0.1.2) (2026-08-24)
 
 

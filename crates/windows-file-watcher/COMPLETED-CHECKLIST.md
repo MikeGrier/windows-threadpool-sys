@@ -428,3 +428,86 @@ together in one commit rather than four artificially separated ones.
   counts. Integration test for the milestone: `tests/scenario_stress.rs`'s three new M9+ tests plus four new
   JSON fixtures (`concurrent_file_churn.json`, `spoiler_blocks_delete.json`, `queue_overwhelm.json`,
   `nested_concurrent_composition.json`) all pass through the generic fixture runner.
+
+## Moved 2026-08-25 -- M13: consumer test surface (test-util)
+
+Let a downstream consumer drive *its own* notification-handling code with synthetic, deterministic
+notifications -- no real filesystem, no thread pool -- by feeding the real [`Receiver`]. This is the
+"go below" seam from the [testability design discussion](DESIGN-NOTES.md): the consumer substitutes the
+OS ingest while keeping the crate's delivery model (`Notification`/`Receiver`/queue semantics) intact.
+Because the consumer becomes the driver, their test is deterministic for free -- the crate ships no
+scheduler or virtual clock.
+
+The reachable part of the seam was already public (`WatchId::from_raw` and every boundary type); the
+feedable channel (`channel_with_bound`/`Sender`/`Delivery`/`Reservation`) was `pub` only inside the
+private `queue` module, hence unreachable, and is exposed behind `test-util` (discovered during
+execution, revising D-81/D-82). Records D-81 (bless the already-reachable pieces rather than re-gate
+them), D-82 (expose the feed channel and gap-filler constructors behind an off-by-default `test-util`
+feature, reconciled with D-64 by audience), and D-83 (fidelity limit: the seam tests the consumer's
+reactions, not whether the crate would ever emit that sequence).
+
+- [x] **M13.1** -- Add an off-by-default `test-util` Cargo feature (no new dependencies) and record the
+  three seam decisions D-81/D-82/D-83 in [DESIGN-NOTES.md](DESIGN-NOTES.md) (Tier 1) and
+  [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) (Tier 2).
+
+- [x] **M13.2** -- Fill the `RelativeName` gap behind `test-util`: valid-by-construction `for_test`
+  constructors from `&str`/`&OsStr`/raw `u16` units, so a consumer can build a `Change`. Unit test.
+
+- [x] **M13.3** -- Fill the `VolumeIdentity` gap behind `test-util`: promote the `#[cfg(test)]`
+  `synthetic` builder to a `test-util`-gated public `for_test` constructor, keeping the crate's own
+  `#[cfg(test)]` use working. Unit test.
+
+- [x] **M13.4** -- Expose and document the consumer test surface: re-export
+  `channel_with_bound`/`Sender`/`Delivery`/`Reservation` behind `test-util` (they were `pub` only inside
+  the private `queue` module, hence unreachable -- revised D-81/D-82); rewrite `WatchId::from_raw`'s
+  stale doc; frame `channel_with_bound` + `Sender::send` as the injection seam; add a crate-level
+  "Testing your consumer code" docs section with a deterministic, cfg-gated doctest (D-83 fidelity limit).
+
+- [x] **M13.5** -- Consumer-facing example [examples/test_your_handler.rs](examples/test_your_handler.rs) (`required-features =
+  ["test-util"]`): a small handler driven by a scripted deterministic sequence pushed through
+  `channel_with_bound`/`Sender::send` -- covering `Batch` (gap-filled `Change`), `Desync`, `Completion`,
+  `RetryQuestion`, and `VolumeChanged` (gap-filled `VolumeIdentity`) -- asserting the handler's
+  reactions, with no filesystem and no thread pool.
+
+- [x] **M13.6** -- Integration test [tests/consumer_test_surface.rs](tests/consumer_test_surface.rs) (`required-features =
+  ["test-util"]`) exercising the surface exactly as a downstream consumer would (public + `test-util`
+  items only): a scripted sequence covering every `Notification` variant including both gap-filled types,
+  asserting deterministic receipt through `Receiver`.
+
+## Moved 2026-08-27 -- M14: audit the delivery contract against the ten specification-gap categories (D-84)
+
+PR #42 found gaps in this crate's contract prose one at a time, reactively, over 19 review rounds. M14 ran
+the converse pass: a deliberate sweep asking, for each of
+[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract), whether this crate states the
+answer or leaves it to omission. It found four shipped defects and five rules that were true of the code and
+written down nowhere. Full results in [The M14 audit](DESIGN-NOTES.md#the-m14-audit) and
+[The M14.3 predicate sweep](DESIGN-NOTES.md#the-m143-predicate-sweep).
+
+- [x] **M14.1** -- Audited D-12 (`Desync`), D-27/D-28 (the fault protocol), and D-30 (request completions)
+  against all ten categories. Three documentation defects: `DesyncCause`'s type-level doc claimed every cause
+  is advisory and always answered by a re-scan while its own `Stopped` variant said the opposite (a consumer
+  reading the type doc first would re-scan forever against a dead watch); "The Desync primitive" enumerated
+  four causes when there are five; and "Delivery and saturation" still described the pre-D-29 drop policy and
+  the exact latch phrasing D-39 corrects. Two rules stated for the first time: the standing slot shared by
+  `RetryQuestion` and `VolumeChanged` rests on a mutual-exclusion invariant its soundness depends on, and
+  D-30's "every request produces a completion" holds for lifecycle requests only -- `Answer` and
+  `AnswerVolumeChange` deliberately carry none.
+
+- [x] **M14.2** -- Audited D-10, D-13, D-17, D-26 and D-57 the same way, folding every newly-stated rule into
+  the harness's `schedule` module docs. Three legal sequences the contract described in a way that excludes
+  them: a liveness bracket can open with `Resumed` (a route coalescing onto an already-faulted watcher joins
+  after `enter_fault` sent its `Suspended`s) and can close with `Desync { Stopped }` instead of `Resumed`, so
+  a consumer balancing brackets is wrong in both directions; `Established` is not necessarily a watch's first
+  notification; and the tier is re-resolved on every reopen (D-61), so it may differ between establishments.
+  Also recorded that D-10's "one completion = one batch" is per-subscription and only when that
+  subscription's filtered subset is non-empty.
+
+- [x] **M14.3** -- Swept all nine advisory predicates this crate exposes or consumes for the `has_room`
+  shape. One defect: `Receiver::is_empty` is `len() == 0`, and `len` excludes owed latched losses, so a
+  drained queue that still owes a `Desync { QueueFull }` reports itself empty while `recv` would still yield
+  it. D-41 makes that a spin rather than a silent miss -- the doorbell is signalled on all three of queued,
+  owed, and disconnected, so a client that waits on it and then tests `is_empty` never collects the report it
+  was woken for. That this crate's own tests never use `is_empty` alone, always rebuilding
+  `!is_empty() || latched() > 0` by hand, is the same signal `has_room` gave before it was fixed. Fixed by
+  publishing D-41's own predicate as `Receiver::has_pending` rather than redefining `is_empty`, with three
+  regression tests that had no predecessor.

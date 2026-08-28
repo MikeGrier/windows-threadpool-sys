@@ -60,6 +60,19 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test --workspace --locked --no-fail-fast
+      # windows-file-watcher-example-test-harness is a normal workspace member
+      # that depends on windows-file-watcher with the test-util feature, so
+      # the two `--workspace` steps above unify that feature onto
+      # windows-file-watcher and no longer actually verify its published
+      # *default*-feature build/test. Select it alone (no --workspace) to
+      # isolate from that unification and close the gap.
+      - name: cargo build (windows-file-watcher, default features)
+        run: cargo build -p windows-file-watcher --all-targets --locked
+      - name: cargo test (windows-file-watcher, default features)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-file-watcher --locked --no-fail-fast
 
   feature-matrix:
     name: windows-overlapped-io-sys (${{ matrix.feature }} only)
@@ -127,6 +140,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: cargo clippy (default features)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # See build-test's matching isolated steps: --workspace unifies
+      # windows-file-watcher-example-test-harness's test-util dependency onto
+      # windows-file-watcher, so the default-feature lint above never actually
+      # checks it in isolation either.
+      - name: cargo clippy (windows-file-watcher, default features)
+        run: cargo clippy -p windows-file-watcher --all-targets --locked -- -D warnings
 
   docs:
     name: rustdoc (intra-doc links)

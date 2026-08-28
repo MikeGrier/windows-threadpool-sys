@@ -15,9 +15,8 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: none.** M1 through M9+, M10, M11, and M12 are archived/done -- the full PR #20
-> review response is complete. Only the parked, ungated M-inf horizon items remain, and none is a current
-> obligation.
+> **NEXT ACTIONABLE ITEM: none.** M1 through M14 are archived/done. Only the parked, ungated M-inf horizon
+> items remain, and none is a current obligation.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -120,6 +119,14 @@ after a reopen lands on a different directory. Independent of M10 above; M12 bel
 ## M12 -- Per-subscription volume-change confirmation (D-78)
 
 Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-23----m12-per-subscription-volume-change-confirmation-d-78).
+
+## M13 -- Consumer test surface (`test-util`)
+
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-25----m13-consumer-test-surface-test-util).
+
+## M14 -- Audit the delivery contract against the ten specification-gap categories (D-84)
+
+Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----m14-audit-the-delivery-contract-against-the-ten-specification-gap-categories-d-84).
 
 ## M-inf -- Horizon (ungated, post-v1)
 

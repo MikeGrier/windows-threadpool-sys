@@ -48,7 +48,7 @@ threads of its own.
 | <a id="d-27"></a>D-27 | **On fault the monitor asks each subscription how long to wait, and takes the earliest answer.** Supersedes D-16, which forbade asking. D-16's two objections were a synchronous callback on the pool thread (does not apply to a queued exchange) and a race against an already-scheduled retry timer -- and the race only exists if a timer is scheduled *before* the answer arrives. It is not: on fault the watcher latches and schedules nothing, so there is nothing to race. Each subscription chooses its mode at registration: **defaults** (the monitor retries autonomously, preserving D-14 for anyone who does not opt in) or **interactive** (a control message carries the `WatchId`, the failing operation, and the error code, and its response supplies the next delay). Because a directory is one coalesced watcher over several subscriptions (D-6), every subscription is asked and the **earliest** answer wins, clamped to a floor so no client can drive a hot loop; a subscription that declines is counted at its default rather than cancelled. Values follow `Azure/m`'s shipped code: **500 ms default, 50 ms floor.** Where `m`'s documentation contradicts its code -- claiming a declined answer cancels the watch, and a floor of "typically 1000ms, not less than 500ms" -- the code is authoritative and the prose lags. Open and arm failures carry separate defaults, matching D-15's reopen-retry / rearm-retry split. |
 | D-28 | **A fault needs a standing reservation, and the latch is the saturation fallback for observation.** A fault report is control data generated on the cadence, so it can neither be dropped (the watch would silently never recover) nor block (deadlock). Under [D-33](#d-33) it is reserved rather than latched: an interactive subscription takes **one** standing notification-queue slot at registration, which is sufficient because a watcher cannot be faulted twice concurrently -- a faulted watcher is not running. It is therefore a queued item in the ordinary stream, in order with the data that preceded it. **This corrects an earlier over-generalisation.** This decision originally made *every* `Desync` a latch, which silently contradicted D-12 and D-26: an out-of-band latch destroys exactly the in-stream ordering those promise ("a client seeing a `Desync` knows exactly which changes preceded it"). Desyncs are observation-tier, so they ride the queue in order like any other notification; the per-`WatchId` coalescing latch is the **fallback used only when the observation tier cannot enqueue**, which is also the only way to report `QueueFull` at all, since saying "the queue is full" cannot itself require a slot. At that point ordering is already compromised by the loss the latch is reporting, so nothing is given up that survived anyway. |
 | <a id="d-29"></a>D-29 | **A full queue is survived by throttling each producer away from the enqueue, never by blocking there.** Blocking at a full queue is a deadlock rather than backpressure: the writer would be an I/O completion holding a pool thread, and the client's drain may itself be a pool callback (the D-25 doorbell integration), so the cadence can block pool threads waiting for a drain that needs one. **Control** needs no throttle at all under [D-33](#d-33) -- its capacity was reserved at submit, so a completion always fits and request draining can never be blocked by a full ring. **Observation** is unreserved, so it is throttled at the arm: the watcher does not re-arm the read while the queue is full, which propagates backpressure into the kernel's own change buffer -- a grace period rather than a loss, and if the client drains in time nothing is lost at all. Because observation holds no reservation, a batch can still arrive to a full ring (a control reservation may have taken the room since the read was armed); that batch is dropped and the loss reported by D-28's latch, which is the one path where a notification is discarded. If instead the kernel buffer overflows first, that is the already-specified `Desync { Overflow }`. A consequence worth stating: the loss a client most often sees is genuine kernel overflow -- "the OS dropped changes", which is true -- rather than "the crate dropped changes because you were slow", which was a choice. |
-| D-30 | **Every request produces a completion, carried on the notification queue, and its slot is reserved at submit ([D-33](#d-33)).** The request queue previously had no completions at all, which made M3.5's requirement -- assert no delivery after cancellation completes -- unprovable, since a client could not observe that its cancellation had been processed. Completions ride the notification queue rather than a side channel so the ordering guarantee is **structural**: a `Cancelled { watch }` sitting in the same ordered stream means everything before it belongs to the live watch and nothing after it does, which is the same reason `Desync` rides the stream (D-12). Uniformly *every* request, not only those whose contract seems to need it: subscribing can fail **permanently** (D-22's `NotADirectory` and `InvalidPath` have no retry path), so a fire-and-forget subscribe would hand back a `Watch` that will never fire and never say so. |
+| D-30 | **Every lifecycle request produces a completion, carried on the notification queue, and its slot is reserved at submit ([D-33](#d-33)).** The request queue previously had no completions at all, which made M3.5's requirement -- assert no delivery after cancellation completes -- unprovable, since a client could not observe that its cancellation had been processed. Completions ride the notification queue rather than a side channel so the ordering guarantee is **structural**: a `Cancelled { watch }` sitting in the same ordered stream means everything before it belongs to the live watch and nothing after it does, which is the same reason `Desync` rides the stream (D-12). Uniformly every **lifecycle** request -- one that creates or ends a subscription -- not only those whose contract seems to need it: subscribing can fail **permanently** (D-22's `NotADirectory` and `InvalidPath` have no retry path), so a fire-and-forget subscribe would hand back a `Watch` that will never fire and never say so. **`Answer` and `AnswerVolumeChange` are excluded and carry no completion**: they are *responses* to questions this crate posed, not requests with a lifecycle of their own, so there is nothing for a completion to report and nothing a client is left waiting on. An answer for a watch that is not currently being asked is silently discarded (already resolved, already cancelled, or never asked). |
 | D-31 | **A stalled watcher is a reportable state, not a silent one.** Both D-28 and D-29 park a watcher in the same not-re-arming state -- faulted, or waiting for a client that is behind. That state is bounded and self-healing (drain, or answer, and it resumes), but it is indistinguishable from "nothing is changing" unless it is reported. It must therefore be observable, and diagnostics for it must exist; the transport for those diagnostics is deliberately left open here, since a library emitting output is a dependency decision (see [CHECKLIST.md](CHECKLIST.md) -> M5.6). It must not be a client-supplied sink, which would be a callback on our path and is what D-2 forbids. |
 | D-32 | **Relative names are stored as `Wtf16String`, not `OsString` or a bare `Box<[u16]>`.** The kernel reports names as `u16` and wide (`*W`) Win32 APIs consume `u16`, so any WTF-8 intermediate is pure overhead in both directions -- which is exactly the case `wtf-string` exists for. `RelativeName` is a newtype over `Wtf16String` rather than an alias, keeping the D-8 contract (relative to the *opened* directory) attached to the type, and derefs to `Wtf16Str` so the counted FFI, length, and lossy-display surface come for free; `as_wtf16` reaches the owned form for the terminated `LPCWSTR` pointer, which only the owned string carries. The public lossless surface is unchanged: `as_wide`, `to_os_string`, and `to_path_buf` all still hold, now converting at the boundary rather than storing there. One behavioural improvement falls out -- `Debug` was rendering through `to_string_lossy`, so two names differing only in *which* unpaired surrogate they carried printed identically as U+FFFD; WTF-16's own `Debug` escapes them as `\u{d800}` and keeps them distinguishable. |
 | <a id="d-33"></a>D-33 | **Reliability is a property of reserved capacity, not of message type.** A **control** message reserves its notification-queue slot *before* whatever produces it is allowed to proceed: a request reserves its completion slot at submit, and an interactive subscription reserves a standing fault slot at registration (D-28). Delivery then cannot fail -- the slot is already the sender's -- so reliability is structural rather than a check somebody must remember to perform, and backpressure lands on the client's **own thread at submit time** rather than being discovered later somewhere it cannot be handled. **Change notifications reserve nothing** and are best-effort by design: a lost batch is re-derivable by re-scanning, which is what `Desync` exists to say, whereas a lost completion is a liveness bug because the client waits forever for something that already happened. This is what makes a single ring carrying two reliability classes principled rather than ad hoc -- the rule is one line, *reserved is guaranteed, unreserved is best-effort*, rather than a per-message-type table a reader has to memorise. It is the same discipline `io_uring` follows when it sizes its completion ring against its submission ring: an in-flight submission must always have somewhere to land. Consequently the monitor never needs to test whether a completion will fit, and a full ring can never wedge request processing. |
@@ -99,6 +99,10 @@ threads of its own.
 | <a id="d-78"></a>D-78 | **A reopen that lands on a different volume than before is a per-subscription confirmation, not a silent continuation or a directory-wide veto.** `WatcherInner::reopen` reopens by path and never checked whether the result is still the same volume, so removable media swapped for different media at the same path (the classic case: NTFS media replaced by FAT32) was silently absorbed, with the client learning about it, if at all, only as an ordinary `Established { Coarse }` should the new volume happen to need the fallback tier. See [Volume identity confirmation on reopen](#volume-identity-confirmation-on-reopen). |
 | <a id="d-79"></a>D-79 | **Supersedes [D-54](#d-54): every fault/failure message now carries a `FaultDetail` (this crate's `OpenFailure` classification plus a `FailureCode`), not just which operation faulted.** A client asked to choose a retry delay, or told a subscription failed permanently, previously had no way to know *why* -- `FaultOperation` says only `Open` or `Arm`, and the raw error was logged (D-58) and discarded. `FailureCode` is `Win32(u32)` or `HResult(i32)` rather than one currency: every source in this crate today is a classic last-error API, so `Win32` is the only variant anything currently produces, but a value is kept in the currency it actually arrived in rather than converted through `HRESULT_FROM_WIN32`/`HRESULT_CODE` to force a single shape. See [Failure detail on every fault report](#failure-detail-on-every-fault-report). |
 | <a id="d-80"></a>D-80 | **M11.2's fast reopen path is disabled (returns `None` unconditionally), and reopens by `OpenFileById` (file reference), not `ReOpenFile` (handle), when re-enabled.** Both were measured against the actual OS (D-52's precedent) rather than assumed: `ReOpenFile` against a directory handle fails outright with `ERROR_ACCESS_DENIED` for an ordinary, unprivileged process (it needs `SeBackupPrivilege` *enabled*, which `FILE_FLAG_BACKUP_SEMANTICS` does not grant); `OpenFileById` reopens correctly by identity (confirmed delete-pending-safe and recreate-safe) but is path-independent, which is its own hazard (it would silently keep following a moved/renamed directory away from the path a client subscribed to -- caught by comparing `GetFinalPathNameByHandleW` before trusting it); and, independently of both, a handle obtained via `OpenFileById` hangs or (once) crashes with `STATUS_STACK_BUFFER_OVERRUN` once associated with the thread pool's `ThreadpoolIo`/IOCP and armed, for a reason not yet root-caused. See [Reopening by file reference, and why the fast path is off](#reopening-by-file-reference-and-why-the-fast-path-is-off). |
+| <a id="d-81"></a>D-81 | **The consumer test surface reuses the delivery model rather than replacing it, and its already-reachable pieces -- `WatchId::from_raw` and every re-exported boundary type -- are blessed as-is, not re-gated.** A downstream consumer tests its own notification-handling code by feeding synthetic `Notification`s through a real `Receiver`: "go below" the `Monitor`, substituting the OS ingest while keeping the delivery model (`Notification`/`Receiver`/queue ordering/doorbell) intact. The reachable pieces shipped public in 0.1, so re-gating them would be a breaking change with no offsetting safety gain. The one further thing a consumer needs -- a `Receiver` it can feed -- was `pub` only inside a private module (hence unreachable), so it is *exposed*, not re-gated, under `test-util` (D-82). See [Consumer test surface](#consumer-test-surface). |
+| <a id="d-82"></a>D-82 | **Everything a consumer needs but cannot otherwise reach is exposed behind an off-by-default `test-util` feature, not on the unconditional public surface: the feedable channel (`channel_with_bound` with `Sender`/`Delivery`/`Reservation`, previously `pub` only inside a private module) and valid-by-construction builders for the two unconstructible boundary types (`RelativeName`, `VolumeIdentity`).** This does not reverse [D-64](DESIGN-RATIONALE.md#the-m64-test-seam-is-a-private-constructor-not-a-public-feature-flag-d-64): D-64's seams serve the crate's own tests reaching internal state, for which `#[cfg(test)]`/`pub(crate)` is strictly better; this seam serves a downstream consumer's tests, which `#[cfg(test)]` cannot reach at all, and it exposes the delivery channel and public boundary constructors rather than internal state (so the retired `unstable-internals` objection does not apply). Feature-gating keeps the crate's internal queue sender, and identity/name construction, out of the production API. See [Consumer test surface](#consumer-test-surface). |
+| <a id="d-83"></a>D-83 | **The consumer test surface tests the consumer's reactions, not whether this crate would ever emit a given sequence.** Builders are valid-by-construction in the type-safety sense (memory-safe, lossless), not production-domain-validating: a `RelativeName` can still carry a unit sequence the kernel itself never reports (an interior NUL, say), and an impossible ordering or an impossible relationship between two otherwise valid values (a `VolumeChanged` with equal `previous`/`current` serials, each individually a legal `VolumeIdentity`) both remain the consumer's responsibility, as with any hand-fed test double. This fidelity limit is documented on the surface so a passing handler test is not mistaken for confirmation that the crate produces that traffic. See [Consumer test surface](#consumer-test-surface). |
+| <a id="d-84"></a>D-84 | **The delivery contract was under-specified, and a second implementation of it -- not a test suite -- is what proved that.** PR #42's example harness promised contract-legal schedules only (its own D-5), which made its generator a second implementation of *this* crate's contract. Converging it took **19 automated review rounds**: eight fixed generated sequences this crate could never emit, five corrected the contract prose itself, and one found a real shipped reliability defect ([`has_room`](#the-has_room-finding-in-this-crate)) on [D-29](#d-29)'s backpressure path. All 278 of this crate's own tests passed throughout and were never going to fail -- they assert what the watcher *does*, and every gap was in what the contract *permits*. The gap categories are workspace-wide and recorded once, in [the workspace design notes](../../DESIGN-NOTES.md#specifying-a-delivery-contract); the decisions amended in response were [D-9](#d-9) (renames never joined), [D-12](#d-12)/[D-30](#d-30) (branch and terminal paths), [D-17](#d-17) (per-tier emission legality), [D-27](#d-27)/[D-28](#d-28) (a fault question is unconditional, and enters as `Arm`), [D-50](#d-50)/[D-78](#d-78) (volume identity: distinct serials, and continuity across reopens), and [D-83](#d-83) (fidelity is type-safety, not production-domain). See [What the second implementation exposed](#what-the-second-implementation-exposed). |
 
 
 ### Queue mediation
@@ -133,21 +137,34 @@ path, because we never call into it.
 
 Delivery is a crate-owned bounded queue: the monitor enqueues decoded batches and
 the client drains the matching receiver. Enqueue never blocks -- a slow client must
-not stall the cadence (D-2) -- so a full queue drops the batch. The core contract is
-that a client is *never silently* left out of sync, which a naive design breaks
-here: the `Desync { QueueFull }` that reports the drop cannot be pushed onto the
-very queue that is full (and reserving one data slot only defers the problem -- a
-second overflow has nowhere to go).
+not stall the cadence (D-2). The core contract is that a client is *never silently*
+left out of sync, and the shape that keeps it has three layers, not one.
 
-The signal is therefore kept **out of band**. The sender holds a latched overflow
-set -- the `WatchId`s with a pending `QueueFull` -- as control state separate from the
-bounded data queue, so it never competes for data capacity. A failed enqueue drops
-the batch and adds each affected `WatchId` to that set; repeats coalesce, which
-loses nothing because `Desync` is idempotent (the response is always a re-scan).
-The receiver is guaranteed to observe a synthesized `Desync { QueueFull }` for each
-latched `WatchId`, surfaced ahead of the next successful batch and cleared once
-observed -- so the dropped batch and its desync can never both vanish, at any queue
-depth >= 1. A zero-capacity bound is rejected at construction. (D-11, D-12)
+**Reserved capacity, not message type, decides what can be lost** (D-33). A
+completion's slot is taken at submit and an interactive subscription's fault slot
+at registration, so control delivery cannot fail. Change notifications reserve
+nothing and are best-effort, because a lost batch is re-derivable by re-scanning
+where a lost completion would be a liveness bug.
+
+**Saturation is survived at the arm, not at the enqueue** (D-29). A full queue does
+not simply drop the batch: the watcher stops re-arming the read, which propagates
+backpressure into the kernel's own change buffer -- a grace period rather than a
+loss, and nothing is lost at all if the client drains in time. A batch can still
+arrive to a full ring (a control reservation may have taken the room since the read
+was armed), and that one is dropped; if the kernel buffer overflows first, that is
+the already-specified `Desync { Overflow }`.
+
+**The loss report is latched out of band, and lands where the loss actually
+happened** (D-28/D-39). `Desync { QueueFull }` cannot be pushed onto the very queue
+that is full, so the sender holds a latched set of `WatchId`s owed one, coalesced
+(a second loss adds nothing, since the response to one is the response to ten). The
+latch is flushed into the queue at the next successful enqueue -- **not** ahead of
+the next batch, which would claim the hole is older than it is. The queue was full
+when the loss occurred, so everything still queued precedes it; a freed slot goes to
+the *report* and the new notification is re-latched. A receiver draining to empty
+synthesizes any remainder directly, so the report never depends on future traffic
+arriving. A zero-capacity bound is unrepresentable (D-40). (D-11, D-12, D-28, D-29,
+D-33, D-39)
 
 ### Coalescing by directory
 
@@ -167,6 +184,16 @@ the same fact to a client -- "there is a hole in your event set" -- so all four 
 delivered as one cause-tagged `Desync { Overflow | QueueFull | Coarse |
 Reestablished }`. Honest reporting of this limitation is a core requirement, not
 an afterthought. (D-12)
+There is a **fifth cause, and it is not the same fact**: `Desync { Stopped }` is
+terminal. It is published once by `record_stop`, reached only when a re-establish
+attempt's own open fails in a way D-22 classifies as permanent -- the single edge
+D-14's "no terminal fault state" does not cover, because retrying would spin
+forever against a target that can never become watchable again. A re-scan does not
+resynchronize it; nothing further will ever arrive for that watch, and the reason
+is readable from `Monitor::stop_reason`. A client that treats the cause as purely
+advisory and re-scans on every desync will therefore re-scan forever against a dead
+watch, which is why the cause is advisory across the recoverable four and
+match-worthy on the fifth. (D-12, D-22)
 
 ### Completeness is the contract (no change-type filter)
 
@@ -394,3 +421,352 @@ pre-existing property of D-7's design, not something M10 changed; `stopped`'s
 own permanent-stop path (`WatcherInner::record_stop`) can still classify a
 later re-establish's `NotADirectory` the same way `subscribe` does, and is
 equally hard to hit for the same structural reason.
+
+### Consumer test surface
+
+A downstream consumer of this crate reacts to `Notification`s drained from a
+`Receiver`. To let that consumer test its *own* reaction logic cheaply and
+deterministically -- with no real filesystem and no thread pool -- the crate lets
+the consumer feed a real `Receiver` itself, rather than only receiving one from
+`Monitor::session`. This is the "go below" seam: the consumer substitutes the OS
+ingest (the source of notifications) while keeping the crate's delivery model --
+`Notification`, `Receiver`, queue ordering, the doorbell -- intact. Substituting
+*above* the delivery model, or replacing it wholesale, would discard exactly the
+behavior the consumer is trying to test against (D-81).
+
+Because the consumer becomes the driver -- it decides what to push and when --
+its test is deterministic without this crate shipping any scheduler or virtual
+clock. Reproducibility falls out of removing the crate's own concurrency from the
+consumer's test, not out of modeling it.
+
+The reachable part of the seam was already public: `WatchId::from_raw` and every
+boundary type (`Notification`, `Change`, `DesyncCause`, `Outcome`,
+`FaultDetail`/`OpenFailure`/`FailureCode`, `WatchMode`, `FaultOperation`,
+`ChangeKind`) are re-exported at the crate root, so a consumer can already tag and
+match notifications. These are blessed as-is rather than re-gated (D-81). Two
+things a consumer additionally needs were not reachable, and are exposed behind
+the off-by-default `test-util` feature (D-82): the feedable channel --
+`channel_with_bound`, with `Sender`, `Delivery`, and `Reservation` -- which was
+`pub` only inside the private `queue` module; and valid-by-construction `for_test`
+builders for the two boundary types with no consumer-reachable constructor,
+`RelativeName` (inside a `Change`) and `VolumeIdentity` (inside a `VolumeChanged`).
+
+The feature gate is an audience distinction, not a reversal of D-64. D-64's
+`#[cfg(test)]`/`pub(crate)` seams exist for the crate's own tests to reach
+internal state, and a public feature there would leak internal state for no gain.
+This seam exists for a *downstream* consumer's tests, which `#[cfg(test)]` cannot
+reach at all (the cfg is not set when the crate is compiled as a dependency), so
+a feature is the only mechanism that reaches them -- and it exposes public
+boundary constructors, not internal state, so the anti-pattern that retired
+`unstable-internals` (a `#[doc(hidden)]` window into internals) is not what this
+is.
+
+The surface tests a consumer's reactions, not the crate's production of a given
+sequence (D-83): the builders are valid-by-construction only in the type-safety
+sense (memory-safe, lossless) -- a `RelativeName` can still carry a unit
+sequence the kernel never reports (an interior NUL, say). An impossible
+*ordering*, or an impossible *relationship between two otherwise valid values*
+(a `VolumeChanged` with equal `previous`/`current` serials, say), is likewise
+the consumer's responsibility, as with any hand-fed test double.
+
+### What the second implementation exposed
+
+D-84. The example harness published alongside this crate promises to generate
+only schedules this crate could actually emit. That promise is what made it a
+**second implementation of this crate's delivery contract**, and converging it
+took 19 automated review rounds -- more review-response commits than the
+original implementation had.
+
+The value is not the harness. It is that a contract stated as prose can only be
+*read*, never *executed*, so nothing forces its gaps into the open. A second
+implementation has to make a decision at every point the prose is silent, and
+each decision it gets wrong is a place the contract failed to say something.
+This crate's own test suite could not have found any of it: 278 tests passed
+throughout, because a test asserts one point in the set of legal sequences and
+every gap was in the *boundary* of that set.
+
+The ten categories those findings fall into are workspace-wide and recorded in
+[the workspace design notes](../../DESIGN-NOTES.md#specifying-a-delivery-contract),
+since `windows-overlapped-io-sys` and `windows-ioring-sys` publish contracts of
+the same shape. What is specific to this crate is which of its decisions turned
+out to be stated incompletely, and how:
+
+- **[D-27](#d-27)/[D-28](#d-28) said the monitor "asks" on fault.** It did not
+  say *always*: `enter_fault` puts every interactive route in the awaiting set
+  and asks on every fault, with no probability anywhere. Nor did it say which
+  operation a *live* watch's fault enters as -- always `Arm`, with `Open`
+  reachable only as a re-entry into an already-unresolved bracket.
+- **[D-17](#d-17) named the two tiers but not what each can emit.** A Coarse
+  endpoint's `on_activation` publishes `Desync { Coarse }` for activity, and
+  `Batch` and `Overflow` are Detailed-only -- `Overflow` because it is the
+  *kernel change buffer's* own overflow, which only a detailed read observes.
+  `QueueFull`, `Reestablished` and `Stopped` are **not** restricted by tier: a
+  coarse activation rides the same best-effort queue, so saturation latches a
+  `QueueFull` against it exactly as against a `Batch`. The tier decision stated
+  none of this.
+- **[D-50](#d-50)/[D-78](#d-78) specified volume identity per message, not
+  across messages.** `install` stores the confirmed identity, so a watch's next
+  `VolumeChanged.previous` must equal its own prior `.current` -- a continuity
+  rule that only exists *between* two notifications and so had no natural home
+  in either one's description.
+- **[D-12](#d-12)/[D-30](#d-30) enumerated the success path exhaustively and
+  the branches by omission.** `Completion { Failed }` is not only an initial
+  outcome (`rekey` emits it for an already-routed watch), and a fault question
+  is not always followed by `Desync { Reestablished }` -- a pending retry can
+  ask again, and `record_stop` can end the watch with `Desync { Stopped }`.
+- **[D-9](#d-9) said renames are never joined; it did not say what that
+  permits.** A legal batch may carry a lone half, both halves, or halves with
+  unrelated records between them.
+
+Each of those is now stated. [M14.1](CHECKLIST.md) then ran the converse pass over
+the sequencing decisions a consumer builds recovery on; see
+[The M14 audit](#the-m14-audit) below. The remaining decisions are M14.2's.
+
+### <a id="the-m14-audit"></a>The M14 audit: the sequencing decisions against all ten categories
+
+Reactive fixes only ever reach the categories a reviewer happened to probe, so
+M14.1 asked the question deliberately, for each of
+[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract), of the
+three decisions carrying the rules a consumer's recovery logic rests on. "Not
+applicable" below means the category has no instance here, and is distinguished
+throughout from "unspecified", which means the contract deliberately declines to
+say.
+
+It found three shipped defects, corrected in the same change, and two rules that
+were true of the code but stated nowhere.
+
+**[D-12](#d-12), the `Desync` primitive.**
+
+| # | Answer |
+|---|---|
+| 1 | No `WatchOptions` field suppresses any desync. Unfilterability is load-bearing, not incidental (D-77): a hole must invalidate an in-flight settling window. |
+| 2 | Unconditional. `Desync { Reestablished }` is published on **every** successful re-establishment and is *not* gated on `report_liveness`, unlike the `Resumed`/`Established` that follow it. |
+| 3 | Per tier: `Overflow` is Detailed-only, `Coarse` is Coarse-only, and `QueueFull`/`Reestablished`/`Stopped` are tier-independent. **Was unstated; now stated.** |
+| 4 | `Desync { Reestablished }` is always published *before* the `Resumed`/`Established` for the same recovery, so a client is told to re-scan the gap before being told it can trust incremental changes again. |
+| 5 | Not every `(watch, cause)` pair is reachable -- the tier restriction in 3 constrains it, and nothing follows a `Stopped` for that watch. |
+| 6 | `Reestablished` only ever leaves an unresolved fault bracket; `Coarse` fires on every coarse activation including the first; `Stopped` is reachable only from a re-establish attempt, never from initial registration (that path reports `Completion { Failed }`). |
+| 7 | **`Stopped` is terminal and was documented as though it were not** -- see the defects below. |
+| 8 | A desync is never correlated with what was lost. The crate says a hole exists, never what fell in it; there is no partial-recovery path. |
+| 9 | Not applicable -- a desync carries no name or boundary-typed value. |
+| 10 | `test-util` can build tier-impossible pairs (a Coarse watch's `Overflow`); D-83's fidelity limit governs. |
+
+**[D-27](#d-27)/[D-28](#d-28), the fault protocol.**
+
+| # | Answer |
+|---|---|
+| 1 | **Three** independent `WatchOptions` fields, not two: `retry`, `on_volume_change`, and `report_liveness`. All eight combinations are legal. A standing slot is taken iff `Interactive \|\| Confirm`. |
+| 2 | Unconditional -- every interactive route is asked on every fault, with no probability anywhere. The source reads conditionally (`retry == Interactive && fault_slot.is_some()`), but the second conjunct is *implied* by the first: `subscribe` fails with `WouldBlock` when the reservation cannot be carved out, so an interactive route always has its slot. |
+| 3 | A `RetryQuestion` reaches only an `Interactive` subscription, a `VolumeChanged` only a `Confirm` one -- both over the same standing slot. |
+| 4 | **The shared slot rests on a mutual-exclusion invariant** -- a `RetryQuestion` and a `VolumeChanged` are never outstanding at once for one subscription, because a volume-change question is only raised by a reopen that already succeeded, and the gate blocks arming while one is pending. This was a source comment, load-bearing for a reservation's soundness, and stated nowhere in the contract. **Now stated.** |
+| 5 | A live watch's fault always enters as `Arm`; `Open` reaches a route only by re-entering an already-unresolved bracket. |
+| 6 | As 5 -- entry state, not just transition label, is what distinguishes the two. |
+| 7 | A question does not always resolve with `Desync { Reestablished }`: a retry loop can ask again, and `record_stop` can terminate the watch with `Desync { Stopped }` instead. |
+| 8 | Answers are keyed by `WatchId` alone, never to a question instance, so a late answer to an already-resolved fault is silently discarded rather than misapplied. Deliberate, and deliberately not a correlation the client can rely on. |
+| 9 | `FailureCode` keeps a code in the currency it arrived in (`Win32` or `HResult`) rather than forcing one shape through `HRESULT_FROM_WIN32` (D-79). |
+| 10 | As D-12's row 10. |
+
+**[D-30](#d-30), request completions.**
+
+| # | Answer |
+|---|---|
+| 1 | No option suppresses a completion; reliability is reservation, not opt-in (D-33). |
+| 2 | **"Every request produces a completion" is true of every *lifecycle* request, not of every `Request` variant** -- `Answer` and `AnswerVolumeChange` are responses to questions the crate posed and deliberately carry none. D-30's blanket wording did not admit the exception. **Now stated.** |
+| 3 | `Subscribed`/`Establishing`/`Failed` arise only from a subscribe; `Cancelled` only from a cancellation. |
+| 4 | A subscription yields exactly one registration outcome and at most one `Cancelled`. |
+| 5 | `Establishing` is not a failure and carries no terminal meaning (D-46); only D-22's permanent pair reaches `Failed`. |
+| 6 | `Failed` is not only an initial-registration outcome -- `rekey` emits it for an already-routed watch. |
+| 7 | `Cancelled` is the stream boundary and is sent *after* teardown, which is what makes D-30's ordering claim structural rather than a race. |
+| 8 | Completions are keyed by `WatchId`, never by a request identity; the crate issues none, so two requests for one watch are distinguished by their `Outcome` alone. |
+| 9 | `Failed { detail }` carries the full `FaultDetail` rather than a reduced code (D-79). |
+| 10 | As D-12's row 10. |
+
+**The three defects this pass found**, all in prose or rustdoc rather than behaviour,
+and all corrected here:
+
+1. **`DesyncCause`'s own doc contradicted its own variant.** The enum said "the
+   cause is advisory: the client's response is the same in every case (a re-scan)"
+   while `Stopped` said "unlike every other cause, a re-scan will not resynchronize
+   this watch". A consumer reading the type-level doc -- the one a reader reaches
+   first -- would re-scan forever against a dead watch. `Notification::Desync`'s
+   `cause` field carried the same claim.
+2. **[The Desync primitive](#the-desync-primitive) enumerated four causes.** There
+   are five; `Stopped` was absent, so the section's "all four are the same fact to
+   a client" was the exact over-generalisation defect 1 shipped.
+3. **[Delivery and saturation](#delivery-and-saturation) still described the
+   pre-D-29 design.** It said a full queue "drops the batch" (D-29 replaced that
+   with throttling at the arm) and that the latch is "surfaced ahead of the next
+   successful batch" -- the precise phrasing [D-39](#d-39) identifies as wrong,
+   because it would claim the hole is older than it is.
+
+All three are the same shape: a decision was superseded or extended, the index row
+was updated, and the prose section a reader actually reads was not. That the
+per-decision rows were correct throughout is what let it go unnoticed.
+
+**[D-10](#d-10)/[D-13](#d-13)/[D-17](#d-17)/[D-26](#d-26)/[D-57](#d-57), the
+notification-shaping decisions**, audited by M14.2 the same way. Only the rows that
+were not already answered above are listed.
+
+| # | Answer |
+|---|---|
+| 1 | `report_liveness` is the third independent option (M14.2 confirms D-27/D-28's row 1 from the other side): it gates `Suspended`/`Resumed`/`Established` and nothing else, and never creates a standing slot (D-57). |
+| 2 | `Established` is *conditional in a second way* beyond `report_liveness`: a route coalescing onto an already-faulted watcher is deliberately not told a tier, since there is no settled one to name. |
+| 3 | One decoded completion yields **zero, one, or many** `Batch` notifications, not one. `publish` de-multiplexes across every route (D-6) and a route whose filtered subset is empty is skipped, on the same reasoning D-26 applies to a wholly empty completion. **D-10's "one completion = one batch" is per-subscription, and only when that subscription's filtered subset is non-empty.** |
+| 4 | **The tier is not sticky.** `reopen` re-resolves it on every call (D-61), so `Established { Detailed }` then `Established { Coarse }` for one watch is legal, as is the reverse -- detailed is retried first every time, so a downgrade is not permanent. A client caching "this watch is detailed" is caching something the contract never promised. |
+| 5 | `Suspended`/`Resumed` carry only a `WatchId`; `Established` pairs it with a tier, both of whose values are always reachable. |
+| 6 | **A `Resumed` does not imply this subscription saw the matching `Suspended`.** A route that coalesces onto a faulted watcher joins `routes` after `enter_fault` has sent its `Suspended`s, so it receives `Resumed` (and its first `Established`) out of a bracket it never saw open. |
+| 7 | **A `Suspended` is not always followed by `Resumed`.** If the re-establish attempt's own open fails permanently, `record_stop` publishes `Desync { Stopped }` and sends no `Resumed` and no `Established` -- the bracket is closed by a terminator instead. A client balancing brackets must treat `Stopped` as closing every open one. |
+| 8 | An `Established` is never correlated with the `Completion` for the same registration; their relative order is fixed only in the immediate-success case. |
+| 9 | Not applicable -- none of these five carry a boundary-typed value. |
+| 10 | As D-12's row 10. |
+
+**What M14.2 found**, all in the contract's description of sequences rather than in
+behaviour:
+
+1. **A liveness bracket can open with `Resumed`.** Rows 6 and 7 above are the two
+   halves of the same omission: the contract described `Suspended`/`Resumed` as a
+   pair, and both a mid-fault join (opens without `Suspended`) and a permanent stop
+   (closes without `Resumed`) break the pairing. A consumer that counts brackets --
+   the obvious way to track "is my watch live?" -- is wrong in both directions.
+2. **`Established` is not the first notification a liveness subscription sees.**
+   For a route joining a faulted watcher the order is `Completion { Subscribed }`,
+   then later `Desync { Reestablished }`, `Resumed`, `Established`.
+3. **The tier can change between establishments**, which "reported once at first
+   establishment and again after every re-establishment" does not imply.
+
+One correction to M14.1's own table falls out of this pass: its D-27/D-28 row 2 says
+the `fault_slot.is_some()` conjunct is *implied* by `retry == Interactive`. That
+holds for every route `subscribe` builds, which is every route in production, but
+the crate's own unit tests construct `Route` directly and do pair `Interactive` with
+`fault_slot: None`. The guard is therefore live code, not redundant, and the honest
+statement is that the pairing is an invariant of the public registration path rather
+than of the type.
+
+### <a id="the-has_room-finding-in-this-crate"></a>The `has_room` finding
+
+One round found a genuine defect in shipped 0.1 code rather than in the harness.
+`Sender::has_room` reported `free() > 0`, but `Sender::send` flushes every owed
+latched desync into the queue *before* considering the caller's notification --
+so a freed slot with a latch outstanding was never available to a new
+notification, and `has_room` returned `true` for a slot the next `send` would
+consume for the flush.
+
+`WatcherInner::arm_locked` gates re-arming on `any_route_has_room()`, so this
+sat directly on [D-29](#d-29)'s backpressure path. The intended behaviour is to
+leave changes in the kernel's buffer as a grace period rather than let a batch
+complete with nowhere to go; the bug produced exactly the outcome D-29 exists to
+prevent -- arm, complete, flush takes the slot, batch dropped and re-latched.
+Fixed with a regression test that had no predecessor: no existing test called
+`has_room` with a latch outstanding.
+
+The transferable rule is recorded workspace-wide: an advisory predicate another
+subsystem's reliability gate depends on is not advisory, and must be tested in
+the condition that gate uses it under.
+
+### <a id="the-m143-predicate-sweep"></a>The M14.3 predicate sweep
+
+`has_room` was found by review rather than by looking, so nothing established it
+was the only one. M14.3 enumerated every predicate this crate exposes or consumes
+and asked the same question of each: **does its stated contract hold under the
+condition its caller actually uses it in?**
+
+| Predicate | Used by | On a reliability gate? | Verdict |
+|---|---|---|---|
+| `Sender::has_room` | `any_route_has_room` -> `arm_locked` | Yes -- [D-29](#d-29) backpressure | The original finding; accounts for the latch since `700e0eb` |
+| `Receiver::is_empty` / `len` | a client's own drain loop | Yes -- a drain loop is the client's liveness gate | **Defect. See below.** |
+| `Receiver::is_disconnected` | end-of-stream detection | Yes | Honest: `senders == 0` is exactly what it claims |
+| `Receiver::latched` / `capacity` | diagnostics | No | Informational, and correct |
+| `DirectoryWatcher::stop_reason().is_none()` | `route_established`, to discard a permanently-stopped watcher before coalescing onto it | Yes | Sound: read under the same `resident` lock as the insert that acts on it, so there is no window |
+| `DirectoryWatcher::is_faulted` | `route_established`, to suppress a tier report with no settled tier | Yes | Sound, same critical section |
+| `Session::is_open` / `Servicer::is_open` | advisory pre-check | No -- `submit` returns `Rejected` regardless | The right shape: the fallible *operation* is authoritative, the predicate is a courtesy |
+| `Monitor::is_registered` / `is_watching` / `is_running` | [D-31](#d-31) observability | No | Point-in-time snapshots by construction, and documented as such |
+| `OpenFailure::is_retryable` | [D-15](#d-15) classification | Yes | Pure function of a value; no timing dimension, so the shape cannot arise |
+
+**The defect: `Receiver::is_empty` is not "nothing to take".** It is `len() == 0`,
+and `len` deliberately excludes latched losses -- so a drained queue that still
+owes a `Desync { QueueFull }` reports itself empty while `recv` would still yield
+that report. The caller's actual question is the drain loop's, and
+`while !receiver.is_empty()` exits with a loss still owed.
+
+It is worse than a silent miss, because of [D-41](#d-41): the doorbell is signalled
+whenever the receiver has something to take, and "something to take" is
+deliberately *three* things -- a queued notification, an owed latched loss, and the
+end of the stream. A client that waits on the doorbell and then tests `is_empty`
+therefore **spins**: the event stays signalled because a loss is owed, and the
+predicate keeps saying there is nothing to collect. That is the `has_room` shape
+exactly -- a predicate consulted at a gate whose condition it does not model.
+
+The evidence it was already biting: **this crate's own tests never use `is_empty`
+alone.** They write `!receiver.is_empty() || receiver.latched() > 0`, and
+`receiver.is_disconnected() && receiver.is_empty() && receiver.latched() == 0`.
+Every internal call site that means "is there anything for me" reconstructs the
+conjunction by hand, which is the same signal `has_room` gave before it was fixed.
+
+The fix is to publish the predicate D-41 already defines internally rather than to
+redefine `is_empty` (whose `len() == 0` correspondence is a Rust-wide expectation
+and is not itself wrong): `Receiver::has_pending` *is* `State::pending`, the exact
+condition the doorbell is signalled on, so a client waiting on the doorbell now has
+a predicate that matches it. `is_empty` and `len` keep their meaning and gained the
+warning they lacked. Three regression tests cover the drained-with-a-loss-owed
+state, agreement with the doorbell at every step of that transition, and the
+disconnected-and-empty case -- none of which had a predecessor.
+
+**The sequel: fixing a predicate without fixing its wake edge.** The review round
+that followed M14.3 found the other half of the original `has_room` defect, and it
+is the sharper lesson of the two.
+
+`has_room` was corrected to `free() > latched.len()`. The prod that *wakes* a
+parked producer was left at its original `free() == 1`. Those two expressions agree
+only while nothing is latched -- which is exactly the state that never matters,
+because a producer only parks when the queue is saturated, and saturation is what
+creates latches. With one loss owed, draining a slot took `free()` to 1 and fired
+the prod, but `has_room` was still `1 > 1` = false, so the producer re-checked and
+stayed parked. The next drain took `free()` to 2, where `has_room` finally became
+true -- and `free() != 1`, so **no prod was ever sent again**. The watcher remained
+`Backpressured` with room available, permanently, and no error anywhere.
+
+That is [D-47](#d-47)'s lost-wake failure returning through a door D-47 did not
+guard. D-47 reasoned carefully about *when* the prod is rung relative to the gate
+lock, and got that right; what it did not anticipate is the wake *threshold* and
+the arm predicate being two separately-written expressions that a later fix to one
+would silently desynchronise from the other.
+
+So the fix is not to correct the second expression to match the first -- that just
+restores the coupling and waits for the next edit to break it again. Both are now
+derived from one quantity, `State::best_effort_room()`: `has_room` is `> 0` and the
+wake edge is `== 1`. Every step that frees capacity raises it by exactly one, so the
+edge cannot be stepped over. **A predicate and the edge that wakes it are one
+decision, and must have one source of truth.**
+
+Worth recording about the test, too. The first regression test written for this
+passed against the buggy code, because it only asserted the prod count *after* the
+transition -- where both versions reach 1, differing only in *when*. Asserting the
+count at the intermediate step (still 0 while `has_room` is false) is what
+distinguishes them. A regression test for a timing defect has to be run against the
+unfixed code to be worth anything, which is now how both were confirmed.
+
+**A third round: the audit was right and the generator was not.** The review after
+the wake-edge fix found that the harness generator excluded `Desync { QueueFull }`
+for a Coarse-tier watch, with a test codifying that exclusion -- while
+[the M14 audit's own table](#the-m14-audit) had just recorded `QueueFull` as
+tier-independent.
+
+The audit's table is correct, and the source settles it: `on_activation` publishes
+`Desync { Coarse }` through `publish` -> `route.sink.send`, which is the same
+best-effort path a `Batch` takes, so a saturated client latches a `QueueFull`
+against a coarse watch exactly as it would a detailed one. Only `Overflow` is
+Detailed-only, because it is the *kernel change buffer's* overflow and a coarse
+handle never reports one.
+
+The generator's error was a plausible-sounding conflation -- "`Overflow` and
+`QueueFull` are the two loss causes, and a coarse watcher's losses are `Coarse`"
+-- which reads as one rule and is really two, one true and one false. Worth
+recording because it is the mirror image of every other finding in this section:
+here the *contract* was stated correctly and the second implementation still
+diverged, so writing the rule down is necessary and not sufficient. Anything that
+was built against the pre-audit understanding has to be re-checked against the
+post-audit statement, and nothing does that automatically.
+
+The corrected test also asserts that a coarse `QueueFull` is actually *generated*,
+not merely permitted -- without that, the test would pass just as well against a
+generator that still excluded it, which is the same weakness the wake-edge
+regression test had in its first form.
