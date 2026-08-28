@@ -87,12 +87,14 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+pub mod capture_set;
 pub mod captured;
 pub mod declared;
 pub mod error_mode;
 pub mod impersonation;
 pub mod transaction;
 
+pub use capture_set::{CapturableAspect, CaptureSet};
 pub use captured::Captured;
 pub use declared::Declared;
 

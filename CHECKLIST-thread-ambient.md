@@ -101,7 +101,7 @@ namespace operation is.
   executed rather than merely parsed. M23.4 retains the *composite's* documentation.
 ## M23 -- `windows-thread-ambient-sys`: the composite
 
-- [ ] **M23.1** -- Implement the capture set and its named default, covering only the capturable aspects.
+- [x] **M23.1** -- Implement the capture set and its named default, covering only the capturable aspects.
   The default set is a named constant whose growth is a breaking change, so a caller who wants stability
   can name aspects explicitly and a caller who takes the default can see what it contains.
 
