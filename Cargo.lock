@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "windows-file-enumeration-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "windows-impersonation-token-sys",
  "windows-sys",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "windows-impersonation-token-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "windows-sys",
 ]

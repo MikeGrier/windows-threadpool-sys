@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-file-enumeration-sys"
-version = "0.1.0" # x-release-please-version
+version = "0.1.1" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -27,7 +27,7 @@ targets = ["x86_64-pc-windows-msvc"]
 [dependencies]
 # Begin submission captures the caller's effective security context, and
 # traversal can supply one previously captured context for descendant opens.
-windows-impersonation-token-sys = { version = "0.1.0", path = "../windows-impersonation-token-sys" }
+windows-impersonation-token-sys = { version = "0.1.1", path = "../windows-impersonation-token-sys" }
 
 # ThreadpoolWork provides the coalesced SQ doorbell and the per-enumeration
 # synchronous refill workers.
