@@ -604,7 +604,7 @@ handle or memory defects that CI now executes on every run since M27.5 added the
   sibling test rather than by the platform. Claim the letter atomically, use a distinct target per
   test, and pass `DDD_EXACT_MATCH_ON_REMOVE`.
 
-- [ ] **M29.2** -- Do not free an `OVERLAPPED` and its buffer while the I/O may be pending.
+- [x] **M29.2** -- Do not free an `OVERLAPPED` and its buffer while the I/O may be pending.
   `read_through_port` discards `ReadFile`'s return value; if the read goes pending and
   `GetQueuedCompletionStatus` times out, the stack `OVERLAPPED` and the heap buffer are destroyed
   and the port closed with the IRP outstanding, so the kernel later writes into freed memory

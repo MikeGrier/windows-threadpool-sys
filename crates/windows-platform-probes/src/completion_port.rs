@@ -243,17 +243,31 @@ pub fn measure() -> IoRingSupport<CompletionPortFinding> {
     })
 }
 
+/// How long each completion wait blocks before rechecking, rather than one
+/// unbounded call -- the same discipline `windows-ioring-sys` uses for rundown.
+const COMPLETION_POLL_MS: u32 = 5_000;
+
 /// Issues an overlapped read and collects it from `port`.
+///
+/// # Why the failure path cancels and keeps waiting
+///
+/// `overlapped` has automatic storage and `buffer` is a heap allocation, and
+/// both are freed when this returns. Once `ReadFile` reports `ERROR_IO_PENDING`
+/// the kernel owns both until the operation completes, so returning on a
+/// timeout would leave it writing into a freed stack frame and a freed heap
+/// block -- and the caller closes the port immediately afterwards. There is no
+/// safe early return: the operation is cancelled and then waited for.
 fn read_through_port(handle: HANDLE, port: HANDLE) -> bool {
+    use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, GetLastError};
     use windows_sys::Win32::Storage::FileSystem::ReadFile;
-    use windows_sys::Win32::System::IO::GetQueuedCompletionStatus;
+    use windows_sys::Win32::System::IO::{CancelIoEx, GetQueuedCompletionStatus};
 
     let mut buffer = vec![0_u8; FIXTURE_LEN];
     let mut overlapped = unsafe { std::mem::zeroed::<OVERLAPPED>() };
 
     // SAFETY: the handle is live and overlapped; the buffer and OVERLAPPED both
-    // outlive the completion collected below.
-    unsafe {
+    // outlive the completion collected below -- see this function's comment.
+    let started = unsafe {
         ReadFile(
             handle,
             buffer.as_mut_ptr(),
@@ -263,9 +277,20 @@ fn read_through_port(handle: HANDLE, port: HANDLE) -> bool {
         )
     };
 
+    if started == 0 {
+        // SAFETY: no preconditions.
+        let error = unsafe { GetLastError() };
+        if error != ERROR_IO_PENDING {
+            // The read was refused outright, so nothing is in flight and
+            // nothing owns the buffer. This is the measured negative.
+            return false;
+        }
+    }
+
     let mut bytes = 0_u32;
     let mut key = 0_usize;
     let mut completed: *mut OVERLAPPED = std::ptr::null_mut();
+
     // SAFETY: the port is live and every out-parameter is writable.
     let dequeued = unsafe {
         GetQueuedCompletionStatus(
@@ -273,9 +298,33 @@ fn read_through_port(handle: HANDLE, port: HANDLE) -> bool {
             &raw mut bytes,
             &raw mut key,
             &raw mut completed,
-            5_000,
+            COMPLETION_POLL_MS,
         )
     };
+
+    if completed.is_null() {
+        // Nothing was dequeued, so the read is still outstanding and still
+        // owns the buffer. Cancel it, then wait for the completion that
+        // cancelling guarantees -- rechecking rather than waiting unbounded,
+        // but never giving up, because giving up is what corrupts memory.
+        // SAFETY: `handle` is live and `overlapped` names an operation on it.
+        unsafe { CancelIoEx(handle, &raw mut overlapped) };
+
+        while completed.is_null() {
+            // SAFETY: as above.
+            unsafe {
+                GetQueuedCompletionStatus(
+                    port,
+                    &raw mut bytes,
+                    &raw mut key,
+                    &raw mut completed,
+                    COMPLETION_POLL_MS,
+                )
+            };
+        }
+
+        return false;
+    }
 
     dequeued != 0 && bytes as usize == FIXTURE_LEN && key == COMPLETION_KEY && buffer[0] == FILL
 }

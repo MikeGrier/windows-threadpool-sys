@@ -125,10 +125,54 @@ impl Ring {
     }
 
     /// Submits, waiting for `operations` completions.
-    pub(crate) fn submit_and_wait(&self, operations: u32) -> i32 {
+    ///
+    /// Returns the `HRESULT` **and the number of entries actually submitted**.
+    /// The count is what tells a caller whether the kernel now owns its
+    /// buffer: a failing `HRESULT` does not mean nothing was queued (the wait
+    /// can time out with entries in flight), and a caller that freed its
+    /// buffer on that assumption would leave the kernel writing into freed
+    /// memory.
+    pub(crate) fn submit_and_wait(&self, operations: u32) -> (i32, u32) {
         let mut submitted = 0_u32;
         // SAFETY: the ring is live and `submitted` is writable.
-        unsafe { SubmitIoRing(self.0, operations, SUBMIT_TIMEOUT_MS, &raw mut submitted) }
+        let hr = unsafe { SubmitIoRing(self.0, operations, SUBMIT_TIMEOUT_MS, &raw mut submitted) };
+
+        (hr, submitted)
+    }
+
+    /// Collects `outstanding` completions, returning the first.
+    ///
+    /// # Why this does not give up
+    ///
+    /// Every caller frees the buffer its operation reads into as soon as it
+    /// returns. An operation the kernel has accepted owns that buffer until it
+    /// completes, so returning early -- on a timeout, or because the queue was
+    /// momentarily empty -- would leave the kernel writing into freed memory.
+    /// There is no safe error path here: the only correct action is to wait.
+    ///
+    /// The wait is bounded and rechecked rather than one unbounded call, the
+    /// same discipline `windows-ioring-sys` uses for its rundown, but the
+    /// recheck loop itself does not terminate early. Call it only with a count
+    /// the ring really reported as submitted -- never with a guess -- or it
+    /// will wait for a completion that is never coming.
+    pub(crate) fn collect(&self, outstanding: u32) -> Option<IORING_CQE> {
+        let mut first = None;
+        let mut remaining = outstanding;
+
+        while remaining > 0 {
+            if let Some(cqe) = self.pop() {
+                remaining -= 1;
+                first = first.or(Some(cqe));
+                continue;
+            }
+
+            // Nothing ready yet. Wait for one more, then recheck. A failure or
+            // timeout here is not a reason to stop: the entry is still
+            // outstanding either way.
+            let _ = self.submit_and_wait(1);
+        }
+
+        first
     }
 
     /// Pops one completion, or `None` when the queue is empty.
@@ -351,12 +395,14 @@ fn register(ring: &Ring, handles: &[HANDLE]) -> i32 {
         return built;
     }
 
-    let submitted = ring.submit_and_wait(1);
-    if submitted < 0 {
-        return submitted;
+    let (hr, submitted) = ring.submit_and_wait(1);
+    if submitted == 0 {
+        // Nothing was queued, so nothing owns `handles` -- safe to return.
+        return if hr < 0 { hr } else { i32::MIN };
     }
 
-    ring.pop().map_or(i32::MIN, |cqe| cqe.ResultCode)
+    ring.collect(submitted)
+        .map_or(i32::MIN, |cqe| cqe.ResultCode)
 }
 
 /// Reads one byte through registered file `index`, returning the result code.
@@ -381,12 +427,15 @@ fn read_through_index(ring: &Ring, index: u32) -> i32 {
         return built;
     }
 
-    let submitted = ring.submit_and_wait(1);
-    if submitted < 0 {
-        return submitted;
+    let (hr, submitted) = ring.submit_and_wait(1);
+    if submitted == 0 {
+        // Nothing was queued, so nothing owns `byte` -- safe to return.
+        return if hr < 0 { hr } else { i32::MIN };
     }
 
-    ring.pop().map_or(i32::MIN, |cqe| cqe.ResultCode)
+    // `byte` must outlive this, which is what `collect` guarantees.
+    ring.collect(submitted)
+        .map_or(i32::MIN, |cqe| cqe.ResultCode)
 }
 
 /// Reads the whole fixture through a raw handle on a fresh ring.
@@ -429,12 +478,15 @@ pub(crate) fn read_raw_handle(handle: HANDLE) -> (i32, usize, u8) {
         return (built, 0, 0);
     }
 
-    let submitted = ring.submit_and_wait(1);
-    if submitted < 0 {
-        return (submitted, 0, 0);
+    let (hr, submitted) = ring.submit_and_wait(1);
+    if submitted == 0 {
+        // Nothing was queued, so nothing owns `buffer` -- safe to return.
+        return (if hr < 0 { hr } else { i32::MIN }, 0, 0);
     }
 
-    match ring.pop() {
+    // `buffer` is dropped on return, so the completion must be collected
+    // first rather than abandoned on a timeout.
+    match ring.collect(submitted) {
         Some(cqe) => (cqe.ResultCode, cqe.Information, buffer[0]),
         None => (i32::MIN, 0, 0),
     }
@@ -580,7 +632,9 @@ pub fn measure_thread_agnosticism() -> IoRingSupport<ThreadAgnosticism> {
         // caller across the join below, so both outlive the operation.
         let built = unsafe { BuildIoRingReadFile(ring.0, file_ref, buffer_ref, READ_LEN, 0, 0, 0) };
         assert!(built >= 0, "build the read");
-        assert!(ring.submit_and_wait(0) >= 0, "submit the read");
+        let (hr, submitted) = ring.submit_and_wait(0);
+        assert!(hr >= 0, "submit the read");
+        assert_eq!(submitted, 1, "the read must actually have been queued");
 
         // Whether the operation is still outstanding, observed here rather
         // than inferred: this is the submitting thread, and it has not
