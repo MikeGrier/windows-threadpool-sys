@@ -121,6 +121,31 @@ assert_eq!(refused.bits(), 0x0004);
 | Memory priority | declared | Readable, but remoting a caller's priority without being asked is a policy choice |
 | Background mode | declared | Moves CPU, I/O and memory priority together, which the name says out loud |
 
+## One capture, many workers
+
+`AmbientState` is `Send` **and** `Sync`, so a single capture can be shared
+through an `Arc` and applied concurrently on any number of workers -- the shape a
+traversal or scan engine has, capturing once at submission and running it on
+every worker for the length of the job. Sharing is also the cheap option:
+capture duplicates a kernel token object, so re-capturing per unit of work
+re-pays for a snapshot you already hold.
+
+Two things a consumer of that shape should know before adopting it:
+
+- **Granularity is yours to choose and costs something.** Applying once around a
+  batch and applying per operation are both expressible; each application is a
+  `SetThreadToken` plus a call per other aspect in play. Prefer the widest
+  window the aspects allow -- but the narrowest is sometimes right for a
+  non-performance reason, as in the enumeration crate, which impersonates only
+  around its directory open because later queries use the handle and need no
+  token.
+- **A restore failure for impersonation is fail-fast.** It panics, and a panic
+  inside a thread-pool callback aborts the process. On sixty-four impersonated
+  workers that is not one failed operation, it is the whole process. This is the
+  intended trade -- a shared worker returned to a pool under an unknown identity
+  is a process-wide security failure -- but it should be a decision, not a
+  discovery.
+
 ## Status
 
 The aspects and the composite are complete: capture, declaration, ordered

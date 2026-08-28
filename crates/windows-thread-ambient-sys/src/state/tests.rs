@@ -193,6 +193,19 @@ fn an_ambient_state_is_send() {
 }
 
 #[test]
+fn an_ambient_state_is_sync_so_one_capture_can_serve_many_workers() {
+    // `Send` alone is not enough for the shape this crate exists to serve. A
+    // traversal engine captures once at submission and shares that one state
+    // across every worker it runs, which needs `Sync` and an `Arc`. Asserting
+    // only `Send` would let the crate pass its whole suite and then fail to
+    // compile in the consumer that motivated it.
+    fn assert_sync<T: Sync>() {}
+    assert_sync::<AmbientState>();
+    fn assert_shareable<T: Send + Sync + 'static>() {}
+    assert_shareable::<std::sync::Arc<AmbientState>>();
+}
+
+#[test]
 fn capture_does_not_disturb_the_thread_it_reads() {
     let entry_mode = ThreadErrorMode::capture().expect("representable");
     let entry_token = thread_has_token();

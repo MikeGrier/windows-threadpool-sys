@@ -305,3 +305,255 @@ fn one_state_serves_repeated_pool_callbacks() {
     );
     assert_eq!(hits.load(Ordering::SeqCst), 8, "not every callback ran");
 }
+
+// --- one capture, many workers (M23.5) -------------------------------------
+
+/// Wait until `gauge` reaches `target`, or the deadline passes.
+///
+/// Used instead of a `Barrier` deliberately: a barrier inside the applied region
+/// would hang the whole suite if one worker failed to apply and never arrived.
+/// A bounded wait turns that into a failed assertion with a legible message.
+fn wait_for(gauge: &AtomicU32, target: u32, within: std::time::Duration) -> u32 {
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        let seen = gauge.load(Ordering::SeqCst);
+        if seen >= target || std::time::Instant::now() >= deadline {
+            return seen;
+        }
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn one_capture_serves_many_workers_simultaneously() {
+    // The shape a traversal engine actually uses: capture once at submission,
+    // share it, and run it on every worker at the same time. Each worker applies
+    // and restores independently against one shared, immutable state.
+    const WORKERS: u32 = 8;
+
+    assert!(
+        !has_token(),
+        "precondition: the submitting thread has no token"
+    );
+    let guard = ThreadErrorMode::FAIL_CRITICAL_ERRORS
+        .apply()
+        .expect("install a distinctive mode to capture");
+    let state = Arc::new(AmbientState::capture(CaptureSet::DEFAULT).expect("capture"));
+    guard.release().expect("restore the submitting thread");
+
+    // `arrived` is monotonic and is what the wait keys off. An earlier version
+    // used a gauge that each worker decremented on the way out, which raced: the
+    // last worker to arrive could decrement before the others observed the peak,
+    // so they spun to the deadline and the assertion still passed on the single
+    // sample the last worker recorded. Slow *and* weak.
+    let arrived = Arc::new(AtomicU32::new(0));
+    let inside = Arc::new(AtomicU32::new(0));
+    let peak = Arc::new(AtomicU32::new(0));
+    let saw_context = Arc::new(AtomicU32::new(0));
+    let left_clean = Arc::new(AtomicU32::new(0));
+
+    let workers: Vec<_> = (0..WORKERS)
+        .map(|_| {
+            let state = Arc::clone(&state);
+            let arrived = Arc::clone(&arrived);
+            let inside = Arc::clone(&inside);
+            let peak = Arc::clone(&peak);
+            let saw_context = Arc::clone(&saw_context);
+            let left_clean = Arc::clone(&left_clean);
+            std::thread::spawn(move || {
+                let applied = state
+                    .with_applied(|| {
+                        arrived.fetch_add(1, Ordering::SeqCst);
+                        inside.fetch_add(1, Ordering::SeqCst);
+                        // Hold every worker inside the applied region at once,
+                        // so the state is genuinely shared rather than merely
+                        // reused in sequence. No worker leaves before the last
+                        // one arrives, so a full count means real overlap.
+                        let overlap =
+                            wait_for(&arrived, WORKERS, std::time::Duration::from_secs(10));
+                        peak.fetch_max(overlap, Ordering::SeqCst);
+                        let observed = (live_mode(), has_token());
+                        inside.fetch_sub(1, Ordering::SeqCst);
+                        observed
+                    })
+                    .expect("apply on a worker");
+
+                if applied.value().0 == ThreadErrorMode::FAIL_CRITICAL_ERRORS.bits()
+                    && applied.value().1
+                {
+                    saw_context.fetch_add(1, Ordering::SeqCst);
+                }
+                if applied.restore().is_clean() {
+                    left_clean.fetch_add(1, Ordering::SeqCst);
+                }
+                // Every worker must leave itself as it found it.
+                assert_eq!(
+                    live_mode(),
+                    0,
+                    "a worker was left with the wrong error mode"
+                );
+                assert!(!has_token(), "a worker was left carrying a token");
+            })
+        })
+        .collect();
+
+    for worker in workers {
+        worker.join().expect("a worker panicked");
+    }
+
+    assert_eq!(
+        peak.load(Ordering::SeqCst),
+        WORKERS,
+        "the workers never overlapped, so this proved reuse rather than sharing"
+    );
+    assert_eq!(
+        inside.load(Ordering::SeqCst),
+        0,
+        "a worker left the applied region unbalanced"
+    );
+    assert_eq!(
+        saw_context.load(Ordering::SeqCst),
+        WORKERS,
+        "not every worker saw the captured context"
+    );
+    assert_eq!(
+        left_clean.load(Ordering::SeqCst),
+        WORKERS,
+        "not every worker restored cleanly"
+    );
+}
+
+#[test]
+fn one_shared_capture_serves_concurrent_pool_callbacks() {
+    // The same property on the pool, at volume. Concurrency is observed rather
+    // than required: the pool decides how many callbacks run at once, and
+    // demanding a minimum here would make the test a measurement of the pool's
+    // scheduling rather than of this crate.
+    const SUBMISSIONS: u32 = 32;
+
+    let guard = ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX
+        .apply()
+        .expect("install a distinctive mode to capture");
+    let state = Arc::new(AmbientState::capture(CaptureSet::DEFAULT).expect("capture"));
+    guard.release().expect("restore");
+
+    let inside = Arc::new(AtomicU32::new(0));
+    let peak = Arc::new(AtomicU32::new(0));
+    let correct = Arc::new(AtomicU32::new(0));
+    let clean = Arc::new(AtomicU32::new(0));
+    let ran = Arc::new(AtomicU32::new(0));
+
+    let work = {
+        let state = Arc::clone(&state);
+        let inside = Arc::clone(&inside);
+        let peak = Arc::clone(&peak);
+        let correct = Arc::clone(&correct);
+        let clean = Arc::clone(&clean);
+        let ran = Arc::clone(&ran);
+        ThreadpoolWork::new(
+            move || {
+                ran.fetch_add(1, Ordering::SeqCst);
+                let applied = state
+                    .with_applied(|| {
+                        let concurrent = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(concurrent, Ordering::SeqCst);
+                        std::thread::yield_now();
+                        let observed = (live_mode(), has_token());
+                        inside.fetch_sub(1, Ordering::SeqCst);
+                        observed
+                    })
+                    .expect("apply on a pool worker");
+
+                if applied.value().0 == ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX.bits()
+                    && applied.value().1
+                {
+                    correct.fetch_add(1, Ordering::SeqCst);
+                }
+                if applied.restore().is_clean() {
+                    clean.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+            None,
+        )
+        .expect("create the pool work item")
+    };
+
+    for _ in 0..SUBMISSIONS {
+        work.submit();
+    }
+    work.wait();
+
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        SUBMISSIONS,
+        "not every callback ran"
+    );
+    assert_eq!(
+        correct.load(Ordering::SeqCst),
+        SUBMISSIONS,
+        "a callback did not see the captured context"
+    );
+    assert_eq!(
+        clean.load(Ordering::SeqCst),
+        SUBMISSIONS,
+        "a callback did not restore cleanly"
+    );
+    assert_eq!(
+        inside.load(Ordering::SeqCst),
+        0,
+        "a callback left the applied region unbalanced"
+    );
+    println!(
+        "peak observed concurrency: {} of {SUBMISSIONS} submissions",
+        peak.load(Ordering::SeqCst)
+    );
+}
+
+#[test]
+fn concurrent_workers_do_not_leak_state_into_each_other() {
+    // Two states applied at once on different workers must not blend. Without
+    // this, a per-thread implementation and a process-wide one would both pass:
+    // each worker sees *a* captured mode, and only the cross-check shows it is
+    // the right one.
+    let first_guard = ThreadErrorMode::FAIL_CRITICAL_ERRORS
+        .apply()
+        .expect("install");
+    let first = Arc::new(AmbientState::capture(CaptureSet::ERROR_MODE).expect("capture"));
+    first_guard.release().expect("restore");
+
+    let second_guard = ThreadErrorMode::NO_GP_FAULT_ERROR_BOX
+        .apply()
+        .expect("install");
+    let second = Arc::new(AmbientState::capture(CaptureSet::ERROR_MODE).expect("capture"));
+    second_guard.release().expect("restore");
+
+    let inside = Arc::new(AtomicU32::new(0));
+    let run = |state: Arc<AmbientState>, inside: Arc<AtomicU32>| {
+        std::thread::spawn(move || {
+            state
+                .with_applied(|| {
+                    inside.fetch_add(1, Ordering::SeqCst);
+                    let _ = wait_for(&inside, 2, std::time::Duration::from_secs(10));
+                    live_mode()
+                })
+                .expect("apply")
+                .into_value()
+        })
+    };
+
+    let left = run(Arc::clone(&first), Arc::clone(&inside));
+    let right = run(Arc::clone(&second), Arc::clone(&inside));
+    let left = left.join().expect("no panic");
+    let right = right.join().expect("no panic");
+
+    assert_eq!(
+        left,
+        ThreadErrorMode::FAIL_CRITICAL_ERRORS.bits(),
+        "the first worker saw the wrong state"
+    );
+    assert_eq!(
+        right,
+        ThreadErrorMode::NO_GP_FAULT_ERROR_BOX.bits(),
+        "the second worker saw the wrong state"
+    );
+}

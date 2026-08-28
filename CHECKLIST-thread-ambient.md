@@ -123,7 +123,7 @@ namespace operation is.
   arrive on the worker -- since a test suite that only ever sees capture succeed cannot tell the two apart.
   Complete the API documentation, the README examples, and the changelog baseline.
 
-- [ ] **M23.5** -- Prove the composite against a **many-worker consumer's shape**, which is the audit's
+- [x] **M23.5** -- Prove the composite against a **many-worker consumer's shape**, which is the audit's
   second purpose and was not discharged when M23 was closed. The in-repository consumers each apply a
   captured state on one worker at a time; Globazog takes one capture at `submit()` and shares it across up
   to 64 concurrent workers for the length of a traversal, and nothing currently tests that. Assert

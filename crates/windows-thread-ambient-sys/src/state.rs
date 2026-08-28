@@ -22,6 +22,49 @@
 //! are attached with [`AmbientState::with_declared`] rather than collected. That
 //! separation is why the capture set names only capturable aspects.
 //!
+//! # One capture can serve many workers at once
+//!
+//! [`AmbientState`] is both `Send` and `Sync`, so a single capture may be shared
+//! through an `Arc` and applied concurrently on any number of workers. That is
+//! the shape a traversal or scan engine actually has: capture once at
+//! submission, then run it on every worker for the length of the job. Each
+//! application installs and restores on its own thread and observes nothing of
+//! the others.
+//!
+//! Sharing is also the cheap option. Capture duplicates a kernel token object,
+//! so re-capturing per unit of work re-pays for a snapshot the caller already
+//! holds.
+//!
+//! # Granularity is the caller's choice, and it costs something
+//!
+//! Applying once around a batch of operations and applying once per operation
+//! are both expressible, and the crate deliberately does not choose. Each
+//! application is a `SetThreadToken` plus a call for every other aspect in play,
+//! so a worker that opens a thousand files pays that a thousand times if it
+//! applies per open.
+//!
+//! Prefer the widest window the aspects allow -- but note that the *narrowest*
+//! window is sometimes the correct one for a reason unrelated to cost:
+//! [crates/windows-file-enumeration-sys](../../windows-file-enumeration-sys/DESIGN-NOTES.md)
+//! deliberately impersonates only around its directory open, because every later
+//! query uses the resulting handle and needs no token at all. Holding a token
+//! longer than the work requires is a security decision, not just a performance
+//! one.
+//!
+//! # The blast radius of fail-fast restoration
+//!
+//! A failure to restore impersonation panics. That is inherited from
+//! [`windows_impersonation_token_sys`] rather than chosen here, and it is
+//! correct: a shared worker returned to a pool under an unknown identity is a
+//! process-wide security failure.
+//!
+//! The consequence is worth stating plainly for anyone running many impersonated
+//! workers. A panic inside a thread-pool callback **aborts the process** -- the
+//! pool has no caller to unwind to -- so a restore failure on one worker of
+//! sixty-four is not one failed operation, it is the whole process. This is the
+//! intended trade, and a consumer that cannot accept it should not be applying
+//! impersonation on threads it does not own.
+//!
 //! # Example
 //!
 //! ```
