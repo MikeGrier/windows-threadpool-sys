@@ -64,7 +64,7 @@ namespace operation is.
   **named constant** rather than a `Default` impl, because growing an implicit default silently changes
   behaviour for callers who never named it; the guard composition order; and the per-aspect restore policy.
 
-- [ ] **M22.4** -- Implement the thread error mode aspect: capture via `GetThreadErrorMode`, declaration of
+- [x] **M22.4** -- Implement the thread error mode aspect: capture via `GetThreadErrorMode`, declaration of
   an explicit value, and scoped application restoring the worker's entry value on every path including
   unwind. This is the aspect that appears in **both** categories, and that is deliberate -- the facility
   captures the caller's value for diagnostics while declaring the forced dialog-suppressing bits, and
