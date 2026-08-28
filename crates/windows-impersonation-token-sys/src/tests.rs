@@ -1,10 +1,13 @@
 // Copyright (c) 2026 Mike Grier
 
+use std::any::Any;
 use std::cell::Cell;
 use std::error::Error as _;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::process::{Command, Stdio};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_CANT_OPEN_ANONYMOUS, ERROR_NO_TOKEN, FALSE,
@@ -12,7 +15,7 @@ use windows_sys::Win32::Foundation::{
 
 use super::{
     ApplicationGuard, ApplyFailure, CaptureFailure, ThreadTokenOpenError, check_application_result,
-    classify_thread_token_open_error, run_in_scope,
+    classify_thread_token_open_error, restore, run_in_scope,
 };
 
 struct DropFlag {
@@ -154,4 +157,101 @@ fn application_guard_is_neither_send_nor_sync() {
 
     let _ = <ApplicationGuard as AmbiguousIfSend<_>>::marker;
     let _ = <ApplicationGuard as AmbiguousIfSync<_>>::marker;
+}
+
+/// Restoration-failure panic and double-panic process behavior.
+///
+/// Moved from an integration test (`tests/restoration_failure.rs`) that
+/// pulled `src/restore.rs` in via `#[path]` to call `restore::panic_failure`
+/// -- which duplicated the module rather than exercising the crate's real
+/// compiled module graph, and could silently stop testing the real thing if
+/// the crate ever stopped calling that helper the way these tests assume.
+/// As unit tests, both call it directly with no such gap.
+const RESTORE_FAILURE_SCENARIO_VAR: &str = "WITS_RESTORE_FAILURE_SCENARIO";
+const DOUBLE_PANIC_SCENARIO: &str = "double-panic";
+const RESTORE_FAILURE_CHILD_TIMEOUT: Duration = Duration::from_secs(30);
+const RESTORE_FAILURE_SETUP_FAILURE_EXIT_CODE: i32 = 111;
+
+struct RestorationFailure;
+
+impl Drop for RestorationFailure {
+    fn drop(&mut self) {
+        restore::panic_failure(os_error(ERROR_ACCESS_DENIED));
+    }
+}
+
+fn restoration_failure_panic_text(payload: &(dyn Any + Send)) -> Option<&str> {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+}
+
+fn restoration_failure_child_double_panics() -> ! {
+    let _restoration = RestorationFailure;
+    panic!("operation panic");
+}
+
+fn restoration_failure_dispatch_if_child() {
+    let Ok(scenario) = std::env::var(RESTORE_FAILURE_SCENARIO_VAR) else {
+        return;
+    };
+
+    let caught = catch_unwind(|| match scenario.as_str() {
+        DOUBLE_PANIC_SCENARIO => restoration_failure_child_double_panics(),
+        other => panic!("unknown child scenario {other}"),
+    });
+    if caught.is_err() {
+        std::process::exit(RESTORE_FAILURE_SETUP_FAILURE_EXIT_CODE);
+    }
+}
+
+#[test]
+fn restoration_failure_panics_with_the_native_error() {
+    let panic = catch_unwind(|| {
+        restore::panic_failure(os_error(ERROR_ACCESS_DENIED));
+    })
+    .expect_err("restoration failure must panic");
+    let text = restoration_failure_panic_text(panic.as_ref()).expect("panic payload is text");
+
+    assert!(text.contains("SetThreadToken failed to restore the previous thread token"));
+    assert!(text.contains("os error 5"));
+}
+
+#[test]
+fn restoration_failure_during_unwind_aborts_the_process() {
+    restoration_failure_dispatch_if_child();
+
+    let executable = std::env::current_exe().expect("locate the unit-test binary");
+    let mut child = Command::new(executable)
+        .arg("--exact")
+        .arg("tests::restoration_failure_during_unwind_aborts_the_process")
+        .env(RESTORE_FAILURE_SCENARIO_VAR, DOUBLE_PANIC_SCENARIO)
+        .env("RUST_TEST_THREADS", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn double-panic child");
+    let deadline = Instant::now() + RESTORE_FAILURE_CHILD_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll double-panic child") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("double-panic child did not exit within {RESTORE_FAILURE_CHILD_TIMEOUT:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    assert!(
+        !status.success(),
+        "double-panic child exited successfully instead of aborting"
+    );
+    assert_ne!(
+        status.code(),
+        Some(RESTORE_FAILURE_SETUP_FAILURE_EXIT_CODE),
+        "double-panic child failed during setup instead of aborting"
+    );
 }

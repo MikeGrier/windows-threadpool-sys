@@ -7,6 +7,8 @@
 //! filesystem side small and fast -- cannot exercise on their own. See each
 //! submodule's own doc comment for what it covers.
 
+#![cfg(windows)]
+
 mod support;
 
 mod cancellation;

@@ -599,16 +599,22 @@ delegation-level preservation, and anonymous rejection. Exact restoration is
 verified with the prior token's `TOKEN_STATISTICS.TokenId`, so clearing to process
 identity or substituting a duplicate cannot pass.
 
-The
-[tests/restoration_failure.rs](crates/windows-impersonation-token-sys/tests/restoration_failure.rs)
-target verifies that restoration failure panics with the native error and that a
-restoration panic during existing unwind aborts in a bounded child process. Both
-tests call the same production panic helper in
+The `restoration_failure_panics_with_the_native_error` and
+`restoration_failure_during_unwind_aborts_the_process` unit tests in
+[src/tests.rs](crates/windows-impersonation-token-sys/src/tests.rs) verify
+that restoration failure panics with the native error and that a
+restoration panic during existing unwind aborts in a bounded child process
+(re-executing the unit-test binary itself, not a separate integration test
+target). Both tests call the same production panic helper in
 [src/restore.rs](crates/windows-impersonation-token-sys/src/restore.rs).
 
 All 25 tests pass: nine unit tests in 0.00 seconds, fourteen real-token tests in
 0.00 seconds, and two restoration subprocess tests in 1.69 seconds. Targeted
-all-target Clippy and documentation tests also pass without warnings.
+all-target Clippy and documentation tests also pass without warnings. (The two
+restoration subprocess tests were later moved from a separate integration test
+target into `src/tests.rs` as ordinary unit tests, addressing a Copilot PR #44
+review finding that the integration test's `#[path]` inclusion of `src/restore.rs`
+bypassed the crate's real compiled module graph.)
 
 ## Moved 2026-08-27 -- scoped impersonation application
 
