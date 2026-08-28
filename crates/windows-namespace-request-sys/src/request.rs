@@ -21,14 +21,25 @@
 //! make every open look single-use and force a caller to rebuild a request it
 //! could simply have performed again.
 //!
+//! # Why the error type is an associated type
+//!
+//! Most entries fail only as Windows failed, so their error is a
+//! [`Win32Error`](crate::Win32Error). One does not:
+//! [`crate::final_path::QueryFinalPath`] retries a growing buffer, and
+//! "the required size kept changing" is a failure Win32 has no code for.
+//!
+//! Fixing the trait's error to `Win32Error` would have left that entry outside
+//! the seam, which would make the seam not level -- a consumer could substitute
+//! a fake for four entries and not the fifth. An associated `Error` keeps every
+//! entry reachable through one trait without any of them having to invent a
+//! code it does not have.
+//!
 //! # This is a seam, not an abstraction layer
 //!
 //! The traits exist so a *consumer* can substitute a fake. They are not a
 //! plug-in point for alternative implementations of Windows, and nothing in
 //! this crate dispatches through them: the entries keep their inherent
 //! `perform` methods, which is what an ordinary caller uses.
-
-use crate::outcome::Outcome;
 
 /// A request that may be performed more than once.
 ///
@@ -62,6 +73,7 @@ use crate::outcome::Outcome;
 /// struct AlwaysMissing;
 ///
 /// impl Request for AlwaysMissing {
+///     type Error = Win32Error;
 ///     type Output = ();
 ///
 ///     fn perform(&self) -> Outcome<()> {
@@ -72,6 +84,7 @@ use crate::outcome::Outcome;
 /// struct AlwaysOpens;
 ///
 /// impl Request for AlwaysOpens {
+///     type Error = Win32Error;
 ///     type Output = u32;
 ///
 ///     fn perform(&self) -> Outcome<u32> {
@@ -86,13 +99,20 @@ pub trait Request {
     /// What performing the request produces.
     type Output;
 
+    /// How performing it can fail.
+    ///
+    /// [`Win32Error`](crate::Win32Error) for every entry that fails only as
+    /// Windows failed, which is all of them but one.
+    type Error;
+
     /// Performs the request on the calling thread.
     ///
     /// # Errors
     ///
     /// Returns the raw Win32 code, unaltered, per this crate's
-    /// faithful-execution contract.
-    fn perform(&self) -> Outcome<Self::Output>;
+    /// faithful-execution contract -- or, for an entry with a failure Win32 has
+    /// no code for, that entry's own error.
+    fn perform(&self) -> Result<Self::Output, Self::Error>;
 }
 
 /// A request that is consumed by performing it.
@@ -106,6 +126,7 @@ pub trait Request {
 /// ```
 /// use windows_namespace_request_sys::outcome::Outcome;
 /// use windows_namespace_request_sys::request::ConsumingRequest;
+/// use windows_namespace_request_sys::Win32Error;
 ///
 /// // A consumer's cleanup step, written against the trait.
 /// fn perform_all<R: ConsumingRequest>(requests: Vec<R>) -> usize {
@@ -120,6 +141,7 @@ pub trait Request {
 /// struct FakeClose;
 ///
 /// impl ConsumingRequest for FakeClose {
+///     type Error = Win32Error;
 ///     type Output = ();
 ///
 ///     fn perform(self) -> Outcome<()> {
@@ -133,12 +155,15 @@ pub trait ConsumingRequest {
     /// What performing the request produces.
     type Output;
 
+    /// How performing it can fail.
+    type Error;
+
     /// Performs the request on the calling thread, consuming it.
     ///
     /// # Errors
     ///
     /// Returns the raw Win32 code, unaltered.
-    fn perform(self) -> Outcome<Self::Output>;
+    fn perform(self) -> Result<Self::Output, Self::Error>;
 }
 
 #[cfg(test)]

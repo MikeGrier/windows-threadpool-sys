@@ -301,6 +301,7 @@ impl OpenFileByIdentifier {
 }
 
 impl crate::request::Request for OpenFileByIdentifier {
+    type Error = crate::Win32Error;
     type Output = OwnedHandle;
 
     fn perform(&self) -> Outcome<OwnedHandle> {

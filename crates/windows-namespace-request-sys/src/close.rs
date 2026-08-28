@@ -244,6 +244,7 @@ unsafe impl Send for CloseRequest {}
 unsafe impl Sync for CloseRequest {}
 
 impl crate::request::ConsumingRequest for CloseRequest {
+    type Error = crate::Win32Error;
     type Output = ();
 
     fn perform(self) -> Outcome<()> {

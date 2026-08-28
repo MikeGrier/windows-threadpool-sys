@@ -406,7 +406,7 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
 
 - [x] **M26.2** -- The `GetFileInformationByHandle` entry, returning `BY_HANDLE_FILE_INFORMATION`. It is a  distinct Win32 call rather than a class of M26.1, and the watcher uses it where the Ex form would not do.
 
-- [ ] **M26.3** -- The `GetFinalPathNameByHandleW` entry, including the flags the watcher relies on
+- [x] **M26.3** -- The `GetFinalPathNameByHandleW` entry, including the flags the watcher relies on
   (`VOLUME_NAME_DOS | FILE_NAME_NORMALIZED`) and the grow-the-buffer retry the call requires. This is the
   entry the audit identified as having the strongest offload evidence, since Globazog performs it on its
   submitting thread today.

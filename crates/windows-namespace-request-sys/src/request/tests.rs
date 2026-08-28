@@ -47,6 +47,7 @@ struct CannedOpen {
 }
 
 impl Request for CannedOpen {
+    type Error = Win32Error;
     type Output = u32;
 
     fn perform(&self) -> Outcome<u32> {
@@ -57,6 +58,7 @@ impl Request for CannedOpen {
 struct CannedClose;
 
 impl ConsumingRequest for CannedClose {
+    type Error = Win32Error;
     type Output = ();
 
     fn perform(self) -> Outcome<()> {
@@ -165,7 +167,7 @@ fn the_trait_method_and_the_inherent_method_agree() {
 fn a_request_can_be_held_behind_a_trait_object() {
     // A consumer that stores heterogeneous requests needs this to work, and it
     // only does if the trait stays object-safe.
-    let requests: Vec<Box<dyn Request<Output = u32>>> = vec![
+    let requests: Vec<Box<dyn Request<Output = u32, Error = Win32Error>>> = vec![
         Box::new(CannedOpen { outcome: Ok(1) }),
         Box::new(CannedOpen {
             outcome: Err(Win32Error::from_code(ERROR_FILE_NOT_FOUND)),

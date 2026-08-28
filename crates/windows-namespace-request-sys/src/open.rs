@@ -278,6 +278,7 @@ impl OpenFile {
 }
 
 impl crate::request::Request for OpenFile {
+    type Error = crate::Win32Error;
     type Output = OwnedHandle;
 
     fn perform(&self) -> Outcome<OwnedHandle> {

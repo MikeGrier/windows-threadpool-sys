@@ -326,6 +326,7 @@ impl fmt::Display for NotifyFilter {
 }
 
 impl crate::request::Request for WatchDirectory {
+    type Error = crate::Win32Error;
     type Output = ChangeNotification;
 
     fn perform(&self) -> Outcome<ChangeNotification> {

@@ -108,6 +108,7 @@ impl QueryFileInformationByHandle {
 }
 
 impl crate::request::Request for QueryFileInformationByHandle {
+    type Error = crate::Win32Error;
     type Output = BY_HANDLE_FILE_INFORMATION;
 
     fn perform(&self) -> Outcome<BY_HANDLE_FILE_INFORMATION> {

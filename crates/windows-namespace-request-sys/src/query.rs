@@ -307,6 +307,7 @@ impl QueryFileInformation {
 }
 
 impl crate::request::Request for QueryFileInformation {
+    type Error = crate::Win32Error;
     type Output = AlignedBuffer;
 
     fn perform(&self) -> Outcome<AlignedBuffer> {
