@@ -343,6 +343,17 @@ In brief:
 11. **Two layers**, cut as catalogue-plus-faithful-execution (synchronous,
     testable with no ring, pool, or async) and delivery model -- not as
     "trivial implementation" and "ring implementation".
+11a. **One catalogue entry per Win32 call, sequenced by the client.** A consumer
+    needing two calls makes two requests: submit, observe the completion, decide,
+    submit the next. The sequencing is logical and lives on the client side; the
+    facility does not represent the pair. A compound entry is added only under a
+    measured performance argument, and would be a fusion of entries that already
+    exist rather than a capability they lack. Recorded because the first draft of
+    this session offered "compound operation or second catalogue entry" as an
+    even choice, which it is not. This is a statement about request granularity
+    only, and deliberately says nothing about how the facility might later
+    present itself to Rust coroutines -- that is out of scope here and is not
+    foreclosed.
 12. **v1 cancellation is pre-execution only.**
 
 ## Rejected alternatives

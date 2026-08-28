@@ -1198,8 +1198,8 @@ facility's catalogue has to satisfy all of them:
   directory-ness, because the refill failure codes cannot tell "you named a file"
   from "this filesystem lacks extended directory information". Remoting the open
   while leaving that query inline would still leave a blocking call on the
-  consumer's worker, so the facility owes either a compound open-and-classify
-  operation or a second catalogue entry.
+  consumer's worker, so the query is a catalogue entry of its own, which the
+  consumer sequences itself -- see the granularity rule below.
 
 ### A handle is either a completion-port handle or an `IoRing` handle, never both
 
@@ -1274,6 +1274,43 @@ contaminated worker to shared infrastructure is worse than dying.
 already owns that layer -- capture, transport, thread-bound application, and
 exact restoration with a fail-fast guard -- and the facility consumes it rather
 than growing a second implementation.
+
+#### One catalogue entry per Win32 call, and the client sequences them
+
+A catalogue entry corresponds to **one** Win32 call. Where a consumer needs two
+calls, it makes two requests: it submits the first, receives its completion,
+decides what to do, and submits the second. The default is never a compound
+operation, and a compound entry is only ever added under a **measured**
+performance argument -- not because two calls happen to appear together at one
+call site today.
+
+**The sequencing is logical, and lives on the client side.** Each request is
+independent; the ordering comes from the client not submitting the second until
+it has observed the first's completion, and the facility does not represent the
+pair. Keeping it there is what avoids inventing answers the client already has
+for its own case -- what becomes of the remaining steps when one fails, how one
+step's output names the next step's input, and whether a partially-executed
+sequence can be cancelled.
+
+This is a statement about **request granularity**, and only that. It says nothing
+about how the facility might later present itself to Rust coroutines, which is a
+separate question, deliberately out of scope here, and not foreclosed by
+anything above.
+
+Two consequences worth stating outright:
+
+- **A compound entry is a fusion, never a new capability.** Whatever it does must
+  remain expressible as the sequence of its parts, so adding one can only ever
+  change performance -- never semantics, and never what is possible.
+- **The cost of *not* fusing is a real completion round trip**, and that cost is
+  inherent to remoting rather than particular to this rule: for a *single*
+  operation the remoted form is always slower than the synchronous one, because
+  the win is concurrency and thread-freedom rather than latency. The same shape
+  appears at the data-plane seam, where an async open followed by a ring read is
+  necessarily two round trips -- Windows `IoRing` has no link flag, and a read
+  cannot be submitted for a handle that does not exist yet. That is the honest
+  trade, and it is what a measurement would have to overturn before a compound
+  entry is justified.
 
 #### The context is a composite that *contains* an impersonation token
 

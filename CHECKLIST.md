@@ -98,12 +98,13 @@ be settled rather than discovered later.
   `GetLastError` captured *before* the context is restored, which the shipped code does deliberately.
   Its D-15 Globazog acceptance gate must still pass afterwards.
 
-- [ ] **M21.4** -- Decide whether the post-open `FileBasicInfo` directory-ness check becomes a compound
-  open-and-classify operation or a second catalogue entry. The enumeration crate performs it because the
-  refill failure codes cannot distinguish "you named a file" from "this filesystem lacks extended
-  directory information". It is itself a blocking namespace call, so remoting the open while leaving the
-  classification inline would leave a blocking call on the consumer's worker and only half-solve the
-  problem this facility exists for. Depends on M21.3.
+- [ ] **M21.4** -- Add the `FileBasicInfo` query as its own catalogue entry, and have the enumeration
+  crate sequence it after the open rather than performing it inline. It is a blocking namespace call, so
+  leaving it inline would keep a blocking call on the consumer's worker and only half-solve the problem
+  this facility exists for. One entry per Win32 call: this is **not** a compound open-and-classify
+  operation, and the sequencing is logical and client-side -- the crate submits the open, observes its
+  completion, then submits the query. A compound entry is reserved for a measured performance argument
+  and would be a fusion of these two entries rather than a capability they lack. Depends on M21.3.
 
 ## M-inf -- Parked
 
