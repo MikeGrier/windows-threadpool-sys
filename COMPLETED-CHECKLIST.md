@@ -1148,3 +1148,68 @@ single-enumeration scenario still depends on.
 stable across eight consecutive integration runs (~1s each) and leaving no
 scratch directories behind. Targeted all-target Clippy and
 `cargo fmt --check` are clean.
+
+
+## Moved 2026-08-27 -- file-enumeration Globazog adapter demonstration
+
+### <a id="fe-14"></a>FE-14 -- Discharge the D-15 Globazog acceptance gate with a real adapter demonstration, not a metadata cross-check. *(completed 2026-08-27 22:54:47 UTC-04:00)*
+
+A hand-reconstructed adapter under
+[tests/integration/globazog_adapter/](crates/windows-file-enumeration-sys/tests/integration/globazog_adapter.rs)
+reimplements Globazog's real Windows one-directory backend's public value
+types and predicate vocabulary and exercises the live native engine through
+it. Globazog is never an actual dependency of this workspace -- it is meant
+to consume this crate, not the reverse -- so every reconstructed type carries
+a doc comment citing the exact file it was copied from at `MikeGrier/globazog-rs`
+commit `55a0b1aec7a93051a675852636ab41a6437440fb`
+(`crates/globazog/src/{sys,sys/win,predicate,syntax,syntax/decode,error}.rs`):
+
+- `types.rs` -- `DirEntry`, `DirScan`, `EntryFailure`, `EnumPlan`, `FileId`,
+  `decode_utf16` (ported verbatim to preserve Globazog's unpaired-surrogate
+  handling), its inverse `encode_codepoint_to_wtf16` (written from scratch,
+  Globazog never needs that direction), and the FILETIME-to-Unix-nanos
+  conversion Globazog's real backend uses.
+- `predicate_types.rs` -- `CaseSensitivity`, `Token`, `Segment`, `Cmp`,
+  `TimeField`, `Leaf`, with `Leaf::Depth` deliberately excluded: it is a
+  property of Globazog's own recursive multi-directory traversal engine, not
+  something a one-directory backend can ever be asked to answer.
+- `translate.rs` -- `translate_leaf`/`translate_segment`/`translate_leaves`,
+  including the `EntryType::Other` case: Windows has no third entry kind, so
+  a non-negated `IsType{ty:Other}` translates to a self-contradictory
+  attribute-clause pair (the directory bit required both set and clear in
+  the same conjunction) rather than being silently dropped.
+- `adapter.rs` -- `enumerate_dir_native_via_wfe(_with_predicate)`,
+  `translate_entry`, and `finish_scan` as a pure function separated from live
+  I/O specifically so the error-shape contract can be unit-tested without a
+  live filesystem fault.
+
+Two properties D-15 requires could not be reached organically in this
+environment, and both are narrowed to a proof that still covers the
+contract, matching the precedent FE-13's `capability.rs` set:
+
+- A genuine live late-failure (`TerminalOutcome::Failed` arriving after some
+  entries were already delivered) needs a filesystem or redirector fault this
+  environment cannot manufacture on demand -- proven instead via
+  `tests_errors.rs` calling `finish_scan` directly with hand-built
+  `TerminalOutcome::Failed` values, both with and without prior entries.
+- "No path opens an individual entry" (inherited from D-3) is proven via
+  `tests_no_per_entry_open.rs`: a directory junction whose target does not
+  exist is still listed successfully by the batched directory query, which
+  would not hold if entries were resolved individually.
+
+Two test-construction bugs surfaced while writing `tests_metadata.rs`, not
+production defects: a `target` directory created as a junction's destination
+was itself a fourth top-level listable entry alongside the three the test
+expected, fixed by nesting it under a subdirectory; and passing a compound
+slash-containing string (`"plain-dir/target"`) to the shared `Scratch::subdir`
+helper produced a path `cmd.exe`'s own command-line re-parsing of the
+`mklink /J` invocation mis-tokenized around, fixed by composing the nested
+path with `PathBuf::join` instead so every component keeps native `\`
+separators.
+
+53 new integration tests pass alongside the existing 302 unit tests and the
+crate doctest, stable across ten consecutive integration runs and leaving no
+scratch directories or junctions behind. Targeted all-target Clippy and
+`cargo fmt --check` are clean. `DESIGN-NOTES.md`'s Globazog replacement gate
+section and `DESIGN-RATIONALE.md` record the discharge and both acknowledged
+limitations.

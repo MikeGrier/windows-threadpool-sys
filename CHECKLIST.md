@@ -12,8 +12,8 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-14.** Discharge the D-15 Globazog acceptance
-> gate with a real adapter demonstration.
+> **NEXT ACTIONABLE ITEM: FE-15.** Complete crate-level API and safety
+> documentation, README examples, and the changelog baseline.
 
 ## M6 -- Native enumeration engine
 
@@ -39,14 +39,7 @@ and the submission-ring servicer the sole registry authority (D-16, D-17).
 
 - [x] **FE-13** -- Build the real-Windows integration suite. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-13)
 
-- [ ] **FE-14** -- Discharge the D-15 Globazog acceptance gate with a real adapter
-  demonstration, not a metadata cross-check. Show that Globazog's Windows
-  one-directory backend can be replaced without losing native names, entry type,
-  reparse status and tag, raw attributes, both sizes, all four times, or
-  volume-qualified identity; that its name, type, reparse, attribute, size, and
-  timestamp predicate leaves translate without loss; that a failed terminal
-  reproduces its error-plus-partial-listing surface; and that no path opens an
-  individual entry.
+- [x] **FE-14** -- Discharge the D-15 Globazog acceptance gate with a real adapter demonstration, not a metadata cross-check. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-14)
 
 - [ ] **FE-15** -- Complete crate-level API and safety documentation, README
   examples covering ordinary and traversal-style submission, and the changelog

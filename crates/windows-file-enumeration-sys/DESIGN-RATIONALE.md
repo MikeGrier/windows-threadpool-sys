@@ -249,3 +249,58 @@ no per-entry open. The new crate adds bounded asynchronous transport and correct
 submitter impersonation around that same capability. Treating the existing
 backend as an acceptance witness prevents the lower layer from becoming easier
 to implement by quietly forcing a second metadata path back into traversal.
+
+## FE-14: discharging the Globazog replacement gate
+
+D-15's gate demands a demonstration, not a promise, so FE-14 built one: a
+hand-reconstructed adapter under
+[tests/integration/globazog_adapter/](../tests/integration/globazog_adapter.rs)
+that reimplements Globazog's real Windows backend's public shape and
+translates its predicate vocabulary, then exercises it end-to-end against the
+live native engine in this crate. The adapter is deliberately a
+reconstruction rather than a dependency: Globazog is meant to consume this
+crate, never the reverse, so its value types (`DirEntry`, `DirScan`,
+`EntryFailure`, `EnumPlan`, `FileId`, the `Leaf`/`Token`/`Segment` predicate
+vocabulary) are copied field-for-field from Globazog's real source at
+`MikeGrier/globazog-rs` commit `55a0b1aec7a93051a675852636ab41a6437440fb`
+(`crates/globazog/src/{sys,sys/win,predicate,syntax,syntax/decode,error}.rs`),
+each with a doc comment citing the exact file the shape came from so a future
+maintainer knows to re-diff against the real repo rather than trust this copy
+blindly.
+
+Every property D-15 lists is exercised through the adapter against the live
+engine: native name/path fidelity (including UTF-16 round-tripping through
+Globazog's own `decode_utf16`, ported verbatim to preserve its unpaired-
+surrogate handling), file/directory type, reparse status and tag, raw
+attributes, logical size, all four timestamps converted through Globazog's
+own FILETIME-to-Unix-nanos formula, and 128-bit volume-qualified identity.
+The predicate translation table covers every `Leaf` variant that a
+one-directory backend can answer, including the `EntryType::Other` case --
+Windows has no third entry kind, so a non-negated `IsType{ty:Other}`
+translates to a self-contradictory attribute-clause pair (directory bit set
+and clear in the same conjunction, which can never hold) rather than being
+silently dropped. `Leaf::Depth` is excluded on purpose: it is a property of
+Globazog's own recursive multi-directory traversal engine, not something a
+single-directory backend is ever asked to answer, so translating it is out of
+scope by construction rather than an oversight.
+
+Two properties could not be proven organically in this environment, and both
+are handled by narrowing the proof rather than skipping it, matching the
+precedent FE-13's `capability.rs` set for untestable capability gaps.
+A genuine live late-failure -- a `TerminalOutcome::Failed` arriving after
+some entries were already delivered -- needs a filesystem or redirector fault
+this environment cannot manufacture on demand. The adapter's translation of
+that outcome is instead extracted into a pure function, `finish_scan(entries,
+outcome) -> io::Result<DirScan>`, and unit-tested directly against hand-built
+`TerminalOutcome::Failed` values (both with and without prior entries),
+proving the error-plus-partial-listing contract without needing a live fault.
+"No path opens an individual entry" -- inherited from D-3 -- is proven
+empirically instead: a directory junction whose target does not exist is
+still listed successfully by the batched directory query, which would not be
+true if the adapter (or the engine beneath it) resolved each entry
+individually.
+
+The demonstration is 53 integration tests plus the reused unit-level
+`finish_scan` proofs, stable across ten consecutive runs with no leaked
+scratch state, and it satisfies D-15 without turning Globazog into an actual
+dependency of this workspace.

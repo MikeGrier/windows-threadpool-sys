@@ -12,6 +12,7 @@ mod support;
 mod cancellation;
 mod capability;
 mod directories;
+mod globazog_adapter;
 mod metadata;
 mod paths;
 mod predicates;

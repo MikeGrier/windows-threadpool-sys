@@ -5,27 +5,13 @@
 
 use windows_file_enumeration_sys::{Completion, EnumerationRequest, Session};
 
-use crate::support::Scratch;
+use crate::support::{Scratch, create_junction};
 
 /// `FILE_ATTRIBUTE_REPARSE_POINT`.
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 /// `IO_REPARSE_TAG_MOUNT_POINT`, what a junction reports itself as.
 const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
-
-/// Create a directory junction at `link` pointing at `target`, using `mklink`
-/// rather than a Win32 call directly: junctions need no privilege a plain
-/// user lacks, unlike `CreateSymbolicLinkW`, which is exactly why this test
-/// uses one instead of a symlink.
-fn create_junction(link: &std::path::Path, target: &std::path::Path) {
-    let status = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
-        .status()
-        .expect("mklink is part of every Windows installation");
-    assert!(status.success(), "mklink /J failed for {}", link.display());
-}
 
 #[test]
 fn a_directory_junction_is_reported_as_a_reparse_point_with_its_tag() {

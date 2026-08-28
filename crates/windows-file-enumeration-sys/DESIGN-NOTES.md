@@ -29,7 +29,7 @@ making submission, delivery, cancellation, and resource bounds explicit.
 | <a id="d-12"></a>D-12 | **Validation and admission failures are synchronous; accepted enumeration failures are ordered terminal outcomes.** Every native failure retains its raw Win32 code, and partial entries remain observable before a late failed terminal. |
 | <a id="d-13"></a>D-13 | **Unsupported extended directory enumeration is a typed terminal failure, never a metadata-losing fallback.** The crate owns the classification while preserving the native code. |
 | <a id="d-14"></a>D-14 | **The native buffer has one fallibly allocated, fixed effective capacity and an 8-byte-aligned base address.** It defaults to 64 KiB, clamps and aligns small requests, never grows, and reports a typed oversize-record terminal. |
-| <a id="d-15"></a>D-15 | **Replacing Globazog's Windows one-directory backend is a release acceptance gate.** The adapter must retain all required metadata, native paths and names, predicates, errors, ordering, and no-per-entry-open performance. |
+| <a id="d-15"></a>D-15 | **Discharged by FE-14's adapter demonstration.** Replacing Globazog's Windows one-directory backend is a release acceptance gate. The adapter must retain all required metadata, native paths and names, predicates, errors, ordering, and no-per-entry-open performance. |
 | <a id="d-16"></a>D-16 | **A worker reports; the submission-ring servicer is the sole registry authority.** A worker delivers entries and its own terminal to the completion ring, then reports retirement through the submission ring. It claims and releases its own enumeration but never removes a registry entry, and never releases a thread-pool object. |
 | <a id="d-17"></a>D-17 | **One session-owned engine work object serves every enumeration, through a ready set.** No thread-pool object is stored per enumeration, so nothing the servicer or a worker drops can wait on a directory query. |
 | <a id="d-18"></a>D-18 | **Each accepted enumeration reserves a retirement message as well as a cancellation.** Reporting oneself finished must be as infallible as being cancelled, which raises the minimum submission capacity to four. |
@@ -304,6 +304,9 @@ after a failed refill and keeps the configured memory bound real.
 
 ## Globazog replacement gate
 
+**Discharged by FE-14's adapter demonstration.** See
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) for the full discharge record.
+
 Before publication, an adapter must demonstrate that Globazog can obtain native
 names, file/directory type, reparse status and tag, raw attributes, logical size,
 all four times, and volume-qualified 128-bit identity when requested, without
@@ -314,6 +317,20 @@ detail for the adapter to reproduce Globazog's error-plus-failed-terminal
 surface. The asynchronous replacement may improve bounded backpressure and
 impersonation correctness, but it may not narrow metadata or predicate
 capability.
+
+FE-14 discharged this gate with a hand-reconstructed adapter under
+[tests/integration/globazog_adapter/](../tests/integration/globazog_adapter.rs),
+built directly against Globazog's real `crates/globazog/src/{sys,sys/win,predicate,syntax}.rs`
+at `MikeGrier/globazog-rs` commit `55a0b1aec7a93051a675852636ab41a6437440fb`.
+Globazog is never an actual dependency of this workspace; the adapter's types
+are reconstructions with provenance comments, not an integration against the
+real crate. Two properties are explicitly out of scope rather than silently
+untested: `Leaf::Depth` is excluded because it is a property of Globazog's own
+recursive multi-directory traversal, not answerable by a one-directory
+backend; and a genuine live late-failure (`TerminalOutcome::Failed` after some
+entries were already delivered) is proven only against the adapter's pure
+`finish_scan` function with hand-built inputs, not a live filesystem fault,
+because this environment cannot manufacture one.
 
 ## Publication boundary
 

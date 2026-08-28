@@ -89,6 +89,19 @@ pub fn borrow_all(names: &[String]) -> Vec<&str> {
     names.iter().map(String::as_str).collect()
 }
 
+/// Create a directory junction at `link` pointing at `target`, using
+/// `mklink` rather than a Win32 call directly: junctions need no privilege a
+/// plain user lacks, unlike `CreateSymbolicLinkW`.
+pub fn create_junction(link: &Path, target: &Path) {
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .status()
+        .expect("mklink is part of every Windows installation");
+    assert!(status.success(), "mklink /J failed for {}", link.display());
+}
+
 /// Drain a receiver until `enumeration`'s terminal arrives, collecting every
 /// entry delivered for it along the way.
 ///
