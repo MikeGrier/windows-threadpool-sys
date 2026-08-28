@@ -12,8 +12,8 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-13.** Build the real-Windows integration suite.
-> M6 is complete.
+> **NEXT ACTIONABLE ITEM: FE-14.** Discharge the D-15 Globazog acceptance
+> gate with a real adapter demonstration.
 
 ## M6 -- Native enumeration engine
 
@@ -37,13 +37,7 @@ and the submission-ring servicer the sole registry authority (D-16, D-17).
 
 ## M7 -- Verification, Globazog acceptance, and publication
 
-- [ ] **FE-13** -- Build the real-Windows integration suite. Exercise at least ten
-  ordinary directories plus empty, single-entry, thousands-of-entries, full
-  completion ring, cancellation at each phase, receiver drop, invalid and
-  inaccessible paths, long `\?\` paths, native WTF-16 names, reparse points, files
-  and directories, every predicate operator and case mode, metadata and
-  file-identity fidelity, minimum and default buffers, multi-refill enumeration,
-  unsupported-capability behaviour, and the settled oversize-record path.
+- [x] **FE-13** -- Build the real-Windows integration suite. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-13)
 
 - [ ] **FE-14** -- Discharge the D-15 Globazog acceptance gate with a real adapter
   demonstration, not a metadata cross-check. Show that Globazog's Windows

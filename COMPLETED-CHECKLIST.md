@@ -1086,3 +1086,65 @@ message `report_quantum` posts but does not itself service.
 302 unit tests plus the crate doctest pass, stable across thirty consecutive
 runs and leaving no scratch directories behind; targeted all-target Clippy
 and `cargo fmt --check` are clean. This completes M6.
+
+## Moved 2026-08-27 -- file-enumeration real-Windows integration suite
+
+### <a id="fe-13"></a>FE-13 -- Build the real-Windows integration suite. *(completed 2026-08-27 22:33:56 UTC-04:00)*
+
+A new integration test crate under
+[tests/integration/](crates/windows-file-enumeration-sys/tests/integration/)
+(`main.rs` plus eight scenario modules, using the `tests/<name>/main.rs`
+layout so `mod` declarations resolve). Built entirely on the crate's public
+API, since an integration test is a separate crate and cannot reach
+`src/scratch.rs` or `src/testing.rs` (both `pub(crate)`); a dedicated
+`support.rs` supplies its own self-deleting `Scratch` fixture and drain
+helpers, including `drain_many` for scenarios running several enumerations
+concurrently on a shared receiver.
+
+- `directories.rs` -- ten independent ordinary directories on one session,
+  an empty directory, a single-entry directory, and files mixed with
+  subdirectories reported with the right `EntryType`.
+- `scale.rs` -- 4,000 entries in one directory (forcing multi-refill),
+  a completion ring at `MINIMUM_COMPLETION_RING_CAPACITY` against 500 entries
+  (forcing sustained park/resume), and `MINIMUM_BUFFER_CAPACITY` /
+  `DEFAULT_BUFFER_CAPACITY` agreeing on the same directory.
+- `cancellation.rs` -- cancel before any quantum runs, cancel racing a real
+  4,000-entry enumeration on the live pool, cancel after completion (no
+  second terminal), and receiver drop against a live running enumeration.
+- `paths.rs` -- a missing directory, a file opened as a directory, a
+  present-but-often-restricted system directory (accepting either outcome,
+  since the test host's ACL is not this crate's to assume), a `\\?\` path
+  built to exceed 260 characters, an ordinary path rejected for exceeding it,
+  and a filename holding an unpaired UTF-16 surrogate built via
+  `OsStringExt::from_wide`, round-tripped byte-for-byte.
+- `reparse.rs` -- a real directory junction (via `mklink /J`, needing no
+  elevated privilege, unlike a symlink), confirming the reparse attribute,
+  `is_reparse_point()`, and `IO_REPARSE_TAG_MOUNT_POINT`.
+- `predicates.rs` -- all six `ComparisonOperator` variants against known file
+  sizes; both `CaseSensitivity` modes; `IsType`, `NameInSet`, a wildcard
+  `AnyRun` pattern, `AttributesAllSet`/`AttributesAllClear` against a real
+  read-only file, `IsReparsePoint` negated, and all four `TimestampField`
+  variants.
+- `metadata.rs` -- logical size cross-checked against `std::fs::metadata`,
+  every inline field reachable for both a file and a directory,
+  `BestEffort` identity volume-qualified on a local disk, and two real files'
+  identities sharing one volume serial while carrying distinct file IDs.
+- `capability.rs` -- documents, per the user's explicit decision, that
+  `UnsupportedExtendedDirectoryInfo` and `RecordTooLarge` are proven only at
+  the unit level (FE-11, synthetic Win32 codes): no incompatible filesystem
+  or redirector is available in this environment to reach either
+  organically, and `MINIMUM_BUFFER_CAPACITY` structurally rules out the
+  latter through the crate's own public buffer sizing regardless. Tests that
+  a below-minimum buffer clamps up rather than ever reaching it.
+
+One test-construction issue surfaced while writing `directories.rs`: the
+ten-concurrent-enumerations scenario shares one receiver across enumerations
+that interleave arbitrarily, which a single-enumeration-only drain helper
+cannot assume; `drain_many` was added rather than weakening
+`drain_to_terminal`'s per-enumeration ordering check, which every
+single-enumeration scenario still depends on.
+
+302 crate unit tests, 31 new integration tests, and the crate doctest pass;
+stable across eight consecutive integration runs (~1s each) and leaving no
+scratch directories behind. Targeted all-target Clippy and
+`cargo fmt --check` are clean.
