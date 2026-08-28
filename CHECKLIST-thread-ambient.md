@@ -266,9 +266,28 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   own next-entry offsets -- so the completion returns the whole buffer and the consumer bounds its own
   reads, rather than the entry inventing a byte count it cannot know.
 
-  Finally, record that this entry needs **no ambient context**: access was checked at the open, which is
-  exactly why the enumeration crate applies impersonation only around `CreateFileW`. It is the clearest
-  case that a request and a context are paired at submission rather than fused.
+  Record that this entry needs **no ambient context**: access was checked at the open, which is exactly why
+  the enumeration crate applies impersonation only around `CreateFileW`. It is the clearest case that a
+  request and a context are paired at submission rather than fused.
+
+  Finally, state the relationship to
+  [windows-file-enumeration-sys](crates/windows-file-enumeration-sys/DESIGN-NOTES.md), because an entry
+  covering the two directory classes otherwise looks like a second implementation of a shipped streaming
+  engine. It is not: this entry is **single-shot** -- one call, one batch, and the *client* sequences the
+  next, which is the one-entry-per-Win32-call rule applied literally -- while that crate is a streaming
+  specialisation over the same shape, owning the cursor, the refill loop, the quanta, and backpressure. All
+  five audited classes stay reachable here, because restricting them would narrow the entry for a
+  no-consumer reason, which is the same move refused for `lpSecurityAttributes` in M24.3. The documentation
+  must nonetheless point a consumer wanting *streaming* enumeration at that crate rather than leaving it to
+  rebuild the loop from single-shot calls.
+
+  Recorded because it was challenged directly and the challenge was reasonable: this entry needs almost no
+  marshaling work, which invites the conclusion that it does not belong in the catalogue at all. Membership
+  is decided by whether a blocking namespace call needs performing off the caller's thread, not by whether
+  it is awkward to marshal -- the latter test would select for our implementation convenience rather than
+  for consumer need. On the former test this is the most-called namespace operation across all three
+  audited consumers, and the call whose lack of an overlapped form is why an unassociated handle is a
+  first-class destination at all.
 
 - [ ] **M26.2** -- The `GetFileInformationByHandle` entry, returning `BY_HANDLE_FILE_INFORMATION`. It is a  distinct Win32 call rather than a class of M26.1, and the watcher uses it where the Ex form would not do.
 
