@@ -340,7 +340,7 @@ Entries 1-4 of the audited list. Each depends on M24's foundations and on nothin
 
 Entries 5-9 of the audited list. All but the last take a handle, so all but the last depend on M24.2.
 
-- [ ] **M26.1** -- The `GetFileInformationByHandleEx` entry: one entry with the info class as a request
+- [x] **M26.1** -- The `GetFileInformationByHandleEx` entry: one entry with the info class as a request
   field, per the one-entry-per-Win32-call rule. As a *marshaling* problem this is the easiest entry in the
   catalogue and should be built as such -- its inputs are a handle, a scalar class, and a buffer size, with
   no pointer into caller memory anywhere, so nothing needs normalising. An earlier draft of this item

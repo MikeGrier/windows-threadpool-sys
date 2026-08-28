@@ -52,6 +52,23 @@ impl Fixture {
         Self { directory }
     }
 
+    /// A fixture holding `extra` further files beyond `f.t`.
+    ///
+    /// Needed by any test that must leave a directory enumeration *mid*
+    /// directory: with only `.`, `..`, and `f.t`, every batch drains the
+    /// directory in one call and no cursor question can arise.
+    pub(crate) fn with_extra_files(label: &str, extra: usize) -> Self {
+        let fixture = Self::new(label);
+        for index in 0..extra {
+            std::fs::write(
+                fixture.directory.join(format!("e{index:03}.t")),
+                FILE_CONTENTS,
+            )
+            .expect("write an extra fixture file");
+        }
+        fixture
+    }
+
     pub(crate) fn directory(&self) -> &Path {
         &self.directory
     }
