@@ -105,7 +105,7 @@ namespace operation is.
   The default set is a named constant whose growth is a breaking change, so a caller who wants stability
   can name aspects explicitly and a caller who takes the default can see what it contains.
 
-- [ ] **M23.2** -- Implement composite capture, failing synchronously on the calling thread. A capture that
+- [x] **M23.2** -- Implement composite capture, failing synchronously on the calling thread. A capture that
   cannot be performed is an admission failure, not a deferred one, and the error names which aspect failed.
 
 - [ ] **M23.3** -- Implement application as a composition of per-aspect guards, applied outermost-first and

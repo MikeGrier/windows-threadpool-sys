@@ -92,11 +92,13 @@ pub mod captured;
 pub mod declared;
 pub mod error_mode;
 pub mod impersonation;
+pub mod state;
 pub mod transaction;
 
 pub use capture_set::{CapturableAspect, CaptureSet};
 pub use captured::Captured;
 pub use declared::Declared;
+pub use state::{AmbientState, CaptureError, CaptureFailure};
 
 /// Compiles the README's examples, so a contract change breaks the build rather
 /// than silently teaching the old answer.
