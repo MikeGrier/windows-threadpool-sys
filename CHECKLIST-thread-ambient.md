@@ -419,7 +419,7 @@ Entries 5-9 of the audited list. All but the last take a handle, so all but the 
   and never expands a drive letter, so it does **not** close the session-relative hazard from M20.1, and
   its documentation must say which problem it solves and which it leaves standing.
 
-- [ ] **M26.6** -- Acceptance, in **two** parts, because the audit had two purposes and checking only the
+- [x] **M26.6** -- Acceptance, in **two** parts, because the audit had two purposes and checking only the
   first is how the coverage question got missed once already.
 
   *Operation coverage:* re-express each audited call site from the three consumers against the catalogue

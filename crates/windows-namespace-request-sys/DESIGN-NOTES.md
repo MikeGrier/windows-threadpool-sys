@@ -416,6 +416,41 @@ An example that merely shows a constructor being called would satisfy a count
 and teach nothing; these are written to be read by someone about to make the
 mistake.
 
+## <a id="d-16"></a>D-16: Acceptance checks coverage twice, because the audit had two purposes
+
+The audit that produced the entry list had two purposes, and the first draft of
+this plan discharged only one -- establishing the *operation set* -- while
+silently leaving the question of whether the *scenario* is served. That is how
+the coverage gap got missed once already, so acceptance is split in two and the
+split is structural rather than a heading:
+
+- **Operation coverage** re-expresses each audited call site against the
+  catalogue, one test per call site, named for the consumer and the call. A gap
+  shows up as a missing test rather than as a paragraph nobody re-reads.
+- **Scenario coverage** confirms the catalogue serves each consumer's actual
+  *shape*: a request built on one thread and executed on another under a
+  captured context, many requests across concurrent workers from one shared
+  capture, and a handle opened by one request carried into a later one -- the
+  combination where [D-4](#d-4)'s owned duplicate meets
+  [D-10](#d-10)'s shared enumeration cursor, and the one no single-entry test
+  reaches.
+
+**An entry may be wider than its call site, and that is the correct direction.**
+The watcher passes NULL for two of `GetVolumeInformationByHandleW`'s
+out-parameters; this crate's entry fills them anyway. Acceptance records that as
+correct rather than as a mismatch, because the failure this milestone guards
+against is an entry that is *narrower* than what a consumer needs.
+
+**`windows-thread-ambient-sys` is a dev-dependency, and only that.** A request
+carries no ambient context and a context is useful to work that never opens a
+file, so the two are paired at a submission site by whoever owns both
+([D-1](#d-1)). The scenario tests *are* that submission site -- which is the
+only honest way to demonstrate the relationship without creating the coupling
+the design refuses. Acceptance also asserts the negative: every entry works with
+no captured context at all, because access was checked at the open. A catalogue
+that silently required a context would not be a sibling of the ambient crate; it
+would be a layer above it.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the

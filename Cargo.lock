@@ -204,6 +204,7 @@ name = "windows-namespace-request-sys"
 version = "0.0.0"
 dependencies = [
  "windows-sys",
+ "windows-thread-ambient-sys",
  "wtf-string",
 ]
 

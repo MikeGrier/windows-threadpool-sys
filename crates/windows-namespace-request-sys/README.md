@@ -91,19 +91,41 @@ One entry per Win32 call. The list is audited from three real consumers -- this
 repository's file watcher and enumeration crates, and `MikeGrier/Globazog-rs` --
 rather than chosen by taste:
 
-`CreateFileW`, `OpenFileById`, `FindFirstChangeNotificationW`, `CloseHandle` and
-variant close routines, `GetFileInformationByHandleEx`,
-`GetFileInformationByHandle`, `GetFinalPathNameByHandleW`,
-`GetVolumeInformationByHandleW`, `GetFullPathNameW`.
+| Win32 call | Type |
+|---|---|
+| `CreateFileW` | `OpenFile` |
+| `OpenFileById` | `OpenFileByIdentifier` |
+| `FindFirstChangeNotificationW` | `WatchDirectory` |
+| `CloseHandle` and variant close routines | `CloseRequest` |
+| `GetFileInformationByHandleEx` | `QueryFileInformation` |
+| `GetFileInformationByHandle` | `QueryFileInformationByHandle` |
+| `GetFinalPathNameByHandleW` | `QueryFinalPath` |
+| `GetVolumeInformationByHandleW` | `QueryVolumeInformation` |
+| `GetFullPathNameW` | `ResolveFullPath` |
 
 Deletion, rename, directory creation, attribute setting, link creation, and the
 `FindFirstFileExW` family are **deliberately** out of round one: no audited
 consumer calls them. [DESIGN-NOTES.md](DESIGN-NOTES.md) records the full list so
 a considered omission is distinguishable from an unexamined one.
 
+## Testing your own code against these entries
+
+Every entry implements `Request` (or `ConsumingRequest`, for the one-shot
+close), so a consumer's code can be written against "a request that produces
+`T`" and exercised in that consumer's own tests with a fake -- no filesystem, no
+network path, no device that may or may not be present.
+
+Two traits rather than one because the distinction is real: an open is a
+parameter set that may be performed repeatedly and takes `&self`, while a close
+is consumed by performing it, which is what makes closing twice impossible.
+
 ## Status
 
-Early. The boundary decisions are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md);
-implementation is queued as milestones M24 to M26 of
-[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md). Not yet ready
-for a crates.io release.
+The round-one catalogue is complete and its acceptance pass covers both
+operation coverage (every audited call site re-expressed) and scenario coverage
+(a request built on one thread and executed on another under a captured
+context, many requests across concurrent workers from one shared capture, and a
+handle opened by one request carried into a later one).
+
+Design decisions are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md). Not yet
+released to crates.io.
