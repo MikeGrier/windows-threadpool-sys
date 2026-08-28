@@ -10,4 +10,4 @@ source-component. That file is not the workspace
 
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [../../CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md) | in progress | M24: foundations -- owned handle duplication, security attributes, path preparation, and the faithful-execution contract. M25: the handle-producing entries. M26: the query entries, closing with an acceptance pass over both operation and scenario coverage. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
+| [../../CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md) | in progress | **This crate's part (M24-M26) is complete**: the foundations (owned handle duplication, security attributes, path preparation, the faithful-execution contract), the four handle-producing entries, the five query entries, a test seam, and an acceptance pass over both operation and scenario coverage. The checklist itself stays open for M27 (`windows-platform-probes`) and the `M26+` items gated on this branch merging with `main` -- including `M26+.3`, the merge-or-delete decision on this crate's duplicated path preparation. | [DESIGN-NOTES.md](DESIGN-NOTES.md) |
