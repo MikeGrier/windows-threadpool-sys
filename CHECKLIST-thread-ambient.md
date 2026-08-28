@@ -246,7 +246,7 @@ assumed:
   peculiar to descriptors -- M26.1 needs an 8-byte-aligned buffer for the same underlying reason -- so build
   it once as an owned aligned buffer primitive rather than twice.
 
-- [ ] **M24.4** -- Implement path preparation: resolve on the calling thread at construction, because the
+- [x] **M24.4** -- Implement path preparation: resolve on the calling thread at construction, because the
   process current directory is mutable by any thread. Bind to the shipped precedent in
   [crates/windows-file-enumeration-sys/src/path.rs](crates/windows-file-enumeration-sys/src/path.rs)
   rather than writing a second path preparation. **That precedent's `prepare` is `pub(crate)`**, noticed
@@ -257,6 +257,14 @@ assumed:
   path form is decided, a session-relative drive letter is a documented hazard on these types, and the
   documentation must say so rather than imply the resolution is complete.
 
+  **Decided: copy it, temporarily and on the record.** Neither published option was taken. The enumeration
+  crate is released and this one is not, so making it depend here would make it unpublishable, and this
+  branch exists to reach publication with minimal impact on what already ships; extracting a third shared
+  crate buys a new published member before any consumer justifies it. The copy is the duplicate-then-decide
+  procedure working as intended -- the released path stays untouched while this one is proven -- and it is
+  not permitted to become permanent by default: `path.rs` carries a provenance comment naming its source
+  and commit, D-9 records the reasoning, and the merge-or-delete decision is scheduled as **M26+.3**, gated
+  on this crate's first release.
 - [ ] **M24.5** -- Establish the faithful-execution contract that every entry then follows: an entry
   returns its result or the raw Win32 code **unaltered**, and `GetLastError` is captured before any
   restoration runs so nothing in between overwrites it. Preserving the code is a constraint from a real
@@ -456,3 +464,13 @@ reading of it, moves. This milestone gives them a durable home that an ordinary 
   measured trap in the same edit: an invalid bit fails the whole `SetThreadErrorMode` call, so a
   forced-plus-transplanted combination installs nothing if the transplanted part is invalid.
 
+- [ ] **M26+.3** -- Make the merge-or-delete decision on the duplicated path preparation. M24.4 copied
+  `windows-file-enumeration-sys`'s `path.rs` into `windows-namespace-request-sys` rather than depending on
+  it, because that crate is released and this one was not, and this branch exists to reach publication with
+  minimal impact on what already ships. Once `windows-namespace-request-sys` has a release, decide: either
+  make the enumeration crate consume it and delete the older copy, or keep both and record what makes them
+  genuinely separate. Do **not** let the duplication become permanent by nobody circling back -- that is
+  the failure mode the duplicate-then-decide procedure exists to prevent, and it is why this item is here
+  rather than only in a design note. Until it is settled, a fix to either copy must be applied to both.
+  See [crates/windows-namespace-request-sys/DESIGN-NOTES.md](crates/windows-namespace-request-sys/DESIGN-NOTES.md)
+  -> `D-9`.

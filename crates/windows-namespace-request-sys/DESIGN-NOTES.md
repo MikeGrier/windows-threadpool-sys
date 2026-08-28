@@ -238,6 +238,37 @@ underlying reason -- so it is met once, by an `AlignedBuffer` primitive whose
 alignment is stated at construction and preserved by `Clone`, rather than being
 solved twice by two different local tricks.
 
+## <a id="d-9"></a>D-9: Path preparation is duplicated from the enumeration crate, deliberately and temporarily
+
+Path preparation resolves a caller's path **on the calling thread, when the
+request is built**, because the process current directory is shared mutable
+state that any thread can change between submission and execution. That is not
+a new contract: `windows-file-enumeration-sys` already ships exactly this
+preparation, and writing a second one from scratch is what this repository's
+mono-repo policy refuses.
+
+So it was **copied**, byte for byte, and adapted only where this crate's error
+taxonomy differs. The alternatives were considered and rejected:
+
+- **Depend on the enumeration crate.** It is released; this crate is not. A
+  released crate cannot depend on an unpublished `0.0.0` sibling, and the whole
+  point of the branch this landed on is a minimal-impact, fast route to
+  publication. Pointing the released crate at this one would have made that
+  strictly worse, and would also have inverted the layering: the enumeration
+  crate sits *above* the namespace catalogue.
+- **Extract to a third shared crate.** A new workspace member and a new
+  published crate, purchased before the consumer that would justify it exists.
+- **Write a second implementation.** The option the mono-repo policy names as
+  the wrong one.
+
+The duplication is therefore the mechanism that keeps a working, released crate
+stable while this one is proven -- not debt incurred by accident. `path.rs`
+carries a provenance comment naming its source and the commit it was taken at,
+and the **merge-or-delete decision is scheduled**, not left to be rediscovered:
+see `M26+.3` in
+[CHECKLIST-thread-ambient.md](../../CHECKLIST-thread-ambient.md), gated on this
+crate's first release. Until then, a fix to either copy must be applied to both.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the

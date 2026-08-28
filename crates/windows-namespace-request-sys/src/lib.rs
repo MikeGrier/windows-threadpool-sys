@@ -65,10 +65,12 @@
 
 pub mod buffer;
 pub mod handle;
+pub mod path;
 pub mod security;
 
 pub use buffer::AlignedBuffer;
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
+pub use path::{PathError, PathFailure, PreparedPath, prepare};
 pub use security::{
     AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
 };
