@@ -74,6 +74,7 @@ mod native;
 mod path;
 mod pattern;
 mod predicate;
+mod record;
 mod registry;
 mod request;
 mod session;

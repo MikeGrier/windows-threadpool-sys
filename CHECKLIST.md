@@ -12,8 +12,8 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-9.** Parse the batches the engine is already
-> reading, and deliver entries.
+> **NEXT ACTIONABLE ITEM: FE-10.** Bound each quantum and make backpressure
+> lossless.
 
 ## M6 -- Native enumeration engine
 
@@ -27,16 +27,7 @@ and the submission-ring servicer the sole registry authority (D-16, D-17).
 
 - [x] **FE-8** -- Allocate the fixed native buffer and get one directory open and reading. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-8)
 
-- [ ] **FE-9** -- Parse what the buffer returns and deliver entries.
-  Parse `FILE_ID_EXTD_DIR_INFO`
-  chains alignment-safely, validating record alignment, fixed-field extent,
-  next-entry offset advance, name byte length parity, name bounds, and size sign
-  before reading any field. Retain the batch and record cursor across callbacks,
-  drop `.` and `..` before predicate evaluation, build entries with every field
-  FE-2 promised in native units, evaluate predicates without lossy name or
-  timestamp conversion, and deliver accepted entries. Use
-  `FileIdExtdDirectoryInfo` for every refill after the first; never
-  `FindFirstFileExW`, `FindNextFileW`, or a direct `Nt*` API.
+- [x] **FE-9** -- Parse what the buffer returns and deliver entries. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-9)
 
 - [ ] **FE-10** -- Bound each quantum and make backpressure lossless. Count every
   examined record against the record budget, including dot entries and predicate

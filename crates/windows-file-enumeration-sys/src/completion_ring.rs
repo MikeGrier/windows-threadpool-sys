@@ -227,10 +227,6 @@ impl CompletionRing {
     /// Returns the entry unchanged when there is no room, so the caller can keep
     /// it and retry after the receiver makes progress.
     #[allow(
-        dead_code,
-        reason = "the native engine (M6) is the producer of entries"
-    )]
-    #[allow(
         clippy::result_large_err,
         reason = "handing the record back by value is the point: it is returned \
                   intact rather than boxed, reallocated, or dropped"

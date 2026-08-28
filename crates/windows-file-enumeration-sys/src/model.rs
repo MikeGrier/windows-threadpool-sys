@@ -24,11 +24,12 @@
 //!
 //! # What stands in for the engine
 //!
-//! The native engine (FE-8) is what will produce entries and decide outcomes.
-//! Here the scenario plays that part: [`Op::OfferEntry`] writes an entry the way
-//! a worker will, and [`Op::Claim`] / [`Op::Report`] drive the same claim-and-
-//! report transitions the engine callback drives, split so a scenario can
-//! interleave a cancellation with a quantum that is still executing.
+//! The native engine is what produces entries and decides outcomes in
+//! production. Here the scenario plays that part: [`Op::OfferEntry`] writes an
+//! entry the way a worker will, and [`Op::Claim`] / [`Op::Report`] drive the
+//! same claim-and-report transitions the engine callback drives, split so a
+//! scenario can interleave a cancellation with a quantum that is still
+//! executing.
 //! [`Op::RunEngine`] runs both halves through the real callback body. That is
 //! deliberate: the shell's invariants must hold for *any* engine that respects
 //! those transitions, so modelling them directly tests the contract rather than

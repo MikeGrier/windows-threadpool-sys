@@ -14,22 +14,36 @@
 //! this at a time, so the directory handle, the buffer, and the record cursor
 //! have one owner for the duration.
 //!
-//! # What a quantum does today
+//! # What a quantum does
 //!
-//! Open the directory, obtain any volume identity the request asked for, and
-//! read the first batch. An empty directory finishes here; so does a failure.
-//! A directory that *has* entries is left waiting for the record parser (FE-9),
-//! which is what turns a batch into entries.
+//! Open the directory and obtain any volume identity the request asked for, on
+//! the quantum that finds it unopened. A refill happens at most once per
+//! quantum: when the record cursor says the loaded batch is exhausted, one
+//! `GetFileInformationByHandleEx` call loads the next one. Whatever batch is
+//! then current -- freshly loaded or left over from a quantum that could not
+//! finish it -- is parsed record by record: `.` and `..` are dropped, the
+//! request's predicate is evaluated, and every match is offered to the
+//! completion ring. The cursor this leaves behind, in
+//! [`EngineState::cursor`], is exactly where the next quantum resumes; a batch
+//! is never re-read from its start and never refilled a second time before it
+//! is drained.
+//!
+//! Parsing stops early, before the batch is drained, only when the completion
+//! ring refuses an accepted entry. The cursor is left at that record -- not
+//! past it -- so a later quantum reparses and re-offers exactly what could not
+//! be delivered, rather than losing it.
 
 use std::os::windows::io::OwnedHandle;
 
 use windows_impersonation_token_sys::ImpersonationToken;
 
 use crate::buffer::NativeBuffer;
-use crate::completion::TerminalOutcome;
-use crate::entry::FileIdentityMode;
+use crate::completion::{Completion, EnumerationId, TerminalOutcome};
+use crate::completion_ring::CompletionRing;
+use crate::entry::{DirectoryEntry, FileIdentityMode};
 use crate::error::EnumerationError;
 use crate::native::{self, Refill, RefillOutcome};
+use crate::record;
 use crate::request::EnumerationRequest;
 use crate::session::QuantumOutcome;
 
@@ -52,6 +66,12 @@ pub(crate) struct EngineState {
     directory: Option<OwnedHandle>,
     volume_serial: Option<u64>,
     phase: Phase,
+    /// Where the next record starts in the currently loaded batch.
+    ///
+    /// `None` means there is no unparsed batch left: either nothing has been
+    /// read yet, or the last one was fully drained, and the next quantum's
+    /// first job is a refill rather than a parse.
+    cursor: Option<usize>,
 }
 
 impl EngineState {
@@ -67,6 +87,7 @@ impl EngineState {
             directory: None,
             volume_serial: None,
             phase: Phase::Unopened,
+            cursor: None,
         }
     }
 
@@ -76,13 +97,11 @@ impl EngineState {
     /// query failed, which is deliberate: an identity is either volume-qualified
     /// or it is not, and a caller cannot act on the difference between those two
     /// reasons.
-    #[allow(dead_code, reason = "FE-9 stamps this onto every entry it builds")]
     pub(crate) fn volume_serial(&self) -> Option<u64> {
         self.volume_serial
     }
 
     /// The request being served.
-    #[allow(dead_code, reason = "FE-9 evaluates this request's predicate")]
     pub(crate) fn request(&self) -> &EnumerationRequest {
         &self.request
     }
@@ -102,6 +121,7 @@ impl std::fmt::Debug for EngineState {
             .field("phase", &self.phase)
             .field("open", &self.directory.is_some())
             .field("volume_serial", &self.volume_serial)
+            .field("cursor", &self.cursor)
             .finish_non_exhaustive()
     }
 }
@@ -109,7 +129,11 @@ impl std::fmt::Debug for EngineState {
 /// Advance one enumeration by one quantum.
 ///
 /// Runs with no lock held, so it is free to block on a directory query.
-pub(crate) fn advance(engine: &mut EngineState) -> QuantumOutcome {
+pub(crate) fn advance(
+    engine: &mut EngineState,
+    enumeration: EnumerationId,
+    completions: &CompletionRing,
+) -> QuantumOutcome {
     if engine.phase == Phase::Unopened
         && let Some(failure) = start(engine)
     {
@@ -124,24 +148,60 @@ pub(crate) fn advance(engine: &mut EngineState) -> QuantumOutcome {
         ));
     };
 
-    let which = match engine.phase {
-        Phase::Opened => Refill::First,
-        _ => Refill::Next,
-    };
-    match native::refill(directory, &mut engine.buffer, which) {
-        RefillOutcome::Batch => {
-            engine.phase = Phase::Reading;
-            // One refill per quantum, then hand the worker back: that puts a
-            // scheduling point at every place this could have blocked.
-            //
-            // FE-9 is what turns this batch into entries. Until it lands the
-            // batch is read and passed over, so an enumeration still reaches
-            // its true end -- it simply delivers nothing on the way.
-            QuantumOutcome::Yielded
+    if engine.cursor.is_none() {
+        let which = match engine.phase {
+            Phase::Opened => Refill::First,
+            _ => Refill::Next,
+        };
+        match native::refill(directory, &mut engine.buffer, which) {
+            RefillOutcome::Batch => {
+                engine.phase = Phase::Reading;
+                engine.cursor = Some(0);
+            }
+            RefillOutcome::Exhausted => {
+                return QuantumOutcome::Finished(TerminalOutcome::Completed);
+            }
+            RefillOutcome::Failed(error) => {
+                return QuantumOutcome::Finished(TerminalOutcome::Failed(error));
+            }
         }
-        RefillOutcome::Exhausted => QuantumOutcome::Finished(TerminalOutcome::Completed),
-        RefillOutcome::Failed(error) => QuantumOutcome::Finished(TerminalOutcome::Failed(error)),
     }
+
+    // Parse as much of the current batch as this quantum can. One refill is
+    // already spent above, so draining this batch never triggers another --
+    // that is what leaves a scheduling point at every place a refill could
+    // have blocked.
+    while let Some(offset) = engine.cursor {
+        let (parsed, next) = match record::parse_record(engine.buffer.as_bytes(), offset) {
+            Ok(parsed) => parsed,
+            Err(detail) => {
+                return QuantumOutcome::Finished(TerminalOutcome::Failed(
+                    EnumerationError::MalformedRecord(detail),
+                ));
+            }
+        };
+
+        if parsed.is_dot_or_dotdot() {
+            engine.cursor = next;
+            continue;
+        }
+
+        let entry = DirectoryEntry::from_fields(parsed.into_fields(engine.volume_serial()));
+        if !engine.request().predicate().matches(&entry) {
+            engine.cursor = next;
+            continue;
+        }
+
+        match completions.try_send_entry(Completion::Entry { enumeration, entry }) {
+            Ok(()) => engine.cursor = next,
+            // No room. The cursor stays exactly here -- not past it -- so the
+            // next quantum reparses and re-offers this same record rather than
+            // losing it.
+            Err(_) => return QuantumOutcome::Parked,
+        }
+    }
+
+    QuantumOutcome::Yielded
 }
 
 /// Open the directory and obtain whatever identity the request asked for.

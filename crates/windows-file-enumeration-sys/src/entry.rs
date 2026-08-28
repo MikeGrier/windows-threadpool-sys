@@ -140,13 +140,6 @@ pub struct DirectoryEntry {
 /// dozen positional arguments, and so adding a field later is not a breaking
 /// change to a constructor. It is crate-internal: the public surface is
 /// [`DirectoryEntry`]'s accessors.
-///
-/// The record parser that fills this lands in FE-8, so nothing in a non-test
-/// build constructs one yet.
-#[allow(
-    dead_code,
-    reason = "FE-8 adds the record parser that fills these fields"
-)]
 pub(crate) struct EntryFields {
     pub(crate) name: Wtf16String,
     pub(crate) attributes: u32,
@@ -174,7 +167,7 @@ impl DirectoryEntry {
     /// The reparse tag is admitted only when the attributes say the entry is a
     /// reparse point. A record's tag field is otherwise meaningless, and
     /// surfacing it would let a caller act on a tag that names nothing.
-    #[allow(dead_code, reason = "FE-8 adds the record parser that calls this")]
+    #[must_use]
     pub(crate) fn from_fields(fields: EntryFields) -> Self {
         let reparse_tag =
             (fields.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0).then_some(fields.reparse_tag);

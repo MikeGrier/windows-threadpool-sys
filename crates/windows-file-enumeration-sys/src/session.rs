@@ -75,16 +75,18 @@ pub const MINIMUM_SUBMISSION_CAPACITY: usize = 4;
 pub const MINIMUM_COMPLETION_RING_CAPACITY: usize = MINIMUM_COMPLETION_CAPACITY;
 
 /// What one quantum of work decided.
-///
-/// Only [`Idle`](Self::Idle) is produced today: [`advance`](SessionShared::advance)
-/// has no engine behind it until FE-8, which is what decides the other two.
 #[derive(Debug)]
-#[allow(
-    dead_code,
-    reason = "FE-8's native engine is what parks and finishes an enumeration"
-)]
 pub(crate) enum QuantumOutcome {
     /// Nothing to do. The enumeration stays registered and idle.
+    ///
+    /// The native engine never returns this itself -- claiming an enumeration
+    /// always leaves it with a refill or a parse to do. It exists for the
+    /// state-machine model, which scripts it to stand in for a quantum that
+    /// found nothing runnable.
+    #[allow(
+        dead_code,
+        reason = "only the cfg(test) state-machine model constructs this; a plain lib build never does"
+    )]
     Idle,
     /// Progress was made and there is more to do.
     ///
@@ -354,7 +356,7 @@ impl SessionShared {
         let Some((enumeration, mut engine)) = self.claim_next() else {
             return;
         };
-        let outcome = self.advance(&mut engine);
+        let outcome = self.advance(enumeration, &mut engine);
         self.report_quantum(enumeration, engine, outcome);
     }
 
@@ -368,7 +370,7 @@ impl SessionShared {
     /// Runs with no lock held, because a quantum performs a synchronous
     /// directory query. A scripted outcome takes precedence so the
     /// state-machine model can drive the shell without touching a filesystem.
-    fn advance(&self, engine: &mut EngineState) -> QuantumOutcome {
+    fn advance(&self, enumeration: EnumerationId, engine: &mut EngineState) -> QuantumOutcome {
         #[cfg(test)]
         if let Some(scripted) = self
             .scripted
@@ -378,7 +380,7 @@ impl SessionShared {
         {
             return scripted;
         }
-        engine::advance(engine)
+        engine::advance(engine, enumeration, &self.completions)
     }
 
     /// Hand the claim back, engine state and all, and apply whatever the

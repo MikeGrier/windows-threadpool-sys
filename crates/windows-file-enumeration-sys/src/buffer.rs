@@ -66,9 +66,8 @@ impl NativeBuffer {
     ///
     /// The whole buffer is exposed rather than the written extent, because
     /// `GetFileInformationByHandleEx` reports no written length: a batch is
-    /// walked by its own next-entry offsets, and the parser (FE-9) is what
-    /// bounds every read against this slice.
-    #[allow(dead_code, reason = "FE-9's record parser is the reader")]
+    /// walked by its own next-entry offsets, and the parser bounds every read
+    /// against this slice.
     pub(crate) fn as_bytes(&self) -> &[u8] {
         // SAFETY: `u64` has no padding or invalid bit patterns, so its storage
         // is always readable as initialised bytes, and the lifetime is the

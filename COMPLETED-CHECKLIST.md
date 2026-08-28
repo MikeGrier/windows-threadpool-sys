@@ -924,3 +924,38 @@ current read-and-pass-over with real parsing.
 269 unit tests plus the crate doctest pass, stable across ten consecutive runs
 and leaving no scratch directories behind; targeted all-target Clippy and
 `cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration record parsing
+
+### <a id="fe-9"></a>FE-9 -- Parse what the buffer returns and deliver entries. *(completed 2026-08-27 20:42:04 UTC-04:00)*
+
+[record.rs](crates/windows-file-enumeration-sys/src/record.rs) is a new module
+that walks a `FILE_ID_EXTD_DIR_INFO` chain over the batch buffer, validating
+alignment, fixed-field extent, next-entry-offset advance -- which now also
+rejects an offset that lands inside the current record's own extent, not just
+one past the batch -- name byte-length parity, name bounds, and size sign
+before any field is trusted. Every field is read once, from a byte slice via
+`from_ne_bytes`/`as_chunks`, never a pointer cast: later records in a batch are
+only ever known to be 8-byte aligned as a whole, not individually.
+
+[engine.rs](crates/windows-file-enumeration-sys/src/engine.rs)'s quantum now
+refills at most once and then parses the loaded batch in the same quantum,
+tracking a `cursor: Option<usize>` that survives across quanta exactly as D-3
+specifies. `.` and `..` are dropped before the predicate ever sees them; a
+match is offered to the completion ring via `try_send_entry`. A refusal parks
+the quantum with the cursor left at the unparsed record -- not past it -- so
+the next quantum re-parses and re-offers exactly what could not be delivered,
+losing nothing. `QuantumOutcome::Idle` is now the only variant the native
+engine never produces itself; its `dead_code` allow moved from the whole enum
+to that one variant.
+
+A pre-existing live-session test enumerated `C:\Windows` and counted every
+completion as a terminal; now that quanta really do deliver entries, a
+cancellation racing a worker could let real entries interleave with the three
+expected terminals, occasionally letting the count of "3" never appear on a
+run with parallel load. It now targets an empty scratch directory, which can
+never produce an entry regardless of that race, matching what the test is
+actually about.
+
+290 unit tests plus the crate doctest pass, stable across fifteen consecutive
+runs; targeted all-target Clippy and `cargo fmt --check` are clean.

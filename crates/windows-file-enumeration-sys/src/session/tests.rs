@@ -337,10 +337,18 @@ fn the_doorbell_drains_the_ring_on_a_pool_thread() {
 fn a_burst_of_submissions_is_serviced_by_coalesced_drains() {
     // Room for three concurrent begins: the standing abandon slot, two reserved
     // control messages each, and three unserviced begin messages.
+    //
+    // An empty directory, deliberately: this test counts completions and
+    // expects exactly three, one per cancelled enumeration. A directory with
+    // real entries could interleave delivered entries with those terminals
+    // depending on how the cancellation races the worker, which is a
+    // different property than the one this test is about.
     let (session, receiver) = Session::new(16, 16).expect("a session with room");
+    let scratch = Scratch::empty();
     let mut handles = Vec::new();
     for _ in 0..3 {
-        handles.push(session.try_begin(request()).expect("room"));
+        let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+        handles.push(session.try_begin(request).expect("room"));
     }
     for handle in handles {
         handle.cancel();
@@ -424,6 +432,31 @@ fn an_empty_directory_completes_end_to_end() {
 
     let outcome = await_terminal(&receiver, enumeration);
     assert!(outcome.is_completed(), "{outcome:?}");
+}
+
+#[test]
+fn real_entries_are_delivered_before_the_terminal_end_to_end() {
+    // The full stack: submission, the live thread pool, native parsing, and
+    // the completion ring, against real files on disk.
+    let scratch = Scratch::with_files(&["a.txt", "b.txt", "c.txt"]);
+    let (session, receiver) = live_session();
+    let request = EnumerationRequest::for_path(scratch.path()).expect("resolvable");
+    let handle = session.try_begin(request).expect("room");
+    let enumeration = handle.id();
+    handle.detach();
+
+    let mut names = Vec::new();
+    let outcome = loop {
+        match receiver.recv_timeout(Duration::from_secs(5)) {
+            Some(Completion::Entry { entry, .. }) => names.push(entry.name().to_string_lossy()),
+            Some(Completion::Terminal { outcome, .. }) => break outcome,
+            None => panic!("no completion arrived for {enumeration}"),
+        }
+    };
+
+    assert!(outcome.is_completed(), "{outcome:?}");
+    names.sort();
+    assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
 }
 
 #[test]
