@@ -1213,3 +1213,40 @@ scratch directories or junctions behind. Targeted all-target Clippy and
 `cargo fmt --check` are clean. `DESIGN-NOTES.md`'s Globazog replacement gate
 section and `DESIGN-RATIONALE.md` record the discharge and both acknowledged
 limitations.
+
+
+## Moved 2026-08-27 -- file-enumeration API documentation and changelog baseline
+
+### <a id="fe-15"></a>FE-15 -- Complete crate-level API and safety documentation, README examples covering ordinary and traversal-style submission, and the changelog baseline. *(completed 2026-08-27 23:03:43 UTC-04:00)*
+
+Removed the stale M5/M6 shell caveat from `lib.rs`'s top doc comment (it said
+the session and native engine were "scheduled by M5 and M6," both long since
+implemented) and replaced it with a `# Safety` section stating the actual
+guarantee: the public surface is entirely safe, every native call is confined
+to one caller-owned size-checked buffer, no entry is ever opened
+individually, and a submitted enumeration's security context is captured
+synchronously on the submitter's own thread before the request becomes
+visible to any worker -- with a pointer to `DESIGN-NOTES.md`/
+`DESIGN-RATIONALE.md` for the unsafe internals that make it true.
+
+Added two new doctested examples to `lib.rs` alongside the existing
+predicate-building one: "Running an enumeration" (`Session::new`,
+`try_begin`, draining to `Completion::Terminal`) and "Traversal-style
+submission" (`ImpersonationToken::capture` once, reused via
+`try_begin_with_token` across several directories instead of a fresh capture
+per directory). Both compile under `cargo test --doc` (3 doctests, up from
+1).
+
+`README.md`'s "Status" section, which still named FE-3 through FE-11 as in
+progress, now states the public API, session, native engine, and Globazog
+adapter demonstration are complete, with only FE-16 (publication validation)
+remaining. Added a matching "Examples" section mirroring both `lib.rs`
+doctests for a reader who only opens the README.
+
+`CHANGELOG.md` was empty (just a heading); gave it the same boilerplate
+release-please baseline every other not-yet-released crate in this
+workspace carries (`windows-impersonation-token-sys`'s, verbatim).
+
+302 unit tests, 53 integration tests, and now 3 doctests pass. Targeted
+all-target Clippy and `cargo fmt --check` are clean; `missing_docs` remains
+warning-free with no new suppressions needed.

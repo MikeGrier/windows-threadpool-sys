@@ -12,8 +12,9 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-15.** Complete crate-level API and safety
-> documentation, README examples, and the changelog baseline.
+> **NEXT ACTIONABLE ITEM: FE-16.** Validate publication: packaged contents,
+> docs.rs metadata, release automation, sibling-dependency version ordering
+> against crates.io, and `cargo publish --dry-run`.
 
 ## M6 -- Native enumeration engine
 
@@ -41,9 +42,7 @@ and the submission-ring servicer the sole registry authority (D-16, D-17).
 
 - [x] **FE-14** -- Discharge the D-15 Globazog acceptance gate with a real adapter demonstration, not a metadata cross-check. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-14)
 
-- [ ] **FE-15** -- Complete crate-level API and safety documentation, README
-  examples covering ordinary and traversal-style submission, and the changelog
-  baseline. Remove the M6 caveats the shell documents while its engine was missing.
+- [x] **FE-15** -- Complete crate-level API and safety documentation, README examples covering ordinary and traversal-style submission, and the changelog baseline. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-15)
 
 - [ ] **FE-16** -- Validate publication: packaged contents, docs.rs metadata,
   release automation, sibling-dependency version ordering against crates.io, and
