@@ -17,7 +17,7 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::ERROR_NO_TOKEN;
 
 use crate::completion_port::measure as measure_completion_port;
-use crate::device_map::{free_drive_letter, measure_with_subst};
+use crate::device_map::{SubstDrive, measure_with_subst};
 use crate::ioring::{measure_registration, measure_thread_agnosticism};
 use crate::pool_growth::{measure_growth, measure_raise_while_saturated};
 
@@ -428,12 +428,17 @@ fn raising_the_maximum_while_saturated_releases_more_work() {
 fn impersonation_changes_which_device_map_a_drive_letter_resolves_in() {
     // The measurement behind the session-relative drive-letter hazard that
     // windows-namespace-request-sys documents and deliberately does not close.
-    let Some(letter) = free_drive_letter() else {
+    let Some(drive) = SubstDrive::claim("map-differs") else {
         panic!("no free drive letter on this host, so the probe cannot run");
     };
 
-    let finding = measure_with_subst(&letter, r"\Device\HarddiskVolume1");
+    let finding = measure_with_subst(&drive);
 
+    assert!(
+        finding.claim_is_exclusive(),
+        "the letter must carry only our own definition, or a sibling probe's \
+         removal could be what the impersonated query is observing: {finding:?}"
+    );
     assert!(
         finding.sessions_differ(),
         "the control must hold first: the two contexts must really be \
@@ -452,20 +457,25 @@ fn the_subst_letter_really_was_visible_before_impersonating() {
     // The fixture check. A letter that never resolved in our own session would
     // make the whole finding vacuous -- "not found while impersonating" would
     // be true of any letter at all.
-    let Some(letter) = free_drive_letter() else {
+    let Some(drive) = SubstDrive::claim("visible-before") else {
         panic!("no free drive letter on this host, so the probe cannot run");
     };
 
-    let finding = measure_with_subst(&letter, r"\Device\HarddiskVolume1");
+    let finding = measure_with_subst(&drive);
 
     assert!(
         finding.own_session.is_found(),
         "the subst drive must exist in our own map, or the probe measured nothing: {finding:?}"
     );
+    assert!(
+        finding.claim_is_exclusive(),
+        "and it must point where we put it, and nowhere else: {finding:?}"
+    );
     assert_eq!(
-        finding.own_session.target.as_deref(),
-        Some(r"\Device\HarddiskVolume1"),
-        "and it must point where we put it: {finding:?}"
+        finding.own_session.entries(),
+        [drive.target()],
+        "stated as the exact entry list, so a stacked definition fails here \
+         rather than being trimmed away silently: {finding:?}"
     );
 }
 

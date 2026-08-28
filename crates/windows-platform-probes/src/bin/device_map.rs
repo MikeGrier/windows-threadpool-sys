@@ -8,20 +8,24 @@
 //! path resolved on a submitting thread and opened on a worker under a captured
 //! token can name a different device.
 
-use windows_platform_probes::device_map::{free_drive_letter, measure_with_subst};
+use windows_platform_probes::device_map::{SubstDrive, measure_with_subst};
 
 fn main() {
     println!("== does impersonation change the DOS device map? ==\n");
 
-    let Some(letter) = free_drive_letter() else {
+    let Some(drive) = SubstDrive::claim("binary") else {
         println!("no free drive letter on this host, so the probe cannot run.");
         println!("(Reported rather than measured: a probe that cannot set up its");
         println!("fixture must say so instead of producing a misleading negative.)");
         return;
     };
 
-    println!("using {letter} as a subst-style link to \\Device\\HarddiskVolume1\n");
-    let finding = measure_with_subst(&letter, r"\Device\HarddiskVolume1");
+    println!(
+        "using {} as a subst-style link to {}\n",
+        drive.letter(),
+        drive.target()
+    );
+    let finding = measure_with_subst(&drive);
 
     let describe =
         |label: &str, observation: &windows_platform_probes::device_map::MapObservation| {

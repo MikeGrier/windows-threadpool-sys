@@ -594,7 +594,7 @@ manufacture a false negative that looks like the platform refusing something, an
 handle or memory defects that CI now executes on every run since M27.5 added the ignored tier to
 [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
-- [ ] **M29.1** -- Stop the two `device_map` probes racing for one drive letter.
+- [x] **M29.1** -- Stop the two `device_map` probes racing for one drive letter.
   `free_drive_letter` reads `GetLogicalDrives` and returns the first free letter with no
   reservation ([device_map.rs](crates/windows-platform-probes/src/device_map.rs) `:183`), and both
   ignored tests then `subst` the **same** target onto it. Under the parallel harness both can pick
