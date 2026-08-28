@@ -214,7 +214,7 @@ assumed:
   *submitting* thread and opens them on workers. Under a token from another logon session, M20.1's
   session-relative drive letter hazard makes that a genuine divergence rather than a theoretical one, and
   the namespace-request crate inherits it.
-- [ ] **M24.1** -- Create the crate, with a `DESIGN-NOTES.md` recording the boundary decisions before
+- [x] **M24.1** -- Create the crate, with a `DESIGN-NOTES.md` recording the boundary decisions before
   implementation: a request excludes ambient context; a request captures parameters and performs the call
   faithfully but does not choose a delivery model, so the handle-destination fork stays out and an opened
   handle comes back plain and unassociated; the family grows one entry per Win32 call; and a request owns
@@ -249,7 +249,11 @@ assumed:
 - [ ] **M24.4** -- Implement path preparation: resolve on the calling thread at construction, because the
   process current directory is mutable by any thread. Bind to the shipped precedent in
   [crates/windows-file-enumeration-sys/src/path.rs](crates/windows-file-enumeration-sys/src/path.rs)
-  rather than writing a second path preparation. The result inherits M20.1: until the session-independent
+  rather than writing a second path preparation. **That precedent's `prepare` is `pub(crate)`**, noticed
+  while writing M24.1's design notes, so "bind to it" is not yet possible as written: it must be published
+  from that crate or extracted to a shared one first. Duplicating it is the option this repository's
+  mono-repo policy rejects -- fix the layer rather than work around it -- so decide which before
+  implementing, and treat the decision as part of this item. The result inherits M20.1: until the session-independent
   path form is decided, a session-relative drive letter is a documented hazard on these types, and the
   documentation must say so rather than imply the resolution is complete.
 

@@ -6,6 +6,7 @@ plans tracker: [crates/windows-file-enumeration-sys/PLANS.md](crates/windows-fil
 [crates/windows-impersonation-token-sys/PLANS.md](crates/windows-impersonation-token-sys/PLANS.md),
 [crates/windows-ioring-sys/PLANS.md](crates/windows-ioring-sys/PLANS.md),
 [crates/windows-overlapped-io-sys/PLANS.md](crates/windows-overlapped-io-sys/PLANS.md),
+[crates/windows-namespace-request-sys/PLANS.md](crates/windows-namespace-request-sys/PLANS.md),
 [crates/windows-platform-probes/PLANS.md](crates/windows-platform-probes/PLANS.md),
 [crates/windows-thread-ambient-sys/PLANS.md](crates/windows-thread-ambient-sys/PLANS.md),
 [crates/windows-threadpool-sys/PLANS.md](crates/windows-threadpool-sys/PLANS.md),
