@@ -303,7 +303,7 @@ Entries 1-4 of the audited list. Each depends on M24's foundations and on nothin
 - [x] **M25.3** -- The `FindFirstChangeNotificationW` entry. Path, subtree flag, and notification filter,
   producing a handle that is **not** closed with `CloseHandle`.
 
-- [ ] **M25.4** -- The close entries. `CloseHandle` belongs in the catalogue because it blocks on
+- [x] **M25.4** -- The close entries. `CloseHandle` belongs in the catalogue because it blocks on
   outstanding I/O and can block hard on a dead network path, which is the whole reason this facility
   exists. The audit shows a close entry cannot assume its routine: `FindCloseChangeNotification` closes
   M25.3's handle and `CloseHandle` is wrong for it. A handle therefore carries its close routine rather
