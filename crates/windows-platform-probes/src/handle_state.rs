@@ -304,11 +304,30 @@ impl CursorObservation {
     }
 
     /// The second handle started again from the beginning.
+    ///
+    /// Only meaningful alongside [`left_mid_directory`]: if the first call had
+    /// drained the whole directory, both handles would return the complete
+    /// listing and this would be trivially true with no cursor ever left
+    /// part-way through.
+    ///
+    /// [`left_mid_directory`]: Self::left_mid_directory
     #[must_use]
     pub fn restarted(&self) -> bool {
         self.other_next
             .as_ref()
             .is_ok_and(|next| next.as_slice() == self.source_first.as_slice())
+    }
+
+    /// The first handle really was left part-way through the directory.
+    ///
+    /// This is what makes [`restarted`](Self::restarted) and
+    /// [`continued`](Self::continued) distinguishable at all. A first call
+    /// that returned everything would satisfy `restarted` without any cursor
+    /// having been suspended, so the control would report "independent
+    /// cursors" having observed nothing of the sort.
+    #[must_use]
+    pub fn left_mid_directory(&self, truth: &[String]) -> bool {
+        !self.source_first.is_empty() && self.source_first.len() < truth.len()
     }
 }
 
@@ -328,6 +347,11 @@ pub fn duplicate_shares_cursor(fixture: &Fixture) -> CursorObservation {
 ///
 /// Without this, "the duplicate continued" is unattributable -- it could mean
 /// any handle continues, which would say nothing about duplication.
+///
+/// Check [`CursorObservation::left_mid_directory`] against
+/// [`ground_truth`] before reading the result. This probe cannot check it
+/// itself without draining the directory, which would disturb the very cursor
+/// it is measuring.
 #[must_use]
 pub fn separate_opens_are_independent(fixture: &Fixture) -> CursorObservation {
     let first = DirHandle::open(fixture.path());

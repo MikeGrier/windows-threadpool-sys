@@ -24,8 +24,8 @@ use crate::pool_growth::{measure_growth, measure_raise_while_saturated};
 use crate::worker_context::{observe_on_worker, observe_on_worker_while_impersonating};
 
 use crate::handle_state::{
-    Fixture, SingleShot, closing_duplicate_preserves_source, duplicate_shares_cursor, ground_truth,
-    query_disturbs_cursor, separate_opens_are_independent,
+    CursorObservation, Fixture, SingleShot, closing_duplicate_preserves_source,
+    duplicate_shares_cursor, ground_truth, query_disturbs_cursor, separate_opens_are_independent,
 };
 
 #[test]
@@ -102,10 +102,80 @@ fn a_separate_open_does_not_continue_another_handles_enumeration() {
     // The control. Without it, "the duplicate continued" could mean any handle
     // continues, which would say nothing about duplication at all.
     let fixture = Fixture::new("separate-opens");
+
+    // ground_truth panics if the whole directory fits in one call, which is
+    // the fixture-adequacy guard the sibling cursor tests already rely on.
+    // This test needs it just as much: `restarted` compares the second
+    // handle's names against the first's, so a single draining call would make
+    // both the complete listing and the assertion below trivially true. It is
+    // non-degenerate today only by coincidence of BUFFER_BYTES and
+    // FIXTURE_FILES, which is exactly the sort of thing a later tidy-up
+    // changes.
+    let truth = ground_truth(&fixture);
     let observation = separate_opens_are_independent(&fixture);
+
+    assert!(
+        observation.left_mid_directory(&truth),
+        "the first handle must be left part-way through, or there is no cursor \
+         to have its own: {observation:?}"
+    );
     assert!(
         observation.restarted(),
         "a separate open should have its own cursor: {observation:?}"
+    );
+}
+
+#[test]
+fn a_drained_first_call_does_not_count_as_a_left_cursor() {
+    // The degenerate case the guard exists to reject, exercised directly
+    // rather than hoped against: one call returned the whole directory, so
+    // both handles hold the complete listing. `restarted` is satisfied -- and
+    // means nothing, because no cursor was ever suspended.
+    let truth = vec!["a".to_string(), "b".to_string()];
+    let observation = CursorObservation {
+        source_first: truth.clone(),
+        other_next: Ok(truth.clone()),
+    };
+
+    assert!(
+        observation.restarted(),
+        "the degenerate case does satisfy restarted, which is the problem"
+    );
+    assert!(
+        !observation.left_mid_directory(&truth),
+        "so the guard must reject it: {observation:?}"
+    );
+}
+
+#[test]
+fn a_partial_first_call_counts_as_a_left_cursor() {
+    // The real case: the first handle stopped part-way, and the second
+    // returned the same opening names rather than continuing.
+    let truth = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let observation = CursorObservation {
+        source_first: vec!["a".to_string()],
+        other_next: Ok(vec!["a".to_string()]),
+    };
+
+    assert!(
+        observation.left_mid_directory(&truth),
+        "a first call that stopped part-way did leave a cursor: {observation:?}"
+    );
+    assert!(observation.restarted(), "and the second handle restarted");
+}
+
+#[test]
+fn an_empty_first_call_does_not_count_as_a_left_cursor() {
+    // Nothing was read, so there is no cursor position to have kept or lost.
+    let truth = vec!["a".to_string(), "b".to_string()];
+    let observation = CursorObservation {
+        source_first: Vec::new(),
+        other_next: Ok(Vec::new()),
+    };
+
+    assert!(
+        !observation.left_mid_directory(&truth),
+        "an empty first call leaves no cursor: {observation:?}"
     );
 }
 

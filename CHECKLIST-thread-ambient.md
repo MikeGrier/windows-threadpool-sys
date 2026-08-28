@@ -577,7 +577,7 @@ during M25 and M27, so treat this as a recurring class rather than a set of isol
   asymmetry at all. Have `observe_on_worker_while_impersonating` return both observations so the
   test can assert `submitter.has_thread_token && worker.is_unimpersonated()`.
 
-- [ ] **M28.4** -- Guard the separate-opens control against a vacuous fixture.
+- [x] **M28.4** -- Guard the separate-opens control against a vacuous fixture.
   `restarted()` is `next == source_first`, so if one `enumerate` call ever drained the directory
   both would be the full listing and the control would report "independent cursors" with no cursor
   ever left mid-directory ([handle_state.rs](crates/windows-platform-probes/src/handle_state.rs)
