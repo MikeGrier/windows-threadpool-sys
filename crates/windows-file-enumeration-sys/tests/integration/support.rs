@@ -12,8 +12,15 @@ use windows_file_enumeration_sys::{Completion, EnumerationId, Receiver, Terminal
 
 /// How long any single integration scenario is willing to wait for a
 /// completion. Generous: these tests run against real directories and a real
-/// thread pool, not a scripted clock.
-const RECV_TIMEOUT: Duration = Duration::from_secs(30);
+/// thread pool, not a scripted clock. `120s` specifically because the
+/// smallest-completion-ring scale test forces hundreds of park/resume round
+/// trips through the process-default thread pool, and a hosted CI runner's
+/// few vCPUs plus that pool's conservative thread-injection heuristic can
+/// make each round trip far slower under the full workspace's concurrent
+/// test load than on a lightly loaded dev machine -- reproducibly around 30s
+/// on GitHub Actions' `windows-latest` runner, which the previous 30s ceiling
+/// left no headroom for.
+const RECV_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Distinguishes fixtures created within the same process.
 static NEXT: AtomicU64 = AtomicU64::new(0);
