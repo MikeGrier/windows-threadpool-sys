@@ -277,5 +277,13 @@ impl OpenFile {
     }
 }
 
+impl crate::request::Request for OpenFile {
+    type Output = OwnedHandle;
+
+    fn perform(&self) -> Outcome<OwnedHandle> {
+        Self::perform(self)
+    }
+}
+
 #[cfg(test)]
 mod tests;

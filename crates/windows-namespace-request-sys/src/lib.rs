@@ -113,6 +113,7 @@ pub mod open;
 pub mod open_by_id;
 pub mod outcome;
 pub mod path;
+pub mod request;
 pub mod security;
 pub mod watch;
 
@@ -123,6 +124,7 @@ pub use open::OpenFile;
 pub use open_by_id::{FileIdentifier, OpenFileByIdentifier};
 pub use outcome::{Outcome, Win32Error};
 pub use path::{PathError, PathFailure, PreparedPath, prepare};
+pub use request::{ConsumingRequest, Request};
 /// Compiles the README's examples, so a contract change breaks the build
 /// rather than silently teaching the old answer.
 #[cfg(doctest)]

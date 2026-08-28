@@ -195,5 +195,13 @@ unsafe impl Send for CloseRequest {}
 // SAFETY: as above. Every method that could close the handle takes `self`.
 unsafe impl Sync for CloseRequest {}
 
+impl crate::request::ConsumingRequest for CloseRequest {
+    type Output = ();
+
+    fn perform(self) -> Outcome<()> {
+        Self::perform(self)
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -318,6 +318,24 @@ Entries 1-4 of the audited list. Each depends on M24's foundations and on nothin
   called out -- a handle opened by one request becoming the *input* to a later one. Also covers the whole
   chain performed on a worker that saw none of its inputs, and many requests across concurrent workers,
   which is Globazog's shape.
+
+- [x] **M25.6** -- Give the catalogue a **test seam**, so a consumer can exercise its own code against these
+  entries without a filesystem. Every entry is a value whose `perform` is the single point where Win32 is
+  touched, which is already the right shape -- what is missing is a trait over it, so a consumer's code can
+  be generic over "a request that produces `T`" and take a fake in its tests. Two traits, not one, because
+  the distinction is real rather than cosmetic: an open is a parameter set that may be performed repeatedly
+  and takes `&self`, while a close is one-shot and consumes itself. Collapsing them would either make a
+  close look repeatable or make every open look single-use. Prove the seam by writing a fake in a doctest --
+  a seam nobody has substituted is a seam nobody knows works.
+
+- [ ] **M25.7** -- Give the public surface **runnable examples**. The crate currently has 6 doctests against
+  roughly 128 public items, which is thin enough that a contract change could silently invalidate the
+  documentation without breaking the build. Every public type gets a worked example, and every method whose
+  correct use is not obvious from its signature gets one -- with priority on the ones a caller gets wrong:
+  the three-way security and DACL distinctions, the two handle-failure conventions, what a duplicated handle
+  does and does not share, and rearming a notification. These are compiled, so they cannot rot. This sets
+  the standard M26's entries are then held to rather than being a one-off cleanup.
+
 ## M26 -- `windows-namespace-request-sys`: the query entries
 
 Entries 5-9 of the audited list. All but the last take a handle, so all but the last depend on M24.2.

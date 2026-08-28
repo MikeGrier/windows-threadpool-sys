@@ -365,6 +365,33 @@ shaped by whichever binding crate we happen to build against -- that is
 behavior inherited from a dependency rather than owned. The conversion happens
 at the FFI boundary, where it belongs.
 
+## <a id="d-14"></a>D-14: The catalogue offers a seam, in two traits because the distinction is real
+
+Every entry is a value whose `perform` is the single point where Win32 is
+touched. `Request` and `ConsumingRequest` are the traits over that, so a
+*consumer's* code can be written against "a request that produces `T`" and
+exercised in that consumer's own tests without a filesystem, a network path, or
+a device that may not be present. Offering the seam is a levelness obligation:
+a platform whose consumers cannot test against it is not level, whether or not
+a consumer has asked yet.
+
+**Two traits, not one.** An open is a parameter set -- it may be performed
+repeatedly, producing an independent handle each time, so it takes `&self`. A
+close is one-shot; performing it consumes the request, which is what makes
+closing twice impossible ([D-11](#d-11)). One trait would have to pick a side
+and both choices lie: a `&self` trait makes a close look repeatable, and a
+`self` trait makes every open look single-use.
+
+**A seam, not an abstraction layer.** The traits exist for substitution by a
+consumer. Nothing in this crate dispatches through them and the entries keep
+their inherent `perform` methods, which is what an ordinary caller uses. A test
+asserts the two paths agree, so the trait cannot become a second, divergent
+implementation.
+
+The traits are object-safe, because a consumer holding heterogeneous requests
+needs that, and a test pins it -- object safety is easy to lose by accident and
+nothing else would notice.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the

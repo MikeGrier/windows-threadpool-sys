@@ -267,5 +267,13 @@ impl fmt::Display for NotifyFilter {
     }
 }
 
+impl crate::request::Request for WatchDirectory {
+    type Output = ChangeNotification;
+
+    fn perform(&self) -> Outcome<ChangeNotification> {
+        Self::perform(self)
+    }
+}
+
 #[cfg(test)]
 mod tests;

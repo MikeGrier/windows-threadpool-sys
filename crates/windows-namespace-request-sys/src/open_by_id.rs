@@ -284,5 +284,13 @@ impl OpenFileByIdentifier {
     }
 }
 
+impl crate::request::Request for OpenFileByIdentifier {
+    type Output = OwnedHandle;
+
+    fn perform(&self) -> Outcome<OwnedHandle> {
+        Self::perform(self)
+    }
+}
+
 #[cfg(test)]
 mod tests;
