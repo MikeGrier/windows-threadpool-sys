@@ -49,6 +49,7 @@
 pub mod captured;
 pub mod error_mode;
 pub mod impersonation;
+pub mod transaction;
 
 pub use captured::Captured;
 pub use error_mode::ThreadErrorMode;

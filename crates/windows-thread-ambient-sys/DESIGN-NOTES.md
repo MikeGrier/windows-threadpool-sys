@@ -158,8 +158,43 @@ decision above.
 
 ### TxF transaction
 
-`ktmw32` is bound lazily rather than linked, so a consumer that never captures a
-transaction does not acquire a dependency nothing else in the workspace has.
+<a id="d-transaction-binding"></a>
+
+**The documented entry points are not exports, and the real ones are in
+`ntdll`.** `ktmw32.h` documents `GetCurrentTransaction` and
+`SetCurrentTransaction`, and MSDN names `Ktmw32.dll` as their library. Neither
+is exported from it: the shipping DLL's export table offers
+`CreateTransaction`, `CommitTransaction`, `RollbackTransaction` and their
+neighbours and nothing named `CurrentTransaction`. The header declares the two
+as `FORCEINLINE` wrappers over `RtlGetCurrentTransaction` and
+`RtlSetCurrentTransaction` in **`ntdll.dll`**, which is what this crate binds.
+
+This was found by a test failing, not by reading. The first implementation
+resolved the documented names from `ktmw32.dll` and every transaction test failed
+at symbol resolution; the export table then settled it. Recorded because the
+documentation is actively misleading here, and the next person to reach for these
+functions will start where we did.
+
+Two consequences:
+
+- **The aspect rests on an `Rtl`-prefixed `ntdll` export**, which is weaker
+  footing than the rest of this crate. It is unavoidable -- no documented export
+  exists -- but it is why binding is lazy and why an unresolvable symbol is a
+  typed `Unsupported` failure rather than a process that will not start.
+- **`RtlSetCurrentTransaction` returns `BOOLEAN`, one byte**, not the four-byte
+  `BOOL` its documented wrapper returns. Reading it as `BOOL` would test three
+  bytes of whatever happened to be in the register, which is the kind of defect
+  that passes for years and then does not.
+
+Binding is lazy for a second reason too: a consumer that never captures a
+transaction should pay nothing for the aspect's existence.
+
+**`Absent` clears rather than leaves alone, and this is the aspect where that
+distinction first has teeth.** `NotCaptured` leaves the running thread's own
+transaction untouched, because the caller never asked. `Absent` *installs* "no
+transaction", because the caller did ask and the answer was none -- a worker that
+happened to carry one would otherwise silently enlist the caller's work in it.
+Impersonation never reaches `Absent`, so the question does not arise there.
 
 The aspect carries an owned duplicate of the transaction handle, so the captured
 value does not depend on the caller keeping its own handle open.

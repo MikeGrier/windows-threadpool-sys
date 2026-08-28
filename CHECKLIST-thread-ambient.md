@@ -78,7 +78,7 @@ namespace operation is.
   snapshots the process identity when the thread has none, so this aspect's *absent* state is unreachable
   by construction while the three-state shape is retained for uniformity.
 
-- [ ] **M22.6** -- Implement the TxF transaction aspect: capture the calling thread's current transaction,
+- [x] **M22.6** -- Implement the TxF transaction aspect: capture the calling thread's current transaction,
   carry an owned duplicate so the value does not depend on the caller's handle outliving it, and apply it
   around the callback. Bind `ktmw32` lazily rather than linking it, so a consumer that never captures a
   transaction does not acquire a dependency nothing else in the workspace has. State the hazard the aspect
