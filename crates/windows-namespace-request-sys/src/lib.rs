@@ -63,6 +63,12 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+pub mod buffer;
 pub mod handle;
+pub mod security;
 
+pub use buffer::AlignedBuffer;
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
+pub use security::{
+    AclState, SecurityAttributes, SecurityCaptureError, SecurityCaptureFailure, SecurityDescriptor,
+};

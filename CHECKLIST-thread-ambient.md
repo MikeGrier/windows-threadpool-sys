@@ -237,7 +237,7 @@ assumed:
   too: closing the duplicate does **not** disturb the source, so a request owning a duplicate and dropping
   it cannot damage the handle its caller kept.
 
-- [ ] **M24.3** -- Capture the security attributes. A caller's descriptor may be **absolute**, holding raw
+- [x] **M24.3** -- Capture the security attributes. A caller's descriptor may be **absolute**, holding raw
   pointers to owner SID, group SID, DACL and SACL that are quite possibly on the caller's stack, so capture  normalises to **self-relative** and owns the resulting contiguous blob. Two traps must be handled rather
   than discovered: a self-relative descriptor requires DWORD alignment, which a plain boxed byte slice does
   not guarantee; and *no descriptor*, *a descriptor with a NULL DACL*, and *a descriptor with an empty

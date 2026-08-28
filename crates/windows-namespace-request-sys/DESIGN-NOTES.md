@@ -195,6 +195,49 @@ reaches.
 Duplication is fallible, so the type offers `try_clone` rather than `Clone`. The
 result refers to the same kernel object, with everything D-4 says about that.
 
+## <a id="d-8"></a>D-8: Security attributes are captured as a self-relative, owned blob
+
+A `SECURITY_ATTRIBUTES` is not a value. It points at a security descriptor, and
+an **absolute** descriptor is itself a structure of raw pointers to an owner
+SID, a group SID, a DACL and a SACL that are quite possibly on the caller's
+stack. Copying the struct would copy those pointers, so a request built on a
+submitter and run on a worker would be reading the submitter's dead stack
+frame. Capture therefore converts to the **self-relative** form -- every part at
+an offset inside one contiguous blob -- and owns that blob.
+
+Validation runs at capture, on the calling thread, for the same reason handle
+capture does (see [D-7](#d-7)): a descriptor Windows will reject is the caller's
+to fix, and reporting it from a worker gives the report to code that cannot act
+on it.
+
+### The three-way distinctions this must not collapse
+
+A single nullable pointer runs together outcomes that are different grants, so
+each is given its own representation:
+
+| Caller passed | Meaning |
+|---|---|
+| a null `lpSecurityAttributes` | default security, non-inheritable handle |
+| attributes whose descriptor is null | default security, but the caller's inheritance choice |
+| attributes with a descriptor | the caller's security |
+
+and inside a descriptor, a **DACL** has three states that a `bool` or an
+`Option` would flatten: **absent** (the object takes its default), **NULL**
+(everyone gets everything), and **empty** (nobody gets anything). NULL and empty
+are opposites, so collapsing them is not a loss of detail -- it is an inversion.
+`AclState` keeps all four cases (with a populated list reporting its entry
+count), and applies to the SACL as well.
+
+### Alignment is a property of the buffer, not the first field
+
+A self-relative descriptor must live in DWORD-aligned storage. A `Box<[u8]>`
+guarantees an alignment of 1, so this is a requirement the obvious
+representation silently fails. It is the second such requirement in the crate
+-- the directory-information classes need 8-byte alignment for the same
+underlying reason -- so it is met once, by an `AlignedBuffer` primitive whose
+alignment is stated at construction and preserved by `Clone`, rather than being
+solved twice by two different local tricks.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the
