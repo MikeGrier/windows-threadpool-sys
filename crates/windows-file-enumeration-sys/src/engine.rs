@@ -28,12 +28,28 @@
 //! is never re-read from its start and never refilled a second time before it
 //! is drained.
 //!
-//! Parsing stops early, before the batch is drained, only when the completion
-//! ring refuses an accepted entry. The cursor is left at that record -- not
-//! past it -- so a later quantum reparses and re-offers exactly what could not
-//! be delivered, rather than losing it.
+//! Parsing stops early, before the batch is drained, for three reasons, and
+//! each leaves the cursor at a different place:
+//!
+//! - The completion ring refuses an accepted entry. The cursor is left at
+//!   that record -- not past it -- so a later quantum reparses and re-offers
+//!   exactly what could not be delivered, rather than losing it.
+//!   [`EngineState::awaiting_room`] remembers that the record waiting there is
+//!   already known to need delivery, so a quantum that resumes while the ring
+//!   is still full can say so from one cheap check rather than reparsing,
+//!   rebuilding, and re-evaluating a predicate against a record whose fate is
+//!   already decided.
+//! - The quantum's record budget or time budget is spent
+//!   ([`quantum_budget_exhausted`]). The cursor is left at the next unexamined
+//!   record, and the quantum yields rather than parking: nothing is blocked on
+//!   the completion ring, only on getting the worker back. This is what keeps
+//!   an enormous batch, or a predicate that rejects every record it sees,
+//!   from monopolising a worker.
+//! - A record fails validation, which ends the enumeration outright rather
+//!   than leaving a cursor to resume from.
 
 use std::os::windows::io::OwnedHandle;
+use std::time::{Duration, Instant};
 
 use windows_impersonation_token_sys::ImpersonationToken;
 
@@ -46,6 +62,35 @@ use crate::native::{self, Refill, RefillOutcome};
 use crate::record;
 use crate::request::EnumerationRequest;
 use crate::session::QuantumOutcome;
+
+/// The most records one quantum examines before yielding, regardless of how
+/// each one was disposed of.
+///
+/// Counted against every record a quantum looks at -- a dropped `.` or `..`,
+/// one a predicate rejected, and one delivered all count the same -- so a
+/// directory whose predicate matches nothing still yields back to the
+/// scheduler instead of running to the end of an enormous batch in one
+/// callback.
+const MAX_RECORDS_PER_QUANTUM: u32 = 256;
+
+/// The longest one quantum may run before yielding, regardless of how many
+/// records that turned out to be.
+///
+/// A record count alone is too coarse when per-record cost varies -- a long
+/// name, or an expensive predicate clause -- so this is the second, orthogonal
+/// bound: whichever budget is spent first ends the quantum.
+const MAX_QUANTUM_DURATION: Duration = Duration::from_millis(2);
+
+/// Whether a quantum that has already examined `examined` records over
+/// `elapsed` time should stop before examining another.
+///
+/// Never true for a quantum's first record: `examined` starts at zero, so a
+/// quantum always makes at least one record's worth of progress no matter how
+/// tight either bound is -- a budget that could stall an enumeration
+/// completely is not a budget.
+fn quantum_budget_exhausted(examined: u32, elapsed: Duration) -> bool {
+    examined > 0 && (examined >= MAX_RECORDS_PER_QUANTUM || elapsed >= MAX_QUANTUM_DURATION)
+}
 
 /// How far an enumeration has got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +117,14 @@ pub(crate) struct EngineState {
     /// read yet, or the last one was fully drained, and the next quantum's
     /// first job is a refill rather than a parse.
     cursor: Option<usize>,
+    /// Whether the record at `cursor` is already known to need delivery and
+    /// was refused for want of completion-ring room.
+    ///
+    /// Set only when a quantum parks; cleared the moment a resuming quantum
+    /// finds room. While set, resuming checks the ring before reparsing and
+    /// rebuilding a record whose fate -- deliver, once there is room -- is
+    /// already decided.
+    awaiting_room: bool,
 }
 
 impl EngineState {
@@ -88,6 +141,7 @@ impl EngineState {
             volume_serial: None,
             phase: Phase::Unopened,
             cursor: None,
+            awaiting_room: false,
         }
     }
 
@@ -113,6 +167,12 @@ impl EngineState {
     pub(crate) fn into_parts(self) -> (EnumerationRequest, ImpersonationToken) {
         (self.request, self.token)
     }
+
+    /// Whether a batch is loaded and not yet fully parsed.
+    #[cfg(test)]
+    pub(crate) fn has_pending_batch(&self) -> bool {
+        self.cursor.is_some()
+    }
 }
 
 impl std::fmt::Debug for EngineState {
@@ -122,6 +182,7 @@ impl std::fmt::Debug for EngineState {
             .field("open", &self.directory.is_some())
             .field("volume_serial", &self.volume_serial)
             .field("cursor", &self.cursor)
+            .field("awaiting_room", &self.awaiting_room)
             .finish_non_exhaustive()
     }
 }
@@ -167,11 +228,25 @@ pub(crate) fn advance(
         }
     }
 
-    // Parse as much of the current batch as this quantum can. One refill is
-    // already spent above, so draining this batch never triggers another --
-    // that is what leaves a scheduling point at every place a refill could
-    // have blocked.
+    // Parse as much of the current batch as this quantum's budgets allow. One
+    // refill is already spent above, so draining this batch never triggers
+    // another -- that is what leaves a scheduling point at every place a
+    // refill could have blocked.
+    let started = Instant::now();
+    let mut examined: u32 = 0;
+
     while let Some(offset) = engine.cursor {
+        if engine.awaiting_room {
+            if !completions.has_data_room() {
+                return QuantumOutcome::Parked;
+            }
+            engine.awaiting_room = false;
+        }
+
+        if quantum_budget_exhausted(examined, started.elapsed()) {
+            return QuantumOutcome::Yielded;
+        }
+
         let (parsed, next) = match record::parse_record(engine.buffer.as_bytes(), offset) {
             Ok(parsed) => parsed,
             Err(detail) => {
@@ -180,6 +255,7 @@ pub(crate) fn advance(
                 ));
             }
         };
+        examined += 1;
 
         if parsed.is_dot_or_dotdot() {
             engine.cursor = next;
@@ -194,10 +270,13 @@ pub(crate) fn advance(
 
         match completions.try_send_entry(Completion::Entry { enumeration, entry }) {
             Ok(()) => engine.cursor = next,
-            // No room. The cursor stays exactly here -- not past it -- so the
-            // next quantum reparses and re-offers this same record rather than
-            // losing it.
-            Err(_) => return QuantumOutcome::Parked,
+            Err(_) => {
+                // No room. The cursor stays exactly here -- not past it -- so
+                // the next quantum reparses and re-offers this same record
+                // rather than losing it, and knows to check for room first.
+                engine.awaiting_room = true;
+                return QuantumOutcome::Parked;
+            }
         }
     }
 

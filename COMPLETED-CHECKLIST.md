@@ -959,3 +959,38 @@ actually about.
 
 290 unit tests plus the crate doctest pass, stable across fifteen consecutive
 runs; targeted all-target Clippy and `cargo fmt --check` are clean.
+
+## Moved 2026-08-27 -- file-enumeration quantum budgets
+
+### <a id="fe-10"></a>FE-10 -- Bound each quantum and make backpressure lossless. *(completed 2026-08-27 21:32:24 UTC-04:00)*
+
+[engine.rs](crates/windows-file-enumeration-sys/src/engine.rs)'s quantum now
+bounds its own progress with two independent budgets, checked every record:
+`MAX_RECORDS_PER_QUANTUM` (256) and `MAX_QUANTUM_DURATION` (2ms, a plain
+monotonic `Instant`). A dropped `.`/`..`, a predicate reject, and a delivered
+entry all count the same against the record budget, so a predicate that
+matches nothing still yields back to the scheduler instead of running an
+enormous batch to its end in one callback. Neither budget can stall an
+enumeration completely: a quantum's first record is never gated by either one.
+Both budgets are pure functions of `(examined, elapsed)`, unit tested directly
+with synthetic values rather than real sleeping.
+
+Completion-ring backpressure remains a separate concern, refined rather than
+replaced: `EngineState::awaiting_room` remembers that the record retained at
+the cursor is already known to need delivery, so a quantum resuming into a
+still-full ring asks `CompletionRing::has_data_room` -- one cheap call -- and
+parks again immediately rather than reparsing, rebuilding, and re-evaluating a
+predicate against a record whose fate is already decided.
+
+Recorded as D-20 in [DESIGN-NOTES.md](crates/windows-file-enumeration-sys/DESIGN-NOTES.md)
+and [DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
+
+New tests cover: the record budget stopping a quantum mid-batch on a directory
+larger than the budget, with every entry still delivered exactly once across
+the quanta that follow; a directory needing several physical refills
+delivering every entry once; and a still-full ring parking again on a second
+resume without losing or duplicating the pending entry.
+
+296 unit tests plus the crate doctest pass, stable across twenty consecutive
+runs and leaving no scratch directories behind; targeted all-target Clippy and
+`cargo fmt --check` are clean.

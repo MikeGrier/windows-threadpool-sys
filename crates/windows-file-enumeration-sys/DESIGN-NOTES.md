@@ -34,6 +34,7 @@ making submission, delivery, cancellation, and resource bounds explicit.
 | <a id="d-17"></a>D-17 | **One session-owned engine work object serves every enumeration, through a ready set.** No thread-pool object is stored per enumeration, so nothing the servicer or a worker drops can wait on a directory query. |
 | <a id="d-18"></a>D-18 | **Each accepted enumeration reserves a retirement message as well as a cancellation.** Reporting oneself finished must be as infallible as being cancelled, which raises the minimum submission capacity to four. |
 | <a id="d-19"></a>D-19 | **The native buffer is allocated at admission, fallibly, with an 8-byte-aligned base.** A request stays a cheap, clonable, comparable description; the buffer belongs to the enumeration it serves. |
+| <a id="d-20"></a>D-20 | **A quantum's progress is bounded by both a record count and an elapsed-time budget; whichever is spent first ends it.** A quantum always examines at least one record regardless of either bound. A quantum parked for completion-ring room remembers that its retained record already needs delivery, so resuming re-checks room with one cheap call before reparsing it. |
 
 ## Control authority and worker lifetime
 
@@ -63,6 +64,29 @@ is never claimed twice, so one native buffer and record cursor are only ever
 touched by one worker. Abandonment then releases registry entries that own no
 thread-pool object at all, which is what lets receiver drop tear a session down
 without waiting on a directory query.
+
+## Quantum budgets and backpressure resumption
+
+A quantum bounds its own progress two ways: a record count
+(`MAX_RECORDS_PER_QUANTUM`) and an elapsed-time budget (`MAX_QUANTUM_DURATION`),
+checked with a plain monotonic `Instant`. Either one being spent ends the
+quantum with `Yielded`, resubmitting rather than running to the end of an
+enormous batch or letting a predicate that rejects every record it sees
+monopolise a worker. Every record a quantum looks at counts against the record
+budget the same way -- a dropped `.` or `..`, one a predicate rejected, and one
+delivered -- because the cost that matters here is examining the record at
+all, not what became of it. Neither bound can stall an enumeration completely:
+a quantum's first record is never gated by either one, so a budget this tight
+still always makes some progress.
+
+Completion-ring backpressure is a separate concern from either budget. A
+quantum that cannot deliver an accepted entry parks with the cursor left at
+that exact record, and remembers (`EngineState::awaiting_room`) that the
+record waiting there is already known to need delivery. A quantum that resumes
+while that flag is set asks the ring for room with one cheap call before
+reparsing, rebuilding, and re-evaluating a predicate against a record whose
+fate is already decided -- which is what keeps a sustained full ring from
+paying that cost on every retry.
 
 ## Request path contract
 

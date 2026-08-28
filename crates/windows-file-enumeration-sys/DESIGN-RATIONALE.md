@@ -190,6 +190,35 @@ fail does so on the caller's own thread. The allocation must be fallible and
 8-byte aligned, and neither comes free: the ordinary growable vector aborts the
 process on allocation failure and guarantees only byte alignment.
 
+## Why a quantum has two independent budgets, not one (D-20)
+
+A record count alone under-bounds a quantum whenever per-record cost is not
+uniform: a handful of records with very long names, or a predicate clause that
+does real comparison work, can cost far more than a budget sized for the
+ordinary case expects. A time budget alone under-bounds it the other way: a
+directory whose predicate rejects everything is cheap per record, so a
+time-only budget would let it examine an unbounded number of records before
+the clock ran out, which is exactly the "reject-all predicate monopolises a
+worker" failure mode the record budget exists to prevent. Neither bound
+substitutes for the other, so a quantum stops the moment either is spent.
+
+`Instant::now()` was measured against QPC-backed timers as cheap enough to
+call once per record without mattering next to the record parse it accompanies,
+so the time budget is checked on every iteration rather than every Nth one --
+a periodic check would only complicate the loop for a cost that is not there
+to save.
+
+Backpressure from a full completion ring is deliberately not folded into
+either budget. A quantum that cannot deliver parks rather than yields, because
+resubmitting immediately into a ring that is still full would burn a worker on
+a callback that can only fail again; parking instead waits for the one event
+that can create room; a receiver taking a record. What *is* worth avoiding on
+every retry is repeating the parse, the entry construction, and the predicate
+evaluation for a record whose disposition never changes while it waits --
+hence `EngineState::awaiting_room`, a one-bit memory of "this exact record
+already matched and is only waiting on room," checked with
+`CompletionRing::has_data_room` before any of that work is repeated.
+
 ## Why directory-ness is checked rather than inferred (FE-8)
 
 Two things the filesystem taught us during FE-8, both of which the contract had

@@ -12,8 +12,8 @@ documentation-test, sync, and push gate is standard procedure and is not repeate
 as checklist work. Conventional Commit scopes for the new crates are
 `impersonation-token` and `file-enumeration`.
 
-> **NEXT ACTIONABLE ITEM: FE-10.** Bound each quantum and make backpressure
-> lossless.
+> **NEXT ACTIONABLE ITEM: FE-11.** Complete the failure and capability
+> taxonomy the contract settled.
 
 ## M6 -- Native enumeration engine
 
@@ -29,14 +29,7 @@ and the submission-ring servicer the sole registry authority (D-16, D-17).
 
 - [x] **FE-9** -- Parse what the buffer returns and deliver entries. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-9)
 
-- [ ] **FE-10** -- Bound each quantum and make backpressure lossless. Count every
-  examined record against the record budget, including dot entries and predicate
-  rejects, so a reject-all predicate cannot monopolise a worker; enforce a cheap
-  monotonic elapsed-time budget alongside it. Perform at most one refill per
-  callback and resubmit rather than refilling twice. Establish completion-ring room
-  before parsing the next record, and when there is none, retain the buffer and
-  cursor, park, and resume from consumer progress without polling, duplicate
-  callbacks, or lost wakeups. Test multi-refill enumeration and a full ring.
+- [x] **FE-10** -- Bound each quantum and make backpressure lossless. -> [completed 2026-08-27](COMPLETED-CHECKLIST.md#fe-10)
 
 - [ ] **FE-11** -- Complete the failure and capability taxonomy the contract
   settled. Classify `ERROR_INVALID_FUNCTION`, `ERROR_NOT_SUPPORTED`, and

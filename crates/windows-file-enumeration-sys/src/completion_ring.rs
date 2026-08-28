@@ -155,9 +155,9 @@ impl CompletionRing {
 
     /// Whether an entry would be accepted right now.
     ///
-    /// An enumeration asks this *before* parsing its next record, which is what
-    /// turns a full ring into a yield rather than a dropped entry.
-    #[allow(dead_code, reason = "the native engine (M6) is the caller that asks")]
+    /// Checked when a quantum resumes at a record it already knows needs
+    /// delivery: a cheap way to say "still no room" without reparsing,
+    /// rebuilding, and re-evaluating a predicate against that record again.
     pub(crate) fn has_data_room(&self) -> bool {
         self.lock().data_room() > 0
     }

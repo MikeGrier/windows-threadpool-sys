@@ -38,6 +38,22 @@ fn engine_with_predicate(path: &std::path::Path, predicate: QueryByExample) -> E
     EngineState::new(request, token, buffer)
 }
 
+fn engine_with_capacity(path: &std::path::Path, capacity: usize) -> EngineState {
+    let request = EnumerationRequest::for_path(path)
+        .expect("a resolvable path")
+        .with_buffer_capacity(capacity)
+        .expect("representable");
+    let token = ImpersonationToken::capture().expect("the calling thread has a context");
+    let buffer = NativeBuffer::try_new(request.buffer_capacity()).expect("allocation");
+    EngineState::new(request, token, buffer)
+}
+
+/// `count` distinct, sorted-stable file names, cheap to create and to compare
+/// against what a full enumeration delivers.
+fn many_file_names(count: usize) -> Vec<String> {
+    (0..count).map(|index| format!("f{index:05}.txt")).collect()
+}
+
 fn terminal(outcome: QuantumOutcome) -> TerminalOutcome {
     match outcome {
         QuantumOutcome::Finished(outcome) => outcome,
@@ -48,9 +64,12 @@ fn terminal(outcome: QuantumOutcome) -> TerminalOutcome {
 /// Run quanta until the enumeration finishes, or give up.
 ///
 /// An empty directory takes two: one for its . and .. batch, and one to
-/// reach exhaustion.
+/// reach exhaustion. The cap is generous rather than tight: a quantum's record
+/// and time budgets mean a very large batch can legitimately need many of
+/// them, and this loop should only ever fail a test for a real regression,
+/// never for outrunning an arbitrary iteration count.
 fn run_to_completion(engine: &mut EngineState, completions: &CompletionRing) -> TerminalOutcome {
-    for _ in 0..64 {
+    for _ in 0..4096 {
         if let QuantumOutcome::Finished(outcome) = advance(engine, ENUMERATION, completions) {
             return outcome;
         }
@@ -269,4 +288,115 @@ fn debug_output_names_the_phase() {
     let engine = engine_for(scratch.path(), FileIdentityMode::Omit);
     let rendered = format!("{engine:?}");
     assert!(rendered.contains("Unopened"), "{rendered}");
+}
+
+// -- quantum budgets (FE-10) ---------------------------------------------
+
+#[test]
+fn a_quantum_always_examines_at_least_one_record() {
+    // A budget that could stall an enumeration completely is not a budget:
+    // the very first record of a quantum is never gated by either bound.
+    assert!(!quantum_budget_exhausted(0, Duration::from_secs(3600)));
+}
+
+#[test]
+fn the_record_budget_stops_a_quantum_once_reached() {
+    assert!(quantum_budget_exhausted(
+        MAX_RECORDS_PER_QUANTUM,
+        Duration::ZERO
+    ));
+    assert!(!quantum_budget_exhausted(
+        MAX_RECORDS_PER_QUANTUM - 1,
+        Duration::ZERO
+    ));
+}
+
+#[test]
+fn the_time_budget_stops_a_quantum_once_reached() {
+    assert!(quantum_budget_exhausted(1, MAX_QUANTUM_DURATION));
+    assert!(!quantum_budget_exhausted(
+        1,
+        MAX_QUANTUM_DURATION - Duration::from_nanos(1)
+    ));
+}
+
+#[test]
+fn a_batch_larger_than_the_record_budget_spans_multiple_quanta() {
+    // A buffer generous enough to hold the whole batch in one refill, so only
+    // the record budget -- not a second physical query -- is under test.
+    let count = usize::try_from(MAX_RECORDS_PER_QUANTUM).unwrap() + 40;
+    let names = many_file_names(count);
+    let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+    let scratch = Scratch::with_files(&borrowed);
+    let mut engine = engine_with_capacity(scratch.path(), 256 * 1024);
+    let completions = CompletionRing::new(count + 8);
+
+    let first = advance(&mut engine, ENUMERATION, &completions);
+    assert!(matches!(first, QuantumOutcome::Yielded), "{first:?}");
+    assert!(
+        engine.has_pending_batch(),
+        "the record budget must stop mid-batch, not at its end"
+    );
+    let delivered_after_one_quantum = completions.len();
+    assert!(
+        delivered_after_one_quantum <= usize::try_from(MAX_RECORDS_PER_QUANTUM).unwrap(),
+        "one quantum must not examine more than the record budget: {delivered_after_one_quantum}"
+    );
+
+    let outcome = run_to_completion(&mut engine, &completions);
+    assert!(outcome.is_completed(), "{outcome:?}");
+    let mut delivered = drain_names(&completions);
+    delivered.sort();
+    let mut expected = names;
+    expected.sort();
+    assert_eq!(delivered, expected);
+}
+
+#[test]
+fn a_directory_needing_several_refills_delivers_every_entry_once() {
+    // A small buffer alongside enough entries that no single refill's batch
+    // can hold them all, so the phase/cursor handoff across refills is what
+    // is under test, not the record budget.
+    let names = many_file_names(60);
+    let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+    let scratch = Scratch::with_files(&borrowed);
+    let mut engine = engine_for(scratch.path(), FileIdentityMode::Omit);
+    let completions = CompletionRing::new(names.len() + 8);
+
+    let outcome = run_to_completion(&mut engine, &completions);
+    assert!(outcome.is_completed(), "{outcome:?}");
+
+    let mut delivered = drain_names(&completions);
+    delivered.sort();
+    let mut expected = names;
+    expected.sort();
+    assert_eq!(
+        delivered, expected,
+        "no entry lost or duplicated across refills"
+    );
+}
+
+#[test]
+fn a_still_full_ring_parks_again_without_losing_the_pending_entry() {
+    let scratch = Scratch::with_files(&["a.txt", "b.txt", "c.txt"]);
+    let mut engine = engine_for(scratch.path(), FileIdentityMode::Omit);
+    let completions = CompletionRing::new(MINIMUM_COMPLETION_CAPACITY);
+
+    let first = advance(&mut engine, ENUMERATION, &completions);
+    assert!(matches!(first, QuantumOutcome::Parked), "{first:?}");
+    assert_eq!(completions.len(), MINIMUM_COMPLETION_CAPACITY);
+
+    // Nothing was drained, so the ring is exactly as full as before: resuming
+    // must park again, from the `awaiting_room` fast path, rather than
+    // reparsing and re-delivering into a ring with no room.
+    let second = advance(&mut engine, ENUMERATION, &completions);
+    assert!(matches!(second, QuantumOutcome::Parked), "{second:?}");
+    assert_eq!(completions.len(), MINIMUM_COMPLETION_CAPACITY);
+
+    let mut names = drain_names(&completions);
+    let outcome = run_to_completion(&mut engine, &completions);
+    assert!(outcome.is_completed(), "{outcome:?}");
+    names.extend(drain_names(&completions));
+    names.sort();
+    assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
 }
