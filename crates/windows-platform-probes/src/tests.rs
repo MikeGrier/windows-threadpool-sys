@@ -319,11 +319,28 @@ fn runs_long_also_reaches_the_maximum() {
 fn raising_the_maximum_while_saturated_releases_more_work() {
     // The exact mechanism of "raise the pool size to compensate for a blocked
     // worker", so the delay is the number that matters.
-    let delay = measure_raise_while_saturated(2, 6, 8);
+    let observed = measure_raise_while_saturated(2, 6, 8);
 
+    // The premise, before the number that depends on it. The probe's settle
+    // loop exits on saturation *or* timeout, so without this a pool that had
+    // reached only 1 of its 2 base threads would have the delay below time
+    // ordinary growth toward the base maximum -- a small number, passing the
+    // assertion, measuring the wrong thing entirely.
     assert!(
-        delay < Duration::from_secs(1),
-        "raising the maximum took {delay:?} to take effect"
+        observed.saturated_before_raise(),
+        "the pool must be saturated at its base maximum before the raise, or \
+         the delay measures growth toward that base rather than the raise: \
+         {observed:?}"
+    );
+    assert!(
+        observed.took_effect,
+        "no extra callback started within the settle window, so the delay is \
+         the window itself and not a measurement: {observed:?}"
+    );
+    assert!(
+        observed.delay < Duration::from_secs(1),
+        "raising the maximum took {:?} to take effect: {observed:?}",
+        observed.delay
     );
 }
 

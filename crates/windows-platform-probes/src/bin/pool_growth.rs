@@ -38,9 +38,24 @@ fn main() {
     report("P2 the same, runs-long:", 4, 8, true);
     println!();
 
-    let delay = measure_raise_while_saturated(2, 6, 8);
+    let raise = measure_raise_while_saturated(2, 6, 8);
     println!("P3 raise while saturated (2 -> 6):");
-    println!("  extra work started {delay:?} after the maximum was raised");
+    if raise.saturated_before_raise() {
+        println!(
+            "  extra work started {:?} after the maximum was raised",
+            raise.delay
+        );
+    } else {
+        println!(
+            "  NOT saturated before the raise ({} of {} started), so the delay",
+            raise.started_before_raise, raise.base_max
+        );
+        println!("  below times growth toward the base maximum, not the raise.");
+        println!("  elapsed: {:?}", raise.delay);
+    }
+    if !raise.took_effect {
+        println!("  the settle window expired with no extra callback started.");
+    }
 
     println!("\nnote: every number here is from this host and this Windows build.");
     println!("Re-run on another architecture rather than assuming they carry over.");

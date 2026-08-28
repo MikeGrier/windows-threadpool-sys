@@ -559,7 +559,7 @@ during M25 and M27, so treat this as a recurring class rather than a set of isol
   claim the design rests on. Have the submitting thread record `ring.pop().is_none()` immediately
   before returning and report that, and force a genuinely pending IRP so the probe can fail.
 
-- [ ] **M28.2** -- Assert the premise in `measure_raise_while_saturated`. Its settle loop exits on
+- [x] **M28.2** -- Assert the premise in `measure_raise_while_saturated`. Its settle loop exits on
   saturation **or** timeout, and `before` is then whatever `started` happened to reach
   ([pool_growth.rs](crates/windows-platform-probes/src/pool_growth.rs) `:304`-`:317`). If the pool
   reached only 1 of `base_max`, the function times ordinary growth toward the *base* maximum and

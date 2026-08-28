@@ -176,8 +176,13 @@ struct Log {
 ///
 /// # Panics
 ///
-/// Panics if the pool or its work items cannot be created, or if the pool never
-/// reaches its maximum within the settle window.
+/// Panics if the pool or its work items cannot be created.
+///
+/// It does **not** panic when the pool fails to reach its maximum: that is a
+/// finding, reported through [`GrowthObservation::saturated`], and the tests
+/// assert it. An earlier version of this comment claimed the panic, which was
+/// worth correcting rather than implementing -- a probe that aborts on an
+/// unexpected platform result cannot report it.
 #[must_use]
 pub fn measure_growth(maximum: u32, submissions: usize, runs_long: bool) -> GrowthObservation {
     /// Long enough for a healthy pool to grow well inside it, short enough that
@@ -255,6 +260,39 @@ pub fn measure_growth(maximum: u32, submissions: usize, runs_long: bool) -> Grow
     }
 }
 
+/// What the raise-while-saturated probe observed.
+///
+/// The delay is only meaningful when [`saturated_before_raise`] holds. If the
+/// pool had not actually reached `base_max` when the maximum was raised, the
+/// delay times ordinary growth *toward the base maximum* rather than the
+/// effect of the raise -- a small number that looks like a pass while
+/// measuring the wrong thing entirely.
+///
+/// [`saturated_before_raise`]: Self::saturated_before_raise
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RaiseObservation {
+    /// The maximum the pool was held at before the raise.
+    pub base_max: u32,
+    /// Callbacks started at the moment the maximum was raised.
+    pub started_before_raise: usize,
+    /// How long after the raise the first extra callback started.
+    ///
+    /// The settle window elapsed when [`took_effect`](Self::took_effect) is
+    /// false, so compare that first.
+    pub delay: Duration,
+    /// An extra callback started within the settle window.
+    pub took_effect: bool,
+}
+
+impl RaiseObservation {
+    /// The pool really was saturated at its base maximum when the raise
+    /// happened, so [`delay`](Self::delay) measures the raise.
+    #[must_use]
+    pub fn saturated_before_raise(self) -> bool {
+        self.started_before_raise == self.base_max as usize
+    }
+}
+
 /// Saturates at `base_max`, raises the maximum to `raised_max`, and reports how
 /// long the extra callbacks took to start.
 ///
@@ -263,13 +301,14 @@ pub fn measure_growth(maximum: u32, submissions: usize, runs_long: bool) -> Grow
 ///
 /// # Panics
 ///
-/// As [`measure_growth`].
+/// As [`measure_growth`]: failing to saturate is reported through
+/// [`RaiseObservation::saturated_before_raise`], not raised.
 #[must_use]
 pub fn measure_raise_while_saturated(
     base_max: u32,
     raised_max: u32,
     submissions: usize,
-) -> Duration {
+) -> RaiseObservation {
     /// How long to let the raise take effect before giving up on it.
     const SETTLE: Duration = Duration::from_secs(2);
 
@@ -306,6 +345,10 @@ pub fn measure_raise_while_saturated(
         std::thread::sleep(Duration::from_millis(5));
     }
 
+    // Whatever the settle loop above reached -- which is not necessarily
+    // `base_max`, since that loop also exits on timeout. Recorded rather than
+    // assumed, because the delay measured below only means what it claims when
+    // this equals `base_max`.
     let before = log.started.load(Ordering::SeqCst);
     let raised_at = Instant::now();
     pool.set_max_threads(raised_max).expect("raise the maximum");
@@ -314,6 +357,7 @@ pub fn measure_raise_while_saturated(
     while Instant::now() < deadline && log.started.load(Ordering::SeqCst) <= before {
         std::thread::sleep(Duration::from_millis(1));
     }
+    let took_effect = log.started.load(Ordering::SeqCst) > before;
     let delay = raised_at.elapsed();
 
     gate.open();
@@ -321,5 +365,10 @@ pub fn measure_raise_while_saturated(
         item.wait();
     }
 
-    delay
+    RaiseObservation {
+        base_max,
+        started_before_raise: before,
+        delay,
+        took_effect,
+    }
 }
