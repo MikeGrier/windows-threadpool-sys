@@ -250,6 +250,7 @@ impl PreparedPath {
 ///
 /// Returns [`PathError`] for an empty path, an interior NUL, a `\?\` path
 /// that is not fully qualified, an ordinary path that exceeds `MAX_PATH` before
+/// or after resolution, or a resolution failure reported by Windows.
 ///
 /// # Example
 ///
@@ -275,7 +276,7 @@ impl PreparedPath {
 ///
 /// // These are decided here, before any Win32 call, so they carry no OS code.
 /// assert_eq!(empty.raw_os_error(), None);
-/// ```/// or after resolution, or a resolution failure reported by Windows.
+/// ```
 pub fn prepare(path: &Wtf16Str) -> Result<PreparedPath, PathError> {
     prepare_units(path).map(|units| PreparedPath { units })
 }

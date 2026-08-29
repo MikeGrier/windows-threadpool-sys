@@ -512,10 +512,16 @@ fn a_dropped_watcher_stops_delivering() {
     std::fs::write(dir.path().join("after-drop.txt"), b"x").expect("create");
 
     // Teardown releases the last sender, so the queue can be drained to the end
-    // of the stream rather than to an arbitrary deadline: `recv` reports `None`
-    // only once nothing is queued and no sender remains, which is exactly the
-    // point past which nothing can ever be added. Everything the watcher will
-    // ever deliver is therefore in `delivered` below -- including anything a
+    // of the stream rather than to an arbitrary deadline. Drain until
+    // `recv_timeout` yields `None`, then assert `is_disconnected` -- that second
+    // step is load-bearing rather than decorative, because `recv_timeout`
+    // reports `None` on a timeout too, and only the disconnection distinguishes
+    // "no sender remains" from "nothing arrived in time". A timeout would end
+    // the loop early and leave the assertions below covering part of the
+    // delivered set while appearing to cover all of it.
+    //
+    // Past a genuine disconnection nothing can ever be added, so everything the
+    // watcher will ever deliver is in `delivered` -- including anything a
     // still-running callback managed to enqueue, since a live callback implies a
     // live sender and would keep the drain going.
     while let Some(item) = receiver.recv_timeout(NOTIFY_TIMEOUT) {
