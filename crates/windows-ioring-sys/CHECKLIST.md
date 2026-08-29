@@ -446,39 +446,66 @@ useful together.
   the counter the waiting thread spins on, so the waiter read a stale zero. Fixed by publishing the data
   before the flag -- the same ordering rule the epoch log's reclaim worker already follows.
 
-## M17 -- Vary the state space instead of enumerating it by hand
+## M17 -- Feed the detectors M15 and M16 built
 
 Population A. [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47) is one point in a space
 nobody was sampling: `{fresh, dirty}` handover state crossed with operation kind, buffer kind, claim/drop and
 drain timing. Enumerating that by hand is how it was missed the first time.
 
+**What M15 and M16 changed about this milestone's purpose.** Neither found a single new defect in shipping
+code: every finding was either historical ([D-32](DESIGN-NOTES.md#d-32), `Appender::claim`) or a defect in the
+new instrumentation itself. That is not evidence the crate is clean. `RingContract`, the guard pages, the
+poison, `Witness` and the fault seam are all **passive** -- they fire only on paths the existing hand-written
+tests already walk, and #47 lived on a path no test walked. M17 is therefore not a fourth technique standing
+beside M15 and M16. It is the **input generator for detectors that are already built and currently under-fed**,
+which is also why its cost is lower than when it was first planned: the oracle, the memory checking and the
+failure paths all exist now.
+
 **Depends on M16.1** (the oracle is the property these tests assert).
 
-**CONVENTION GATE -- needs the engineer's explicit approval before M17.2 starts.** This component's rules say
+**CONVENTION GATE -- needs the engineer's explicit approval before M17.3 starts.** This component's rules say
 tests must be reproducible and must **not** use randomized sampling without explicit approval recorded in a
-design note. `proptest` is randomized sampling. M17.1 exists to get that decision made and recorded rather
-than smuggled in under a dev-dependency. Note M15.2's seeded poison needs the same permission and should be
-decided at the same time, under the same terms.
+design note. `proptest` is randomized sampling. M17.2 exists to get that decision made and recorded rather
+than smuggled in under a dev-dependency. M15.2's seeded poison already needed the same permission and got it,
+so the question is narrower than it was -- see M17.2.
 
-- [ ] **M17.1** -- Decide and record whether randomized property testing is permitted here, as a
-  [DESIGN-NOTES.md](DESIGN-NOTES.md) decision. If yes, the decision must also fix the terms that keep it
-  reproducible: a pinned default seed so CI reruns are deterministic, a committed regression corpus so any
-  discovered failure becomes a permanent fixed case, and placement as **integration** tests rather than unit
-  tests (they cross the OS boundary and will exceed the one-second unit budget).
-  If the answer is no, record that and close M17 -- exhaustive small-case enumeration is a legitimate fallback
-  at this API's size, and M17.3 is written to stand on its own.
+- [ ] **M17.1** -- Close the two open cells of the handover precondition. A coverage inventory taken after M16
+  found this axis is mostly covered already, so this is no longer a matrix to build: *fresh* and
+  *queued-non-empty* are covered by [tests/completion_event.rs](tests/completion_event.rs),
+  *drained-then-resubmitted* by its `the_edge_re_arms_after_every_drain_to_empty`, and #47's own repro by
+  [tests/event_delivery.rs](tests/event_delivery.rs). What remains is (a) attaching while operations are
+  **in flight but no completion has landed**, for both `IoRing::completion_event` and `EventDelivery::new`,
+  and (b) drain-then-resubmit for `EventDelivery`. The in-flight cell is inherently racy to construct --
+  submit-then-attach-immediately samples both it and the queued cell, which is acceptable and is the point.
+  Gated on nothing; done first so #47's own axis is banked before any convention decision.
 
-- [ ] **M17.2** -- Model the operation space as data: operation kind, buffer kind (owned / registered), file
+- [ ] **M17.2** -- Decide and record whether randomized property testing is permitted here, as a
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) decision. [D-39](DESIGN-NOTES.md#d-39) already fixed the terms under which
+  non-fixed test data is allowed in this component -- **seeded, announced, pinnable** -- and M15.2 proved them
+  end to end, so this is now the narrow question "does D-39 extend from poison to `proptest`?" rather than an
+  open-ended policy call. Inherit D-39's three terms rather than re-deriving them, and add the two it does not
+  cover: a committed regression corpus so any discovered failure becomes a permanent fixed case, and placement
+  as **integration** tests rather than unit tests (they cross the OS boundary and will exceed the one-second
+  unit budget). If the answer is no, record that and close M17 after M17.1 -- exhaustive small-case enumeration
+  is a legitimate fallback at this API's size.
+
+- [ ] **M17.3** -- Model the operation space as data: operation kind, buffer kind (owned / registered), file
   target kind (raw / shared / registered), claim-or-drop, drain-now-or-later, and handover state. A generator
-  over *sequences* of these, each sequence checked against `RingContract`.
+  over *sequences* of these, each sequence checked against `RingContract`. The harness **must run under
+  `windows-guard-alloc` with poison enabled**: if it does not, generated sequences are checked for conservation
+  only, which discards every M15 detector at exactly the moment there is finally enough input to feed them.
+  Address space is not a constraint on doing so -- measured at 8 KiB per allocation, about 8.6e9 allocations
+  before 64 TiB, against a generative run needing a few million.
 
-- [ ] **M17.3** -- Cover the handover precondition exhaustively, whatever M17.1 decides: `EventDelivery::new`
-  and `IoRing::completion_event` against a ring that is fresh, has queued completions, has in-flight
-  operations, and has been drained-then-resubmitted. This is
-  [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47)'s own axis and is small enough to
-  enumerate by hand, so it does not depend on M17.1 going either way.
+- [ ] **M17.4** -- Calibrate the generator before its green result is allowed to count. Show that it
+  rediscovers a defect known to be real -- #47's handover shape, or D-32's registration timing -- when the fix
+  is reverted. Every M15 and M16 item carried a sabotage step and this milestone had none: a generator that
+  cannot emit the shape that triggers #47 reports green for ever, and that green would feed straight into
+  release confidence. Until this item passes, M17.3's result is uninformative by construction. Note M18.3's
+  `cargo-mutants` run is a general form of the same calibration; this targeted version comes first because it
+  is cheaper and aims at two known-real defects rather than synthetic mutants.
 
-- [ ] **M17.4** -- Make discovered failures permanent: every sequence the generator finds becomes a named,
+- [ ] **M17.5** -- Make discovered failures permanent: every sequence the generator finds becomes a named,
   seed-free regression test committed alongside the corpus. A property test that finds a bug and then forgets
   it has bought a single debugging session rather than a guarantee.
 
