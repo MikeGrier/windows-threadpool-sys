@@ -30,13 +30,22 @@
 //! 1. The **log thread** observes epoch *N* durable and submits a checkpoint:
 //!    one write of the new watermark plus one covering flush, on the control
 //!    ring.
-//! 2. A **pool thread** observes that flush complete. The watermark is now
-//!    durable, which is what makes the retired segment genuinely dead -- a
-//!    reader recovering from the checkpoint will never look at it again.
-//! 3. That same pool thread asks the **reclaim worker** to zero it (see
+//! 2. A **pool thread** observes *both* of those complete, and both succeed.
+//!    Only then is the watermark durable, which is what makes the retired
+//!    segment genuinely dead -- a reader recovering from the checkpoint will
+//!    never look at it again.
+//! 3. That pool thread asks the **reclaim worker** to zero it (see
 //!    [`crate::reclaim`]).
 //! 4. The **log thread** learns the whole chain finished, through the one
 //!    reclaim handle already in its multiplexed wait.
+//!
+//! Step 2 says "both, and both succeed" for a reason worth stating up front:
+//! **a covering flush orders execution, it does not aggregate results.** The
+//! flush is released when the operations before it *complete*, so a record
+//! write that failed is followed by a flush that completes perfectly happily.
+//! Acting on the flush alone would declare a watermark durable on the strength
+//! of bytes that never landed, and then reclaim a segment on it. See
+//! [`Pending`].
 //!
 //! Three execution contexts, one ordering chain, and the log thread blocks for
 //! none of it. Note again what does *not* participate: `drain_preceding` orders
@@ -60,26 +69,121 @@ use crate::reclaim::Reclaimer;
 /// prefix it may skip.
 const MAGIC: &[u8; 8] = b"EPLOGCKP";
 
+/// One checkpoint's two operations, and what is known about them so far.
+///
+/// **A checkpoint is two operations, and both must succeed.** A covering flush
+/// is released when the operations before it *complete*, not when they
+/// *succeed* (D-24 orders execution, it does not aggregate results), so a
+/// record write that fails with `ERROR_DISK_FULL` is followed by a flush that
+/// completes perfectly happily. Treating that flush as the whole answer would
+/// declare a watermark durable on the strength of bytes that never landed --
+/// and then authorise reclaiming a segment on it.
+///
+/// So neither result is acted on alone: whichever completion arrives second
+/// decides, and it authorises only if both succeeded.
+struct Pending {
+    epoch: Epoch,
+    reclaim_to: u64,
+    /// `None` until the corresponding completion has been observed.
+    write_result: Option<Result<(), String>>,
+    flush_result: Option<Result<(), String>>,
+}
+
+impl Pending {
+    /// Both halves observed, and both succeeded.
+    fn is_complete(&self) -> bool {
+        self.write_result.is_some() && self.flush_result.is_some()
+    }
+
+    /// Every failure this checkpoint saw.
+    fn failures(&self) -> Vec<String> {
+        [self.write_result.as_ref(), self.flush_result.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|result| result.as_ref().err().cloned())
+            .collect()
+    }
+}
+
 /// Shared between the log thread (which submits) and the pool threads (which
 /// complete).
 struct State {
-    /// `UserData` of an in-flight covering flush -> the watermark it makes
-    /// durable, and how far the retired segment may then be reclaimed.
-    in_flight: std::collections::HashMap<usize, (Epoch, u64)>,
-    /// The buffers the writes are reading from, held in their tokens. A token
-    /// that is dropped unclaimed deliberately leaks its buffer (that is what
-    /// keeps the kernel's pointer valid), so claiming it on completion is not
-    /// tidiness -- it is the only way the memory comes back.
-    writes: std::collections::HashMap<usize, Token<Vec<u8>>>,
+    /// Flush `UserData` -> the checkpoint that flush closes.
+    pending: std::collections::HashMap<usize, Pending>,
+    /// Write `UserData` -> (its checkpoint's flush `UserData`, the token
+    /// holding the record).
+    ///
+    /// The token is what keeps the record buffer alive at a stable address
+    /// while the kernel reads it. A token dropped unclaimed deliberately leaks
+    /// that buffer (which is what keeps the kernel's pointer valid), so
+    /// claiming it on completion is not tidiness -- it is the only way the
+    /// memory comes back.
+    writes: std::collections::HashMap<usize, (usize, Token<Vec<u8>>)>,
     /// The highest watermark whose checkpoint is durable.
     durable_through: Option<Epoch>,
     /// Anything that went wrong on a pool thread, kept for the log thread to
     /// report. A failure swallowed on a callback thread is a failure nobody
     /// ever hears about.
     failures: Vec<String>,
-    /// How many checkpoints have completed, so a caller can wait for one
-    /// without racing.
+    /// How many checkpoints have finished, successfully or otherwise, so a
+    /// caller can wait for one without racing.
     completed: usize,
+}
+
+/// Decide a checkpoint once both of its completions have been observed.
+///
+/// Called from whichever pool thread observes the second one. The two can
+/// arrive in either order and on different threads -- `EventDelivery` re-arms
+/// *inside* its callback, so two pool threads can be draining at once and
+/// completion-queue order is not a processing order -- which is exactly why
+/// this is keyed on "both present" rather than on the flush alone.
+fn settle(state: &mut State, flush: usize, reclaimer: &Mutex<Reclaimer>) {
+    let Some(pending) = state.pending.get(&flush) else {
+        return;
+    };
+    if !pending.is_complete() {
+        return;
+    }
+    let pending = state
+        .pending
+        .remove(&flush)
+        .expect("just observed to be present");
+    state.completed += 1;
+
+    let failures = pending.failures();
+    if !failures.is_empty() {
+        // Not durable, so the watermark does not advance and no reclaim is
+        // authorised. Saying "this epoch is not durable" is the truthful
+        // answer, and it is the whole reason the failure is checked here
+        // rather than merely logged.
+        for failure in failures {
+            state.failures.push(format!(
+                "checkpoint for epoch {}: {failure}",
+                pending.epoch.0
+            ));
+        }
+        return;
+    }
+
+    state.durable_through = Some(
+        state
+            .durable_through
+            .map_or(pending.epoch, |t| t.max(pending.epoch)),
+    );
+
+    // Step 3: the checkpoint is durable, so the retired segment is dead and
+    // the reclaim may go. This is the ordering the ring cannot express, issued
+    // from a pool thread -- the "background path driven from the pool" in one
+    // line.
+    let mut reclaimer = reclaimer
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Err(error) = reclaimer.request(pending.epoch, pending.reclaim_to) {
+        state.failures.push(format!(
+            "reclaim request for epoch {}: {error}",
+            pending.epoch.0
+        ));
+    }
 }
 
 /// Owns the control ring and the thread-pool delivery over it.
@@ -105,7 +209,7 @@ impl Checkpointer {
         reclaimer: Arc<Mutex<Reclaimer>>,
     ) -> io::Result<Self> {
         let state = Arc::new(Mutex::new(State {
-            in_flight: std::collections::HashMap::new(),
+            pending: std::collections::HashMap::new(),
             writes: std::collections::HashMap::new(),
             durable_through: None,
             failures: Vec::new(),
@@ -120,52 +224,46 @@ impl Checkpointer {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let user_data = completion.user_data();
-                if let Some(token) = state.writes.remove(&user_data) {
-                    // The write's own completion. Claiming reclaims the
-                    // buffer; the covering flush is what carries the meaning,
-                    // so nothing else happens here. A failed write is still
-                    // reported, because the flush that follows it would
-                    // otherwise make a checkpoint out of bytes that never
-                    // landed.
-                    match token.claim_if(&completion) {
-                        Ok(_buffer) => {
-                            if let Err(error) = completion.result() {
-                                state
-                                    .failures
-                                    .push(format!("checkpoint record write: {error}"));
-                            }
-                        }
+
+                if let Some((flush, token)) = state.writes.remove(&user_data) {
+                    // The record write. Claiming the token is what returns its
+                    // buffer; the result is recorded against the checkpoint
+                    // rather than acted on here, because the flush may not have
+                    // been observed yet.
+                    let expected = match token.claim_if(&completion) {
+                        Ok(record) => record.len(),
                         Err(token) => {
                             // Cannot happen: the key *is* the token's id.
-                            state.writes.insert(user_data, token);
+                            state.writes.insert(user_data, (flush, token));
+                            return;
                         }
+                    };
+                    let result = match completion.result() {
+                        Err(error) => Err(format!("record write: {error}")),
+                        // A short write is a failure too. The record is fixed
+                        // size and tiny, so a partial one is not a "retry the
+                        // tail" case -- it means what is on disk is not the
+                        // record we composed.
+                        Ok(written) if written != expected => Err(format!(
+                            "record write was short: {written} of {expected} bytes"
+                        )),
+                        Ok(_) => Ok(()),
+                    };
+                    if let Some(pending) = state.pending.get_mut(&flush) {
+                        pending.write_result = Some(result);
                     }
+                    settle(&mut state, flush, &reclaimer);
                     return;
                 }
-                let Some((epoch, reclaim_to)) = state.in_flight.remove(&user_data) else {
-                    return;
-                };
-                if let Err(error) = completion.result() {
-                    state
-                        .failures
-                        .push(format!("checkpoint for epoch {}: {error}", epoch.0));
-                    state.completed += 1;
-                    return;
-                }
-                state.durable_through = Some(state.durable_through.map_or(epoch, |t| t.max(epoch)));
-                state.completed += 1;
 
-                // Step 3: the checkpoint is durable, so the retired segment is
-                // dead and the reclaim may go. This is the ordering the ring
-                // cannot express, issued from a pool thread -- the "background
-                // path driven from the pool" in one line.
-                let mut reclaimer = reclaimer
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if let Err(error) = reclaimer.request(epoch, reclaim_to) {
-                    state
-                        .failures
-                        .push(format!("reclaim request for epoch {}: {error}", epoch.0));
+                if let Some(pending) = state.pending.get_mut(&user_data) {
+                    pending.flush_result = Some(
+                        completion
+                            .result()
+                            .map(|_| ())
+                            .map_err(|error| format!("covering flush: {error}")),
+                    );
+                    settle(&mut state, user_data, &reclaimer);
                 }
             },
             None,
@@ -198,9 +296,11 @@ impl Checkpointer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut batch = Batch::new(&mut ring);
-        // SAFETY: `record` is kept alive in `State::buffers` until the flush
-        // that covers it completes, and `self.handle` outlives this value by
-        // the contract on `new`.
+        // SAFETY: `record` is moved into the token, which is kept alive in
+        // `State::writes` until its own completion is observed and claimed --
+        // so the buffer stays at a stable address for as long as the kernel
+        // may read it. `self.handle` outlives this value by the contract on
+        // `new`.
         let write = unsafe {
             batch.write_raw(
                 self.handle,
@@ -215,6 +315,11 @@ impl Checkpointer {
         // meant to cover (D-23), and a checkpoint that races its own record is
         // worse than no checkpoint -- it authorises a reclaim on the strength
         // of bytes that may not be there.
+        //
+        // Coverage orders execution; it does not aggregate results. So this
+        // flush completing says nothing about whether the write *succeeded* --
+        // which is why both are tracked against one `Pending` and neither is
+        // acted on alone.
         // SAFETY: as above.
         let flush = unsafe {
             batch.flush_raw(
@@ -224,16 +329,26 @@ impl Checkpointer {
             )
         }?;
 
-        // Registered before the submit, so the completion cannot arrive before
+        // Registered before the submit, so a completion cannot arrive before
         // the callback knows what it means. The push assigns `UserData`; only
-        // the submit makes the operation visible to the kernel.
+        // the submit makes the operation visible to the kernel, and the ring
+        // lock is held across both -- so no pool thread can pop either
+        // completion until this registration is visible.
         {
             let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.in_flight.insert(flush, (watermark, reclaim_to));
-            state.writes.insert(write.id(), write);
+            state.pending.insert(
+                flush,
+                Pending {
+                    epoch: watermark,
+                    reclaim_to,
+                    write_result: None,
+                    flush_result: None,
+                },
+            );
+            state.writes.insert(write.id(), (flush, write));
         }
         batch.submit()?;
         Ok(())

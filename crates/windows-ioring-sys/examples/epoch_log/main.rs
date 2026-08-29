@@ -369,6 +369,7 @@ fn run_log<O: io::Write, E: io::Write>(
             woken,
             &mut reclaim_failures,
         ));
+        check_control_plane(&checkpointer)?;
     }
 
     // Phase 2 is where the handle has teeth. Quiesce the ring first, so every
@@ -412,6 +413,7 @@ fn run_log<O: io::Write, E: io::Write>(
             woken,
             &mut reclaim_failures,
         ));
+        check_control_plane(&checkpointer)?;
     }
 
     // The work is done: ask for shutdown and keep pumping until the *other*
@@ -481,8 +483,19 @@ fn run_log<O: io::Write, E: io::Write>(
     // cannot race the worker.
     let reclaimed_for = reclaimed_for.expect("a checkpoint was submitted");
     drop(reclaimer);
-    for failure in checkpointer.failures() {
+
+    // A failure on a pool thread is still a failure. Reporting it and then
+    // continuing to the success line would be the same defect the checkpoint
+    // path itself was fixed for: noticing a problem and not acting on it.
+    let checkpoint_failures = checkpointer.failures();
+    for failure in &checkpoint_failures {
         report.error_line(format_args!("control plane: {failure}"));
+    }
+    if !checkpoint_failures.is_empty() {
+        return Err(io::Error::other(format!(
+            "{} checkpoint failure(s) on pool threads",
+            checkpoint_failures.len()
+        )));
     }
     let checkpoint_watermark = checkpointer
         .durable_through()
@@ -635,6 +648,24 @@ fn await_durable_fused(
         }
     }
     Ok(())
+}
+
+/// Fail fast if the control plane reported a failure on a pool thread.
+///
+/// Without this, a failed checkpoint is not merely unreported -- it *hangs the
+/// waiter*. The log thread is waiting for a reclaim that a pool thread will now
+/// never authorise, so it sits until `WAIT_MS` and then blames the wait
+/// ("no handle signalled") rather than the cause. Checking each pass turns a
+/// 30-second timeout with a misleading message into an immediate, accurate one.
+fn check_control_plane(checkpointer: &Checkpointer) -> io::Result<()> {
+    let failures = checkpointer.failures();
+    if failures.is_empty() {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "control plane failed, so no reclaim will be authorised: {}",
+        failures.join("; ")
+    )))
 }
 
 /// Collect a finished reclamation if one is ready, reporting which arm of the
