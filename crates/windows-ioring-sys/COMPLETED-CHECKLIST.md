@@ -629,3 +629,81 @@ landed, so this milestone is unblocked.
   cannot fail proves nothing, so the sample proves this one can: it reports
   `MissingDurableRecord { reason: ChecksumMismatch }` and the run states out loud that the checker
   which passed the first two cases was shown to be able to fail.
+
+## Moved 2026-08-29 -- M14: crossing the ring boundary, and paying for the barrier
+
+## M14 -- Worked example: crossing the ring boundary, and paying for the barrier
+
+Second half of the example. M13 stays inside the ring; this milestone covers the two things that
+forced the original consumer conversation -- operations the ring cannot express, and the cost of
+[D-24](DESIGN-NOTES.md#d-24)'s full-barrier stall.
+
+**Depends on M13.**
+
+- [x] **M14.1** -- Order a non-ring operation against ring epochs: an `FSCTL`-class operation issued
+  through [`windows-overlapped-io-sys`](../windows-overlapped-io-sys), sequenced at an epoch
+  boundary, with its completion waited on in the *same* multiplexed wait as the ring's. This is the
+  case `drain_preceding` cannot express at all ([D-24](DESIGN-NOTES.md#d-24) orders SQEs against
+  SQEs), and the reason `completion_event` exists. Add the sibling crate as a dev-dependency.
+  **Done:** `examples/epoch_log/reclaim.rs` reclaims a retired segment with `FSCTL_SET_ZERO_DATA`
+  on a worker thread (that backend completes synchronously, which the event loop must not do), and
+  `EventLoop` now waits on three handles. Two measured facts, both sabotage-checked: the reclaim
+  running *alongside* appends does **not** make the third handle load-bearing (ring traffic wakes
+  the loop; removing the handle costs nothing), whereas the idle-path reclaim after the ring
+  quiesces does -- removing it turns a 78 ms run into a 30 s `WAIT_MS` block. The ordering itself
+  is enforced by the log, not the ring, and asserting it before each request makes that checkable.
+
+- [x] **M14.2** -- A control-plane and background path on `windows-threadpool-sys`: checkpointing or
+  reclamation driven from the pool while the pinned log thread keeps the data path. Demonstrates the
+  hybrid the design notes recommend -- Model B on the hot path, Model A for everything else -- in one
+  program, which nothing in the crate currently shows. **Must also add an explicit `[[example]]`
+  entry for `epoch_log` with `required-features = ["threadpool"]`** (found while doing M13.1): the
+  sample uses no thread pool through M13, so it builds under `--no-default-features` today, and the
+  moment this item introduces `EventDelivery` it stops -- which the `ioring-no-threadpool` CI job
+  from M11.4 will catch as a build failure rather than a warning.
+  **Done:** `examples/epoch_log/checkpoint.rs` runs the checkpoint on a *second* ring handed to
+  `EventDelivery`; the pool thread that sees the covering flush complete is what authorises the
+  reclaim, so the chain crosses log thread -> pool thread -> reclaim worker -> log thread with the
+  log thread blocking for none of it. Two rings rather than one is forced by
+  [D-21](DESIGN-NOTES.md#d-21), not chosen. The `[[example]]` entry was added and its necessity
+  verified: removing it makes `cargo check --all-targets --no-default-features` fail with
+  `unresolved import windows_ioring_sys::EventDelivery`, which is exactly what the M11.4 job runs.
+
+- [x] **M14.3** -- Implement all three epoch-commit strategies from "Durability on the ring" behind
+  one interface, selectable at run time: covering flush (ring stalls), host sequencing (a userspace
+  round trip per epoch), and alternating rings (neither, at the cost of doubled registration). The
+  point is that [D-24](DESIGN-NOTES.md#d-24) makes this a real fork with no free answer, and a
+  reader needs to see all three to choose.
+  **Done:** `examples/epoch_log/strategy.rs`. All three run the same workload and are checked two
+  ways: each log replays clean, and all three must be **byte-identical** to each other. Both checks
+  were sabotage-verified (a shifted offset trips replay; a dropped epoch trips byte-identity). The
+  limit is stated in the code rather than papered over -- neither check can observe whether the
+  ordering held on the *device*, which is only visible across a power cut, so the strategies are
+  argued from [D-23](DESIGN-NOTES.md#d-23)/[D-24](DESIGN-NOTES.md#d-24) rather than from a clean run.
+
+- [x] **M14.4** -- Measure the three strategies on the running machine and print the comparison:
+  throughput, commit latency distribution, and ring idle time during the barrier. The example should
+  *demonstrate* the trade-off rather than assert it, and the numbers are machine-specific enough that
+  quoting ours would be misleading.
+  **Done:** throughput, commit-latency quantiles, and append stall are measured per strategy and
+  printed with an explicit "these describe THIS machine" note. The finding is that on this machine
+  the three are **indistinguishable** -- the cross-strategy spread (1.08x-1.72x) is the same size as
+  one strategy's run-to-run spread (1.42x) -- because every strategy pays one device flush per epoch
+  at hundreds of microseconds while their actual differences land in the tens. The program computes
+  and states that from its own data rather than hard-coding a ranking. Measurement also **found two
+  harness bugs** that no other check caught: a single deferred-commit slot shared by two lanes (so
+  half the commits were never awaited and `durable_through` was a claim), and pending commits keyed
+  by `UserData` in one map across two rings whose sequences collide. Both are recorded in
+  `strategy.rs` because both are easy to repeat.
+
+- [x] **M14.5** -- Document the example: a module-level walkthrough, a pointer from `README.md` and
+  from the "Durability on the ring" section of [DESIGN-NOTES.md](DESIGN-NOTES.md), and an explicit
+  statement that it is a demonstration of a pattern rather than a supported API -- so that nobody
+  vendors it and then expects this crate to maintain its policy choices.
+  **Done:** `main.rs` opens with the not-API statement and its reasoning (D-8/D-26), a module table
+  giving each file's job *and the contract behind it*, what one run does, and two things the sample
+  cannot show. `README.md` points at the example from the Durability section and gains an "the
+  examples are demonstrations, not API" subsection under Cargo features.
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) gains a subsection at the end of "Durability on the ring" that
+  also promotes M14.4's two findings out of the sample, since both are about the design rather than
+  about the demonstration.
