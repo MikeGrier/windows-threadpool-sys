@@ -312,7 +312,7 @@ wait on the state-space work.
   *derived* by a `const fn` Newton iteration, which makes that class of error unrepresentable rather than
   merely tested for.
 
-- [ ] **M15.3** -- Verify the poison at the points where the *kernel* is the suspect, which is the gap guard
+- [x] **M15.3** -- Verify the poison at the points where the *kernel* is the suspect, which is the gap guard
   pages structurally cannot cover: a guard page only catches access to memory that should not be touched at
   all, and says nothing about the kernel writing into a live, valid allocation. Both checks below are
   invariants this crate asserts in prose today and verifies nowhere:
@@ -324,6 +324,17 @@ wait on the state-space work.
     wrong.
   Sabotage-verify each by deliberately submitting a span narrower than the write, and by mutating a slot
   mid-flight.
+  **Done:** `tests/kernel_span.rs`, five tests. Both named checks, plus two the item did not anticipate: a
+  **short read** must leave the unfilled remainder of its span poison (the span is a permission, not a
+  promise, so `information` is the only thing that says where real data stops), and a read into one slot must
+  leave its **neighbours** untouched -- which is what per-slot ordinals buy over a single constant, since a
+  write landing in the wrong slot is visible as such rather than merely as "something changed".
+  All four assertions were sabotage-verified individually and each named the right failure: a byte before the
+  span, a byte past its end, a modified write source, and a disturbed neighbour. Every message carries the
+  seed, so a failure is replayable per [D-39](DESIGN-NOTES.md#d-39).
+  **Note the checks cut both ways**, which is worth more than the kernel-conformance reading: the offset the
+  kernel receives is computed by *this* crate in `checked_span`, so an off-by-one there fails these tests
+  exactly as a kernel bug would -- and is otherwise as invisible as one.
 
 - [ ] **M15.4** -- Verify poison at quiescence too: at teardown every registered buffer's never-written
   regions still hold their expected pattern, and no buffer that was only ever a write source has changed.
