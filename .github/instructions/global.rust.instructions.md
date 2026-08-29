@@ -96,11 +96,11 @@ before `git commit`. This is the full form of the gate summarised in
    first.
 
 Tests must pass before committing. A pre-existing failure unrelated to the
-current change does not block the commit but must first be recorded in the
-nearest `UNRESOLVED-TEST-FAILURES.md` -- a per-component file, created next to
-the component's `CHECKLIST.md` if it does not yet exist. The only one that
-currently exists is
-[crates/windows-file-watcher/UNRESOLVED-TEST-FAILURES.md](../../crates/windows-file-watcher/UNRESOLVED-TEST-FAILURES.md).
+current change does not block the commit, but must first be recorded in the
+nearest `UNRESOLVED-TEST-FAILURES.md`. That file is per-component rather than
+repository-root; [copilot-instructions.md](../copilot-instructions.md) states
+where it goes and how a resolved entry is later moved, and is the one place to
+change if that convention ever does.
 
 ## Testing
 
