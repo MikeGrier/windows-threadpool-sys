@@ -240,7 +240,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo doc (deny broken intra-doc links)
         env:
-          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+          # invalid_rust_codeblocks is denied because it is the lint that catches a
+          # doc-comment code fence which never closes -- typically a sentence welded
+          # onto the closing ``` by a mis-joined edit, which swallows the prose after
+          # it into the example and corrupts the rendered page. Three of those reached
+          # review in windows-namespace-request-sys while this job passed, because it
+          # denied only the link lints and rustdoc reports this one as a warning.
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links -D rustdoc::invalid_rust_codeblocks"
         run: cargo doc --workspace --no-deps --all-features --locked
 
   msrv:

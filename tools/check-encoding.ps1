@@ -133,15 +133,25 @@ foreach ($file in $files) {
         continue
     }
 
-    # 3. Must not glue a doc-comment marker onto the end of a line of code.
+    # 3. Must not glue a doc-comment marker onto a non-space character.
     #
     #    `let x = 1;///` compiles -- it is only an `unused_doc_comment`
     #    warning, and doctest warnings do not fail a build -- so this survives
     #    every check the toolchain applies. It is never intentional: it is what
     #    a mis-joined edit looks like, and one lived in a doc example for nine
     #    review rounds before being spotted by eye.
+    #
+    #    The pattern deliberately does NOT anchor to end of line. It did once,
+    #    and that let a second variant of the same damage through: a closing
+    #    doc-comment code fence with a relocated sentence welded to it, as in
+    #    ```/// general form for a call whose convention is none of those.
+    #    Three of those reached review in windows-namespace-request-sys, each
+    #    leaving its own `# Errors` section truncated or empty where the moved
+    #    text had come from. Matching `///` after any non-space character costs
+    #    nothing -- it is zero-hit across this repository when clean -- and
+    #    covers both shapes.
     if ([System.IO.Path]::GetExtension($file) -eq '.rs') {
-        $glued = [regex]::Match($text, '(?m)^.*\S///\s*$')
+        $glued = [regex]::Match($text, '(?m)^.*\S///.*$')
         if ($glued.Success) {
             $prefix = $text.Substring(0, $glued.Index)
             $line = ($prefix -split "`n").Count

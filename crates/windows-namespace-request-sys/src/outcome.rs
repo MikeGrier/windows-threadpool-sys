@@ -122,6 +122,7 @@ pub type Outcome<T> = Result<T, Win32Error>;
 /// conventions differ per call and none of them is inferable from the type. The
 /// three the catalogue actually meets have named forms:
 /// [`perform_bool`], [`perform_handle`], and [`perform_nonzero`]. Use this
+/// general form for a call whose convention is none of those.
 ///
 /// # Example
 ///
@@ -153,7 +154,7 @@ pub type Outcome<T> = Result<T, Win32Error>;
 ///     outcome.expect_err("a negative result is a failure").code(),
 ///     ERROR_FILE_NOT_FOUND
 /// );
-/// ```/// general form for a call whose convention is none of those.
+/// ```
 pub fn perform<T>(call: impl FnOnce() -> T, failed: impl FnOnce(&T) -> bool) -> Outcome<T> {
     let result = call();
 
@@ -186,6 +187,7 @@ pub fn perform_bool(call: impl FnOnce() -> i32) -> Outcome<()> {
 ///
 /// # Errors
 ///
+/// Returns the raw Win32 code when the call returns `INVALID_HANDLE_VALUE`.
 ///
 /// # Example
 ///
@@ -206,7 +208,7 @@ pub fn perform_bool(call: impl FnOnce() -> i32) -> Outcome<()> {
 /// // Under the null convention, the two swap.
 /// assert!(perform_nonnull_handle(|| INVALID_HANDLE_VALUE).is_ok());
 /// assert!(perform_nonnull_handle(ptr::null_mut).is_err());
-/// ```/// Returns the raw Win32 code when the call returns `INVALID_HANDLE_VALUE`.
+/// ```
 pub fn perform_handle(call: impl FnOnce() -> HANDLE) -> Outcome<HANDLE> {
     perform(call, |result| *result == INVALID_HANDLE_VALUE)
 }
