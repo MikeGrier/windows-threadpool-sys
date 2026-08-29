@@ -417,8 +417,15 @@ pub fn run(
     // outstanding commit is overwritten the moment lane 1 pushes its own, and
     // is then never awaited -- so `durable_through` becomes a claim rather
     // than an observation. That was the shape of this code until M14.4's
-    // measurement showed a commit-latency sample count of one, which no
-    // correct run could produce.
+    // measurement exposed it.
+    //
+    // Do not rely on the commit-latency count below to catch a regression
+    // here: in this loop's current shape it stays at `epochs` even with a
+    // shared slot, because every iteration still settles exactly one commit --
+    // just not always the right one. Verified by re-running that sabotage. The
+    // guard that does catch it belongs to the crate: an un-awaited commit is
+    // still referencing the lane's registered arena when `Lane` drops, and the
+    // drop panics.
     //
     // The push instant lives here too, rather than in a map keyed by
     // `UserData`. Each ring assigns its own `UserData` sequence, so the two
@@ -488,10 +495,6 @@ pub fn run(
             }
         };
         let user_data = lanes[lane_index].commit(file, coverage)?;
-        debug_assert!(
-            deferred[lane_index].is_none(),
-            "a lane's previous commit must be settled before it takes another epoch"
-        );
         deferred[lane_index] = Some((user_data, Instant::now()));
     }
 
@@ -503,9 +506,30 @@ pub fn run(
             commit_latencies.push(pushed.elapsed());
         }
     }
-    // Every epoch produced exactly one commit, and every commit must have been
-    // observed. Checked rather than assumed: the missing-settle bug above was
-    // invisible to replay, and this is what would have caught it.
+    // One observation per epoch. Cheap, and it binds a real invariant -- but be
+    // precise about which one, because this comment previously overclaimed.
+    //
+    // It fires when a settle is *skipped altogether*, which is how the original
+    // per-lane bug showed up (16 of 32) in an earlier shape where the settle sat
+    // at the top of the loop and a lane mismatch could pass it by. It does
+    // **not** catch that bug in the current shape: with the settle immediately
+    // before the push, every iteration settles exactly one commit, so restoring
+    // the single shared `deferred` slot keeps this count at `epochs` while
+    // settling the *wrong* commits -- some twice, some never. Measured, not
+    // assumed: that sabotage was re-run against this code and this assertion
+    // passed.
+    //
+    // What does catch it is the crate's own guard. A commit left un-awaited is
+    // still referencing the lane's registered arena at drop, and `Lane`'s drop
+    // panics with "RegisteredBuffers dropped while an operation still
+    // references it". That is the load-bearing detector here, and it lives in
+    // the layer that owns the invariant rather than in this harness.
+    //
+    // An earlier revision also carried a per-lane
+    // `debug_assert!(deferred[lane].is_none())` just before the push. That one
+    // could never fire at all -- the settle above it calls `Option::take`, which
+    // empties the slot whether or not the `if let` binds -- so it was removed
+    // rather than left to look like a guard.
     assert_eq!(
         commit_latencies.len(),
         epochs,
