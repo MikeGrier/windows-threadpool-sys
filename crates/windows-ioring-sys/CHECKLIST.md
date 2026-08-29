@@ -273,12 +273,34 @@ M12.1 is first because it is a correctness defect in shipped 0.1.2, not an enhan
 
   **Breaking change**: both flush entry points changed signature.
 
-- [ ] **M12.2** -- A test proving the contract rather than the implementation: writes plus an
-  *unordered* flush must be observable completing out of order (the spike sees 17-23 of 32), while
-  writes plus a *covering* flush must always place the flush last. Needs the spike's conditions --
-  `FILE_FLAG_NO_BUFFERING` over a pre-written extent -- because buffered or extending writes complete
-  in submission order and make the test vacuous. Guard it so that a machine where the control shows
-  no reordering skips rather than falsely passing.
+- [x] **M12.2** -- [tests/flush_barrier.rs](tests/flush_barrier.rs) proves the barrier *behaviour*,
+  not the flag. The unit test in [src/batch/tests.rs](src/batch/tests.rs) pins the enum-to-SQE-flag
+  mapping, which shows the flag is set but not that setting it changes what the kernel does; this
+  reproduces the D-23 shape against a real device and asserts the difference. Verified by sabotage --
+  mapping `CoversPrecedingOperations` to `IOSQE_FLAGS_NONE` fails it on behaviour, not on a flag
+  comparison.
+
+  All three of the spike's failed iterations are encoded as requirements rather than left to be
+  rediscovered: `FILE_FLAG_NO_BUFFERING` (buffered writes finish in issue order), a pre-written extent
+  (extending writes serialize), and a **size asymmetry** between the two phases (uniform sizes do not
+  reorder). The third was not in the item's text and cost a full rewrite to find: a first version used
+  32 uniform writes and one flush, and skipped on this machine because it could observe nothing.
+
+  **The measurement disagreed with D-23, and the disagreement is now recorded rather than smoothed
+  over.** On this machine *no* preceding write ever completed after an unflagged flush -- 0 of 32,
+  against the spike's 17 and 23 -- yet 11 of 32 writes queued *after* the flush completed before it.
+  Reordering was plainly happening; it just did not manifest as the flush overtaking the writes ahead
+  of it. So the control accepts *either* direction of reordering and skips only when it sees neither;
+  requiring D-23's specific observable would have made the test silently vacuous here.
+  [D-23](DESIGN-NOTES.md#d-23) now carries the amendment, and "The two measured facts" states the
+  consumer-facing consequence: **observing that your flush lands last is not evidence you can omit the
+  barrier** -- it is incidental behavior of one device stack, which is exactly what PLATFORM INTEGRITY
+  says never to bind to.
+
+  The covering case also asserts [D-24](DESIGN-NOTES.md#d-24)'s other half (writes queued after a
+  drained flush are held until it completes), which is the observable that actually discriminates on
+  this hardware. Short-write detection guards the whole thing: an unbuffered write with a misaligned
+  offset or length would otherwise make every count meaningless.
 
 - [ ] **M12.3** -- Expose `FILE_WRITE_FLAGS` on the write entry points
   ([D-25](DESIGN-NOTES.md#d-25)), as a typed option rather than a raw flag word. Rustdoc must state
