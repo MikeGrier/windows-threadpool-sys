@@ -524,9 +524,11 @@ instead prove it reached the state it claims to exercise.
   inherent non-determinism excuses *irreproducibility*, never *unverifiability*, so an unreplayable test must
   prove it reached the state it claims to exercise. M17.1 is cited as the worked example of both halves -- its
   racing draft decayed into testing the easier state, and its replacement guards against exactly that.
-  No dev-dependency is added here; `proptest` arrives with the generator in M17.3, which this unblocks.
+  No dev-dependency is added here. D-41 permits randomized property testing without mandating a particular
+  crate, and M17.3 went on to satisfy its terms with a seeded `SplitMix64` rather than `proptest` -- see that
+  item for why.
 
-- [ ] **M17.3** -- Model the operation space as data: operation kind, buffer kind (owned / registered), file
+- [x] **M17.3** -- Model the operation space as data: operation kind, buffer kind (owned / registered), file
   target kind (raw / shared / registered), claim-or-drop, drain-now-or-later, and handover state. A generator
   over *sequences* of these, each sequence checked against `RingContract`. The harness **must run under
   `windows-guard-alloc` with poison enabled**: if it does not, generated sequences are checked for conservation
@@ -539,6 +541,39 @@ instead prove it reached the state it claims to exercise.
   applies, so any such sequence must **verify it reached the state it claims**, not merely fail to crash. Note
   the guard allocator's seed and the generator's are two separate knobs and must not be conflated in the
   announcement, or a replay will reproduce one and not the other.
+  **Done:** [tests/generated_sequences.rs](tests/generated_sequences.rs). 128 sequences per run, ~650
+  operations, all 15 reachable shapes, under the guard allocator and checked against `RingContract`.
+  **No `proptest`.** D-41 permits randomized property testing without naming a crate. Its terms are that one
+  number replays a whole run and is pinnable from the environment; `proptest`'s model is a persisted
+  regression file plus per-case seeds, a different shape, and its headline feature -- shrinking -- earns its
+  keep on long sequences. These cap at 10 steps and print every one, so a failure already arrives readable. A
+  seeded `SplitMix64` over one `u64` serves the stated terms exactly. If the step cap is ever raised
+  substantially, shrinking stops being redundant and the choice should be revisited; that condition is
+  recorded in the file's module doc rather than left implicit.
+  **Seeding verified end to end:** two runs pinned to the same pair of seeds produced byte-identical coverage;
+  a different seed produced different sequences; both decimal and `0x` hex parse. The two seeds are
+  independent knobs and both are announced with the replay command.
+  **The generator is self-verifying, per D-41's corollary.** A green run proves nothing unless it shows which
+  states it reached, so the test asserts every shape appeared, plus at least one deliberate drop, one
+  mid-sequence drain, and one attach against a ring with work outstanding (#47's own axis). Sequence count is
+  set *by* that assertion rather than by taste: at 48 the rarest shape (flush against a registered file, 3.3%
+  of operations) would be missed about 1 run in 4000 and flake CI; 128 puts that at ~3e-10.
+  **The first run found a defect in the generated program, not the ring.** It emitted a registered-buffer
+  operation whose token was deliberately dropped, and `RegisteredBuffers`'s drop guard fired.
+  `read_registered_raw`'s rustdoc already states that token "must be claimed", because claiming is the only
+  thing that releases the use -- `Token`'s drop is deliberately empty (D-4), so dropping instead pins that
+  buffer index for ever. Claim-or-drop is therefore a free axis only for owned buffers, which the generator
+  now encodes alongside the existing rule that two live operations never share one registered buffer index.
+  **Calibrated by sabotage, which also exposed a defect in the harness:** removing `RegisteredUse::drop`'s
+  `outstanding` decrement -- D-32's own class of bug -- is caught and reported as
+  `BufferStillInUse { index: 0, outstanding: 1 }` with the seed and the step that did it. The first attempt
+  reported it as a bare `debug_assert` from inside the crate instead, because the registration's drop guard
+  fires *while the error is being returned* and masked the diagnostic. The failure path now forfeits the
+  registration deliberately -- the same leak-not-free choice the crate makes in release -- so the report
+  survives. An instrument whose failure output names neither sequence, step, nor seed is barely an instrument.
+  Note this sabotage is a *smoke test* that the harness is not inert, not the calibration M17.4 requires:
+  it shows the oracle reports a fault injected into buffer accounting, not that the generator can emit the
+  shapes that trigger the defects which actually shipped.
 
 - [ ] **M17.4** -- Calibrate the generator before its green result is allowed to count. Show that it
   rediscovers a defect known to be real -- #47's handover shape, or D-32's registration timing -- when the fix
