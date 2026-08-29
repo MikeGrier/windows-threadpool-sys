@@ -104,10 +104,19 @@ currently exists is
 
 ## Testing
 
-Prefer `cargo_nextest_run` for unit and integration tests where cargo-nextest is
-available, falling back to `cargo_test`. Either way nextest does **not** run
-doctests, so run those separately with `cargo_test` and `doc: true`. A milestone
-is not complete while any doc test fails or is unrun.
+Use `cargo_test`. This workspace does not use cargo-nextest -- it is not
+installed, there is no `.config/nextest.toml`, and the CI jobs that run tests all
+use `cargo test`. That is deliberate rather than incidental: the two runners isolate
+differently (nextest gives each test its own process, `cargo test` runs tests as
+threads in one), and tests here are written for the latter. See
+[copilot-instructions.md](../copilot-instructions.md) and the case recorded in
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md) before proposing a change.
+
+An **unfiltered** `cargo_test` runs doctests too; confirm the `Doc-tests <crate>`
+line appears in its stderr. A **filtered** run (`test_filter` or `test_name`)
+executes the compiled libtest binaries directly and so skips doctests entirely --
+after one, run `cargo_test` with `doc: true` separately. A milestone is not
+complete while any doc test fails or is unrun.
 
 This repository targets a single operating system, so depending on Windows does
 not by itself make a test an integration test. Placement is decided by duration

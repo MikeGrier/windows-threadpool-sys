@@ -386,12 +386,29 @@ non-blank line is a JSON object. The `reason` field identifies the record type:
 behaviour). `eprintln!` bypasses libtest capture and always appears in
 `x-cargo-mcp-stderr`.
 
-### Recommended: cargo-nextest
+### This workspace runs `cargo test`, not cargo-nextest
 
-This workspace contains a `.config/nextest.toml`, so prefer `cargo_nextest_run`
-over `cargo_test` for unit and integration tests. Use `cargo_test` only for
-**doctests** (nextest does not run them). `cargo_nextest_list` enumerates tests as
-structured JSON when you need discovery without execution.
+**Use `cargo_test`.** There is no `.config/nextest.toml` here, cargo-nextest is not
+installed, and no CI job invokes it — the jobs that run tests all use `cargo test`.
+An earlier version of this section claimed the opposite; it was generic guidance that
+never matched this repository.
+
+This is not merely a missing tool, so do not "fix" it by adding one. The two runners
+have different isolation models — nextest gives each test its own **process**, while
+`cargo test` runs tests as **threads in one process** — and this workspace's tests are
+written for the latter on purpose. [DESIGN-NOTES.md](../DESIGN-NOTES.md) records the
+case that forced it: a close routine is a bare `extern "system"` pointer that cannot
+capture, so its observation state must live in a `static`, and those statics are
+declared *inside* each test function rather than at module scope precisely because a
+module-scope counter would be corrupted by another test closing a handle concurrently.
+Under nextest that hazard would not exist; under `cargo test`, which is what CI runs,
+it does.
+
+So adopting nextest would be a deliberate change to CI and to the model the tests are
+written against — a decision to raise, not a gap to close in passing.
+
+`cargo_nextest_run` and `cargo_nextest_list` remain in the tool table above because the
+MCP server exposes them; they will fail here until cargo-nextest is installed.
 
 ## Scratch directory for temporary files
 
@@ -1054,10 +1071,13 @@ as checklist items:
    hang. `--all-targets` (tests/examples/benches) is fine and expected; `--workspace`
    (all members) is not.
 2. **Test only the in-scope crate / source-component**, not the whole default workspace.
-   **Include documentation tests**, not just unit and integration tests. For Rust,
-   cargo-nextest does **not** run doc tests, so run them separately with `cargo_test`
-   (`doc: true`, i.e. `cargo test --doc`) for the in-scope crate in addition to the
-   nextest run; a milestone is not complete while any doc test fails or is unrun.
+   **Include documentation tests**, not just unit and integration tests. For Rust, an
+   *unfiltered* `cargo_test` already runs them -- look for the `Doc-tests <crate>`
+   line in its stderr and a matching `test result:` line. A **filtered** run does not:
+   `test_filter` and `test_name` execute the compiled libtest binaries directly, and
+   doctests live in none of them. So after any filtered run, do a separate
+   `cargo_test` with `doc: true` (i.e. `cargo test --doc`) for the in-scope crate. A
+   milestone is not complete while any doc test fails or is unrun.
 3. **Sync with origin**: `git fetch`, then merge or rebase the current branch on top
    of the updated upstream tip (`--no-edit`), resolving any conflicts, then push.
    Pushing is permitted at milestone boundaries without further confirmation; outside
