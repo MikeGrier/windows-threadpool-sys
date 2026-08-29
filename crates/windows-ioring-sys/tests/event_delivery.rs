@@ -2,7 +2,9 @@
 //! End-to-end test of Model A delivery: the completion event wired to the
 //! thread pool (M4.4).
 
-#![cfg(windows)]
+// `EventDelivery` is behind the default-on `threadpool` feature (D-22), so
+// this whole file compiles out with `--no-default-features`.
+#![cfg(all(windows, feature = "threadpool"))]
 
 use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;

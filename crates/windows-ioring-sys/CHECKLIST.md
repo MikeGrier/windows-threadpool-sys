@@ -315,10 +315,33 @@ would mean writing a `SetEvent`-after-arm patch that M11.3 immediately deletes.
   [D-21](DESIGN-NOTES.md#d-21) violation. Worth stating because the same call was previously worse and
   equally silent -- it replaced the pool's event and stopped delivery outright.
 
-- [ ] **M11.4** -- Gate `windows-threadpool-sys` behind a default-on `threadpool` feature
-  ([D-22](DESIGN-NOTES.md#d-22)), with `EventDelivery` and its tests behind the same gate, and extend CI to
-  build and test **both** feature combinations. The second combination is the whole point: without it the
-  `default-features = false` path rots silently.
+- [x] **M11.4** -- `windows-threadpool-sys` is now optional behind a default-on `threadpool` feature
+  ([D-22](DESIGN-NOTES.md#d-22)). Gated with it: the `event_delivery` module and its unit tests, the
+  `EventDelivery` re-export, [tests/event_delivery.rs](tests/event_delivery.rs), and
+  [examples/model_a_delivery.rs](examples/model_a_delivery.rs) -- the example via an explicit
+  `[[example]]` with `required-features`, so cargo *skips* it rather than failing to compile it.
+  Verified non-vacuous by `cargo tree`: `windows-threadpool-sys` disappears from the graph entirely
+  under `--no-default-features`, and the other two examples still auto-discover and build.
+
+  CI gained an `ioring-no-threadpool` job, which is the cost D-22 accepted the gate with: nothing else
+  in the workflow builds that configuration, because every `--workspace` step uses the default set and
+  `--all-features` turns the gate back on. It runs build, clippy `-D warnings`, test, and doc for
+  `--no-default-features`, plus isolated default-feature clippy and test steps (selecting the crate
+  alone, so `--workspace` feature unification cannot mask a gap -- the same reason
+  `windows-file-watcher` has isolated steps).
+
+  The `cargo doc` step is there because of a defect this item found rather than by symmetry: the
+  crate's ungated "Choosing a delivery architecture" prose intra-doc-linked ``[`EventDelivery`]``,
+  which resolves under `--all-features` and *dangles* without the feature. The repo-wide `docs` job
+  only documents `--all-features`, so it could never have caught it. The link is now plain code naming
+  the feature, matching how `windows-overlapped-io-sys` avoids linking its own gated items from ungated
+  prose; the failure was confirmed by restoring the link and watching
+  `cargo doc --no-default-features` fail with `unresolved link to EventDelivery`.
+
+  Also documented for consumers: a Cargo-features table in [README.md](README.md) with the
+  `default-features = false` snippet and D-22's actual rationale -- layering, not runtime cost, since
+  linking the thread-pool crate creates no threads (the Win32 default pool is process-wide and lazily
+  instantiated).
 
 - [ ] **M11.5** -- Document the wakeup shapes and both contract gaps across every place that states them --
   `lib.rs`'s "Choosing a delivery architecture", `README.md`, and the "Two delivery architectures" section

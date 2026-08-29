@@ -18,6 +18,28 @@ categories = ["api-bindings", "os::windows-apis", "filesystem"]
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = ["threadpool"]
+# Model A delivery (`EventDelivery`) is the only thing in this crate that needs
+# a thread pool, so a Model B consumer -- a pinned thread parked in
+# `Batch::submit_and_wait`, owning its own ring -- otherwise links a dependency
+# it never calls (D-22). Default-on keeps the gate additive: no existing
+# consumer is affected, and opting out is `default-features = false`.
+#
+# The justification is layering, not runtime cost: linking
+# `windows-threadpool-sys` creates no threads, because the Win32 default pool is
+# a process-wide facility instantiated lazily on first use. A ring wrapper simply
+# does not intrinsically depend on a thread pool.
+threadpool = ["dep:windows-threadpool-sys"]
+
+# `--no-default-features` drops `EventDelivery`, which this example is entirely
+# about, so declare the requirement rather than letting the build break. Cargo
+# skips the example instead of failing to compile it.
+[[example]]
+name = "model_a_delivery"
+path = "examples/model_a_delivery.rs"
+required-features = ["threadpool"]
+
 # The crate is Windows-only, so docs.rs must build on a Windows target or it
 # would render an almost-empty crate.
 [package.metadata.docs.rs]
@@ -38,8 +60,9 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_System_Threading",
 ] }
 # The Model A delivery path (M4): a `ThreadpoolWait` on the ring's completion
-# event.
-windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys" }
+# event. Optional behind the default-on `threadpool` feature (D-22); nothing
+# else in the crate references it.
+windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys", optional = true }
 
 [dev-dependencies]
 # M6.3's topology-guidance example enumerates L3 cache domains with this

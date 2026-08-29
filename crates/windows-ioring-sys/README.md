@@ -37,7 +37,7 @@ println!("read {} bytes", buffer.len());
 # Ok::<(), std::io::Error>(())
 ```
 
-[`EventDelivery`] wires completions to the thread pool instead, so no thread
+`EventDelivery` wires completions to the thread pool instead, so no thread
 ever calls `try_pop` itself; see `examples/model_a_delivery.rs` for that shape,
 and the "Choosing a delivery architecture" section below for when to reach for
 each.
@@ -97,6 +97,28 @@ Most real applications want Model B on the hot data path and Model A everywhere
 else -- the control plane, background work, cold paths -- where the thread
 pool's quiescence is worth more than locality. This crate supports both as
 first-class; neither is a degraded form of the other.
+
+## Cargo features
+
+| Feature | Default | What it adds |
+|---|---|---|
+| `threadpool` | on | `EventDelivery` (Model A), and with it the dependency on `windows-threadpool-sys`. |
+
+`EventDelivery` is the only item in this crate that needs a thread pool, so a
+Model B consumer -- one pinned thread per domain, parked in
+`Batch::submit_and_wait`, owning its own ring -- otherwise links a dependency it
+never calls. Turning the feature off drops that dependency entirely:
+
+```toml
+[dependencies]
+windows-ioring-sys = { version = "0.1", default-features = false }
+```
+
+The gate is justified on layering rather than runtime cost: linking
+`windows-threadpool-sys` creates no threads, because the Win32 default pool is a
+process-wide facility instantiated lazily on first use. A ring wrapper simply
+does not intrinsically depend on a thread pool. Default-on keeps the change
+additive, so no existing consumer has to do anything.
 
 ## Topology guidance
 

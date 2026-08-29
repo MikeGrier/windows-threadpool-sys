@@ -37,10 +37,14 @@
 //!
 //! **Model A -- shared queue, kernel load-balances.** A pool of threads waits;
 //! work is handed to whichever thread the system picks next. This is
-//! [`EventDelivery`]: the ring's completion event wired to a thread-pool wait,
+//! `EventDelivery`: the ring's completion event wired to a thread-pool wait,
 //! so no thread of yours ever blocks on I/O. Load balancing is automatic and
-//! locality is incidental -- start here. See
-//! `examples/model_a_delivery.rs` for a full worked example (M6.2).
+//! locality is incidental -- start here. It lives behind the default-on
+//! `threadpool` feature, so a Model B consumer can drop the thread-pool
+//! dependency entirely with `default-features = false` (D-22); it is named
+//! here rather than linked because a link would dangle in that
+//! configuration. See `examples/model_a_delivery.rs` for a full worked
+//! example (M6.2).
 //!
 //! **Model B -- shared-nothing execution domains.** One pinned thread per
 //! domain, owning its ring, its buffer pool, and its shard of the
@@ -114,7 +118,7 @@ mod buf;
 mod capability;
 #[cfg(windows)]
 mod error;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "threadpool"))]
 mod event_delivery;
 #[cfg(windows)]
 mod ring;
@@ -132,7 +136,7 @@ pub use buf::{IoBuf, IoBufMut};
 pub use capability::{Capabilities, RingVersion, capabilities};
 #[cfg(windows)]
 pub use error::{IoRingError, IoRingErrorExt, RingCondition};
-#[cfg(windows)]
+#[cfg(all(windows, feature = "threadpool"))]
 pub use event_delivery::EventDelivery;
 #[cfg(windows)]
 pub use ring::{Completion, IoRing, Op, RingInfo};
