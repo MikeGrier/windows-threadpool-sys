@@ -38,15 +38,58 @@ fn thread_has_token() -> bool {
 }
 
 /// Give the calling thread a token for the duration of `body`.
+///
+/// Reverts even when `body` panics. That is not defensive tidiness: with
+/// `--test-threads=1` libtest runs tests inline on the calling thread, so a
+/// panic here would leave *that* thread impersonating and every later test
+/// would inherit the token. `capture_yields_present_even_when_the_thread_is_not_impersonating`
+/// asserts the opposite as its precondition, so the first failure would be
+/// followed by a cascade of unrelated ones, and the original cause would be
+/// the least visible thing in the output.
 fn while_impersonating<T>(body: impl FnOnce() -> T) -> T {
     // SAFETY: no preconditions; paired with `RevertToSelf` below.
     let ok = unsafe { ImpersonateSelf(SecurityImpersonation) };
     assert!(ok != 0, "ImpersonateSelf failed");
-    let outcome = body();
+
+    // AssertUnwindSafe: the only state `body` could leave torn that matters
+    // here is the thread token, and restoring it is exactly what this function
+    // does next, on both paths.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+
     // SAFETY: no preconditions.
     let reverted = unsafe { RevertToSelf() };
-    assert!(reverted != 0, "RevertToSelf failed");
-    outcome
+    match outcome {
+        Ok(value) => {
+            assert!(reverted != 0, "RevertToSelf failed");
+            value
+        }
+        // The body's failure is the interesting one. Asserting on a revert
+        // failure here would replace it and hide the cause.
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+#[test]
+fn a_panicking_body_still_reverts_the_thread() {
+    // Pins the panic-safety of the helper above rather than trusting it. The
+    // failure this prevents is silent and misattributed: with
+    // `--test-threads=1` libtest runs tests inline on the calling thread, so a
+    // token leaked by one panicking test is inherited by every later one, and
+    // the resulting cascade buries the original cause.
+    let outcome = std::panic::catch_unwind(|| {
+        while_impersonating(|| -> () {
+            panic!("the body fails while the thread holds a token");
+        });
+    });
+
+    assert!(
+        outcome.is_err(),
+        "the panic must still propagate to the caller"
+    );
+    assert!(
+        !thread_has_token(),
+        "and the thread must not have been left impersonating"
+    );
 }
 
 #[test]

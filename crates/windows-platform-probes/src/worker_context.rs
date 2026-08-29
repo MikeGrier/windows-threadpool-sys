@@ -21,7 +21,8 @@ use std::sync::mpsc::{Sender, channel};
 
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_TOKEN, GetLastError, HANDLE};
 use windows_sys::Win32::Security::{
-    DuplicateTokenEx, RevertToSelf, SecurityImpersonation, TOKEN_ALL_ACCESS, TokenImpersonation,
+    DuplicateTokenEx, RevertToSelf, SecurityImpersonation, TOKEN_ALL_ACCESS, TOKEN_QUERY,
+    TokenImpersonation,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::GetThreadErrorMode;
 use windows_sys::Win32::System::Threading::{
@@ -90,12 +91,27 @@ impl IdentityAsymmetry {
 }
 
 /// Reads the calling thread's ambient state.
+///
+/// # Why the token is opened for `TOKEN_QUERY` only
+///
+/// This asks one question: is there a token at all? `TOKEN_QUERY` is the least
+/// access that answers it. Asking for `TOKEN_ALL_ACCESS` -- which this did
+/// until a review caught it -- makes the call fail with `ERROR_ACCESS_DENIED`
+/// against a token that exists but does not grant everything, which this probe
+/// would then report as `has_thread_token: false` with an error that is not
+/// `ERROR_NO_TOKEN`.
+///
+/// That conflates "no token" with "a token I could not open that widely", and
+/// the distinction is the entire content of [`is_unimpersonated`]. The failure
+/// would surface as an asserted-tier test failing for a reason having nothing
+/// to do with the platform behaviour being measured.
+///
+/// [`is_unimpersonated`]: WorkerContext::is_unimpersonated
 fn observe_here() -> WorkerContext {
     let mut token: HANDLE = std::ptr::null_mut();
     // SAFETY: GetCurrentThread returns a pseudo-handle needing no cleanup, and
     // `token` is a writable destination.
-    let opened =
-        unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_ALL_ACCESS, 1, &raw mut token) };
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) };
     let open_token_error = if opened == 0 {
         // SAFETY: no preconditions.
         unsafe { GetLastError() }
@@ -155,7 +171,16 @@ pub fn observe_on_worker() -> WorkerContext {
             std::ptr::null::<TP_CALLBACK_ENVIRON_V3>(),
         )
     };
-    assert_ne!(submitted, 0, "submit a callback to the process thread pool");
+    if submitted == 0 {
+        // The callback was never queued, so `report` -- the only other path
+        // that reclaims this box -- will never run. Taking it back here is
+        // what keeps a failed submission from leaking permanently in a
+        // long-running process.
+        // SAFETY: `boxed` came from Box::into_raw above and nothing else owns
+        // it, precisely because the submission failed.
+        drop(unsafe { Box::from_raw(boxed) });
+        panic!("submit a callback to the process thread pool");
+    }
 
     receiver
         .recv()
