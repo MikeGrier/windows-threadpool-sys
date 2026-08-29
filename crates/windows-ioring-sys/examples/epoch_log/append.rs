@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::io;
 use std::os::windows::io::RawHandle;
 
+use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
     Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, RegisteredUse, Token,
     WriteCaching,
@@ -56,6 +57,16 @@ pub struct Appender {
     in_flight: HashMap<usize, InFlight>,
     next_sequence: u64,
     next_offset: u64,
+    /// Conservation accounting for this appender's own operations (M16.2).
+    ///
+    /// Owned here rather than threaded in from `main` because the component
+    /// that issues the operations is the one that can report them without a
+    /// caller having to remember to. That matters for the specific failure
+    /// this guards: an early return from [`Appender::claim`] that skips the
+    /// token claim leaks the arena slot permanently, and nothing else in this
+    /// program notices until the arena runs dry `SLOTS` failures later --
+    /// somewhere else entirely, with no trace of the cause.
+    contract: RingContract,
 }
 
 impl Appender {
@@ -92,7 +103,14 @@ impl Appender {
             in_flight: HashMap::new(),
             next_sequence: 0,
             next_offset: 0,
+            contract: RingContract::new(),
         })
+    }
+
+    /// This appender's conservation record, for a caller to assert against at
+    /// teardown.
+    pub fn contract(&self) -> &RingContract {
+        &self.contract
     }
 
     /// The sequence the next appended record will carry.
@@ -186,6 +204,7 @@ impl Appender {
         }?;
         batch.submit()?;
 
+        self.contract.observe_push(token.id());
         self.in_flight.insert(token.id(), InFlight { token, slot });
         self.next_sequence += 1;
         self.next_offset += total as u64;
@@ -202,6 +221,8 @@ impl Appender {
         let Some(in_flight) = self.in_flight.remove(&completion.user_data()) else {
             return Ok(false);
         };
+        let user_data = completion.user_data();
+        self.contract.observe_completion(user_data);
         // Claim *before* checking the write's result. The completion has
         // already been observed, so claiming is sound either way -- and
         // bailing out on a failed write without claiming would drop the token
@@ -216,6 +237,7 @@ impl Appender {
         // Dropping the marker is what decrements the slot's count, so it has
         // to happen before the check below rather than at end of scope.
         drop(released);
+        self.contract.observe_claim(user_data);
         debug_assert!(
             self.arena.outstanding(in_flight.slot) == Some(0),
             "claiming the token must release the slot"

@@ -39,6 +39,7 @@ use std::path::PathBuf;
 
 use windows_guard_alloc::poison;
 use windows_guard_alloc::witness::Witness;
+use windows_ioring_sys::contract::RingContract;
 use windows_ioring_sys::{
     Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedFile, WriteCaching,
 };
@@ -428,6 +429,12 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
     // Slot 3 appears only here, as a source. Nothing about it may change.
     let writes: [(u32, u32, u32); 2] = [(3, 0, 4096), (3, 4096, 2048)];
 
+    // Conservation, alongside the poison accounting (M16.2). The two answer
+    // different questions and neither subsumes the other: the witness asks
+    // "did anything write where it should not have", the contract asks "did
+    // every operation complete exactly once and give back what it held".
+    let mut contract = RingContract::new();
+
     let mut pending = Vec::new();
     for (slot, offset, len) in reads {
         let span = RegisteredSpan {
@@ -440,6 +447,7 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
             .read_registered(&read_file, &buffers, span, 0, PushOptions::new())
             .expect("queue a registered read");
         batch.submit().expect("submit the read");
+        contract.observe_push(token.id());
         pending.push((token, slot, offset, true));
     }
     for (slot, offset, len) in writes {
@@ -460,6 +468,7 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
             )
             .expect("queue a registered write");
         batch.submit().expect("submit the write");
+        contract.observe_push(token.id());
         pending.push((token, slot, offset, false));
     }
 
@@ -468,16 +477,22 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
     // witness merges permissions rather than requiring ascending offsets.
     while !pending.is_empty() {
         let completion = await_one(&mut ring);
+        contract.observe_completion(completion.user_data());
         let transferred = completion.result().expect("the operation succeeded");
         let position = pending
             .iter()
             .position(|(token, ..)| token.id() == completion.user_data())
             .expect("a completion must belong to a pushed operation");
         let (token, slot, offset, is_read) = pending.swap_remove(position);
+        let user_data = token.id();
         let released = token
             .claim_if(&completion)
             .expect("the token claims its own completion");
+        // Claimed *after* the `RegisteredUse` is dropped, since that is what
+        // returns the buffer's outstanding count to zero -- and the count is
+        // what `observe_buffer` reports below.
         drop(released);
+        contract.observe_claim(user_data);
 
         if is_read {
             let entry = &mut slots[slot as usize];
@@ -487,6 +502,18 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
             entry.witness.permit(offset as usize, transferred);
         }
     }
+
+    // Conservation at teardown: every operation completed exactly once, every
+    // token was claimed, and every registered buffer is quiet.
+    for slot in 0..SLOTS {
+        contract.observe_buffer(
+            slot,
+            buffers
+                .outstanding(slot)
+                .expect("every slot index is in range"),
+        );
+    }
+    contract.assert_quiescent();
 
     // Teardown: every byte nobody accounted for must still be poison.
     for (index, slot) in slots.iter().enumerate() {

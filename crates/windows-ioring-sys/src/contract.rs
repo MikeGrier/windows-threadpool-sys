@@ -36,6 +36,11 @@
 //! | A push that failed synchronously produces none | the same section: it is un-counted, not merely uncompleted |
 //! | No completion arrives for an operation never pushed | corollary of the above |
 //! | Every token is claimed, or deliberately leaked | `Token`'s leak-on-drop contract ([D-13](../DESIGN-NOTES.md#d-13)) |
+//!
+//! Not every push carries a token: the `_raw` flush and cancel entry points
+//! return a bare `user_data`, because they own nothing a claim could hand
+//! back. Report those with [`RingContract::observe_tokenless_push`], or the
+//! oracle will demand a claim that cannot be made.
 //! | Nothing is outstanding at quiescence | what `IoRing::run_down`'s termination depends on |
 //!
 //! # What it deliberately does **not** check
@@ -141,9 +146,17 @@ impl fmt::Display for Violation {
 /// What one observed operation is known to have done so far.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
-    /// Queued, no completion seen.
+    /// Queued with a token to claim, no completion seen.
     Pushed,
-    /// Completed exactly once, and its token claimed.
+    /// Queued with nothing to claim, no completion seen.
+    ///
+    /// The `_raw` flush and cancel entry points return a bare `user_data`
+    /// rather than a [`crate::Token`], because they own nothing a claim could
+    /// hand back. Conflating them with [`State::Pushed`] would report a
+    /// `LeakedToken` for every one -- a violation that is not merely wrong but
+    /// unfixable by the caller, since there is no token to claim.
+    PushedTokenless,
+    /// Completed exactly once, and its token claimed (or none was owed).
     Completed,
     /// Completed, but its token was dropped unclaimed.
     Leaked,
@@ -195,6 +208,16 @@ impl RingContract {
         self.operations.insert(user_data, State::Pushed);
     }
 
+    /// Record that an SQE was queued that carries **no token** to claim.
+    ///
+    /// The `_raw` flush and cancel entry points return a bare `user_data`
+    /// rather than a [`crate::Token`], because they own nothing a claim could
+    /// hand back. Reporting one through [`RingContract::observe_push`] would
+    /// produce a [`Violation::LeakedToken`] the caller has no way to satisfy.
+    pub fn observe_tokenless_push(&mut self, user_data: usize) {
+        self.operations.insert(user_data, State::PushedTokenless);
+    }
+
     /// Record a completion popped from the ring.
     pub fn observe_completion(&mut self, user_data: usize) {
         match self.operations.get(&user_data) {
@@ -206,6 +229,10 @@ impl RingContract {
                 // claimed *is* a leak, so this is corrected by
                 // `observe_claim` rather than assumed benign.
                 self.operations.insert(user_data, State::Leaked);
+            }
+            Some(State::PushedTokenless) => {
+                // Nothing was owed, so completing is the end of the story.
+                self.operations.insert(user_data, State::Completed);
             }
             Some(_) => self
                 .violations
@@ -260,7 +287,7 @@ impl RingContract {
             .operations
             .iter()
             .filter_map(|(user_data, state)| match state {
-                State::Pushed => Some(Violation::Outstanding {
+                State::Pushed | State::PushedTokenless => Some(Violation::Outstanding {
                     user_data: *user_data,
                 }),
                 State::Leaked => Some(Violation::LeakedToken {

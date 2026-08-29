@@ -385,11 +385,24 @@ useful together.
   [D-24](DESIGN-NOTES.md#d-24)'s barrier constrains execution rather than pop order), operation success,
   anything about the device.
 
-- [ ] **M16.2** -- Bind the existing integration tests to `RingContract` and assert quiescence at teardown.
+- [x] **M16.2** -- Bind the existing integration tests to `RingContract` and assert quiescence at teardown.
   This is the item that pays for M16.1: the `Appender::claim` slot leak and the strategy harness's shared
   deferred slot were both conservation failures, found by review and by measurement respectively, and both
   would have fallen out of a quiescence assertion automatically.
   Sabotage-verify by reintroducing one of them and confirming the oracle reports it.
+  **Done:** bound `tests/submission_lifecycle.rs` (two tests) and `tests/kernel_span.rs`'s mixed workload,
+  which also reports per-buffer counts. **The example's `Appender` now owns a `RingContract`**, because the
+  claim that the `Appender::claim` leak "would have fallen out automatically" had to be *proved* rather than
+  asserted -- and nothing outside the example could prove it. Calibrated against the real defect: taking the
+  pre-fix early-return path once makes the run die with `the token for user_data 0x1 was dropped unclaimed,
+  leaking whatever it held for the life of the process`.
+  **Binding real tests exposed a gap in M16.1**: `flush_raw` and `cancel_raw` return a bare `user_data` with
+  no token, so the oracle demanded a claim that cannot be made -- a false violation the caller has no way to
+  satisfy, which is the worst kind. Added `observe_tokenless_push` and a `PushedTokenless` state, with four
+  more tests. The backpressure test also exercises the rule's other half: the *rejected* push is deliberately
+  never observed, since a synchronously-failing `Build*` releases its reservation and produces no completion.
+  Noted for M16.3: reverting the fix's *ordering* alone does not reproduce the leak, because the early return
+  only triggers on a **failed** write -- which is precisely the population-B path that has no coverage yet.
 
 - [ ] **M16.3** -- Add a fault-injection seam at the completion boundary, so a test can make `result()` return
   a chosen error for a chosen operation. `Completion::synthetic` already exists under `#[cfg(test)]` and is

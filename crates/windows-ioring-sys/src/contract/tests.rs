@@ -239,3 +239,65 @@ fn assert_quiescent_is_silent_when_the_contract_holds() {
     full_cycle(&mut contract, 1);
     contract.assert_quiescent();
 }
+
+#[test]
+fn a_tokenless_operation_is_complete_once_it_completes() {
+    // `flush_raw` and `cancel_raw` return a bare `user_data` rather than a
+    // token, because they own nothing a claim could hand back. Treating them
+    // like token-carrying pushes would report a `LeakedToken` the caller
+    // cannot possibly satisfy -- a violation that is not merely wrong but
+    // unfixable, which is the worst kind an oracle can emit.
+    //
+    // Found by binding the real backpressure test in `submission_lifecycle.rs`
+    // to this contract (M16.2), which pushes nothing but raw flushes.
+    let mut contract = RingContract::new();
+    contract.observe_tokenless_push(1);
+    contract.observe_completion(1);
+
+    assert_eq!(contract.check_quiescent(), Vec::new());
+}
+
+#[test]
+fn a_tokenless_operation_that_never_completes_is_still_reported() {
+    // Owning no token does not excuse it from the one-SQE-one-completion rule.
+    let mut contract = RingContract::new();
+    contract.observe_tokenless_push(2);
+
+    assert_eq!(
+        contract.check_quiescent(),
+        vec![Violation::Outstanding { user_data: 2 }]
+    );
+}
+
+#[test]
+fn a_tokenless_operation_completing_twice_is_still_a_duplicate() {
+    let mut contract = RingContract::new();
+    contract.observe_tokenless_push(3);
+    contract.observe_completion(3);
+    contract.observe_completion(3);
+
+    assert!(
+        contract
+            .violations()
+            .contains(&Violation::DuplicateCompletion { user_data: 3 }),
+        "got {:?}",
+        contract.violations()
+    );
+}
+
+#[test]
+fn a_push_that_was_rejected_is_simply_never_observed() {
+    // The other half of the rule: a `Build*` that fails synchronously releases
+    // its reservation and produces no completion, so it is un-counted rather
+    // than uncompleted. Reporting it would manufacture an `Outstanding`
+    // violation at teardown for an operation that never existed.
+    //
+    // Nothing in the API enforces this -- it is a rule about what a caller
+    // reports -- so it is written down as a test to make the intent legible.
+    let mut contract = RingContract::new();
+    contract.observe_tokenless_push(1);
+    contract.observe_completion(1);
+    // A second push was attempted here and rejected with queue-full. It is
+    // deliberately not observed.
+    assert_eq!(contract.check_quiescent(), Vec::new());
+}

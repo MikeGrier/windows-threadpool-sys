@@ -452,6 +452,13 @@ fn run_log<O: io::Write, E: io::Write>(
         drain(&mut ring, &mut appender, &mut committer)?;
     }
 
+    // Conservation, once everything has quiesced (M16.2). Every append that
+    // queued completed exactly once, and every token was claimed -- the second
+    // half being what returns its arena slot. A slot leaked here would not
+    // show up as an error at all: the arena would simply run dry `SLOTS`
+    // appends later, somewhere else, with nothing pointing back to the cause.
+    appender.contract().assert_quiescent();
+
     let durable_through = committer
         .durable_through()
         .expect("at least one epoch was committed");
