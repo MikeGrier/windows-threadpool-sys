@@ -1517,7 +1517,7 @@ comments, and this test's own comment).
 
 The other remaining gap -- an interactive fault always asking -- stands as recorded.
 
-## Moved 2026-08-28 -- automated-reviewer language baseline (CHECKLIST-review-baseline.md, M1)
+## <a id="checklist-review-baseline"></a>Moved 2026-08-28 -- automated-reviewer language baseline (CHECKLIST-review-baseline.md, M1)
 
 Closed the gap that let an automated PR review on
 [#46](https://github.com/MikeGrier/windows-threadpool-sys/pull/46) raise seven false
