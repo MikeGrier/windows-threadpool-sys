@@ -262,10 +262,44 @@ landed, so this milestone is unblocked.
   sample prints it, so a reader who only runs the program still learns what it does and does not
   promise. M13.5's verification pass has something concrete to refer back to.
 
-- [ ] **M13.2** -- The append path: a record format with a length, a sequence number, and a checksum
-  (so a torn tail is detectable at replay), written into registered buffers and pushed via `Batch`.
-  Uses `register_buffers` and `write_registered` deliberately rather than the owned-`Vec` form,
-  since an externally-managed buffer arena is what a real consumer has.
+- [x] **M13.2** -- The append path, in [record.rs](examples/epoch_log/record.rs) (the format) and
+  [append.rs](examples/epoch_log/append.rs) (the arena and the push). A record is a 20-byte header --
+  magic, sequence, payload length, checksum -- followed by its payload, with each field justified by
+  a clause of the contract rather than by convention: the length because replay has no framing of its
+  own, the sequence because the contract guarantees no ordering *within* an epoch so the on-disk
+  order is not the logical one, and the checksum because the contract says the tail may be **torn**
+  and a reader that cannot tell torn from whole cannot honour that clause. The checksum covers the
+  header too, so a torn header carrying a plausible length is caught rather than trusted.
+
+  Appends compose into a registered arena (`SLOTS` slots) and push with `write_registered_raw` over
+  exactly the record's bytes, deliberately not the owned-`Vec` form: an externally-managed arena is
+  what a real consumer has, and it is what makes this sample worth reading. `PushOptions::new()` and
+  `WriteCaching::Cached` are both the *unordered, uncached* choice on purpose -- records stream
+  unordered within an epoch exactly as the contract says, and the ordering is bought once by M13.3's
+  covering flush. The example runs the arena dry on purpose (24 records through 8 slots), so the
+  `WouldBlock`-then-drain path is exercised rather than hypothetical.
+
+  **This item found a real gap in the crate and fixed it at the layer, per the mono-repo policy.**
+  `RegisteredBuffers` exposed `get` but no mutable accessor, so a registered arena could only ever
+  carry bytes the *kernel* had produced -- there was no way to put a record a caller composed into
+  one. `ring_copy` never hit it because it reads into a registered buffer and writes back out of the
+  same one. Raised rather than worked around, and the engineer chose per-buffer accounting over a
+  narrow `unsafe` seam.
+
+  The subtlety that made it more than an accessor: **`&mut self` is not sufficient for safety here.**
+  An in-flight operation holds no borrow -- `write_registered` takes `&RegisteredBuffers` for the
+  length of the call and the `Token` keeps only a `RegisteredUse` -- so the borrow checker would
+  happily allow mutating a buffer the kernel is reading through. `get_mut` therefore pairs `&mut
+  self` with a runtime check, and the outstanding count moved from one per *registration* to one per
+  *buffer* so that a busy slot does not block its neighbours, which an arena being refilled needs.
+  `WouldBlock` and `InvalidInput` are distinct so "busy" and "no such buffer" cannot be confused.
+  Sabotage-verified: reverting `get_mut` to the old per-registration semantics fails the new
+  neighbour test with "buffer 1 still has 1 operation(s) outstanding".
+
+  Two tests in [tests/registration.rs](tests/registration.rs) cover it -- filling a registered buffer
+  and writing it back out, and the refusal/neighbour/out-of-range/release cycle. The example also
+  reads its own log back and decodes every record, so the claimed format is checked rather than
+  asserted; verifying the *contract* (durability, the torn tail) stays M13.5's job.
 
 - [ ] **M13.3** -- Epoch bookkeeping and group commit: records join the currently open epoch; closing
   epoch *N* pushes a **covering** flush (M12.1) carrying *N* as its identity; observing that flush's

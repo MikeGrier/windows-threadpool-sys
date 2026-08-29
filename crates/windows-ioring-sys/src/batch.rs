@@ -557,15 +557,26 @@ impl PendingFileRegistration {
 /// A marker a [`Token`] owns while a registered-buffer-indexed read or write
 /// is outstanding (M5.2, M5.3).
 ///
-/// Decrements [`RegisteredBuffers`]'s own count only when actually claimed:
-/// dropping an unclaimed token forgets this like any other value a `Token`
-/// holds, which correctly leaves the registration believing the use is
-/// still outstanding, since nothing proved otherwise.
-pub struct RegisteredUse(Arc<AtomicUsize>);
+/// Decrements [`RegisteredBuffers`]'s count **for the one buffer the
+/// operation addressed** only when actually claimed: dropping an unclaimed
+/// token forgets this like any other value a `Token` holds, which correctly
+/// leaves the registration believing that use is still outstanding, since
+/// nothing proved otherwise.
+///
+/// The count is per buffer rather than per registration (M13.2) so that
+/// [`RegisteredBuffers::get_mut`] can hand out a `&mut` to a *quiet* buffer
+/// while operations are still in flight against its neighbours -- which is
+/// what an arena a caller refills has to be able to do.
+pub struct RegisteredUse {
+    outstanding: Arc<[AtomicUsize]>,
+    index: usize,
+}
 
 impl Drop for RegisteredUse {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        if let Some(count) = self.outstanding.get(self.index) {
+            count.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -583,7 +594,11 @@ impl Drop for RegisteredUse {
 pub struct RegisteredBuffers<B: IoBufMut> {
     buffers: ManuallyDrop<Vec<B>>,
     base_index: u32,
-    outstanding: Arc<AtomicUsize>,
+    /// One outstanding-operation count per registered buffer, indexed by
+    /// position within this registration. Per buffer rather than per
+    /// registration so a caller can refill a quiet buffer while others are in
+    /// flight; see [`RegisteredBuffers::get_mut`].
+    outstanding: Arc<[AtomicUsize]>,
     ring_id: RingId,
 }
 
@@ -605,6 +620,99 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     #[must_use]
     pub fn get(&self, i: u32) -> Option<&B> {
         self.buffers.get(i as usize)
+    }
+
+    /// Borrow the `i`-th buffer **mutably**, to fill it before an operation
+    /// reads out of it (M13.2).
+    ///
+    /// This is what makes a registered arena usable for writes a caller
+    /// composes itself -- a log record, a serialized message -- rather than
+    /// only for bytes the kernel put there. Without it, [`get`] can show a
+    /// caller what a read landed but nothing can put anything into a buffer
+    /// after it is registered.
+    ///
+    /// # Why this is safe, and why it can refuse
+    ///
+    /// `&mut self` is not on its own enough. It excludes concurrent `&self`
+    /// borrows, but an operation already in flight holds no borrow at all --
+    /// [`Batch::write_registered`] takes `&RegisteredBuffers` for the length
+    /// of the call, and the [`Token`] it returns keeps only a
+    /// [`RegisteredUse`]. So the compiler would happily allow mutation of a
+    /// buffer the kernel is reading through right now, which is a data race
+    /// with the kernel and exactly what this crate exists to prevent.
+    ///
+    /// The runtime half of the check is therefore the per-buffer outstanding
+    /// count: this refuses while any operation is still outstanding against
+    /// *this* buffer. Neighbouring buffers being in flight is fine, which is
+    /// the point of counting per buffer -- an arena a caller refills has to
+    /// be able to prepare buffer 5 while buffer 2 is still being written.
+    ///
+    /// A count returns to zero only when a [`Token`] is claimed against a
+    /// real popped [`Completion`], so "not outstanding" means the operation
+    /// was *observed* to finish, never merely assumed to have.
+    ///
+    /// [`get`]: RegisteredBuffers::get
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] if `i` is out of range for this
+    /// registration, or [`io::ErrorKind::WouldBlock`] if an operation is
+    /// still outstanding against that buffer -- pop its completion and claim
+    /// its token first.
+    pub fn get_mut(&mut self, i: u32) -> io::Result<&mut B> {
+        let index = usize::try_from(i).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "buffer index does not fit usize",
+            )
+        })?;
+        if index >= self.buffers.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("buffer index {i} is out of range for this registration"),
+            ));
+        }
+        let outstanding = self.outstanding[index].load(Ordering::SeqCst);
+        if outstanding > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!(
+                    "buffer {i} still has {outstanding} operation(s) outstanding; the kernel may \
+                     be reading or writing through it. Pop the completion and claim its token \
+                     before filling this buffer."
+                ),
+            ));
+        }
+        Ok(&mut self.buffers[index])
+    }
+
+    /// How many operations are still outstanding against the `i`-th buffer,
+    /// or `None` if `i` is out of range.
+    ///
+    /// Lets a caller pick a quiet buffer without provoking an error from
+    /// [`RegisteredBuffers::get_mut`], which is the normal shape for an arena
+    /// cycling through its slots.
+    #[must_use]
+    pub fn outstanding(&self, i: u32) -> Option<usize> {
+        self.outstanding
+            .get(usize::try_from(i).ok()?)
+            .map(|count| count.load(Ordering::SeqCst))
+    }
+
+    /// Record that one more operation is outstanding against `span`'s buffer,
+    /// and produce the marker whose drop records it finished.
+    ///
+    /// Call only after [`RegisteredBuffers::checked_span`] has validated
+    /// `span`, which is what makes the index below in range.
+    fn begin_use(&self, span: RegisteredSpan) -> RegisteredUse {
+        let index = span.buffer_index as usize;
+        if let Some(count) = self.outstanding.get(index) {
+            count.fetch_add(1, Ordering::SeqCst);
+        }
+        RegisteredUse {
+            outstanding: Arc::clone(&self.outstanding),
+            index,
+        }
     }
 
     /// The registered index of the `i`-th buffer, or an
@@ -650,22 +758,28 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
 
 impl<B: IoBufMut> Drop for RegisteredBuffers<B> {
     fn drop(&mut self) {
-        if self.outstanding.load(Ordering::SeqCst) > 0 {
+        if self
+            .outstanding
+            .iter()
+            .any(|count| count.load(Ordering::SeqCst) > 0)
+        {
             // Refused, not silently permitted (M5.3): freeing now would
             // leave an outstanding `IORING_BUFFER_REF` pointing at freed
             // memory. Loud in debug builds; in release, leaking is the safe
             // failure mode -- the same choice `Token` already makes
             // ("leak is safe, use-after-free is not"), so `buffers` is
             // simply never reclaimed rather than freed out from under a
-            // still-outstanding op.
+            // still-outstanding op. Any one buffer still in use holds the
+            // whole registration, because they are freed together.
             debug_assert!(
                 false,
                 "RegisteredBuffers dropped while an operation still references it"
             );
             return;
         }
-        // SAFETY: `outstanding == 0`, so no operation still references these
-        // buffers, and this is the only place `buffers` is ever dropped.
+        // SAFETY: every per-buffer count is zero, so no operation still
+        // references these buffers, and this is the only place `buffers` is
+        // ever dropped.
         unsafe { ManuallyDrop::drop(&mut self.buffers) };
     }
 }
@@ -732,11 +846,15 @@ impl<B: IoBufMut> PendingBufferRegistration<B> {
         let buffers = unsafe { ManuallyDrop::take(&mut self.buffers) };
         let base_index = self.base_index;
         let ring_id = self.ring_id;
-        Ok(completion.result().map(move |_| RegisteredBuffers {
-            buffers: ManuallyDrop::new(buffers),
-            base_index,
-            outstanding: Arc::new(AtomicUsize::new(0)),
-            ring_id,
+        Ok(completion.result().map(move |_| {
+            let outstanding: Arc<[AtomicUsize]> =
+                buffers.iter().map(|_| AtomicUsize::new(0)).collect();
+            RegisteredBuffers {
+                buffers: ManuallyDrop::new(buffers),
+                base_index,
+                outstanding,
+                ring_id,
+            }
         }))
     }
 }
@@ -1424,11 +1542,7 @@ impl<'ring> Batch<'ring> {
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        registration.outstanding.fetch_add(1, Ordering::SeqCst);
-        let token = Token::new(
-            self.ring,
-            RegisteredUse(Arc::clone(&registration.outstanding)),
-        )?;
+        let token = Token::new(self.ring, registration.begin_use(span))?;
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `index` was just checked
         // against `registration`, whose buffer stays put until it drops;
@@ -1474,14 +1588,7 @@ impl<'ring> Batch<'ring> {
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        registration.outstanding.fetch_add(1, Ordering::SeqCst);
-        let token = Token::new(
-            self.ring,
-            (
-                RegisteredUse(Arc::clone(&registration.outstanding)),
-                file.guard(),
-            ),
-        )?;
+        let token = Token::new(self.ring, (registration.begin_use(span), file.guard()))?;
         let user_data = token.id();
         // SAFETY: `index` was just checked against `registration`, whose
         // buffer stays put until it drops; `target` stays valid at least as
@@ -1528,11 +1635,7 @@ impl<'ring> Batch<'ring> {
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        registration.outstanding.fetch_add(1, Ordering::SeqCst);
-        let token = Token::new(
-            self.ring,
-            RegisteredUse(Arc::clone(&registration.outstanding)),
-        )?;
+        let token = Token::new(self.ring, registration.begin_use(span))?;
         let user_data = token.id();
         // SAFETY: as `read_registered_raw`; the kernel only reads through
         // this reference for a write.
@@ -1576,14 +1679,7 @@ impl<'ring> Batch<'ring> {
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        registration.outstanding.fetch_add(1, Ordering::SeqCst);
-        let token = Token::new(
-            self.ring,
-            (
-                RegisteredUse(Arc::clone(&registration.outstanding)),
-                file.guard(),
-            ),
-        )?;
+        let token = Token::new(self.ring, (registration.begin_use(span), file.guard()))?;
         let user_data = token.id();
         // SAFETY: as `read_registered`'s; the kernel only reads through
         // this reference for a write.

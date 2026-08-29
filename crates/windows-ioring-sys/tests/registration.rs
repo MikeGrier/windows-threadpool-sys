@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows_ioring_sys::{Batch, IoBuf, IoBufMut, IoRing, PushOptions, RegisteredSpan};
+use windows_ioring_sys::{
+    Batch, IoBuf, IoBufMut, IoRing, PushOptions, RegisteredSpan, WriteCaching,
+};
 
 fn temp_file(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -779,4 +781,171 @@ fn dropping_an_unclaimed_pending_buffer_registration_leaks_rather_than_frees() {
     // The leak is permanent: nothing later runs the destructor either,
     // including the ring's own teardown.
     assert!(!dropped.load(Ordering::SeqCst));
+}
+
+// --- filling a registered buffer from userspace (M13.2) ---
+
+#[test]
+fn a_registered_buffer_can_be_filled_and_written_back_out() {
+    // The gap M13.2 found: `get` shows a caller what a read landed, but until
+    // `get_mut` there was no way to put anything *into* a buffer once it was
+    // registered -- so a registered arena could only ever carry bytes the
+    // kernel had produced, never a record the caller composed.
+    let path = temp_file("fill-registered");
+    std::fs::write(&path, vec![0_u8; 64]).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(vec![vec![0_u8; 64], vec![0_u8; 64]])
+        .expect("queue buffer registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let mut buffers = pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("buffer registration succeeded");
+
+    // Compose a record into the registered buffer, then write it out.
+    let record = b"the caller composed this";
+    buffers.get_mut(0).expect("buffer 0 is quiet")[..record.len()].copy_from_slice(record);
+
+    let span = RegisteredSpan {
+        buffer_index: 0,
+        offset: 0,
+        len: record.len() as u32,
+    };
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: `handle` stays open for the whole test.
+    let token = unsafe {
+        batch.write_registered_raw(
+            handle,
+            &buffers,
+            span,
+            0,
+            PushOptions::new(),
+            WriteCaching::Cached,
+        )
+    }
+    .expect("queue registered write");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    assert_eq!(
+        completion.result().expect("registered write succeeded"),
+        record.len()
+    );
+    let _ = token
+        .claim_if(&completion)
+        .expect("token claims its own completion");
+
+    drop(file);
+    let written = std::fs::read(&path).expect("read the file back");
+    assert_eq!(&written[..record.len()], record);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn get_mut_refuses_a_buffer_with_an_operation_outstanding_but_allows_its_neighbour() {
+    // `&mut self` alone cannot make this safe: an in-flight operation holds no
+    // borrow, only a `RegisteredUse`, so the compiler would allow mutating a
+    // buffer the kernel is reading through. The per-buffer count is the other
+    // half of the check -- and counting per buffer rather than per
+    // registration is what lets an arena refill a quiet slot while another is
+    // still in flight, which is the whole point.
+    let path = temp_file("get-mut-busy");
+    std::fs::write(&path, vec![0_u8; 4096]).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(vec![vec![7_u8; 2048], vec![9_u8; 2048]])
+        .expect("queue buffer registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let mut buffers = pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("buffer registration succeeded");
+
+    // Put an operation in flight against buffer 0 only, and deliberately do
+    // not drain it yet.
+    let span = RegisteredSpan {
+        buffer_index: 0,
+        offset: 0,
+        len: 2048,
+    };
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: `handle` stays open for the whole test, and the token below is
+    // held until its completion is claimed.
+    let token = unsafe {
+        batch.write_registered_raw(
+            handle,
+            &buffers,
+            span,
+            0,
+            PushOptions::new(),
+            WriteCaching::Cached,
+        )
+    }
+    .expect("queue registered write");
+    batch.submit().expect("submit");
+
+    assert_eq!(buffers.outstanding(0), Some(1));
+    assert_eq!(buffers.outstanding(1), Some(0));
+
+    let busy = buffers
+        .get_mut(0)
+        .expect_err("a buffer with an operation outstanding must be refused");
+    assert_eq!(busy.kind(), std::io::ErrorKind::WouldBlock);
+
+    // The neighbour is untouched by that operation and must stay usable, or
+    // per-buffer accounting would buy nothing over the single count it
+    // replaced.
+    buffers
+        .get_mut(1)
+        .expect("a quiet neighbour must still be fillable")[0] = 1;
+
+    // Out of range is a different failure from busy, and says so.
+    let out_of_range = buffers.get_mut(2).expect_err("index 2 does not exist");
+    assert_eq!(out_of_range.kind(), std::io::ErrorKind::InvalidInput);
+
+    // Drain, claim, and the buffer becomes fillable again -- the count only
+    // returns to zero against a real popped completion.
+    let mut popped = None;
+    while popped.is_none() {
+        popped = ring.try_pop().expect("pop completion");
+    }
+    let completion = popped.expect("a completion is ready");
+    completion.result().expect("registered write succeeded");
+    let _ = token
+        .claim_if(&completion)
+        .expect("token claims its own completion");
+
+    assert_eq!(buffers.outstanding(0), Some(0));
+    buffers
+        .get_mut(0)
+        .expect("a claimed completion releases the buffer")[0] = 2;
+
+    let _ = std::fs::remove_file(&path);
 }
