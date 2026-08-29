@@ -6,11 +6,11 @@ use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows_sys::Win32::Storage::FileSystem::{
-    CloseIoRing, CreateIoRing, GetIoRingInfo, IORING_CQE, IORING_CREATE_ADVISORY_FLAGS_NONE,
-    IORING_CREATE_FLAGS, IORING_CREATE_REQUIRED_FLAGS_NONE, IORING_INFO, IORING_OP_CANCEL,
-    IORING_OP_CODE, IORING_OP_FLUSH, IORING_OP_NOP, IORING_OP_READ, IORING_OP_REGISTER_BUFFERS,
-    IORING_OP_REGISTER_FILES, IORING_OP_WRITE, IsIoRingOpSupported, PopIoRingCompletion,
-    SubmitIoRing,
+    CloseIoRing, CreateIoRing, GetIoRingInfo, IORING_BUFFER_INFO, IORING_CQE,
+    IORING_CREATE_ADVISORY_FLAGS_NONE, IORING_CREATE_FLAGS, IORING_CREATE_REQUIRED_FLAGS_NONE,
+    IORING_INFO, IORING_OP_CANCEL, IORING_OP_CODE, IORING_OP_FLUSH, IORING_OP_NOP, IORING_OP_READ,
+    IORING_OP_REGISTER_BUFFERS, IORING_OP_REGISTER_FILES, IORING_OP_WRITE, IsIoRingOpSupported,
+    PopIoRingCompletion, SubmitIoRing,
 };
 
 use crate::capability::{RingVersion, capabilities};
@@ -228,7 +228,9 @@ const RUN_DOWN_POLL_MS: u32 = 50;
 /// threads is deliberately not offered -- a consumer wanting concurrent
 /// access chooses a delivery architecture (M4 / M6+) rather than relying on
 /// this type to serialize for them.
-#[derive(Debug)]
+// `Debug` is hand-written rather than derived: `IORING_BUFFER_INFO` does not
+// implement it, and the array's contents (raw addresses and lengths) are not
+// useful to print anyway -- its length is.
 pub struct IoRing {
     handle: *mut c_void,
     version: RingVersion,
@@ -245,6 +247,36 @@ pub struct IoRing {
     registered_files: u32,
     /// As `registered_files`, for `BuildIoRingRegisterBuffers` (M5.2).
     registered_buffers: u32,
+    /// The `IORING_BUFFER_INFO` array handed to `BuildIoRingRegisterBuffers`,
+    /// kept alive because the kernel reads it when the registration op
+    /// *runs*, not when the `Build*` call returns (D-32, measured).
+    ///
+    /// Held by the ring rather than by the `Batch` that built it: a failed
+    /// `SubmitIoRing` leaves the SQE queued as ring state (D-5), so a later,
+    /// unrelated submit can be what finally runs it -- after that batch is
+    /// long gone. A ring accepts at most one buffer registration, so this is
+    /// one small allocation per ring, and it is released only by
+    /// `CloseIoRing`.
+    registered_buffer_infos: Vec<IORING_BUFFER_INFO>,
+}
+
+impl std::fmt::Debug for IoRing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IoRing")
+            .field("handle", &self.handle)
+            .field("version", &self.version)
+            .field("supported_ops", &self.supported_ops)
+            .field("ring_id", &self.ring_id)
+            .field("next_user_data", &self.next_user_data)
+            .field("outstanding", &self.outstanding)
+            .field("registered_files", &self.registered_files)
+            .field("registered_buffers", &self.registered_buffers)
+            .field(
+                "registered_buffer_infos",
+                &self.registered_buffer_infos.len(),
+            )
+            .finish()
+    }
 }
 
 // SAFETY: HIORING is a Windows kernel object handle. Windows handles are not
@@ -308,6 +340,7 @@ impl IoRing {
             outstanding: 0,
             registered_files: 0,
             registered_buffers: 0,
+            registered_buffer_infos: Vec::new(),
         })
     }
 
@@ -416,6 +449,11 @@ impl IoRing {
     /// eager advance does still determine is the *meaning* of the public
     /// accessors, which is why they document a reserved rather than a
     /// confirmed count.
+    ///
+    /// D-32 did not answer this question, despite being adjacent to it: it
+    /// established when the kernel reads the `IORING_BUFFER_INFO` *array*,
+    /// which is a different thing from when it claims the *indices*. The
+    /// latter remains unmeasured, and dissolved rather than resolved.
     pub(crate) fn reserve_registered_files(&mut self, count: u32) {
         self.registered_files = self.registered_files.saturating_add(count);
     }
@@ -423,6 +461,33 @@ impl IoRing {
     /// As [`IoRing::reserve_registered_files`], for registered buffers.
     pub(crate) fn reserve_registered_buffers(&mut self, count: u32) {
         self.registered_buffers = self.registered_buffers.saturating_add(count);
+    }
+
+    /// Take ownership of the `IORING_BUFFER_INFO` array a
+    /// `BuildIoRingRegisterBuffers` call was handed, keeping it alive for
+    /// this ring's remaining life, and hand back a stable pointer to it
+    /// (D-32).
+    ///
+    /// The kernel reads this array when the registration op *runs*, not when
+    /// the `Build*` call returns, so the caller must not build the SQE from a
+    /// temporary: store the array here first and pass the returned pointer.
+    /// Returns a null pointer for an empty array, which is what
+    /// `BuildIoRingRegisterBuffers` should be handed for a zero-length
+    /// registration anyway.
+    pub(crate) fn hold_registered_buffer_infos(
+        &mut self,
+        infos: Vec<IORING_BUFFER_INFO>,
+    ) -> *const IORING_BUFFER_INFO {
+        debug_assert!(
+            self.registered_buffer_infos.is_empty(),
+            "a ring accepts at most one buffer registration, so this must only be set once"
+        );
+        self.registered_buffer_infos = infos;
+        // `Vec::as_ptr` is stable for as long as the `Vec` is neither moved
+        // out of nor reallocated; it lives in `self` and is never mutated
+        // again, and moving the `IoRing` itself moves only the `Vec` header,
+        // not its heap allocation.
+        self.registered_buffer_infos.as_ptr()
     }
 
     /// How many operations this ring believes are still outstanding: minted

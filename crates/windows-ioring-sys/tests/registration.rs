@@ -186,6 +186,83 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
 }
 
 #[test]
+fn a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit() {
+    // The kernel reads the IORING_BUFFER_INFO array when the registration op
+    // runs -- during SubmitIoRing -- not when BuildIoRingRegisterBuffers
+    // returns (D-32, measured). The crate built that array in a local Vec and
+    // dropped it before submitting, so the kernel read freed memory and the
+    // registration completed with ERROR_NOACCESS.
+    //
+    // Written against the stated contract rather than the old symptom: it
+    // allocates hard between the push and the submit, so any future
+    // regression that lets the array die early gets its freed bytes reused
+    // rather than left conveniently intact. A plain round-trip test would
+    // pass even while broken on a quieter allocator.
+    let path = temp_file("bufreg-survives-churn");
+    let content = vec![9_u8; 256];
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(vec![vec![0_u8; 256]])
+        .expect("queue buffer registration");
+
+    // Churn the heap between the push and the submit.
+    let mut churn: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..256 {
+        churn.push(vec![0xAA_u8; 256]);
+    }
+    drop(churn);
+
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let registered_buffers = pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("buffer registration must survive heap churn before the submit");
+
+    // And the registration is genuinely usable, not merely reported OK.
+    let mut batch = Batch::new(&mut ring);
+    let span = RegisteredSpan {
+        buffer_index: 0,
+        offset: 0,
+        len: 256,
+    };
+    let shared = windows_ioring_sys::SharedFile::new(file.try_clone().expect("clone file").into());
+    let token = batch
+        .read_registered(&shared, &registered_buffers, span, 0, PushOptions::new())
+        .expect("queue read against the registered buffer");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let bytes = completion.result().expect("read succeeded");
+    assert_eq!(bytes, 256);
+    let _ = token.claim_if(&completion);
+
+    assert_eq!(
+        registered_buffers.get(0).expect("buffer 0 exists")[..8],
+        content[..8],
+        "the read must have landed in the registered buffer"
+    );
+
+    drop(registered_buffers);
+    let _ = handle;
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn the_registered_count_is_reserved_at_queue_time_not_confirmed_at_completion() {
     // `registered_file_count` reports what the ring has reserved, not what
     // the kernel has confirmed: it advances when the Build* call queues

@@ -194,6 +194,22 @@ are not a work queue".
   that needs it. Do **not** map `IORING_E_*` onto `io::ErrorKind`: D-30 refuses that as trading an honest
   `Other` for a lossy guess.
 
+- [x] **M10.6** -- Fixed a live use-after-free in `Batch::register_buffers`
+  ([D-32](DESIGN-NOTES.md#d-32)). `BuildIoRingRegisterBuffers` reads its `IORING_BUFFER_INFO` array when
+  the registration op *runs*, not when the `Build*` call returns; the crate built that array in a local
+  `Vec` and dropped it before `SubmitIoRing`, so the kernel read freed heap and the registration completed
+  with `ERROR_NOACCESS`. Since `register_buffers` is a **safe** `pub fn`, safe code could make the kernel
+  dereference a dangling pointer -- a soundness hole in shipped 0.1.2, not a test defect. A spike crossed
+  array-lifetime against buffer alignment and disproved alignment in both directions; it also established
+  that the array may be released once submit returns, and that `BuildIoRingRegisterFileHandles` genuinely
+  *does* read synchronously -- the asymmetry the rustdoc had wrongly generalized across, and the reason the
+  file-registration tests always passed. The array is now owned by the `IoRing` rather than the `Batch`,
+  because a failed submit leaves the SQE queued as ring state ([D-5](DESIGN-NOTES.md#d-5)) and a later
+  unrelated submit can be what runs it. Added a regression test that churns the heap between the push and
+  the submit, verified by sabotage; corrected both false "read synchronously" claims; moved the entry from
+  [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) to
+  [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md).
+
 ## M11 -- The completion event as a ring primitive (external consumer proposal, 2026-08-28)
 
 Prompted by a consumer proposal and the spike that answered it; the exchange is recorded in
