@@ -165,6 +165,14 @@ stall, so the correct construction is also the expensive one. "Durability on
 the ring" in [DESIGN-NOTES.md](DESIGN-NOTES.md) has the full shape and the three
 ways to pay for it.
 
+[examples/epoch_log/](examples/epoch_log/) builds all of that as a running
+program: a write-ahead log with a written-down durability contract, group
+commit, a multiplexed wait, a thread-pool control plane, replay with a negative
+control, and all three commit strategies measured against each other on your
+machine. It needs the `threadpool` feature, and it is a **demonstration of a
+pattern, not supported API surface** -- see the caveat under
+[Cargo features](#cargo-features) below.
+
 ## Cargo features
 
 | Feature | Default | What it adds |
@@ -186,6 +194,20 @@ The gate is justified on layering rather than runtime cost: linking
 process-wide facility instantiated lazily on first use. A ring wrapper simply
 does not intrinsically depend on a thread pool. Default-on keeps the change
 additive, so no existing consumer has to do anything.
+
+### The examples are demonstrations, not API
+
+`examples/` is where this crate shows compositions it deliberately does not
+ship. [examples/epoch_log/](examples/epoch_log/) is the largest: it makes
+policy choices -- what an epoch is, when to commit, what durability is reported
+as, which of the three commit strategies to pay for -- that the crate itself
+refuses to make, because they depend on a workload the crate cannot see (D-8,
+D-26).
+
+So treat it as a worked answer to "how do these primitives go together", not as
+a component. **Nothing under `examples/` is public API, none of it is covered
+by this crate's semantic versioning, and vendoring it makes its policy choices
+yours to maintain.** If you copy it, copy it as a starting point you own.
 
 ## Topology guidance
 

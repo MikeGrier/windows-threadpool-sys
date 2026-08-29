@@ -1,17 +1,24 @@
 // Copyright (c) 2026 Mike Grier
-//! `epoch-log` (M13): a miniature write-ahead log on `IoRing`, made durable by
-//! group commit and reporting durability by epoch.
+//! `epoch-log`: a miniature write-ahead log on `IoRing`, made durable by group
+//! commit and reporting durability by epoch.
 //!
-//! This is a **sample**, not library surface. `windows-ioring-sys` exposes
-//! Windows mechanism and deliberately owns no durability *policy* (D-26 in its
-//! `DESIGN-NOTES.md`): epoch bookkeeping, which barrier strategy to pay for,
-//! and how durability is reported all depend on a consumer's workload and
-//! contract, so baking them into a primitive would be exactly the kind of
-//! policy D-8 refuses. The residue is that every consumer would otherwise
-//! rediscover the same composition, and the contracts involved (D-19's
-//! edge-triggered completion event, D-23's non-covering flush, D-24's
-//! ring-wide barrier) are the kind that get learned by deadlock or by data
-//! loss. This sample is the transfer vehicle.
+//! # This is a demonstration, not API
+//!
+//! Nothing here is public surface, nothing here is covered by this crate's
+//! semantic versioning, and copying it makes its policy choices yours to
+//! maintain. That is not a disclaimer bolted on; it is the reason the sample
+//! exists at all.
+//!
+//! `windows-ioring-sys` exposes Windows mechanism and deliberately owns no
+//! durability *policy* (D-26 in its `DESIGN-NOTES.md`): what an epoch is, when
+//! to commit, which barrier strategy to pay for, and how durability is
+//! reported all depend on a workload the crate cannot see, so baking them into
+//! a primitive would be exactly the kind of policy D-8 refuses. The residue is
+//! that every consumer would otherwise rediscover the same composition, and
+//! the contracts involved (D-19's edge-triggered completion event, D-23's
+//! non-covering flush, D-24's ring-wide barrier) are the kind that get learned
+//! by deadlock or by data loss. This sample is the transfer vehicle: a worked
+//! answer to "how do these go together", offered as a starting point you own.
 //!
 //! # Read [`contract`] first
 //!
@@ -21,17 +28,47 @@
 //! own words rather than as a description of what the ring happens to do. The
 //! code below has to satisfy it; it does not get to define it.
 //!
-//! # State of construction
+//! # The modules, and what each one is for
 //!
-//! M13.1 delivered the contract, M13.2 the record format and append path,
-//! M13.3 epoch bookkeeping and group commit, M13.4 the multiplexed wait, and
-//! M13.5 replay. M14.1 added the case that motivated the multiplexed wait in
-//! the first place: an operation the ring cannot express -- an `FSCTL`
-//! reclaiming a retired segment -- that must nonetheless be ordered against
-//! ring work. M14.2 (this) splits the program across both delivery models at
-//! once: the log thread keeps Model B for the data path, while checkpointing
-//! runs Model A on a second ring delivered to the thread pool. See
-//! [`reclaim`] and [`checkpoint`].
+//! Roughly the order to read them.
+//!
+//! | Module | What it holds | The contract behind it |
+//! |---|---|---|
+//! | [`contract`] | What this log guarantees, does not guarantee, and assumes | written first, on purpose |
+//! | [`record`] | The 28-byte header: magic, sequence, epoch, length, checksum | a torn record must be *detectable*, not survivable |
+//! | [`append`] | The data path: compose into a registered arena slot, push one write | a registered buffer's address lives for the ring's life, so slots are reused only after their completion is observed |
+//! | [`commit`] | Epochs, group commit, and the truthful `durable_through` | D-23: an unflagged flush does not cover preceding writes |
+//! | [`event_loop`] | The multiplexed wait: ring, non-ring, shutdown | D-19: the completion event is an *edge*, so drain to empty every pass |
+//! | [`reclaim`] | An `FSCTL` the ring cannot express, ordered against ring epochs | D-24 orders SQEs against SQEs, so this ordering is the log's job |
+//! | [`checkpoint`] | The control plane: a second ring, delivered to the thread pool | D-21: a ring given to `EventDelivery` cannot also be waited on directly |
+//! | [`replay`] | Reading the log back, including a negative control | a verifier that cannot fail proves nothing |
+//! | [`strategy`] | All three commit strategies, implemented and measured | D-24 makes the choice a real fork with no free answer |
+//!
+//! # What one run does
+//!
+//! 1. Prints the contract, so a reader who only runs the program still learns
+//!    what it does and does not promise.
+//! 2. Appends records in epochs, committing each and waiting for it to become
+//!    durable -- then appends a tail into an epoch it deliberately never
+//!    commits, because a replay pass that never sees such a tail has not been
+//!    asked the interesting question.
+//! 3. Checkpoints on the pool, which is what authorises reclaiming a retired
+//!    segment: log thread -> pool thread -> reclaim worker -> log thread, with
+//!    the log thread blocking for none of it.
+//! 4. Replays three ways: clean, with a torn tail, and with a byte corrupted
+//!    inside the durable region that replay is *required* to catch.
+//! 5. Runs the same workload under all three commit strategies and prints what
+//!    each costs on this machine.
+//!
+//! # Two things it cannot show, said plainly
+//!
+//! - **Whether the ordering held on the device.** That is only observable
+//!   across a power cut. Every durability claim here rests on D-23 and D-24
+//!   plus the assumption, stated in [`contract`], that the device honours the
+//!   flush.
+//! - **A ranking of the three strategies.** Measured here they are
+//!   indistinguishable, because the device flush dominates everything they
+//!   differ about. [`strategy`] has the numbers and the reasoning.
 
 mod append;
 mod checkpoint;

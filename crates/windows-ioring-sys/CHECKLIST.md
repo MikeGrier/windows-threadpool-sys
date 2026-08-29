@@ -287,7 +287,14 @@ forced the original consumer conversation -- operations the ring cannot express,
   by `UserData` in one map across two rings whose sequences collide. Both are recorded in
   `strategy.rs` because both are easy to repeat.
 
-- [ ] **M14.5** -- Document the example: a module-level walkthrough, a pointer from `README.md` and
+- [x] **M14.5** -- Document the example: a module-level walkthrough, a pointer from `README.md` and
   from the "Durability on the ring" section of [DESIGN-NOTES.md](DESIGN-NOTES.md), and an explicit
   statement that it is a demonstration of a pattern rather than a supported API -- so that nobody
   vendors it and then expects this crate to maintain its policy choices.
+  **Done:** `main.rs` opens with the not-API statement and its reasoning (D-8/D-26), a module table
+  giving each file's job *and the contract behind it*, what one run does, and two things the sample
+  cannot show. `README.md` points at the example from the Durability section and gains an "the
+  examples are demonstrations, not API" subsection under Cargo features.
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) gains a subsection at the end of "Durability on the ring" that
+  also promotes M14.4's two findings out of the sample, since both are about the design rather than
+  about the demonstration.

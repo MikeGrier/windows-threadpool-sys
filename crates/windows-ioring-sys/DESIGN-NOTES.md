@@ -152,6 +152,31 @@ ordering point per epoch rather than per write.
 Neither is exposed by this crate today, and neither is reachable through the ring API; a consumer
 that needs them queries the device directly.
 
+### A worked implementation of everything above
+
+[examples/epoch_log/](examples/epoch_log/) builds this section as a running program, and is the
+place to look when the prose above is clear but the composition is not. It carries a written-down
+durability contract (authored before the code that implements it), group commit over a registered
+arena, a multiplexed wait that services a non-ring `FSCTL` alongside ring completions, a thread-pool
+control plane on a second ring, replay with a negative control, and all three commit strategies from
+the table above implemented behind one interface and measured against each other.
+
+Two of its findings belong here rather than only in the sample:
+
+- Measured on the machine this was written on, the three strategies are **indistinguishable**: the
+  spread across strategies is the same size as one strategy's run-to-run spread, because all three
+  pay exactly one device flush per epoch at hundreds of microseconds while their actual differences
+  land in the tens. The table's distinctions are real, and at that workload they sit two orders of
+  magnitude below the dominant term. A device with a fast flush, a log committing far more often, or
+  an arena under real pressure moves the balance -- which is why the sample measures rather than
+  quotes.
+- The barrier's cost is invisible to a benchmark that awaits each commit before appending again,
+  because a ring-wide barrier costs nothing when nothing is queued behind it. Measuring it requires
+  the shape a real log has: keep appending while the commit is outstanding.
+
+The sample is a demonstration of a pattern, not supported API surface -- it makes exactly the policy
+choices [D-8](#d-8) and [D-26](#d-26) say this crate must not make.
+
 ## The completion event is an edge, not a level
 
 This is the second section written for consumers rather than for maintainers, for the same reason as
