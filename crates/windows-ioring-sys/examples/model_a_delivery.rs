@@ -7,8 +7,9 @@
 //!
 //! This submits several reads and returns immediately (`wait_operations =
 //! 0`): the submitting thread never blocks waiting for a completion. Every
-//! completion is instead delivered on a thread-pool callback thread, via
-//! [`EventDelivery`]'s wired-up `SetIoRingCompletionEvent`.
+//! completion is instead delivered on a thread-pool callback thread, via the
+//! ring's own completion event, which [`EventDelivery`] takes from
+//! [`IoRing::completion_event`] and hands to a `ThreadpoolWait`.
 
 use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;

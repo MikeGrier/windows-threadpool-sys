@@ -281,18 +281,39 @@ would mean writing a `SetEvent`-after-arm patch that M11.3 immediately deletes.
   [tests/event_delivery.rs](tests/event_delivery.rs). The suite runs in about half a second, nearly all
   of it the one deliberately-asserted timeout.
 
-- [ ] **M11.3** -- Re-express `EventDelivery::new` on top of `IoRing::completion_event`, which removes the
-  second `SetIoRingCompletionEvent` call site ([D-20](DESIGN-NOTES.md#d-20)) and fixes the stranded-backlog
-  bug ([D-19](DESIGN-NOTES.md#d-19)) in the same change. The bug: a ring handed to `EventDelivery::new`
-  with completions already in its CQ never delivers them, because the attach does not signal (the queue
-  was already non-empty) and nothing afterwards signals either (the queue never returns to empty). Its
-  rustdoc claims the opposite ("including any that were already queued when `ring` was handed over"), so
-  the doc is wrong as well as the behaviour, and must be corrected in the same commit. Land the spike's
-  repro as a failing integration test first (submit, let the completion land, *then* hand the ring over,
-  assert the callback runs), then consolidate: `completion_event`'s signal-once-on-attach is what makes it
-  pass, and `ThreadpoolWait` accepts the returned duplicate as its owned waitable. The drain/re-arm/drain
-  callback body is already correct and needs no change. The existing M4 test only ever hands over a fresh
-  ring, which is why this passed CI.
+- [x] **M11.3** -- `EventDelivery::new` re-expressed on top of `IoRing::completion_event`, which removed
+  the second `SetIoRingCompletionEvent` call site ([D-20](DESIGN-NOTES.md#d-20)) and fixed the
+  stranded-backlog bug ([D-19](DESIGN-NOTES.md#d-19)) in one change. `src/` now has exactly one
+  `SetIoRingCompletionEvent` call, in `IoRing::completion_event`.
+
+  The repro landed first and was **watched failing**: a ring handed over with eight completions already
+  in its CQ delivered nothing, and
+  `completions_queued_before_handover_are_still_delivered` in
+  [tests/event_delivery.rs](tests/event_delivery.rs) failed on a five-second delivery timeout. After the
+  consolidation it passes instantly. The two pre-existing tests in that file both hand over a *fresh*
+  ring, which is exactly why the bug survived CI. `completion_event`'s signal-once-on-attach is what
+  makes it pass; `ThreadpoolWait` takes the returned duplicate through
+  `WaitableHandle::assume_waitable`, and the drain/re-arm/drain callback body needed no change.
+
+  Also removed: `EventDelivery`'s own copy of the capability check and its `Unsupported` error message,
+  which duplicated `completion_event`'s word for word. One statement of that rule now, not two.
+
+  Documentation corrected in the same commit, per CONTRACT INTEGRITY's blast-radius rule. The rustdoc
+  had asserted the backlog guarantee while the code did not hold it, so it is now stated as a guarantee
+  the method *buys* -- naming the edge that would otherwise strand the backlog and the setup signal that
+  closes it -- with a note that a caller on an earlier version cannot rely on it. Swept
+  `SetIoRingCompletionEvent` / "already queued" / "handed over" across `src/`, `tests/`, `examples/` and
+  `*.md`: 6 files updated ([src/event_delivery.rs](src/event_delivery.rs),
+  [src/capability.rs](src/capability.rs), [examples/model_a_delivery.rs](examples/model_a_delivery.rs),
+  [DESIGN-NOTES.md](DESIGN-NOTES.md)'s D-20 status marker, its Model A description, and its "this bit us"
+  paragraph). Design-session transcripts and [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) were left
+  alone as historical record.
+
+  One newly reachable interaction documented on `EventDelivery::ring`: calling
+  `IoRing::completion_event` on a ring the pool is already waiting on now *succeeds*, returning a
+  duplicate of the pool's own event, which is two waiters on one ring and a
+  [D-21](DESIGN-NOTES.md#d-21) violation. Worth stating because the same call was previously worse and
+  equally silent -- it replaced the pool's event and stopped delivery outright.
 
 - [ ] **M11.4** -- Gate `windows-threadpool-sys` behind a default-on `threadpool` feature
   ([D-22](DESIGN-NOTES.md#d-22)), with `EventDelivery` and its tests behind the same gate, and extend CI to

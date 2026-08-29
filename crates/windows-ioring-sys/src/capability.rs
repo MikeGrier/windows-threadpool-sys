@@ -60,8 +60,9 @@ pub struct Capabilities {
     pub max_submission_queue_size: u32,
     /// The largest completion queue a ring can request.
     pub max_completion_queue_size: u32,
-    /// Whether `SetIoRingCompletionEvent` is available. The thread-pool
-    /// delivery path refuses to construct without this.
+    /// Whether `SetIoRingCompletionEvent` is available. Both
+    /// [`crate::IoRing::completion_event`] and the thread-pool delivery path
+    /// built on it refuse to construct without this.
     pub supports_completion_event: bool,
     /// Whether the ring is emulated in user mode rather than backed by the
     /// kernel. A consumer reaching for this crate to maximize throughput
