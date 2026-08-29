@@ -146,8 +146,36 @@ assumption), and the previously-unstated completion-ordering rule. Categories 1,
   `supports_raw`, `Op`, `register_files`, and `register_buffers` rustdoc that stated these wrongly or not at
   all, and added an integration test binding the zero-length-registration rule.
 
-- [ ] **M10.2** -- Audit the remaining categories (1, 2, 6, 8, 9) against the ring/token/registration
-  surface, stating each answer including "unspecified, deliberately" where that is honest.
+- [x] **M10.2** -- Audited the remaining categories (1, 2, 6, 8, 9) against the ring/token/registration
+  surface; [DESIGN-NOTES.md](DESIGN-NOTES.md) carries one section each. Category 1: file addressing and
+  buffer addressing are genuinely orthogonal (all four combinations reachable), but file addressing and
+  *safety* co-vary and in the wrong direction -- `FileRef::Registered` is reachable only through an
+  `unsafe fn` whose safety obligation is vacuous for that very input
+  ([D-29](DESIGN-NOTES.md#d-29), queued as M10.4). Category 2: **every successfully queued SQE produces
+  exactly one completion**, unconditionally -- the rule `run_down`'s termination silently depended on --
+  plus the two "may" readings that were too weak (`submit*` returns entries submitted, not completed; a
+  cancel is a request that yields a second completion rather than replacing its target's). Category 6: a
+  completion matching no live `Token` is normal, via four distinct routes. Category 8: this crate joins
+  nothing, deliberately, and now says so. Category 9: `io::Error::kind()` is lossy exactly where the
+  `HRESULT` is not, discriminating this crate's own rejections and never the kernel's
+  ([D-30](DESIGN-NOTES.md#d-30), predicate queued as M10.5). Category 7 falls out of 2 and 6 jointly, so
+  all ten categories are now examined.
+
+- [ ] **M10.4** -- Give `FileRef::Registered` safe entry points ([D-29](DESIGN-NOTES.md#d-29)). Today every
+  safe push hardcodes `FileRef::Raw` from its `SharedFile`, so using a registered file forces an `unsafe`
+  call whose contract is vacuous for that input -- the index is minted by this crate, checked against the
+  minting ring (D-17), and names a table the ring owns, leaving the caller nothing to keep alive. Vacuous
+  `unsafe` is worse than none: it trains a caller to discharge safety contracts by rote. Accept a
+  `RegisteredFile` without `unsafe` across the read/write/flush/cancel surface, including the
+  registered-buffer variants, and cover the file-registered x buffer-registered combination the safe API
+  currently cannot express at all.
+
+- [ ] **M10.5** -- A named predicate for the ring conditions a consumer must branch on, starting with
+  `IORING_E_SUBMISSION_QUEUE_FULL` ([D-30](DESIGN-NOTES.md#d-30)). Every push's rustdoc names queue-full as
+  the backpressure signal, and the only way to detect it is a `downcast_ref::<IoRingError>()` plus an
+  `HRESULT` comparison -- documented on `IoRingError` as of M10.2, but still hand-rolled at every call site
+  that needs it. Do **not** map `IORING_E_*` onto `io::ErrorKind`: D-30 refuses that as trading an honest
+  `Other` for a lossy guess.
 
 - [ ] **M10.3** -- Resolve or re-record D-14's unverified registration-index continuity assumption. It is a
   cross-message invariant a consumer can silently depend on; either establish it by measurement (the spike's

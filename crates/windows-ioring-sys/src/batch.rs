@@ -114,6 +114,13 @@ fn checked_len(len: usize) -> io::Result<u32> {
 /// A file, addressed either by a raw `HANDLE` or by the index a prior
 /// [`Batch::register_files`] assigned it (M5.1).
 ///
+/// Reaching the [`FileRef::Registered`] form currently requires one of the
+/// `unsafe fn` `_raw` pushes, because every safe push hardcodes
+/// [`FileRef::Raw`] from its [`SharedFile`]. That is a known gap, not the
+/// intended shape: a registered index carries no lifetime obligation, so the
+/// `unsafe` is vacuous for exactly that case (M10.2, D-29; the safe entry
+/// points are M10.4).
+///
 /// A distinct type per addressing mode -- rather than one method accepting
 /// either a `HANDLE` or a bare `u32` -- is what makes "read against a
 /// registered file" and "read against an unregistered one" impossible to
@@ -835,6 +842,13 @@ impl<'ring> Batch<'ring> {
     /// the returned [`Token`] keeps `file`'s clone alive until this
     /// operation's completion is observed.
     ///
+    /// A cancel is a request, not a guarantee (M10.2): `target` may complete
+    /// normally regardless, and this push produces its *own* completion in
+    /// addition to the target's, so a cancelled operation yields two. A
+    /// result of `ERROR_NOT_FOUND` on this push's own completion means
+    /// `target` was no longer outstanding -- a normal race, not a caller
+    /// error.
+    ///
     /// # Errors
     ///
     /// As [`Batch::cancel_raw`].
@@ -1205,6 +1219,9 @@ impl<'ring> Batch<'ring> {
     /// Submit everything queued so far, returning the number of entries the
     /// kernel accepted.
     ///
+    /// That count is entries *submitted*, never entries completed (M10.2):
+    /// draining is [`crate::IoRing::try_pop`]'s job and stays the caller's.
+    ///
     /// # Errors
     ///
     /// Returns any error from `SubmitIoRing`.
@@ -1216,6 +1233,11 @@ impl<'ring> Batch<'ring> {
     /// `wait_operations` of them have completed or `timeout_ms` elapses
     /// (D-3's Model B primitive: the fused submit-and-wait *is* the event
     /// loop for a pinned-thread consumer).
+    ///
+    /// Returning does not mean `wait_operations` completions are poppable:
+    /// the timeout can expire first, and the returned count is entries
+    /// submitted rather than completed (M10.2). Drain with
+    /// [`crate::IoRing::try_pop`] and count for yourself.
     ///
     /// # Errors
     ///

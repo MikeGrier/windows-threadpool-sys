@@ -51,6 +51,8 @@ runs a continuation), this crate exposes the mechanism and documents the trade-o
 | <a id="d-26"></a>D-26 | **Windows mechanism belongs in this crate; durability policy belongs to the consumer; an example is how the knowledge crosses between them.** The dividing test is whether the answer depends on *how Windows behaves* or on *the consumer's workload and contract*. Ours: exposing the kernel's parameters, stating the measured contracts ([D-19](#d-19), [D-23](#d-23), [D-24](#d-24)), and making the footguns hard to hold. Theirs: epoch bookkeeping, which barrier strategy to pay for, how durability is reported, and how non-ring operations are sequenced against ring ones -- all of which depend on epoch sizes and latency targets, and so would be policy baked into a primitive ([D-8](#d-8) refuses exactly this). The residue is that a consumer must otherwise rediscover the same composition, so the transfer vehicle is a worked example (M13/M14), not a library: it demonstrates the pattern without this crate owning the policy. |
 | <a id="d-27"></a>D-27 | **One ring per thread is userspace's proxy for one ring per CPU, and pinning is what makes the proxy real.** Kernels affine hot structures to *CPUs*, not threads, because per-CPU exclusion is free (disable preemption, or raise IRQL) and because interrupt context has no meaningful owning thread. The hardware agrees: NVMe queue pairs are per-CPU with their completion interrupt vector routed to that CPU. Userspace has no per-CPU primitive and cannot disable preemption, so the only durable ownership unit available is the thread -- which is why the SPDK/Seastar discipline pins one. This is the reason under guidance this crate already gives ([D-8](#d-8), and the L3-domain advice): an *unpinned* per-thread ring still gets the single-producer safety the SQ/CQ protocol requires, but none of the locality that motivated the structure, and the interesting count is therefore cores or LLC domains rather than threads. |
 | <a id="d-28"></a>D-28 | **`IoRing::supports` answers what the kernel's op table contains, not what this crate's safe push surface reaches; and every legality check runs before anything is reserved (category 3 audit, M10.1).** Six of the seven named ops gate one or more `Batch` methods; `Op::Nop` gates none and is reachable only through `push_raw`, because a nop owns no buffer for a `Token` to hand back. Reading `supports` as "a push for this op will be accepted" is therefore wrong for exactly the op a consumer reaches for to wake a parked `submit_and_wait` (M6+.3). `supports_raw` is the same truth uncached rather than a different question -- it accepts named codes too and agrees with `supports` on them -- and it never widens the push surface, since an op outside `Op` has no builder regardless. Separately, the registration one-shot is enforced against the registered count rather than a flag, which makes the real rule "at most one registration that assigned an index" (a zero-length registration does not spend it) and makes a *failed* registration unretryable on that ring (the count advances at queue time, [D-14](#d-14)). |
+| <a id="d-29"></a>D-29 | **`FileRef::Registered` must be reachable without `unsafe`, because a registered index carries no lifetime obligation for a caller to get wrong (category 1 audit, M10.2).** Every safe push method hardcodes `FileRef::Raw` internally and only the six `unsafe fn` `_raw` variants accept an `impl Into<FileRef>`, so today the *only* route to a registered file is an `unsafe` call. That inverts the safety argument [D-16](#d-16) built: `read_raw`'s own contract says a `FileRef::Registered` target "needs none of this", which means the `unsafe` obligation is vacuous for exactly that input -- and vacuous `unsafe` is worse than none, since it trains a caller to discharge safety contracts by rote. The index is minted by this crate, checked against the minting ring ([D-17](#d-17)), and names a table the ring itself owns; there is nothing left for the caller to keep alive. Queued as M10.4. Note this is a PLATFORM INTEGRITY instance rather than a mere ergonomic one: registration is a platform capability that the safe surface currently does not reach at all, so the safe API is narrower than the platform for no reason the design supports. |
+| <a id="d-30"></a>D-30 | **`io::Error::kind()` discriminates this crate's own rejections and never the kernel's, and that asymmetry is stated rather than papered over (category 9 audit, M10.2).** `check` wraps every failing `HRESULT` as `io::Error::other(IoRingError)`, so a kernel-reported failure always surfaces as `ErrorKind::Other` while this crate's own refusals carry `Unsupported`/`InvalidInput`/`AlreadyExists`. The `HRESULT` is not lost -- it survives behind `downcast_ref::<IoRingError>()` -- but the derived form a consumer naturally matches on is lossy, which is category 9 applied to an error type rather than a name. The alternative, mapping `IORING_E_*` onto `io::ErrorKind` variants, is refused: the kinds are not a faithful target (there is no "submission queue full" kind, and `WouldBlock` would misdescribe a condition that is not retryable without draining), so the mapping would trade an honest `Other` for a lossy guess. Instead the downcast recipe is documented on `IoRingError`, and a named predicate for the one condition consumers must branch on -- `IORING_E_SUBMISSION_QUEUE_FULL`, which the push rustdoc already names as the backpressure signal -- is queued as M10.5. |
 
 ## Durability on the ring
 
@@ -297,11 +299,107 @@ rather than a flag:
   registration fails must build it on a new ring. That is a real constraint on a consumer's error path, and
   it was previously discoverable only by reading `reserve_registered_files`'s call site.
 
-### Not yet audited
+### Category 1: independent options read as one concept
 
-Categories 1, 2, 6, 8, and 9 have not been examined against this crate's surface. Their absence above means
-"not looked at", not "does not apply" -- the distinction the taxonomy exists to keep visible. Queued as
-[CHECKLIST.md](CHECKLIST.md) -> M10.2.
+Two axes look independent on the push surface, and one pair genuinely is. **File addressing**
+(`FileRef::Raw` vs `FileRef::Registered`) and **buffer addressing** (an owned buffer vs a registered one) are
+fully orthogonal: all four combinations are legal and reachable, because `read_raw`/`write_raw` take
+`impl Into<FileRef>` with an owned buffer and `read_registered_raw`/`write_registered_raw` take the same
+`impl Into<FileRef>` with a registered span. A reader could reasonably have guessed the registered forms
+pair up -- that registered buffers require registered files -- and they do not.
+
+**What is *not* independent is file addressing and safety, and the coupling runs the wrong way.** Every safe
+method (`read`, `write`, `flush`, `cancel`, `read_registered`, `write_registered`) takes a `SharedFile` and
+hardcodes `FileRef::Raw(..)` internally; only the six `unsafe fn` `_raw` variants accept an
+`impl Into<FileRef>`. So `FileRef::Registered` -- the addressing mode with *no* handle-lifetime hazard at
+all, since the ring holds the table and the caller passes only an index this crate minted -- can be reached
+only through an `unsafe fn` whose own safety contract says, of that very case, "A `FileRef::Registered`
+target needs none of this." The requirement is vacuous and the `unsafe` is unearned. This is a real API gap
+the audit found rather than a statement gap; it is [D-29](#d-29), and the fix is queued as
+[CHECKLIST.md](CHECKLIST.md) -> M10.4.
+
+A smaller one: `PushOptions` is not universal, though its presence on most pushes implies it. Neither
+`cancel` nor `cancel_raw` takes one, because `BuildIoRingCancelRequest` has no SQE-flags parameter, and
+neither registration takes one either -- which is not an oversight but the precise root of [D-14](#d-14),
+since it is what stops this crate from forcing a drain barrier around a registration.
+
+### Category 2: unconditional read as probabilistic
+
+The rule the prose never stated, and that `run_down`'s termination silently depends on: **every SQE that
+successfully queues produces exactly one completion -- always, not usually.** `try_pop` returning `Option`
+describes whether the completion queue has an entry *at this instant*, never whether one is ever coming.
+`IoRing::run_down` loops until `outstanding` reaches zero and would not terminate if this were probabilistic.
+The one case that produces no completion is the push that never queued at all: a `Build*` failing
+synchronously releases its reservation (`cancel_reservation`), so it is not merely uncompleted, it is
+un-counted.
+
+Two consequences worth stating in the same breath, because both are places "may" reads too weakly:
+
+- **`submit` and `submit_and_wait` return entries *submitted*, not completed.** `submit_and_wait(n, timeout)`
+  returning does not mean `n` completions are poppable -- the timeout can expire first, and the return value
+  counts submissions regardless. A consumer still drains with `try_pop` and still counts for itself.
+- **A cancel is a request, not a guarantee, and it does not replace its target's completion.** The target may
+  complete normally anyway; either way the cancel produces its *own* completion in addition to the target's,
+  so a cancelled operation yields two. `ERROR_NOT_FOUND` on the cancel's own result means the target was no
+  longer outstanding, which is a normal race rather than a caller error.
+
+### Category 6: which state a transition is entered from
+
+**A popped `Completion` matching no live `Token` is normal, not a bug**, and a drain loop that treats it as
+one is wrong. There are four distinct ways to reach that state, and only the last is a mistake:
+
+- a **registration** completion, which is claimed by `PendingFileRegistration`/`PendingBufferRegistration`
+  rather than by a `Token`;
+- a **`flush_raw` or `cancel_raw`** completion, for which no `Token` was ever created -- both return a bare
+  `usize` identity, because neither op owns a buffer to hand back;
+- a **cancel's own** completion, distinct from its target's;
+- a completion whose `Token` the caller **dropped** unclaimed, which by [D-4](#d-4) forgets the buffer rather
+  than freeing it.
+
+Relatedly, completions can arrive for work the caller never explicitly submitted: `Batch` submits on `Drop`
+([D-5](#d-5)), so abandoning a batch queues its pushes rather than discarding them.
+
+### Category 8: values deliberately never correlated
+
+**This crate joins nothing, deliberately.** Matching a completion to what it completes is the consumer's
+loop, and every place a pairing could have been offered is left to them on purpose:
+
+- a `Completion` is never joined to its `Token` -- `claim_if` is offered so the consumer can, and [D-4](#d-4)
+  is why the crate does not do it for them (it would require the ring to retain a map keyed by `UserData`,
+  which is exactly the per-operation allocation this design exists to avoid);
+- a cancel's completion is never paired with its target's, though the consumer holds both identities;
+- a registration's completion is never paired with the reads and writes that later address that registration;
+- `Completion::information` is returned uninterpreted, since its meaning is per-op.
+
+Stated plainly so the absence reads as a decision rather than an omission.
+
+### Category 9: boundary-type fidelity lost at the consumer
+
+Most boundaries here are lossless or narrow loudly. `UserData` is `usize` from `IORING_CQE` through `Token`
+with no conversion. Buffer lengths narrow `usize` to `u32` through `checked_len`, which *reports*
+`InvalidInput` rather than truncating. `RegisteredBuffers::len`'s saturating `unwrap_or(u32::MAX)` is
+unreachable by construction, because `register_buffers` runs the same `checked_len` over the same `Vec`
+before the registration is ever built. `RingVersion` wraps a raw `i32` precisely so a version this crate
+cannot name survives ([D-6](#d-6)).
+
+**The exception is `io::Error::kind()`, and it is the shape category 9 describes exactly: the value is
+lossless, the derived form the consumer actually matches on is not.** Every kernel-reported failure goes
+through `check`, which produces `io::Error::other(IoRingError)` -- so `kind()` is **always**
+`ErrorKind::Other` and discriminates nothing, while the `HRESULT` itself survives intact behind
+`downcast_ref::<IoRingError>()`. This crate's *own* rejections, by contrast, carry meaningful kinds
+(`Unsupported`, `InvalidInput`, `AlreadyExists`). So `kind()` reliably answers "did this crate refuse the
+push?" and never answers "why did the kernel refuse it?" -- including for `IORING_E_SUBMISSION_QUEUE_FULL`,
+which the push rustdoc names as the expected backpressure signal and which is therefore the one a consumer
+most needs to match. See [D-30](#d-30); the recipe is now stated on `IoRingError`, and a first-class
+predicate is queued as [CHECKLIST.md](CHECKLIST.md) -> M10.5.
+
+### Audit status
+
+All ten categories have now been examined against this crate's surface (M10.1, M10.2). Categories 4, 5, and
+10 were reached by the first pass above; 3 by M10.1; 1, 2, 6, 8, and 9 by M10.2. Category 7 (branch and
+terminal paths documented by omission) is answered jointly by the category-2 and category-6 sections: the
+terminal paths are "exactly one completion per queued SQE" and "no completion for a push that never queued",
+and the branch paths are the four ways a completion can match no token.
 
 ## Two delivery architectures
 

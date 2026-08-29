@@ -16,6 +16,31 @@ use windows_sys::core::HRESULT;
 /// Every `IoRing` entry point reports failure as an `HRESULT`, not through
 /// `GetLastError` the way most of Win32 does, so this crate cannot reuse
 /// `io::Error::last_os_error` the way `windows-overlapped-io-sys` does.
+///
+/// # Matching on one of these
+///
+/// A kernel-reported failure always reaches a caller as an [`io::Error`] whose
+/// [`kind`](io::Error::kind) is [`io::ErrorKind::Other`], because there is no
+/// faithful `ErrorKind` for most `IORING_E_*` conditions (M10.2, D-30). The
+/// `HRESULT` is not lost -- it is this value, behind a downcast -- but
+/// `kind()` will not find it. `kind()` discriminates only this crate's *own*
+/// rejections, which use `Unsupported`, `InvalidInput`, and `AlreadyExists`.
+///
+/// So a consumer branching on a ring condition -- most often
+/// `IORING_E_SUBMISSION_QUEUE_FULL`, the backpressure signal every push's
+/// docs name -- downcasts:
+///
+/// ```no_run
+/// use windows_ioring_sys::IoRingError;
+/// use windows_sys::Win32::Foundation::IORING_E_SUBMISSION_QUEUE_FULL;
+///
+/// fn is_queue_full(error: &std::io::Error) -> bool {
+///     error
+///         .get_ref()
+///         .and_then(|inner| inner.downcast_ref::<IoRingError>())
+///         .is_some_and(|ring| ring.code() == IORING_E_SUBMISSION_QUEUE_FULL)
+/// }
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct IoRingError {
     code: HRESULT,

@@ -549,6 +549,22 @@ impl IoRing {
     /// it (D-4): accounting is driven by observing a real `IORING_CQE`,
     /// never by a token being dropped.
     ///
+    /// `None` says the completion queue is empty *at this instant*, never
+    /// that an operation will not complete. **Every SQE that successfully
+    /// queues produces exactly one completion** (M10.2) -- unconditionally,
+    /// which is what lets [`IoRing::run_down`] terminate. The only push that
+    /// yields no completion is one whose `Build*` call failed synchronously,
+    /// and that push's reservation is released rather than left outstanding.
+    ///
+    /// A popped completion matching no live [`crate::Token`] is **normal**,
+    /// not a bug, and a drain loop must not treat it as one. It happens for
+    /// a registration (claimed by [`crate::PendingFileRegistration`] or
+    /// [`crate::PendingBufferRegistration`] instead), for a
+    /// [`crate::Batch::flush_raw`]/[`crate::Batch::cancel_raw`] push (which
+    /// return a bare identity because they own no buffer), for a cancel's own
+    /// completion as distinct from its target's, and for a token the caller
+    /// dropped unclaimed.
+    ///
     /// # Errors
     ///
     /// Returns any error from `PopIoRingCompletion` other than its
