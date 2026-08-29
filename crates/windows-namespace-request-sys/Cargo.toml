@@ -2,7 +2,7 @@
 
 [package]
 name = "windows-namespace-request-sys"
-version = "0.1.0" # x-release-please-version
+version = "0.2.0" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -37,7 +37,7 @@ wtf-string = { version = "0.1.0", path = "../wtf-string" }
 # demonstrated, and a dev-dependency is how to demonstrate it without creating
 # the coupling the design refuses.
 [dev-dependencies]
-windows-thread-ambient-sys = { version = "0.1.0", path = "../windows-thread-ambient-sys" }
+windows-thread-ambient-sys = { version = "0.2.0", path = "../windows-thread-ambient-sys" }
 
 [dependencies.windows-sys]
 version = "0.61.2"

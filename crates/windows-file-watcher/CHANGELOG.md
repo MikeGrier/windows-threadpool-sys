@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.1.2...windows-file-watcher-v0.1.3) (2026-08-29)
+
+
+### Bug Fixes
+
+* **file-watcher:** assert teardown on the queue, not on a drained count ([140cf3d](https://github.com/MikeGrier/windows-threadpool-sys/commit/140cf3d0a5261899eaaa4341db3bc5cc090d8192))
+
 ## [0.1.2](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.1.1...windows-file-watcher-v0.1.2) (2026-08-27)
 
 
