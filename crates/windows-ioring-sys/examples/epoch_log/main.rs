@@ -684,7 +684,14 @@ fn report_contract<O: io::Write, E: io::Write>(report: &mut Report<O, E>) {
     }
 }
 
-/// Run the same log three ways, once per commit strategy (M14.3).
+/// Format a duration in microseconds, which is the resolution these
+/// measurements actually have.
+fn micros(duration: std::time::Duration) -> String {
+    format!("{} us", duration.as_micros())
+}
+
+/// Run the same log three ways, once per commit strategy (M14.3), and measure
+/// what each one costs on this machine (M14.4).
 ///
 /// Every strategy produces the same records in the same order, so the check
 /// that matters is that all three replay clean. Which one to *pay for* is a
@@ -693,16 +700,21 @@ fn compare_strategies<O: io::Write, E: io::Write>(
     report: &mut Report<O, E>,
     directory: &std::path::Path,
 ) -> io::Result<()> {
-    const EPOCHS: usize = 8;
-    const PER_EPOCH: usize = 16;
+    const EPOCHS: usize = 32;
+    const PER_EPOCH: usize = 64;
 
     report.line(format_args!(""));
     report.line(format_args!(
         "commit strategies: {EPOCHS} epochs of {PER_EPOCH} records, each run replayed"
     ));
+    report.line(format_args!(
+        "  these numbers describe THIS machine and THIS device. They are printed rather than \
+         quoted in the docs because quoting ours would be misleading."
+    ));
 
     let payload = b"strategy comparison record payload";
     let mut reference: Option<(&'static str, Vec<u8>)> = None;
+    let mut throughputs: Vec<f64> = Vec::new();
     for strategy in strategy::CommitStrategy::ALL {
         let path = directory.join(format!(
             "windows-ioring-sys-epoch-log-{}-{}.log",
@@ -728,6 +740,14 @@ fn compare_strategies<O: io::Write, E: io::Write>(
         // Replayed with the same verifier the log itself uses, because a
         // strategy that is fast and wrong is not a strategy.
         let bytes = std::fs::read(&path)?;
+        assert_eq!(
+            outcome.bytes as usize,
+            bytes.len(),
+            "{} wrote {} bytes but accounted for {}",
+            strategy.name(),
+            bytes.len(),
+            outcome.bytes
+        );
         let outcome_replay =
             replay::replay(&bytes, outcome.durable_through, outcome.records, |index| {
                 let mut expected = Vec::with_capacity(payload.len());
@@ -765,12 +785,43 @@ fn compare_strategies<O: io::Write, E: io::Write>(
             ),
         }
         report.line(format_args!(
-            "  {:<18} {} records in {} epochs, {} bytes, replayed clean -- pays {}",
+            "  {:<18} {:>8.0} rec/s  commit p50 {:>7}  p99 {:>7}  max {:>7}  \
+             append stall {:>7}  -- pays {}",
             outcome.strategy.name(),
-            outcome.records,
-            EPOCHS,
-            outcome.bytes,
+            outcome.throughput(),
+            micros(outcome.commit_quantile(0.50)),
+            micros(outcome.commit_quantile(0.99)),
+            micros(outcome.commit_quantile(1.0)),
+            micros(outcome.append_stall),
             outcome.strategy.cost()
+        ));
+        throughputs.push(outcome.throughput());
+    }
+
+    // The reading, computed from this run rather than asserted from theory.
+    //
+    // The spread across strategies is only meaningful next to the spread the
+    // *same* strategy shows between runs, so the program says so instead of
+    // declaring a winner. On the machine this was written on the two are the
+    // same size, and the reason is visible in the numbers above: every
+    // strategy pays exactly one device flush per epoch, that flush is hundreds
+    // of microseconds, and everything the strategies actually differ about --
+    // ring-side stalls, an extra host round trip -- lands in the tens. The
+    // distinction D-24 draws is real; on this device it is two orders of
+    // magnitude below the dominant term.
+    //
+    // That is not a licence to pick the cheapest-looking one. A device with a
+    // fast flush, a log that commits far more often, or an arena under real
+    // pressure moves the balance, and the only way to know is to run this on
+    // the machine in question.
+    let low = throughputs.iter().copied().fold(f64::INFINITY, f64::min);
+    let high = throughputs.iter().copied().fold(0.0, f64::max);
+    if low > 0.0 {
+        report.line(format_args!(
+            "  spread across strategies: {:.2}x. Run this twice: if the run-to-run spread of one \
+             strategy is the same size, the choice is dominated by the device flush that all \
+             three pay once per epoch.",
+            high / low
         ));
     }
     Ok(())

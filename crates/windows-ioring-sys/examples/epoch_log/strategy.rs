@@ -58,9 +58,38 @@
 //! Which one is right. That depends on commit frequency, record size, arena
 //! pressure, and the device -- none of which this crate knows. M14.4 measures
 //! all three on the running machine, which is the only honest way to answer it.
+//!
+//! # What the measurement found here, and why it is worth saying
+//!
+//! On the machine this was written on, the three are **indistinguishable**:
+//! the throughput spread across strategies is the same size as the spread one
+//! strategy shows between consecutive runs. The reason is visible in the
+//! numbers the sample prints. Every strategy pays exactly one device flush per
+//! epoch, that flush costs hundreds of microseconds, and everything the
+//! strategies actually differ about -- the ring-side stall, the extra host
+//! round trip -- lands in the tens.
+//!
+//! The distinction [D-24](../../DESIGN-NOTES.md) draws is real. It is simply
+//! two orders of magnitude below the dominant term at this workload, and a
+//! reader is better served by knowing that than by a ranking that would not
+//! reproduce.
+//!
+//! Getting that result required fixing the harness twice, which is worth
+//! recording because both mistakes are easy to make and neither announces
+//! itself:
+//!
+//! - The first version awaited each commit before appending the next epoch.
+//!   That serialises every strategy, and a ring-wide barrier costs nothing
+//!   when nothing is queued behind it -- so it measured the barrier as free.
+//!   A real log keeps appending while a commit is outstanding, and those are
+//!   the appends a covering flush holds back.
+//! - The second version keyed pending commits by `UserData` in one map across
+//!   both rings. Each ring assigns its own sequence, so the two collided and
+//!   half the samples vanished.
 
 use std::io;
 use std::os::windows::io::RawHandle;
+use std::time::{Duration, Instant};
 
 use windows_ioring_sys::{
     Batch, FlushCoverage, FlushMode, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan,
@@ -139,6 +168,52 @@ pub struct Outcome {
     pub durable_through: Epoch,
     /// Bytes the run wrote, so a reader can check the three wrote the same log.
     pub bytes: u64,
+    /// Wall clock for the whole run, appends and commits together.
+    pub elapsed: Duration,
+    /// Per epoch, from pushing the commit to observing its completion.
+    ///
+    /// Read this carefully, because it is **not** device flush time. Every
+    /// strategy here defers its await by design, so the figure includes time
+    /// the program spent doing useful work before it got around to asking --
+    /// and a strategy that defers *further* therefore reports a *larger*
+    /// number while being no slower. Alternating rings shows this most
+    /// plainly: it defers across two epochs and reports the highest latency of
+    /// the three while matching them on throughput.
+    ///
+    /// So compare [`Outcome::elapsed`] across strategies, and read this as
+    /// "how stale is a commit acknowledgement by the time this design collects
+    /// it" -- which is a real property, just not the one its name suggests.
+    pub commit_latencies: Vec<Duration>,
+    /// Time appends spent blocked because every arena slot was busy.
+    ///
+    /// This is where a ring-wide barrier shows up as a number: slots cannot be
+    /// released until the operations holding them complete, and a covering
+    /// flush holds everything pushed after it.
+    pub append_stall: Duration,
+}
+
+impl Outcome {
+    /// Records per second over the whole run.
+    pub fn throughput(&self) -> f64 {
+        if self.elapsed.is_zero() {
+            return 0.0;
+        }
+        self.records as f64 / self.elapsed.as_secs_f64()
+    }
+
+    /// Commit latency at `fraction` through the sorted distribution.
+    ///
+    /// Nearest-rank rather than interpolated: with tens of samples an
+    /// interpolated quantile invents precision the data does not have.
+    pub fn commit_quantile(&self, fraction: f64) -> Duration {
+        if self.commit_latencies.is_empty() {
+            return Duration::ZERO;
+        }
+        let mut sorted = self.commit_latencies.clone();
+        sorted.sort_unstable();
+        let rank = ((sorted.len() as f64 - 1.0) * fraction).round() as usize;
+        sorted[rank.min(sorted.len() - 1)]
+    }
 }
 
 /// One ring plus the arena registered on it.
@@ -328,10 +403,28 @@ pub fn run(
     let mut offset = 0u64;
     let mut sequence = 0u64;
     let mut records = 0usize;
-    // The commit that is pushed but not yet awaited. Only
+    let mut commit_latencies = Vec::with_capacity(epochs);
+    let mut append_stall = Duration::ZERO;
+    // Registration is deliberately outside the clock: it happens once, and
+    // charging a strategy's throughput for it would say more about setup than
+    // about the commit path this is comparing.
+    let started = Instant::now();
+    // Per lane, the commit that is pushed but not yet awaited. Only
     // `AlternatingRings` ever carries one across an epoch boundary; that
     // deferral *is* the overlap it buys.
-    let mut deferred: Option<(usize, usize)> = None;
+    //
+    // One slot **per lane**, not one slot: with a single slot, lane 0's
+    // outstanding commit is overwritten the moment lane 1 pushes its own, and
+    // is then never awaited -- so `durable_through` becomes a claim rather
+    // than an observation. That was the shape of this code until M14.4's
+    // measurement showed a commit-latency sample count of one, which no
+    // correct run could produce.
+    //
+    // The push instant lives here too, rather than in a map keyed by
+    // `UserData`. Each ring assigns its own `UserData` sequence, so the two
+    // lanes hand out colliding values and a single map silently loses half the
+    // samples -- which is exactly what the second attempt at this measured.
+    let mut deferred: Vec<Option<(usize, Instant)>> = vec![None; lanes.len()];
 
     for epoch in 0..epochs as u64 {
         let lane_index = if strategy == CommitStrategy::AlternatingRings {
@@ -339,17 +432,6 @@ pub fn run(
         } else {
             0
         };
-
-        // Before appending into this lane, settle any commit it still owes.
-        // For the single-ring strategies there is never one outstanding; for
-        // alternating rings this is where the previous use of *this* lane is
-        // reconciled, one full epoch later than it was pushed.
-        if let Some((owed_lane, user_data)) = deferred
-            && owed_lane == lane_index
-        {
-            lanes[owed_lane].await_flush(user_data)?;
-            deferred = None;
-        }
 
         for _ in 0..records_per_epoch {
             loop {
@@ -363,54 +445,86 @@ pub fn run(
                     }
                     // Every slot is busy. Drain and retry -- the arena
                     // working as intended, and the pressure a ring-wide
-                    // stall makes worse.
+                    // stall makes worse. Timed, because this is the cost a
+                    // covering flush imposes on the append path.
                     None => {
+                        let blocked = Instant::now();
                         if lane.drain()? == 0 {
                             Batch::new(&mut lane.ring).submit_and_wait(1, WAIT_MS)?;
                         }
+                        append_stall += blocked.elapsed();
                     }
                 }
             }
         }
 
-        match strategy {
-            CommitStrategy::CoveringFlush => {
-                let user_data = lanes[0].commit(file, FlushCoverage::CoversPrecedingOperations)?;
-                lanes[0].await_flush(user_data)?;
-            }
-            CommitStrategy::HostSequenced => {
-                // The round trip: every write observed complete *before* the
-                // flush is even pushed. That is what makes an unordered flush
-                // sufficient here -- and what the pipeline pays for it.
-                lanes[0].await_writes()?;
-                let user_data = lanes[0].commit(file, FlushCoverage::Unordered)?;
-                lanes[0].await_flush(user_data)?;
-            }
-            CommitStrategy::AlternatingRings => {
-                // Push the barrier and walk away. The next epoch appends into
-                // the *other* lane, so this stall overlaps with real work
-                // instead of blocking it. The debt is settled at the top of
-                // the next iteration that lands back on this lane.
-                let user_data =
-                    lanes[lane_index].commit(file, FlushCoverage::CoversPrecedingOperations)?;
-                deferred = Some((lane_index, user_data));
-            }
+        // Settle this lane's previous commit *here*, after its next epoch's
+        // appends have already been pushed, rather than before them.
+        //
+        // That placement is what makes the comparison mean anything. Settling
+        // first would make every strategy serialise -- commit, wait, append,
+        // commit -- and a ring-wide barrier costs nothing when nothing is
+        // queued behind it. A real log keeps appending while a commit is
+        // outstanding (the one in `main.rs` does), and it is *those* appends
+        // that a covering flush holds back. An earlier revision of this
+        // harness settled first, measured a difference indistinguishable from
+        // run-to-run noise, and would have let a reader conclude the barrier
+        // is free.
+        if let Some((user_data, pushed)) = deferred[lane_index].take() {
+            lanes[lane_index].await_flush(user_data)?;
+            commit_latencies.push(pushed.elapsed());
         }
+
+        let coverage = match strategy {
+            // The round trip: every write observed complete *before* the flush
+            // is even pushed. That is what makes an unordered flush sufficient
+            // here -- and what the pipeline pays for it.
+            CommitStrategy::HostSequenced => {
+                lanes[lane_index].await_writes()?;
+                FlushCoverage::Unordered
+            }
+            CommitStrategy::CoveringFlush | CommitStrategy::AlternatingRings => {
+                FlushCoverage::CoversPrecedingOperations
+            }
+        };
+        let user_data = lanes[lane_index].commit(file, coverage)?;
+        debug_assert!(
+            deferred[lane_index].is_none(),
+            "a lane's previous commit must be settled before it takes another epoch"
+        );
+        deferred[lane_index] = Some((user_data, Instant::now()));
     }
 
     // Settle the last outstanding commit, or `durable_through` below would be
     // a claim rather than an observation.
-    if let Some((lane_index, user_data)) = deferred {
-        lanes[lane_index].await_flush(user_data)?;
+    for lane_index in 0..lanes.len() {
+        if let Some((user_data, pushed)) = deferred[lane_index].take() {
+            lanes[lane_index].await_flush(user_data)?;
+            commit_latencies.push(pushed.elapsed());
+        }
     }
+    // Every epoch produced exactly one commit, and every commit must have been
+    // observed. Checked rather than assumed: the missing-settle bug above was
+    // invisible to replay, and this is what would have caught it.
+    assert_eq!(
+        commit_latencies.len(),
+        epochs,
+        "{} observed {} of {epochs} commits",
+        strategy.name(),
+        commit_latencies.len()
+    );
     for lane in &mut lanes {
         lane.await_writes()?;
     }
+    let elapsed = started.elapsed();
 
     Ok(Outcome {
         strategy,
         records,
         durable_through: Epoch(epochs as u64 - 1),
         bytes: offset,
+        elapsed,
+        commit_latencies,
+        append_stall,
     })
 }

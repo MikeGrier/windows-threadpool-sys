@@ -272,10 +272,20 @@ forced the original consumer conversation -- operations the ring cannot express,
   ordering held on the *device*, which is only visible across a power cut, so the strategies are
   argued from [D-23](DESIGN-NOTES.md#d-23)/[D-24](DESIGN-NOTES.md#d-24) rather than from a clean run.
 
-- [ ] **M14.4** -- Measure the three strategies on the running machine and print the comparison:
+- [x] **M14.4** -- Measure the three strategies on the running machine and print the comparison:
   throughput, commit latency distribution, and ring idle time during the barrier. The example should
   *demonstrate* the trade-off rather than assert it, and the numbers are machine-specific enough that
   quoting ours would be misleading.
+  **Done:** throughput, commit-latency quantiles, and append stall are measured per strategy and
+  printed with an explicit "these describe THIS machine" note. The finding is that on this machine
+  the three are **indistinguishable** -- the cross-strategy spread (1.08x-1.72x) is the same size as
+  one strategy's run-to-run spread (1.42x) -- because every strategy pays one device flush per epoch
+  at hundreds of microseconds while their actual differences land in the tens. The program computes
+  and states that from its own data rather than hard-coding a ranking. Measurement also **found two
+  harness bugs** that no other check caught: a single deferred-commit slot shared by two lanes (so
+  half the commits were never awaited and `durable_through` was a claim), and pending commits keyed
+  by `UserData` in one map across two rings whose sequences collide. Both are recorded in
+  `strategy.rs` because both are easy to repeat.
 
 - [ ] **M14.5** -- Document the example: a module-level walkthrough, a pointer from `README.md` and
   from the "Durability on the ring" section of [DESIGN-NOTES.md](DESIGN-NOTES.md), and an explicit
