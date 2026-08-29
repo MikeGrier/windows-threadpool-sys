@@ -479,3 +479,153 @@ M12.1 is first because it is a correctness defect in shipped 0.1.2, not an enhan
   checks of the contract rather than statements of it; the `ring_copy` example's writes are a copy
   pipeline with no durability claim to make, and now name `WriteCaching::Cached` explicitly rather
   than inheriting a hardcoded flag.
+
+## Moved 2026-08-29 -- M13: the epoch-committed log worked example
+
+### M13 -- Worked example: consumer-side durability (an epoch-committed log)
+
+[D-26](DESIGN-NOTES.md#d-26) puts durability *policy* with the consumer and Windows *mechanism*
+here, which leaves a gap: without a demonstration, every consumer rediscovers the same composition,
+and the three measured contracts ([D-19](DESIGN-NOTES.md#d-19), [D-23](DESIGN-NOTES.md#d-23),
+[D-24](DESIGN-NOTES.md#d-24)) are exactly the kind that are learned by deadlock or by data loss.
+This milestone closes that gap with a worked example, not a library -- it demonstrates the pattern
+without this crate owning the policy.
+
+The example is a miniature write-ahead log: records appended through the ring, made durable by
+group commit, with durability reported by epoch. It is deliberately the shape a real consumer
+needs, and it exercises `windows-ioring-sys` and `windows-threadpool-sys` together.
+
+**Depends on M11.1** (`IoRing::completion_event`) and **M12.1** (explicit flush barrier). Both have
+landed, so this milestone is unblocked.
+
+- [x] **M13.1** -- Scaffolding under [examples/epoch_log/](examples/epoch_log/) --
+  [main.rs](examples/epoch_log/main.rs) and [contract.rs](examples/epoch_log/contract.rs) -- with the
+  sample's own durability contract written down first, before any code that implements it.
+
+  The contract is phrased as *this program's specification*, not as a description of what the ring
+  happens to do, which is the Design Autonomy rule applied rather than cited: the mechanisms it picks
+  (a covering flush, the ring's completion event) are recorded as chosen *because* they satisfy the
+  specification, and the file states plainly that a dependency which stops satisfying it is the thing
+  that is wrong. The guarantee is the item's sentence -- **a record is durable when the commit of the
+  epoch containing it has completed** -- with each of its four load-bearing phrases unpacked, since
+  "has completed" doing the work of "was submitted" is exactly how this contract gets misread.
+
+  All three non-guarantees the item names are stated as plainly as the guarantee (no per-record
+  durability, no ordering within an epoch, no atomicity past the device's power-fail atomic write
+  unit), plus two the writing surfaced: nothing is promised about records after the last committed
+  epoch -- present, absent, and torn are all legal outcomes of one crash -- and the whole contract
+  rests on the device honoring the flush, which nothing here can verify. Those are recorded as an
+  explicit `Assumes` clause rather than left silent.
+
+  The contract is also machine-readable (`CONTRACT: &[Statement]`, grouped by `Clause`) and the
+  sample prints it, so a reader who only runs the program still learns what it does and does not
+  promise. M13.5's verification pass has something concrete to refer back to.
+
+- [x] **M13.2** -- The append path, in [record.rs](examples/epoch_log/record.rs) (the format) and
+  [append.rs](examples/epoch_log/append.rs) (the arena and the push). A record is a 20-byte header --
+  magic, sequence, payload length, checksum -- followed by its payload, with each field justified by
+  a clause of the contract rather than by convention: the length because replay has no framing of its
+  own, the sequence because the contract guarantees no ordering *within* an epoch so the on-disk
+  order is not the logical one, and the checksum because the contract says the tail may be **torn**
+  and a reader that cannot tell torn from whole cannot honour that clause. The checksum covers the
+  header too, so a torn header carrying a plausible length is caught rather than trusted.
+
+  Appends compose into a registered arena (`SLOTS` slots) and push with `write_registered_raw` over
+  exactly the record's bytes, deliberately not the owned-`Vec` form: an externally-managed arena is
+  what a real consumer has, and it is what makes this sample worth reading. `PushOptions::new()` and
+  `WriteCaching::Cached` are both the *unordered, uncached* choice on purpose -- records stream
+  unordered within an epoch exactly as the contract says, and the ordering is bought once by M13.3's
+  covering flush. The example runs the arena dry on purpose (24 records through 8 slots), so the
+  `WouldBlock`-then-drain path is exercised rather than hypothetical.
+
+  **This item found a real gap in the crate and fixed it at the layer, per the mono-repo policy.**
+  `RegisteredBuffers` exposed `get` but no mutable accessor, so a registered arena could only ever
+  carry bytes the *kernel* had produced -- there was no way to put a record a caller composed into
+  one. `ring_copy` never hit it because it reads into a registered buffer and writes back out of the
+  same one. Raised rather than worked around, and the engineer chose per-buffer accounting over a
+  narrow `unsafe` seam.
+
+  The subtlety that made it more than an accessor: **`&mut self` is not sufficient for safety here.**
+  An in-flight operation holds no borrow -- `write_registered` takes `&RegisteredBuffers` for the
+  length of the call and the `Token` keeps only a `RegisteredUse` -- so the borrow checker would
+  happily allow mutating a buffer the kernel is reading through. `get_mut` therefore pairs `&mut
+  self` with a runtime check, and the outstanding count moved from one per *registration* to one per
+  *buffer* so that a busy slot does not block its neighbours, which an arena being refilled needs.
+  `WouldBlock` and `InvalidInput` are distinct so "busy" and "no such buffer" cannot be confused.
+  Sabotage-verified: reverting `get_mut` to the old per-registration semantics fails the new
+  neighbour test with "buffer 1 still has 1 operation(s) outstanding".
+
+  Two tests in [tests/registration.rs](tests/registration.rs) cover it -- filling a registered buffer
+  and writing it back out, and the refusal/neighbour/out-of-range/release cycle. The example also
+  reads its own log back and decodes every record, so the claimed format is checked rather than
+  asserted; verifying the *contract* (durability, the torn tail) stays M13.5's job.
+
+- [x] **M13.3** -- Epoch bookkeeping and group commit in [commit.rs](examples/epoch_log/commit.rs).
+  Records join whatever epoch is open, closing epoch *N* pushes **one covering flush** whose
+  `UserData` is *N*'s identity for the rest of its life, and observing that flush's completion is what
+  advances `durable_through`. The item's completion test -- a caller can await "epoch *N* is durable"
+  and get a truthful answer -- is `Committer::is_durable`, and the example awaits each epoch before
+  moving on.
+
+  **Truthfulness is the whole item, so it is asserted rather than assumed.** The example checks
+  `!is_durable(closed)` in the window between pushing a commit and observing it, checks monotonicity
+  across every epoch below the watermark, and checks that the still-open epoch never reports durable.
+  Sabotage-verified: advancing `durable_through` at push time instead of at completion fails on "a
+  pushed commit is not a completed one". A failed commit advances nothing, which is the truthful
+  answer for the epoch it was closing.
+
+  Two things the writing forced, both recorded in the module rather than left implicit. The barrier is
+  **ring-wide**, so a commit stalls the log -- next-epoch appends queue behind it and hold their arena
+  slots -- which is D-24's cost made visible rather than described. And because it is ring-wide, a
+  commit of *N* may in fact also cover records already pushed into *N+1*; the committer deliberately
+  **reports less than is true**, advancing only to *N*, because reporting less than reality is always
+  safe and reporting more never is.
+
+  **The record format gained an `epoch` field**, extending M13.2's header from 20 to 28 bytes. Keeping
+  the record-to-epoch mapping only in RAM would have made the contract verifiable in this
+  demonstration and unverifiable in the situation it exists for: a replay after a crash runs in a new
+  process with no memory of which record joined which epoch. The read-back check now asserts every
+  record carries the epoch that was open when it was appended.
+
+  The blocking wait here is the fused submit-and-wait; M13.4 replaces it with the multiplexed one,
+  which changes the shape but not the accounting.
+
+- [x] **M13.4** -- The event loop in [event_loop.rs](examples/epoch_log/event_loop.rs): the ring's
+  `completion_event` waited on by `WaitForMultipleObjects` alongside a manual-reset shutdown latch,
+  with the drain outside the match on which handle woke us and draining *to empty*. Ownership does
+  not change -- this thread still owns, submits to, and drains its ring -- so it is Model B with a
+  different wakeup source, not Model A. The fused wait M13.3 used is kept beside it as the documented
+  contrast rather than deleted, since it is the right choice for a log whose only I/O is ring I/O.
+
+  **The item asked for the drain-to-empty rule to be visually obvious, and sabotage corrected which
+  half of it actually matters.** Replacing drain-to-empty with a single `try_pop` deadlocks the
+  example outright: the queue stops returning to empty, the edge never re-arms, and the next wait
+  blocks until its 30-second timeout with the log's work stranded. That half has teeth and is now
+  demonstrated.
+
+  Moving the drain *inside* the ring's arm, by contrast, **does not break a conformant loop** -- the
+  sabotage passed. On a loop that already obeys rule 1 the shutdown pass has nothing to pop, because
+  any completion that arrived signalled the event and was drained on the ring's own wake. An earlier
+  draft claimed the unconditional placement was "the bug this file exists to demonstrate the absence
+  of"; that claim was false and is removed. The placement stays because rule 1 says every pass and it
+  costs nothing, and the file now says plainly that this example cannot make it fail. This is the
+  the same overclaim M11.6 caught, found the same way.
+
+- [x] **M13.5** -- The replay-and-verify pass in [replay.rs](examples/epoch_log/replay.rs), which is
+  what turns the sample from a demonstration into evidence. It is handed the watermark the log
+  reported and holds it to exactly the contract's asymmetry: every record in an epoch at or below the
+  watermark **must** be present, in sequence, with a matching payload and a validating checksum,
+  while records above it may be present, absent, or torn and are counted rather than judged. Refusing
+  to tolerate a torn tail would be its own bug -- the contract promises the tail is unreliable, so a
+  reader that treated it as corruption would reject a healthy log.
+
+  The example now appends `TAIL_RECORDS` into an epoch it **deliberately never commits**, because a
+  replay pass that never sees an uncommitted tail has not been asked the interesting question.
+
+  **The verifier is run three ways, and the third is the point.** Against the log as written (24
+  durable verified, 3 tail tolerated); against a copy cut mid-record to simulate a crash (24 durable
+  still verified, tail truncated, *no* violation reported); and -- the negative control -- against a
+  copy with one byte corrupted **inside** the durable region, which must be reported. A verifier that
+  cannot fail proves nothing, so the sample proves this one can: it reports
+  `MissingDurableRecord { reason: ChecksumMismatch }` and the run states out loud that the checker
+  which passed the first two cases was shown to be able to fail.
