@@ -260,11 +260,17 @@ forced the original consumer conversation -- operations the ring cannot express,
   verified: removing it makes `cargo check --all-targets --no-default-features` fail with
   `unresolved import windows_ioring_sys::EventDelivery`, which is exactly what the M11.4 job runs.
 
-- [ ] **M14.3** -- Implement all three epoch-commit strategies from "Durability on the ring" behind
+- [x] **M14.3** -- Implement all three epoch-commit strategies from "Durability on the ring" behind
   one interface, selectable at run time: covering flush (ring stalls), host sequencing (a userspace
   round trip per epoch), and alternating rings (neither, at the cost of doubled registration). The
   point is that [D-24](DESIGN-NOTES.md#d-24) makes this a real fork with no free answer, and a
   reader needs to see all three to choose.
+  **Done:** `examples/epoch_log/strategy.rs`. All three run the same workload and are checked two
+  ways: each log replays clean, and all three must be **byte-identical** to each other. Both checks
+  were sabotage-verified (a shifted offset trips replay; a dropped epoch trips byte-identity). The
+  limit is stated in the code rather than papered over -- neither check can observe whether the
+  ordering held on the *device*, which is only visible across a power cut, so the strategies are
+  argued from [D-23](DESIGN-NOTES.md#d-23)/[D-24](DESIGN-NOTES.md#d-24) rather than from a clean run.
 
 - [ ] **M14.4** -- Measure the three strategies on the running machine and print the comparison:
   throughput, commit latency distribution, and ring idle time during the barrier. The example should

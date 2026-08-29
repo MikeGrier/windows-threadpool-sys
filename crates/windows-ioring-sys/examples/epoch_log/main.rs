@@ -41,6 +41,7 @@ mod event_loop;
 mod reclaim;
 mod record;
 mod replay;
+mod strategy;
 
 use std::io;
 use std::os::windows::io::AsRawHandle;
@@ -683,6 +684,98 @@ fn report_contract<O: io::Write, E: io::Write>(report: &mut Report<O, E>) {
     }
 }
 
+/// Run the same log three ways, once per commit strategy (M14.3).
+///
+/// Every strategy produces the same records in the same order, so the check
+/// that matters is that all three replay clean. Which one to *pay for* is a
+/// separate question, and M14.4 is what answers it with numbers.
+fn compare_strategies<O: io::Write, E: io::Write>(
+    report: &mut Report<O, E>,
+    directory: &std::path::Path,
+) -> io::Result<()> {
+    const EPOCHS: usize = 8;
+    const PER_EPOCH: usize = 16;
+
+    report.line(format_args!(""));
+    report.line(format_args!(
+        "commit strategies: {EPOCHS} epochs of {PER_EPOCH} records, each run replayed"
+    ));
+
+    let payload = b"strategy comparison record payload";
+    let mut reference: Option<(&'static str, Vec<u8>)> = None;
+    for strategy in strategy::CommitStrategy::ALL {
+        let path = directory.join(format!(
+            "windows-ioring-sys-epoch-log-{}-{}.log",
+            std::process::id(),
+            strategy.name()
+        ));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+
+        let outcome = strategy::run(strategy, file.as_raw_handle(), EPOCHS, PER_EPOCH, payload);
+        drop(file);
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let _ = std::fs::remove_file(&path);
+                return Err(error);
+            }
+        };
+
+        // Replayed with the same verifier the log itself uses, because a
+        // strategy that is fast and wrong is not a strategy.
+        let bytes = std::fs::read(&path)?;
+        let outcome_replay =
+            replay::replay(&bytes, outcome.durable_through, outcome.records, |index| {
+                let mut expected = Vec::with_capacity(payload.len());
+                expected.extend_from_slice(payload);
+                let _ = index;
+                expected
+            });
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            outcome_replay.is_clean(),
+            "{} produced a log that does not replay clean: {:?}",
+            strategy.name(),
+            outcome_replay.violations
+        );
+
+        // The cross-strategy invariant, and the one with real teeth. Replay
+        // checks a log against itself; this checks the three strategies
+        // against *each other*, so a dropped record, a wrong offset, or an
+        // epoch tagged to the wrong commit shows up as a byte difference
+        // rather than passing three times independently.
+        //
+        // What it cannot check is the thing the strategies actually differ
+        // about: whether the ordering held on the *device*. That is only
+        // observable across a power cut, and no in-process check substitutes
+        // for it -- which is why the strategies are argued from D-23 and D-24
+        // rather than from this run passing.
+        match &reference {
+            None => reference = Some((strategy.name(), bytes)),
+            Some((first, expected)) => assert_eq!(
+                &bytes,
+                expected,
+                "{} produced a different log than {first}; all three must write the same bytes",
+                strategy.name()
+            ),
+        }
+        report.line(format_args!(
+            "  {:<18} {} records in {} epochs, {} bytes, replayed clean -- pays {}",
+            outcome.strategy.name(),
+            outcome.records,
+            EPOCHS,
+            outcome.bytes,
+            outcome.strategy.cost()
+        ));
+    }
+    Ok(())
+}
+
 fn main() {
     let mut report = Report::new(io::stdout(), io::stderr());
     report_contract(&mut report);
@@ -691,10 +784,12 @@ fn main() {
     let path = log_path();
     let retired = retired_path();
     let checkpoint = checkpoint_path();
-    let outcome = run_log(&mut report, &path, &retired, &checkpoint).and_then(|run| {
-        report.line(format_args!(""));
-        verify(&mut report, &path, &run)
-    });
+    let outcome = run_log(&mut report, &path, &retired, &checkpoint)
+        .and_then(|run| {
+            report.line(format_args!(""));
+            verify(&mut report, &path, &run)
+        })
+        .and_then(|()| compare_strategies(&mut report, &std::env::temp_dir()));
     match outcome {
         Ok(()) => report.line(format_args!(
             "the log kept its contract, and the verifier that says so was shown to be able to fail"
