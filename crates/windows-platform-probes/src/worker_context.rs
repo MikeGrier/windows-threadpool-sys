@@ -18,6 +18,7 @@
 
 use std::ffi::c_void;
 use std::sync::mpsc::{Sender, channel};
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_TOKEN, GetLastError, HANDLE};
 use windows_sys::Win32::Security::{
@@ -146,6 +147,14 @@ unsafe extern "system" fn report(_instance: PTP_CALLBACK_INSTANCE, context: *mut
     let _ = sender.send(observe_here());
 }
 
+/// How long a submitted callback is given to report before the pool is declared
+/// wedged.
+///
+/// A healthy process pool runs a submitted callback in milliseconds, so this is
+/// not a tuning knob for slow machines; it is the boundary between a probe that
+/// fails with a reason and one that hangs the job it runs in.
+pub const REPORT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Submits one callback to the **process** thread pool and reports what the
 /// worker found.
 ///
@@ -155,8 +164,9 @@ unsafe extern "system" fn report(_instance: PTP_CALLBACK_INSTANCE, context: *mut
 ///
 /// # Panics
 ///
-/// Panics if the callback cannot be submitted or never reports, since a probe
-/// that silently measured nothing would be worse than one that stopped.
+/// Panics if the callback cannot be submitted, or if the worker does not report
+/// within [`REPORT_TIMEOUT`], since a probe that silently measured nothing would
+/// be worse than one that stopped.
 #[must_use]
 pub fn observe_on_worker() -> WorkerContext {
     let (sender, receiver) = channel();
@@ -182,9 +192,24 @@ pub fn observe_on_worker() -> WorkerContext {
         panic!("submit a callback to the process thread pool");
     }
 
-    receiver
-        .recv()
-        .expect("the worker reported what it was handed")
+    // Bounded, not a plain `recv`. The only way a `recv` here ever returns is
+    // the callback running: it owns the one sender, so a pool that never runs it
+    // leaves no sender to drop and no disconnect to observe, and the wait is
+    // genuinely forever. That turns a wedged pool into a hung `cargo test` --
+    // and CI runs this suite with `--include-ignored`, so the job would sit
+    // until its step timeout with nothing said about why.
+    //
+    // On timeout the boxed sender is left to the callback, which may still run
+    // later; its `send` then finds the receiver gone and is discarded, which
+    // `report` already tolerates. Reclaiming it here instead would free a box
+    // the pool may be about to dereference.
+    match receiver.recv_timeout(REPORT_TIMEOUT) {
+        Ok(context) => context,
+        Err(error) => panic!(
+            "the worker never reported what it was handed ({error}): the process \
+             thread pool did not run a submitted callback within {REPORT_TIMEOUT:?}"
+        ),
+    }
 }
 
 /// Impersonates this thread for as long as it is held, then reverts.
@@ -263,13 +288,41 @@ impl Impersonation {
 
 impl Drop for Impersonation {
     fn drop(&mut self) {
-        // SAFETY: restores this thread to its own identity, and closes the
-        // duplicate this value owns exactly once. Reverting a thread that is
-        // not impersonating -- the case where `SetThreadToken` failed -- is
-        // harmless.
-        unsafe {
-            RevertToSelf();
-            CloseHandle(self.0);
+        // SAFETY: restores this thread to its own identity. Reverting a thread
+        // that is not impersonating -- the case where `SetThreadToken` failed --
+        // is harmless.
+        let reverted = unsafe { RevertToSelf() };
+        // SAFETY: the duplicate this value owns, closed exactly once. Done
+        // before the check below so the handle is released on every path.
+        unsafe { CloseHandle(self.0) };
+
+        if reverted != 0 {
+            return;
+        }
+
+        // A failed revert leaves this thread impersonating, and silence is the
+        // worst response available. Under `--test-threads=1` libtest runs later
+        // tests inline on this very thread, so the identity is inherited by all
+        // of them, and `a_thread_pool_worker_starts_with_no_impersonation_token`
+        // asserts the opposite as its premise -- the real failure would surface
+        // as a cascade of unrelated ones, which is exactly the outcome this
+        // guard exists to prevent.
+        //
+        // SAFETY: no preconditions.
+        let code = unsafe { GetLastError() };
+        let message = format!(
+            "RevertToSelf failed with {code}: this thread is still impersonating, so every \
+             later probe run on it inherits an identity nobody established"
+        );
+
+        // Panicking from `Drop` while an unwind is already in progress aborts
+        // the process, which would replace a diagnosable failure with one that
+        // explains nothing. When that is the case, report and let the original
+        // panic carry the diagnosis.
+        if std::thread::panicking() {
+            eprintln!("warning: {message}");
+        } else {
+            panic!("{message}");
         }
     }
 }
