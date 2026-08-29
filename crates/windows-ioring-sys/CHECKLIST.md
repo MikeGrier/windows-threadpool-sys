@@ -233,146 +233,187 @@ are not a work queue".
   [UNRESOLVED-TEST-FAILURES.md](UNRESOLVED-TEST-FAILURES.md) to
   [RESOLVED-TEST-FAILURES.md](RESOLVED-TEST-FAILURES.md).
 
-## M15 -- Exercise the crate against the defect populations it actually produces (release-gating)
+## M15 -- Deterministic memory instrumentation (release-gating)
 
-Eight defects were found in the 0.1.x line and the M11-M14 branch: [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47),
+Eight defects came out of the 0.1.x line and the M11-M14 branch:
+[#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47),
 [#48](https://github.com/MikeGrier/windows-threadpool-sys/issues/48), `get_mut` returning `&mut B`
 ([D-35](DESIGN-NOTES.md#d-35)), `Appender::claim` leaking an arena slot, the checkpoint path authorising a
 reclaim after a failed write, a shared deferred-commit slot in the strategy harness, `get` racing the kernel
 ([D-36](DESIGN-NOTES.md#d-36)), and a `debug_assert` that could never fire. Sorting them by *what would have
-caught them* is what this milestone and M16/M17 are built from, because the populations need different tools:
+caught them* is what M15-M18 are built from, because they need different tools and one population needs a tool
+that does not exist:
 
 - **A -- preconditions never varied.** Every `tests/event_delivery.rs` case handed over a *fresh* ring, so
-  "completion queue non-empty at handover" was never a test input. That is [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47).
-  Addressed by M16.
-- **B -- failure paths never taken.** Every operation in every test succeeds, so no test ever ran
-  `completion.result()` returning `Err`. That is the checkpoint defect, and it is why
-  [#48](https://github.com/MikeGrier/windows-threadpool-sys/issues/48) surfaced as a *lucky* `ERROR_NOACCESS`
-  rather than as corruption. Addressed here.
+  "completion queue non-empty at handover" was never a test input. That is
+  [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47). M17.
+- **B -- failure paths never taken.** No test ever ran `completion.result()` returning `Err`, which is the
+  checkpoint defect, and is why [#48](https://github.com/MikeGrier/windows-threadpool-sys/issues/48) surfaced
+  as a *lucky* `ERROR_NOACCESS` rather than as corruption. M15 and M16.
 - **C -- permissions, not behaviour.** `&mut Vec<u8>` *permits* `reserve`/`resize`/reassign; no execution ever
   performs it. That is [D-35](DESIGN-NOTES.md#d-35) and [D-36](DESIGN-NOTES.md#d-36), the two most severe
-  findings, and **no runtime technique reaches this population at all.** Addressed by M17.
+  findings, and **no runtime technique reaches this population at all.** M18.
 
-**Deliberately rejected: a mock `IoRing`.** Both shipped defects were cases where the kernel's real behaviour
-differed from this crate's assumption -- the completion event is edge-triggered, not level-triggered
-([D-19](DESIGN-NOTES.md#d-19)), and `BuildIoRingRegisterBuffers` reads its array at submit rather than at build
-([D-32](DESIGN-NOTES.md#d-32)). A mock encodes the assumption, so a mock written before those discoveries would
-have passed both bugs green. It would not merely have failed to find them; it would have manufactured evidence
-they were absent. A model belongs here as an **oracle over observed sequences**, never as a substitute for the
-kernel -- the same conclusion [`ContractChecker`](../windows-file-watcher/src/contract.rs) reaches.
+**Deliberately rejected: a mock `IoRing`.** Both shipped defects were the kernel behaving differently from
+this crate's assumptions -- the completion event is edge-triggered ([D-19](DESIGN-NOTES.md#d-19)), and
+`BuildIoRingRegisterBuffers` reads its array at submit rather than at build ([D-32](DESIGN-NOTES.md#d-32)). A
+mock encodes the assumption, so one written before those discoveries would have passed both bugs green -- it
+would not merely have failed to find them, it would have manufactured evidence they were absent. A model
+belongs here as an **oracle over observed sequences** (M16), never as a substitute for the kernel.
 
-**This milestone gates the 0.2.0 release; M16 and M17 do not.** 0.2.0 carries two security fixes and should not
+**Deliberately rejected: Application Verifier / PageHeap**, after measuring it rather than assuming either way.
+See [D-37](DESIGN-NOTES.md#d-37); the short version is that it works but is keyed by *image file name*, and
+cargo rehashes test binaries on every meaningful rebuild.
+
+**M15 and M16 gate the 0.2.0 release; M17 and M18 do not.** 0.2.0 carries two security fixes and should not
 wait on the state-space work.
 
-- [ ] **M15.1** -- Add a CI job and a local script running the crate's tests under **Application Verifier with
-  full PageHeap** (`gflags /p /enable <exe> /full`), which is the Windows-native equivalent of ASAN for this
-  defect class: each allocation gets its own page behind a guard page, so a kernel read of freed memory faults
-  deterministically at the moment of access instead of silently succeeding.
-  **Verify the job can actually fail before trusting it:** revert [D-32](DESIGN-NOTES.md#d-32)'s fix locally,
-  confirm PageHeap turns the freed-array read into an immediate access violation with a stack, and restore. A
-  verification job that has never been seen to fail is indistinguishable from one that cannot.
+- [ ] **M15.1** -- Add a guard-page global allocator for test builds: `VirtualAlloc` each allocation with a
+  trailing `PAGE_NOACCESS` guard page, right-aligned so its end abuts the guard, and on free flip the block to
+  `PAGE_NOACCESS` and **never reuse the address**. That combination makes both an overrun and a
+  use-after-free a deterministic `0xC0000005` instead of a silent stale read.
+  Use `MEM_DECOMMIT` rather than plain `VirtualProtect` on free: never reusing an address is the point, but
+  never releasing the *commit* would grow a long suite without bound.
+  A working probe is at `.scratch/guardalloc/` -- measured clean/UAF/overrun as `0`/`0xC0000005`/`0xC0000005`,
+  against a system-allocator baseline that silently read a freed byte and exited `0`.
+  **Sabotage-verify against the real defect:** revert [D-32](DESIGN-NOTES.md#d-32)'s fix locally and confirm
+  the allocator turns it from a lucky `ERROR_NOACCESS` into a deterministic failure. An instrument never seen
+  to fire is indistinguishable from one that cannot.
 
-- [ ] **M15.2** -- Add `src/contract.rs` with a public `RingContract`: the executable form of the invariants
-  this crate already *states* in prose but nothing checks -- [D-29](DESIGN-NOTES.md#d-29)/[D-30](DESIGN-NOTES.md#d-30)'s
-  "every successfully queued SQE produces exactly one completion", every token claimed-or-deliberately-leaked,
-  and every per-buffer outstanding count back to zero at quiescence. Fed by the caller
-  (`observe_push` / `observe_completion` / `check_quiescent`) rather than wired into `Batch`, so a consumer can
-  validate its own harness with the same definition.
+- [ ] **M15.2** -- Fill every allocation and every freed block with a **tracked** poison pattern, derived from
+  a per-run seed plus a per-allocation ordinal so the bytes identify *which* allocation they came from rather
+  than merely being "not real data". A fixed constant like `0xDD` is worth much less: it collides with real
+  payloads, and it cannot answer "where did this come from".
+  The tracking is also what keeps this compatible with this component's reproducibility rule: **log the seed at
+  test start and accept it from the environment**, so a failure is replayable exactly rather than being a
+  one-off. Record that in [DESIGN-NOTES.md](DESIGN-NOTES.md) as the terms under which non-fixed test data is
+  permitted here.
+  Keep the pattern cheap to write (a repeating 8-byte word carrying the ordinal, not a per-byte hash) since it
+  runs on every allocation.
+
+- [ ] **M15.3** -- Verify the poison at the points where the *kernel* is the suspect, which is the gap guard
+  pages structurally cannot cover: a guard page only catches access to memory that should not be touched at
+  all, and says nothing about the kernel writing into a live, valid allocation. Both checks below are
+  invariants this crate asserts in prose today and verifies nowhere:
+  - **After a registered *write* completes** (`KernelAccess::ReadsBuffer`): the slot must be **byte-identical**
+    to what was submitted. The kernel is only permitted to read it.
+  - **After a registered *read* completes** (`KernelAccess::WritesBuffer`): every byte *outside*
+    `[span.offset, span.offset + information)` must still be poison. This binds the kernel to the
+    `RegisteredSpan` we declared, and would equally catch our own `checked_span` or offset arithmetic being
+    wrong.
+  Sabotage-verify each by deliberately submitting a span narrower than the write, and by mutating a slot
+  mid-flight.
+
+- [ ] **M15.4** -- Verify poison at quiescence too: at teardown every registered buffer's never-written
+  regions still hold their expected pattern, and no buffer that was only ever a write source has changed.
+  This is the whole-arena form of M15.3 and is what catches a stray write attributed to no particular
+  operation.
+
+## M16 -- Make the contract executable, and take the failure paths (release-gating)
+
+Population B, and the invariants this crate already *states* but nothing checks.
+
+**Depends on M15** only for convenience -- the oracle is independent of the allocator, but the two are most
+useful together.
+
+- [ ] **M16.1** -- Add `src/contract.rs` with a public `RingContract`: the executable form of
+  [D-29](DESIGN-NOTES.md#d-29)/[D-30](DESIGN-NOTES.md#d-30)'s "every successfully queued SQE produces exactly
+  one completion", every token claimed-or-deliberately-leaked, and every per-buffer outstanding count back to
+  zero at quiescence. Fed by the caller (`observe_push` / `observe_completion` / `check_quiescent`) rather than
+  wired into `Batch`, so a consumer can validate its own harness against the same definition.
   It lives in **this** crate, not in the test harness: the layer that owns the invariant owns the oracle, and a
-  harness-side copy is a second implementation of the rule rather than a check of it.
-  State plainly what it does **not** check -- it cannot observe device ordering or anything the completion
-  stream does not carry -- since over-constraining is the same defect as under-specifying.
+  harness-side copy is a second implementation of the rule rather than a check of it. Follow
+  [`ContractChecker`](../windows-file-watcher/src/contract.rs)'s shape.
+  State plainly what it does **not** check -- it cannot observe device ordering or anything absent from the
+  completion stream -- since over-constraining is the same defect as under-specifying.
 
-- [ ] **M15.3** -- Bind the existing integration tests to `RingContract` and assert quiescence at teardown.
-  This is the item that pays for M15.2: the `Appender::claim` slot leak and the strategy harness's shared
-  deferred slot were both conservation failures found by review and by measurement respectively, and both would
-  have fallen out of a quiescence assertion automatically.
+- [ ] **M16.2** -- Bind the existing integration tests to `RingContract` and assert quiescence at teardown.
+  This is the item that pays for M16.1: the `Appender::claim` slot leak and the strategy harness's shared
+  deferred slot were both conservation failures, found by review and by measurement respectively, and both
+  would have fallen out of a quiescence assertion automatically.
   Sabotage-verify by reintroducing one of them and confirming the oracle reports it.
 
-- [ ] **M15.4** -- Add a fault-injection seam at the completion boundary, so a test can make `result()` return
+- [ ] **M16.3** -- Add a fault-injection seam at the completion boundary, so a test can make `result()` return
   a chosen error for a chosen operation. `Completion::synthetic` already exists under `#[cfg(test)]` and is
   half of this. Keep it test-gated for the same reason `synthetic` is: `Token::claim_if`'s safety argument
   depends on every `Completion` tracing back to a real popped `IORING_CQE`.
 
-- [ ] **M15.5** -- Use M15.4 to cover population B on the paths that have none: a failed read/write/flush
-  completion claimed normally, a failed registration, and `EventDelivery` delivering a failed completion.
+- [ ] **M16.4** -- Use M16.3 to cover the failure paths that have no coverage at all: a failed read, write and
+  flush completion claimed normally, a failed registration, and `EventDelivery` delivering a failed completion.
   Assert the *documented* degradation each time rather than merely that nothing panics -- the checkpoint defect
   was precisely a failure that was noticed, recorded, and then not acted on.
 
-## M16 -- Vary the state space instead of enumerating it by hand
+## M17 -- Vary the state space instead of enumerating it by hand
 
 Population A. [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47) is one point in a space
-nobody was sampling: `{fresh, dirty}` handover state crossed with operation kind, buffer kind, claim/drop, and
+nobody was sampling: `{fresh, dirty}` handover state crossed with operation kind, buffer kind, claim/drop and
 drain timing. Enumerating that by hand is how it was missed the first time.
 
-**Depends on M15.2** (the oracle is the property these tests assert).
+**Depends on M16.1** (the oracle is the property these tests assert).
 
-**CONVENTION GATE -- needs the engineer's explicit approval before M16.2 starts.** This component's rules say
-unit tests must be reproducible and must **not** use randomized sampling without explicit approval recorded in
-a design note. `proptest` is randomized sampling. M16.1 exists to get that decision made and recorded rather
-than smuggled in under a dev-dependency.
+**CONVENTION GATE -- needs the engineer's explicit approval before M17.2 starts.** This component's rules say
+tests must be reproducible and must **not** use randomized sampling without explicit approval recorded in a
+design note. `proptest` is randomized sampling. M17.1 exists to get that decision made and recorded rather
+than smuggled in under a dev-dependency. Note M15.2's seeded poison needs the same permission and should be
+decided at the same time, under the same terms.
 
-- [ ] **M16.1** -- Decide and record whether randomized property testing is permitted here, as a
+- [ ] **M17.1** -- Decide and record whether randomized property testing is permitted here, as a
   [DESIGN-NOTES.md](DESIGN-NOTES.md) decision. If yes, the decision must also fix the terms that keep it
   reproducible: a pinned default seed so CI reruns are deterministic, a committed regression corpus so any
   discovered failure becomes a permanent fixed case, and placement as **integration** tests rather than unit
   tests (they cross the OS boundary and will exceed the one-second unit budget).
-  If the answer is no, record that and close M16 -- exhaustive small-case enumeration is the fallback, and it
-  is a legitimate one at this API's size.
+  If the answer is no, record that and close M17 -- exhaustive small-case enumeration is a legitimate fallback
+  at this API's size, and M17.3 is written to stand on its own.
 
-- [ ] **M16.2** -- Add a poisoning global allocator for tests: fill freed blocks with a recognisable pattern.
-  Weaker than M15.1's PageHeap and worth having anyway, because it is portable, needs no external tool, and
-  turns "freed memory happened to still hold plausible bytes" into a loud failure. Independent of M16.1's
-  outcome, so it lands either way.
+- [ ] **M17.2** -- Model the operation space as data: operation kind, buffer kind (owned / registered), file
+  target kind (raw / shared / registered), claim-or-drop, drain-now-or-later, and handover state. A generator
+  over *sequences* of these, each sequence checked against `RingContract`.
 
-- [ ] **M16.3** -- Model the operation space as data: operation kind, buffer kind (owned / registered),
-  file target kind (raw / shared / registered), claim-or-drop, drain-now-or-later, and handover state. A
-  generator over *sequences* of these, with each sequence checked against `RingContract`.
-
-- [ ] **M16.4** -- Cover the handover precondition explicitly, whatever M16.1 decides: `EventDelivery::new`
+- [ ] **M17.3** -- Cover the handover precondition exhaustively, whatever M17.1 decides: `EventDelivery::new`
   and `IoRing::completion_event` against a ring that is fresh, has queued completions, has in-flight
-  operations, and has been drained-then-resubmitted. This is [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47)'s
-  own axis and is small enough to enumerate exhaustively, so it does not depend on M16.1 going either way.
+  operations, and has been drained-then-resubmitted. This is
+  [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47)'s own axis and is small enough to
+  enumerate by hand, so it does not depend on M17.1 going either way.
 
-- [ ] **M16.5** -- Make discovered failures permanent: every sequence the generator finds becomes a named,
+- [ ] **M17.4** -- Make discovered failures permanent: every sequence the generator finds becomes a named,
   seed-free regression test committed alongside the corpus. A property test that finds a bug and then forgets
   it has bought a single debugging session rather than a guarantee.
 
-## M17 -- The population no runtime technique reaches
+## M18 -- The population no runtime technique reaches
 
 Population C, and the one that produced the two most severe findings of the M14 review round. `get_mut`
 returning `&mut B` ([D-35](DESIGN-NOTES.md#d-35)) and `get` returning an unchecked `&B`
 ([D-36](DESIGN-NOTES.md#d-36)) are both defects of **what safe code is permitted to do**, not of what any code
-path does. No fuzzer, oracle, allocator, or chaos harness can reach them, because nothing has to execute for
-the hole to exist. Both were found by review, and review is therefore a *primary* technique here rather than a
-backstop -- which means it deserves a written procedure instead of depending on who happens to read the diff.
+path does. No fuzzer, oracle, allocator, poison scheme or chaos harness reaches them, because nothing has to
+execute for the hole to exist. Both were found by review, which makes review a *primary* technique here rather
+than a backstop -- and that deserves a written procedure instead of depending on who happens to read the diff.
 
-Independent of M16; may run in parallel.
+Independent of M17; may run in parallel.
 
-- [ ] **M17.1** -- Audit every public type that hands out a borrow or an owned value, against one mechanical
-  question: **what can safe code do with this, and does the registration/kernel still hold anything it could
-  invalidate?** `&mut Vec<u8>` permits `reserve`, `resize`, and whole-value assignment; `&[u8]` permits none of
-  them. Record the finding per item even when the answer is "nothing", so the absence of a hole is evidence
-  rather than silence.
+- [ ] **M18.1** -- Audit every public type that hands out a borrow or an owned value, against one mechanical
+  question: **what can safe code do with this, and does the registration or the kernel still hold anything it
+  could invalidate?** `&mut Vec<u8>` permits `reserve`, `resize` and whole-value assignment; `&mut [u8]`
+  permits none of them. Record the finding per item even when the answer is "nothing", so the absence of a
+  hole is evidence rather than silence.
 
-- [ ] **M17.2** -- Turn M17.1 into a recurring obligation rather than a one-time pass, as a
+- [ ] **M18.2** -- Turn M18.1 into a recurring obligation rather than a one-time pass, as a
   `DESIGN-INSTRUCTIONS.md` rule for this component: any change adding or widening a public borrow-returning
-  method answers M17.1's question in the PR. Both C-population defects were introduced by ordinary,
+  method answers M18.1's question in the PR. Both C-population defects were introduced by ordinary,
   well-reviewed changes; what was missing was the specific question, not the diligence.
 
-- [ ] **M17.3** -- Run `cargo-mutants` over the crate and triage the surviving mutants. There is a measured
+- [ ] **M18.3** -- Run `cargo-mutants` over the crate and triage the surviving mutants. There is a measured
   rate to justify it: this branch produced two vacuously-passing tests (the M11.2 idempotence pair, which
   asserted through a freshly attached event and so could not observe a detached one) and one `debug_assert`
   that could never fire (`Option::take` had already emptied the slot it checked). Both are exactly what a
   surviving mutant looks like.
 
-- [ ] **M17.4** -- Resolve the survivors: strengthen the test, or record why the mutant is equivalent and
+- [ ] **M18.4** -- Resolve the survivors: strengthen the test, or record why the mutant is equivalent and
   harmless. Do not delete an assertion merely because a mutant survives it -- a dead assertion beside a live
   one is worse than none, which is why M14.3's was removed rather than repaired.
 
-- [ ] **M17.5** -- Document the strategy as a whole in [DESIGN-NOTES.md](DESIGN-NOTES.md): the three defect
+- [ ] **M18.5** -- Document the strategy as a whole in [DESIGN-NOTES.md](DESIGN-NOTES.md): the three defect
   populations, which technique covers which, and -- most importantly -- **what none of them cover.** Two of the
-  eight defects came from spikes against the real kernel, and no oracle or generator would have produced
-  either, because both were cases of Windows behaving differently from the documented or assumed contract.
-  Record spikes as a budgeted technique for each new Win32 surface rather than something that happens when a
-  test mysteriously fails.
+  eight defects came from spikes against the real kernel, and no oracle, generator or allocator would have
+  produced either, because both were cases of Windows behaving differently from the assumed contract. Record
+  spikes as a budgeted technique for each new Win32 surface rather than something that happens when a test
+  mysteriously fails.
