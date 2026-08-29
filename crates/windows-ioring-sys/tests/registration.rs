@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_ioring_sys::{
-    Batch, IoBuf, IoBufMut, IoRing, PushOptions, RegisteredSpan, WriteCaching,
+    Batch, IoBuf, IoBufMut, IoRing, PushOptions, RegisteredSpan, SharedFile, WriteCaching,
 };
 
 fn temp_file(tag: &str) -> PathBuf {
@@ -948,4 +948,101 @@ fn get_mut_refuses_a_buffer_with_an_operation_outstanding_but_allows_its_neighbo
         .expect("a claimed completion releases the buffer")[0] = 2;
 
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
+    // The soundness property behind `get_mut` returning `&mut [u8]` rather
+    // than `&mut B` (code review of the M13.2 branch).
+    //
+    // Win32's IoRing has no unregister call, so the address handed to
+    // `BuildIoRingRegisterBuffers` is live for the ring's remaining life. An
+    // earlier version returned `&mut Vec<u8>`, which let entirely safe code
+    // free or move that allocation while the kernel still held its address:
+    //
+    //     *buffers.get_mut(0)? = vec![0_u8; 4096];  // frees the registered block
+    //     buffers.get_mut(0)?.reserve(100_000);     // reallocates it
+    //     buffers.get_mut(0)?.resize(8192, 0);      // moves it *and* lies about its length
+    //
+    // None of those compile now: a `&mut [u8]` has no such methods. This test
+    // pins what remains -- that the slice is exactly the registered length and
+    // addresses the registered allocation -- because a future change back to
+    // `&mut B`, or to a slice built from a live `bytes_len()`, would reopen the
+    // hole silently.
+    const LEN: usize = 2048;
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(vec![vec![0_u8; LEN], vec![0_u8; LEN / 2]])
+        .expect("queue buffer registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let mut buffers = pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("buffer registration succeeded");
+
+    // The address the kernel was given, captured through the shared borrow.
+    let registered_addr = buffers.get(0).expect("buffer 0 exists").as_ptr() as usize;
+
+    let slot = buffers.get_mut(0).expect("buffer 0 is quiet");
+    assert_eq!(
+        slot.len(),
+        LEN,
+        "the slice must be exactly the registered length, so no span can address past it"
+    );
+    assert_eq!(
+        slot.as_ptr() as usize,
+        registered_addr,
+        "the slice must address the registered allocation, not a copy of it"
+    );
+
+    // Writing through it is the one power a caller needs, and it must reach
+    // the registered allocation rather than anything else.
+    slot[0] = 0xAB;
+    slot[LEN - 1] = 0xCD;
+    assert_eq!(buffers.get(0).expect("buffer 0")[0], 0xAB);
+    assert_eq!(buffers.get(0).expect("buffer 0")[LEN - 1], 0xCD);
+
+    // Each buffer reports its own registered length, not the first one's.
+    assert_eq!(
+        buffers.get_mut(1).expect("buffer 1 is quiet").len(),
+        LEN / 2
+    );
+
+    // And a span may not exceed the registered length, which is the second
+    // face of the same property: validated against what the kernel was told.
+    let mut batch = Batch::new(&mut ring);
+    let span_file = SharedFile::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(temp_file("registered-span-bound"))
+            .expect("open")
+            .into(),
+    );
+    let too_long = batch
+        .write_registered(
+            &span_file,
+            &buffers,
+            RegisteredSpan {
+                buffer_index: 1,
+                offset: 0,
+                len: (LEN / 2 + 1) as u32,
+            },
+            0,
+            PushOptions::new(),
+            WriteCaching::Cached,
+        )
+        .expect_err("a span longer than the registered buffer must be refused");
+    assert_eq!(too_long.kind(), std::io::ErrorKind::InvalidInput);
+
+    drop(span_file);
+    let _ = std::fs::remove_file(temp_file("registered-span-bound"));
 }

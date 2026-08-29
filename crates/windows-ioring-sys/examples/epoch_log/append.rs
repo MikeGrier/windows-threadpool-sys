@@ -202,7 +202,13 @@ impl Appender {
         let Some(in_flight) = self.in_flight.remove(&completion.user_data()) else {
             return Ok(false);
         };
-        let written = completion.result()?;
+        // Claim *before* checking the write's result. The completion has
+        // already been observed, so claiming is sound either way -- and
+        // bailing out on a failed write without claiming would drop the token
+        // unclaimed, which `Token` deliberately treats as "still outstanding"
+        // and leaks. That would burn this arena slot permanently: `free_slot`
+        // would never offer it again, and after `SLOTS` failures every append
+        // would return `WouldBlock` forever.
         let released = in_flight
             .token
             .claim_if(completion)
@@ -214,7 +220,8 @@ impl Appender {
             self.arena.outstanding(in_flight.slot) == Some(0),
             "claiming the token must release the slot"
         );
-        let _ = written;
+
+        let _written = completion.result()?;
         Ok(true)
     }
 }

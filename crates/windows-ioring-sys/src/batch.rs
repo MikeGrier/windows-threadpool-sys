@@ -554,6 +554,20 @@ impl PendingFileRegistration {
     }
 }
 
+/// Per-buffer state a registration keeps for its whole life.
+///
+/// The registered length is captured at registration time and never
+/// recomputed. That matters because `IoBuf::bytes_len` reports the buffer's
+/// *current* length, and what the kernel holds is the length it was given --
+/// validating a span against the former would let a buffer that had grown
+/// address memory the kernel does not know about.
+struct BufferState {
+    /// Operations outstanding against this one buffer.
+    outstanding: AtomicUsize,
+    /// The length handed to `BuildIoRingRegisterBuffers`, in bytes.
+    registered_len: u32,
+}
+
 /// A marker a [`Token`] owns while a registered-buffer-indexed read or write
 /// is outstanding (M5.2, M5.3).
 ///
@@ -568,14 +582,14 @@ impl PendingFileRegistration {
 /// while operations are still in flight against its neighbours -- which is
 /// what an arena a caller refills has to be able to do.
 pub struct RegisteredUse {
-    outstanding: Arc<[AtomicUsize]>,
+    state: Arc<[BufferState]>,
     index: usize,
 }
 
 impl Drop for RegisteredUse {
     fn drop(&mut self) {
-        if let Some(count) = self.outstanding.get(self.index) {
-            count.fetch_sub(1, Ordering::SeqCst);
+        if let Some(state) = self.state.get(self.index) {
+            state.outstanding.fetch_sub(1, Ordering::SeqCst);
         }
     }
 }
@@ -594,11 +608,9 @@ impl Drop for RegisteredUse {
 pub struct RegisteredBuffers<B: IoBufMut> {
     buffers: ManuallyDrop<Vec<B>>,
     base_index: u32,
-    /// One outstanding-operation count per registered buffer, indexed by
-    /// position within this registration. Per buffer rather than per
-    /// registration so a caller can refill a quiet buffer while others are in
-    /// flight; see [`RegisteredBuffers::get_mut`].
-    outstanding: Arc<[AtomicUsize]>,
+    /// One entry per registered buffer, indexed by position within this
+    /// registration.
+    state: Arc<[BufferState]>,
     ring_id: RingId,
 }
 
@@ -622,8 +634,8 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
         self.buffers.get(i as usize)
     }
 
-    /// Borrow the `i`-th buffer **mutably**, to fill it before an operation
-    /// reads out of it (M13.2).
+    /// Borrow the `i`-th buffer's registered bytes **mutably**, to fill them
+    /// before an operation reads out of them (M13.2).
     ///
     /// This is what makes a registered arena usable for writes a caller
     /// composes itself -- a log record, a serialized message -- rather than
@@ -631,15 +643,32 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// caller what a read landed but nothing can put anything into a buffer
     /// after it is registered.
     ///
-    /// # Why this is safe, and why it can refuse
+    /// # Why this hands back `&mut [u8]` and not `&mut B`
     ///
-    /// `&mut self` is not on its own enough. It excludes concurrent `&self`
-    /// borrows, but an operation already in flight holds no borrow at all --
-    /// [`Batch::write_registered`] takes `&RegisteredBuffers` for the length
-    /// of the call, and the [`Token`] it returns keeps only a
+    /// Because `&mut B` would be **unsound**, and quietly so. Win32's
+    /// `IoRing` has no unregister call: the address and length handed to
+    /// `BuildIoRingRegisterBuffers` stay live for the ring's remaining life.
+    /// A `&mut Vec<u8>` lets safe code assign a whole new vector, `reserve`,
+    /// or `resize` -- each of which frees or moves the very allocation the
+    /// kernel still holds the address of. No `unsafe` is involved, and it
+    /// happens at a moment when nothing is outstanding, so no runtime check
+    /// would catch it. [`IoBuf`]'s contract requires that address to stay put
+    /// for as long as this crate holds the value, and a registration holds it
+    /// forever.
+    ///
+    /// A byte slice of exactly the registered length grants the one power a
+    /// caller actually needs -- writing the bytes -- and none of the powers
+    /// that would break the registration.
+    ///
+    /// # Why it can refuse
+    ///
+    /// `&mut self` is not on its own enough either. It excludes concurrent
+    /// `&self` borrows, but an operation already in flight holds no borrow at
+    /// all -- [`Batch::write_registered`] takes `&RegisteredBuffers` for the
+    /// length of the call, and the [`Token`] it returns keeps only a
     /// [`RegisteredUse`]. So the compiler would happily allow mutation of a
     /// buffer the kernel is reading through right now, which is a data race
-    /// with the kernel and exactly what this crate exists to prevent.
+    /// with the kernel.
     ///
     /// The runtime half of the check is therefore the per-buffer outstanding
     /// count: this refuses while any operation is still outstanding against
@@ -659,20 +688,20 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// registration, or [`io::ErrorKind::WouldBlock`] if an operation is
     /// still outstanding against that buffer -- pop its completion and claim
     /// its token first.
-    pub fn get_mut(&mut self, i: u32) -> io::Result<&mut B> {
+    pub fn get_mut(&mut self, i: u32) -> io::Result<&mut [u8]> {
         let index = usize::try_from(i).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "buffer index does not fit usize",
             )
         })?;
-        if index >= self.buffers.len() {
+        let Some(state) = self.state.get(index) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("buffer index {i} is out of range for this registration"),
             ));
-        }
-        let outstanding = self.outstanding[index].load(Ordering::SeqCst);
+        };
+        let outstanding = state.outstanding.load(Ordering::SeqCst);
         if outstanding > 0 {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -683,7 +712,18 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
                 ),
             ));
         }
-        Ok(&mut self.buffers[index])
+        let len = state.registered_len as usize;
+        let buffer = self
+            .buffers
+            .get_mut(index)
+            .expect("state and buffers are built together and have equal length");
+        // SAFETY: `stable_mut_ptr` is `IoBufMut`'s promised stable, uniquely
+        // owned address for this buffer, and `registered_len` was recorded
+        // from that same buffer at registration, so those bytes are allocated
+        // and initialized. `&mut self` plus the zero-outstanding check above
+        // establish that nothing else -- kernel included -- is reading or
+        // writing them for this borrow's life.
+        Ok(unsafe { std::slice::from_raw_parts_mut(buffer.stable_mut_ptr(), len) })
     }
 
     /// How many operations are still outstanding against the `i`-th buffer,
@@ -694,9 +734,9 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// cycling through its slots.
     #[must_use]
     pub fn outstanding(&self, i: u32) -> Option<usize> {
-        self.outstanding
+        self.state
             .get(usize::try_from(i).ok()?)
-            .map(|count| count.load(Ordering::SeqCst))
+            .map(|state| state.outstanding.load(Ordering::SeqCst))
     }
 
     /// Record that one more operation is outstanding against `span`'s buffer,
@@ -706,11 +746,11 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// `span`, which is what makes the index below in range.
     fn begin_use(&self, span: RegisteredSpan) -> RegisteredUse {
         let index = span.buffer_index as usize;
-        if let Some(count) = self.outstanding.get(index) {
-            count.fetch_add(1, Ordering::SeqCst);
+        if let Some(state) = self.state.get(index) {
+            state.outstanding.fetch_add(1, Ordering::SeqCst);
         }
         RegisteredUse {
-            outstanding: Arc::clone(&self.outstanding),
+            state: Arc::clone(&self.state),
             index,
         }
     }
@@ -733,21 +773,29 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// buffer -- validating only the index and handing an unchecked range to
     /// the kernel would let it read or write outside the registered
     /// allocation.
+    ///
+    /// Checked against the length recorded **at registration**, never against
+    /// the buffer's current `bytes_len()`. Those are the same number today,
+    /// because nothing this type exposes can resize a registered buffer, but
+    /// the kernel's view is the registered one and that is what a span has to
+    /// fit inside. Validating against a live length would mean a buffer that
+    /// somehow grew could address memory the kernel does not know about.
     fn checked_span(&self, span: RegisteredSpan) -> io::Result<u32> {
         let index = self.checked_index(span.buffer_index)?;
-        let buffer = self
-            .buffers
+        let registered_len = self
+            .state
             .get(span.buffer_index as usize)
-            .expect("checked_index just validated this index");
-        let bytes_len = buffer.bytes_len();
+            .expect("checked_index just validated this index")
+            .registered_len;
         let fits = u64::from(span.offset)
             .checked_add(u64::from(span.len))
-            .is_some_and(|end| end <= bytes_len as u64);
+            .is_some_and(|end| end <= u64::from(registered_len));
         if !fits {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "span offset {} + len {} does not fit inside buffer {} ({bytes_len} bytes)",
+                    "span offset {} + len {} does not fit inside buffer {} \
+                     ({registered_len} registered bytes)",
                     span.offset, span.len, span.buffer_index
                 ),
             ));
@@ -759,9 +807,9 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
 impl<B: IoBufMut> Drop for RegisteredBuffers<B> {
     fn drop(&mut self) {
         if self
-            .outstanding
+            .state
             .iter()
-            .any(|count| count.load(Ordering::SeqCst) > 0)
+            .any(|state| state.outstanding.load(Ordering::SeqCst) > 0)
         {
             // Refused, not silently permitted (M5.3): freeing now would
             // leave an outstanding `IORING_BUFFER_REF` pointing at freed
@@ -812,6 +860,10 @@ pub struct PendingBufferRegistration<B: IoBufMut> {
     user_data: usize,
     base_index: u32,
     buffers: ManuallyDrop<Vec<B>>,
+    /// The lengths handed to `BuildIoRingRegisterBuffers`, captured there
+    /// rather than recomputed here, so what a span is later validated against
+    /// is exactly what the kernel was told.
+    registered_lens: Vec<u32>,
     ring_id: RingId,
 }
 
@@ -846,13 +898,24 @@ impl<B: IoBufMut> PendingBufferRegistration<B> {
         let buffers = unsafe { ManuallyDrop::take(&mut self.buffers) };
         let base_index = self.base_index;
         let ring_id = self.ring_id;
+        let registered_lens = std::mem::take(&mut self.registered_lens);
         Ok(completion.result().map(move |_| {
-            let outstanding: Arc<[AtomicUsize]> =
-                buffers.iter().map(|_| AtomicUsize::new(0)).collect();
+            let state: Arc<[BufferState]> = registered_lens
+                .into_iter()
+                .map(|registered_len| BufferState {
+                    outstanding: AtomicUsize::new(0),
+                    registered_len,
+                })
+                .collect();
+            debug_assert_eq!(
+                state.len(),
+                buffers.len(),
+                "one state entry per registered buffer"
+            );
             RegisteredBuffers {
                 buffers: ManuallyDrop::new(buffers),
                 base_index,
-                outstanding,
+                state,
                 ring_id,
             }
         }))
@@ -1475,8 +1538,10 @@ impl<'ring> Batch<'ring> {
         let count = checked_len(buffers.len())?;
         let base_index = self.ring.registered_buffer_count();
         let mut infos = Vec::with_capacity(buffers.len());
+        let mut registered_lens = Vec::with_capacity(buffers.len());
         for buffer in &mut buffers {
             let length = checked_len(buffer.bytes_len())?;
+            registered_lens.push(length);
             infos.push(IORING_BUFFER_INFO {
                 Address: buffer.stable_mut_ptr().cast::<c_void>(),
                 Length: length,
@@ -1506,6 +1571,7 @@ impl<'ring> Batch<'ring> {
             user_data,
             base_index,
             buffers: ManuallyDrop::new(buffers),
+            registered_lens,
             ring_id: self.ring.ring_id(),
         })
     }
