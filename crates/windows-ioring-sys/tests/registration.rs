@@ -12,6 +12,29 @@ use windows_ioring_sys::{
     Batch, IoBuf, IoBufMut, IoRing, PushOptions, RegisteredSpan, SharedFile, WriteCaching,
 };
 
+/// Registration is the path where this crate hands the kernel a pointer and
+/// the kernel dereferences it *later* -- which is precisely how
+/// [D-32](../DESIGN-NOTES.md#d-32) shipped a use-after-free that surfaced as a
+/// survivable `ERROR_NOACCESS` only because the freed pages happened to still
+/// be mapped. Under this allocator that read faults instead (M15.1).
+#[global_allocator]
+static ALLOC: windows_guard_alloc::GuardAlloc = windows_guard_alloc::GuardAlloc::new();
+
+/// Fail loudly if the allocator above is not actually in force.
+///
+/// Forgetting `#[global_allocator]` is silent: every test still passes and
+/// nothing is instrumented. Since the guard allocator is the only thing
+/// standing between this file and another D-32, "is it installed" has to be an
+/// assertion rather than an assumption.
+#[test]
+fn the_guard_allocator_is_installed_for_this_test_binary() {
+    assert!(
+        ALLOC.total_allocations() > 0,
+        "the guard-page allocator is not installed, so every other test in this file \
+         is running uninstrumented"
+    );
+}
+
 fn temp_file(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "windows-ioring-sys-registration-{tag}-{}.tmp",

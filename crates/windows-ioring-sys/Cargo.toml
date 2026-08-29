@@ -98,3 +98,9 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 windows-overlapped-io-sys = { version = "0.1.3", path = "../windows-overlapped-io-sys", features = [
 	"device",
 ] }
+
+# M15.1's guard-page allocator, installed by the integration tests that
+# exercise registered buffers. Test instrumentation only -- it is
+# `publish = false` and deliberately never reuses an address, which is correct
+# for a test binary and wrong for anything that runs for long.
+windows-guard-alloc = { path = "../windows-guard-alloc" }

@@ -268,7 +268,7 @@ cargo rehashes test binaries on every meaningful rebuild.
 **M15 and M16 gate the 0.2.0 release; M17 and M18 do not.** 0.2.0 carries two security fixes and should not
 wait on the state-space work.
 
-- [ ] **M15.1** -- Add a guard-page global allocator for test builds: `VirtualAlloc` each allocation with a
+- [x] **M15.1** -- Add a guard-page global allocator for test builds: `VirtualAlloc` each allocation with a
   trailing `PAGE_NOACCESS` guard page, right-aligned so its end abuts the guard, and on free flip the block to
   `PAGE_NOACCESS` and **never reuse the address**. That combination makes both an overrun and a
   use-after-free a deterministic `0xC0000005` instead of a silent stale read.
@@ -279,6 +279,13 @@ wait on the state-space work.
   **Sabotage-verify against the real defect:** revert [D-32](DESIGN-NOTES.md#d-32)'s fix locally and confirm
   the allocator turns it from a lucky `ERROR_NOACCESS` into a deterministic failure. An instrument never seen
   to fire is indistinguishable from one that cannot.
+  **Done:** new `windows-guard-alloc` crate (`publish = false`), installed by `tests/registration.rs`. The
+  calibration was run and is the point of the item: reverting [D-32](DESIGN-NOTES.md#d-32) makes
+  `a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit` -- the regression test that fix
+  added -- die with `STATUS_ACCESS_VIOLATION` instead of passing. Five subprocess tests in `tests/faults.rs`
+  prove the allocator fires at all (an access violation cannot be caught in-process), and a
+  `the_guard_allocator_is_installed_for_this_test_binary` assertion catches the silent failure mode where the
+  `#[global_allocator]` attribute is missing and everything passes uninstrumented.
 
 - [ ] **M15.2** -- Fill every allocation and every freed block with a **tracked** poison pattern, derived from
   a per-run seed plus a per-allocation ordinal so the bytes identify *which* allocation they came from rather
