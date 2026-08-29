@@ -52,7 +52,7 @@ This file is feature-scoped and is deleted when every item is done.
   follow a link out of a diff -- names the prelude items this unlocks, and points at
   RB-1's file for the rest. Depends on RB-1.
 
-- [ ] **RB-3** -- Normalise the pre-1.80 `size_of` call sites so the workspace stops
+- [x] **RB-3** -- Normalise the pre-1.80 `size_of` call sites so the workspace stops
   contradicting itself. Every site that imports `std::mem::size_of` or writes
   `std::mem::size_of` / `mem::size_of` / `std::mem::size_of_val` becomes the bare
   prelude form, and any import left unused by the change is dropped. This is the

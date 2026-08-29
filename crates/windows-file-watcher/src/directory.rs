@@ -349,7 +349,7 @@ fn is_case_sensitive_dir(handle: HANDLE) -> bool {
             handle,
             FileCaseSensitiveInfo,
             std::ptr::from_mut(&mut info).cast(),
-            u32::try_from(std::mem::size_of::<FILE_CASE_SENSITIVE_INFO>())
+            u32::try_from(size_of::<FILE_CASE_SENSITIVE_INFO>())
                 .expect("this fixed, small struct's size always fits a u32"),
         )
     };
@@ -437,7 +437,7 @@ impl DirectoryHandle {
         file_id: u64,
     ) -> Result<Self, OpenError> {
         let descriptor = FILE_ID_DESCRIPTOR {
-            dwSize: u32::try_from(std::mem::size_of::<FILE_ID_DESCRIPTOR>())
+            dwSize: u32::try_from(size_of::<FILE_ID_DESCRIPTOR>())
                 .expect("this fixed, small struct's size always fits a u32"),
             Type: FileIdType,
             Anonymous: FILE_ID_DESCRIPTOR_0 {

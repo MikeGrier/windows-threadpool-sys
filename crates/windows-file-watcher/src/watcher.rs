@@ -69,7 +69,7 @@ pub const DEFAULT_BUFFER_BYTES: usize = 64 * 1024;
 
 /// The bytes in one `u32`, the unit the completion buffer is allocated in so it
 /// satisfies `ReadDirectoryChangesW`'s DWORD alignment requirement.
-const BYTES_PER_WORD: usize = std::mem::size_of::<u32>();
+const BYTES_PER_WORD: usize = size_of::<u32>();
 
 /// Every `FILE_NOTIFY_CHANGE_*` class this crate can report.
 ///
