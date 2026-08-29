@@ -9,19 +9,24 @@
 //! offset  size  field
 //!      0     4  magic          identifies a record start
 //!      4     8  sequence       monotonic, assigned at append
-//!     12     4  payload_len    bytes of payload that follow the header
-//!     16     4  checksum       over the sequence, the length, and the payload
-//!     20     n  payload
+//!     12     8  epoch          the epoch this record joined
+//!     20     4  payload_len    bytes of payload that follow the header
+//!     24     4  checksum       over the sequence, epoch, length, and payload
+//!     28     n  payload
 //! ```
 //!
-//! The three fields the contract needs, and why each is there rather than
-//! being nice to have:
+//! The four fields, and why each is there rather than being nice to have:
 //!
 //! - **a length**, because replay reads a stream of bytes with no framing of
 //!   its own and has to know where this record ends and the next begins;
 //! - **a sequence number**, because [`crate::contract`] guarantees no ordering
 //!   *within* an epoch, so the on-disk order is not the logical order and
 //!   replay has to reconstruct it from something;
+//! - **an epoch**, because the contract defines durability per epoch, and a
+//!   replay after a crash runs in a *new process* with no memory of which
+//!   record joined which epoch. Keeping it only in RAM would make the contract
+//!   verifiable in this demonstration and unverifiable in the situation it
+//!   exists for;
 //! - **a checksum**, because the contract promises records after the last
 //!   committed epoch may be **torn**, and a reader that cannot tell a torn
 //!   record from a whole one cannot honour the part of the contract that says
@@ -50,6 +55,8 @@
 
 use std::io;
 
+use crate::commit::Epoch;
+
 /// Marks the start of a record. A region that was never written reads as
 /// zeroes on a freshly-extended file, so any value with a bit set will do;
 /// this one is recognisable in a hex dump.
@@ -61,8 +68,9 @@ const MAGIC: u32 = 0x676F_4C45; // "ELog" little-endian-ish, chosen to be visibl
 mod field {
     pub const MAGIC: std::ops::Range<usize> = 0..4;
     pub const SEQUENCE: std::ops::Range<usize> = 4..12;
-    pub const PAYLOAD_LEN: std::ops::Range<usize> = 12..16;
-    pub const CHECKSUM: std::ops::Range<usize> = 16..20;
+    pub const EPOCH: std::ops::Range<usize> = 12..20;
+    pub const PAYLOAD_LEN: std::ops::Range<usize> = 20..24;
+    pub const CHECKSUM: std::ops::Range<usize> = 24..28;
 }
 
 /// Total header size. The payload begins here.
@@ -75,14 +83,14 @@ pub const HEADER_LEN: usize = field::CHECKSUM.end;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Sequence(pub u64);
 
-/// A checksum over a record's sequence, payload length, and payload.
+/// A checksum over a record's sequence, epoch, payload length, and payload.
 ///
 /// FNV-1a: not cryptographic and not trying to be. Its job is to detect a
 /// *torn* record -- a partial write across a power failure -- which is a
 /// corruption with structure rather than an adversary. A real consumer should
 /// prefer a CRC with hardware support; this is chosen so the sample carries no
 /// dependency and the reader can see the whole thing.
-fn checksum(sequence: Sequence, payload: &[u8]) -> u32 {
+fn checksum(sequence: Sequence, epoch: Epoch, payload: &[u8]) -> u32 {
     const OFFSET_BASIS: u32 = 0x811C_9DC5;
     const PRIME: u32 = 0x0100_0193;
 
@@ -92,6 +100,9 @@ fn checksum(sequence: Sequence, payload: &[u8]) -> u32 {
         hash = hash.wrapping_mul(PRIME);
     };
     for byte in sequence.0.to_le_bytes() {
+        eat(byte);
+    }
+    for byte in epoch.0.to_le_bytes() {
         eat(byte);
     }
     for byte in (payload.len() as u32).to_le_bytes() {
@@ -114,7 +125,12 @@ fn checksum(sequence: Sequence, payload: &[u8]) -> u32 {
 /// [`io::ErrorKind::InvalidInput`] if the record does not fit in `slot`. A log
 /// that silently truncated a record would produce a checksum failure at replay
 /// and look like corruption, so this refuses at append time instead.
-pub fn encode(slot: &mut [u8], sequence: Sequence, payload: &[u8]) -> io::Result<usize> {
+pub fn encode(
+    slot: &mut [u8],
+    sequence: Sequence,
+    epoch: Epoch,
+    payload: &[u8],
+) -> io::Result<usize> {
     let payload_len = u32::try_from(payload.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -136,8 +152,9 @@ pub fn encode(slot: &mut [u8], sequence: Sequence, payload: &[u8]) -> io::Result
 
     slot[field::MAGIC].copy_from_slice(&MAGIC.to_le_bytes());
     slot[field::SEQUENCE].copy_from_slice(&sequence.0.to_le_bytes());
+    slot[field::EPOCH].copy_from_slice(&epoch.0.to_le_bytes());
     slot[field::PAYLOAD_LEN].copy_from_slice(&payload_len.to_le_bytes());
-    slot[field::CHECKSUM].copy_from_slice(&checksum(sequence, payload).to_le_bytes());
+    slot[field::CHECKSUM].copy_from_slice(&checksum(sequence, epoch, payload).to_le_bytes());
     slot[HEADER_LEN..total].copy_from_slice(payload);
     Ok(total)
 }
@@ -146,6 +163,7 @@ pub fn encode(slot: &mut [u8], sequence: Sequence, payload: &[u8]) -> io::Result
 #[derive(Debug)]
 pub struct Decoded<'a> {
     pub sequence: Sequence,
+    pub epoch: Epoch,
     pub payload: &'a [u8],
     pub total_len: usize,
 }
@@ -191,6 +209,11 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded<'_>, Torn> {
             .try_into()
             .expect("SEQUENCE is eight bytes wide"),
     ));
+    let epoch = Epoch(u64::from_le_bytes(
+        bytes[field::EPOCH]
+            .try_into()
+            .expect("EPOCH is eight bytes wide"),
+    ));
     let payload_len = u32::from_le_bytes(
         bytes[field::PAYLOAD_LEN]
             .try_into()
@@ -210,11 +233,12 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded<'_>, Torn> {
         _ => return Err(Torn::Truncated),
     };
     let payload = &bytes[HEADER_LEN..total_len];
-    if checksum(sequence, payload) != stored {
+    if checksum(sequence, epoch, payload) != stored {
         return Err(Torn::ChecksumMismatch);
     }
     Ok(Decoded {
         sequence,
+        epoch,
         payload,
         total_len,
     })

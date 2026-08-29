@@ -301,11 +301,35 @@ landed, so this milestone is unblocked.
   reads its own log back and decodes every record, so the claimed format is checked rather than
   asserted; verifying the *contract* (durability, the torn tail) stays M13.5's job.
 
-- [ ] **M13.3** -- Epoch bookkeeping and group commit: records join the currently open epoch; closing
-  epoch *N* pushes a **covering** flush (M12.1) carrying *N* as its identity; observing that flush's
-  completion marks every epoch `<= N` durable and releases anything waiting on them. This is the
-  construction in "Durability on the ring", and the item is complete when a caller can await
-  "epoch *N* is durable" and get a truthful answer.
+- [x] **M13.3** -- Epoch bookkeeping and group commit in [commit.rs](examples/epoch_log/commit.rs).
+  Records join whatever epoch is open, closing epoch *N* pushes **one covering flush** whose
+  `UserData` is *N*'s identity for the rest of its life, and observing that flush's completion is what
+  advances `durable_through`. The item's completion test -- a caller can await "epoch *N* is durable"
+  and get a truthful answer -- is `Committer::is_durable`, and the example awaits each epoch before
+  moving on.
+
+  **Truthfulness is the whole item, so it is asserted rather than assumed.** The example checks
+  `!is_durable(closed)` in the window between pushing a commit and observing it, checks monotonicity
+  across every epoch below the watermark, and checks that the still-open epoch never reports durable.
+  Sabotage-verified: advancing `durable_through` at push time instead of at completion fails on "a
+  pushed commit is not a completed one". A failed commit advances nothing, which is the truthful
+  answer for the epoch it was closing.
+
+  Two things the writing forced, both recorded in the module rather than left implicit. The barrier is
+  **ring-wide**, so a commit stalls the log -- next-epoch appends queue behind it and hold their arena
+  slots -- which is D-24's cost made visible rather than described. And because it is ring-wide, a
+  commit of *N* may in fact also cover records already pushed into *N+1*; the committer deliberately
+  **reports less than is true**, advancing only to *N*, because reporting less than reality is always
+  safe and reporting more never is.
+
+  **The record format gained an `epoch` field**, extending M13.2's header from 20 to 28 bytes. Keeping
+  the record-to-epoch mapping only in RAM would have made the contract verifiable in this
+  demonstration and unverifiable in the situation it exists for: a replay after a crash runs in a new
+  process with no memory of which record joined which epoch. The read-back check now asserts every
+  record carries the epoch that was open when it was appended.
+
+  The blocking wait here is the fused submit-and-wait; M13.4 replaces it with the multiplexed one,
+  which changes the shape but not the accounting.
 
 - [ ] **M13.4** -- The event loop: a caller-owned ring whose `completion_event` (M11.1) is waited on
   by `WaitForMultipleObjects` alongside a shutdown event, draining to empty on **every** pass

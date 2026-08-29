@@ -23,17 +23,17 @@
 //!
 //! # State of construction
 //!
-//! M13.1 delivered the contract; M13.2 (this) adds the record format and the
-//! append path. The pieces that finish it:
+//! M13.1 delivered the contract, M13.2 the record format and append path;
+//! M13.3 (this) adds epoch bookkeeping and group commit, which is what makes
+//! the contract's guarantee answerable. The pieces that finish it:
 //!
-//! - **M13.3** -- epoch bookkeeping and group commit, so a caller can await
-//!   "epoch N is durable" and get a truthful answer.
 //! - **M13.4** -- the event loop: the ring's completion event multiplexed with
 //!   a shutdown event, draining to empty on every pass.
 //! - **M13.5** -- replay and verify, which is the only part that can actually
 //!   catch a durability bug.
 
 mod append;
+mod commit;
 mod contract;
 mod record;
 
@@ -42,12 +42,20 @@ use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 
 use append::{Appender, SLOT_LEN, SLOTS};
+use commit::{Committer, Epoch};
 use contract::{CONTRACT, Clause};
 use record::Sequence;
-use windows_ioring_sys::IoRing;
+use windows_ioring_sys::{Batch, IoRing};
 
 /// How many records this demonstration appends.
 const RECORDS: usize = 24;
+
+/// Records per epoch. Small so the demonstration shows several commits; a real
+/// log sizes this against its latency target, since the commit is what costs.
+const EPOCH_SIZE: usize = 6;
+
+/// Bound on the wait for a commit, so a stuck example fails instead of hanging.
+const WAIT_MS: u32 = 30_000;
 
 /// The single sink every line of this sample's output goes through (the
 /// repository's "architectural pre-steps" rule: never call `println!` from
@@ -89,13 +97,13 @@ fn payload_for(index: usize) -> Vec<u8> {
     format!("record {index}: the quick brown fox").into_bytes()
 }
 
-/// Append `RECORDS` records and drain every completion.
+/// Append `RECORDS` records in epochs of `EPOCH_SIZE`, committing each one and
+/// waiting for it to become durable before moving on.
 ///
-/// This is the whole of M13.2: records composed into the registered arena and
-/// pushed. Nothing here is durable yet -- that is M13.3's commit -- and saying
-/// so out loud is the point, because "the write completed" is exactly the
-/// thing [`contract`] warns against reading as durability.
-fn append_records<O: io::Write, E: io::Write>(
+/// This is M13.3's deliverable in one function: records join the open epoch,
+/// closing an epoch pushes one covering flush, and observing that flush's
+/// completion is what makes `is_durable` start answering `true`.
+fn run_log<O: io::Write, E: io::Write>(
     report: &mut Report<O, E>,
     path: &std::path::Path,
 ) -> io::Result<()> {
@@ -108,45 +116,89 @@ fn append_records<O: io::Write, E: io::Write>(
 
     let mut ring = IoRing::new(64, 128)?;
     let mut appender = Appender::new(&mut ring)?;
+    let mut committer = Committer::new();
     report.line(format_args!(
         "arena registered: {SLOTS} slots of {SLOT_LEN} bytes"
     ));
 
     let mut appended = 0;
-    let mut completed = 0;
     while appended < RECORDS {
+        let epoch = committer.open_epoch();
         let payload = payload_for(appended);
-        match appender.append(&mut ring, handle, &payload) {
+        match appender.append(&mut ring, handle, epoch, &payload) {
             Ok(_sequence) => appended += 1,
             // Every slot is in flight. This is the arena working as intended,
             // not an error: drain one and try again.
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                completed += drain(&mut ring, &mut appender)?;
+                drain(&mut ring, &mut appender, &mut committer)?;
             }
             Err(error) => return Err(error),
+        }
+
+        if appended % EPOCH_SIZE == 0 {
+            let closed = committer.commit(&mut ring, handle)?;
+            // Before the commit's completion is observed, the honest answer is
+            // "no". Asking here rather than after is what makes the difference
+            // between the two visible.
+            assert!(
+                !committer.is_durable(closed),
+                "a pushed commit is not a completed one"
+            );
+            await_durable(&mut ring, &mut appender, &mut committer, closed)?;
+            report.line(format_args!(
+                "epoch {} committed and durable: {appended} records so far, \
+                 durable through epoch {}",
+                closed.0,
+                committer
+                    .durable_through()
+                    .map_or_else(|| "none".to_owned(), |e| e.0.to_string()),
+            ));
         }
     }
 
     // Drain to empty before returning, so every arena slot is released and
     // nothing is outstanding when the ring closes.
-    while appender.in_flight() > 0 {
-        completed += drain(&mut ring, &mut appender)?;
+    while appender.in_flight() > 0 || committer.in_flight() > 0 {
+        drain(&mut ring, &mut appender, &mut committer)?;
     }
 
+    let durable_through = committer
+        .durable_through()
+        .expect("at least one epoch was committed");
     report.line(format_args!(
-        "appended {appended} records, {completed} write completions observed; \
-         next sequence would be {}",
-        appender.next_sequence().0
+        "appended {appended} records (sequences 0..{}) across {} epochs; durable through epoch {}",
+        appender.next_sequence().0,
+        committer.open_epoch().0,
+        durable_through.0
     ));
-    report.line(format_args!(
-        "none of them are durable yet: a write completing means the kernel took the bytes, \
-         not that they survive power loss (M13.3 adds the commit)"
-    ));
+    // Monotonicity is a guarantee, so it is checked rather than assumed.
+    for epoch in 0..=durable_through.0 {
+        assert!(
+            committer.is_durable(Epoch(epoch)),
+            "durability must be monotonic: epoch {epoch} is below the durable watermark"
+        );
+    }
+    assert!(
+        !committer.is_durable(committer.open_epoch()),
+        "the still-open epoch was never committed and must not report durable"
+    );
 
-    // Read the bytes back and decode them, so "the records are in the format
-    // above" is checked rather than asserted. This is not the replay pass --
-    // M13.5 owns verifying the *contract*, including the torn tail. All this
-    // shows is that the append path produced what it claims to produce.
+    verify_on_disk(report, path, file, appended, durable_through)
+}
+
+/// Read the log back and decode it.
+///
+/// Not the replay pass -- M13.5 owns verifying the *contract*, including the
+/// torn tail. This checks the weaker thing M13.3 can already claim: that the
+/// records are in the format described, and that each one carries the epoch it
+/// was appended into.
+fn verify_on_disk<O: io::Write, E: io::Write>(
+    report: &mut Report<O, E>,
+    path: &std::path::Path,
+    file: std::fs::File,
+    appended: usize,
+    durable_through: Epoch,
+) -> io::Result<()> {
     drop(file);
     let bytes = std::fs::read(path)?;
     let mut decoded = 0;
@@ -164,6 +216,15 @@ fn append_records<O: io::Write, E: io::Write>(
                     payload_for(decoded),
                     "a decoded payload must be byte-identical to what was appended"
                 );
+                assert_eq!(
+                    record.epoch,
+                    Epoch((decoded / EPOCH_SIZE) as u64),
+                    "a record must carry the epoch that was open when it was appended"
+                );
+                assert!(
+                    record.epoch <= durable_through,
+                    "every record here belongs to a committed epoch"
+                );
                 cursor += record.total_len;
                 decoded += 1;
             }
@@ -176,7 +237,8 @@ fn append_records<O: io::Write, E: io::Write>(
         }
     }
     report.line(format_args!(
-        "read back {} bytes and decoded {decoded} of {appended} records",
+        "read back {} bytes and decoded {decoded} of {appended} records, \
+         every one stamped with its epoch",
         bytes.len()
     ));
     assert_eq!(
@@ -186,11 +248,41 @@ fn append_records<O: io::Write, E: io::Write>(
     Ok(())
 }
 
-/// Pop every completion currently available, handing each to the appender.
-fn drain(ring: &mut IoRing, appender: &mut Appender) -> io::Result<usize> {
+/// Block until `epoch` is durable, draining completions while we wait.
+///
+/// The blocking wait here is the *fused* submit-and-wait: with nothing new
+/// queued its only effect is to park until a completion arrives. M13.4
+/// replaces it with the multiplexed wait, which is what a log that also has to
+/// service non-ring handles needs -- the shape changes, the accounting below
+/// does not.
+fn await_durable(
+    ring: &mut IoRing,
+    appender: &mut Appender,
+    committer: &mut Committer,
+    epoch: Epoch,
+) -> io::Result<()> {
+    while !committer.is_durable(epoch) {
+        if drain(ring, appender, committer)? == 0 {
+            Batch::new(ring).submit_and_wait(1, WAIT_MS)?;
+        }
+    }
+    Ok(())
+}
+
+/// Pop every completion currently available, routing each to whichever of the
+/// two owns it.
+fn drain(
+    ring: &mut IoRing,
+    appender: &mut Appender,
+    committer: &mut Committer,
+) -> io::Result<usize> {
     let mut popped = 0;
     while let Some(completion) = ring.try_pop()? {
-        if appender.claim(&completion)? {
+        // A completion belongs to exactly one of the two, so the short-circuit
+        // is the dispatch: if the appender claimed it the committer is never
+        // asked, and a completion neither recognises is left uncounted rather
+        // than silently attributed.
+        if appender.claim(&completion)? || committer.claim(&completion)?.is_some() {
             popped += 1;
         }
     }
@@ -225,10 +317,10 @@ fn main() {
     report.line(format_args!(""));
 
     let path = log_path();
-    match append_records(&mut report, &path) {
+    match run_log(&mut report, &path) {
         Ok(()) => report.line(format_args!("log written to {}", path.display())),
         Err(error) => {
-            report.error_line(format_args!("append failed: {error}"));
+            report.error_line(format_args!("epoch log failed: {error}"));
             let _ = std::fs::remove_file(&path);
             std::process::exit(1);
         }
@@ -236,8 +328,7 @@ fn main() {
 
     report.line(format_args!(""));
     report.line(format_args!(
-        "Still to come: M13.3 commits epochs, M13.4 runs the event loop, M13.5 replays \
-         and verifies."
+        "Still to come: M13.4 runs the multiplexed event loop, M13.5 replays and verifies."
     ));
     let _ = std::fs::remove_file(&path);
 }

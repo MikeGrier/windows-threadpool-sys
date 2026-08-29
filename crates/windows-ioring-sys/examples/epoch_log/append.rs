@@ -32,6 +32,7 @@ use windows_ioring_sys::{
     WriteCaching,
 };
 
+use crate::commit::Epoch;
 use crate::record::{self, Sequence};
 
 /// How many slots the arena holds. More slots means more records can be in
@@ -129,6 +130,7 @@ impl Appender {
         &mut self,
         ring: &mut IoRing,
         file: RawHandle,
+        epoch: Epoch,
         payload: &[u8],
     ) -> io::Result<Sequence> {
         let slot = self.free_slot().ok_or_else(|| {
@@ -141,7 +143,11 @@ impl Appender {
 
         // Step 1: compose. `get_mut` is what makes this possible at all, and
         // it is also the check that the kernel is not reading this slot.
-        let total = record::encode(self.arena.get_mut(slot)?, sequence, payload)?;
+        //
+        // The epoch is stamped into the record here, at the moment the append
+        // is accepted -- which is exactly when the contract says a record's
+        // epoch is decided, and never changes afterwards.
+        let total = record::encode(self.arena.get_mut(slot)?, sequence, epoch, payload)?;
 
         // Step 2: push, over exactly the bytes the record occupies rather than
         // the whole slot -- writing the slot's unused tail would put stale
