@@ -69,7 +69,7 @@ pub const DEFAULT_BUFFER_BYTES: usize = 64 * 1024;
 
 /// The bytes in one `u32`, the unit the completion buffer is allocated in so it
 /// satisfies `ReadDirectoryChangesW`'s DWORD alignment requirement.
-const BYTES_PER_WORD: usize = std::mem::size_of::<u32>();
+const BYTES_PER_WORD: usize = size_of::<u32>();
 
 /// Every `FILE_NOTIFY_CHANGE_*` class this crate can report.
 ///
@@ -1576,7 +1576,17 @@ impl DirectoryWatcher {
     ///
     /// Idempotent, so a caller may stop explicitly and still let `Drop` run.
     /// After it returns, no callback for this watcher is executing or can start,
-    /// and nothing further is delivered.
+    /// so nothing further is ever *enqueued*.
+    ///
+    /// That guarantee covers the sending side only. Notifications already
+    /// enqueued are still queued, and a receiver has yet to drain them -- D-38's
+    /// split, where the crate owns when watching stops and the client owns when
+    /// reading stops. So "teardown returned" must not be read as "my side has
+    /// seen everything it will ever see": the two differ by however long the
+    /// receiving thread takes to catch up, which is unbounded and is not this
+    /// crate's to schedule. Teardown does release the last sender, so draining
+    /// until the receiver reports disconnection is what makes a delivered set
+    /// complete.
     ///
     /// Must not be called from inside this watcher's own completion callback: it
     /// waits for that callback to finish, so it would wait on itself. Nothing in

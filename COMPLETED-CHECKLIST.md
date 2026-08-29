@@ -1516,3 +1516,71 @@ sites in the same change (the schedule module's legality guide, the generator's 
 comments, and this test's own comment).
 
 The other remaining gap -- an interactive fault always asking -- stands as recorded.
+
+## <a id="checklist-review-baseline"></a>Moved 2026-08-28 -- automated-reviewer language baseline (CHECKLIST-review-baseline.md, M1)
+
+Closed the gap that let an automated PR review on
+[#46](https://github.com/MikeGrier/windows-threadpool-sys/pull/46) raise seven false
+"`size_of` is not in scope, this will not compile" findings against code that builds clean on
+this workspace's pinned toolchain. Three things had to coincide, and two were ours: the
+baseline is structurally invisible in a diff (the toolchain pin never appears, the root
+manifest's `[workspace.package]` table fell six lines outside the only hunk, and the new crate
+manifests carry `edition.workspace = true`, a pointer to a table in no hunk); the workspace's
+own pre-1.80 `size_of` call sites supplied genuine in-repo evidence for the wrong reading; and
+nearly all existing Rust predates the 1.80 prelude change. Only the third was outside our
+control.
+
+Validated empirically rather than argued. Re-running the same reviewer on the same PR after
+the change took it from **7 comments generated / "changes recommended"** to **0 new comments**,
+with the `size_of` claim absent; the remaining verdict was a scope observation asking for human
+review of a 112-file, three-new-crate PR, which is correct.
+
+Decisions recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md#restatement-drift) (a fourth remedy for
+restatement drift, for a fact none of the previous three reach) and
+[DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) (why the baseline is checked rather than centralised,
+with the three rejected alternatives).
+
+- [x] **RB-1** -- Create [.github/instructions/global.rust.instructions.md](.github/instructions/global.rust.instructions.md).
+  [.github/copilot-instructions.md](.github/copilot-instructions.md) already cited this path
+  twice (at the "Rust pre-commit gate" bullet and at the milestone-boundary build step) as the
+  home of "the full gate", but the file did not exist -- so the one natural home for a Rust
+  language baseline was a dangling reference. Created as the authoritative Rust document: the
+  language baseline (edition, MSRV, pinned toolchain, and the consequence that 1.80+ prelude
+  items are used unqualified), then the full pre-commit gate the root file summarises. Both
+  existing references converted into clickable relative links. Two false claims in the root
+  file were found while writing it and corrected in the new file rather than copied forward:
+  there is no `.config/nextest.toml` in this repository and cargo-nextest is not installed, and
+  `UNRESOLVED-TEST-FAILURES.md` is a per-component file rather than a root one.
+
+- [x] **RB-2** -- Add a short Rust language baseline section to
+  [.github/copilot-instructions.md](.github/copilot-instructions.md). That file is the one an
+  automated PR reviewer is known to read, and it contained zero occurrences of `edition`,
+  `MSRV`, `1.98`, `rust-version`, or `prelude` across its whole length. Placed first in the
+  file, states the edition and MSRV outright (a reviewer cannot follow a link out of a diff),
+  names the prelude items this unlocks, generalises to the whole 1.80 -> 1.98 window rather
+  than to `size_of` alone, instructs that a compile claim be verified before it is reported,
+  and points at RB-1's file for the rest.
+
+- [x] **RB-3** -- Normalise the pre-1.80 `size_of` call sites so the workspace stops
+  contradicting itself. Seven sites across three crates became the bare prelude form and four
+  now-unused imports were dropped (two `use std::mem::size_of;`, two `use core::mem;`). This
+  was the confirming evidence above: while it stood, a reviewer pattern-matching against
+  repository precedent would keep reaching the same wrong conclusion whatever the instruction
+  files said. `ManuallyDrop` and `MaybeUninit` imports untouched -- they are not in the prelude.
+
+- [x] **RB-4** -- Guard the restated baseline against drift in CI, via
+  [tools/check-baseline.ps1](tools/check-baseline.ps1) and the `language baseline consistency`
+  job. **Re-planned during execution:** the item as written assumed the restatements lived in
+  "either instruction file", but a blast-radius sweep found **twelve claims across six files** --
+  also README.md, DEVELOPMENT.md, .github/dependabot.yml, and ci.yml's own `msrv` job name and
+  toolchain pin. The check parses the two authoritative declarations
+  (`[workspace.package]` in [Cargo.toml](Cargo.toml), `[toolchain]` in
+  [rust-toolchain.toml](rust-toolchain.toml)), verifies they agree with each other, then makes
+  two passes: each labelled claim is matched by its own regex and compared, and every
+  Rust-version-shaped token in a registered file must be the MSRV, the channel, or an
+  allow-listed historical version carrying a recorded reason. A claim that no longer matches
+  its regex fails rather than passes, catching a reword that drops the value. Verified by
+  sabotage per the rule that a binding which cannot be shown to fail is cosmetic: changing
+  `rust-version`, `channel`, or `edition`, deleting a claim's value, and planting a stale
+  version in prose each produce a distinct located failure; exit 2 is reserved for
+  configuration errors and the script is cwd-independent.

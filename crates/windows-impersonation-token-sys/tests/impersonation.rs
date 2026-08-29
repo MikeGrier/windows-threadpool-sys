@@ -5,7 +5,6 @@
 
 use std::io;
 use std::marker::PhantomData;
-use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;

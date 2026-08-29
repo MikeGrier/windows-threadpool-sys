@@ -2,6 +2,43 @@
 
 Use LF line endings.
 
+## RUST LANGUAGE BASELINE — read this before reporting a compile error
+
+This workspace is **Rust edition 2024** with an **MSRV of 1.98**, and pins
+**toolchain 1.98.0** in [rust-toolchain.toml](../rust-toolchain.toml). The edition and
+MSRV are declared once in the `[workspace.package]` table of the root
+[Cargo.toml](../Cargo.toml); every crate inherits them via `edition.workspace = true`
+and `rust-version.workspace = true`, so **a crate's own `Cargo.toml` shows a pointer,
+not a value** — reading one crate manifest will not tell you the edition.
+
+This matters to reviewers specifically, because none of those three files reliably
+appears in a pull-request diff: the toolchain pin is rarely edited, and the root
+manifest's `[workspace.package]` table usually sits outside whatever hunk the diff
+does contain. **Absence of the baseline from a diff is not evidence that the baseline
+is old.**
+
+1.98 is well ahead of most Rust in circulation, and the gap between it and a typical
+prior is a standing source of false "this will not compile" findings. In particular:
+
+- **`size_of`, `size_of_val`, `align_of`, and `align_of_val` are in the prelude** as of
+  Rust 1.80 (released 2024-07-25). They are called **bare** — `size_of::<T>()` — and
+  `use std::mem::size_of;` is neither required nor the house style here. A file calling
+  `size_of::<T>()` with no such import is **correct**. (`std::mem` still owns
+  `ManuallyDrop`, `MaybeUninit`, `transmute`, `swap`, `replace`, and `take`, which are
+  not in the prelude, so a `use std::mem::...` line beside a bare `size_of` call is
+  expected rather than contradictory.)
+- More generally, **treat everything stabilised in the 1.80 -> 1.98 window as
+  available.** That window is under-represented in most training data, so it is exactly
+  where a confident-but-wrong "missing import" or "unstable feature" claim lands.
+
+**Never report that code fails to compile on the basis of reading it.** Verify first —
+`cargo check --all-targets` via the `cargo_check` MCP tool covers every crate and every
+test target, because the root manifest declares no `default-members`. Report the
+failure only if the build actually produces one.
+
+The full Rust rules, including the pre-commit gate, are in
+[instructions/global.rust.instructions.md](instructions/global.rust.instructions.md).
+
 ## PRIME DIRECTIVE — never defer work for a perceived lack of need
 
 **Do not defer, drop, or narrow a feature merely because you cannot currently see a
@@ -117,7 +154,7 @@ edits (`tpu_replace_in_file` / `tpu_edit_file`), not only to PowerShell/shell.
   (`git --no-pager diff --cached -U0 -- "*.rs" | Select-String '^\+\s*mod tests\s*\{'`);
   any hit is a blocking violation — move those tests into a sibling `tests.rs`
   first. See the full gate in
-  `.github/instructions/global.rust.instructions.md`.
+  [instructions/global.rust.instructions.md](instructions/global.rust.instructions.md).
 - **Commit every file `cargo fmt` reformats, even outside your task's scope.**
   `cargo fmt` rewrites *all* files in the formatted scope, not just the ones you
   edited — so a run can clean up a pre-existing formatting drift in a file your
@@ -349,12 +386,29 @@ non-blank line is a JSON object. The `reason` field identifies the record type:
 behaviour). `eprintln!` bypasses libtest capture and always appears in
 `x-cargo-mcp-stderr`.
 
-### Recommended: cargo-nextest
+### This workspace runs `cargo test`, not cargo-nextest
 
-This workspace contains a `.config/nextest.toml`, so prefer `cargo_nextest_run`
-over `cargo_test` for unit and integration tests. Use `cargo_test` only for
-**doctests** (nextest does not run them). `cargo_nextest_list` enumerates tests as
-structured JSON when you need discovery without execution.
+**Use `cargo_test`.** There is no `.config/nextest.toml` here, cargo-nextest is not
+installed, and no CI job invokes it — the jobs that run tests all use `cargo test`.
+An earlier version of this section claimed the opposite; it was generic guidance that
+never matched this repository.
+
+This is not merely a missing tool, so do not "fix" it by adding one. The two runners
+have different isolation models — nextest gives each test its own **process**, while
+`cargo test` runs tests as **threads in one process** — and this workspace's tests are
+written for the latter on purpose. [DESIGN-NOTES.md](../DESIGN-NOTES.md) records the
+case that forced it: a close routine is a bare `extern "system"` pointer that cannot
+capture, so its observation state must live in a `static`, and those statics are
+declared *inside* each test function rather than at module scope precisely because a
+module-scope counter would be corrupted by another test closing a handle concurrently.
+Under nextest that hazard would not exist; under `cargo test`, which is what CI runs,
+it does.
+
+So adopting nextest would be a deliberate change to CI and to the model the tests are
+written against — a decision to raise, not a gap to close in passing.
+
+`cargo_nextest_run` and `cargo_nextest_list` remain in the tool table above because the
+MCP server exposes them; they will fail here until cargo-nextest is installed.
 
 ## Scratch directory for temporary files
 
@@ -437,7 +491,8 @@ When executing checklist items (CHECKLIST.md files):
   ```
 - **Check the item off** in CHECKLIST.md (change `- [ ]` to `- [x]`) and include that change in the same commit.
 - After the commit, pull / rebase from origin then push back to origin
-- **Tests must pass** before committing. Run the appropriate test command (per the language-specific instructions) after each item and fix failures before committing. Pre-existing failures unrelated to the current item do not block the commit, but must be recorded in `UNRESOLVED-TEST-FAILURES.md` (see language-specific instructions for the convention) before committing. When such a failure is later **resolved**, do not delete its entry — move it out of `UNRESOLVED-TEST-FAILURES.md` into a sibling `RESOLVED-TEST-FAILURES.md` (append-only) under a `## Resolved <YYYY-MM-DD HH:MM:SS ±hh:mm> — <description>` heading recording the date and time the resolution was finalized, in the same commit that removes it from the unresolved file.
+- **Tests must pass** before committing. Run the appropriate test command (per the language-specific instructions) after each item and fix failures before committing. Pre-existing failures unrelated to the current item do not block the commit, but must be recorded in an `UNRESOLVED-TEST-FAILURES.md` before committing. When such a failure is later **resolved**, do not delete its entry — move it out of `UNRESOLVED-TEST-FAILURES.md` into a sibling `RESOLVED-TEST-FAILURES.md` (append-only) under a `## Resolved <YYYY-MM-DD HH:MM:SS ±hh:mm> — <description>` heading recording the date and time the resolution was finalized, in the same commit that removes it from the unresolved file.
+  - **These files are per-component, not repository-root**, and are located by the same nearest-ancestor rule as `DESIGN-NOTES.md`: use the pair in the source-component root of the failing test, or the nearest one in an ancestor directory between that test and the component root, creating it beside that component's `CHECKLIST.md` if it does not yet exist. There is deliberately no root-level pair — a failure belongs next to the component that owns it, where the person working there will see it. The only pair that currently exists is [crates/windows-file-watcher/UNRESOLVED-TEST-FAILURES.md](../crates/windows-file-watcher/UNRESOLVED-TEST-FAILURES.md) and its sibling [RESOLVED-TEST-FAILURES.md](../crates/windows-file-watcher/RESOLVED-TEST-FAILURES.md), which are the worked example of the format.
 - **When the last item in a CHECKLIST file is completed**, update its PLANS.md entry to "completed" in the same commit.
 - **Cross-component handoff callouts.** When the next required action in a checklist sequence shifts to a different source-component (see "Source-Components" above) — i.e. the next dependency-ordered item cannot be worked in the current component because it lives in another component — the item whose completion triggers the shift must end with an explicit handoff callout naming the destination component, milestone, and work item ID. Use the reciprocal form on the destination side: the destination's first dependent item must carry a `CROSS-COMPONENT PREREQUISITE` callout naming the source component / item that must land first, and (if control returns) a `CROSS-COMPONENT HANDOFF` callout at the end pointing back. Recommended format (markdown blockquote so it stands out when scanning):
   > **-> CROSS-COMPONENT HANDOFF:** next work is in component `<component-path>` -> `<milestone-id>` -> `<work-item-id>` (`<short title>`). See [`<path-to-CHECKLIST.md>`](...).
@@ -1017,10 +1072,13 @@ as checklist items:
    hang. `--all-targets` (tests/examples/benches) is fine and expected; `--workspace`
    (all members) is not.
 2. **Test only the in-scope crate / source-component**, not the whole default workspace.
-   **Include documentation tests**, not just unit and integration tests. For Rust,
-   cargo-nextest does **not** run doc tests, so run them separately with `cargo_test`
-   (`doc: true`, i.e. `cargo test --doc`) for the in-scope crate in addition to the
-   nextest run; a milestone is not complete while any doc test fails or is unrun.
+   **Include documentation tests**, not just unit and integration tests. For Rust, an
+   *unfiltered* `cargo_test` already runs them -- look for the `Doc-tests <crate>`
+   line in its stderr and a matching `test result:` line. A **filtered** run does not:
+   `test_filter` and `test_name` execute the compiled libtest binaries directly, and
+   doctests live in none of them. So after any filtered run, do a separate
+   `cargo_test` with `doc: true` (i.e. `cargo test --doc`) for the in-scope crate. A
+   milestone is not complete while any doc test fails or is unrun.
 3. **Sync with origin**: `git fetch`, then merge or rebase the current branch on top
    of the updated upstream tip (`--no-edit`), resolving any conflicts, then push.
    Pushing is permitted at milestone boundaries without further confirmation; outside
@@ -1364,6 +1422,8 @@ This applies to any feature whose output may plausibly need to be retargeted lat
 CLI output, log output, diagnostic output, generated artifacts.
 
 <!-- tpu-mcp:setup:begin -->
+<!-- tpu-mcp:setup:version=3.0.0 -->
+
 ## File I/O — use `tpu_*` MCP tools, never PowerShell or shell
 
 This workspace runs the **tpu-mcp** MCP server which exposes encoding-aware
@@ -1375,6 +1435,32 @@ and round-trip the file's native encoding and line endings safely.
 
 **Rule:** when working in any project that has the tpu-mcp server registered,
 ALWAYS prefer the `tpu_*` tools over PowerShell or shell file commands.
+
+### Version check (do this first)
+
+Every `tpu_*` response begins with an `x-tpu-mcp-invocation` header line
+that includes a `tpu_version` field — the version of the running `tpu-mcp`
+binary answering the call. The `<!-- tpu-mcp:setup:version=X.Y.Z -->` HTML
+comment on the very first line of this block records the version of `tpu`
+that wrote this guidance.
+
+**If the two versions differ, stop and report the mismatch to the user
+before performing any file mutation.** Include both versions in the
+message and suggest the remedy:
+
+- **Binary older than guidance** — rebuild / reinstall the `tpu-mcp`
+  extension so its bundled binary matches this guidance, then retry. This
+  is the case that has historically wasted whole sessions: a defect the
+  user reads about as "fixed" is still present in the running binary
+  because the extension's bundled `tpu-mcp.exe` was not updated.
+- **Binary newer than guidance** — re-run `tpu setup --inject
+  <path-to-copilot-instructions.md>` to refresh this block against the
+  newer binary, then retry. Tool descriptions, response shapes, or
+  recommended workflows may have changed.
+
+This check is cheap (one field on one line, checked once per session) and
+catches version-drift bugs before they manifest as silent behavioural
+differences.
 
 | MCP tool | Use it for |
 |---|---|
@@ -1402,7 +1488,11 @@ ALWAYS prefer the `tpu_*` tools over PowerShell or shell file commands.
 - **Edits** — prefer `tpu_replace_in_file` (literal matching by default,
   no escaping needed) over `tpu_edit_file` when the target text is unique,
   because line numbers can shift between reads. Use `tpu_edit_file` when
-  you have just read the file and know exact line offsets.
+  you have just read the file and know exact line offsets. Every text
+  payload — `content`, `text`, `replacement`, an op's `data` — is written
+  **verbatim**: backslashes are never collapsed, so no tpu tool needs
+  pre-doubled escapes. (`tpu_replace_in_file` accepts an opt-in
+  `expand_escapes: true` for callers that deliberately double-escape.)
 - **Writes that should be guarded** — pass `validate: [{ "selector":
   "line-contains:N", "value": "..." }]` to refuse the write if the file is
   not in the expected state.
@@ -1416,6 +1506,67 @@ ALWAYS prefer the `tpu_*` tools over PowerShell or shell file commands.
 - **Dependency-free templating** — `tpu_render_file` substitutes
   `{{NAME}}`-style tokens. Use `\{{` to emit literal braces.
 
+### Escape-sequence hazard (JSON transport)
+
+MCP arguments travel as JSON strings. In JSON, `\n` **is** a real newline —
+a literal backslash-n in the file requires `\\n` on the wire. Under-escaping
+is easy for an agent to do because it "sees" the target source text, not
+the JSON transport, and the damage is invisible: the string is already
+decoded to a real newline *before* `tpu_write_file` / `tpu_append_file` /
+`tpu_replace_in_file` / `tpu_edit_file` ever runs, so no flag on the tool
+call can distinguish "intended literal `\n`" from "intended real newline" —
+no server-side option can undo a JSON decode that already happened.
+
+tpu does not add a second layer of its own: every text payload is written
+verbatim, so a correctly JSON-escaped string always lands byte-for-byte.
+(`tpu_replace_in_file`'s `expand_escapes: true` is the sole exception, and
+it is opt-in — leave it off unless you deliberately double-escaped.) The
+residual hazard is purely in getting the JSON escaping right.
+
+**The fix**: when a payload (`content`, `pattern`, `replacement`, or an
+edit op's `data`) contains backslash escapes, embedded quotes, or anything
+not certain to be JSON-escaped correctly, set the matching `*_format`
+argument (`content_format`, `pattern_format`, `replacement_format`, or an
+op's `data_format`) to `"base64"` and send the exact bytes base64-encoded.
+Base64's alphabet has no backslashes, so there is no escaping decision to
+get wrong — this makes the whole class of bug impossible rather than just
+less likely. `"hex"` works the same way; avoid `"encoded"` for this purpose
+since it is itself a backslash-escape codec and re-introduces the hazard.
+
+**Safety net**: `tpu_replace_in_file` also echoes a compact changed-region
+preview of every small real write by default (no `diff:true` needed — see
+`echo_max_lines`), so a corruption like this is visible immediately in the
+same turn instead of requiring a follow-up read. This echo is cheap
+regardless of file size (it never clones the whole file); pass `diff:true`
+for a full old/new unified diff instead.
+
+### Concurrent edits — don't silently clobber (`content_version` / `if_match`)
+
+Copilot may issue several tool calls against the same file in quick
+succession. A blind `tpu_write_file` (or a `tpu_edit_file` at line numbers)
+whose payload was computed from an earlier read can silently overwrite an
+edit that landed in between — a lost update.
+
+Every read (`tpu_read_file`, `tpu_read_head`, `tpu_read_tail`, `tpu_read_file_escaped`)
+reports a `"content_version"` on its invocation-header line (a content digest
+that changes whenever the file's bytes change), and every successful write
+stamp reports the new `"content_version"`. A read MAY omit the token when the
+file changed while it was being read (so it can't be guaranteed to describe
+the bytes returned) — treat a missing token as "re-read before relying on a
+version".
+
+When you mutate a file based on content you previously read, pass that token
+as `if_match` on `tpu_write_file` / `tpu_edit_file` / `tpu_replace_in_file` /
+`tpu_append_file`. If the file changed since you read it, the call is
+REFUSED with `{"status":"conflict",...}` (surfaced as an MCP error,
+`isError: true`) and the file is left unchanged, instead of clobbering the
+other edit; then re-read, rebuild your change against the current content,
+and retry with the new `content_version`.
+
+Prefer a narrow `tpu_replace_in_file` over a full-file `tpu_write_file` when
+you can: a replace operates on the file's current bytes, so it is far less
+prone to lost updates in the first place.
+
 ### Tool output format
 
 Every tool response uses a **mixed format**: a JSON invocation header,
@@ -1427,16 +1578,27 @@ between the header and trailer.
   `{"reason":"x-tpu-mcp-invocation","tool":"tpu_NAME","args":{...}}`
   Large `content`/`replacement`/`template` fields appear as `"<N bytes>"` placeholders.
 - **Mutating tools** (write, replace, edit, append) — normal write:
-  `{"status":"success","file":"...","mtime_epoch_ms":N,"size":N}`
+  `{"status":"success","file":"...","mtime_epoch_ms":N,"size":N,"content_version":"..."}`
+  (`content_version` is the digest of the just-written file — pass it as
+  `if_match` on your next edit of this file; see "Concurrent edits" above).
   Preview modes do not stamp the file and return a reduced trailer:
   `diff:true` adds unified diff lines before the status (full stamp still present for write/replace/edit).
   `dry_run:true` (replace only): optional diff lines, then `{"status":"success","changed":true|false}`.
   `count:true` (replace only): `{"status":"success","count":N}`.
   `append diff:true`: diff lines when changed, then `{"status":"success","file":"...","changed":true|false}`.
+  `tpu_replace_in_file` on a real write additionally reports `"changed_lines":N` in the status —
+  the sum, over every match, of `(old span line count) + (new text line count)`; this is a
+  cheap per-match total, NOT a deduplicated count of unique file lines, so two matches on the
+  same line each contribute their own share and can push N above the file's actual line count —
+  and, as long as N is at most `echo_max_lines` (default 5), automatically prepends a
+  compact changed-region preview (unified-diff-style hunk headers, new lines only — no
+  full-file diff) even without `diff:true`; a larger change instead adds
+  `"diff_omitted":true` (pass `diff:true` for a full old/new unified diff regardless of size).
 - **Structured tools** (count_file, stat_file, copy_file, render_file,
   setup+target, doctor) — result line
   `{"reason":"x-tpu-mcp-result",...}` followed by `{"status":"success"}`.
-- **Read tools** (read_file, read_head, read_tail, read_file_escaped) — header then raw content; no JSON trailer on success.
+- **Read tools** (tpu_read_file, tpu_read_head, tpu_read_tail, tpu_read_file_escaped) — header then raw content; no JSON trailer on success.
+  The header line usually carries a `"content_version"` token for this file (see "Concurrent edits" above); pass it as `if_match` when you later edit the file. It may be absent if the file changed mid-read — re-read to get a usable token.
   **Exception** — `tpu_read_file_binary` with a non-empty `hash` arg acts like a structured tool:
   `{"reason":"x-tpu-mcp-result","encoding":"bytes-base64","content":"<base64>","hashes":[...]}` followed by `{"status":"success"}`.
   Without `hash`, `tpu_read_file_binary` returns header + 7-bit-clean escaped bytes (no trailer).

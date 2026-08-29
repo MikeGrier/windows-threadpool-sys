@@ -461,28 +461,80 @@ fn dropping_while_changes_are_arriving_does_not_deadlock() {
 #[test]
 fn a_dropped_watcher_stops_delivering() {
     let dir = TempDir::new("stops-delivering");
-    let (watcher, collected) = watch(dir.path(), false);
 
+    // Received inline rather than through `Drained`, deliberately. What this
+    // test claims is that teardown makes a later change *unobservable*, and a
+    // background pump puts an unsynchronised thread between the queue and the
+    // assertion: a notification enqueued before teardown but drained after the
+    // count was sampled is indistinguishable from a post-teardown delivery. That
+    // is not hypothetical -- it is what made this test intermittent on CI, and a
+    // longer sleep would only have widened the window it depends on. Receiving
+    // here lets the drain be a checked fact instead of a race against a sleep.
+    let (sender, receiver) = channel();
+    let handle = DirectoryHandle::open(dir.path()).expect("open the directory");
+    let route = plain_route(
+        test_watch(),
+        RouteScope::Directory { subtree: false },
+        sender,
+    );
+    let watcher = DirectoryWatcher::start(handle, dir.path().to_path_buf(), route)
+        .expect("start the watcher");
+
+    fn record(item: Notification, into: &mut Vec<String>) {
+        if let Notification::Batch { changes, .. } = item {
+            into.extend(
+                changes
+                    .into_iter()
+                    .map(|change| change.name.to_os_string().to_string_lossy().into_owned()),
+            );
+        }
+    }
+
+    // One `std::fs::write` is a create *and* a write, so it yields more than one
+    // notification, and they need not share a completion. Waiting only for the
+    // first change named `before-drop.txt` therefore leaves the rest in flight
+    // on purpose: an in-flight completion is precisely the state teardown has to
+    // be correct in, and the state this test exists to cover.
+    let mut delivered: Vec<String> = Vec::new();
     std::fs::write(dir.path().join("before-drop.txt"), b"x").expect("create");
-    collected.wait_for_name("before-drop.txt");
-    drop(watcher);
+    let deadline = std::time::Instant::now() + NOTIFY_TIMEOUT;
+    while !delivered.iter().any(|name| name == "before-drop.txt") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for a change named before-drop.txt; saw {delivered:?}"
+        );
+        if let Some(item) = receiver.recv_timeout(Duration::from_millis(50)) {
+            record(item, &mut delivered);
+        }
+    }
 
-    // Rundown has completed, so no further callback can run and the count is
-    // settled; anything created now must never be delivered.
-    let settled = collected.notifications().len();
+    drop(watcher);
     std::fs::write(dir.path().join("after-drop.txt"), b"x").expect("create");
-    std::thread::sleep(Duration::from_millis(200));
-    assert_eq!(
-        collected.notifications().len(),
-        settled,
-        "a dropped watcher must deliver nothing further"
+
+    // Teardown releases the last sender, so the queue can be drained to the end
+    // of the stream rather than to an arbitrary deadline: `recv` reports `None`
+    // only once nothing is queued and no sender remains, which is exactly the
+    // point past which nothing can ever be added. Everything the watcher will
+    // ever deliver is therefore in `delivered` below -- including anything a
+    // still-running callback managed to enqueue, since a live callback implies a
+    // live sender and would keep the drain going.
+    while let Some(item) = receiver.recv_timeout(NOTIFY_TIMEOUT) {
+        record(item, &mut delivered);
+    }
+    assert!(
+        receiver.is_disconnected(),
+        "teardown must release the last sender; the drain above stopped on a \
+         timeout rather than on the end of the stream, so the assertions below \
+         would not cover the whole delivered set. Saw {delivered:?}"
+    );
+
+    assert!(
+        !delivered.iter().any(|name| name == "after-drop.txt"),
+        "a change after teardown must never be reported; saw {delivered:?}"
     );
     assert!(
-        !collected
-            .changes()
-            .iter()
-            .any(|(_, name)| name == "after-drop.txt"),
-        "a change after teardown must never be reported"
+        delivered.iter().all(|name| name == "before-drop.txt"),
+        "a dropped watcher must deliver nothing further; saw {delivered:?}"
     );
 
     dir.cleanup();
