@@ -53,7 +53,9 @@
 //! the event loop. This is what `IoRing`'s own API is shaped for: the
 //! submission queue is not thread-safe, registration is per-ring, and there is
 //! exactly one completion event per ring, none of which are limitations to
-//! work around.
+//! work around. That fused submit-and-wait is Model B's *usual* wakeup source
+//! rather than its defining one -- see the next paragraph, which is still
+//! Model B.
 //!
 //! **Model B with a multiplexed wakeup.** [`IoRing::completion_event`] hands
 //! back an owned duplicate of the ring's own completion event, so a caller

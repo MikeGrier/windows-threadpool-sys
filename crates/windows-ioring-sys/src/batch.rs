@@ -37,9 +37,47 @@ impl PushOptions {
     }
 
     /// Set `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`: this op does not start until
-    /// every op already queued in this batch's ring has completed. A
+    /// every op already queued on this batch's ring has completed. A
     /// barrier, not a cheap tag -- it forces the ring to drain before
     /// continuing.
+    ///
+    /// # Ring-wide, and it spans submissions
+    ///
+    /// Measured, not inferred (D-24 in `DESIGN-NOTES.md`). The barrier
+    /// reaches every operation outstanding on the *ring*, not only the ones
+    /// queued in this batch, and it holds back ops pushed after it even when
+    /// they target an entirely different file -- which rules out
+    /// filesystem-level serialization as the explanation. Results were
+    /// identical whether the sequence went in one [`Batch::submit`] or three.
+    ///
+    /// The consequence to plan for: **cross-epoch pipelining through a single
+    /// ring is not available.** A consumer that closes an epoch with a
+    /// drained flush stalls that whole ring for the flush's duration, so the
+    /// way to overlap epochs is more rings, not more batches.
+    ///
+    /// # The barrier stops at the ring's edge
+    ///
+    /// It orders SQEs against SQEs, and nothing else. Any non-ring I/O -- an
+    /// overlapped `DeviceIoControl`, anything issued through
+    /// `windows-overlapped-io-sys`, a plain blocking write -- is outside it in
+    /// *both* directions: this flag can neither make a ring op wait for a
+    /// non-ring op nor make a non-ring op wait for ring ops.
+    ///
+    /// A consumer mixing both paths is the normal case rather than an exotic
+    /// one, and it must enforce that ordering in its own code. What this
+    /// crate offers toward it is [`IoRing::completion_event`], which makes
+    /// waiting on the ring *alongside* other handles expressible without
+    /// giving up the ring or blocking a thread in a drain.
+    ///
+    /// # Ordering, never durability by itself
+    ///
+    /// This flag orders operations; it does not flush anything. It is,
+    /// however, what makes a flush cover the writes before it: a flush pushed
+    /// after a batch of writes *without* this flag routinely completes while
+    /// many of those writes are still outstanding (D-23 in `DESIGN-NOTES.md`,
+    /// measured at 17 and 23 of 32 writes finishing after the flush did). So
+    /// the obvious spelling -- push the writes, then push a flush -- silently
+    /// does not make those writes durable. See [`Batch::flush`].
     pub fn drain_preceding(mut self, drain: bool) -> Self {
         self.drain_preceding = drain;
         self

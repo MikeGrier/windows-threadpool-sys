@@ -450,6 +450,34 @@ race, because there is nothing to re-arm.
 and there being exactly one completion event per ring are not limitations to work around; they are the API
 assuming a shared-nothing consumer.
 
+### Model B's wakeup source is separable from Model B's identity ([D-20](#d-20))
+
+The paragraph above describes Model B's *usual* wakeup source, and an earlier revision of this section
+offered no other, which is how the framing came to be read as fixing it. It does not. Model B's identity
+is **who owns, submits, and drains** -- one pinned thread per domain, no sharing on the data path. What
+that thread happens to *block on* is a separate axis, and there are two answers:
+
+| Wakeup source | The thread blocks in | Use when |
+|---|---|---|
+| **Fused submit-and-wait** | `Batch::submit_and_wait` (`SubmitIoRing` with `wait_n`) | The domain's only I/O is ring I/O. Nothing to re-arm, nothing to multiplex, lowest overhead. |
+| **Multiplexed wait** | `WaitForMultipleObjects` over `IoRing::completion_event` plus other handles | The domain must also service non-ring handles: a shutdown event, a socket, an overlapped operation, a timer. |
+
+Both are Model B. Switching between them changes neither ownership nor the submission path, and neither
+one is a degraded form of the other -- picking the second does not make a consumer "Model A with extra
+steps", and does not cost the locality that motivated Model B in the first place.
+
+The second row exists because of a limit stated in full under Category 2 above and worth repeating
+here, since this is where a consumer decides: **`IOSQE_FLAGS_DRAIN_PRECEDING_OPS` stops at the ring's
+edge.** It orders SQEs against SQEs and is powerless in both directions across the ring boundary -- it
+can neither make a ring op wait for an overlapped one nor make an overlapped op wait for ring ops. A
+consumer mixing both paths therefore cannot get its ordering from the barrier flag and must enforce it
+itself; the multiplexed wait is what lets it do so without either surrendering the ring or parking a
+thread in a blocking drain.
+
+The cost of the multiplexed row is that the waiter inherits [D-19](#d-19)'s edge-trigger contract in
+full: drain to empty before waiting again, on every pass, and treat a wake with nothing to pop as
+normal. The fused row has no such obligation, which is the honest reason to prefer it when it fits.
+
 ### Why per-thread, and why pinning is not optional ([D-27](#d-27))
 
 Model B's "one ring per thread" is usually presented as a convention. It is not -- it is userspace

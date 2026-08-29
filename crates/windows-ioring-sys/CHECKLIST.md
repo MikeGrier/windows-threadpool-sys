@@ -343,13 +343,40 @@ would mean writing a `SetEvent`-after-arm patch that M11.3 immediately deletes.
   linking the thread-pool crate creates no threads (the Win32 default pool is process-wide and lazily
   instantiated).
 
-- [ ] **M11.5** -- Document the wakeup shapes and both contract gaps across every place that states them --
-  `lib.rs`'s "Choosing a delivery architecture", `README.md`, and the "Two delivery architectures" section
-  of [DESIGN-NOTES.md](DESIGN-NOTES.md). Two facts to state: that Model B's wakeup source is separable from
-  Model B's identity (a caller may own its ring and still wait on it alongside other handles), and that
-  `drain_preceding`'s barrier stops at the ring's edge. Per CONTRACT INTEGRITY this is a blast-radius
-  sweep, not a single edit: grep `drain_preceding`, "two delivery", and "completion event" across `src/`,
-  `tests/`, `examples/`, and `*.md`, and fix or account for every hit.
+- [x] **M11.5** -- Both facts now stated wherever the wakeup shapes are described, as a blast-radius
+  sweep rather than a single edit. Grepped `drain_preceding` / `DRAIN_PRECEDING` / "two delivery" /
+  "completion event" / "delivery architecture" across `src/`, `tests/`, `examples/` and `*.md`; 18 files
+  matched, 4 changed, and the rest are accounted for below.
+
+  **Fact 1 -- Model B's wakeup source is separable from its identity.** The
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) "Two delivery architectures" section described Model B as a thread
+  parked in `SubmitIoRing` and offered no alternative, which is exactly how the framing came to be read
+  as fixing the wakeup mechanism ([D-3](DESIGN-NOTES.md#d-3)'s amendment note). It gained a subsection
+  naming the two wakeup sources -- fused submit-and-wait, and a multiplexed `WaitForMultipleObjects` over
+  `IoRing::completion_event` -- as a table, with the point that identity is *who owns, submits and
+  drains* and the wakeup is a separate axis. [README.md](README.md) gained the same in consumer form.
+  [src/lib.rs](src/lib.rs) already stated it (M11.1); its Model B paragraph gained a forward pointer so a
+  reader who stops there does not leave with the fixed-wakeup reading.
+
+  **Fact 2 -- `drain_preceding`'s barrier stops at the ring's edge.** Stated in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md)'s Category 2 and in [src/lib.rs](src/lib.rs), but **not on
+  `PushOptions::drain_preceding` itself** -- the one place a consumer actually meets the flag. That was
+  the real gap this sweep found. Its rustdoc now states all three measured properties: ring-wide and
+  spanning submissions with no cross-epoch pipelining ([D-24](DESIGN-NOTES.md#d-24)), powerless in both
+  directions across the ring boundary with `IoRing::completion_event` as what this crate offers instead,
+  and that the flag orders but does not flush -- while being what makes a flush cover preceding writes
+  at all ([D-23](DESIGN-NOTES.md#d-23)). README states the limit too, as the reason the multiplexed
+  shape has to exist.
+
+  **Accounted for, unchanged:** `IoRing::completion_event` and the `IoRing` type docs in
+  [src/ring.rs](src/ring.rs) already state both facts correctly (M11.1);
+  [src/event_delivery.rs](src/event_delivery.rs) and
+  [examples/model_a_delivery.rs](examples/model_a_delivery.rs) are Model A only and make no wakeup claim
+  beyond it; [src/batch/tests.rs](src/batch/tests.rs) and the integration tests are uses of the flag and
+  the primitive rather than statements about them (the cross-path limit is not testable in-crate -- it
+  is a fact about I/O this crate does not issue); [PLANS.md](PLANS.md) is an index summary with no
+  wakeup claim; and [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md), the design-session transcripts and
+  the spikes are historical record, deliberately left alone.
 
 - [ ] **M11.6** -- An example putting the multiplexed wait together end to end: a caller-owned ring whose
   completion event is waited on via `WaitForMultipleObjects` alongside a shutdown event, draining to empty

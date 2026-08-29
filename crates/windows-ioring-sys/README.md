@@ -93,6 +93,38 @@ owning its ring, its buffer pool, and its shard of the work, parked directly in
 `Batch::submit_and_wait` -- the fused submit-and-wait *is* the event loop. This
 is the shape `IoRing`'s own API is built for.
 
+**Model B's wakeup source is separable from Model B's identity.** What makes it
+Model B is who owns, submits, and drains -- one pinned thread, no sharing on the
+data path -- not what that thread blocks on. There are two answers for the
+latter, and both are Model B:
+
+- **Fused submit-and-wait**, blocking in `Batch::submit_and_wait`. Use it when
+  the domain's only I/O is ring I/O: nothing to re-arm, nothing to multiplex.
+- **A multiplexed wait**, blocking in `WaitForMultipleObjects` over
+  `IoRing::completion_event` alongside other handles. Use it when the domain
+  must also service a shutdown event, a socket, an overlapped operation, or a
+  timer. `IoRing::completion_event` hands back an owned *duplicate* of the
+  ring's event, so the caller keeps its ring.
+
+Picking the second is not "Model A with extra steps" and costs none of the
+locality that motivated Model B. It does inherit one contract: the ring's event
+is **edge-triggered on the completion queue going empty to non-empty**, so a
+waiter must drain to empty before waiting again, on every pass, and must treat a
+wake with nothing to pop as normal. That is measured rather than documented by
+Win32, and getting it wrong hangs rather than merely slows -- read
+`IoRing::completion_event`'s own docs before using it.
+
+**The `drain_preceding` barrier stops at the ring's edge.** This is the reason
+the multiplexed shape has to exist. `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` orders
+SQEs against SQEs and is powerless in both directions across the ring boundary:
+it can neither make a ring operation wait for an overlapped one nor make an
+overlapped operation wait for ring operations. A consumer mixing ring and
+non-ring I/O -- the normal case, not an exotic one -- must therefore enforce
+that ordering in its own code, and the multiplexed wait is what lets it do so
+without surrendering the ring or parking a thread in a blocking drain. The
+barrier is also ring-wide and spans submissions, so a drained flush stalls the
+whole ring for its duration; see `PushOptions::drain_preceding`.
+
 Most real applications want Model B on the hot data path and Model A everywhere
 else -- the control plane, background work, cold paths -- where the thread
 pool's quiescence is worth more than locality. This crate supports both as
