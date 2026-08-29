@@ -334,3 +334,148 @@ would mean writing a `SetEvent`-after-arm patch that M11.3 immediately deletes.
 
   The example uses no thread pool, so it is also the first real consumer of the `--no-default-features`
   configuration M11.4 added to CI; verified building under both feature sets.
+
+## Moved 2026-08-28 -- M12: durability exposed, and the flush barrier made explicit
+
+### M12 -- Durability: expose it, and stop defaulting it wrong
+
+The kernel exposes a durability parameter on writes (`FILE_WRITE_FLAGS`) and on flushes
+(`FILE_FLUSH_MODE`); this crate hardcodes both, so a consumer sees ordering but no way to express
+durability at all. Worse, [D-23](DESIGN-NOTES.md#d-23) measured that an unflagged flush does *not*
+cover preceding writes -- which made `Batch::flush(&file, PushOptions::default())`, the obvious
+spelling, a silent data-loss bug rather than a missing feature. **M12.1 removed that spelling**; the
+remaining items expose the parameters the crate still hardcodes.
+
+Decisions: [D-23](DESIGN-NOTES.md#d-23) through [D-25](DESIGN-NOTES.md#d-25). Measurements are
+reproduced by the drain spike recorded in
+[DESIGN-SESSION-2026-08-28-external-consumer-correspondence.md](design-sessions/DESIGN-SESSION-2026-08-28-external-consumer-correspondence.md).
+
+M12.1 is first because it is a correctness defect in shipped 0.1.2, not an enhancement.
+
+- [x] **M12.1** -- The barrier decision is now explicit for flushes ([D-23](DESIGN-NOTES.md#d-23),
+  [D-25](DESIGN-NOTES.md#d-25)). `Batch::flush` and `Batch::flush_raw` take a required
+  `FlushCoverage` -- `CoversPrecedingOperations` or `Unordered` -- **in place of** `PushOptions`,
+  rather than alongside it. Replacing it rather than adding to it is the point: keeping both would let
+  a caller write `FlushCoverage::Unordered` with `PushOptions::new().drain_preceding(true)` and mean
+  two contradictory things at once. `PushOptions` carries exactly one decision, and for a flush
+  `FlushCoverage` *is* that decision.
+
+  An enum rather than a `bool` because `flush(&file, true)` does not say what the `true` decides, and
+  a two-variant type makes the wrong choice unwriteable by accident rather than merely discouraged.
+  The `Unordered` variant is documented with the two uses that are legitimate (host sequencing, and a
+  flush not being used for durability at all) so it reads as a deliberate choice rather than an
+  escape hatch.
+
+  Rustdoc on `flush_raw` now states the measured contract in full: that the ring has no FUA and the
+  flush is therefore its only durability primitive, that an unflagged flush was measured completing
+  while 17 and then 23 of 32 preceding writes were still outstanding, and that durability is a
+  property of an epoch rather than of a write. `PushOptions::drain_preceding` cross-references it so a
+  reader arriving from the flag side learns the flush no longer inherits the decision.
+
+  A unit test pins the `FlushCoverage` -> SQE-flag mapping, **verified by sabotage**: making
+  `CoversPrecedingOperations` map to `IOSQE_FLAGS_NONE` compiles and passes every other test in the
+  crate, and would lose data only on power failure -- exactly the class of defect that needs a
+  mechanical check rather than review.
+
+  Swept the statements this changed: [DESIGN-NOTES.md](DESIGN-NOTES.md)'s epoch construction and
+  barrier-cost table now name the API instead of the raw flag, [D-25](DESIGN-NOTES.md#d-25) carries an
+  implementation-status marker, and the M12 intro above no longer describes a spelling that exists.
+  The two `flush_raw` call sites in [tests/submission_lifecycle.rs](tests/submission_lifecycle.rs) use
+  `Unordered` with a note saying why (they test backpressure, not durability). The broader durability
+  sweep across `lib.rs` and `README.md` stays M12.5, which is where those documents first have to
+  discuss durability at all.
+
+  **Breaking change**: both flush entry points changed signature.
+
+- [x] **M12.2** -- [tests/flush_barrier.rs](tests/flush_barrier.rs) proves the barrier *behaviour*,
+  not the flag. The unit test in [src/batch/tests.rs](src/batch/tests.rs) pins the enum-to-SQE-flag
+  mapping, which shows the flag is set but not that setting it changes what the kernel does; this
+  reproduces the D-23 shape against a real device and asserts the difference. Verified by sabotage --
+  mapping `CoversPrecedingOperations` to `IOSQE_FLAGS_NONE` fails it on behaviour, not on a flag
+  comparison.
+
+  All three of the spike's failed iterations are encoded as requirements rather than left to be
+  rediscovered: `FILE_FLAG_NO_BUFFERING` (buffered writes finish in issue order), a pre-written extent
+  (extending writes serialize), and a **size asymmetry** between the two phases (uniform sizes do not
+  reorder). The third was not in the item's text and cost a full rewrite to find: a first version used
+  32 uniform writes and one flush, and skipped on this machine because it could observe nothing.
+
+  **The measurement disagreed with D-23, and the disagreement is now recorded rather than smoothed
+  over.** On this machine *no* preceding write ever completed after an unflagged flush -- 0 of 32,
+  against the spike's 17 and 23 -- yet 11 of 32 writes queued *after* the flush completed before it.
+  Reordering was plainly happening; it just did not manifest as the flush overtaking the writes ahead
+  of it. So the control accepts *either* direction of reordering and skips only when it sees neither;
+  requiring D-23's specific observable would have made the test silently vacuous here.
+  [D-23](DESIGN-NOTES.md#d-23) now carries the amendment, and "The two measured facts" states the
+  consumer-facing consequence: **observing that your flush lands last is not evidence you can omit the
+  barrier** -- it is incidental behavior of one device stack, which is exactly what PLATFORM INTEGRITY
+  says never to bind to.
+
+  The covering case also asserts [D-24](DESIGN-NOTES.md#d-24)'s other half (writes queued after a
+  drained flush are held until it completes), which is the observable that actually discriminates on
+  this hardware. Short-write detection guards the whole thing: an unbuffered write with a misaligned
+  offset or length would otherwise make every count meaningless.
+
+- [x] **M12.3** -- `FILE_WRITE_FLAGS` is exposed as `WriteCaching` (`Cached` / `WriteThrough`), a
+  required argument on all four write entry points -- `write`, `write_raw`, `write_registered`,
+  `write_registered_raw` ([D-25](DESIGN-NOTES.md#d-25)). A typed enum rather than a raw flag word, and
+  `Cached` is `#[default]` so the previous hardcoded behaviour has a name rather than being the
+  absence of one.
+
+  The rustdoc states what write-through **is** -- a first-level cache directive whose value is
+  latency shaping, since data already at the device makes a later flush shorter -- and what it is
+  **not**: not a durability guarantee and not FUA, because whether it becomes a Force Unit Access bit
+  depends on the driver, the volume, and whether the device's write cache is enabled, none of which
+  this API can see or promise. A write that completes with `WriteThrough` may still be in a volatile
+  device cache. That conflation cost the originating exchange a wrong recommendation, so it is stated
+  at the type rather than left in a design note.
+
+  A unit test pins the mapping, including that `Cached` stays the no-flag value: silently enabling
+  write-through would change latency behaviour for every existing caller without changing any call
+  site.
+
+- [x] **M12.4** -- `FILE_FLUSH_MODE` is exposed as `FlushMode` (`Default`, `Data`, `MinMetadata`,
+  `NoSync`) on both flush entry points ([D-25](DESIGN-NOTES.md#d-25)), with `Default` as `#[default]`
+  -- the mode a durability barrier wants and what the crate hardcoded before.
+
+  `NoSync` carries the loudest documentation in the crate, because it is **the one mode that makes
+  nothing durable**: it pushes data out of the system cache and stops, so anything in a volatile
+  device cache is lost on power failure exactly as if no flush had been issued. Its completion is not
+  a commit point and must never be reported to a caller as one. Stated in passing, as the item asked:
+  the existence of a distinct "no sync" mode is itself the evidence that the other three *do* issue
+  the sync -- nothing in the Win32 documentation says so directly.
+
+  A unit test pins all four mappings. It matters most for `NoSync`: confusing it with any other value
+  would turn a commit point into a no-op that still reports success.
+
+  **Note on sequencing.** These two were implemented back to back and are committed together, citing
+  both IDs. They are genuinely independent -- separate kernel parameters on separate entry points --
+  and that independence was preserved in how the code was written, so re-slicing the commit would be
+  bookkeeping rather than history.
+
+  **Breaking change**: all four write entry points and both flush entry points changed signature.
+
+- [x] **M12.5** -- Durability is now stated wherever it is discussed, as a blast-radius sweep.
+  Grepped `flush` / `durab` / `write_through` / `WriteThrough` / `drain_preceding` / `FUA` across
+  `src/`, `tests/`, `examples/` and `*.md`.
+
+  **The finding was an absence, not a contradiction.** [src/lib.rs](src/lib.rs) and
+  [README.md](README.md) between them mentioned durability *zero times* -- one incidental hit each, both
+  the word "flush" in the list of the kernel's seven ops. A consumer reading either document
+  front-to-back would have learned that the ring exists, how to choose a delivery architecture, and
+  how to size an execution domain, without ever being told that a flush is the only way to commit
+  anything or that the obvious spelling of one commits nothing. Both now carry a `Durability` section
+  stating the three facts the item names -- no FUA, the flush is the only durability primitive, a
+  flush without the barrier covers nothing -- plus the consequence that ties them together: durability
+  is a property of an epoch, never of an individual write. README's third point also carries M12.2's
+  measurement, that seeing your flush land last is device-dependent and not evidence the barrier can
+  be omitted.
+
+  **Accounted for, already correct:** the flush and write rustdoc state all three facts in full
+  (M12.1, M12.3, M12.4), which is where the summaries point; `PushOptions::drain_preceding` states the
+  barrier's reach and its relationship to durability (M11.5);
+  [DESIGN-NOTES.md](DESIGN-NOTES.md)'s "Durability on the ring" is the long form all of them defer to.
+  [tests/flush_barrier.rs](tests/flush_barrier.rs) and [src/batch/tests.rs](src/batch/tests.rs) are
+  checks of the contract rather than statements of it; the `ring_copy` example's writes are a copy
+  pipeline with no durability claim to make, and now name `WriteCaching::Cached` explicitly rather
+  than inheriting a hardcoded flag.
