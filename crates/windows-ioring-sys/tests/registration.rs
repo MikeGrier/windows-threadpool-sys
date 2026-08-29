@@ -186,6 +186,55 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
 }
 
 #[test]
+fn a_zero_length_registration_does_not_spend_the_ring_s_one_registration() {
+    // The one-shot guard tests the registered *count*, not a flag, so a
+    // registration that assigns no index leaves the shot unspent (M10.1,
+    // D-28). Asserted against the stated rule rather than against whichever
+    // way the kernel happens to answer a zero-length build: if the build is
+    // refused the count never advances, and if it is accepted it advances by
+    // zero, so either way the following real registration must be accepted.
+    let path = temp_file("zero-length-registration");
+    std::fs::write(&path, b"content").expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: no handle is read at all -- the slice is empty.
+    let empty = unsafe { batch.register_files(&[]) };
+    drop(batch);
+    if empty.is_ok() {
+        ring.run_down().expect("drain the zero-length registration");
+    }
+    assert_eq!(
+        ring.registered_file_count(),
+        0,
+        "a zero-length registration must not advance the base index"
+    );
+
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: `handle` stays open for the whole test.
+    let pending = unsafe { batch.register_files(&[handle]) }
+        .expect("a real registration must still be accepted after a zero-length one");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let registered = pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("file registration succeeded");
+    assert_eq!(registered.len(), 1);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn dropping_a_registration_with_an_operation_in_flight_leaks_rather_than_frees() {
     /// A buffer that records whether its destructor ran, so the test can
     /// distinguish "leaked (forgotten)" from "dropped (freed)" -- the exact

@@ -45,6 +45,13 @@ impl RingId {
 /// and will again. A consumer must not be able to write an exhaustive
 /// `match` that a new variant would break. [`IoRing::supports_raw`] reaches
 /// an op this enum does not yet name.
+///
+/// Naming an op here is not the same as offering a way to push it: every
+/// variant except [`Op::Nop`] gates one or more [`crate::Batch`] methods
+/// (`Read` gates the four read pushes, `Write` the four write pushes,
+/// `Flush` and `Cancel` two each, and the two registration ops one each),
+/// while `Nop` gates none and is reachable only through
+/// [`IoRing::push_raw`]. See [`IoRing::supports`] (M10.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Op {
@@ -329,17 +336,34 @@ impl IoRing {
 
     /// Whether this ring supports `op`, from the capability set cached at
     /// construction.
+    ///
+    /// Answers what the *kernel's* op table contains, not what this crate's
+    /// safe push surface reaches (M10.1, [`Op`]'s own docs list the mapping).
+    /// The two coincide for every op except [`Op::Nop`], which has no
+    /// [`crate::Batch`] method at all: a nop owns no buffer, so there is
+    /// nothing for a [`crate::Token`] to hand back, and it is reachable only
+    /// through [`IoRing::push_raw`]. A `true` here therefore means "the
+    /// kernel would accept this op", not "a `Batch` method exists to push
+    /// it".
     #[must_use]
     pub fn supports(&self, op: Op) -> bool {
         self.supported_ops.contains(op)
     }
 
-    /// Whether this ring supports a raw op code this crate does not yet name
-    /// (D-7).
+    /// Whether this ring supports a raw op code, including one this crate
+    /// does not yet name (D-7).
     ///
-    /// Unlike [`IoRing::supports`], this is not cached -- it exists
-    /// specifically for an op outside [`Op`], which by definition this
-    /// ring's cached capability set was never probed for.
+    /// Its reason to exist is an op outside [`Op`], which by definition this
+    /// ring's cached capability set was never probed for -- but passing a
+    /// named op's [`Op::code`] is equally in contract, and answers
+    /// identically to [`IoRing::supports`] (M10.1). The difference between
+    /// them is cost, not truth: `supports` is a bit test against the set
+    /// probed once at construction, this is an `IsIoRingOpSupported` call
+    /// every time.
+    ///
+    /// What a `true` here does *not* mean is that the op became pushable: an
+    /// op outside [`Op`] has no builder method whatever this answers, so
+    /// [`IoRing::push_raw`] remains the only route to one.
     #[must_use]
     pub fn supports_raw(&self, op_code: IORING_OP_CODE) -> bool {
         // SAFETY: `self.handle` is a live ring.

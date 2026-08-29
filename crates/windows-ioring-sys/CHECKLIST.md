@@ -134,10 +134,17 @@ correctly), D-14's registration-index continuity (category 4, recorded as an exp
 assumption), and the previously-unstated completion-ordering rule. Categories 1, 2, 3, 6, 8, and 9 were
 **not examined**, and that is recorded as "not looked at" rather than "does not apply".
 
-- [ ] **M10.1** -- Audit category 3 (state-dependent legality unenumerated) first: capability negotiation
-  (D-6) makes the legal op set a per-ring *runtime* property, so which pushes are legal depends on state the
-  type system does not carry. Enumerate, per capability state, which `Batch` methods can succeed and what a
-  caller may infer from `supports_raw`.
+- [x] **M10.1** -- Audited category 3 (state-dependent legality unenumerated) against capability negotiation
+  ([D-28](DESIGN-NOTES.md#d-28)): [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "Category 3" now tabulates which
+  `Batch` methods each probed op gates, and states the four rules the prose left silent -- `supports` answers
+  for the kernel's op table rather than this crate's push surface (`Op::Nop` gates no `Batch` method at all,
+  which is exactly the op M6+.3's shutdown case reaches for); `supports_raw` accepts named codes too and
+  differs from `supports` in caching rather than truth, while never widening what `Batch` can push; every
+  legality check runs before `reserve_user_data`, so a rejected push strands no identity; and the registration
+  one-shot is enforced against the registered count, making the real rule "at most one registration that
+  assigned an index" and making a *failed* registration unretryable on that ring. Corrected the `supports`,
+  `supports_raw`, `Op`, `register_files`, and `register_buffers` rustdoc that stated these wrongly or not at
+  all, and added an integration test binding the zero-length-registration rule.
 
 - [ ] **M10.2** -- Audit the remaining categories (1, 2, 6, 8, 9) against the ring/token/registration
   surface, stating each answer including "unspecified, deliberately" where that is honest.

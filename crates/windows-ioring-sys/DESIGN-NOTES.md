@@ -50,6 +50,7 @@ runs a continuation), this crate exposes the mechanism and documents the trade-o
 | <a id="d-25"></a>D-25 | **Every durability parameter the kernel exposes is exposed by this crate, and the barrier decision is never taken by default.** `BuildIoRingWriteFile` takes `FILE_WRITE_FLAGS` and `BuildIoRingFlushFile` takes a `FILE_FLUSH_MODE`; this crate hardcoded `FILE_WRITE_FLAGS_NONE` and `FILE_FLUSH_DEFAULT`, so a consumer reading the API saw ordering but no way to express durability at all, and reasonably concluded the ring could not express it. That is a PLATFORM INTEGRITY failure -- the platform narrowed to what the crate's own examples needed -- and it is the second instance found in one review cycle, which makes it a pattern rather than an accident. Given [D-23](#d-23), `Batch::flush` additionally must not have a default spelling that produces a non-covering flush: the barrier decision is made explicit at the call site rather than inherited from `PushOptions::default()`. Queued as M12. |
 | <a id="d-26"></a>D-26 | **Windows mechanism belongs in this crate; durability policy belongs to the consumer; an example is how the knowledge crosses between them.** The dividing test is whether the answer depends on *how Windows behaves* or on *the consumer's workload and contract*. Ours: exposing the kernel's parameters, stating the measured contracts ([D-19](#d-19), [D-23](#d-23), [D-24](#d-24)), and making the footguns hard to hold. Theirs: epoch bookkeeping, which barrier strategy to pay for, how durability is reported, and how non-ring operations are sequenced against ring ones -- all of which depend on epoch sizes and latency targets, and so would be policy baked into a primitive ([D-8](#d-8) refuses exactly this). The residue is that a consumer must otherwise rediscover the same composition, so the transfer vehicle is a worked example (M13/M14), not a library: it demonstrates the pattern without this crate owning the policy. |
 | <a id="d-27"></a>D-27 | **One ring per thread is userspace's proxy for one ring per CPU, and pinning is what makes the proxy real.** Kernels affine hot structures to *CPUs*, not threads, because per-CPU exclusion is free (disable preemption, or raise IRQL) and because interrupt context has no meaningful owning thread. The hardware agrees: NVMe queue pairs are per-CPU with their completion interrupt vector routed to that CPU. Userspace has no per-CPU primitive and cannot disable preemption, so the only durable ownership unit available is the thread -- which is why the SPDK/Seastar discipline pins one. This is the reason under guidance this crate already gives ([D-8](#d-8), and the L3-domain advice): an *unpinned* per-thread ring still gets the single-producer safety the SQ/CQ protocol requires, but none of the locality that motivated the structure, and the interesting count is therefore cores or LLC domains rather than threads. |
+| <a id="d-28"></a>D-28 | **`IoRing::supports` answers what the kernel's op table contains, not what this crate's safe push surface reaches; and every legality check runs before anything is reserved (category 3 audit, M10.1).** Six of the seven named ops gate one or more `Batch` methods; `Op::Nop` gates none and is reachable only through `push_raw`, because a nop owns no buffer for a `Token` to hand back. Reading `supports` as "a push for this op will be accepted" is therefore wrong for exactly the op a consumer reaches for to wake a parked `submit_and_wait` (M6+.3). `supports_raw` is the same truth uncached rather than a different question -- it accepts named codes too and agrees with `supports` on them -- and it never widens the push surface, since an op outside `Op` has no builder regardless. Separately, the registration one-shot is enforced against the registered count rather than a flag, which makes the real rule "at most one registration that assigned an index" (a zero-length registration does not spend it) and makes a *failed* registration unretryable on that ring (the count advances at queue time, [D-14](#d-14)). |
 
 ## Durability on the ring
 
@@ -236,12 +237,71 @@ which belongs to whoever knows the semantics of the operations being ordered. Th
 previously available to be read as stronger than it is; this states the limit explicitly, since a
 consumer mixing both paths is exactly the case D-2 says is normal.
 
+### Category 3: which pushes are legal is per-ring runtime state
+
+Category 3 asks: the contract lists the modes; which messages is each mode *capable* of emitting? Here the
+modes are ring capability states and the messages are pushes. [D-6](#d-6) makes the legal op set a per-ring
+*runtime* property -- `IsIoRingOpSupported` is probed once per op at construction -- so which `Batch` methods
+can succeed is state neither the type system nor the prose carried. The mapping, previously derivable only by
+reading every `self.require(..)` call in `batch.rs`:
+
+| Probed op | `Batch` methods it gates |
+|---|---|
+| `Op::Read` | `read`, `read_raw`, `read_registered`, `read_registered_raw` |
+| `Op::Write` | `write`, `write_raw`, `write_registered`, `write_registered_raw` |
+| `Op::Flush` | `flush`, `flush_raw` |
+| `Op::Cancel` | `cancel`, `cancel_raw` |
+| `Op::RegisterFiles` | `register_files` |
+| `Op::RegisterBuffers` | `register_buffers` |
+| `Op::Nop` | **none** -- see below |
+
+Four rules follow, and each is a place the prose was silent.
+
+**The capability set answers for the kernel, not for this crate's push surface.** `supports(Op::Nop)` is true
+on every ring this crate has run on, and there is no `Batch::nop`: `IORING_OP_NOP` is reachable only through
+`IoRing::push_raw`'s unsafe seam. That asymmetry is deliberate rather than a gap to close on demand -- a nop
+owns no buffer, so there is nothing for a `Token` to hand back -- but it does mean `supports` must not be read
+as "this ring will accept a push for this op through the safe API". It answers what the kernel's op table
+contains. The distinction is not academic: it is exactly the op a consumer reaches for to wake a thread parked
+in `submit_and_wait`, which is the shutdown problem [CHECKLIST.md](CHECKLIST.md) -> M6+.3 records.
+
+**`supports_raw` is not restricted to ops outside `Op`, and agrees with `supports` where they overlap.** Its
+name and its stated purpose ([D-7](#d-7): reach an op this crate has not wrapped) invited the reading that
+passing a named op's `code()` is out of contract. It is not -- the two answer identically for every named op,
+which the `capability_reporting_never_claims_more_than_is_io_ring_op_supported_reports` test already asserted
+against a live ring while the rustdoc still read as excluding the case. The difference between them is cost
+and caching, not truth: `supports` is a bit test against the set probed at construction, `supports_raw` is an
+`IsIoRingOpSupported` call every time. What `supports_raw` never does is widen what `Batch` can push: an op
+outside `Op` has no builder method whatever it answers, so `push_raw` stays the only route to one.
+
+**Legality is decided before anything is reserved.** Every pre-`Build*` rejection -- an unsupported op, a
+cross-ring `RegisteredFile`/`RegisteredBuffers` ([D-17](#d-17)), an out-of-range span, an oversized buffer, a
+second registration -- returns before `reserve_user_data` runs. A rejected push therefore consumes no
+`UserData`, counts nothing against `IoRing::run_down`, and leaves the ring exactly as it found it. D-17 states
+this for the cross-ring check specifically; it holds for every legality check in `batch.rs`, and it is the
+property that makes "just attempt the push and read the error" a safe probing strategy for a consumer rather
+than one that silently strands an identity.
+
+**A registration is a one-shot per ring, and the shot is spent by queueing, not by succeeding.**
+`register_files` and `register_buffers` each refuse once the corresponding count is non-zero, because
+`BuildIoRingRegister*` replaces the whole table rather than appending, so a second call would invalidate every
+index the first handed out. Two consequences the prose did not state, both from the guard testing the *count*
+rather than a flag:
+
+- A zero-length registration does not spend the shot: it advances the count by zero, so a later registration
+  is still accepted. This is correct rather than an oversight -- an empty registration hands out no index, so
+  a later replacement invalidates nothing -- but the enforced rule is "at most one registration that assigned
+  an index", not the "at most one call" the rustdoc claimed.
+- The count advances when the `Build*` call queues ([D-14](#d-14)), so a registration whose *completion*
+  reports failure has still spent the ring's one registration. There is no retry: a consumer whose
+  registration fails must build it on a new ring. That is a real constraint on a consumer's error path, and
+  it was previously discoverable only by reading `reserve_registered_files`'s call site.
+
 ### Not yet audited
 
-Categories 1, 2, 3, 6, 8, and 9 have not been examined against this crate's surface. Their absence above means
-"not looked at", not "does not apply" -- the distinction the taxonomy exists to keep visible. Category 3
-(state-dependent legality) is the strongest candidate, given that capability negotiation ([D-6](#d-6)) makes
-the legal op set a per-ring runtime property. Queued as [CHECKLIST.md](CHECKLIST.md) -> M10.
+Categories 1, 2, 6, 8, and 9 have not been examined against this crate's surface. Their absence above means
+"not looked at", not "does not apply" -- the distinction the taxonomy exists to keep visible. Queued as
+[CHECKLIST.md](CHECKLIST.md) -> M10.2.
 
 ## Two delivery architectures
 

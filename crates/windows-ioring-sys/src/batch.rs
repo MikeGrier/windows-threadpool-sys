@@ -861,7 +861,16 @@ impl<'ring> Batch<'ring> {
     /// [`RegisteredFile`] index a prior registration handed out. Rather than
     /// track and resubmit that whole prior table transparently, this method
     /// refuses a second registration outright: a ring accepts at most one
-    /// [`Batch::register_files`] call in its lifetime.
+    /// file-handle registration *that assigned an index* in its lifetime.
+    ///
+    /// Two consequences of that rule being enforced against
+    /// [`crate::IoRing::registered_file_count`] rather than a flag (M10.1):
+    /// a zero-length `handles` does not spend the ring's one registration,
+    /// since it hands out no index for a later replacement to invalidate;
+    /// and the count advances when this call *queues*, not when its
+    /// completion succeeds (D-14), so a registration whose completion
+    /// reports failure has still spent it. There is no retry -- a consumer
+    /// whose registration fails must build the registration on a new ring.
     ///
     /// `handles` only needs to stay valid for this call, unlike a data
     /// buffer referenced through an `IORING_HANDLE_REF`/`IORING_BUFFER_REF`:
@@ -936,7 +945,9 @@ impl<'ring> Batch<'ring> {
     /// As [`Batch::register_files`]: `BuildIoRingRegisterBuffers` replaces
     /// the ring's entire buffer table rather than appending to it, so this
     /// method refuses a second registration outright -- a ring accepts at
-    /// most one [`Batch::register_buffers`] call in its lifetime.
+    /// most one buffer registration *that assigned an index* in its
+    /// lifetime, with the same zero-length and failed-registration
+    /// consequences [`Batch::register_files`] spells out (M10.1).
     ///
     /// Unlike [`Batch::register_files`], what must outlive this call is not
     /// the array `BuildIoRingRegisterBuffers` reads (also synchronous, also
