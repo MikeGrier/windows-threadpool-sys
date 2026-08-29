@@ -2,6 +2,43 @@
 
 Use LF line endings.
 
+## RUST LANGUAGE BASELINE — read this before reporting a compile error
+
+This workspace is **Rust edition 2024** with an **MSRV of 1.98**, and pins
+**toolchain 1.98.0** in [rust-toolchain.toml](../rust-toolchain.toml). The edition and
+MSRV are declared once in the `[workspace.package]` table of the root
+[Cargo.toml](../Cargo.toml); every crate inherits them via `edition.workspace = true`
+and `rust-version.workspace = true`, so **a crate's own `Cargo.toml` shows a pointer,
+not a value** — reading one crate manifest will not tell you the edition.
+
+This matters to reviewers specifically, because none of those three files reliably
+appears in a pull-request diff: the toolchain pin is rarely edited, and the root
+manifest's `[workspace.package]` table usually sits outside whatever hunk the diff
+does contain. **Absence of the baseline from a diff is not evidence that the baseline
+is old.**
+
+1.98 is well ahead of most Rust in circulation, and the gap between it and a typical
+prior is a standing source of false "this will not compile" findings. In particular:
+
+- **`size_of`, `size_of_val`, `align_of`, and `align_of_val` are in the prelude** as of
+  Rust 1.80 (released 2024-07-25). They are called **bare** — `size_of::<T>()` — and
+  `use std::mem::size_of;` is neither required nor the house style here. A file calling
+  `size_of::<T>()` with no such import is **correct**. (`std::mem` still owns
+  `ManuallyDrop`, `MaybeUninit`, `transmute`, `swap`, `replace`, and `take`, which are
+  not in the prelude, so a `use std::mem::...` line beside a bare `size_of` call is
+  expected rather than contradictory.)
+- More generally, **treat everything stabilised in the 1.80 -> 1.98 window as
+  available.** That window is under-represented in most training data, so it is exactly
+  where a confident-but-wrong "missing import" or "unstable feature" claim lands.
+
+**Never report that code fails to compile on the basis of reading it.** Verify first —
+`cargo check --all-targets` via the `cargo_check` MCP tool covers every crate and every
+test target, because the root manifest declares no `default-members`. Report the
+failure only if the build actually produces one.
+
+The full Rust rules, including the pre-commit gate, are in
+[instructions/global.rust.instructions.md](instructions/global.rust.instructions.md).
+
 ## PRIME DIRECTIVE — never defer work for a perceived lack of need
 
 **Do not defer, drop, or narrow a feature merely because you cannot currently see a

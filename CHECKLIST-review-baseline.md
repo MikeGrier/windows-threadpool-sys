@@ -44,7 +44,7 @@ This file is feature-scoped and is deleted when every item is done.
   pre-commit gate the root file summarises. Convert both existing references into
   clickable relative links per the repository's cross-reference rule.
 
-- [ ] **RB-2** -- Add a short Rust language baseline section to
+- [x] **RB-2** -- Add a short Rust language baseline section to
   [.github/copilot-instructions.md](.github/copilot-instructions.md). That file is the
   one an automated PR reviewer is known to read, and it currently contains zero
   occurrences of `edition`, `MSRV`, `1.98`, `rust-version`, or `prelude` across its
