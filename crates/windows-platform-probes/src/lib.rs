@@ -46,10 +46,16 @@
 //! # Running them
 //!
 //! ```text
-//! cargo test -p windows-platform-probes                      # asserted tier
-//! cargo test -p windows-platform-probes -- --ignored          # + ignored tier
-//! cargo run  -p windows-platform-probes --bin probe-cancel-io # binary only
+//! cargo test -p windows-platform-probes                          # asserted tier
+//! cargo test -p windows-platform-probes -- --include-ignored     # both tiers
+//! cargo test -p windows-platform-probes -- --ignored             # ignored tier only
+//! cargo run  -p windows-platform-probes --bin probe-cancel-io    # binary only
 //! ```
+//!
+//! `--include-ignored` is what CI runs, and is almost always what a human
+//! wants: `--ignored` runs the ignored tier *instead of* the asserted one, not
+//! in addition to it, so it silently skips the checks that guard the ignored
+//! probes' own premises.
 //!
 //! The binaries print numbers; the tests assert shape. That split is
 //! deliberate: host-specific magnitudes belong where a human reads them, and

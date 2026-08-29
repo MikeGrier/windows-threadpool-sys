@@ -17,6 +17,8 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::ERROR_NO_TOKEN;
 
 use crate::completion_port::measure as measure_completion_port;
+use windows_sys::Win32::System::Diagnostics::Debug::SetThreadErrorMode;
+
 use crate::device_map::{SubstDrive, measure_with_subst};
 use crate::ioring::{measure_registration, measure_thread_agnosticism};
 use crate::pool_growth::{measure_growth, measure_raise_while_saturated};
@@ -79,6 +81,33 @@ fn one_invalid_bit_costs_the_caller_every_valid_bit() {
         installed_nothing,
         "expected an invalid bit to fail the whole call, but the valid bits \
          survived: read back 0x{read_back:04X}"
+    );
+}
+
+#[test]
+fn the_invalid_bit_finding_survives_a_thread_that_already_carries_a_valid_bit() {
+    // The probe reads its answer out of the mode left behind by a call that is
+    // *expected to fail*, so the read-back is whatever the thread was already
+    // carrying. Pre-load one of the valid bits: without the forced baseline
+    // inside the probe, that bit shows up in the read-back and the probe
+    // reports that the combined call installed it -- the exact opposite of what
+    // happened, and a finding this crate would then record as fact.
+    let mut previous = 0u32;
+    // SAFETY: `previous` is a valid writable destination.
+    let set = unsafe { SetThreadErrorMode(bits::FAIL_CRITICAL_ERRORS, &raw mut previous) };
+    assert_ne!(set, 0, "pre-load a valid bit for the duration of this test");
+
+    let (installed_nothing, read_back) = combined_invalid_installs_nothing();
+
+    let mut ignored = 0u32;
+    // SAFETY: restoring the exact value saved above.
+    let restored = unsafe { SetThreadErrorMode(previous, &raw mut ignored) };
+    assert_ne!(restored, 0, "restore this test's own thread error mode");
+
+    assert!(
+        installed_nothing,
+        "the finding must not depend on what the thread already carried, but \
+         the probe reported the valid bits installed: read back 0x{read_back:04X}"
     );
 }
 

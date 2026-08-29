@@ -60,12 +60,79 @@ impl BitOutcome {
     }
 }
 
+/// Holds the thread error mode at a known value, restoring the entry value on
+/// drop.
+///
+/// # Why a probe needs this
+///
+/// The thread error mode is ambient state shared by every probe that runs on
+/// this thread, and under `--test-threads=1` libtest runs tests inline on one
+/// thread. A probe that reads the mode back therefore cannot tell what *this*
+/// call did from what the thread was already carrying, unless the baseline is
+/// forced rather than assumed.
+///
+/// Restoring on drop rather than after the measurement keeps the mode from
+/// leaking when a probe panics between the two.
+struct ThreadErrorMode {
+    previous: u32,
+}
+
+impl ThreadErrorMode {
+    /// Forces `mode`, and checks that it took.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mode cannot be set, or if reading it back does not return
+    /// what was just installed -- a probe that could not establish its own
+    /// baseline must stop rather than report against an unknown one.
+    fn force(mode: u32) -> Self {
+        let mut previous = 0u32;
+        // SAFETY: `previous` is a valid writable destination; the call has no
+        // other preconditions.
+        let ok = unsafe { SetThreadErrorMode(mode, &raw mut previous) };
+        assert_ne!(
+            ok,
+            0,
+            "establish the thread error-mode baseline {mode:#06x} (last error {})",
+            // SAFETY: no preconditions.
+            unsafe { GetLastError() }
+        );
+
+        // SAFETY: no preconditions.
+        let observed = unsafe { GetThreadErrorMode() };
+        assert_eq!(
+            observed, mode,
+            "the forced baseline must actually be in effect, or the read-back \
+             below measures something else"
+        );
+
+        Self { previous }
+    }
+}
+
+impl Drop for ThreadErrorMode {
+    fn drop(&mut self) {
+        let mut ignored = 0u32;
+        // SAFETY: restoring the exact value `force` saved.
+        let restored = unsafe { SetThreadErrorMode(self.previous, &raw mut ignored) };
+        assert_ne!(
+            restored, 0,
+            "restore the thread error mode; leaving it changed would contaminate \
+             every later probe on this thread"
+        );
+    }
+}
+
 /// Set `mode` on this thread, read the result back, and restore the entry value.
+///
+/// A failed restore is a probe failure, not something to ignore: the mode is
+/// ambient and shared, so a thread left carrying a probe's mode makes every
+/// later probe on it report against a baseline nobody established.
 fn with_thread_mode(mode: u32) -> (bool, u32, u32) {
     let mut previous = 0u32;
     // SAFETY: `previous` is a valid writable destination; the call has no other
     // preconditions.
-    let ok = unsafe { SetThreadErrorMode(mode, &mut previous) };
+    let ok = unsafe { SetThreadErrorMode(mode, &raw mut previous) };
     let last_error = if ok == 0 {
         // SAFETY: no preconditions.
         unsafe { GetLastError() }
@@ -77,7 +144,12 @@ fn with_thread_mode(mode: u32) -> (bool, u32, u32) {
     if ok != 0 {
         let mut ignored = 0u32;
         // SAFETY: restoring the exact value the call above saved.
-        unsafe { SetThreadErrorMode(previous, &mut ignored) };
+        let restored = unsafe { SetThreadErrorMode(previous, &raw mut ignored) };
+        assert_ne!(
+            restored, 0,
+            "restore the thread error mode after probing {mode:#06x}; leaving it \
+             changed would contaminate every later probe on this thread"
+        );
     }
     (ok != 0, last_error, read_back)
 }
@@ -118,6 +190,15 @@ pub fn settable_bits() -> u32 {
 pub fn combined_invalid_installs_nothing() -> (bool, u32) {
     let valid = bits::FAIL_CRITICAL_ERRORS | bits::NO_GP_FAULT_ERROR_BOX;
     let combined = valid | bits::NO_ALIGNMENT_FAULT_EXCEPT;
+
+    // The whole finding is read out of `read_back`, and the call under test is
+    // expected to *fail* -- so `read_back` is whatever the thread was already
+    // carrying. Without a forced baseline, a thread that happened to hold
+    // either valid bit would make this report that the call installed them,
+    // which is the opposite of what happened. Forcing zero makes any valid bit
+    // in the read-back attributable to this call and nothing else.
+    let _baseline = ThreadErrorMode::force(0);
+
     let (_, _, read_back) = with_thread_mode(combined);
     (read_back & valid == 0, read_back)
 }
