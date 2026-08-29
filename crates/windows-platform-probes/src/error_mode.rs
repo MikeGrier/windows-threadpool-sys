@@ -235,6 +235,26 @@ impl ProcessVersusThread {
 /// would permanently mutate whatever process called this -- see
 /// [`alignment_bit_is_sticky_at_process_scope`], which is binary-only for
 /// exactly that reason.
+///
+/// # An experiment, not a component: this mutates process-wide state
+///
+/// `SetErrorMode` is **process-scoped**. For the length of this call the whole
+/// process carries a mode it did not ask for, and every other thread in it sees
+/// that. A library has no business doing this: process-wide state belongs to
+/// whoever owns the process, and a component that changes it unilaterally makes
+/// a decision on behalf of code it has never heard of. This function does it
+/// anyway, because the only way to find out whether the thread mode is a view of
+/// the process mode is to move the process mode and look -- which is an
+/// experiment, and is the entire reason it lives in a `publish = false` probe
+/// crate rather than in one that ships.
+///
+/// **Do not call this from production code, and do not copy the pattern into a
+/// crate that ships.** It is not hardened for concurrent use and deliberately
+/// has not been: two overlapping calls can interleave their save and restore so
+/// that the entry mode is lost and the probe's bit is left installed
+/// permanently. Making it concurrency-safe is a small change and is knowingly
+/// declined, because a hardened version would look fit for a setting it must
+/// never enter. See `DESIGN-NOTES.md`.
 #[must_use]
 pub fn thread_mode_independent_of_process() -> ProcessVersusThread {
     let bit = bits::FAIL_CRITICAL_ERRORS;

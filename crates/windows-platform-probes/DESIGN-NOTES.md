@@ -56,6 +56,62 @@ measured by
 [`alignment_bit_is_sticky_at_process_scope`](../../crates/windows-platform-probes/src/error_mode.rs)
 -- binary-only, and documented as irreversible at the call site.
 
+## A probe may change process-wide state; a component may not
+
+<a id="d-experiment-not-component"></a>
+
+`thread_mode_independent_of_process` calls `SetErrorMode`, which is
+**process-scoped**: for the length of that call the whole process carries a mode
+it did not ask for, and every other thread in it sees that.
+
+That is unacceptable in a library, and the rule is general rather than a fact
+about this bit: **a component does not change process-wide state unilaterally.**
+Process-wide state belongs to whoever owns the process. A component that mutates
+it is making a decision on behalf of code it has never heard of, and one that
+restores it afterwards has only narrowed the window, not acquired the right.
+
+This crate does it anyway, and the tension is resolved by what this crate *is*.
+It is an experiment for discovering platform behaviour, not a component: the only
+way to learn whether the thread mode is a view of the process mode is to move the
+process mode and look. `publish = false` and version `0.0.0` are the enforcement
+-- nothing ships this, and nothing outside the workspace can depend on it. The
+call site says the same thing in its own rustdoc, because a reader arriving at
+the function will not have read this file.
+
+### The concurrency hardening is knowingly declined
+
+A review proposed two changes: set `previous | bit` rather than `bit`, so the
+probe does not briefly clear unrelated process bits; and serialize the mutation
+behind a process-wide lock.
+
+Both are technically right, and the second addresses a real defect rather than a
+hypothetical one. Two overlapping calls can interleave so that the second saves a
+value the first had already installed:
+
+| step | thread A | thread B | process mode |
+|---|---|---|---|
+| 1 | `previous = SetErrorMode(bit)` saves the entry mode | | `bit` |
+| 2 | | `previous = SetErrorMode(bit)` saves **`bit`** | `bit` |
+| 3 | `SetErrorMode(entry)` | | entry |
+| 4 | | `SetErrorMode(bit)` | **`bit`**, permanently |
+
+The entry mode is lost and the probe's bit is left installed for the life of the
+process. Neither is a reason to change the code, and it is left as it stands.
+
+The reason is that hardening it would send the wrong signal. A locked,
+non-clobbering version of this function looks like something safe to call, and
+the one thing that must never happen is a component reaching for it because it
+appeared fit for use. It is not fit for use; it is an experiment. The honest
+response to "this is unsafe to call concurrently" is to say plainly that it must
+not be called from production code at all, which is what the rustdoc now does --
+not to make the process-wide mutation *tidier* and leave the real objection
+standing.
+
+Recorded so the suggestion is not re-raised, and so nobody "fixes" it into
+something that looks reusable. If a *component* ever needs this behaviour, the
+answer is not this function hardened; it is a design conversation about who owns
+the process mode.
+
 ## A probe asserts its own controls, and refuses to pass vacuously
 
 <a id="d-controls"></a>

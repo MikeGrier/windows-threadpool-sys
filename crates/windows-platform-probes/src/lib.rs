@@ -9,6 +9,27 @@
 //! stays in the design note while the platform, or our reading of it, moves.
 //! These probes exist so a claim can be re-run rather than re-argued.
 //!
+//! # Experiments, not components
+//!
+//! Everything here is an **experiment for discovering what Windows does**, and
+//! none of it is for production use. The crate is `publish = false` at version
+//! `0.0.0`; nothing ships it and nothing outside this workspace can depend on
+//! it. That is not modesty about maturity -- it is the boundary that lets a
+//! probe do things a component must not.
+//!
+//! The clearest case is process-wide state. A probe may set it, because some
+//! questions cannot be answered without moving it and looking:
+//! [`error_mode::thread_mode_independent_of_process`] mutates the *process*
+//! error mode to find out whether the thread mode is a view of it. **A component
+//! may not.** Process-wide state belongs to whoever owns the process, and a
+//! library that changes it unilaterally decides on behalf of code it has never
+//! heard of -- restoring it afterwards narrows the window without acquiring the
+//! right.
+//!
+//! So do not call these from production code, and do not lift a technique out of
+//! here into a crate that ships. Where a probe is deliberately not hardened for
+//! ordinary use, its own rustdoc says so and `DESIGN-NOTES.md` records why.
+//!
 //! # Each probe is a function, not a program
 //!
 //! A probe's logic lives in a library function that *returns* its observation.
