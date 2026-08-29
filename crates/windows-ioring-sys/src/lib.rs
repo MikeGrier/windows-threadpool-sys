@@ -119,7 +119,7 @@ pub use buf::{IoBuf, IoBufMut};
 #[cfg(windows)]
 pub use capability::{Capabilities, RingVersion, capabilities};
 #[cfg(windows)]
-pub use error::IoRingError;
+pub use error::{IoRingError, IoRingErrorExt, RingCondition};
 #[cfg(windows)]
 pub use event_delivery::EventDelivery;
 #[cfg(windows)]

@@ -8,7 +8,9 @@ use std::io;
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::PathBuf;
 
-use windows_ioring_sys::{Batch, IoRing, IoRingError, PushOptions, SharedFile, Token};
+use windows_ioring_sys::{
+    Batch, IoRing, IoRingErrorExt, PushOptions, RingCondition, SharedFile, Token,
+};
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 
 const CHUNKS: usize = 8;
@@ -29,17 +31,9 @@ fn filled_content() -> Vec<u8> {
     content
 }
 
-fn error_name(error: &io::Error) -> Option<&'static str> {
-    error
-        .get_ref()
-        .and_then(|inner| inner.downcast_ref::<IoRingError>())
-        .and_then(IoRingError::name)
-}
-
 fn error_code(error: &io::Error) -> windows_sys::core::HRESULT {
     error
-        .get_ref()
-        .and_then(|inner| inner.downcast_ref::<IoRingError>())
+        .as_ioring_error()
         .expect("error is an IoRingError")
         .code()
 }
@@ -135,10 +129,22 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
         queued, capacity,
         "backpressure must trip exactly at the negotiated queue capacity"
     );
-    assert_eq!(
-        error_name(&overflow_error),
-        Some("IORING_E_SUBMISSION_QUEUE_FULL")
+    // Asked through the named predicate rather than a hand-rolled downcast
+    // plus HRESULT comparison (M10.5, D-30). This binds the predicate to a
+    // *real* kernel-reported queue-full rather than a synthetic
+    // `IoRingError`, which is what the unit tests in `error/tests.rs` cover.
+    assert!(
+        overflow_error.is_submission_queue_full(),
+        "the backpressure signal every push's docs name must be what the \
+         predicate reports: got {:?}",
+        overflow_error.ring_condition()
     );
+    assert_eq!(
+        overflow_error.ring_condition(),
+        Some(RingCondition::SubmissionQueueFull)
+    );
+    // And `kind()` still cannot answer -- the asymmetry D-30 records.
+    assert_eq!(overflow_error.kind(), io::ErrorKind::Other);
 
     let mut remaining = queued;
     while remaining > 0 {

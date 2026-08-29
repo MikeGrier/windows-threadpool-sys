@@ -192,12 +192,20 @@ are not a work queue".
   reintroducing what D-16 closed. Three tests: a safe registered-file read, the fully-registered
   composition, and a cross-ring rejection confirming D-17's check still holds on the safe path.
 
-- [ ] **M10.5** -- A named predicate for the ring conditions a consumer must branch on, starting with
-  `IORING_E_SUBMISSION_QUEUE_FULL` ([D-30](DESIGN-NOTES.md#d-30)). Every push's rustdoc names queue-full as
-  the backpressure signal, and the only way to detect it is a `downcast_ref::<IoRingError>()` plus an
-  `HRESULT` comparison -- documented on `IoRingError` as of M10.2, but still hand-rolled at every call site
-  that needs it. Do **not** map `IORING_E_*` onto `io::ErrorKind`: D-30 refuses that as trading an honest
-  `Other` for a lossy guess.
+- [x] **M10.5** -- Added named predicates for the ring conditions a consumer must branch on
+  ([D-30](DESIGN-NOTES.md#d-30), resolved as [D-34](DESIGN-NOTES.md#d-34)), in three parts. A
+  `#[non_exhaustive]` `RingCondition` enum covering **every** `IORING_E_*` this crate names -- not only the
+  actionable ones, since narrowing it would be the "narrow the platform to serve the visible goal" failure
+  PLATFORM INTEGRITY forbids. Predicates (`is_submission_queue_full`, `is_completion_queue_too_full`,
+  `is_submit_in_progress`) for just the runtime-actionable conditions, because a predicate asserts a branch
+  exists; the rest stay reachable via `condition()`. And a sealed `IoRingErrorExt` putting those answers on
+  `io::Error` itself, which is what actually removes the hand-rolled
+  `get_ref().downcast_ref::<IoRingError>()` from call sites -- the crate's own integration tests had two
+  such helpers, and deleting them was the new API's first use. `IoRingError::name` is now **derived** from
+  `condition()` rather than matching the `HRESULT` a second time (CONTRACT INTEGRITY: prefer a derived fact
+  to a restated one) -- previously a new condition could be added to one `match` and silently missed by the
+  other. Did **not** map `IORING_E_*` onto `io::ErrorKind`; D-30's refusal stands. Bound to a *real*
+  kernel-reported queue-full in the existing backpressure integration test, not only to synthetic errors.
 
 - [x] **M10.6** -- Fixed a live use-after-free in `Batch::register_buffers`
   ([D-32](DESIGN-NOTES.md#d-32)). `BuildIoRingRegisterBuffers` reads its `IORING_BUFFER_INFO` array when
