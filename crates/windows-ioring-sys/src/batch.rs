@@ -562,10 +562,35 @@ impl PendingFileRegistration {
 /// validating a span against the former would let a buffer that had grown
 /// address memory the kernel does not know about.
 struct BufferState {
-    /// Operations outstanding against this one buffer.
+    /// Operations outstanding against this one buffer, in either direction.
     outstanding: AtomicUsize,
+    /// Of those, the ones the kernel **writes into** this buffer -- that is,
+    /// reads. Always a subset of `outstanding`.
+    ///
+    /// Tracked separately because the two hazards are not the same. Mutating a
+    /// buffer races the kernel whichever way the kernel is touching it, so
+    /// [`RegisteredBuffers::get_mut`] refuses on `outstanding`. *Reading* a
+    /// buffer only races a kernel that is writing into it: a shared read
+    /// alongside the kernel's own read of an in-flight write is not a race at
+    /// all, and refusing it would deny a sound operation.
+    kernel_writes: AtomicUsize,
     /// The length handed to `BuildIoRingRegisterBuffers`, in bytes.
     registered_len: u32,
+}
+
+/// Which way the kernel touches a registered buffer for the life of an
+/// operation.
+///
+/// Named from the kernel's point of view rather than the operation's, because
+/// that is the direction the data-race question actually turns on, and
+/// "a read means the kernel writes" is exactly the inversion that makes this
+/// easy to get backwards.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KernelAccess {
+    /// A read: the kernel writes into the buffer.
+    WritesBuffer,
+    /// A write: the kernel reads out of the buffer.
+    ReadsBuffer,
 }
 
 /// A marker a [`Token`] owns while a registered-buffer-indexed read or write
@@ -584,11 +609,15 @@ struct BufferState {
 pub struct RegisteredUse {
     state: Arc<[BufferState]>,
     index: usize,
+    access: KernelAccess,
 }
 
 impl Drop for RegisteredUse {
     fn drop(&mut self) {
         if let Some(state) = self.state.get(self.index) {
+            if self.access == KernelAccess::WritesBuffer {
+                state.kernel_writes.fetch_sub(1, Ordering::SeqCst);
+            }
             state.outstanding.fetch_sub(1, Ordering::SeqCst);
         }
     }
@@ -627,11 +656,89 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
         self.buffers.is_empty()
     }
 
-    /// Borrow the `i`-th buffer directly, for reading a completed read's or
-    /// write's bytes without going through the ring at all.
-    #[must_use]
-    pub fn get(&self, i: u32) -> Option<&B> {
-        self.buffers.get(i as usize)
+    /// Borrow the `i`-th buffer's registered bytes, for reading a completed
+    /// read's or write's bytes without going through the ring at all.
+    ///
+    /// # Why it can refuse
+    ///
+    /// Because otherwise it is a data race with the kernel, reachable from
+    /// entirely safe code. [`Batch::read_registered`] takes
+    /// `&RegisteredBuffers` and returns a [`Token`] holding only a
+    /// [`RegisteredUse`] -- no borrow of this registration outlives the push.
+    /// So without the check below, this sequence compiles with no `unsafe`
+    /// anywhere and reads memory the kernel is concurrently writing:
+    ///
+    /// ```ignore
+    /// batch.read_registered(&file, &arena, span, 0, PushOptions::new())?;
+    /// batch.submit()?;                 // kernel now filling that buffer
+    /// let bytes = arena.get(span.buffer_index)?;
+    /// ```
+    ///
+    /// # Why it refuses less than [`get_mut`] does
+    ///
+    /// `get_mut` refuses while *any* operation is outstanding, because
+    /// mutating races the kernel whichever way the kernel is touching the
+    /// buffer. Reading is narrower: it races only a kernel that is **writing
+    /// into** the buffer, so this refuses only while a *read* is outstanding.
+    /// A caller may read the bytes of a write it has in flight -- the kernel
+    /// is reading them too, and two readers do not race.
+    ///
+    /// A count returns to zero only when a [`Token`] is claimed against a real
+    /// popped [`Completion`], so "not outstanding" means the operation was
+    /// *observed* to finish, never merely assumed to have.
+    ///
+    /// # Why this hands back `&[u8]` and not `&B`
+    ///
+    /// For the same reason [`get_mut`] does: the slice is exactly the length
+    /// handed to `BuildIoRingRegisterBuffers`, which is what the kernel knows
+    /// about. `B`'s own `bytes_len()` is a live value that may since have
+    /// diverged from it, so answering from the registered length keeps this in
+    /// step with the registration rather than with the buffer.
+    ///
+    /// [`get_mut`]: RegisteredBuffers::get_mut
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] if `i` is out of range for this
+    /// registration, or [`io::ErrorKind::WouldBlock`] if a read is still
+    /// outstanding into that buffer -- pop its completion and claim its token
+    /// first.
+    pub fn get(&self, i: u32) -> io::Result<&[u8]> {
+        let index = usize::try_from(i).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "buffer index does not fit usize",
+            )
+        })?;
+        let Some(state) = self.state.get(index) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("buffer index {i} is out of range for this registration"),
+            ));
+        };
+        let kernel_writes = state.kernel_writes.load(Ordering::SeqCst);
+        if kernel_writes > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!(
+                    "buffer {i} still has {kernel_writes} read(s) outstanding into it; the kernel \
+                     may be writing through it. Pop the completion and claim its token before \
+                     reading this buffer."
+                ),
+            ));
+        }
+        let len = state.registered_len as usize;
+        let buffer = self
+            .buffers
+            .get(index)
+            .expect("state and buffers are built together and have equal length");
+        // SAFETY: `stable_ptr` is `IoBuf`'s promised stable address for this
+        // buffer, and `registered_len` was recorded from that same buffer at
+        // registration, so those bytes are allocated and initialized. `&self`
+        // excludes concurrent mutation through `get_mut`, and the
+        // zero-`kernel_writes` check above excludes the kernel writing into
+        // them for this borrow's life.
+        Ok(unsafe { std::slice::from_raw_parts(buffer.stable_ptr(), len) })
     }
 
     /// Borrow the `i`-th buffer's registered bytes **mutably**, to fill them
@@ -744,14 +851,21 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     ///
     /// Call only after [`RegisteredBuffers::checked_span`] has validated
     /// `span`, which is what makes the index below in range.
-    fn begin_use(&self, span: RegisteredSpan) -> RegisteredUse {
+    fn begin_use(&self, span: RegisteredSpan, access: KernelAccess) -> RegisteredUse {
         let index = span.buffer_index as usize;
         if let Some(state) = self.state.get(index) {
+            // The direction-specific counter first, so a concurrent `get` can
+            // never observe `outstanding` raised without also seeing the
+            // reason it was raised.
+            if access == KernelAccess::WritesBuffer {
+                state.kernel_writes.fetch_add(1, Ordering::SeqCst);
+            }
             state.outstanding.fetch_add(1, Ordering::SeqCst);
         }
         RegisteredUse {
             state: Arc::clone(&self.state),
             index,
+            access,
         }
     }
 
@@ -904,6 +1018,7 @@ impl<B: IoBufMut> PendingBufferRegistration<B> {
                 .into_iter()
                 .map(|registered_len| BufferState {
                     outstanding: AtomicUsize::new(0),
+                    kernel_writes: AtomicUsize::new(0),
                     registered_len,
                 })
                 .collect();
@@ -1608,7 +1723,10 @@ impl<'ring> Batch<'ring> {
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        let token = Token::new(self.ring, registration.begin_use(span))?;
+        let token = Token::new(
+            self.ring,
+            registration.begin_use(span, KernelAccess::WritesBuffer),
+        )?;
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `index` was just checked
         // against `registration`, whose buffer stays put until it drops;
@@ -1654,7 +1772,13 @@ impl<'ring> Batch<'ring> {
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        let token = Token::new(self.ring, (registration.begin_use(span), file.guard()))?;
+        let token = Token::new(
+            self.ring,
+            (
+                registration.begin_use(span, KernelAccess::WritesBuffer),
+                file.guard(),
+            ),
+        )?;
         let user_data = token.id();
         // SAFETY: `index` was just checked against `registration`, whose
         // buffer stays put until it drops; `target` stays valid at least as
@@ -1701,7 +1825,10 @@ impl<'ring> Batch<'ring> {
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.into(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        let token = Token::new(self.ring, registration.begin_use(span))?;
+        let token = Token::new(
+            self.ring,
+            registration.begin_use(span, KernelAccess::ReadsBuffer),
+        )?;
         let user_data = token.id();
         // SAFETY: as `read_registered_raw`; the kernel only reads through
         // this reference for a write.
@@ -1745,7 +1872,13 @@ impl<'ring> Batch<'ring> {
         self.check_registration_ring(registration)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
-        let token = Token::new(self.ring, (registration.begin_use(span), file.guard()))?;
+        let token = Token::new(
+            self.ring,
+            (
+                registration.begin_use(span, KernelAccess::ReadsBuffer),
+                file.guard(),
+            ),
+        )?;
         let user_data = token.id();
         // SAFETY: as `read_registered`'s; the kernel only reads through
         // this reference for a write.

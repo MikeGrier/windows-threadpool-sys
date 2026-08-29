@@ -1046,3 +1046,128 @@ fn get_mut_yields_only_the_registered_bytes_and_cannot_move_the_allocation() {
     drop(span_file);
     let _ = std::fs::remove_file(temp_file("registered-span-bound"));
 }
+
+#[test]
+fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading() {
+    // `get` handing out bytes with no check was a data race with the kernel
+    // reachable from entirely safe code: `read_registered` takes
+    // `&RegisteredBuffers` and leaves no borrow behind, so nothing stopped a
+    // caller reading a buffer the kernel was concurrently filling.
+    //
+    // The asymmetry with `get_mut` is deliberate and is the more interesting
+    // half of this test. `get_mut` refuses on *any* outstanding operation,
+    // because mutating races the kernel whichever way it is touching the
+    // buffer. `get` refuses only on an outstanding **read**, because a write
+    // means the kernel is *reading* the buffer too -- and two readers do not
+    // race. Refusing that case would deny a sound operation, so a future
+    // change that "simplifies" this to a single check should fail here.
+    let path = temp_file("get-busy");
+    std::fs::write(&path, vec![0xEE_u8; 4096]).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(vec![vec![7_u8; 2048], vec![9_u8; 2048]])
+        .expect("queue buffer registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let buffers = pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("buffer registration succeeded");
+
+    let span = |buffer_index| RegisteredSpan {
+        buffer_index,
+        offset: 0,
+        len: 2048,
+    };
+
+    // A read into buffer 0: the kernel *writes* through it, so reading it now
+    // would be a race.
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: `handle` stays open for the whole test, and both tokens below
+    // are held until their completions are claimed.
+    let read_token =
+        unsafe { batch.read_registered_raw(handle, &buffers, span(0), 0, PushOptions::new()) }
+            .expect("queue registered read");
+    // A write out of buffer 1: the kernel *reads* through it, so reading it
+    // alongside is sound.
+    let write_token = unsafe {
+        batch.write_registered_raw(
+            handle,
+            &buffers,
+            span(1),
+            2048,
+            PushOptions::new(),
+            WriteCaching::Cached,
+        )
+    }
+    .expect("queue registered write");
+    batch.submit().expect("submit");
+
+    // Both buffers are outstanding, so `get_mut` refuses both...
+    assert_eq!(buffers.outstanding(0), Some(1));
+    assert_eq!(buffers.outstanding(1), Some(1));
+
+    // ...but `get` distinguishes them by direction.
+    let racing = buffers
+        .get(0)
+        .expect_err("a buffer with a read landing into it must be refused");
+    assert_eq!(racing.kind(), std::io::ErrorKind::WouldBlock);
+
+    let sound = buffers
+        .get(1)
+        .expect("a buffer the kernel is only reading is safe to read alongside");
+    assert_eq!(sound.len(), 2048, "get yields the registered length");
+
+    // Out of range is a different failure from busy, and says so.
+    let out_of_range = buffers.get(2).expect_err("index 2 does not exist");
+    assert_eq!(out_of_range.kind(), std::io::ErrorKind::InvalidInput);
+
+    // Drain both, claim both, and buffer 0 becomes readable -- the count only
+    // returns to zero against a real popped completion.
+    let mut claimed = 0;
+    let mut read_token = Some(read_token);
+    let mut write_token = Some(write_token);
+    while claimed < 2 {
+        let Some(completion) = ring.try_pop().expect("pop completion") else {
+            continue;
+        };
+        completion.result().expect("operation succeeded");
+        if let Some(token) = read_token.take() {
+            match token.claim_if(&completion) {
+                Ok(_) => {
+                    claimed += 1;
+                    continue;
+                }
+                Err(token) => read_token = Some(token),
+            }
+        }
+        if let Some(token) = write_token.take() {
+            match token.claim_if(&completion) {
+                Ok(_) => claimed += 1,
+                Err(token) => write_token = Some(token),
+            }
+        }
+    }
+
+    assert_eq!(buffers.outstanding(0), Some(0));
+    let landed = buffers
+        .get(0)
+        .expect("a claimed completion releases the buffer");
+    assert_eq!(
+        landed[0], 0xEE,
+        "the read should have landed the file's bytes"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
