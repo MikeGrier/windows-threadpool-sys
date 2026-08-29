@@ -375,7 +375,21 @@ pub fn install<'captured>(
 
 /// Holds an installed thread transaction until released.
 ///
-/// Not `Send`: it restores the thread it was created on.
+/// Not `Send`: it restores the thread it was created on. Moving one to
+/// another thread would restore *that* thread's transaction to a value
+/// captured on a different one, corrupting both.
+///
+/// That property is currently a consequence of a field type rather than of an
+/// explicit bound -- `previous: Option<HANDLE>` is a raw pointer, and raw
+/// pointers are not `Send`. Nothing would notice if `HANDLE` were later
+/// replaced by an integer newtype, at which point the guard would silently
+/// become `Send` and this paragraph would become false. So the claim is
+/// pinned by a test rather than left as prose:
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<windows_thread_ambient_sys::transaction::TransactionGuard<'static>>();
+/// ```
 ///
 /// # Why it borrows the captured context
 ///

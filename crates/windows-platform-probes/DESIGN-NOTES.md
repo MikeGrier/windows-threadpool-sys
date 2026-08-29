@@ -271,6 +271,54 @@ circularity. It is that a probe re-implementing a primitive owes that
 primitive the same scrutiny as the platform behaviour it is measuring, because
 a defect in the re-implementation is indistinguishable from a platform finding.
 
+## A collect that cannot give up, and what that costs
+
+<a id="d-collect"></a>
+
+Every read path in [ioring.rs](src/ioring.rs) and the completion-port read in
+[completion_port.rs](src/completion_port.rs) frees its buffer when it returns.
+An operation the kernel has accepted owns that buffer until it completes, so
+there is no safe early return from the collection step: abandoning a
+still-outstanding operation leaves the kernel writing into freed heap, and in
+the completion-port case into a freed stack frame as well. `Ring::collect` and
+the cancel-then-drain loop therefore **do not give up**. They wait inside the
+kernel and recheck, rather than spinning, but no timeout releases them.
+
+The decision that makes this affordable is the one *above* it: a caller only
+enters the collection step when the ring reported entries as actually
+submitted. `submit_and_wait` returns that count alongside its `HRESULT`
+precisely so the two cases can be told apart -- a failing `HRESULT` does not
+mean nothing was queued, because the wait can time out with entries in flight.
+When the count is zero nothing owns the buffer and the caller returns
+immediately.
+
+### The cost: an operation that never completes hangs rather than reports
+
+This is a real trade and worth stating plainly. If a submitted operation never
+produced a completion at all, the probe would hang, and in CI it would consume
+the job's time budget instead of reporting a failure -- which is the wrong
+failure mode for a crate whose whole purpose is reporting what the platform
+does.
+
+Two things make that acceptable rather than merely tolerated:
+
+- **The negative result this probe exists to detect does not take that path.**
+  A submitted `IoRing` operation yields a CQE in every terminal case,
+  including cancellation, so a platform that *did* cancel the IRP when the
+  submitting thread exited would surface a completion carrying a failure code
+  and `survives_submitter_exit()` would report `false`. The finding being false
+  is detectable; it is not the hanging case.
+- **The alternative is worse.** Giving up and returning is memory corruption,
+  not a lesser bug.
+
+If a genuinely-never-completing operation is ever encountered, the fix is not
+to add a timeout to `collect`: it is to leak the buffer deliberately
+(`mem::forget`) on the give-up path and report a "could not collect"
+observation, so the kernel's writes land in memory nothing will reuse and the
+probe can still say what happened. That is recorded here as the known escape
+hatch, **not** as scheduled work -- nothing in this workspace has encountered
+the case, and building the machinery now would be speculative.
+
 ## The x64 comparison: no finding is architecture-dependent
 
 <a id="d-x64"></a>
