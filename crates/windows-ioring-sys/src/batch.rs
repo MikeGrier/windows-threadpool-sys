@@ -198,6 +198,11 @@ impl RegisteredFile {
 
 /// The confirmed result of a [`Batch::register_files`] push: `count`
 /// contiguous indices starting at `base_index`.
+///
+/// `base_index` is currently always zero, because a ring accepts at most one
+/// registration that assigns an index -- do not read its presence as evidence
+/// that several registrations compose. It is kept rather than folded away
+/// because it is the correct shape if that rule is ever relaxed (M10.3, D-31).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegisteredFiles {
     base_index: u32,

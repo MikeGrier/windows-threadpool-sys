@@ -186,6 +186,39 @@ fn a_second_file_or_buffer_registration_on_the_same_ring_is_refused() {
 }
 
 #[test]
+fn the_registered_count_is_reserved_at_queue_time_not_confirmed_at_completion() {
+    // `registered_file_count` reports what the ring has reserved, not what
+    // the kernel has confirmed: it advances when the Build* call queues
+    // (M10.3, D-31). Observed here by reading it while the registration is
+    // submitted but its completion has not been popped.
+    let path = temp_file("reserved-not-confirmed");
+    std::fs::write(&path, b"content").expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    assert_eq!(ring.registered_file_count(), 0);
+
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: `handle` stays open for the whole test.
+    let _pending = unsafe { batch.register_files(&[handle]) }.expect("queue registration");
+    batch.submit().expect("submit");
+
+    assert_eq!(
+        ring.registered_file_count(),
+        1,
+        "the count must already be advanced before any completion is observed"
+    );
+
+    ring.run_down().expect("drain");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn a_zero_length_registration_does_not_spend_the_ring_s_one_registration() {
     // The one-shot guard tests the registered *count*, not a flag, so a
     // registration that assigns no index leaves the shot unspent (M10.1,

@@ -370,17 +370,33 @@ impl IoRing {
         unsafe { IsIoRingOpSupported(self.handle, op_code) != 0 }
     }
 
-    /// How many file handles are registered on this ring so far, across
-    /// every `BuildIoRingRegisterFileHandles` this crate has successfully
-    /// queued (M5.1). This is the base index the next registration will
-    /// start from -- see `reserve_registered_files` for why it advances
-    /// eagerly rather than waiting for a completion (D-14).
+    /// How many file handles this ring has **reserved** for registration --
+    /// not how many are confirmed registered (M5.1, M10.3, D-31).
+    ///
+    /// The count advances the instant a `BuildIoRingRegisterFileHandles`
+    /// call queues, never when its completion is observed. Two consequences
+    /// a caller must not be surprised by:
+    ///
+    /// - it is already advanced before any completion has been popped, so it
+    ///   cannot be used to decide whether a registration has taken effect --
+    ///   claim the completion with
+    ///   [`crate::PendingFileRegistration::claim_if`] for that;
+    /// - it stays advanced after a registration whose completion reported
+    ///   *failure*, which is why such a registration cannot be retried on
+    ///   this ring ([`crate::Batch::register_files`]).
+    ///
+    /// Because a ring accepts at most one registration that assigns an
+    /// index, this is `0` until that registration is queued and its count
+    /// thereafter; there is no second registration for it to serve as a base
+    /// index for.
     #[must_use]
     pub fn registered_file_count(&self) -> u32 {
         self.registered_files
     }
 
-    /// As [`IoRing::registered_file_count`], for registered buffers (M5.2).
+    /// As [`IoRing::registered_file_count`], for registered buffers (M5.2) --
+    /// a **reserved** count, not a confirmed one, with the same two
+    /// consequences (M10.3, D-31).
     #[must_use]
     pub fn registered_buffer_count(&self) -> u32 {
         self.registered_buffers
@@ -390,14 +406,16 @@ impl IoRing {
     /// `BuildIoRingRegisterFileHandles` call successfully queues (not once
     /// its completion is observed).
     ///
-    /// Recorded as an explicitly unverified assumption (D-14, mirroring
-    /// D-10 above): this crate does not know whether the kernel claims
-    /// these `count` indices synchronously at build time or only once the
-    /// registration op actually runs. Advancing eagerly is the safe
-    /// direction either way -- it can only ever waste indices by advancing
-    /// too early, never collide two registrations on the same index by
-    /// advancing too late, which is the failure mode that would actually
-    /// corrupt a later registration's base index.
+    /// D-14 recorded this as an explicitly unverified assumption, since this
+    /// crate cannot know whether the kernel claims these `count` indices
+    /// synchronously at build time or only once the registration op runs.
+    /// D-31 (M10.3) dissolved that: the collision it guarded against needs a
+    /// *second* registration, and `Batch::register_files`/`register_buffers`
+    /// forbid one, so no later base index is ever derived from this count and
+    /// the kernel's actual timing has no observable consequence. What the
+    /// eager advance does still determine is the *meaning* of the public
+    /// accessors, which is why they document a reserved rather than a
+    /// confirmed count.
     pub(crate) fn reserve_registered_files(&mut self, count: u32) {
         self.registered_files = self.registered_files.saturating_add(count);
     }

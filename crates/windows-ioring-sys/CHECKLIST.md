@@ -177,9 +177,18 @@ assumption), and the previously-unstated completion-ordering rule. Categories 1,
   that needs it. Do **not** map `IORING_E_*` onto `io::ErrorKind`: D-30 refuses that as trading an honest
   `Other` for a lossy guess.
 
-- [ ] **M10.3** -- Resolve or re-record D-14's unverified registration-index continuity assumption. It is a
-  cross-message invariant a consumer can silently depend on; either establish it by measurement (the spike's
-  precedent) or state plainly on the public API that index continuity is not guaranteed.
+- [x] **M10.3** -- Resolved D-14's unverified registration-index continuity assumption, by **dissolution
+  rather than measurement** ([D-31](DESIGN-NOTES.md#d-31)). D-14 justified the eager advance on the grounds
+  that erring early "can only ever waste indices, never collide two registrations onto the same index" -- and
+  that collision needs a *second* registration, which the PR #20 review response forbade the day after D-14
+  was written. So `base_index` is always zero, no later base index is ever derived from the count, and the
+  kernel's claim timing has no observable consequence; measuring it would settle a fact with nothing
+  downstream of it. Took the checklist's second branch for the residue that *is* observable: the public
+  counts now state on themselves that they report a **reserved** count, not a confirmed one -- already
+  advanced before any completion is popped, and still advanced after a registration whose completion failed
+  (which is why that registration cannot be retried, [D-28](DESIGN-NOTES.md#d-28)). Added a test binding
+  reserved-at-queue-time, gave D-14 the required adjacent status marker, and corrected the audit section's
+  category-4 paragraph, which still described the assumption as live.
 
 ## M11 -- The completion event as a ring primitive (external consumer proposal, 2026-08-28)
 
