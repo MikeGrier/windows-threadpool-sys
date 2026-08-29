@@ -463,6 +463,61 @@ no captured context at all, because access was checked at the open. A catalogue
 that silently required a context would not be a sibling of the ambient crate; it
 would be a layer above it.
 
+## <a id="d-17"></a>D-17: A Win32 out-buffer is allocated in content units and sized in terminator-inclusive units, and the two differ by one on purpose
+
+Raised as a review finding on PR #46 and rejected as a defect; recorded here so it
+is not re-raised, and so nobody "corrects" it in the unsafe direction.
+
+Two conventions meet at every string-out call in this crate, and they are not the
+same:
+
+- **`Wtf16String::with_capacity(n)`** takes *content* units and reserves `n + 1`,
+  because the terminator always occupies one slot. Total storage is `n + 1`.
+- **Win32's length parameters** (`nBufferLength` for `GetFullPathNameW`,
+  `cchFilePath` for `GetFinalPathNameByHandleW`, `nVolumeNameSize` for
+  `GetVolumeInformationByHandleW`) count units *including* the terminator. A call
+  told `k` writes at most `k` units total, so at most `k - 1` content units.
+
+Every site here passes the same number to both. The consequence is that the
+allocation is **one unit larger** than the size Win32 is told:
+
+| site | `with_capacity(n)` | total storage `n+1` | told Win32 `k` | max content Win32 writes (`k-1`) | spare (`n+1-k`) |
+|---|---|---|---|---|---|
+| [path.rs](src/path.rs) `resolve` | 260 | 261 | 260 | 259 | 1 |
+| [volume.rs](src/volume.rs) label | 261 | 262 | 261 | 260 | 1 |
+| [volume.rs](src/volume.rs) filesystem name | 261 | 262 | 261 | 260 | 1 |
+| [full_path.rs](src/full_path.rs) first attempt | 260 | 261 | 260 | 259 | 1 |
+
+The slack is in the **safe** direction: the buffer is over-sized relative to what
+Win32 is permitted to fill, never under-sized. The review that raised this
+described it as under-sizing the buffer and as being able to truncate at the
+documented limit; both are the wrong way round.
+
+### The documented limit is honoured exactly, not approximately
+
+`path.rs` is the case where a real off-by-one would show, because it enforces a
+limit rather than growing. `MAX_PATH` is 260 *counting the terminator* and
+`MAX_PATH_CONTENT` is 259. Told `nBufferLength = 260`, `GetFullPathNameW` can
+write at most 259 content units -- exactly `MAX_PATH_CONTENT`, which is exactly
+what the success path permits before returning `PathTooLong`. So the buffer size,
+the limit constant, and the success test agree; there is no length that is
+rejected when it should fit, and none accepted that should not.
+
+The growing callers cannot truncate at all: a path that does not fit produces the
+"required size including the terminator" form, which is strictly greater than the
+size passed, so it is always recognised as a retry rather than mistaken for a
+success. `written == capacity` is unreachable -- that would mean `capacity - 1`
+content units, which would have fit.
+
+### Why the spare unit is not removed
+
+Tightening each site to `with_capacity(k - 1)` would make the allocation exactly
+`k` and is equally correct. It is not done because the gain is one `u16` per call
+and the cost is editing four `unsafe` FFI call sites whose current sizing is
+proven correct -- a bad trade on a crate whose buffers are handed to the kernel.
+If it is ever done, it must be done together with the size passed to Win32, never
+to one side alone.
+
 ## Open, and inherited rather than introduced
 
 - **Path resolution under a captured identity.** A path must be resolved on the
