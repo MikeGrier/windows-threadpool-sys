@@ -128,11 +128,15 @@ process.
 ## M10 -- Finish the contract audit against the ten specification-gap categories
 
 [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "Specifying this contract" audits this crate against
-[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract) and reaches four of them: D-17's
-`RingId` (categories 4/5, handled correctly), `Completion::synthetic`'s test-only gate (category 10, handled
-correctly), D-14's registration-index continuity (category 4, recorded as an explicitly unverified
-assumption), and the previously-unstated completion-ordering rule. Categories 1, 2, 3, 6, 8, and 9 were
-**not examined**, and that is recorded as "not looked at" rather than "does not apply".
+[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract). The first pass reached four of
+them: D-17's `RingId` (categories 4/5, handled correctly), `Completion::synthetic`'s test-only gate
+(category 10, handled correctly), D-14's registration-index continuity (category 4, recorded as an explicitly
+unverified assumption), and the previously-unstated completion-ordering rule. Categories 1, 2, 3, 6, 8, and 9
+were **not examined**, recorded as "not looked at" rather than "does not apply".
+
+M10.1-M10.3 closed that out, so all ten are now examined. The audit also turned up two API gaps rather than
+mere statement gaps; they are M10.4 and M10.5 below rather than notes in the design record, per "design notes
+are not a work queue".
 
 - [x] **M10.1** -- Audited category 3 (state-dependent legality unenumerated) against capability negotiation
   ([D-28](DESIGN-NOTES.md#d-28)): [DESIGN-NOTES.md](DESIGN-NOTES.md) -> "Category 3" now tabulates which
@@ -161,6 +165,19 @@ assumption), and the previously-unstated completion-ordering rule. Categories 1,
   ([D-30](DESIGN-NOTES.md#d-30), predicate queued as M10.5). Category 7 falls out of 2 and 6 jointly, so
   all ten categories are now examined.
 
+- [x] **M10.3** -- Resolved D-14's unverified registration-index continuity assumption, by **dissolution
+  rather than measurement** ([D-31](DESIGN-NOTES.md#d-31)). D-14 justified the eager advance on the grounds
+  that erring early "can only ever waste indices, never collide two registrations onto the same index" -- and
+  that collision needs a *second* registration, which the PR #20 review response forbade the day after D-14
+  was written. So `base_index` is always zero, no later base index is ever derived from the count, and the
+  kernel's claim timing has no observable consequence; measuring it would settle a fact with nothing
+  downstream of it. Took the checklist's second branch for the residue that *is* observable: the public
+  counts now state on themselves that they report a **reserved** count, not a confirmed one -- already
+  advanced before any completion is popped, and still advanced after a registration whose completion failed
+  (which is why that registration cannot be retried, [D-28](DESIGN-NOTES.md#d-28)). Added a test binding
+  reserved-at-queue-time, gave D-14 the required adjacent status marker, and corrected the audit section's
+  category-4 paragraph, which still described the assumption as live.
+
 - [ ] **M10.4** -- Give `FileRef::Registered` safe entry points ([D-29](DESIGN-NOTES.md#d-29)). Today every
   safe push hardcodes `FileRef::Raw` from its `SharedFile`, so using a registered file forces an `unsafe`
   call whose contract is vacuous for that input -- the index is minted by this crate, checked against the
@@ -176,19 +193,6 @@ assumption), and the previously-unstated completion-ordering rule. Categories 1,
   `HRESULT` comparison -- documented on `IoRingError` as of M10.2, but still hand-rolled at every call site
   that needs it. Do **not** map `IORING_E_*` onto `io::ErrorKind`: D-30 refuses that as trading an honest
   `Other` for a lossy guess.
-
-- [x] **M10.3** -- Resolved D-14's unverified registration-index continuity assumption, by **dissolution
-  rather than measurement** ([D-31](DESIGN-NOTES.md#d-31)). D-14 justified the eager advance on the grounds
-  that erring early "can only ever waste indices, never collide two registrations onto the same index" -- and
-  that collision needs a *second* registration, which the PR #20 review response forbade the day after D-14
-  was written. So `base_index` is always zero, no later base index is ever derived from the count, and the
-  kernel's claim timing has no observable consequence; measuring it would settle a fact with nothing
-  downstream of it. Took the checklist's second branch for the residue that *is* observable: the public
-  counts now state on themselves that they report a **reserved** count, not a confirmed one -- already
-  advanced before any completion is popped, and still advanced after a registration whose completion failed
-  (which is why that registration cannot be retried, [D-28](DESIGN-NOTES.md#d-28)). Added a test binding
-  reserved-at-queue-time, gave D-14 the required adjacent status marker, and corrected the audit section's
-  category-4 paragraph, which still described the assumption as live.
 
 ## M11 -- The completion event as a ring primitive (external consumer proposal, 2026-08-28)
 
