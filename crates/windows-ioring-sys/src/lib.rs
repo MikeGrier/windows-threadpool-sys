@@ -182,6 +182,12 @@ pub use capability::{Capabilities, RingVersion, capabilities};
 pub use error::{IoRingError, IoRingErrorExt, RingCondition};
 #[cfg(all(windows, feature = "threadpool"))]
 pub use event_delivery::EventDelivery;
+/// The fault-injection seam (M16.3), for exercising failure paths a healthy
+/// machine will not produce on demand. See
+/// [`Completion::with_injected_failure`] for why transforming a real
+/// completion is sound where fabricating one would not be.
+#[cfg(all(windows, any(test, feature = "fault-injection")))]
+pub use ring::InjectedFailure;
 #[cfg(windows)]
 pub use ring::{Completion, IoRing, Op, RingInfo};
 #[cfg(windows)]

@@ -20,6 +20,17 @@ path = "src/lib.rs"
 
 [features]
 default = ["threadpool"]
+
+# A test-support seam that makes a *real* completion report a failure it did
+# not actually have (M16.3). Off by default: it is for testing failure
+# handling, and nothing in production has a use for it.
+#
+# It is safe to enable -- it cannot cause undefined behaviour, only a wrong
+# answer from `Completion::result` -- because it transforms a completion the
+# ring genuinely popped rather than fabricating one. That distinction is the
+# whole design and is argued in full on `Completion::with_injected_failure`.
+# Fabrication stays `#[cfg(test)] pub(crate)` and is not reachable from here.
+fault-injection = []
 # Model A delivery (`EventDelivery`) is the only thing in this crate that needs
 # a thread pool, so a Model B consumer -- a pinned thread parked in
 # `Batch::submit_and_wait`, owning its own ring -- otherwise links a dependency

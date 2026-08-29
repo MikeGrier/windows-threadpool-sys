@@ -404,10 +404,27 @@ useful together.
   Noted for M16.3: reverting the fix's *ordering* alone does not reproduce the leak, because the early return
   only triggers on a **failed** write -- which is precisely the population-B path that has no coverage yet.
 
-- [ ] **M16.3** -- Add a fault-injection seam at the completion boundary, so a test can make `result()` return
+- [x] **M16.3** -- Add a fault-injection seam at the completion boundary, so a test can make `result()` return
   a chosen error for a chosen operation. `Completion::synthetic` already exists under `#[cfg(test)]` and is
   half of this. Keep it test-gated for the same reason `synthetic` is: `Token::claim_if`'s safety argument
   depends on every `Completion` tracing back to a real popped `IORING_CQE`.
+  **Done:** `Completion::with_injected_failure` plus an `InjectedFailure` enum (`Ring` / `Win32` / `Hresult`),
+  behind a new default-off `fault-injection` feature.
+  **The design turns on a distinction the item's framing missed.** `synthetic` *fabricates* a completion, and
+  the reason it must stay `#[cfg(test)] pub(crate)` is not merely convention: a fabricated completion can name
+  an operation still **in flight**, so claiming a token against one hands a buffer back while the kernel is
+  writing through it -- the exact use-after-free this crate exists to prevent. Building the seam that way to
+  test safety would be self-defeating. So this seam **transforms a completion the ring genuinely popped**
+  instead: same `UserData`, same ring identity, same finished operation, and only `result()` changes.
+  `claim_if`'s argument is therefore untouched, which is what makes the feature safe to expose at all.
+  **Found while writing the tests:** `Hresult(0)` would have injected *success*, silently falsifying the
+  "failure only, never success" guarantee and letting a test conceal the very defect it was written to find.
+  Now enforced by a panic rather than asserted in prose, with a `should_panic` test on it.
+  Also deleted a test that could not verify its own name -- `information` is private and unreachable once
+  `result()` is `Err`, so "reports no bytes transferred" had no assertion to write. The zeroing stays (it
+  would be wrong to model a state the kernel never produces) but the vacuous coverage does not.
+  `tests/fault_injection.rs` proves the seam is reachable *and* gated from outside the crate; CI's existing
+  `--workspace --all-features` job runs it, verified rather than assumed.
 
 - [ ] **M16.4** -- Use M16.3 to cover the failure paths that have no coverage at all: a failed read, write and
   flush completion claimed normally, a failed registration, and `EventDelivery` delivering a failed completion.

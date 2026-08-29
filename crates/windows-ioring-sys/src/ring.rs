@@ -145,6 +145,57 @@ pub struct RingInfo {
     pub completion_queue_size: u32,
 }
 
+/// A failure to report in place of a completion's real result (M16.3).
+///
+/// Three spellings of the same thing, chosen so a call site reads as what it
+/// is testing rather than as a hexadecimal constant.
+///
+/// Available only under the `fault-injection` feature; see
+/// [`Completion::with_injected_failure`].
+#[cfg(any(test, feature = "fault-injection"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InjectedFailure {
+    /// One of the ring's own `IORING_E_*` conditions.
+    Ring(crate::RingCondition),
+    /// A Win32 error code, wrapped the way the kernel wraps one -- so
+    /// `(hresult as u32) & 0xFFFF` recovers it, which is how this crate's
+    /// tests read a real one back.
+    Win32(u32),
+    /// A raw `HRESULT`, for a failure neither of the above names.
+    Hresult(windows_sys::core::HRESULT),
+}
+
+#[cfg(any(test, feature = "fault-injection"))]
+impl InjectedFailure {
+    /// The `HRESULT` this failure puts in the completion's result code.
+    ///
+    /// # Panics
+    ///
+    /// If the result would not actually be a failure. Only
+    /// [`InjectedFailure::Hresult`] can express that -- the other two spellings
+    /// always produce a failing code -- and it is rejected rather than
+    /// accepted, so that
+    /// [`Completion::with_injected_failure`]'s "failure only, never success"
+    /// guarantee is true by construction rather than by convention. A seam
+    /// that could turn a real failure into an apparent success would let a
+    /// test conceal the very defects it exists to find.
+    fn as_hresult(self) -> windows_sys::core::HRESULT {
+        let code = match self {
+            Self::Ring(condition) => condition.code(),
+            // `HRESULT_FROM_WIN32`: severity 1, facility 7 (`FACILITY_WIN32`),
+            // and the low 16 bits of the code.
+            Self::Win32(code) => (0x8007_0000_u32 | (code & 0xFFFF)).cast_signed(),
+            Self::Hresult(code) => code,
+        };
+        assert!(
+            code < 0,
+            "an injected failure must be a failing HRESULT, but {code:#010x} is not: \
+             this seam injects failure only, never success"
+        );
+        code
+    }
+}
+
 /// One popped completion (M3.7): the operation's identity, from
 /// `IORING_CQE::UserData`, and its result.
 #[derive(Clone, Copy, Debug)]
@@ -186,6 +237,83 @@ impl Completion {
     pub fn result(&self) -> io::Result<usize> {
         check(self.result_code)?;
         Ok(self.information)
+    }
+
+    /// Report `failure` from [`Completion::result`] instead of what this
+    /// operation actually returned (M16.3).
+    ///
+    /// # What this is for
+    ///
+    /// Failure paths that are otherwise unreachable in a test. Most of what a
+    /// consumer must handle -- a write that fails partway, a flush the device
+    /// rejects, a registration the kernel refuses -- cannot be provoked on
+    /// demand from a healthy machine, so that code is typically written once
+    /// and never executed again. This crate shipped a defect of exactly that
+    /// shape: a claim path that returned early on a failed write and leaked
+    /// its registered-buffer slot permanently, on a branch no test had ever
+    /// taken.
+    ///
+    /// # Why this is sound, where fabricating a completion would not be
+    ///
+    /// [`crate::Token::claim_if`]'s safety argument is that a `Completion` for
+    /// some `UserData` **existing at all** proves the kernel has finished with
+    /// that operation, and therefore that handing its buffer back is sound.
+    ///
+    /// This method consumes a completion the ring genuinely popped and returns
+    /// one carrying the same `UserData` and the same ring identity. The
+    /// operation really did finish; the only thing that changes is what
+    /// [`Completion::result`] says about it. So the argument above is
+    /// untouched, and claiming against the result is exactly as sound as
+    /// claiming against the original.
+    ///
+    /// [`Completion::synthetic`] is the opposite, and is why it is not
+    /// reachable from here. A fabricated completion can name an operation that
+    /// is **still in flight**, and claiming a token against one hands a buffer
+    /// back to the caller while the kernel is still writing through it -- the
+    /// precise use-after-free this crate exists to prevent. That is a
+    /// test-only, crate-only tool and stays one.
+    ///
+    /// # What it cannot do
+    ///
+    /// Only failure can be injected, never success. Turning a real failure
+    /// into an apparent success would let a test conceal a genuine defect,
+    /// which is the wrong affordance for a tool whose whole purpose is
+    /// exercising error handling. That is enforced rather than merely stated:
+    /// a non-failing `HRESULT` panics.
+    ///
+    /// # Panics
+    ///
+    /// If `failure` does not resolve to a failing `HRESULT`. Only
+    /// [`InjectedFailure::Hresult`] can express that at all.
+    ///
+    /// # Prefer a real failure when one is reachable
+    ///
+    /// A genuine kernel error -- writing through a read-only handle, cancelling
+    /// something that is not outstanding -- tests the real path *and* confirms
+    /// the crate's own error translation. Reach for this only where no such
+    /// route exists.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let completion = completion.with_injected_failure(
+    ///     InjectedFailure::Win32(ERROR_ACCESS_DENIED),
+    /// );
+    /// assert!(completion.result().is_err());
+    /// // The token still claims it: the operation did complete.
+    /// let buffer = token.claim_if(&completion).expect("claims its own");
+    /// ```
+    #[cfg(any(test, feature = "fault-injection"))]
+    #[must_use]
+    pub fn with_injected_failure(self, failure: InjectedFailure) -> Self {
+        Self {
+            result_code: failure.as_hresult(),
+            // Zeroed deliberately: a failed operation transferred nothing, and
+            // leaving a success's byte count behind would model a state the
+            // kernel never produces.
+            information: 0,
+            ..self
+        }
     }
 
     /// Build a `Completion` without popping a real one, for tests that
