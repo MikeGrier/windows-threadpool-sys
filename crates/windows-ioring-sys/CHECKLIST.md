@@ -248,12 +248,38 @@ would mean writing a `SetEvent`-after-arm patch that M11.3 immediately deletes.
   the setup signal, auto-reset, idempotence, and -- the one that matters for M11.3 -- that attaching to a
   ring with a completion *already* queued does signal.
 
-- [ ] **M11.2** -- Tests for the M11.1 contract, written against the *stated* rules rather than against
-  current behaviour: the backlog case (submit, let completions land, call `completion_event`, assert the
-  returned handle signals), the setup-signal case, the idempotence case, and a multiplexed-wait case that
-  waits on the ring's event alongside an unrelated event and asserts the ring still wakes after the
-  unrelated one fires. This last one is the configuration that makes an edge-trigger violation observable
-  at all, and its absence is why the M11.3 bug survived CI.
+- [x] **M11.2** -- Contract tests for the M11.1 primitive in
+  [tests/completion_event.rs](tests/completion_event.rs), written against the *stated* rules rather than
+  against current behaviour: eleven cases covering the setup signal, the backlog case (submit, let the
+  completions land, *then* attach, assert the returned handle signals), idempotence, the edge itself
+  (empty -> non-empty signals; a batch of eight produces exactly one wakeup; the edge re-arms after each
+  drain; a full drain leaves no leftover signal), the duplicate's independence (closing one duplicate,
+  and outliving the ring), the capability gate's `Unsupported` branch, and the multiplexed wait.
+  Each rule is named in the test that pins it, so a failure is readable without opening
+  [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+  Every case was **verified by sabotage**, which is what makes these contract tests rather than
+  behaviour snapshots -- and doing it corrected the suite three times, each correction worth keeping:
+
+  - Suppressing `completion_event`'s setup `SetEvent` fails all eleven, the backlog case on its own
+    message. That is the property M11.3 depends on.
+  - Making the repeat call attach a *second* event initially failed only **one** test. The other two
+    idempotence cases passed **vacuously**: asserting that the handle returned by the *second* call
+    signals is satisfied perfectly well by a freshly attached event, so a silently detached first handle
+    went unnoticed -- the exact bug those tests exist to exclude. Both were rewritten to assert through
+    the *first* handle, and to close the *second* duplicate rather than the first; the sabotage now
+    fails all three.
+  - The multiplexed test's first shape proved that draining mattered but not that draining on *every*
+    pass did. Sabotaging round 1's drain to a single `try_pop` fails at **round 2**, not round 3,
+    because round 2's unrelated-wake drain rescues the seven stranded completions -- which is precisely
+    why rule 2 says every pass and not merely every ring pass. A round 4 was added that breaks rule 2
+    deliberately and asserts the resulting lost wakeup as a timeout, so the deadlock is demonstrated
+    rather than described; a control run confirms the same wait returns immediately when the queue was
+    drained first, so the assertion measures the edge and not an impatient timeout.
+
+  These are integration tests because generating completions crosses the filesystem boundary, matching
+  [tests/event_delivery.rs](tests/event_delivery.rs). The suite runs in about half a second, nearly all
+  of it the one deliberately-asserted timeout.
 
 - [ ] **M11.3** -- Re-express `EventDelivery::new` on top of `IoRing::completion_event`, which removes the
   second `SetIoRingCompletionEvent` call site ([D-20](DESIGN-NOTES.md#d-20)) and fixes the stranded-backlog
