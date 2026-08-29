@@ -126,17 +126,33 @@ jobs:
       # probe-cancel-io is DELIBERATELY ABSENT and must stay that way. It is
       # binary-only because CancelSynchronousIo can block indefinitely -- that
       # is the finding -- so running it here would hang the job by design.
-      - name: probe magnitudes (error mode, handle state, worker context)
-        run: |
-          cargo run -p windows-platform-probes --bin probe-error-mode --locked
-          cargo run -p windows-platform-probes --bin probe-handle-state --locked
-          cargo run -p windows-platform-probes --bin probe-worker-context --locked
-      - name: probe magnitudes (pool growth, device map, IoRing)
-        run: |
-          cargo run -p windows-platform-probes --bin probe-pool-growth --locked
-          cargo run -p windows-platform-probes --bin probe-device-map --locked
-          cargo run -p windows-platform-probes --bin probe-ioring --locked
-          cargo run -p windows-platform-probes --bin probe-completion-port --locked
+      #
+      # One step per probe, deliberately, rather than one `run: |` block listing
+      # them. These steps take the Windows runner's default shell, `pwsh`, where
+      # a failing *native* command neither aborts the script nor sets the step's
+      # exit code: Actions ends a pwsh step with `exit $LASTEXITCODE`, so only
+      # the last command in a block is reported. Grouped, a failing
+      # probe-error-mode followed by a passing probe-worker-context exits 0 and
+      # the job goes green. Measured on pwsh 7.6.5 rather than assumed:
+      # `$ErrorActionPreference = 'stop'` does not change it, because that
+      # governs cmdlet errors and not native exit codes.
+      #
+      # Splitting also names the failing probe in the Actions UI, which matters
+      # for a job whose output is per-probe magnitudes.
+      - name: probe magnitudes (error mode)
+        run: cargo run -p windows-platform-probes --bin probe-error-mode --locked
+      - name: probe magnitudes (handle state)
+        run: cargo run -p windows-platform-probes --bin probe-handle-state --locked
+      - name: probe magnitudes (worker context)
+        run: cargo run -p windows-platform-probes --bin probe-worker-context --locked
+      - name: probe magnitudes (pool growth)
+        run: cargo run -p windows-platform-probes --bin probe-pool-growth --locked
+      - name: probe magnitudes (device map)
+        run: cargo run -p windows-platform-probes --bin probe-device-map --locked
+      - name: probe magnitudes (IoRing)
+        run: cargo run -p windows-platform-probes --bin probe-ioring --locked
+      - name: probe magnitudes (completion port)
+        run: cargo run -p windows-platform-probes --bin probe-completion-port --locked
 
   feature-matrix:
     name: windows-overlapped-io-sys (${{ matrix.feature }} only)
