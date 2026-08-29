@@ -341,12 +341,30 @@ M12.1 is first because it is a correctness defect in shipped 0.1.2, not an enhan
 
   **Breaking change**: all four write entry points and both flush entry points changed signature.
 
-- [ ] **M12.5** -- Document durability across every place that states it, as a CONTRACT INTEGRITY
-  blast-radius sweep rather than a single edit: `lib.rs`, `README.md`, the flush and write rustdoc,
-  and the "Durability on the ring" section of [DESIGN-NOTES.md](DESIGN-NOTES.md). Three facts must
-  appear wherever durability is discussed -- the ring has no FUA, the flush is the only durability
-  primitive, and a flush without the barrier covers nothing. Grep `flush`, `durab`, `write_through`,
-  and `drain_preceding` across `src/`, `tests/`, `examples/`, and `*.md`.
+- [x] **M12.5** -- Durability is now stated wherever it is discussed, as a blast-radius sweep.
+  Grepped `flush` / `durab` / `write_through` / `WriteThrough` / `drain_preceding` / `FUA` across
+  `src/`, `tests/`, `examples/` and `*.md`.
+
+  **The finding was an absence, not a contradiction.** [src/lib.rs](src/lib.rs) and
+  [README.md](README.md) between them mentioned durability *zero times* -- one incidental hit each, both
+  the word "flush" in the list of the kernel's seven ops. A consumer reading either document
+  front-to-back would have learned that the ring exists, how to choose a delivery architecture, and
+  how to size an execution domain, without ever being told that a flush is the only way to commit
+  anything or that the obvious spelling of one commits nothing. Both now carry a `Durability` section
+  stating the three facts the item names -- no FUA, the flush is the only durability primitive, a
+  flush without the barrier covers nothing -- plus the consequence that ties them together: durability
+  is a property of an epoch, never of an individual write. README's third point also carries M12.2's
+  measurement, that seeing your flush land last is device-dependent and not evidence the barrier can
+  be omitted.
+
+  **Accounted for, already correct:** the flush and write rustdoc state all three facts in full
+  (M12.1, M12.3, M12.4), which is where the summaries point; `PushOptions::drain_preceding` states the
+  barrier's reach and its relationship to durability (M11.5);
+  [DESIGN-NOTES.md](DESIGN-NOTES.md)'s "Durability on the ring" is the long form all of them defer to.
+  [tests/flush_barrier.rs](tests/flush_barrier.rs) and [src/batch/tests.rs](src/batch/tests.rs) are
+  checks of the contract rather than statements of it; the `ring_copy` example's writes are a copy
+  pipeline with no durability claim to make, and now name `WriteCaching::Cached` explicitly rather
+  than inheriting a hardcoded flag.
 
 ## M13 -- Worked example: consumer-side durability (an epoch-committed log)
 

@@ -132,6 +132,39 @@ else -- the control plane, background work, cold paths -- where the thread
 pool's quiescence is worth more than locality. This crate supports both as
 first-class; neither is a degraded form of the other.
 
+## Durability
+
+Three facts, all measured rather than documented by Win32, and all of them
+things a consumer gets wrong by default. `Batch::flush`, `FlushCoverage`,
+`WriteCaching` and `FlushMode` state them in full; this is the summary that
+stops a reader from never looking.
+
+1. **There is no FUA.** `BuildIoRingWriteFile`'s entire flag set is
+   `{FILE_WRITE_FLAGS_NONE, FILE_WRITE_FLAGS_WRITE_THROUGH}`, and write-through
+   is a cache directive to the OS, not a device-level guarantee -- whether it
+   becomes a Force Unit Access bit depends on the driver, the volume, and the
+   device's write-cache setting. A completed write-through write may still be
+   sitting in a volatile device cache.
+2. **The flush operation is the only durability primitive the ring has**, and
+   only in a mode that syncs the device -- `FlushMode::NoSync` deliberately
+   does not, which makes it the one mode that commits nothing.
+3. **A flush without the barrier covers nothing.** An unflagged flush is an
+   ordinary operation competing with the writes before it, and it frequently
+   wins, so its completion proves nothing about them. This is why
+   `Batch::flush` requires a `FlushCoverage` rather than defaulting: the
+   obvious spelling was a silent data-loss bug, invisible until power is lost.
+   Note that seeing your flush land last on your hardware is not evidence you
+   can omit the barrier -- which direction the reordering shows in is
+   device-dependent.
+
+So **durability is a property of an epoch, never of an individual write**,
+because the ring offers no per-write primitive to make it one: stream the
+writes, close the epoch with one covering flush, and wait on the flush rather
+than on the writes. The barrier that makes this correct is also a ring-wide
+stall, so the correct construction is also the expensive one. "Durability on
+the ring" in [DESIGN-NOTES.md](DESIGN-NOTES.md) has the full shape and the three
+ways to pay for it.
+
 ## Cargo features
 
 | Feature | Default | What it adds |

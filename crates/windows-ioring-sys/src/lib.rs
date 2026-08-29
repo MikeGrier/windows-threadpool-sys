@@ -79,6 +79,38 @@
 //! Model B execution domain, and why buffer placement likely dominates thread
 //! placement -- is in "Two delivery architectures" in `DESIGN-NOTES.md`.
 //!
+//! # Durability
+//!
+//! Three facts, all measured rather than documented by Win32, and all of them
+//! things a consumer gets wrong by default. They are stated in full on
+//! [`Batch::flush`], [`FlushCoverage`], [`WriteCaching`] and [`FlushMode`];
+//! this is the summary that stops a reader from never looking.
+//!
+//! 1. **There is no FUA.** `BuildIoRingWriteFile`'s entire flag set is
+//!    `{FILE_WRITE_FLAGS_NONE, FILE_WRITE_FLAGS_WRITE_THROUGH}`, and
+//!    write-through is a cache directive to the OS, not a device-level
+//!    guarantee -- whether it becomes a Force Unit Access bit depends on the
+//!    driver, the volume, and the device's write-cache setting. Treating a
+//!    completed write-through write as durable is a mistake, not a shortcut.
+//! 2. **The flush operation is the only durability primitive the ring has**,
+//!    and only in a mode that syncs the device -- [`FlushMode::NoSync`]
+//!    deliberately does not.
+//! 3. **A flush without the barrier covers nothing.** An unflagged flush is an
+//!    ordinary operation competing with the writes before it, and it
+//!    frequently wins, so its completion proves nothing about them. This is
+//!    why [`Batch::flush`] requires a [`FlushCoverage`] instead of defaulting:
+//!    the obvious spelling was a silent data-loss bug, invisible until power
+//!    is lost.
+//!
+//! What follows from all three is that **durability is a property of an epoch,
+//! never of an individual write**, because the ring offers no per-write
+//! primitive to make it one: stream the writes, close the epoch with one
+//! covering flush, and wait on the flush rather than on the writes. The
+//! barrier that makes this correct is also a ring-wide stall
+//! ([`PushOptions::drain_preceding`] documents its reach), so the correct
+//! construction is also the expensive one. "Durability on the ring" in
+//! `DESIGN-NOTES.md` has the full shape and the three ways to pay for it.
+//!
 //! # Topology guidance
 //!
 //! This crate does not partition anything for you (D-8 in `DESIGN-NOTES.md`):
