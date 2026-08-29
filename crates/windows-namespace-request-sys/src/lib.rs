@@ -126,7 +126,7 @@ pub use buffer::AlignedBuffer;
 pub use close::{CloseFn, CloseRequest};
 pub use file_info::QueryFileInformationByHandle;
 pub use final_path::{FinalPathError, FinalPathFlags, QueryFinalPath};
-pub use full_path::ResolveFullPath;
+pub use full_path::{FullPathError, ResolveFullPath};
 pub use handle::{CapturedHandle, HandleCaptureError, HandleCaptureFailure};
 pub use open::OpenFile;
 pub use open_by_id::{FileIdentifier, OpenFileByIdentifier};

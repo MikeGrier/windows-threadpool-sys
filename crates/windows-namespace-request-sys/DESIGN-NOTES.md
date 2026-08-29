@@ -290,6 +290,22 @@ thinks of as a call -- a `CloseHandle` in a `Drop`, a buffer release, a
 restoration guard unwinding. Reading it a few statements after the failure is a
 race against the entry's own tidying up.
 
+**The contract forbids reclassifying a code; it does not require inventing one.**
+Two entries -- `QueryFinalPath` and `ResolveFullPath` -- retry a growing buffer,
+and "the required size kept changing" is a failure Windows never reported at all,
+so there is no raw code to pass through faithfully. Each reports it as its own
+`Unstable` variant alongside a `Win32` variant that still carries the raw code
+unaltered. That is additive rather than a reclassification: no Win32 code is
+altered, and a failure Win32 did not produce is not dressed up as one.
+
+Stating this explicitly is not pedantry. `ResolveFullPath` originally read the
+rule as "an entry must return a Win32 code" and therefore synthesized
+`ERROR_INSUFFICIENT_BUFFER` for the unstable case -- a code Windows also returns
+on its own, leaving a caller unable to tell the crate's retry giving up from a
+genuine Windows refusal. Inventing a code is the same information loss the
+paragraph above forbids, just arriving from the other direction. See
+[the seam's error-type rationale](src/request.rs).
+
 So it is **not left to each entry's discipline.** `outcome::perform` takes the
 call as a closure and snapshots the code in the statement after it returns,
 with the convention-specific forms (`perform_bool`, `perform_handle`,

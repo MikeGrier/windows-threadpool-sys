@@ -24,15 +24,24 @@
 //! # Why the error type is an associated type
 //!
 //! Most entries fail only as Windows failed, so their error is a
-//! [`Win32Error`](crate::Win32Error). One does not:
-//! [`crate::final_path::QueryFinalPath`] retries a growing buffer, and
-//! "the required size kept changing" is a failure Win32 has no code for.
+//! [`Win32Error`](crate::Win32Error). Two do not:
+//! [`crate::final_path::QueryFinalPath`] and
+//! [`crate::full_path::ResolveFullPath`] each retry a growing buffer, and "the
+//! required size kept changing" is a failure Win32 has no code for. They report
+//! it as [`FinalPathError::Unstable`](crate::FinalPathError::Unstable) and
+//! [`FullPathError::Unstable`](crate::FullPathError::Unstable) respectively.
 //!
-//! Fixing the trait's error to `Win32Error` would have left that entry outside
-//! the seam, which would make the seam not level -- a consumer could substitute
-//! a fake for four entries and not the fifth. An associated `Error` keeps every
-//! entry reachable through one trait without any of them having to invent a
-//! code it does not have.
+//! Fixing the trait's error to `Win32Error` would have left those entries
+//! outside the seam, which would make the seam not level -- a consumer could
+//! substitute a fake for some entries and not the rest. An associated `Error`
+//! keeps every entry reachable through one trait without any of them having to
+//! invent a code it does not have.
+//!
+//! That last clause is load-bearing rather than decorative. `ResolveFullPath`
+//! did invent one for a while, returning a synthesized
+//! `ERROR_INSUFFICIENT_BUFFER` that Win32 can also produce by itself, so a
+//! caller could not tell the crate's own retry giving up from a genuine Windows
+//! failure. The rule stated here is what the entry now follows.
 //!
 //! # This is a seam, not an abstraction layer
 //!

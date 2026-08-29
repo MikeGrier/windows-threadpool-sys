@@ -27,11 +27,12 @@
 //! A consumer that wants the *final*, filesystem-verified path of an object
 //! wants [`crate::final_path`], which requires a handle and therefore an open.
 
-use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use std::fmt;
+
 use windows_sys::Win32::Storage::FileSystem::GetFullPathNameW;
 use wtf_string::{Wtf16Str, Wtf16String};
 
-use crate::outcome::{Outcome, Win32Error, perform_nonzero};
+use crate::outcome::{Win32Error, perform_nonzero};
 
 /// How many times the buffer is grown before giving up.
 ///
@@ -41,6 +42,58 @@ const MAX_ATTEMPTS: usize = 8;
 
 /// The buffer size the first attempt uses, in characters.
 const FIRST_ATTEMPT_CHARS: usize = 260;
+
+/// Why a full path could not be resolved.
+///
+/// This mirrors [`crate::final_path::FinalPathError`] deliberately: the two
+/// entries share a retry shape, so they share a failure vocabulary. An earlier
+/// revision returned a synthesized `ERROR_INSUFFICIENT_BUFFER` for the unstable
+/// case, which left a caller unable to tell that apart from the same code
+/// arriving from Windows, and made this entry the one place in the crate that
+/// invented a code Win32 had not produced.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum FullPathError {
+    /// Windows refused the call, with the raw code unaltered.
+    Win32(Win32Error),
+    /// The required size kept changing, so the retry was abandoned.
+    ///
+    /// A path does not normally grow between two calls a microsecond apart, so
+    /// this means something pathological rather than a transient. It is
+    /// reported rather than looped on, because spinning here would hang the
+    /// worker that a consumer moved this call onto in the first place.
+    Unstable {
+        /// How many attempts were made before giving up.
+        attempts: usize,
+    },
+}
+
+impl fmt::Display for FullPathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Win32(error) => write!(f, "GetFullPathNameW: {error}"),
+            Self::Unstable { attempts } => write!(
+                f,
+                "GetFullPathNameW: the required size changed on each of {attempts} attempts"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FullPathError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Win32(error) => Some(error),
+            Self::Unstable { .. } => None,
+        }
+    }
+}
+
+impl From<Win32Error> for FullPathError {
+    fn from(error: Win32Error) -> Self {
+        Self::Win32(error)
+    }
+}
 
 /// An owned, marshalable parameter set for `GetFullPathNameW`.
 ///
@@ -108,8 +161,9 @@ impl ResolveFullPath {
     ///
     /// # Errors
     ///
-    /// Returns the raw Win32 code, unaltered.
-    pub fn perform(&self) -> Outcome<Wtf16String> {
+    /// Returns [`FullPathError::Win32`] with the raw Win32 code, unaltered, or
+    /// [`FullPathError::Unstable`] if the required size kept changing.
+    pub fn perform(&self) -> Result<Wtf16String, FullPathError> {
         let mut capacity = FIRST_ATTEMPT_CHARS;
 
         for _ in 0..MAX_ATTEMPTS {
@@ -149,18 +203,22 @@ impl ResolveFullPath {
         // rather than looping, for the reason final_path gives: spinning here
         // would hang the worker a consumer moved this call onto.
         //
-        // `ERROR_INSUFFICIENT_BUFFER` is not a reclassification -- it is
-        // accurately what happened on each attempt, and this crate has no
-        // better code to offer for "and it kept happening".
-        Err(Win32Error::from_code(ERROR_INSUFFICIENT_BUFFER))
+        // Reported as its own variant rather than as a Win32 code. Windows has
+        // none for "and it kept happening", and the nearest candidate --
+        // `ERROR_INSUFFICIENT_BUFFER`, which each individual attempt really did
+        // hit -- is one Win32 can also return on its own, so borrowing it would
+        // leave a caller unable to tell the two apart.
+        Err(FullPathError::Unstable {
+            attempts: MAX_ATTEMPTS,
+        })
     }
 }
 
 impl crate::request::Request for ResolveFullPath {
-    type Error = crate::Win32Error;
+    type Error = FullPathError;
     type Output = Wtf16String;
 
-    fn perform(&self) -> Outcome<Wtf16String> {
+    fn perform(&self) -> Result<Wtf16String, FullPathError> {
         Self::perform(self)
     }
 }

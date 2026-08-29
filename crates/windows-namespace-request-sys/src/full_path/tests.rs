@@ -6,10 +6,12 @@
 //! a suite that only ever resolved existing paths would leave a reader
 //! believing it verifies something.
 
+use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use wtf_string::Wtf16String;
 
-use super::ResolveFullPath;
+use super::{FullPathError, ResolveFullPath};
 use crate::handle::tests::handle_allocation;
+use crate::outcome::Win32Error;
 
 fn resolve(path: &str) -> String {
     ResolveFullPath::new(Wtf16String::from(path))
@@ -111,10 +113,58 @@ fn a_deeply_nested_path_beyond_the_first_attempt_still_resolves() {
 fn an_empty_path_reports_the_raw_code() {
     let outcome = ResolveFullPath::new(Wtf16String::new()).perform();
 
+    // Specifically the Win32 variant, not merely "an error". The point of the
+    // split is that a caller can tell a refusal by Windows from this crate's own
+    // retry giving up; asserting only `is_err` would pass just as happily if
+    // every failure collapsed back into one shape.
     assert!(
-        outcome.is_err(),
+        matches!(outcome, Err(FullPathError::Win32(_))),
         "an empty path names nothing, and Windows says so rather than this crate"
     );
+}
+
+#[test]
+fn the_two_failures_are_distinguishable() {
+    // The defect this replaced: the unstable case returned a synthesized
+    // ERROR_INSUFFICIENT_BUFFER, a code Win32 also returns on its own, so these
+    // two values were indistinguishable to a caller matching on the error.
+    let refused = FullPathError::from(Win32Error::from_code(ERROR_INSUFFICIENT_BUFFER));
+    let gave_up = FullPathError::Unstable {
+        attempts: super::MAX_ATTEMPTS,
+    };
+
+    assert!(matches!(refused, FullPathError::Win32(_)));
+    assert!(matches!(gave_up, FullPathError::Unstable { .. }));
+
+    // And they do not read the same either, so a log distinguishes them too.
+    assert_ne!(refused.to_string(), gave_up.to_string());
+}
+
+#[test]
+fn an_unstable_failure_reports_the_attempts_it_made() {
+    let error = FullPathError::Unstable {
+        attempts: super::MAX_ATTEMPTS,
+    };
+
+    assert!(
+        error.to_string().contains(&super::MAX_ATTEMPTS.to_string()),
+        "the attempt count is the one diagnostic this variant carries: {error}"
+    );
+}
+
+#[test]
+fn only_a_win32_failure_carries_a_source() {
+    use std::error::Error;
+
+    // `Unstable` is this crate's own conclusion rather than something Windows
+    // reported, so it has no underlying error to chain to.
+    let refused = FullPathError::from(Win32Error::from_code(ERROR_INSUFFICIENT_BUFFER));
+    let gave_up = FullPathError::Unstable {
+        attempts: super::MAX_ATTEMPTS,
+    };
+
+    assert!(refused.source().is_some());
+    assert!(gave_up.source().is_none());
 }
 
 #[test]
