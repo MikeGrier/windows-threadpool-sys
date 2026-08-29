@@ -131,8 +131,9 @@ mod token;
 
 #[cfg(windows)]
 pub use batch::{
-    Batch, FileRef, FileTarget, PendingBufferRegistration, PendingFileRegistration, PushOptions,
-    RegisteredBuffers, RegisteredFile, RegisteredFiles, RegisteredSpan, RegisteredUse, SharedFile,
+    Batch, FileRef, FileTarget, FlushCoverage, PendingBufferRegistration, PendingFileRegistration,
+    PushOptions, RegisteredBuffers, RegisteredFile, RegisteredFiles, RegisteredSpan, RegisteredUse,
+    SharedFile,
 };
 #[cfg(windows)]
 pub use buf::{IoBuf, IoBufMut};

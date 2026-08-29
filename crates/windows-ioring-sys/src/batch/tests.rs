@@ -2,13 +2,28 @@
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE};
 
-use super::{Batch, PushOptions};
+use super::{Batch, FlushCoverage, PushOptions};
 use crate::IoRing;
 use crate::buf::{IoBuf, IoBufMut};
 
 #[test]
 fn default_push_options_set_no_barrier() {
     assert_eq!(PushOptions::new().sqe_flags(), IOSQE_FLAGS_NONE);
+}
+
+#[test]
+fn a_covering_flush_sets_the_barrier_flag_and_an_unordered_one_does_not() {
+    // The mapping this whole type exists for (M12.1, D-23): a covering flush
+    // must carry the barrier, because without it the flush's completion says
+    // nothing about the writes before it. Pinned here so a future edit to
+    // `sqe_flags` cannot silently turn every covering flush into an unordered
+    // one -- which would compile, pass every other test, and lose data only
+    // on power failure.
+    assert_eq!(
+        FlushCoverage::CoversPrecedingOperations.sqe_flags(),
+        IOSQE_FLAGS_DRAIN_PRECEDING_OPS
+    );
+    assert_eq!(FlushCoverage::Unordered.sqe_flags(), IOSQE_FLAGS_NONE);
 }
 
 #[test]

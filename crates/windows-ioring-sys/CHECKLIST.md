@@ -228,8 +228,9 @@ are not a work queue".
 The kernel exposes a durability parameter on writes (`FILE_WRITE_FLAGS`) and on flushes
 (`FILE_FLUSH_MODE`); this crate hardcodes both, so a consumer sees ordering but no way to express
 durability at all. Worse, [D-23](DESIGN-NOTES.md#d-23) measured that an unflagged flush does *not*
-cover preceding writes -- which makes `Batch::flush(&file, PushOptions::default())`, the obvious
-spelling, a silent data-loss bug rather than a missing feature.
+cover preceding writes -- which made `Batch::flush(&file, PushOptions::default())`, the obvious
+spelling, a silent data-loss bug rather than a missing feature. **M12.1 removed that spelling**; the
+remaining items expose the parameters the crate still hardcodes.
 
 Decisions: [D-23](DESIGN-NOTES.md#d-23) through [D-25](DESIGN-NOTES.md#d-25). Measurements are
 reproduced by the drain spike recorded in
@@ -237,14 +238,40 @@ reproduced by the drain spike recorded in
 
 M12.1 is first because it is a correctness defect in shipped 0.1.2, not an enhancement.
 
-- [ ] **M12.1** -- Make the barrier decision explicit for flushes ([D-23](DESIGN-NOTES.md#d-23),
-  [D-25](DESIGN-NOTES.md#d-25)). Today `Batch::flush`/`flush_raw` accept `PushOptions`, whose default
-  carries no barrier, so the natural call produces a flush that can complete while the writes it is
-  meant to cover are still outstanding. Remove the ability to express that by accident: the flush
-  entry points take the barrier decision as a required argument (a two-variant type -- "covers
-  preceding operations" versus "unordered" -- not a `bool`, so the call site reads correctly), with
-  the unordered form documented as almost never what a caller wants. Rustdoc states the measured
-  contract and links [D-23](DESIGN-NOTES.md#d-23).
+- [x] **M12.1** -- The barrier decision is now explicit for flushes ([D-23](DESIGN-NOTES.md#d-23),
+  [D-25](DESIGN-NOTES.md#d-25)). `Batch::flush` and `Batch::flush_raw` take a required
+  `FlushCoverage` -- `CoversPrecedingOperations` or `Unordered` -- **in place of** `PushOptions`,
+  rather than alongside it. Replacing it rather than adding to it is the point: keeping both would let
+  a caller write `FlushCoverage::Unordered` with `PushOptions::new().drain_preceding(true)` and mean
+  two contradictory things at once. `PushOptions` carries exactly one decision, and for a flush
+  `FlushCoverage` *is* that decision.
+
+  An enum rather than a `bool` because `flush(&file, true)` does not say what the `true` decides, and
+  a two-variant type makes the wrong choice unwriteable by accident rather than merely discouraged.
+  The `Unordered` variant is documented with the two uses that are legitimate (host sequencing, and a
+  flush not being used for durability at all) so it reads as a deliberate choice rather than an
+  escape hatch.
+
+  Rustdoc on `flush_raw` now states the measured contract in full: that the ring has no FUA and the
+  flush is therefore its only durability primitive, that an unflagged flush was measured completing
+  while 17 and then 23 of 32 preceding writes were still outstanding, and that durability is a
+  property of an epoch rather than of a write. `PushOptions::drain_preceding` cross-references it so a
+  reader arriving from the flag side learns the flush no longer inherits the decision.
+
+  A unit test pins the `FlushCoverage` -> SQE-flag mapping, **verified by sabotage**: making
+  `CoversPrecedingOperations` map to `IOSQE_FLAGS_NONE` compiles and passes every other test in the
+  crate, and would lose data only on power failure -- exactly the class of defect that needs a
+  mechanical check rather than review.
+
+  Swept the statements this changed: [DESIGN-NOTES.md](DESIGN-NOTES.md)'s epoch construction and
+  barrier-cost table now name the API instead of the raw flag, [D-25](DESIGN-NOTES.md#d-25) carries an
+  implementation-status marker, and the M12 intro above no longer describes a spelling that exists.
+  The two `flush_raw` call sites in [tests/submission_lifecycle.rs](tests/submission_lifecycle.rs) use
+  `Unordered` with a note saying why (they test backpressure, not durability). The broader durability
+  sweep across `lib.rs` and `README.md` stays M12.5, which is where those documents first have to
+  discuss durability at all.
+
+  **Breaking change**: both flush entry points changed signature.
 
 - [ ] **M12.2** -- A test proving the contract rather than the implementation: writes plus an
   *unordered* flush must be observable completing out of order (the spike sees 17-23 of 32), while

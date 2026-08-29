@@ -77,7 +77,11 @@ impl PushOptions {
     /// many of those writes are still outstanding (D-23 in `DESIGN-NOTES.md`,
     /// measured at 17 and 23 of 32 writes finishing after the flush did). So
     /// the obvious spelling -- push the writes, then push a flush -- silently
-    /// does not make those writes durable. See [`Batch::flush`].
+    /// does not make those writes durable.
+    ///
+    /// A flush does not take its barrier decision from here, for exactly that
+    /// reason: [`Batch::flush`] requires a [`FlushCoverage`] instead, so the
+    /// choice cannot be inherited from a default (M12.1, D-25).
     pub fn drain_preceding(mut self, drain: bool) -> Self {
         self.drain_preceding = drain;
         self
@@ -88,6 +92,61 @@ impl PushOptions {
             IOSQE_FLAGS_DRAIN_PRECEDING_OPS
         } else {
             IOSQE_FLAGS_NONE
+        }
+    }
+}
+
+/// Whether a flush covers the operations queued before it (M12.1, D-23 in
+/// `DESIGN-NOTES.md`).
+///
+/// This is a **required argument** on [`Batch::flush`] and
+/// [`Batch::flush_raw`] rather than a field of [`PushOptions`], because there
+/// is no defensible default. An unflagged flush does *not* cover preceding
+/// writes: it is an ordinary operation competing with them, and it frequently
+/// wins. A default would make the obvious spelling -- push the writes, then
+/// push a flush -- a silent data-loss bug rather than a missing feature, so
+/// the decision is taken at the call site instead (D-25).
+///
+/// It is an enum rather than a `bool` for the same reason: `flush(&file,
+/// true)` does not say what the `true` decides, and this is not a parameter
+/// anyone should have to look up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlushCoverage {
+    /// Wait for every operation already outstanding on the ring, then flush.
+    ///
+    /// This is what makes preceding writes durable when the flush's
+    /// completion is observed, and it is what a caller closing an epoch
+    /// wants.
+    ///
+    /// It sets `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`, which is a **ring-wide**
+    /// barrier rather than a per-file one (D-24, measured): operations pushed
+    /// after it are held until it completes even when they target unrelated
+    /// files, and its reach is every operation outstanding on the ring, not
+    /// only the ones in this batch. The whole ring stalls for the flush's
+    /// duration. That cost is real, and it is the only reason the other
+    /// variant exists.
+    CoversPrecedingOperations,
+    /// Queue the flush with no barrier: it may start, and complete, while
+    /// writes pushed before it are still in flight.
+    ///
+    /// **Almost never what a caller wants.** Its completion proves nothing
+    /// about any preceding write, so using it to close an epoch loses data
+    /// that the caller believes is committed -- invisibly, until power is
+    /// lost.
+    ///
+    /// Two uses are legitimate. One is *host sequencing*: the caller has
+    /// already observed the completions of every write in the epoch before
+    /// pushing this, so the ordering is established outside the ring and the
+    /// barrier would only add a stall. The other is a flush that is not being
+    /// used for durability at all.
+    Unordered,
+}
+
+impl FlushCoverage {
+    fn sqe_flags(self) -> IORING_SQE_FLAGS {
+        match self {
+            Self::CoversPrecedingOperations => IOSQE_FLAGS_DRAIN_PRECEDING_OPS,
+            Self::Unordered => IOSQE_FLAGS_NONE,
         }
     }
 }
@@ -835,10 +894,43 @@ impl<'ring> Batch<'ring> {
 
     /// Queue a flush of `file`'s buffered data (`FILE_FLUSH_DEFAULT`).
     ///
+    /// `coverage` decides whether this flush covers the operations queued
+    /// before it. It is required rather than defaulted because there is no
+    /// safe default -- see [`FlushCoverage`] and the measured contract below.
+    ///
     /// There is no buffer, so this returns the raw `UserData` identity
     /// rather than a [`Token`]: nothing owns a buffer for a completion to
     /// hand back. Prefer [`Batch::flush`] unless `file` needs to address a
     /// raw `FileRef` directly.
+    ///
+    /// # A flush is the ring's only durability primitive
+    ///
+    /// **The ring has no FUA.** `BuildIoRingWriteFile`'s entire flag set is
+    /// `{FILE_WRITE_FLAGS_NONE, FILE_WRITE_FLAGS_WRITE_THROUGH}`, and
+    /// write-through is a cache-bypass directive to the OS rather than a
+    /// device-level durability guarantee -- whether it becomes a Force Unit
+    /// Access bit depends on the driver, the volume, and whether the device's
+    /// write cache is enabled. So this operation is the only way the ring
+    /// makes anything durable, and only with
+    /// [`FlushCoverage::CoversPrecedingOperations`].
+    ///
+    /// # The measured contract (D-23 in `DESIGN-NOTES.md`)
+    ///
+    /// **An unflagged flush does not cover preceding writes.** It is an
+    /// ordinary operation competing with them, and it frequently wins: a
+    /// flush pushed after a batch of writes with no barrier was observed
+    /// completing while 17, and on another run 23, of 32 of those writes were
+    /// still outstanding. A caller that reads such a completion as "the
+    /// writes before it are now durable" has lost data it believes it has
+    /// committed, and nothing reports the loss until power fails.
+    ///
+    /// Durability on this ring is therefore a property of an **epoch**, never
+    /// of an individual write, because there is no per-write primitive to
+    /// make it one: stream the writes unflagged, close the epoch with one
+    /// covering flush, and wait on that flush rather than on the writes.
+    /// "Durability on the ring" in `DESIGN-NOTES.md` has the full
+    /// construction, and the three ways to pay for the barrier's ring-wide
+    /// stall.
     ///
     /// # Safety
     ///
@@ -853,7 +945,7 @@ impl<'ring> Batch<'ring> {
     pub unsafe fn flush_raw(
         &mut self,
         file: impl Into<FileRef>,
-        options: PushOptions,
+        coverage: FlushCoverage,
     ) -> io::Result<usize> {
         self.require(Op::Flush)?;
         let target = handle_ref(file.into(), self.ring.ring_id())?;
@@ -867,7 +959,7 @@ impl<'ring> Batch<'ring> {
                 target,
                 FILE_FLUSH_DEFAULT,
                 user_data,
-                options.sqe_flags(),
+                coverage.sqe_flags(),
             )
         };
         if let Err(error) = check(hr) {
@@ -882,6 +974,10 @@ impl<'ring> Batch<'ring> {
     /// (rather than a bare `UserData`) holds its guard until this
     /// operation's completion is observed.
     ///
+    /// `coverage` is required for the reason [`FlushCoverage`] documents: an
+    /// unflagged flush does not cover preceding writes (D-23), so there is no
+    /// default spelling of this call that is safe to inherit.
+    ///
     /// # Errors
     ///
     /// As [`Batch::flush_raw`], plus [`io::ErrorKind::InvalidInput`] if
@@ -889,7 +985,7 @@ impl<'ring> Batch<'ring> {
     pub fn flush<F: FileTarget>(
         &mut self,
         file: &F,
-        options: PushOptions,
+        coverage: FlushCoverage,
     ) -> io::Result<Token<F::Guard>> {
         self.require(Op::Flush)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
@@ -903,7 +999,7 @@ impl<'ring> Batch<'ring> {
                 target,
                 FILE_FLUSH_DEFAULT,
                 user_data,
-                options.sqe_flags(),
+                coverage.sqe_flags(),
             )
         };
         self.finish_push(hr, token)
