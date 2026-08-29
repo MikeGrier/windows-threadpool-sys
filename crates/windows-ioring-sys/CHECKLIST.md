@@ -336,10 +336,21 @@ wait on the state-space work.
   kernel receives is computed by *this* crate in `checked_span`, so an off-by-one there fails these tests
   exactly as a kernel bug would -- and is otherwise as invisible as one.
 
-- [ ] **M15.4** -- Verify poison at quiescence too: at teardown every registered buffer's never-written
+- [x] **M15.4** -- Verify poison at quiescence too: at teardown every registered buffer's never-written
   regions still hold their expected pattern, and no buffer that was only ever a write source has changed.
   This is the whole-arena form of M15.3 and is what catches a stray write attributed to no particular
   operation.
+  **Done:** `windows-guard-alloc`'s `witness` module plus
+  `a_mixed_workload_leaves_every_unaccounted_byte_poisoned`. A `Witness` starts owning a region with nothing
+  permitted; each completion permits exactly the bytes it was entitled to change -- the **transferred** count,
+  never the requested one -- and `verify` walks the *gaps* between merged permissions at teardown. Slot 3 in
+  the test is a write source only, so nothing is ever permitted for it and it must be byte-identical.
+  Both directions were sabotage-verified: a byte in the gap between slot 0's two disjoint reads, and a byte in
+  the write-source slot, each reported with the slot, the offset, expected-versus-found, the seed, and how
+  many bytes were legitimately written (`0 byte(s)` for the write source). The 12 `witness` unit tests weight
+  the **false-positive** direction deliberately -- abutting ranges, overlapping ranges, out-of-order
+  permissions -- because a witness that accuses legitimate writes trains a reader to ignore it, which is the
+  same failure as missing one.
 
 ## M16 -- Make the contract executable, and take the failure paths (release-gating)
 

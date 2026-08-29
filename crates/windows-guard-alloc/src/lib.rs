@@ -57,6 +57,7 @@
 //! is silent -- the tests still pass, and instrument nothing.
 
 pub mod poison;
+pub mod witness;
 
 use std::alloc::{GlobalAlloc, Layout};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
