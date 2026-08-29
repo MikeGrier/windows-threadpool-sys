@@ -463,11 +463,13 @@ failure paths all exist now.
 
 **Depends on M16.1** (the oracle is the property these tests assert).
 
-**CONVENTION GATE -- needs the engineer's explicit approval before M17.3 starts.** This component's rules say
-tests must be reproducible and must **not** use randomized sampling without explicit approval recorded in a
-design note. `proptest` is randomized sampling. M17.2 exists to get that decision made and recorded rather
-than smuggled in under a dev-dependency. M15.2's seeded poison already needed the same permission and got it,
-so the question is narrower than it was -- see M17.2.
+**CONVENTION GATE -- CLEARED.** Randomized property testing is **permitted**, decided by the engineer and
+recorded as [D-41](DESIGN-NOTES.md#d-41), so M17.3 is unblocked. Two conditions bind it: seed whatever can be
+seeded (so a run replays from one number, and varying that number is how permutations are generated), and
+where non-determinism is inherent and outside our control -- multiprocessor scheduling, kernel completion
+order -- randomness is fair game. The corollary that keeps the second from becoming a loophole: inherent
+non-determinism excuses *irreproducibility*, never *unverifiability*, so a test that cannot be replayed must
+instead prove it reached the state it claims to exercise.
 
 - [x] **M17.1** -- Close the two open cells of the handover precondition. A coverage inventory taken after M16
   found this axis is mostly covered already, so this is no longer a matrix to build: *fresh* and
@@ -505,15 +507,24 @@ so the question is narrower than it was -- see M17.2.
   Whether other test files should also bind to `RingContract` is left to **M18.3**'s `cargo-mutants` triage
   to answer with evidence, rather than retrofitted blind now.
 
-- [ ] **M17.2** -- Decide and record whether randomized property testing is permitted here, as a
+- [x] **M17.2** -- Decide and record whether randomized property testing is permitted here, as a
   [DESIGN-NOTES.md](DESIGN-NOTES.md) decision. [D-39](DESIGN-NOTES.md#d-39) already fixed the terms under which
   non-fixed test data is allowed in this component -- **seeded, announced, pinnable** -- and M15.2 proved them
   end to end, so this is now the narrow question "does D-39 extend from poison to `proptest`?" rather than an
   open-ended policy call. Inherit D-39's three terms rather than re-deriving them, and add the two it does not
   cover: a committed regression corpus so any discovered failure becomes a permanent fixed case, and placement
   as **integration** tests rather than unit tests (they cross the OS boundary and will exceed the one-second
-  unit budget). If the answer is no, record that and close M17 after M17.1 -- exhaustive small-case enumeration
-  is a legitimate fallback at this API's size.
+  unit budget).
+  **Decided: permitted**, recorded as [D-41](DESIGN-NOTES.md#d-41). D-39's three terms carry over to any
+  generator, and the two operational terms above are adopted. The engineer added a **second condition D-39 did
+  not anticipate**: where non-determinism is inherent and outside our control -- multiprocessor scheduling,
+  kernel completion order, thread-pool dispatch -- randomness is fair game, because a test depending on those
+  cannot be seeded and pretending otherwise would make it deterministic in its inputs while still
+  nondeterministic in what it observes. D-41 records the corollary that stops that becoming a loophole:
+  inherent non-determinism excuses *irreproducibility*, never *unverifiability*, so an unreplayable test must
+  prove it reached the state it claims to exercise. M17.1 is cited as the worked example of both halves -- its
+  racing draft decayed into testing the easier state, and its replacement guards against exactly that.
+  No dev-dependency is added here; `proptest` arrives with the generator in M17.3, which this unblocks.
 
 - [ ] **M17.3** -- Model the operation space as data: operation kind, buffer kind (owned / registered), file
   target kind (raw / shared / registered), claim-or-drop, drain-now-or-later, and handover state. A generator
@@ -522,6 +533,12 @@ so the question is narrower than it was -- see M17.2.
   only, which discards every M15 detector at exactly the moment there is finally enough input to feed them.
   Address space is not a constraint on doing so -- measured at 8 KiB per allocation, about 8.6e9 allocations
   before 64 TiB, against a generative run needing a few million.
+  Bound by [D-41](DESIGN-NOTES.md#d-41): the generator is **seeded, announced and pinnable**, so one number
+  replays a whole run and varying it is how permutations are produced. Where a sequence's outcome also turns
+  on scheduling or kernel completion order, that residue is legitimately random -- but D-41's corollary still
+  applies, so any such sequence must **verify it reached the state it claims**, not merely fail to crash. Note
+  the guard allocator's seed and the generator's are two separate knobs and must not be conflated in the
+  announcement, or a replay will reproduce one and not the other.
 
 - [ ] **M17.4** -- Calibrate the generator before its green result is allowed to count. Show that it
   rediscovers a defect known to be real -- #47's handover shape, or D-32's registration timing -- when the fix
