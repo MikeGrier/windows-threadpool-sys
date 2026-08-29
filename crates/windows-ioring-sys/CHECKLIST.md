@@ -177,6 +177,16 @@ are not a work queue".
   (which is why that registration cannot be retried, [D-28](DESIGN-NOTES.md#d-28)). Added a test binding
   reserved-at-queue-time, gave D-14 the required adjacent status marker, and corrected the audit section's
   category-4 paragraph, which still described the assumption as live.
+  **Merge note (2026-08-29):** `main` had meanwhile recorded that the measurement *does* exist -- the
+  2026-08-27 session established that a second `BuildIoRingRegisterFileHandles` replaces the whole table and
+  re-bases indices at zero, that a table holds at least 65536 handles, and that an index is resolved at
+  submission -- and scheduled the follow-up workspace-side as [M19.1](../../CHECKLIST.md), with the
+  relaxation of the one-registration-per-ring rule as M19.2. See
+  [DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md](../../design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md).
+  That does not reopen this item, but it does bound the dissolution: **the dissolution's premise is that a
+  second registration is forbidden**, so if M19.2 relaxes that rule, D-14's collision concern becomes live
+  again and [D-31](DESIGN-NOTES.md#d-31) must be revisited rather than assumed to still hold. Recorded here
+  because nothing else would carry that dependency across the two checklists.
 
 - [x] **M10.4** -- Gave `FileRef::Registered` safe entry points ([D-29](DESIGN-NOTES.md#d-29)), via a sealed
   `FileTarget` trait with an associated `Guard` type ([D-33](DESIGN-NOTES.md#d-33)) rather than a parallel

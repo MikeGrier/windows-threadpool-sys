@@ -265,7 +265,7 @@ fn read_overlapped(handle: HANDLE, armed: &mpsc::Sender<()>) -> WatchResult {
         ReadDirectoryChangesW(
             handle,
             buffer.as_mut_ptr().cast(),
-            std::mem::size_of_val(buffer.as_slice()) as u32,
+            size_of_val(buffer.as_slice()) as u32,
             FALSE, // bWatchSubtree
             FILE_NOTIFY_CHANGE_FILE_NAME,
             ptr::null_mut(),

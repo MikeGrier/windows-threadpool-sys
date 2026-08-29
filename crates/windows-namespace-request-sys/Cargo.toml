@@ -1,0 +1,50 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-namespace-request-sys"
+version = "0.2.0" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/windows-namespace-request-sys"
+description = "Owned, marshalable parameter sets for synchronous Win32 namespace calls."
+readme = "README.md"
+keywords = ["windows", "filesystem", "namespace", "marshal", "ffi"]
+categories = ["api-bindings", "os::windows-apis", "filesystem"]
+
+[lib]
+path = "src/lib.rs"
+
+# The crate is Windows-only, so docs.rs must build it on a Windows target or it
+# would render an empty crate.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+# Deliberately NOT a dependency on windows-thread-ambient-sys. A request carries
+# no ambient context and a context is useful to work that never opens a file;
+# the two are paired at the submission site by whoever owns both. See
+# DESIGN-NOTES.md.
+[dependencies]
+wtf-string = { version = "0.1.0", path = "../wtf-string" }
+
+# A *dev* dependency only. The crate itself deliberately does not depend on the
+# ambient-context crate (see DESIGN-NOTES.md, D-1); the acceptance test pairs
+# the two at a submission site, which is precisely the relationship being
+# demonstrated, and a dev-dependency is how to demonstrate it without creating
+# the coupling the design refuses.
+[dev-dependencies]
+windows-thread-ambient-sys = { version = "0.2.0", path = "../windows-thread-ambient-sys" }
+
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_Storage_FileSystem",
+	"Win32_System_Threading",
+]

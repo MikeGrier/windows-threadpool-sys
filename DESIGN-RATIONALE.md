@@ -153,6 +153,58 @@ keeps a failed open or late read from looking like success. Full details and
 alternatives are in the enumeration crate's
 [DESIGN-RATIONALE.md](crates/windows-file-enumeration-sys/DESIGN-RATIONALE.md).
 
+## Why the language baseline is checked rather than centralised
+
+Records how the remedy in [DESIGN-NOTES.md](DESIGN-NOTES.md#restatement-drift) was reached.
+The prompting event was an automated review of
+[PR #46](https://github.com/MikeGrier/windows-threadpool-sys/pull/46) that raised seven
+findings claiming `size_of::<T>()` would not compile without `use std::mem::size_of`. All
+seven were wrong -- the function has been in the prelude since Rust 1.80 and this workspace
+pins well past that -- but the reviewer was not being careless, and treating it as noise
+would have guaranteed a repeat.
+
+Three things had to coincide, and two were ours. The baseline is structurally invisible in a
+diff: the toolchain pin is rarely edited so it never appears, the root manifest's
+`[workspace.package]` table sits outside the hunk a normal change produces, and the crate
+manifests carry `edition.workspace = true`, which is a pointer to a table that is not in the
+diff either. Meanwhile the workspace's own older call sites imported or qualified `size_of`
+in the pre-1.80 style -- the same struct, field, and conversion appeared written both ways in
+two crates -- so local pattern-matching found genuine in-repo evidence for the wrong reading.
+Only the third factor, that nearly all existing Rust predates the change, was outside our
+control.
+
+Four remedies were considered.
+
+**Delete the restatements and link to the manifests.** Rejected, and it is the one that looks
+most correct at first glance. The defect being fixed is precisely that a reader confined to a
+diff cannot follow a link; substituting a pointer for the value optimises the document for a
+reader who already has the whole repository open, which is not the reader who got this wrong.
+
+**State the values and rely on the blast-radius sweep convention.** Rejected as insufficient
+on its own. The convention governs someone who *knows* they are changing a contract; baseline
+drift happens to someone bumping an MSRV who has no reason to suspect a dozen other files
+mention it. Nothing prompts the sweep.
+
+**Generate the documents from the manifests at build time.** Rejected as disproportionate. It
+would require a generator, a check that the generated output is committed, and a templating
+layer over prose that is mostly explanation rather than data -- appreciable machinery to keep
+three short values honest, and a new artifact that can itself go stale.
+
+**Check the restatements against the manifests in CI.** Adopted. It keeps the values where a
+reviewer will read them, needs no toolchain (it only reads files), and costs one small
+script. Its weakness is honest and worth stating: a *new* restatement in a file nobody
+registered is not covered, since the checker polices a declared list rather than the whole
+tree. Two things narrow that. The token sweep covers all of a registered file rather than
+only its labelled claims, so drift in ordinary prose is caught without anyone anticipating
+it; and a missing claim fails loudly, so the failure mode is a false alarm demanding
+attention rather than silence. The design note therefore states the baseline's shape and
+deliberately never its values, so it does not become an unpoliced copy itself.
+
+Sabotage testing was treated as part of the deliverable rather than as validation of it,
+following the rule that a binding which cannot be shown to fail is cosmetic. Five
+mutations -- three manifest values, a deleted claim, and a stale version planted in prose --
+each produce a distinct, located failure.
+
 ## References
 
 - [`QueueUserWorkItem` and `WT_TRANSFER_IMPERSONATION`](https://learn.microsoft.com/windows/win32/api/threadpoollegacyapiset/nf-threadpoollegacyapiset-queueuserworkitem)

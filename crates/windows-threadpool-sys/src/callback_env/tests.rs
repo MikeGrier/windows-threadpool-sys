@@ -1,5 +1,4 @@
 // Copyright (c) 2026 Mike Grier
-use core::mem;
 
 use windows_sys::Win32::System::Threading::{
     TP_CALLBACK_ENVIRON_V3, TP_CALLBACK_PRIORITY_HIGH, TP_CALLBACK_PRIORITY_LOW,
@@ -34,7 +33,7 @@ fn new_priority_is_normal() {
 fn new_size_is_sizeof_struct() {
     assert_eq!(
         inner(&CallbackEnviron::new()).Size,
-        mem::size_of::<TP_CALLBACK_ENVIRON_V3>() as u32,
+        size_of::<TP_CALLBACK_ENVIRON_V3>() as u32,
     );
 }
 
@@ -119,10 +118,7 @@ fn clear_pool_does_not_alter_priority_or_size() {
     let mut env = CallbackEnviron::new();
     env.clear_pool();
     assert_eq!(inner(&env).CallbackPriority, TP_CALLBACK_PRIORITY_NORMAL);
-    assert_eq!(
-        inner(&env).Size,
-        mem::size_of::<TP_CALLBACK_ENVIRON_V3>() as u32,
-    );
+    assert_eq!(inner(&env).Size, size_of::<TP_CALLBACK_ENVIRON_V3>() as u32);
 }
 
 // --- set_cleanup_group ---
@@ -252,7 +248,7 @@ fn set_runs_long_preserves_version_size_priority() {
     env.set_runs_long();
     let i = inner(&env);
     assert_eq!(i.Version, expected_abi::ENVIRON_VERSION);
-    assert_eq!(i.Size, mem::size_of::<TP_CALLBACK_ENVIRON_V3>() as u32);
+    assert_eq!(i.Size, size_of::<TP_CALLBACK_ENVIRON_V3>() as u32);
     assert_eq!(i.CallbackPriority, TP_CALLBACK_PRIORITY_NORMAL);
 }
 

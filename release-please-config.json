@@ -35,6 +35,14 @@
             "package-name": "windows-overlapped-io-sys",
             "component": "windows-overlapped-io-sys"
         },
+        "crates/windows-namespace-request-sys": {
+            "package-name": "windows-namespace-request-sys",
+            "component": "windows-namespace-request-sys"
+        },
+        "crates/windows-thread-ambient-sys": {
+            "package-name": "windows-thread-ambient-sys",
+            "component": "windows-thread-ambient-sys"
+        },
         "crates/windows-threadpool-sys": {
             "package-name": "windows-threadpool-sys",
             "component": "windows-threadpool-sys"

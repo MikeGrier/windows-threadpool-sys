@@ -70,7 +70,6 @@ mod restore;
 use std::fmt;
 use std::io;
 use std::marker::PhantomData;
-use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
 use std::rc::Rc;

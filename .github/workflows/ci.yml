@@ -33,6 +33,21 @@ jobs:
         shell: pwsh
         run: ./tools/check-encoding.ps1
 
+  # The edition, MSRV, and pinned channel are declared once in Cargo.toml and
+  # rust-toolchain.toml, then restated a dozen times -- in this file's `msrv`
+  # job below, in README/DEVELOPMENT prose, and in the instruction files a code
+  # reviewer reads. The restatements cannot be deleted (a reviewer cannot follow
+  # a link out of a diff to resolve `edition.workspace = true`), so this job
+  # keeps them honest instead. Needs no toolchain: it only reads files.
+  baseline:
+    name: language baseline consistency
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check-baseline.ps1
+        shell: pwsh
+        run: ./tools/check-baseline.ps1
+
   build-test:
     name: build + test
     runs-on: windows-latest
@@ -73,6 +88,71 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-file-watcher --locked --no-fail-fast
+
+  platform-probes:
+    # The asserted probe tier already runs on x64 here, because
+    # windows-platform-probes is a workspace member and `cargo test --workspace`
+    # picks it up. This job adds the two tiers that job does NOT reach: the
+    # `#[ignore]`d tests, and the binaries that print the magnitudes.
+    #
+    # Every measurement in this workspace was originally taken on ARM64, so
+    # running them on this x64 runner is what answers "which findings are
+    # architecture-dependent" (CHECKLIST-thread-ambient.md, M27.5).
+    #
+    # A FAILURE HERE IS A RESULT, NOT A BUILD BREAK TO PATCH AWAY. The ignored
+    # tests assert the *shape* of a measured platform fact, so a failure means
+    # the fact differs on this architecture and the design note resting on it
+    # needs revisiting. Read the output before changing an assertion.
+    name: platform probes (x64, ignored tier + magnitudes)
+    runs-on: windows-latest
+    # Bounded so a probe that wedges reports rather than burning the job's
+    # default six-hour ceiling. The suite takes seconds when healthy.
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test (probes, including the ignored tier)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-platform-probes --locked --no-fail-fast -- --include-ignored
+      # The binaries print the numbers the tests deliberately do not assert:
+      # host-specific magnitudes, which are exactly what an architecture
+      # comparison needs and what a pass/fail cannot carry.
+      #
+      # probe-cancel-io is DELIBERATELY ABSENT and must stay that way. It is
+      # binary-only because CancelSynchronousIo can block indefinitely -- that
+      # is the finding -- so running it here would hang the job by design.
+      #
+      # One step per probe, deliberately, rather than one `run: |` block listing
+      # them. These steps take the Windows runner's default shell, `pwsh`, where
+      # a failing *native* command neither aborts the script nor sets the step's
+      # exit code: Actions ends a pwsh step with `exit $LASTEXITCODE`, so only
+      # the last command in a block is reported. Grouped, a failing
+      # probe-error-mode followed by a passing probe-worker-context exits 0 and
+      # the job goes green. Measured on pwsh 7.6.5 rather than assumed:
+      # `$ErrorActionPreference = 'stop'` does not change it, because that
+      # governs cmdlet errors and not native exit codes.
+      #
+      # Splitting also names the failing probe in the Actions UI, which matters
+      # for a job whose output is per-probe magnitudes.
+      - name: probe magnitudes (error mode)
+        run: cargo run -p windows-platform-probes --bin probe-error-mode --locked
+      - name: probe magnitudes (handle state)
+        run: cargo run -p windows-platform-probes --bin probe-handle-state --locked
+      - name: probe magnitudes (worker context)
+        run: cargo run -p windows-platform-probes --bin probe-worker-context --locked
+      - name: probe magnitudes (pool growth)
+        run: cargo run -p windows-platform-probes --bin probe-pool-growth --locked
+      - name: probe magnitudes (device map)
+        run: cargo run -p windows-platform-probes --bin probe-device-map --locked
+      - name: probe magnitudes (IoRing)
+        run: cargo run -p windows-platform-probes --bin probe-ioring --locked
+      - name: probe magnitudes (completion port)
+        run: cargo run -p windows-platform-probes --bin probe-completion-port --locked
 
   feature-matrix:
     name: windows-overlapped-io-sys (${{ matrix.feature }} only)
@@ -208,7 +288,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo doc (deny broken intra-doc links)
         env:
-          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+          # invalid_rust_codeblocks is denied because it is the lint that catches a
+          # doc-comment code fence which never closes -- typically a sentence welded
+          # onto the closing ``` by a mis-joined edit, which swallows the prose after
+          # it into the example and corrupts the rendered page. Three of those reached
+          # review in windows-namespace-request-sys while this job passed, because it
+          # denied only the link lints and rustdoc reports this one as a warning.
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links -D rustdoc::invalid_rust_codeblocks"
         run: cargo doc --workspace --no-deps --all-features --locked
 
   msrv:

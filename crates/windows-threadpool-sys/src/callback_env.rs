@@ -6,7 +6,6 @@
 //! equivalents: a properly initialized [`CallbackEnviron`] wrapper and typed
 //! mutation methods matching `SetThreadpoolCallback*`.
 
-use core::mem;
 use std::marker::PhantomData;
 
 use windows_sys::Win32::System::Threading::{
@@ -130,7 +129,7 @@ impl<'pool> CallbackEnviron<'pool> {
                 FinalizationCallback: None,
                 u: TP_CALLBACK_ENVIRON_V3_0 { Flags: 0 },
                 CallbackPriority: TP_CALLBACK_PRIORITY_NORMAL,
-                Size: mem::size_of::<TP_CALLBACK_ENVIRON_V3>() as u32,
+                Size: size_of::<TP_CALLBACK_ENVIRON_V3>() as u32,
             },
             pool: PhantomData,
         }
