@@ -293,6 +293,26 @@ impl Completion {
     /// the crate's own error translation. Reach for this only where no such
     /// route exists.
     ///
+    /// # The one place injection is *not* inert: registration completions
+    ///
+    /// The soundness argument above is about [`crate::Token::claim_if`], where
+    /// a failed completion changes nothing the caller does with memory: the
+    /// buffer comes back either way. **A registration claim is different.**
+    /// [`crate::PendingBufferRegistration::claim_if`] treats a failed
+    /// completion as proof the kernel did *not* retain the addresses, and so
+    /// **drops the buffers**. Inject a failure there and it frees memory the
+    /// kernel genuinely does hold registered -- leaving the ring with a
+    /// registration pointing at freed pages.
+    ///
+    /// That is inert only while nothing uses it. A test doing this must not
+    /// push any registered-buffer operation on that ring afterwards, and
+    /// should tear the ring down immediately.
+    ///
+    /// This is a limitation of *what a failed registration means*, not
+    /// something the seam can check: a `Completion` does not carry which
+    /// operation produced it, so this cannot be refused at the call. Prefer a
+    /// genuine failure for registration paths wherever one can be provoked.
+    ///
     /// # Example
     ///
     /// ```ignore

@@ -426,10 +426,25 @@ useful together.
   `tests/fault_injection.rs` proves the seam is reachable *and* gated from outside the crate; CI's existing
   `--workspace --all-features` job runs it, verified rather than assumed.
 
-- [ ] **M16.4** -- Use M16.3 to cover the failure paths that have no coverage at all: a failed read, write and
+- [x] **M16.4** -- Use M16.3 to cover the failure paths that have no coverage at all: a failed read, write and
   flush completion claimed normally, a failed registration, and `EventDelivery` delivering a failed completion.
   Assert the *documented* degradation each time rather than merely that nothing panics -- the checkpoint defect
   was precisely a failure that was noticed, recorded, and then not acted on.
+  **Done:** `tests/failure_paths.rs`, six tests, all five named cases plus the loop-closer M16.2 left open --
+  `claiming_before_checking_the_result_is_what_stops_a_failure_from_leaking` runs *both* orderings against
+  `RingContract` on the same injected failure, so the `Appender::claim` defect is a reported violation rather
+  than an argument. `EventDelivery` uses a **genuine** `ERROR_NOT_FOUND` from cancelling a non-outstanding
+  target rather than an injected failure, per M16.3's own guidance.
+  Two sabotage-verified: making a failed registration leak instead of drop, and making `EventDelivery` swallow
+  failed completions. Both fired with the right message.
+  **Corrected M16.3 while doing this.** That item's soundness argument covered `Token::claim_if` only, and
+  `PendingBufferRegistration::claim_if` is materially different: it treats a failed completion as proof the
+  kernel did *not* retain the addresses, so it **drops the buffers**. Injecting a failure there frees memory
+  the kernel genuinely holds registered. Inert only while nothing uses it -- the test takes the precaution
+  explicitly and `with_injected_failure` now documents the limitation, which it did not before.
+  **Found a race in the test, not the crate:** the `EventDelivery` callback published the error code *after*
+  the counter the waiting thread spins on, so the waiter read a stale zero. Fixed by publishing the data
+  before the flag -- the same ordering rule the epoch log's reclaim worker already follows.
 
 ## M17 -- Vary the state space instead of enumerating it by hand
 
