@@ -234,12 +234,19 @@ stranded-backlog bug in one change. Those were separate items when the fix looke
 ahead of the API work; they are merged because in practice the two land minutes apart, and splitting them
 would mean writing a `SetEvent`-after-arm patch that M11.3 immediately deletes.
 
-- [ ] **M11.1** -- Add `IoRing::completion_event(&mut self) -> io::Result<OwnedHandle>`
-  ([D-20](DESIGN-NOTES.md#d-20)): capability-check `IORING_FEATURE_SET_COMPLETION_EVENT`, create and own an
-  auto-reset event, `SetIoRingCompletionEvent`, signal it once, and return a duplicate handle. Idempotent --
-  repeat calls return another duplicate of the same event rather than attaching a new one. The rustdoc
-  states the [D-19](DESIGN-NOTES.md#d-19) contract in full: signalled on empty -> non-empty, drain to empty
-  before waiting again, a wake with nothing to pop is normal.
+- [x] **M11.1** -- Added `IoRing::completion_event(&mut self) -> io::Result<OwnedHandle>`
+  ([D-20](DESIGN-NOTES.md#d-20)): capability-checks `IORING_FEATURE_SET_COMPLETION_EVENT`, creates and owns
+  an auto-reset event, attaches it with `SetIoRingCompletionEvent`, signals it once, and returns a
+  duplicate. Idempotent -- a repeat call returns another duplicate of the same event rather than attaching a
+  new one, which matters because `SetIoRingCompletionEvent` *replaces* rather than adds, so a second attach
+  would silently detach the first subsystem's event. The rustdoc states the
+  [D-19](DESIGN-NOTES.md#d-19) contract in full: signalled on empty -> non-empty, drain to empty before
+  waiting again, a wake with nothing to pop is normal. Ordering detail worth keeping: the event is stored on
+  the ring *before* it is signalled, so no later failure can drop it and leave the ring signalling a closed
+  (possibly recycled) handle; and because a manual `Drop` body runs before its fields drop, `CloseIoRing`
+  always runs before the event handle closes. Contract tests are M11.2; a throwaway smoke check confirmed
+  the setup signal, auto-reset, idempotence, and -- the one that matters for M11.3 -- that attaching to a
+  ring with a completion *already* queued does signal.
 
 - [ ] **M11.2** -- Tests for the M11.1 contract, written against the *stated* rules rather than against
   current behaviour: the backlog case (submit, let completions land, call `completion_event`, assert the

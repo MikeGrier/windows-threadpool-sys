@@ -51,6 +51,18 @@
 //! exactly one completion event per ring, none of which are limitations to
 //! work around.
 //!
+//! **Model B with a multiplexed wakeup.** [`IoRing::completion_event`] hands
+//! back an owned duplicate of the ring's own completion event, so a caller
+//! keeps its ring and still waits on it alongside unrelated handles with
+//! `WaitForMultipleObjects`. This is not a third architecture -- it changes
+//! only what the domain thread blocks on, never who owns, submits, or drains
+//! -- but it is what any consumer mixing ring I/O with non-ring I/O needs,
+//! since `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` orders SQEs against SQEs and
+//! cannot order across the two paths. **The event is edge-triggered on the
+//! completion queue going empty to non-empty**, which is measured rather than
+//! documented by Win32 and hangs rather than merely slows if assumed
+//! otherwise; see that method's docs before using it.
+//!
 //! Most real applications want Model B on the hot data path and Model A
 //! everywhere else -- the control plane, background work, cold paths -- where
 //! the thread pool's quiescence is worth more than locality. Both are

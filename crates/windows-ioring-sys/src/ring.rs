@@ -3,6 +3,7 @@
 
 use std::ffi::c_void;
 use std::io;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows_sys::Win32::Storage::FileSystem::{
@@ -10,8 +11,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     IORING_CREATE_ADVISORY_FLAGS_NONE, IORING_CREATE_FLAGS, IORING_CREATE_REQUIRED_FLAGS_NONE,
     IORING_INFO, IORING_OP_CANCEL, IORING_OP_CODE, IORING_OP_FLUSH, IORING_OP_NOP, IORING_OP_READ,
     IORING_OP_REGISTER_BUFFERS, IORING_OP_REGISTER_FILES, IORING_OP_WRITE, IsIoRingOpSupported,
-    PopIoRingCompletion, SubmitIoRing,
+    PopIoRingCompletion, SetIoRingCompletionEvent, SubmitIoRing,
 };
+use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
 
 use crate::capability::{RingVersion, capabilities};
 use crate::error::check;
@@ -258,6 +260,18 @@ pub struct IoRing {
     /// one small allocation per ring, and it is released only by
     /// `CloseIoRing`.
     registered_buffer_infos: Vec<IORING_BUFFER_INFO>,
+    /// The completion event this ring created and attached, once
+    /// [`IoRing::completion_event`] has been called (M11.1, D-20).
+    ///
+    /// The ring owns it and hands callers duplicates, which is what makes
+    /// the returned handle safe to hold for any length of time: closing a
+    /// duplicate cannot leave the ring signalling a closed handle, and the
+    /// kernel still signals the surviving duplicates.
+    ///
+    /// Dropped *after* `CloseIoRing` runs, because a manual `Drop` impl's
+    /// body runs before its fields are dropped -- so the ring is closed, and
+    /// can no longer signal, before the event it referenced goes away.
+    completion_event: Option<OwnedHandle>,
 }
 
 impl std::fmt::Debug for IoRing {
@@ -275,6 +289,7 @@ impl std::fmt::Debug for IoRing {
                 "registered_buffer_infos",
                 &self.registered_buffer_infos.len(),
             )
+            .field("completion_event", &self.completion_event)
             .finish()
     }
 }
@@ -341,6 +356,7 @@ impl IoRing {
             registered_files: 0,
             registered_buffers: 0,
             registered_buffer_infos: Vec::new(),
+            completion_event: None,
         })
     }
 
@@ -381,6 +397,117 @@ impl IoRing {
     #[must_use]
     pub fn supports(&self, op: Op) -> bool {
         self.supported_ops.contains(op)
+    }
+
+    /// An owned duplicate of this ring's completion event, so a caller can
+    /// wait on the ring alongside other handles without surrendering it
+    /// (M11.1, D-20).
+    ///
+    /// The ring creates the event, attaches it with
+    /// `SetIoRingCompletionEvent`, keeps ownership, and hands back a
+    /// duplicate. Closing the returned handle is therefore always safe: the
+    /// ring keeps signalling its own copy, and a `DuplicateHandle`'d event is
+    /// still signalled after the original is closed.
+    ///
+    /// **Idempotent.** Repeat calls return another duplicate of the *same*
+    /// event rather than attaching a new one, so two subsystems can each ask
+    /// without silently detaching the other's.
+    ///
+    /// This is not a third delivery architecture -- it is Model B with a
+    /// multiplexed wakeup source, changing only what the domain thread blocks
+    /// on, never who owns, submits, or drains ([`Batch::submit_and_wait`] is
+    /// still the single-source shape). Use it when ring I/O has to be waited
+    /// on alongside non-ring I/O, which
+    /// `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` cannot order across.
+    ///
+    /// [`Batch::submit_and_wait`]: crate::Batch::submit_and_wait
+    ///
+    /// # The event is an edge, not a level
+    ///
+    /// **Measured, not inferred, and getting it wrong hangs rather than just
+    /// slowing down** (D-19). The event is signalled when the completion
+    /// queue transitions from **empty to non-empty**. It is *not* signalled
+    /// once per completion, and it is *not* level-triggered: eight
+    /// completions arriving at once into an empty queue produce exactly one
+    /// wakeup, and a completion arriving into an already-non-empty queue
+    /// produces none.
+    ///
+    /// Two rules follow, and they are contract rather than advice:
+    ///
+    /// 1. **Drain to empty before waiting again** -- [`IoRing::try_pop`]
+    ///    until it yields `None`, on *every* pass through a multiplexed wait
+    ///    loop, not only the pass where this handle signalled. A wait entered
+    ///    with entries still in the queue blocks until some later completion
+    ///    arrives *after* the queue has been emptied, which may be never.
+    ///    That is a lost-wakeup deadlock, not a latency wobble.
+    /// 2. **A wake with nothing to pop is normal.** It must not be treated as
+    ///    an error or as a spurious wakeup. This method deliberately produces
+    ///    one: the event is signalled once before it returns, so a caller who
+    ///    had already submitted work never misses a backlog that arrived
+    ///    before the event was attached.
+    ///
+    /// The event is auto-reset, and **exactly one waiter per ring** is
+    /// supported (D-21): the drain that restores the empty state, and so
+    /// re-arms the edge, must run to empty exactly once. Two threads waiting
+    /// on one ring's event cannot be made correct.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] if the running system does not
+    /// report `IORING_FEATURE_SET_COMPLETION_EVENT`; this crate refuses to
+    /// silently substitute a polling thread, since a caller who asked for an
+    /// event and got a spun-up thread has been told something false. Also
+    /// returns any error from `CreateEventW`,
+    /// `SetIoRingCompletionEvent`, `SetEvent`, or duplicating the handle.
+    pub fn completion_event(&mut self) -> io::Result<OwnedHandle> {
+        // Already attached: hand back another duplicate rather than
+        // attaching a second event, which would silently detach the first
+        // (`SetIoRingCompletionEvent` replaces rather than adds). The
+        // capability was necessarily verified on the call that attached it.
+        if let Some(event) = &self.completion_event {
+            return event.try_clone();
+        }
+
+        if !capabilities()?.supports_completion_event {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this system's IoRing does not report IORING_FEATURE_SET_COMPLETION_EVENT",
+            ));
+        }
+
+        // Auto-reset (manual_reset = FALSE) per D-21, initially unsignalled
+        // -- the deliberate setup signal is raised below, after the event is
+        // attached and owned, so it cannot be missed or lost.
+        // SAFETY: null attributes and name are documented defaults.
+        let raw = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+        if raw.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `CreateEventW` just returned this handle and it is not
+        // owned anywhere else, so `OwnedHandle` is its sole owner from here.
+        let event = unsafe { OwnedHandle::from_raw_handle(raw) };
+
+        // SAFETY: `self.handle` is a live ring; `event` is a live event that
+        // this ring will own for the rest of its life once stored below.
+        let hr = unsafe { SetIoRingCompletionEvent(self.handle, event.as_raw_handle()) };
+        // On failure `event` drops here, closing a handle the ring never
+        // successfully referenced.
+        check(hr)?;
+
+        // Stored *before* signalling: from this point the ring owns the
+        // event, so no later failure can drop it and leave the ring
+        // signalling a closed (possibly recycled) handle.
+        let event = self.completion_event.insert(event);
+
+        // The one deliberate spurious wakeup (rule 2 above): a caller who
+        // submitted before attaching would otherwise never be woken for that
+        // backlog, since the queue never returns to empty to re-arm the edge.
+        // SAFETY: `event` is a live event handle this ring owns.
+        if unsafe { SetEvent(event.as_raw_handle()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        event.try_clone()
     }
 
     /// Whether this ring supports a raw op code, including one this crate
