@@ -433,7 +433,22 @@ impl Declared {
 /// Holds declared aspects installed until released.
 ///
 /// Not `Send`: it restores the thread it was created on, and the WOW64 revert
-/// token is meaningless anywhere else.
+/// token is meaningless anywhere else. Moving one to another thread would
+/// revert *that* thread's redirection using a cookie minted for a different
+/// one.
+///
+/// As with [`TransactionGuard`], that property is a consequence of a field
+/// type rather than an explicit bound -- `redirection` is a raw pointer, and
+/// raw pointers are not `Send`. Replacing it with an integer newtype would
+/// silently make this guard `Send` and this paragraph false, so the claim is
+/// pinned by a test rather than left as prose:
+///
+/// ```compile_fail,E0277
+/// fn assert_send<T: Send>() {}
+/// assert_send::<windows_thread_ambient_sys::declared::DeclaredGuard>();
+/// ```
+///
+/// [`TransactionGuard`]: crate::transaction::TransactionGuard
 #[must_use = "dropping the guard restores the aspects but discards any failure to do so"]
 #[derive(Debug)]
 pub struct DeclaredGuard {

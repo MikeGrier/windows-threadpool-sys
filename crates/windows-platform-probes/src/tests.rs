@@ -21,7 +21,13 @@ use crate::device_map::{SubstDrive, measure_with_subst};
 use crate::ioring::{measure_registration, measure_thread_agnosticism};
 use crate::pool_growth::{measure_growth, measure_raise_while_saturated};
 
-use crate::worker_context::{observe_on_worker, observe_on_worker_while_impersonating};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Security::TOKEN_QUERY;
+use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+
+use crate::worker_context::{
+    Impersonation, observe_on_worker, observe_on_worker_while_impersonating,
+};
 
 use crate::handle_state::{
     CursorObservation, Fixture, SingleShot, closing_duplicate_preserves_source,
@@ -621,5 +627,40 @@ fn create_threadpool_io_forecloses_ioring_the_same_way() {
     assert!(
         finding.threadpool_io_forecloses_ioring(),
         "CreateThreadpoolIo must foreclose the ring path too: {finding:?}"
+    );
+}
+
+#[test]
+fn the_impersonation_guard_reverts_even_while_unwinding() {
+    // Pins the guard rather than the function that uses it, so the property is
+    // checked without sabotaging the production path to reach a panic.
+    //
+    // What this protects: `observe_on_worker_while_impersonating` panics on two
+    // reachable paths after impersonating -- the submitter-token assert, and
+    // `observe_on_worker` itself when the pool refuses the callback or the
+    // worker never reports. Before this guard those unwound past a plain
+    // `RevertToSelf`, leaving the thread impersonating. Under
+    // `--test-threads=1` libtest runs tests inline on the calling thread, so
+    // every later test would inherit the identity and fail its own
+    // precondition, burying the original failure.
+    let outcome = std::panic::catch_unwind(|| {
+        let _guard = Impersonation::apply();
+        panic!("unwinding while the thread impersonates");
+    });
+
+    assert!(outcome.is_err(), "the panic must still propagate");
+
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: GetCurrentThread is a pseudo-handle needing no cleanup and
+    // `token` is writable.
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) };
+    if opened != 0 {
+        // SAFETY: opened successfully, so this owns the handle.
+        unsafe { CloseHandle(token) };
+    }
+
+    assert_eq!(
+        opened, 0,
+        "the thread must not have been left impersonating after the unwind"
     );
 }

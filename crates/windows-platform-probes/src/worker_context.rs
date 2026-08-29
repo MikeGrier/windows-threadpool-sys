@@ -187,6 +187,93 @@ pub fn observe_on_worker() -> WorkerContext {
         .expect("the worker reported what it was handed")
 }
 
+/// Impersonates this thread for as long as it is held, then reverts.
+///
+/// # Why a guard rather than a revert after the measurement
+///
+/// The measurement between the two is not panic-free. `observe_on_worker`
+/// panics if the pool refuses the callback or the worker never reports, and
+/// the submitter-token assert panics when the premise fails -- which is
+/// exactly when something has already gone wrong. A plain `RevertToSelf` after
+/// the measurement is skipped on every one of those paths, leaving the thread
+/// impersonating and the token leaked.
+///
+/// That matters more than an ordinary leak because of how these probes run:
+/// under `--test-threads=1` libtest executes tests inline on the calling
+/// thread, so a leaked identity is inherited by every later test, and
+/// `a_thread_pool_worker_starts_with_no_impersonation_token` asserts the
+/// opposite as its precondition. The original failure would be buried under a
+/// cascade of unrelated ones.
+///
+/// The same defect was fixed in this workspace's `while_impersonating` test
+/// helper; this is its production sibling, and it is fixed the same way.
+pub(crate) struct Impersonation(HANDLE);
+
+impl Impersonation {
+    /// Duplicates the process token and applies it to the calling thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the token cannot be opened, duplicated, or applied. The
+    /// duplicate is owned before it is applied, so it is closed even when
+    /// applying it fails.
+    pub(crate) fn apply() -> Self {
+        let mut process_token: HANDLE = std::ptr::null_mut();
+        // SAFETY: GetCurrentProcess returns a pseudo-handle; `process_token` is
+        // writable.
+        let opened = unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ALL_ACCESS,
+                &raw mut process_token,
+            )
+        };
+        assert_ne!(opened, 0, "open the process token");
+
+        let mut impersonation: HANDLE = std::ptr::null_mut();
+        // SAFETY: `process_token` is live; null attributes make the duplicate
+        // non-inheritable; `impersonation` is writable.
+        let duplicated = unsafe {
+            DuplicateTokenEx(
+                process_token,
+                TOKEN_ALL_ACCESS,
+                std::ptr::null(),
+                SecurityImpersonation,
+                TokenImpersonation,
+                &raw mut impersonation,
+            )
+        };
+        // SAFETY: the process token handle is no longer needed either way.
+        unsafe { CloseHandle(process_token) };
+        assert_ne!(
+            duplicated, 0,
+            "duplicate the process token for impersonation"
+        );
+
+        // Owned from here, so the assert below cannot leak the duplicate.
+        let guard = Self(impersonation);
+
+        // SAFETY: `impersonation` is a live impersonation token.
+        let applied = unsafe { SetThreadToken(std::ptr::null(), guard.0) };
+        assert_ne!(applied, 0, "impersonate on the submitting thread");
+
+        guard
+    }
+}
+
+impl Drop for Impersonation {
+    fn drop(&mut self) {
+        // SAFETY: restores this thread to its own identity, and closes the
+        // duplicate this value owns exactly once. Reverting a thread that is
+        // not impersonating -- the case where `SetThreadToken` failed -- is
+        // harmless.
+        unsafe {
+            RevertToSelf();
+            CloseHandle(self.0);
+        }
+    }
+}
+
 /// Submits a callback **while the submitting thread is impersonating**, and
 /// reports what the worker found.
 ///
@@ -200,41 +287,9 @@ pub fn observe_on_worker() -> WorkerContext {
 /// worker never reports.
 #[must_use]
 pub fn observe_on_worker_while_impersonating() -> IdentityAsymmetry {
-    let mut process_token: HANDLE = std::ptr::null_mut();
-    // SAFETY: GetCurrentProcess returns a pseudo-handle; `process_token` is
-    // writable.
-    let opened = unsafe {
-        OpenProcessToken(
-            GetCurrentProcess(),
-            TOKEN_ALL_ACCESS,
-            &raw mut process_token,
-        )
-    };
-    assert_ne!(opened, 0, "open the process token");
-
-    let mut impersonation: HANDLE = std::ptr::null_mut();
-    // SAFETY: `process_token` is live; null attributes make the duplicate
-    // non-inheritable; `impersonation` is writable.
-    let duplicated = unsafe {
-        DuplicateTokenEx(
-            process_token,
-            TOKEN_ALL_ACCESS,
-            std::ptr::null(),
-            SecurityImpersonation,
-            TokenImpersonation,
-            &raw mut impersonation,
-        )
-    };
-    // SAFETY: the process token handle is no longer needed either way.
-    unsafe { CloseHandle(process_token) };
-    assert_ne!(
-        duplicated, 0,
-        "duplicate the process token for impersonation"
-    );
-
-    // SAFETY: `impersonation` is a live impersonation token.
-    let applied = unsafe { SetThreadToken(std::ptr::null(), impersonation) };
-    assert_ne!(applied, 0, "impersonate on the submitting thread");
+    // Reverts and closes on drop, including while unwinding out of either
+    // panic below. See `Impersonation`.
+    let _impersonation = Impersonation::apply();
 
     // The submitter is now genuinely impersonating, which is the premise. It is
     // both asserted here -- so the probe fails fast rather than reporting a
@@ -246,13 +301,6 @@ pub fn observe_on_worker_while_impersonating() -> IdentityAsymmetry {
     );
 
     let worker = observe_on_worker();
-
-    // SAFETY: restores the thread to its own identity; the token handle is then
-    // no longer needed.
-    unsafe {
-        RevertToSelf();
-        CloseHandle(impersonation);
-    }
 
     IdentityAsymmetry { submitter, worker }
 }
