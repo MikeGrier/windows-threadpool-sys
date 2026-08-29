@@ -3,6 +3,11 @@
 //! Which `SEM_` bits are settable per thread, and how the thread error mode
 //! relates to the process error mode.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! This decides what a thread-ambient-state crate can offer as a declarable
 //! aspect: a bit that cannot be set per thread cannot be offered at all, and a
 //! bit that can be *observed* but not *set* would be a value capture could
@@ -236,25 +241,18 @@ impl ProcessVersusThread {
 /// [`alignment_bit_is_sticky_at_process_scope`], which is binary-only for
 /// exactly that reason.
 ///
-/// # An experiment, not a component: this mutates process-wide state
+/// # This one mutates process-wide state, and is not concurrency-safe
 ///
-/// `SetErrorMode` is **process-scoped**. For the length of this call the whole
-/// process carries a mode it did not ask for, and every other thread in it sees
-/// that. A library has no business doing this: process-wide state belongs to
-/// whoever owns the process, and a component that changes it unilaterally makes
-/// a decision on behalf of code it has never heard of. This function does it
-/// anyway, because the only way to find out whether the thread mode is a view of
-/// the process mode is to move the process mode and look -- which is an
-/// experiment, and is the entire reason it lives in a `publish = false` probe
-/// crate rather than in one that ships.
+/// `SetErrorMode` is **process-scoped**: for the length of this call the whole
+/// process carries a mode it did not ask for. That is what the module banner's
+/// "things a shipping component must not" means concretely here, and it is the
+/// only way to answer the question -- to learn whether the thread mode is a view
+/// of the process mode, the process mode has to move.
 ///
-/// **Do not call this from production code, and do not copy the pattern into a
-/// crate that ships.** It is not hardened for concurrent use and deliberately
-/// has not been: two overlapping calls can interleave their save and restore so
-/// that the entry mode is lost and the probe's bit is left installed
-/// permanently. Making it concurrency-safe is a small change and is knowingly
-/// declined, because a hardened version would look fit for a setting it must
-/// never enter. See `DESIGN-NOTES.md`.
+/// Two overlapping calls can interleave their save and restore so that the entry
+/// mode is lost and the probe's bit is left installed permanently. Hardening that
+/// is a small change and is knowingly declined, because a hardened version would
+/// look fit for a setting it must never enter; see `DESIGN-NOTES.md`.
 #[must_use]
 pub fn thread_mode_independent_of_process() -> ProcessVersusThread {
     let bit = bits::FAIL_CRITICAL_ERRORS;

@@ -2,6 +2,11 @@
 
 //! Prints the `IoRing` registration and thread-agnosticism findings.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! Both are environment-dependent: `IoRing` needs a recent Windows build, so
 //! this reports "cannot measure" rather than a false negative on a host that
 //! has no ring.

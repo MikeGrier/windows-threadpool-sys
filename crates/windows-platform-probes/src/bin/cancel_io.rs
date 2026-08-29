@@ -2,6 +2,11 @@
 
 //! Prints whether `CancelSynchronousIo` is safe to point at a shared thread.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! **Binary only, and deliberately not a test.** The subject of the measurement
 //! is a call that can fail to return, so every case here runs behind a
 //! watchdog; a wedged `#[test]` would take the whole suite with it.

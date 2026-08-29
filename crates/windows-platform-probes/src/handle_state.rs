@@ -3,6 +3,11 @@
 //! Where directory-enumeration state lives, and what a duplicated handle does
 //! and does not share.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! A handle is a reference to a kernel object, so duplicating one shares that
 //! object rather than cloning it. Directory enumeration keeps its cursor in the
 //! file object, which makes "does a duplicate share the cursor?" a question with

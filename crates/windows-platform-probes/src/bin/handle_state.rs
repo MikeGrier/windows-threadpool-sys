@@ -2,6 +2,11 @@
 
 //! Print what this machine does with duplicated handles and enumeration state.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! Every finding here is also pinned by a test. The binary exists to show the
 //! observations themselves -- the actual file names each handle returned --
 //! which is what makes a surprising result diagnosable rather than merely red.

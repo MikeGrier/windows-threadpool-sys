@@ -2,6 +2,11 @@
 
 //! `IoRing` registration semantics and thread agnosticism.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! Two findings the pseudo-async namespace-plane design rests on.
 //!
 //! # Registration replaces; it does not append

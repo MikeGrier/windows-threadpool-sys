@@ -3,6 +3,11 @@
 //! Prints what a thread-pool worker starts with, and what it does *not*
 //! inherit from an impersonating submitter.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! The asserted tier covers these facts; this binary exists so the same
 //! measurement can be eyeballed on a new host or a new Windows build without
 //! reading a test's output.

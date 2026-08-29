@@ -3,6 +3,11 @@
 //! Does associating a handle with a completion port foreclose `IoRing` use of
 //! it?
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! This is the evidence for `windows-namespace-request-sys` returning an opened
 //! handle **plain and unassociated**: if the association is irreversible, then
 //! making it on a caller's behalf silently removes a capability, so the choice

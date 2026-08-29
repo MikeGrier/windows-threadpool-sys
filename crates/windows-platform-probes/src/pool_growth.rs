@@ -2,6 +2,11 @@
 
 //! How promptly a private thread pool replaces a blocked worker.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! The saturation-response design rests on an assumption the pool API cannot be
 //! asked about directly: when callbacks are blocked, work is queued, and the
 //! maximum allows, the pool **promptly** creates another thread. "Promptly"

@@ -6,6 +6,12 @@ designs rest on.
 **Windows only. Not published** -- this crate exists to keep measurements honest,
 not to be depended on.
 
+**An experiment, not a component.** These probes measure platform behaviour and
+are not for production use: that scope is what lets one do things a shipping
+component must not -- change process-wide state, hang by design, require
+privileges. Do not call them from production code, and do not lift a technique
+out of here into a crate that ships.
+
 ## Why
 
 Several decisions in this repository are justified by measurements of behaviour

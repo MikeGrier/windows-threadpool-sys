@@ -3,6 +3,11 @@
 //! Whether impersonation changes which DOS device map a thread resolves drive
 //! letters in.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! Drive letters are symbolic links in the object manager namespace. Real local
 //! volumes live in the machine-wide `\GLOBAL??` directory, but `subst` drives
 //! and mapped network drives live in a **per-logon-session** directory keyed by

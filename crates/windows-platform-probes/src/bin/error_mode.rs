@@ -2,6 +2,11 @@
 
 //! Print what this machine does with the `SEM_` bits.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! The assertable findings are pinned by tests; this binary exists to report the
 //! same observations on a machine the test suite has not run on -- notably an
 //! x64 host, since every measurement so far was taken on ARM64 -- and to perform

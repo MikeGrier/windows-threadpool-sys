@@ -2,6 +2,11 @@
 
 //! Prints how a private thread pool grows when its workers are blocked.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! The tests assert the shape of this (the pool reaches its maximum, does not
 //! exceed it, and gets there promptly); this binary prints the numbers, which
 //! is what a new architecture actually needs to be re-measured against.

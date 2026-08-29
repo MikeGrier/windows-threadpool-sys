@@ -3,6 +3,11 @@
 //! Prints whether associating a handle with a completion port forecloses
 //! `IoRing` use of it.
 //!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use: that scope is what lets one do things a
+//! shipping component must not. Do not call them from production code, and do
+//! not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
 //! Every read is judged on its result code, its byte count, **and** the bytes
 //! it actually landed. The first version of this probe checked only where the
 //! completion arrived, and so read a clean failure -- result code
