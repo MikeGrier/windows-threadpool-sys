@@ -152,6 +152,13 @@ mod batch;
 mod buf;
 #[cfg(windows)]
 mod capability;
+/// This crate's conservation rules, made executable (M16.1).
+///
+/// A `pub mod` rather than a re-export, because the module documentation *is*
+/// the statement of what the oracle does and does not check -- and a consumer
+/// reaching for it needs that, not just the type.
+#[cfg(windows)]
+pub mod contract;
 #[cfg(windows)]
 mod error;
 #[cfg(all(windows, feature = "threadpool"))]

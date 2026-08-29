@@ -389,7 +389,7 @@ A smaller one: `PushOptions` is not universal, though its presence on most pushe
 neither registration takes one either -- which is not an oversight but the precise root of [D-14](#d-14),
 since it is what stops this crate from forcing a drain barrier around a registration.
 
-### Category 2: unconditional read as probabilistic
+### <a id="one-sqe-one-completion"></a>Category 2: unconditional read as probabilistic
 
 The rule the prose never stated, and that `run_down`'s termination silently depends on: **every SQE that
 successfully queues produces exactly one completion -- always, not usually.** `try_pop` returning `Option`

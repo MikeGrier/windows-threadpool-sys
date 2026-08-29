@@ -359,16 +359,31 @@ Population B, and the invariants this crate already *states* but nothing checks.
 **Depends on M15** only for convenience -- the oracle is independent of the allocator, but the two are most
 useful together.
 
-- [ ] **M16.1** -- Add `src/contract.rs` with a public `RingContract`: the executable form of
-  [D-29](DESIGN-NOTES.md#d-29)/[D-30](DESIGN-NOTES.md#d-30)'s "every successfully queued SQE produces exactly
-  one completion", every token claimed-or-deliberately-leaked, and every per-buffer outstanding count back to
-  zero at quiescence. Fed by the caller (`observe_push` / `observe_completion` / `check_quiescent`) rather than
+- [x] **M16.1** -- Add `src/contract.rs` with a public `RingContract`: the executable form of
+  [the category-2 rule](DESIGN-NOTES.md#one-sqe-one-completion) -- "every SQE that successfully queues
+  produces exactly one completion" -- every token claimed-or-deliberately-leaked, and every per-buffer
+  outstanding count back to zero at quiescence.
+  **Correction (found while implementing):** this item originally cited D-29/D-30 for that rule. Both are
+  about something else -- D-29 is `FileRef::Registered`'s safety and D-30 is `io::Error::kind`'s asymmetry --
+  and the rule actually lives in the M10.2 audit's category-2 prose, which had no anchor to cite. It has one
+  now. The wrong citation had already reached [PLANS.md](PLANS.md) and
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) itself; all three are corrected. Fed by the caller (`observe_push` / `observe_completion` / `check_quiescent`) rather than
   wired into `Batch`, so a consumer can validate its own harness against the same definition.
   It lives in **this** crate, not in the test harness: the layer that owns the invariant owns the oracle, and a
   harness-side copy is a second implementation of the rule rather than a check of it. Follow
   [`ContractChecker`](../windows-file-watcher/src/contract.rs)'s shape.
   State plainly what it does **not** check -- it cannot observe device ordering or anything absent from the
   completion stream -- since over-constraining is the same defect as under-specifying.
+  **Done:** `src/contract.rs`, 16 unit tests. Five violations: unexpected completion, duplicate completion,
+  outstanding at teardown, leaked token, buffer still in use. A completion provisionally marks its operation
+  **leaked**, corrected by `observe_claim` -- so forgetting to claim is the default failure rather than the
+  silent success, which is the shape of the `Appender::claim` defect. A leak is excused only when *stated*
+  via `observe_deliberate_leak`, because the difference between a stated and an unstated leak is the whole
+  point. Violations sort before they are reported, since `HashMap` order is unspecified and an oracle whose
+  output reorders between runs cannot be diffed. Half the tests are the **does-not-fire** direction, listed
+  in the module doc: completion order (the ring promises none between independent operations, and
+  [D-24](DESIGN-NOTES.md#d-24)'s barrier constrains execution rather than pop order), operation success,
+  anything about the device.
 
 - [ ] **M16.2** -- Bind the existing integration tests to `RingContract` and assert quiescence at teardown.
   This is the item that pays for M16.1: the `Appender::claim` slot leak and the strategy harness's shared
