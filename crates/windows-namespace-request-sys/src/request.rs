@@ -111,7 +111,10 @@ pub trait Request {
     /// How performing it can fail.
     ///
     /// [`Win32Error`](crate::Win32Error) for every entry that fails only as
-    /// Windows failed, which is all of them but one.
+    /// Windows failed. The two that also retry a growing buffer --
+    /// [`QueryFinalPath`](crate::final_path::QueryFinalPath) and
+    /// [`ResolveFullPath`](crate::full_path::ResolveFullPath) -- carry their own
+    /// error instead, as the module documentation explains.
     type Error;
 
     /// Performs the request on the calling thread.
