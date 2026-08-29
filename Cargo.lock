@@ -188,6 +188,7 @@ name = "windows-ioring-sys"
 version = "0.1.2"
 dependencies = [
  "serde_json",
+ "windows-overlapped-io-sys",
  "windows-sys",
  "windows-threadpool-sys",
  "windows-topology-sys",

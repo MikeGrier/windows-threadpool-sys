@@ -1,14 +1,21 @@
 // Copyright (c) 2026 Mike Grier
-//! The event loop (M13.4): the ring's completion event waited on alongside a
-//! shutdown event.
+//! The event loop (M13.4, extended in M14.1): the ring's completion event
+//! waited on alongside a non-ring completion event and a shutdown event.
 //!
 //! This is the shape a real log needs and the one M13.3's fused
 //! `submit_and_wait` cannot provide: a log that must also service something
-//! that is not ring I/O -- a shutdown signal here, a socket or a timer in a
-//! real service -- cannot park inside `SubmitIoRing`, because nothing would
-//! wake it for the other handle. `IoRing::completion_event` hands back an
-//! owned duplicate of the ring's event so the thread can block in
+//! that is not ring I/O -- an `FSCTL` here (M14.1), a shutdown signal, a socket
+//! or a timer in a real service -- cannot park inside `SubmitIoRing`, because
+//! nothing would wake it for the other handle. `IoRing::completion_event` hands
+//! back an owned duplicate of the ring's event so the thread can block in
 //! `WaitForMultipleObjects` instead, without giving up the ring.
+//!
+//! Note what this does and does not buy. It does **not** order the non-ring
+//! operation against ring operations -- `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`
+//! orders SQEs against SQEs (D-24) and has no reach across the boundary, so
+//! that ordering stays the log's job (see [`crate::reclaim`]). What it buys is
+//! that both kinds of completion can be *awaited in one place*, so enforcing
+//! the ordering does not cost a blocking drain.
 //!
 //! Ownership does not change: this thread still owns, submits to, and drains
 //! its ring, so this is Model B with a different wakeup source, not Model A.
@@ -61,30 +68,37 @@ pub enum Woken {
     /// queue. There may be many, or -- per rule 2 -- none left by the time we
     /// look.
     Ring,
+    /// A non-ring operation finished. This is the whole reason the log waits
+    /// here rather than inside `SubmitIoRing`: the ring has no way to signal
+    /// something it did not issue (M14.1).
+    NonRing,
     /// The shutdown latch was set.
     Shutdown,
 }
 
-/// The ring's completion event and a shutdown latch, waited on together.
+/// The ring's completion event, a non-ring completion event, and a shutdown
+/// latch, waited on together.
 pub struct EventLoop {
     completion: OwnedHandle,
+    non_ring: OwnedHandle,
     shutdown: OwnedHandle,
 }
 
 impl EventLoop {
-    /// Take the ring's completion event and pair it with a fresh shutdown
-    /// latch.
+    /// Take the ring's completion event and pair it with `non_ring` -- the
+    /// handle some operation the ring cannot express signals -- and a fresh
+    /// shutdown latch.
     ///
-    /// The returned handle is a *duplicate*: the ring keeps its own, so this
-    /// one is ours to hold and to drop without the ring ever signalling a
-    /// closed handle.
+    /// The ring handle is a *duplicate*: the ring keeps its own, so this one
+    /// is ours to hold and to drop without the ring ever signalling a closed
+    /// handle.
     ///
     /// # Errors
     ///
     /// [`io::ErrorKind::Unsupported`] if the system does not report
-    /// `IORING_FEATURE_SET_COMPLETION_EVENT`, or any error from creating the
-    /// shutdown event.
-    pub fn new(ring: &mut IoRing) -> io::Result<Self> {
+    /// `IORING_FEATURE_SET_COMPLETION_EVENT`, or any error from duplicating
+    /// `non_ring` or creating the shutdown event.
+    pub fn new(ring: &mut IoRing, non_ring: &OwnedHandle) -> io::Result<Self> {
         let completion = ring.completion_event()?;
         // Manual-reset, because shutdown is a latch rather than a hand-off:
         // once set, every subsequent wait must keep seeing it. The ring's own
@@ -93,6 +107,7 @@ impl EventLoop {
         let shutdown = event(true)?;
         Ok(Self {
             completion,
+            non_ring: non_ring.try_clone()?,
             shutdown,
         })
     }
@@ -123,24 +138,28 @@ impl EventLoop {
     where
         F: FnMut() -> io::Result<usize>,
     {
-        let handles: [HANDLE; 2] = [
+        let handles: [HANDLE; 3] = [
             self.completion.as_raw_handle(),
+            self.non_ring.as_raw_handle(),
             self.shutdown.as_raw_handle(),
         ];
-        // SAFETY: both handles are live and owned by this value, and `handles`
-        // holds exactly the two entries the count promises. `bWaitAll = FALSE`,
-        // so this returns as soon as either is signalled -- and reports the
-        // ring first when both are, since it is the lower index, which is what
-        // stops a set shutdown latch from starving completions.
-        let result = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, timeout_ms) };
+        // SAFETY: all three handles are live and owned by this value, and
+        // `handles` holds exactly the three entries the count promises.
+        // `bWaitAll = FALSE`, so this returns as soon as any is signalled --
+        // and reports the ring first when several are, since it is the lowest
+        // index, which is what stops a set shutdown latch from starving
+        // completions.
+        let result = unsafe { WaitForMultipleObjects(3, handles.as_ptr(), 0, timeout_ms) };
         let woken = if result == WAIT_OBJECT_0 {
             Woken::Ring
         } else if result == WAIT_OBJECT_0 + 1 {
+            Woken::NonRing
+        } else if result == WAIT_OBJECT_0 + 2 {
             Woken::Shutdown
         } else if result == WAIT_TIMEOUT {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "neither the ring's completion event nor the shutdown event signalled",
+                "no handle in the multiplexed wait signalled",
             ));
         } else {
             return Err(io::Error::last_os_error());

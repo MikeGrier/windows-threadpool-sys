@@ -75,9 +75,17 @@ windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys", fe
 # M7's ring-copy sample deserializes a fed-in topology description (--topology).
 serde_json = "1.0"
 # M7's ring-copy sample additionally needs `VirtualAllocExNuma` (buffer
-# placement) and `GROUP_AFFINITY` (pinned-thread affinity); the library
-# itself needs neither.
+# placement) and `GROUP_AFFINITY` (pinned-thread affinity); M14.1's epoch-log
+# sample needs `Win32_System_Ioctl` for the `FSCTL_SET_ZERO_DATA` reclamation
+# it orders against ring epochs. The library itself needs none of them.
 windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_System_Ioctl",
 	"Win32_System_Memory",
 	"Win32_System_SystemInformation",
+] }
+# M14.1's epoch-log sample orders a non-ring `FSCTL` against ring epochs, which
+# `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` cannot express (D-24 orders SQEs against
+# SQEs). The `device` feature supplies the `DeviceIoControl` adapter.
+windows-overlapped-io-sys = { version = "0.1.3", path = "../windows-overlapped-io-sys", features = [
+	"device",
 ] }

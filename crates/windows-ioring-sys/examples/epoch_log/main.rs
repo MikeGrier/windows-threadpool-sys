@@ -24,17 +24,17 @@
 //! # State of construction
 //!
 //! M13.1 delivered the contract, M13.2 the record format and append path,
-//! M13.3 epoch bookkeeping and group commit; M13.4 (this) replaces the fused
-//! wait with the multiplexed one, so the log can also wake for something that
-//! is not ring I/O. What finishes it:
-//!
-//! - **M13.5** -- replay and verify, which is the only part that can actually
-//!   catch a durability bug.
+//! M13.3 epoch bookkeeping and group commit, M13.4 the multiplexed wait, and
+//! M13.5 replay. M14.1 (this) adds the case that motivated the multiplexed
+//! wait in the first place: an operation the ring cannot express -- an `FSCTL`
+//! reclaiming a retired segment -- that must nonetheless be ordered against
+//! ring work. See [`reclaim`].
 
 mod append;
 mod commit;
 mod contract;
 mod event_loop;
+mod reclaim;
 mod record;
 mod replay;
 
@@ -47,6 +47,7 @@ use append::{Appender, SLOT_LEN, SLOTS};
 use commit::{Committer, Epoch};
 use contract::{CONTRACT, Clause};
 use event_loop::{EventLoop, Woken};
+use reclaim::Reclaimer;
 use windows_ioring_sys::{Batch, IoRing};
 
 /// How many records this demonstration appends into committed epochs.
@@ -65,6 +66,16 @@ const WAIT_MS: u32 = 30_000;
 
 /// Bound on the shutdown quiesce, for the same reason.
 const QUIESCE_ATTEMPTS: usize = 64;
+
+/// How large the retired segment is (M14.1). It stands in for a previous
+/// generation of the log that this run has superseded: a segmented log retires
+/// whole segments, and reclaims them once the epoch that superseded them is
+/// durable.
+const RETIRED_LEN: u64 = 64 * 1024;
+
+/// The byte the retired segment is filled with, so "was it reclaimed?" has an
+/// answer that does not depend on what happened to be there.
+const RETIRED_FILL: u8 = 0xA5;
 
 /// The single sink every line of this sample's output goes through (the
 /// repository's "architectural pre-steps" rule: never call `println!` from
@@ -100,6 +111,19 @@ fn log_path() -> PathBuf {
     ))
 }
 
+/// Where the retired segment lives (M14.1).
+///
+/// A separate file on purpose. Reclaiming the *live* log would zero the very
+/// records replay is about to check, which is not a subtlety of this sample but
+/// the reason real logs are segmented: what gets reclaimed is a segment nothing
+/// still needs, never the segment being appended to.
+fn retired_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "windows-ioring-sys-epoch-log-{}-retired.log",
+        std::process::id()
+    ))
+}
+
 /// The payload of the `index`-th record this demonstration appends. One
 /// function so the append side and the read-back check cannot drift.
 fn payload_for(index: usize) -> Vec<u8> {
@@ -123,6 +147,7 @@ struct LogRun {
 fn run_log<O: io::Write, E: io::Write>(
     report: &mut Report<O, E>,
     path: &std::path::Path,
+    retired: &std::path::Path,
 ) -> io::Result<LogRun> {
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -131,13 +156,16 @@ fn run_log<O: io::Write, E: io::Write>(
         .open(path)?;
     let handle = file.as_raw_handle();
 
+    std::fs::write(retired, vec![RETIRED_FILL; RETIRED_LEN as usize])?;
+
     let mut ring = IoRing::new(64, 128)?;
     let mut appender = Appender::new(&mut ring)?;
     let mut committer = Committer::new();
-    let events = EventLoop::new(&mut ring)?;
+    let mut reclaimer = Reclaimer::new(retired)?;
+    let events = EventLoop::new(&mut ring, reclaimer.completion_handle())?;
     report.line(format_args!(
         "arena registered: {SLOTS} slots of {SLOT_LEN} bytes; \
-         waiting on the ring's completion event alongside a shutdown latch"
+         waiting on the ring's completion event alongside a reclaim event and a shutdown latch"
     ));
 
     // Something outside the I/O loop decides when to stop -- which is the only
@@ -152,6 +180,8 @@ fn run_log<O: io::Write, E: io::Write>(
 
     let mut appended = 0;
     let mut empty_wakes = 0;
+    let mut reclaimed_for: Option<Epoch> = None;
+    let mut reclaim_failures: Vec<io::Error> = Vec::new();
     while appended < RECORDS {
         let epoch = committer.open_epoch();
         let payload = payload_for(appended);
@@ -189,6 +219,33 @@ fn run_log<O: io::Write, E: io::Write>(
                     .durable_through()
                     .map_or_else(|| "none".to_owned(), |e| e.0.to_string()),
             ));
+
+            // The ordering the ring cannot express (M14.1). The retired
+            // segment is only dead once an epoch of *this* generation is
+            // durable; reclaim it earlier and a crash in between loses both
+            // copies. `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` cannot help, in either
+            // direction -- it orders SQEs against SQEs (D-24), and this
+            // `FSCTL` is not an SQE at all. So the log enforces it, here, in
+            // one line of ordinary control flow.
+            //
+            // The assertion is the enforcement made checkable: move this block
+            // above the `while !committer.is_durable(closed)` loop and it
+            // fires immediately.
+            if reclaimed_for.is_none() {
+                assert!(
+                    committer.is_durable(closed),
+                    "a reclaim must not be issued before the epoch that supersedes the \
+                     retired segment is durable"
+                );
+                reclaimer.request(closed, RETIRED_LEN / 2)?;
+                reclaimed_for = Some(closed);
+                report.line(format_args!(
+                    "epoch {} is durable, so the first half of the retired segment \
+                     ({} bytes) can now be reclaimed; FSCTL issued off the event-loop thread",
+                    closed.0,
+                    RETIRED_LEN / 2
+                ));
+            }
         }
     }
 
@@ -212,6 +269,58 @@ fn run_log<O: io::Write, E: io::Write>(
         "appended {TAIL_RECORDS} more records into epoch {} and deliberately never committed it",
         committer.open_epoch().0
     ));
+
+    // Phase 1 of the reclaim story: collect the reclaim that ran *alongside*
+    // the appends. Measurement is blunt about what this does and does not
+    // show. It shows the two kinds of work overlapping -- ring completions
+    // kept being serviced for the whole time the `FSCTL` was running on the
+    // worker. It does **not** show the reclaim handle being load-bearing:
+    // removing it from the wait entirely costs this phase nothing, because
+    // ring traffic wakes the loop anyway and the result is collected on a ring
+    // arm. Measured, not assumed -- the sabotage was run, and it passed.
+    while reclaimer.in_flight() {
+        let (woken, popped) =
+            events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+        empty_wakes += usize::from(popped == 0);
+        // Collected unconditionally, for the same reason the ring is drained
+        // unconditionally: a result queued between the wait returning and this
+        // line is still a result.
+        collect_reclaim(report, &mut reclaimer, woken, &mut reclaim_failures);
+    }
+
+    // Phase 2 is where the handle has teeth. Quiesce the ring first, so every
+    // append and commit has completed and *nothing on the ring will signal
+    // again*, then issue a second reclaim. Now the only handle that can end
+    // the wait is the reclaim's: drop it from `WaitForMultipleObjects` and
+    // this loop blocks for the full `WAIT_MS` with a finished result sitting
+    // in the channel. That is the lost wakeup this whole file exists to avoid,
+    // and unlike phase 1 it is reproducible on demand.
+    let mut attempts = 0;
+    while appender.in_flight() > 0 || committer.in_flight() > 0 {
+        attempts += 1;
+        if attempts > QUIESCE_ATTEMPTS {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "outstanding operations never completed before the idle-path reclaim",
+            ));
+        }
+        Batch::new(&mut ring).submit_and_wait(1, WAIT_MS)?;
+        drain(&mut ring, &mut appender, &mut committer)?;
+    }
+    let watermark = committer
+        .durable_through()
+        .expect("at least one epoch was committed");
+    reclaimer.request(watermark, RETIRED_LEN)?;
+    report.line(format_args!(
+        "ring is idle; reclaiming the rest of the retired segment ({RETIRED_LEN} bytes) \
+         with nothing but the reclaim event able to wake the wait"
+    ));
+    while reclaimer.in_flight() {
+        let (woken, popped) =
+            events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+        empty_wakes += usize::from(popped == 0);
+        collect_reclaim(report, &mut reclaimer, woken, &mut reclaim_failures);
+    }
 
     // The work is done: ask for shutdown and keep pumping until the *other*
     // handle is what wakes us. The drain still runs on that pass -- see
@@ -273,6 +382,37 @@ fn run_log<O: io::Write, E: io::Write>(
         !committer.is_durable(committer.open_epoch()),
         "the still-open epoch was never committed and must not report durable"
     );
+
+    // Did the reclaim actually do anything? Asked of the bytes rather than of
+    // the return code, because a call that reports success and changes nothing
+    // is the failure worth catching. The endpoint is closed first so the read
+    // cannot race the worker.
+    let reclaimed_for = reclaimed_for.expect("a reclaim was requested");
+    drop(reclaimer);
+    if reclaim_failures.is_empty() {
+        let bytes = std::fs::read(retired)?;
+        let non_zero = bytes.iter().filter(|byte| **byte != 0).count();
+        assert_eq!(
+            non_zero, 0,
+            "the reclaimed range still holds {non_zero} non-zero byte(s), so the FSCTL \
+             reported success without reclaiming anything"
+        );
+        report.line(format_args!(
+            "retired segment reads back as {} zero bytes: the first half reclaimed once \
+             epoch {} was durable, the rest on the idle path",
+            bytes.len(),
+            reclaimed_for.0
+        ));
+    } else {
+        // Not fatal, and not smoothed over either: `FSCTL_SET_ZERO_DATA` is a
+        // filesystem feature, and a volume that refuses it says nothing about
+        // the ordering this item is demonstrating.
+        report.error_line(format_args!(
+            "{} reclaim FSCTL(s) failed on this volume; the ordering they demonstrate still \
+             held, but the retired segment was not zeroed",
+            reclaim_failures.len()
+        ));
+    }
 
     drop(file);
     Ok(LogRun {
@@ -392,6 +532,41 @@ fn await_durable_fused(
     Ok(())
 }
 
+/// Collect a finished reclamation if one is ready, reporting which arm of the
+/// multiplexed wait it arrived on.
+///
+/// Called unconditionally rather than only on [`Woken::NonRing`], for the same
+/// reason the ring is drained unconditionally: a result queued between the
+/// wait returning and this call is still a result.
+fn collect_reclaim<O: io::Write, E: io::Write>(
+    report: &mut Report<O, E>,
+    reclaimer: &mut Reclaimer,
+    woken: Woken,
+    failures: &mut Vec<io::Error>,
+) {
+    let Some(done) = reclaimer.take_completed() else {
+        return;
+    };
+    let arm = match woken {
+        Woken::NonRing => "reclaim",
+        Woken::Ring => "ring",
+        Woken::Shutdown => "shutdown",
+    };
+    match done.result {
+        Ok(()) => report.line(format_args!(
+            "reclaim for epoch {} finished on the {arm} arm: {} bytes zeroed",
+            done.epoch.0, done.bytes
+        )),
+        Err(error) => {
+            report.error_line(format_args!(
+                "reclaim for epoch {} failed on the {arm} arm: {error}",
+                done.epoch.0
+            ));
+            failures.push(error);
+        }
+    }
+}
+
 /// Pop every completion currently available, routing each to whichever of the
 /// two owns it.
 fn drain(
@@ -440,7 +615,8 @@ fn main() {
     report.line(format_args!(""));
 
     let path = log_path();
-    let outcome = run_log(&mut report, &path).and_then(|run| {
+    let retired = retired_path();
+    let outcome = run_log(&mut report, &path, &retired).and_then(|run| {
         report.line(format_args!(""));
         verify(&mut report, &path, &run)
     });
@@ -451,9 +627,11 @@ fn main() {
         Err(error) => {
             report.error_line(format_args!("epoch log failed: {error}"));
             let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&retired);
             std::process::exit(1);
         }
     }
 
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&retired);
 }

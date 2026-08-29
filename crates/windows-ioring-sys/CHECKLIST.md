@@ -231,11 +231,18 @@ forced the original consumer conversation -- operations the ring cannot express,
 
 **Depends on M13.**
 
-- [ ] **M14.1** -- Order a non-ring operation against ring epochs: an `FSCTL`-class operation issued
+- [x] **M14.1** -- Order a non-ring operation against ring epochs: an `FSCTL`-class operation issued
   through [`windows-overlapped-io-sys`](../windows-overlapped-io-sys), sequenced at an epoch
   boundary, with its completion waited on in the *same* multiplexed wait as the ring's. This is the
   case `drain_preceding` cannot express at all ([D-24](DESIGN-NOTES.md#d-24) orders SQEs against
   SQEs), and the reason `completion_event` exists. Add the sibling crate as a dev-dependency.
+  **Done:** `examples/epoch_log/reclaim.rs` reclaims a retired segment with `FSCTL_SET_ZERO_DATA`
+  on a worker thread (that backend completes synchronously, which the event loop must not do), and
+  `EventLoop` now waits on three handles. Two measured facts, both sabotage-checked: the reclaim
+  running *alongside* appends does **not** make the third handle load-bearing (ring traffic wakes
+  the loop; removing the handle costs nothing), whereas the idle-path reclaim after the ring
+  quiesces does -- removing it turns a 78 ms run into a 30 s `WAIT_MS` block. The ordering itself
+  is enforced by the log, not the ring, and asserting it before each request makes that checkable.
 
 - [ ] **M14.2** -- A control-plane and background path on `windows-threadpool-sys`: checkpointing or
   reclamation driven from the pool while the pinned log thread keeps the data path. Demonstrates the
