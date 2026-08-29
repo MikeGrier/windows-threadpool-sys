@@ -331,11 +331,26 @@ landed, so this milestone is unblocked.
   The blocking wait here is the fused submit-and-wait; M13.4 replaces it with the multiplexed one,
   which changes the shape but not the accounting.
 
-- [ ] **M13.4** -- The event loop: a caller-owned ring whose `completion_event` (M11.1) is waited on
-  by `WaitForMultipleObjects` alongside a shutdown event, draining to empty on **every** pass
-  regardless of which handle woke it. This is [D-19](DESIGN-NOTES.md#d-19) in practice, and the
-  example must make the drain-to-empty rule visually obvious -- it is the part a reader will
-  otherwise get wrong.
+- [x] **M13.4** -- The event loop in [event_loop.rs](examples/epoch_log/event_loop.rs): the ring's
+  `completion_event` waited on by `WaitForMultipleObjects` alongside a manual-reset shutdown latch,
+  with the drain outside the match on which handle woke us and draining *to empty*. Ownership does
+  not change -- this thread still owns, submits to, and drains its ring -- so it is Model B with a
+  different wakeup source, not Model A. The fused wait M13.3 used is kept beside it as the documented
+  contrast rather than deleted, since it is the right choice for a log whose only I/O is ring I/O.
+
+  **The item asked for the drain-to-empty rule to be visually obvious, and sabotage corrected which
+  half of it actually matters.** Replacing drain-to-empty with a single `try_pop` deadlocks the
+  example outright: the queue stops returning to empty, the edge never re-arms, and the next wait
+  blocks until its 30-second timeout with the log's work stranded. That half has teeth and is now
+  demonstrated.
+
+  Moving the drain *inside* the ring's arm, by contrast, **does not break a conformant loop** -- the
+  sabotage passed. On a loop that already obeys rule 1 the shutdown pass has nothing to pop, because
+  any completion that arrived signalled the event and was drained on the ring's own wake. An earlier
+  draft claimed the unconditional placement was "the bug this file exists to demonstrate the absence
+  of"; that claim was false and is removed. The placement stays because rule 1 says every pass and it
+  costs nothing, and the file now says plainly that this example cannot make it fail. This is the
+  the same overclaim M11.6 caught, found the same way.
 
 - [ ] **M13.5** -- A replay-and-verify pass that reads the log back and checks the contract from
   M13.1 holds: every record reported durable is present and its checksum validates, while records

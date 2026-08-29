@@ -23,27 +23,29 @@
 //!
 //! # State of construction
 //!
-//! M13.1 delivered the contract, M13.2 the record format and append path;
-//! M13.3 (this) adds epoch bookkeeping and group commit, which is what makes
-//! the contract's guarantee answerable. The pieces that finish it:
+//! M13.1 delivered the contract, M13.2 the record format and append path,
+//! M13.3 epoch bookkeeping and group commit; M13.4 (this) replaces the fused
+//! wait with the multiplexed one, so the log can also wake for something that
+//! is not ring I/O. What finishes it:
 //!
-//! - **M13.4** -- the event loop: the ring's completion event multiplexed with
-//!   a shutdown event, draining to empty on every pass.
 //! - **M13.5** -- replay and verify, which is the only part that can actually
 //!   catch a durability bug.
 
 mod append;
 mod commit;
 mod contract;
+mod event_loop;
 mod record;
 
 use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 use append::{Appender, SLOT_LEN, SLOTS};
 use commit::{Committer, Epoch};
 use contract::{CONTRACT, Clause};
+use event_loop::{EventLoop, Woken};
 use record::Sequence;
 use windows_ioring_sys::{Batch, IoRing};
 
@@ -56,6 +58,9 @@ const EPOCH_SIZE: usize = 6;
 
 /// Bound on the wait for a commit, so a stuck example fails instead of hanging.
 const WAIT_MS: u32 = 30_000;
+
+/// Bound on the shutdown quiesce, for the same reason.
+const QUIESCE_ATTEMPTS: usize = 64;
 
 /// The single sink every line of this sample's output goes through (the
 /// repository's "architectural pre-steps" rule: never call `println!` from
@@ -117,20 +122,35 @@ fn run_log<O: io::Write, E: io::Write>(
     let mut ring = IoRing::new(64, 128)?;
     let mut appender = Appender::new(&mut ring)?;
     let mut committer = Committer::new();
+    let events = EventLoop::new(&mut ring)?;
     report.line(format_args!(
-        "arena registered: {SLOTS} slots of {SLOT_LEN} bytes"
+        "arena registered: {SLOTS} slots of {SLOT_LEN} bytes; \
+         waiting on the ring's completion event alongside a shutdown latch"
     ));
 
+    // Something outside the I/O loop decides when to stop -- which is the only
+    // reason a second handle is in the wait at all.
+    let shutdown = events.shutdown_handle()?;
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let control = std::thread::spawn(move || {
+        if stop_rx.recv().is_ok() {
+            let _ = event_loop::signal(&shutdown);
+        }
+    });
+
     let mut appended = 0;
+    let mut empty_wakes = 0;
     while appended < RECORDS {
         let epoch = committer.open_epoch();
         let payload = payload_for(appended);
         match appender.append(&mut ring, handle, epoch, &payload) {
             Ok(_sequence) => appended += 1,
             // Every slot is in flight. This is the arena working as intended,
-            // not an error: drain one and try again.
+            // not an error: pump once to drain and try again.
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                drain(&mut ring, &mut appender, &mut committer)?;
+                let (_, popped) =
+                    events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+                empty_wakes += usize::from(popped == 0);
             }
             Err(error) => return Err(error),
         }
@@ -144,7 +164,11 @@ fn run_log<O: io::Write, E: io::Write>(
                 !committer.is_durable(closed),
                 "a pushed commit is not a completed one"
             );
-            await_durable(&mut ring, &mut appender, &mut committer, closed)?;
+            while !committer.is_durable(closed) {
+                let (_, popped) =
+                    events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+                empty_wakes += usize::from(popped == 0);
+            }
             report.line(format_args!(
                 "epoch {} committed and durable: {appended} records so far, \
                  durable through epoch {}",
@@ -156,9 +180,39 @@ fn run_log<O: io::Write, E: io::Write>(
         }
     }
 
-    // Drain to empty before returning, so every arena slot is released and
-    // nothing is outstanding when the ring closes.
+    // The work is done: ask for shutdown and keep pumping until the *other*
+    // handle is what wakes us. The drain still runs on that pass -- see
+    // `EventLoop::pump` -- which is the rule this loop exists to demonstrate.
+    let _ = stop_tx.send(());
+    loop {
+        let (woken, popped) =
+            events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+        empty_wakes += usize::from(popped == 0);
+        if woken == Woken::Shutdown {
+            report.line(format_args!(
+                "shutdown woke the wait with {} append(s) and {} commit(s) still in flight",
+                appender.in_flight(),
+                committer.in_flight()
+            ));
+            break;
+        }
+    }
+    drop(stop_tx);
+    control.join().expect("control thread");
+
+    // Shutdown with I/O in flight is normal, not an error: the kernel may
+    // still be reading arena slots, so nothing may close until they finish.
+    // Every SQE that queued produces exactly one completion, so this ends.
+    let mut attempts = 0;
     while appender.in_flight() > 0 || committer.in_flight() > 0 {
+        attempts += 1;
+        if attempts > QUIESCE_ATTEMPTS {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "outstanding operations never completed during shutdown quiesce",
+            ));
+        }
+        Batch::new(&mut ring).submit_and_wait(1, WAIT_MS)?;
         drain(&mut ring, &mut appender, &mut committer)?;
     }
 
@@ -170,6 +224,9 @@ fn run_log<O: io::Write, E: io::Write>(
         appender.next_sequence().0,
         committer.open_epoch().0,
         durable_through.0
+    ));
+    report.line(format_args!(
+        "{empty_wakes} wake(s) had nothing to pop, which the contract requires a caller to tolerate"
     ));
     // Monotonicity is a guarantee, so it is checked rather than assumed.
     for epoch in 0..=durable_through.0 {
@@ -250,12 +307,18 @@ fn verify_on_disk<O: io::Write, E: io::Write>(
 
 /// Block until `epoch` is durable, draining completions while we wait.
 ///
-/// The blocking wait here is the *fused* submit-and-wait: with nothing new
-/// queued its only effect is to park until a completion arrives. M13.4
-/// replaces it with the multiplexed wait, which is what a log that also has to
-/// service non-ring handles needs -- the shape changes, the accounting below
-/// does not.
-fn await_durable(
+/// Kept for reference: this is the *fused* wait, which is what M13.3 used
+/// before the multiplexed loop arrived. It is correct for a log whose only
+/// I/O is ring I/O, and cheaper -- there is nothing to re-arm and no
+/// edge-trigger rule to obey. It cannot serve a log that must also wake for a
+/// shutdown latch, which is why `run_log` above uses `EventLoop::pump`
+/// instead. Both are Model B; only what the thread blocks on differs.
+#[expect(
+    dead_code,
+    reason = "kept as the documented contrast with the multiplexed wait; M14.3 makes the \
+              choice between wakeup strategies selectable at run time"
+)]
+fn await_durable_fused(
     ring: &mut IoRing,
     appender: &mut Appender,
     committer: &mut Committer,
@@ -328,7 +391,7 @@ fn main() {
 
     report.line(format_args!(""));
     report.line(format_args!(
-        "Still to come: M13.4 runs the multiplexed event loop, M13.5 replays and verifies."
+        "Still to come: M13.5 replays the log and verifies the contract."
     ));
     let _ = std::fs::remove_file(&path);
 }
