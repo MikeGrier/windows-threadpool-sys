@@ -36,6 +36,7 @@ mod commit;
 mod contract;
 mod event_loop;
 mod record;
+mod replay;
 
 use std::io;
 use std::os::windows::io::AsRawHandle;
@@ -46,11 +47,14 @@ use append::{Appender, SLOT_LEN, SLOTS};
 use commit::{Committer, Epoch};
 use contract::{CONTRACT, Clause};
 use event_loop::{EventLoop, Woken};
-use record::Sequence;
 use windows_ioring_sys::{Batch, IoRing};
 
-/// How many records this demonstration appends.
+/// How many records this demonstration appends into committed epochs.
 const RECORDS: usize = 24;
+
+/// How many it then appends into an epoch it never commits, so replay has a
+/// tail to tolerate.
+const TAIL_RECORDS: usize = 3;
 
 /// Records per epoch. Small so the demonstration shows several commits; a real
 /// log sizes this against its latency target, since the commit is what costs.
@@ -102,16 +106,24 @@ fn payload_for(index: usize) -> Vec<u8> {
     format!("record {index}: the quick brown fox").into_bytes()
 }
 
+/// What one run of the log reported about itself, for replay to check.
+struct LogRun {
+    durable_through: Epoch,
+    durable_records: usize,
+    tail_records: usize,
+}
+
 /// Append `RECORDS` records in epochs of `EPOCH_SIZE`, committing each one and
-/// waiting for it to become durable before moving on.
+/// waiting for it to become durable, then append `TAIL_RECORDS` more into an
+/// epoch that is deliberately **never committed**.
 ///
-/// This is M13.3's deliverable in one function: records join the open epoch,
-/// closing an epoch pushes one covering flush, and observing that flush's
-/// completion is what makes `is_durable` start answering `true`.
+/// That uncommitted tail is not padding: the contract promises nothing about
+/// records past the last committed epoch, and a replay pass that never sees
+/// such a tail has not been asked the interesting question.
 fn run_log<O: io::Write, E: io::Write>(
     report: &mut Report<O, E>,
     path: &std::path::Path,
-) -> io::Result<()> {
+) -> io::Result<LogRun> {
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -180,6 +192,27 @@ fn run_log<O: io::Write, E: io::Write>(
         }
     }
 
+    // The uncommitted tail: appended, so their writes complete, but no commit
+    // ever closes their epoch. The contract therefore promises nothing about
+    // them, and the replay pass below is what proves the reader tolerates that.
+    for index in RECORDS..RECORDS + TAIL_RECORDS {
+        let epoch = committer.open_epoch();
+        let payload = payload_for(index);
+        loop {
+            match appender.append(&mut ring, handle, epoch, &payload) {
+                Ok(_) => break,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    report.line(format_args!(
+        "appended {TAIL_RECORDS} more records into epoch {} and deliberately never committed it",
+        committer.open_epoch().0
+    ));
+
     // The work is done: ask for shutdown and keep pumping until the *other*
     // handle is what wakes us. The drain still runs on that pass -- see
     // `EventLoop::pump` -- which is the rule this loop exists to demonstrate.
@@ -220,9 +253,10 @@ fn run_log<O: io::Write, E: io::Write>(
         .durable_through()
         .expect("at least one epoch was committed");
     report.line(format_args!(
-        "appended {appended} records (sequences 0..{}) across {} epochs; durable through epoch {}",
+        "appended {appended} records across {} committed epochs plus {TAIL_RECORDS} uncommitted \
+         (sequences 0..{}); durable through epoch {}",
+        durable_through.0 + 1,
         appender.next_sequence().0,
-        committer.open_epoch().0,
         durable_through.0
     ));
     report.line(format_args!(
@@ -240,68 +274,94 @@ fn run_log<O: io::Write, E: io::Write>(
         "the still-open epoch was never committed and must not report durable"
     );
 
-    verify_on_disk(report, path, file, appended, durable_through)
+    drop(file);
+    Ok(LogRun {
+        durable_through,
+        durable_records: RECORDS,
+        tail_records: TAIL_RECORDS,
+    })
 }
 
-/// Read the log back and decode it.
-///
-/// Not the replay pass -- M13.5 owns verifying the *contract*, including the
-/// torn tail. This checks the weaker thing M13.3 can already claim: that the
-/// records are in the format described, and that each one carries the epoch it
-/// was appended into.
-fn verify_on_disk<O: io::Write, E: io::Write>(
+/// Replay the log three ways, which is what turns this sample from a
+/// demonstration into evidence (M13.5).
+fn verify<O: io::Write, E: io::Write>(
     report: &mut Report<O, E>,
     path: &std::path::Path,
-    file: std::fs::File,
-    appended: usize,
-    durable_through: Epoch,
+    run: &LogRun,
 ) -> io::Result<()> {
-    drop(file);
     let bytes = std::fs::read(path)?;
-    let mut decoded = 0;
-    let mut cursor = 0;
-    while cursor < bytes.len() {
-        match record::decode(&bytes[cursor..]) {
-            Ok(record) => {
-                assert_eq!(
-                    record.sequence,
-                    Sequence(decoded as u64),
-                    "records must decode in sequence order on a log written by one appender"
-                );
-                assert_eq!(
-                    record.payload,
-                    payload_for(decoded),
-                    "a decoded payload must be byte-identical to what was appended"
-                );
-                assert_eq!(
-                    record.epoch,
-                    Epoch((decoded / EPOCH_SIZE) as u64),
-                    "a record must carry the epoch that was open when it was appended"
-                );
-                assert!(
-                    record.epoch <= durable_through,
-                    "every record here belongs to a committed epoch"
-                );
-                cursor += record.total_len;
-                decoded += 1;
-            }
-            Err(reason) => {
-                report.line(format_args!(
-                    "stopped decoding at byte {cursor}: {reason:?}"
-                ));
-                break;
-            }
-        }
-    }
-    report.line(format_args!(
-        "read back {} bytes and decoded {decoded} of {appended} records, \
-         every one stamped with its epoch",
-        bytes.len()
-    ));
-    assert_eq!(
-        decoded, appended,
-        "every appended record must decode cleanly from a log that was never truncated"
+
+    // 1. The log as written. Everything committed must be intact, and the
+    //    uncommitted tail must be tolerated rather than rejected.
+    let clean = replay::replay(
+        &bytes,
+        run.durable_through,
+        run.durable_records,
+        payload_for,
     );
+    report.line(format_args!(
+        "replay: {} durable records verified, {} uncommitted tail record(s) tolerated{}",
+        clean.durable_verified,
+        clean.tail_records,
+        clean
+            .tail_stopped
+            .map_or_else(String::new, |reason| format!(", stopped at {reason:?}"))
+    ));
+    assert!(
+        clean.is_clean(),
+        "the log must honour its own contract: {:?}",
+        clean.violations
+    );
+    assert_eq!(clean.durable_verified, run.durable_records);
+    assert_eq!(clean.tail_records, run.tail_records);
+
+    // 2. A torn tail, which is what a crash actually leaves behind. Cutting
+    //    the file mid-record simulates a write that did not land whole. The
+    //    contract says the reader must tolerate this, so a violation here
+    //    would mean the reader is stricter than the contract allows.
+    let torn_at = bytes.len() - (record::HEADER_LEN + 4);
+    let torn = replay::replay(
+        &bytes[..torn_at],
+        run.durable_through,
+        run.durable_records,
+        payload_for,
+    );
+    report.line(format_args!(
+        "replay of a torn tail: {} durable records still verified, {} tail record(s), \
+         stopped at {:?}",
+        torn.durable_verified, torn.tail_records, torn.tail_stopped
+    ));
+    assert!(
+        torn.is_clean(),
+        "a torn tail is a legal outcome and must not be reported as a violation: {:?}",
+        torn.violations
+    );
+    assert_eq!(
+        torn.durable_verified, run.durable_records,
+        "tearing the tail must not cost a single durable record"
+    );
+
+    // 3. The negative control. A verifier that cannot fail proves nothing, so
+    //    corrupt one byte *inside* the durable region and require that replay
+    //    notices. If this passes, the two checks above mean something.
+    let mut damaged = bytes.clone();
+    let victim = record::HEADER_LEN + 2;
+    damaged[victim] ^= 0xFF;
+    let caught = replay::replay(
+        &damaged,
+        run.durable_through,
+        run.durable_records,
+        payload_for,
+    );
+    report.line(format_args!(
+        "negative control: corrupting byte {victim} of a durable record was caught as {:?}",
+        caught.violations
+    ));
+    assert!(
+        !caught.is_clean(),
+        "corruption inside the durable region must be reported, or this verifier checks nothing"
+    );
+
     Ok(())
 }
 
@@ -380,8 +440,14 @@ fn main() {
     report.line(format_args!(""));
 
     let path = log_path();
-    match run_log(&mut report, &path) {
-        Ok(()) => report.line(format_args!("log written to {}", path.display())),
+    let outcome = run_log(&mut report, &path).and_then(|run| {
+        report.line(format_args!(""));
+        verify(&mut report, &path, &run)
+    });
+    match outcome {
+        Ok(()) => report.line(format_args!(
+            "the log kept its contract, and the verifier that says so was shown to be able to fail"
+        )),
         Err(error) => {
             report.error_line(format_args!("epoch log failed: {error}"));
             let _ = std::fs::remove_file(&path);
@@ -389,9 +455,5 @@ fn main() {
         }
     }
 
-    report.line(format_args!(""));
-    report.line(format_args!(
-        "Still to come: M13.5 replays the log and verifies the contract."
-    ));
     let _ = std::fs::remove_file(&path);
 }

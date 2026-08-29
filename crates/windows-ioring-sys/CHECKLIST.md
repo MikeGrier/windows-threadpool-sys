@@ -352,11 +352,24 @@ landed, so this milestone is unblocked.
   costs nothing, and the file now says plainly that this example cannot make it fail. This is the
   the same overclaim M11.6 caught, found the same way.
 
-- [ ] **M13.5** -- A replay-and-verify pass that reads the log back and checks the contract from
-  M13.1 holds: every record reported durable is present and its checksum validates, while records
-  after the last committed epoch may be absent or torn and the reader tolerates both. This is what
-  turns the example from a demonstration into evidence, and it is the only part of the example that
-  can actually catch a durability bug.
+- [x] **M13.5** -- The replay-and-verify pass in [replay.rs](examples/epoch_log/replay.rs), which is
+  what turns the sample from a demonstration into evidence. It is handed the watermark the log
+  reported and holds it to exactly the contract's asymmetry: every record in an epoch at or below the
+  watermark **must** be present, in sequence, with a matching payload and a validating checksum,
+  while records above it may be present, absent, or torn and are counted rather than judged. Refusing
+  to tolerate a torn tail would be its own bug -- the contract promises the tail is unreliable, so a
+  reader that treated it as corruption would reject a healthy log.
+
+  The example now appends `TAIL_RECORDS` into an epoch it **deliberately never commits**, because a
+  replay pass that never sees an uncommitted tail has not been asked the interesting question.
+
+  **The verifier is run three ways, and the third is the point.** Against the log as written (24
+  durable verified, 3 tail tolerated); against a copy cut mid-record to simulate a crash (24 durable
+  still verified, tail truncated, *no* violation reported); and -- the negative control -- against a
+  copy with one byte corrupted **inside** the durable region, which must be reported. A verifier that
+  cannot fail proves nothing, so the sample proves this one can: it reports
+  `MissingDurableRecord { reason: ChecksumMismatch }` and the run states out loud that the checker
+  which passed the first two cases was shown to be able to fail.
 
 ## M14 -- Worked example: crossing the ring boundary, and paying for the barrier
 
