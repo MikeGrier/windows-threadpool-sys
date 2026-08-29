@@ -67,7 +67,9 @@
 //! cannot order across the two paths. **The event is edge-triggered on the
 //! completion queue going empty to non-empty**, which is measured rather than
 //! documented by Win32 and hangs rather than merely slows if assumed
-//! otherwise; see that method's docs before using it.
+//! otherwise; see that method's docs before using it, and
+//! `examples/model_b_multiplexed.rs` for the whole shape end to end,
+//! including shutdown with I/O still outstanding (M11.6).
 //!
 //! Most real applications want Model B on the hot data path and Model A
 //! everywhere else -- the control plane, background work, cold paths -- where

@@ -477,6 +477,9 @@ thread in a blocking drain.
 The cost of the multiplexed row is that the waiter inherits [D-19](#d-19)'s edge-trigger contract in
 full: drain to empty before waiting again, on every pass, and treat a wake with nothing to pop as
 normal. The fused row has no such obligation, which is the honest reason to prefer it when it fits.
+`examples/model_b_multiplexed.rs` (M11.6) is the worked shape, including shutdown with I/O still
+outstanding; sabotaging its drain-to-empty into a single `try_pop` reproduces the lost-wakeup deadlock
+directly.
 
 ### Why per-thread, and why pinning is not optional ([D-27](#d-27))
 

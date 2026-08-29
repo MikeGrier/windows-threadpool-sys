@@ -104,7 +104,9 @@ latter, and both are Model B:
   `IoRing::completion_event` alongside other handles. Use it when the domain
   must also service a shutdown event, a socket, an overlapped operation, or a
   timer. `IoRing::completion_event` hands back an owned *duplicate* of the
-  ring's event, so the caller keeps its ring.
+  ring's event, so the caller keeps its ring. See
+  [examples/model_b_multiplexed.rs](examples/model_b_multiplexed.rs) for the
+  whole shape end to end, including shutdown with I/O still outstanding.
 
 Picking the second is not "Model A with extra steps" and costs none of the
 locality that motivated Model B. It does inherit one contract: the ring's event

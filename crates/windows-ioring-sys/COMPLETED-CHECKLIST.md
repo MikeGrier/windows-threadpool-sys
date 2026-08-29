@@ -152,3 +152,185 @@ Append-only. See [CHECKLIST.md](CHECKLIST.md) for pending and in-progress work.
 - [x] **M7.5** -- Report per-domain throughput, and **say plainly when the host cannot show a
   difference** -- a single-node or virtualized machine will produce noise, and a benchmark that reports
   noise as a result is worse than no benchmark. The machine this was designed on reported zero NUMA nodes.
+
+## Moved 2026-08-28 -- M11: the completion event as a ring primitive
+
+### M11 -- The completion event as a ring primitive (external consumer proposal, 2026-08-28)
+
+Prompted by a consumer proposal and the spike that answered it; the exchange is recorded in
+[DESIGN-SESSION-2026-08-28-completion-event-multiplexing.md](design-sessions/DESIGN-SESSION-2026-08-28-completion-event-multiplexing.md),
+and the decisions are [D-19](DESIGN-NOTES.md#d-19) through [D-22](DESIGN-NOTES.md#d-22).
+
+M11.1 and M11.2 build the primitive; M11.3 then consolidates `EventDelivery` onto it *and* fixes the
+stranded-backlog bug in one change. Those were separate items when the fix looked like it needed to ship
+ahead of the API work; they are merged because in practice the two land minutes apart, and splitting them
+would mean writing a `SetEvent`-after-arm patch that M11.3 immediately deletes.
+
+- [x] **M11.1** -- Added `IoRing::completion_event(&mut self) -> io::Result<OwnedHandle>`
+  ([D-20](DESIGN-NOTES.md#d-20)): capability-checks `IORING_FEATURE_SET_COMPLETION_EVENT`, creates and owns
+  an auto-reset event, attaches it with `SetIoRingCompletionEvent`, signals it once, and returns a
+  duplicate. Idempotent -- a repeat call returns another duplicate of the same event rather than attaching a
+  new one, which matters because `SetIoRingCompletionEvent` *replaces* rather than adds, so a second attach
+  would silently detach the first subsystem's event. The rustdoc states the
+  [D-19](DESIGN-NOTES.md#d-19) contract in full: signalled on empty -> non-empty, drain to empty before
+  waiting again, a wake with nothing to pop is normal. Ordering detail worth keeping: the event is stored on
+  the ring *before* it is signalled, so no later failure can drop it and leave the ring signalling a closed
+  (possibly recycled) handle; and because a manual `Drop` body runs before its fields drop, `CloseIoRing`
+  always runs before the event handle closes. Contract tests are M11.2; a throwaway smoke check confirmed
+  the setup signal, auto-reset, idempotence, and -- the one that matters for M11.3 -- that attaching to a
+  ring with a completion *already* queued does signal.
+
+- [x] **M11.2** -- Contract tests for the M11.1 primitive in
+  [tests/completion_event.rs](tests/completion_event.rs), written against the *stated* rules rather than
+  against current behaviour: eleven cases covering the setup signal, the backlog case (submit, let the
+  completions land, *then* attach, assert the returned handle signals), idempotence, the edge itself
+  (empty -> non-empty signals; a batch of eight produces exactly one wakeup; the edge re-arms after each
+  drain; a full drain leaves no leftover signal), the duplicate's independence (closing one duplicate,
+  and outliving the ring), the capability gate's `Unsupported` branch, and the multiplexed wait.
+  Each rule is named in the test that pins it, so a failure is readable without opening
+  [DESIGN-NOTES.md](DESIGN-NOTES.md).
+
+  Every case was **verified by sabotage**, which is what makes these contract tests rather than
+  behaviour snapshots -- and doing it corrected the suite three times, each correction worth keeping:
+
+  - Suppressing `completion_event`'s setup `SetEvent` fails all eleven, the backlog case on its own
+    message. That is the property M11.3 depends on.
+  - Making the repeat call attach a *second* event initially failed only **one** test. The other two
+    idempotence cases passed **vacuously**: asserting that the handle returned by the *second* call
+    signals is satisfied perfectly well by a freshly attached event, so a silently detached first handle
+    went unnoticed -- the exact bug those tests exist to exclude. Both were rewritten to assert through
+    the *first* handle, and to close the *second* duplicate rather than the first; the sabotage now
+    fails all three.
+  - The multiplexed test's first shape proved that draining mattered but not that draining on *every*
+    pass did. Sabotaging round 1's drain to a single `try_pop` fails at **round 2**, not round 3,
+    because round 2's unrelated-wake drain rescues the seven stranded completions -- which is precisely
+    why rule 2 says every pass and not merely every ring pass. A round 4 was added that breaks rule 2
+    deliberately and asserts the resulting lost wakeup as a timeout, so the deadlock is demonstrated
+    rather than described; a control run confirms the same wait returns immediately when the queue was
+    drained first, so the assertion measures the edge and not an impatient timeout.
+
+  These are integration tests because generating completions crosses the filesystem boundary, matching
+  [tests/event_delivery.rs](tests/event_delivery.rs). The suite runs in about half a second, nearly all
+  of it the one deliberately-asserted timeout.
+
+- [x] **M11.3** -- `EventDelivery::new` re-expressed on top of `IoRing::completion_event`, which removed
+  the second `SetIoRingCompletionEvent` call site ([D-20](DESIGN-NOTES.md#d-20)) and fixed the
+  stranded-backlog bug ([D-19](DESIGN-NOTES.md#d-19)) in one change. `src/` now has exactly one
+  `SetIoRingCompletionEvent` call, in `IoRing::completion_event`.
+
+  The repro landed first and was **watched failing**: a ring handed over with eight completions already
+  in its CQ delivered nothing, and
+  `completions_queued_before_handover_are_still_delivered` in
+  [tests/event_delivery.rs](tests/event_delivery.rs) failed on a five-second delivery timeout. After the
+  consolidation it passes instantly. The two pre-existing tests in that file both hand over a *fresh*
+  ring, which is exactly why the bug survived CI. `completion_event`'s signal-once-on-attach is what
+  makes it pass; `ThreadpoolWait` takes the returned duplicate through
+  `WaitableHandle::assume_waitable`, and the drain/re-arm/drain callback body needed no change.
+
+  Also removed: `EventDelivery`'s own copy of the capability check and its `Unsupported` error message,
+  which duplicated `completion_event`'s word for word. One statement of that rule now, not two.
+
+  Documentation corrected in the same commit, per CONTRACT INTEGRITY's blast-radius rule. The rustdoc
+  had asserted the backlog guarantee while the code did not hold it, so it is now stated as a guarantee
+  the method *buys* -- naming the edge that would otherwise strand the backlog and the setup signal that
+  closes it -- with a note that a caller on an earlier version cannot rely on it. Swept
+  `SetIoRingCompletionEvent` / "already queued" / "handed over" across `src/`, `tests/`, `examples/` and
+  `*.md`: 6 files updated ([src/event_delivery.rs](src/event_delivery.rs),
+  [src/capability.rs](src/capability.rs), [examples/model_a_delivery.rs](examples/model_a_delivery.rs),
+  [DESIGN-NOTES.md](DESIGN-NOTES.md)'s D-20 status marker, its Model A description, and its "this bit us"
+  paragraph). Design-session transcripts and [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) were left
+  alone as historical record.
+
+  One newly reachable interaction documented on `EventDelivery::ring`: calling
+  `IoRing::completion_event` on a ring the pool is already waiting on now *succeeds*, returning a
+  duplicate of the pool's own event, which is two waiters on one ring and a
+  [D-21](DESIGN-NOTES.md#d-21) violation. Worth stating because the same call was previously worse and
+  equally silent -- it replaced the pool's event and stopped delivery outright.
+
+- [x] **M11.4** -- `windows-threadpool-sys` is now optional behind a default-on `threadpool` feature
+  ([D-22](DESIGN-NOTES.md#d-22)). Gated with it: the `event_delivery` module and its unit tests, the
+  `EventDelivery` re-export, [tests/event_delivery.rs](tests/event_delivery.rs), and
+  [examples/model_a_delivery.rs](examples/model_a_delivery.rs) -- the example via an explicit
+  `[[example]]` with `required-features`, so cargo *skips* it rather than failing to compile it.
+  Verified non-vacuous by `cargo tree`: `windows-threadpool-sys` disappears from the graph entirely
+  under `--no-default-features`, and the other two examples still auto-discover and build.
+
+  CI gained an `ioring-no-threadpool` job, which is the cost D-22 accepted the gate with: nothing else
+  in the workflow builds that configuration, because every `--workspace` step uses the default set and
+  `--all-features` turns the gate back on. It runs build, clippy `-D warnings`, test, and doc for
+  `--no-default-features`, plus isolated default-feature clippy and test steps (selecting the crate
+  alone, so `--workspace` feature unification cannot mask a gap -- the same reason
+  `windows-file-watcher` has isolated steps).
+
+  The `cargo doc` step is there because of a defect this item found rather than by symmetry: the
+  crate's ungated "Choosing a delivery architecture" prose intra-doc-linked ``[`EventDelivery`]``,
+  which resolves under `--all-features` and *dangles* without the feature. The repo-wide `docs` job
+  only documents `--all-features`, so it could never have caught it. The link is now plain code naming
+  the feature, matching how `windows-overlapped-io-sys` avoids linking its own gated items from ungated
+  prose; the failure was confirmed by restoring the link and watching
+  `cargo doc --no-default-features` fail with `unresolved link to EventDelivery`.
+
+  Also documented for consumers: a Cargo-features table in [README.md](README.md) with the
+  `default-features = false` snippet and D-22's actual rationale -- layering, not runtime cost, since
+  linking the thread-pool crate creates no threads (the Win32 default pool is process-wide and lazily
+  instantiated).
+
+- [x] **M11.5** -- Both facts now stated wherever the wakeup shapes are described, as a blast-radius
+  sweep rather than a single edit. Grepped `drain_preceding` / `DRAIN_PRECEDING` / "two delivery" /
+  "completion event" / "delivery architecture" across `src/`, `tests/`, `examples/` and `*.md`; 18 files
+  matched, 4 changed, and the rest are accounted for below.
+
+  **Fact 1 -- Model B's wakeup source is separable from its identity.** The
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) "Two delivery architectures" section described Model B as a thread
+  parked in `SubmitIoRing` and offered no alternative, which is exactly how the framing came to be read
+  as fixing the wakeup mechanism ([D-3](DESIGN-NOTES.md#d-3)'s amendment note). It gained a subsection
+  naming the two wakeup sources -- fused submit-and-wait, and a multiplexed `WaitForMultipleObjects` over
+  `IoRing::completion_event` -- as a table, with the point that identity is *who owns, submits and
+  drains* and the wakeup is a separate axis. [README.md](README.md) gained the same in consumer form.
+  [src/lib.rs](src/lib.rs) already stated it (M11.1); its Model B paragraph gained a forward pointer so a
+  reader who stops there does not leave with the fixed-wakeup reading.
+
+  **Fact 2 -- `drain_preceding`'s barrier stops at the ring's edge.** Stated in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md)'s Category 2 and in [src/lib.rs](src/lib.rs), but **not on
+  `PushOptions::drain_preceding` itself** -- the one place a consumer actually meets the flag. That was
+  the real gap this sweep found. Its rustdoc now states all three measured properties: ring-wide and
+  spanning submissions with no cross-epoch pipelining ([D-24](DESIGN-NOTES.md#d-24)), powerless in both
+  directions across the ring boundary with `IoRing::completion_event` as what this crate offers instead,
+  and that the flag orders but does not flush -- while being what makes a flush cover preceding writes
+  at all ([D-23](DESIGN-NOTES.md#d-23)). README states the limit too, as the reason the multiplexed
+  shape has to exist.
+
+  **Accounted for, unchanged:** `IoRing::completion_event` and the `IoRing` type docs in
+  [src/ring.rs](src/ring.rs) already state both facts correctly (M11.1);
+  [src/event_delivery.rs](src/event_delivery.rs) and
+  [examples/model_a_delivery.rs](examples/model_a_delivery.rs) are Model A only and make no wakeup claim
+  beyond it; [src/batch/tests.rs](src/batch/tests.rs) and the integration tests are uses of the flag and
+  the primitive rather than statements about them (the cross-path limit is not testable in-crate -- it
+  is a fact about I/O this crate does not issue); [PLANS.md](PLANS.md) is an index summary with no
+  wakeup claim; and [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md), the design-session transcripts and
+  the spikes are historical record, deliberately left alone.
+
+- [x] **M11.6** -- [examples/model_b_multiplexed.rs](examples/model_b_multiplexed.rs): a caller-owned ring
+  whose `completion_event` is waited on via `WaitForMultipleObjects` alongside a manual-reset shutdown
+  latch, draining to empty on every pass, over three waves of reads. It also covers the half the item did
+  not name but which a consumer hits immediately -- shutdown while I/O is outstanding -- by quiescing
+  through `Batch::submit_and_wait` before the ring closes, which doubles as a demonstration that both
+  wakeup sources are Model B (M11.5's fact 1) and that switching between them changes nothing about
+  ownership.
+
+  **The central claim was verified by sabotage.** Replacing the drain-to-empty with a single `try_pop`
+  reproduces the lost-wakeup deadlock exactly: wave 0 pops one of eight completions, the queue never
+  returns to empty, the edge never re-arms, and the wait times out with all remaining work stranded. That
+  is [D-19](DESIGN-NOTES.md#d-19) as a running program rather than a paragraph, which is the whole point
+  of the item.
+
+  Two comments were **removed after measurement contradicted them**, rather than left as plausible
+  prose. The example requests shutdown while the final wave is outstanding, and an earlier draft claimed
+  that made the drain-on-shutdown-pass and the quiesce load-bearing. Six runs showed otherwise: the loop
+  always exits with zero in flight, because `WaitForMultipleObjects` reports the *lowest* signalled index
+  and the ring is index 0, so a set shutdown latch can never starve completions. That is a genuinely
+  useful fact for a consumer choosing handle order, so the example now states it and reports what
+  actually happened on each run instead of asserting an outcome it does not control.
+
+  The example uses no thread pool, so it is also the first real consumer of the `--no-default-features`
+  configuration M11.4 added to CI; verified building under both feature sets.

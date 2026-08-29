@@ -451,6 +451,10 @@ impl IoRing {
     /// re-arms the edge, must run to empty exactly once. Two threads waiting
     /// on one ring's event cannot be made correct.
     ///
+    /// `examples/model_b_multiplexed.rs` is this whole shape worked end to
+    /// end -- a caller-owned ring waited on alongside a shutdown latch, with
+    /// the quiesce that shutdown-while-outstanding requires (M11.6).
+    ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::Unsupported`] if the running system does not
