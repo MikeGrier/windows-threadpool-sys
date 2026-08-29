@@ -69,8 +69,11 @@ let applied = thread::spawn(move || {
 
 assert_eq!(*applied.value(), "ran as the submitter");
 
-// A restoration failure does not discard the value; it is reported alongside
-// it, so a caller can retire a contaminated thread without losing the result.
+// A restore failure for the reported aspects -- the error mode, the declared
+// aspects, the transaction -- does not discard the value; it is reported
+// alongside it, so a caller can retire a contaminated thread without losing the
+// result. Impersonation is deliberately not among them: its restore is
+// fail-fast and panics, as "One capture, many workers" below explains.
 assert!(applied.restore().is_clean());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```

@@ -68,12 +68,20 @@
 //!
 //! assert_eq!(*applied.value(), "ran as the submitter");
 //!
-//! // A restoration failure does not discard the operation's value; it is
-//! // reported alongside it, so a caller can retire a contaminated thread
-//! // without losing what the work produced.
+//! // A restore failure for the reported aspects -- the error mode, the
+//! // declared aspects, the transaction -- does not discard the operation's
+//! // value; it arrives alongside it, so a caller can retire a contaminated
+//! // thread without losing what the work produced.
 //! assert!(applied.restore().is_clean());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! Impersonation is deliberately *not* among those reported aspects: its restore
+//! is fail-fast, so a failure panics instead of being reported, and a panic
+//! inside a thread-pool callback aborts the process rather than failing one
+//! operation. That is the intended trade rather than an oversight, and it is the
+//! one property to weigh before adopting this crate on shared workers;
+//! [`state`] gives the reasoning in full.
 //!
 //! A consumer that wants to *override* the error mode rather than transplant it
 //! -- forcing the dialog-suppressing bits on a shared worker -- leaves
