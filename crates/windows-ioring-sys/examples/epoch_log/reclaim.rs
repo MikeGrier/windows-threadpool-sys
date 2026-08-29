@@ -143,6 +143,11 @@ impl Reclaimer {
     }
 
     /// Whether a reclamation is outstanding.
+    #[expect(
+        dead_code,
+        reason = "M14.2 moved the request onto a pool thread, so the log thread waits on a \
+                  collected count instead; kept because it is the invariant `request` enforces"
+    )]
     pub fn in_flight(&self) -> bool {
         self.in_flight
     }

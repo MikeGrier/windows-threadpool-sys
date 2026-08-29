@@ -40,6 +40,15 @@ name = "model_a_delivery"
 path = "examples/model_a_delivery.rs"
 required-features = ["threadpool"]
 
+# M14.2 gives the epoch-log sample a thread-pool control plane, so from that
+# point it needs the feature too. Before M14.2 it built under
+# `--no-default-features`; the `ioring-no-threadpool` CI job from M11.4 would
+# have reported the change as a build failure rather than a skip without this.
+[[example]]
+name = "epoch_log"
+path = "examples/epoch_log/main.rs"
+required-features = ["threadpool"]
+
 # The crate is Windows-only, so docs.rs must build on a Windows target or it
 # would render an almost-empty crate.
 [package.metadata.docs.rs]

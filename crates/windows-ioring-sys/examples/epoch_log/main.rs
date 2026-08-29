@@ -25,12 +25,16 @@
 //!
 //! M13.1 delivered the contract, M13.2 the record format and append path,
 //! M13.3 epoch bookkeeping and group commit, M13.4 the multiplexed wait, and
-//! M13.5 replay. M14.1 (this) adds the case that motivated the multiplexed
-//! wait in the first place: an operation the ring cannot express -- an `FSCTL`
+//! M13.5 replay. M14.1 added the case that motivated the multiplexed wait in
+//! the first place: an operation the ring cannot express -- an `FSCTL`
 //! reclaiming a retired segment -- that must nonetheless be ordered against
-//! ring work. See [`reclaim`].
+//! ring work. M14.2 (this) splits the program across both delivery models at
+//! once: the log thread keeps Model B for the data path, while checkpointing
+//! runs Model A on a second ring delivered to the thread pool. See
+//! [`reclaim`] and [`checkpoint`].
 
 mod append;
+mod checkpoint;
 mod commit;
 mod contract;
 mod event_loop;
@@ -41,9 +45,10 @@ mod replay;
 use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 
 use append::{Appender, SLOT_LEN, SLOTS};
+use checkpoint::Checkpointer;
 use commit::{Committer, Epoch};
 use contract::{CONTRACT, Clause};
 use event_loop::{EventLoop, Woken};
@@ -124,6 +129,15 @@ fn retired_path() -> PathBuf {
     ))
 }
 
+/// Where the checkpoint record lives (M14.2). Written on the control ring by
+/// the thread pool, never by the log thread.
+fn checkpoint_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "windows-ioring-sys-epoch-log-{}-checkpoint.bin",
+        std::process::id()
+    ))
+}
+
 /// The payload of the `index`-th record this demonstration appends. One
 /// function so the append side and the read-back check cannot drift.
 fn payload_for(index: usize) -> Vec<u8> {
@@ -148,6 +162,7 @@ fn run_log<O: io::Write, E: io::Write>(
     report: &mut Report<O, E>,
     path: &std::path::Path,
     retired: &std::path::Path,
+    checkpoint_path: &std::path::Path,
 ) -> io::Result<LogRun> {
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -157,12 +172,36 @@ fn run_log<O: io::Write, E: io::Write>(
     let handle = file.as_raw_handle();
 
     std::fs::write(retired, vec![RETIRED_FILL; RETIRED_LEN as usize])?;
+    let checkpoint_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(checkpoint_path)?;
 
     let mut ring = IoRing::new(64, 128)?;
     let mut appender = Appender::new(&mut ring)?;
     let mut committer = Committer::new();
-    let mut reclaimer = Reclaimer::new(retired)?;
-    let events = EventLoop::new(&mut ring, reclaimer.completion_handle())?;
+
+    // The reclaim worker is shared: the log thread waits on its handle, and a
+    // pool thread is what asks it for work (M14.2).
+    let reclaimer = Reclaimer::new(retired)?;
+    let reclaim_handle = reclaimer.completion_handle().try_clone()?;
+    let reclaimer = Arc::new(Mutex::new(reclaimer));
+
+    // The control ring is a *second* ring, handed to the pool. It cannot be
+    // the log's own: `EventDelivery` owns its ring's completion event, and a
+    // second waiter on that event is what D-21 rules out.
+    let checkpointer = Checkpointer::new(
+        IoRing::new(8, 16)?,
+        checkpoint_file.as_raw_handle(),
+        Arc::clone(&reclaimer),
+    )?;
+
+    let events = EventLoop::new(&mut ring, &reclaim_handle)?;
+    report.line(format_args!(
+        "data path: Model B on this thread; control plane: Model A on a second ring \
+         delivered to the thread pool"
+    ));
     report.line(format_args!(
         "arena registered: {SLOTS} slots of {SLOT_LEN} bytes; \
          waiting on the ring's completion event alongside a reclaim event and a shutdown latch"
@@ -182,6 +221,7 @@ fn run_log<O: io::Write, E: io::Write>(
     let mut empty_wakes = 0;
     let mut reclaimed_for: Option<Epoch> = None;
     let mut reclaim_failures: Vec<io::Error> = Vec::new();
+    let mut collected = 0usize;
     while appended < RECORDS {
         let epoch = committer.open_epoch();
         let payload = payload_for(appended);
@@ -220,13 +260,13 @@ fn run_log<O: io::Write, E: io::Write>(
                     .map_or_else(|| "none".to_owned(), |e| e.0.to_string()),
             ));
 
-            // The ordering the ring cannot express (M14.1). The retired
-            // segment is only dead once an epoch of *this* generation is
-            // durable; reclaim it earlier and a crash in between loses both
-            // copies. `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` cannot help, in either
-            // direction -- it orders SQEs against SQEs (D-24), and this
-            // `FSCTL` is not an SQE at all. So the log enforces it, here, in
-            // one line of ordinary control flow.
+            // The ordering the ring cannot express (M14.1), now issued through
+            // the control plane (M14.2). The retired segment is only dead once
+            // a *checkpoint* records a watermark past it -- reclaim earlier and
+            // a crash in between loses both copies.
+            // `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` cannot help anywhere along this
+            // chain: it orders SQEs against SQEs on one ring (D-24), and the
+            // chain spans two rings and an `FSCTL` that is not an SQE at all.
             //
             // The assertion is the enforcement made checkable: move this block
             // above the `while !committer.is_durable(closed)` loop and it
@@ -234,14 +274,13 @@ fn run_log<O: io::Write, E: io::Write>(
             if reclaimed_for.is_none() {
                 assert!(
                     committer.is_durable(closed),
-                    "a reclaim must not be issued before the epoch that supersedes the \
-                     retired segment is durable"
+                    "a checkpoint must not be issued before the epoch it records is durable"
                 );
-                reclaimer.request(closed, RETIRED_LEN / 2)?;
+                checkpointer.submit(closed, RETIRED_LEN / 2)?;
                 reclaimed_for = Some(closed);
                 report.line(format_args!(
-                    "epoch {} is durable, so the first half of the retired segment \
-                     ({} bytes) can now be reclaimed; FSCTL issued off the event-loop thread",
+                    "epoch {} is durable, so a checkpoint went to the control ring; \
+                     a pool thread will authorise reclaiming the first {} bytes",
                     closed.0,
                     RETIRED_LEN / 2
                 ));
@@ -273,28 +312,36 @@ fn run_log<O: io::Write, E: io::Write>(
     // Phase 1 of the reclaim story: collect the reclaim that ran *alongside*
     // the appends. Measurement is blunt about what this does and does not
     // show. It shows the two kinds of work overlapping -- ring completions
-    // kept being serviced for the whole time the `FSCTL` was running on the
-    // worker. It does **not** show the reclaim handle being load-bearing:
-    // removing it from the wait entirely costs this phase nothing, because
-    // ring traffic wakes the loop anyway and the result is collected on a ring
-    // arm. Measured, not assumed -- the sabotage was run, and it passed.
-    while reclaimer.in_flight() {
+    // kept being serviced for the whole time the checkpoint and the `FSCTL`
+    // were running elsewhere. It does **not** show the reclaim handle being
+    // load-bearing: removing it from the wait entirely costs this phase
+    // nothing, because ring traffic wakes the loop anyway and the result is
+    // collected on a ring arm. Measured, not assumed -- the sabotage was run,
+    // and it passed.
+    while collected < 1 {
         let (woken, popped) =
             events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
         empty_wakes += usize::from(popped == 0);
         // Collected unconditionally, for the same reason the ring is drained
         // unconditionally: a result queued between the wait returning and this
         // line is still a result.
-        collect_reclaim(report, &mut reclaimer, woken, &mut reclaim_failures);
+        collected += usize::from(collect_reclaim(
+            report,
+            &reclaimer,
+            woken,
+            &mut reclaim_failures,
+        ));
     }
 
     // Phase 2 is where the handle has teeth. Quiesce the ring first, so every
-    // append and commit has completed and *nothing on the ring will signal
-    // again*, then issue a second reclaim. Now the only handle that can end
-    // the wait is the reclaim's: drop it from `WaitForMultipleObjects` and
-    // this loop blocks for the full `WAIT_MS` with a finished result sitting
-    // in the channel. That is the lost wakeup this whole file exists to avoid,
-    // and unlike phase 1 it is reproducible on demand.
+    // append and commit has completed and *nothing on the log's ring will
+    // signal again*, then issue a second checkpoint. The control ring's own
+    // completions go to the pool, not to this wait, so the only handle that
+    // can end this loop is the reclaim's: drop it from
+    // `WaitForMultipleObjects` and the loop blocks for the full `WAIT_MS` with
+    // a finished result sitting in the channel. That is the lost wakeup this
+    // whole file exists to avoid, and unlike phase 1 it is reproducible on
+    // demand.
     let mut attempts = 0;
     while appender.in_flight() > 0 || committer.in_flight() > 0 {
         attempts += 1;
@@ -310,16 +357,23 @@ fn run_log<O: io::Write, E: io::Write>(
     let watermark = committer
         .durable_through()
         .expect("at least one epoch was committed");
-    reclaimer.request(watermark, RETIRED_LEN)?;
+    checkpointer.submit(watermark, RETIRED_LEN)?;
     report.line(format_args!(
-        "ring is idle; reclaiming the rest of the retired segment ({RETIRED_LEN} bytes) \
-         with nothing but the reclaim event able to wake the wait"
+        "log ring is idle; a second checkpoint for epoch {} will authorise reclaiming the \
+         rest of the retired segment ({RETIRED_LEN} bytes), and nothing but the reclaim \
+         event can wake this wait",
+        watermark.0
     ));
-    while reclaimer.in_flight() {
+    while collected < 2 {
         let (woken, popped) =
             events.pump(WAIT_MS, || drain(&mut ring, &mut appender, &mut committer))?;
         empty_wakes += usize::from(popped == 0);
-        collect_reclaim(report, &mut reclaimer, woken, &mut reclaim_failures);
+        collected += usize::from(collect_reclaim(
+            report,
+            &reclaimer,
+            woken,
+            &mut reclaim_failures,
+        ));
     }
 
     // The work is done: ask for shutdown and keep pumping until the *other*
@@ -387,8 +441,21 @@ fn run_log<O: io::Write, E: io::Write>(
     // the return code, because a call that reports success and changes nothing
     // is the failure worth catching. The endpoint is closed first so the read
     // cannot race the worker.
-    let reclaimed_for = reclaimed_for.expect("a reclaim was requested");
+    let reclaimed_for = reclaimed_for.expect("a checkpoint was submitted");
     drop(reclaimer);
+    for failure in checkpointer.failures() {
+        report.error_line(format_args!("control plane: {failure}"));
+    }
+    let checkpoint_watermark = checkpointer
+        .durable_through()
+        .expect("at least one checkpoint completed");
+    report.line(format_args!(
+        "control plane: {} checkpoint(s) completed on pool threads, durable through epoch {}",
+        checkpointer.completed(),
+        checkpoint_watermark.0
+    ));
+    drop(checkpointer);
+    drop(checkpoint_file);
     if reclaim_failures.is_empty() {
         let bytes = std::fs::read(retired)?;
         let non_zero = bytes.iter().filter(|byte| **byte != 0).count();
@@ -399,7 +466,7 @@ fn run_log<O: io::Write, E: io::Write>(
         );
         report.line(format_args!(
             "retired segment reads back as {} zero bytes: the first half reclaimed once \
-             epoch {} was durable, the rest on the idle path",
+             epoch {} was checkpointed, the rest on the idle path",
             bytes.len(),
             reclaimed_for.0
         ));
@@ -540,12 +607,18 @@ fn await_durable_fused(
 /// wait returning and this call is still a result.
 fn collect_reclaim<O: io::Write, E: io::Write>(
     report: &mut Report<O, E>,
-    reclaimer: &mut Reclaimer,
+    reclaimer: &Mutex<Reclaimer>,
     woken: Woken,
     failures: &mut Vec<io::Error>,
-) {
-    let Some(done) = reclaimer.take_completed() else {
-        return;
+) -> bool {
+    let done = {
+        let mut reclaimer = reclaimer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reclaimer.take_completed()
+    };
+    let Some(done) = done else {
+        return false;
     };
     let arm = match woken {
         Woken::NonRing => "reclaim",
@@ -565,6 +638,7 @@ fn collect_reclaim<O: io::Write, E: io::Write>(
             failures.push(error);
         }
     }
+    true
 }
 
 /// Pop every completion currently available, routing each to whichever of the
@@ -616,7 +690,8 @@ fn main() {
 
     let path = log_path();
     let retired = retired_path();
-    let outcome = run_log(&mut report, &path, &retired).and_then(|run| {
+    let checkpoint = checkpoint_path();
+    let outcome = run_log(&mut report, &path, &retired, &checkpoint).and_then(|run| {
         report.line(format_args!(""));
         verify(&mut report, &path, &run)
     });
@@ -628,10 +703,12 @@ fn main() {
             report.error_line(format_args!("epoch log failed: {error}"));
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_file(&retired);
+            let _ = std::fs::remove_file(&checkpoint);
             std::process::exit(1);
         }
     }
 
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&retired);
+    let _ = std::fs::remove_file(&checkpoint);
 }

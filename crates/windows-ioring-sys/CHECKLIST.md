@@ -244,7 +244,7 @@ forced the original consumer conversation -- operations the ring cannot express,
   quiesces does -- removing it turns a 78 ms run into a 30 s `WAIT_MS` block. The ordering itself
   is enforced by the log, not the ring, and asserting it before each request makes that checkable.
 
-- [ ] **M14.2** -- A control-plane and background path on `windows-threadpool-sys`: checkpointing or
+- [x] **M14.2** -- A control-plane and background path on `windows-threadpool-sys`: checkpointing or
   reclamation driven from the pool while the pinned log thread keeps the data path. Demonstrates the
   hybrid the design notes recommend -- Model B on the hot path, Model A for everything else -- in one
   program, which nothing in the crate currently shows. **Must also add an explicit `[[example]]`
@@ -252,6 +252,13 @@ forced the original consumer conversation -- operations the ring cannot express,
   sample uses no thread pool through M13, so it builds under `--no-default-features` today, and the
   moment this item introduces `EventDelivery` it stops -- which the `ioring-no-threadpool` CI job
   from M11.4 will catch as a build failure rather than a warning.
+  **Done:** `examples/epoch_log/checkpoint.rs` runs the checkpoint on a *second* ring handed to
+  `EventDelivery`; the pool thread that sees the covering flush complete is what authorises the
+  reclaim, so the chain crosses log thread -> pool thread -> reclaim worker -> log thread with the
+  log thread blocking for none of it. Two rings rather than one is forced by
+  [D-21](DESIGN-NOTES.md#d-21), not chosen. The `[[example]]` entry was added and its necessity
+  verified: removing it makes `cargo check --all-targets --no-default-features` fail with
+  `unresolved import windows_ioring_sys::EventDelivery`, which is exactly what the M11.4 job runs.
 
 - [ ] **M14.3** -- Implement all three epoch-commit strategies from "Durability on the ring" behind
   one interface, selectable at run time: covering flush (ring stalls), host sequencing (a userspace
