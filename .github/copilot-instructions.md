@@ -117,7 +117,7 @@ edits (`tpu_replace_in_file` / `tpu_edit_file`), not only to PowerShell/shell.
   (`git --no-pager diff --cached -U0 -- "*.rs" | Select-String '^\+\s*mod tests\s*\{'`);
   any hit is a blocking violation — move those tests into a sibling `tests.rs`
   first. See the full gate in
-  `.github/instructions/global.rust.instructions.md`.
+  [instructions/global.rust.instructions.md](instructions/global.rust.instructions.md).
 - **Commit every file `cargo fmt` reformats, even outside your task's scope.**
   `cargo fmt` rewrites *all* files in the formatted scope, not just the ones you
   edited — so a run can clean up a pre-existing formatting drift in a file your

@@ -34,7 +34,7 @@ This file is feature-scoped and is deleted when every item is done.
 
 ## M1 -- State the baseline where an automated reviewer will read it
 
-- [ ] **RB-1** -- Create [.github/instructions/global.rust.instructions.md](.github/instructions/global.rust.instructions.md).
+- [x] **RB-1** -- Create [.github/instructions/global.rust.instructions.md](.github/instructions/global.rust.instructions.md).
   [.github/copilot-instructions.md](.github/copilot-instructions.md) already cites this
   path twice (at the "Rust pre-commit gate" bullet and at the milestone-boundary build
   step) as the home of "the full gate", but the file does not exist -- so the one
