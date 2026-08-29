@@ -302,17 +302,44 @@ M12.1 is first because it is a correctness defect in shipped 0.1.2, not an enhan
   this hardware. Short-write detection guards the whole thing: an unbuffered write with a misaligned
   offset or length would otherwise make every count meaningless.
 
-- [ ] **M12.3** -- Expose `FILE_WRITE_FLAGS` on the write entry points
-  ([D-25](DESIGN-NOTES.md#d-25)), as a typed option rather than a raw flag word. Rustdoc must state
-  what write-through is and is not: a first-level cache directive that shortens a later flush, **not**
-  a durability guarantee and **not** FUA -- the conflation that cost this exchange a wrong
-  recommendation.
+- [x] **M12.3** -- `FILE_WRITE_FLAGS` is exposed as `WriteCaching` (`Cached` / `WriteThrough`), a
+  required argument on all four write entry points -- `write`, `write_raw`, `write_registered`,
+  `write_registered_raw` ([D-25](DESIGN-NOTES.md#d-25)). A typed enum rather than a raw flag word, and
+  `Cached` is `#[default]` so the previous hardcoded behaviour has a name rather than being the
+  absence of one.
 
-- [ ] **M12.4** -- Expose `FILE_FLUSH_MODE` on the flush entry points
-  ([D-25](DESIGN-NOTES.md#d-25)) as a typed enum (`Default`, `Data`, `MinMetadata`, `NoSync`).
-  `NoSync` needs the loudest documentation in the crate: it skips the device sync, so it is the one
-  mode that does not make anything durable. Note in passing that the existence of `NoSync` as a
-  distinct mode is the evidence that the other three do issue the sync.
+  The rustdoc states what write-through **is** -- a first-level cache directive whose value is
+  latency shaping, since data already at the device makes a later flush shorter -- and what it is
+  **not**: not a durability guarantee and not FUA, because whether it becomes a Force Unit Access bit
+  depends on the driver, the volume, and whether the device's write cache is enabled, none of which
+  this API can see or promise. A write that completes with `WriteThrough` may still be in a volatile
+  device cache. That conflation cost the originating exchange a wrong recommendation, so it is stated
+  at the type rather than left in a design note.
+
+  A unit test pins the mapping, including that `Cached` stays the no-flag value: silently enabling
+  write-through would change latency behaviour for every existing caller without changing any call
+  site.
+
+- [x] **M12.4** -- `FILE_FLUSH_MODE` is exposed as `FlushMode` (`Default`, `Data`, `MinMetadata`,
+  `NoSync`) on both flush entry points ([D-25](DESIGN-NOTES.md#d-25)), with `Default` as `#[default]`
+  -- the mode a durability barrier wants and what the crate hardcoded before.
+
+  `NoSync` carries the loudest documentation in the crate, because it is **the one mode that makes
+  nothing durable**: it pushes data out of the system cache and stops, so anything in a volatile
+  device cache is lost on power failure exactly as if no flush had been issued. Its completion is not
+  a commit point and must never be reported to a caller as one. Stated in passing, as the item asked:
+  the existence of a distinct "no sync" mode is itself the evidence that the other three *do* issue
+  the sync -- nothing in the Win32 documentation says so directly.
+
+  A unit test pins all four mappings. It matters most for `NoSync`: confusing it with any other value
+  would turn a commit point into a no-op that still reports success.
+
+  **Note on sequencing.** These two were implemented back to back and are committed together, citing
+  both IDs. They are genuinely independent -- separate kernel parameters on separate entry points --
+  and that independence was preserved in how the code was written, so re-slicing the commit would be
+  bookkeeping rather than history.
+
+  **Breaking change**: all four write entry points and both flush entry points changed signature.
 
 - [ ] **M12.5** -- Document durability across every place that states it, as a CONTRACT INTEGRITY
   blast-radius sweep rather than a single edit: `lib.rs`, `README.md`, the flush and write rustdoc,

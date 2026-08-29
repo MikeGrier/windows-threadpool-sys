@@ -9,7 +9,8 @@ use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::PathBuf;
 
 use windows_ioring_sys::{
-    Batch, FlushCoverage, IoRing, IoRingErrorExt, PushOptions, RingCondition, SharedFile, Token,
+    Batch, FlushCoverage, FlushMode, IoRing, IoRingErrorExt, PushOptions, RingCondition,
+    SharedFile, Token,
 };
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 
@@ -109,7 +110,7 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
         let mut batch = Batch::new(&mut ring);
         loop {
             // SAFETY: `handle` stays open for the whole test.
-            match unsafe { batch.flush_raw(handle, FlushCoverage::Unordered) } {
+            match unsafe { batch.flush_raw(handle, FlushCoverage::Unordered, FlushMode::Default) } {
                 Ok(_user_data) => {
                     queued += 1;
                     assert!(
@@ -159,8 +160,9 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
     // `Unordered` because this test is about backpressure and ring
     // reusability, not durability: a covering flush would add a ring-wide
     // barrier that has nothing to do with what is under test.
-    let user_data = unsafe { batch.flush_raw(handle, FlushCoverage::Unordered) }
-        .expect("ring still accepts pushes after backpressure");
+    let user_data =
+        unsafe { batch.flush_raw(handle, FlushCoverage::Unordered, FlushMode::Default) }
+            .expect("ring still accepts pushes after backpressure");
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
         .try_pop()

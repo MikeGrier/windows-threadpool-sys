@@ -1,8 +1,12 @@
 // Copyright (c) 2026 Mike Grier
 use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::Storage::FileSystem::{IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_FLUSH_DATA, FILE_FLUSH_DEFAULT, FILE_FLUSH_MIN_METADATA, FILE_FLUSH_NO_SYNC,
+    FILE_WRITE_FLAGS_NONE, FILE_WRITE_FLAGS_WRITE_THROUGH, IOSQE_FLAGS_DRAIN_PRECEDING_OPS,
+    IOSQE_FLAGS_NONE,
+};
 
-use super::{Batch, FlushCoverage, PushOptions};
+use super::{Batch, FlushCoverage, FlushMode, PushOptions, WriteCaching};
 use crate::IoRing;
 use crate::buf::{IoBuf, IoBufMut};
 
@@ -24,6 +28,31 @@ fn a_covering_flush_sets_the_barrier_flag_and_an_unordered_one_does_not() {
         IOSQE_FLAGS_DRAIN_PRECEDING_OPS
     );
     assert_eq!(FlushCoverage::Unordered.sqe_flags(), IOSQE_FLAGS_NONE);
+}
+
+#[test]
+fn write_caching_maps_to_the_kernels_write_flags() {
+    // `Cached` is the default and must stay the no-flag value: silently
+    // enabling write-through would change latency behaviour for every existing
+    // caller without changing any call site (M12.3).
+    assert_eq!(WriteCaching::Cached.raw(), FILE_WRITE_FLAGS_NONE);
+    assert_eq!(
+        WriteCaching::WriteThrough.raw(),
+        FILE_WRITE_FLAGS_WRITE_THROUGH
+    );
+    assert_eq!(WriteCaching::default(), WriteCaching::Cached);
+}
+
+#[test]
+fn flush_mode_maps_to_the_kernels_flush_modes() {
+    // The mapping matters most for `NoSync`, which is the one mode that issues
+    // no device sync: mixing it up with any other value would turn a commit
+    // point into a no-op that still reports success (M12.4).
+    assert_eq!(FlushMode::Default.raw(), FILE_FLUSH_DEFAULT);
+    assert_eq!(FlushMode::Data.raw(), FILE_FLUSH_DATA);
+    assert_eq!(FlushMode::MinMetadata.raw(), FILE_FLUSH_MIN_METADATA);
+    assert_eq!(FlushMode::NoSync.raw(), FILE_FLUSH_NO_SYNC);
+    assert_eq!(FlushMode::default(), FlushMode::Default);
 }
 
 #[test]
@@ -91,8 +120,16 @@ fn write_rejects_a_buffer_longer_than_u32_max_without_touching_the_ring() {
     let outstanding_before = ring.outstanding();
     let mut batch = Batch::new(&mut ring);
     // SAFETY: as above.
-    let error = unsafe { batch.write_raw(NULL_FILE, HugeBuffer, 0, PushOptions::new()) }
-        .expect_err("an oversized buffer must be rejected");
+    let error = unsafe {
+        batch.write_raw(
+            NULL_FILE,
+            HugeBuffer,
+            0,
+            PushOptions::new(),
+            WriteCaching::Cached,
+        )
+    }
+    .expect_err("an oversized buffer must be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     drop(batch);
     assert_eq!(

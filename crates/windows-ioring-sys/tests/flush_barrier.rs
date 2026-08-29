@@ -40,7 +40,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 
-use windows_ioring_sys::{Batch, FlushCoverage, IoBuf, IoRing, PushOptions, Token};
+use windows_ioring_sys::{
+    Batch, FlushCoverage, FlushMode, IoBuf, IoRing, PushOptions, Token, WriteCaching,
+};
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_NO_BUFFERING, FILE_FLAG_OVERLAPPED,
@@ -179,22 +181,39 @@ fn run_case(ring: &mut IoRing, file: RawHandle, coverage: FlushCoverage) -> Obse
             let offset = (index * BIG_LEN) as u64;
             // SAFETY: `file` stays open for the whole test, and every token is
             // held in `pending` until its completion has been popped.
-            let token = unsafe { batch.write_raw(file, buffer, offset, PushOptions::new()) }
-                .expect("queue phase-A write");
+            let token = unsafe {
+                batch.write_raw(
+                    file,
+                    buffer,
+                    offset,
+                    PushOptions::new(),
+                    WriteCaching::Cached,
+                )
+            }
+            .expect("queue phase-A write");
             phase_a.push(token.id());
             expected_len.insert(token.id(), BIG_LEN);
             pending.insert(token.id(), token);
         }
 
         // SAFETY: as above.
-        flush_id = unsafe { batch.flush_raw(file, coverage) }.expect("queue flush");
+        flush_id =
+            unsafe { batch.flush_raw(file, coverage, FlushMode::Default) }.expect("queue flush");
 
         for index in 0..PHASE_OPS {
             let buffer = Aligned::new(SMALL_LEN, index as u8);
             let offset = (PHASE_B_BASE + index * SMALL_LEN) as u64;
             // SAFETY: as above.
-            let token = unsafe { batch.write_raw(file, buffer, offset, PushOptions::new()) }
-                .expect("queue phase-B write");
+            let token = unsafe {
+                batch.write_raw(
+                    file,
+                    buffer,
+                    offset,
+                    PushOptions::new(),
+                    WriteCaching::Cached,
+                )
+            }
+            .expect("queue phase-B write");
             phase_b.push(token.id());
             expected_len.insert(token.id(), SMALL_LEN);
             pending.insert(token.id(), token);

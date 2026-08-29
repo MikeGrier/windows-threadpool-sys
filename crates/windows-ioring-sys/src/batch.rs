@@ -12,10 +12,11 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
     BuildIoRingCancelRequest, BuildIoRingFlushFile, BuildIoRingReadFile,
     BuildIoRingRegisterBuffers, BuildIoRingRegisterFileHandles, BuildIoRingWriteFile,
-    FILE_FLUSH_DEFAULT, FILE_WRITE_FLAGS_NONE, IORING_BUFFER_INFO, IORING_BUFFER_REF,
-    IORING_BUFFER_REF_0, IORING_HANDLE_REF, IORING_HANDLE_REF_0, IORING_REF_RAW,
-    IORING_REF_REGISTERED, IORING_REGISTERED_BUFFER, IORING_SQE_FLAGS,
-    IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE, SubmitIoRing,
+    FILE_FLUSH_DATA, FILE_FLUSH_DEFAULT, FILE_FLUSH_MIN_METADATA, FILE_FLUSH_MODE,
+    FILE_FLUSH_NO_SYNC, FILE_WRITE_FLAGS, FILE_WRITE_FLAGS_NONE, FILE_WRITE_FLAGS_WRITE_THROUGH,
+    IORING_BUFFER_INFO, IORING_BUFFER_REF, IORING_BUFFER_REF_0, IORING_HANDLE_REF,
+    IORING_HANDLE_REF_0, IORING_REF_RAW, IORING_REF_REGISTERED, IORING_REGISTERED_BUFFER,
+    IORING_SQE_FLAGS, IOSQE_FLAGS_DRAIN_PRECEDING_OPS, IOSQE_FLAGS_NONE, SubmitIoRing,
 };
 
 use crate::buf::{IoBuf, IoBufMut};
@@ -147,6 +148,124 @@ impl FlushCoverage {
         match self {
             Self::CoversPrecedingOperations => IOSQE_FLAGS_DRAIN_PRECEDING_OPS,
             Self::Unordered => IOSQE_FLAGS_NONE,
+        }
+    }
+}
+
+/// Where a write is allowed to stop: in the system cache, or past it (M12.3,
+/// D-25 in `DESIGN-NOTES.md`).
+///
+/// This is `BuildIoRingWriteFile`'s `FILE_WRITE_FLAGS` parameter, which the
+/// crate previously hardcoded to `FILE_WRITE_FLAGS_NONE` -- so a consumer
+/// reading this API saw ordering but no way to express anything about caching
+/// at all, and could reasonably conclude the ring did not expose it. It does;
+/// the crate was narrowing the platform to what its own examples needed.
+///
+/// # What write-through is, and what it is not
+///
+/// Worth stating precisely, because conflating these produced a wrong
+/// recommendation in the exchange that prompted this work.
+///
+/// It **is** a first-level cache directive: it tells the OS not to leave the
+/// data sitting in the system cache. Its practical value is latency shaping --
+/// data already at the device makes a later flush shorter, which can matter
+/// when the flush is on a commit path.
+///
+/// It is **not** a durability guarantee, and it is **not** FUA. Whether it
+/// becomes a Force Unit Access bit on the underlying command depends on the
+/// driver, the volume, and whether the device's write cache is enabled -- none
+/// of which this API can see or promise. A write that completes with
+/// [`WriteCaching::WriteThrough`] may still be sitting in a volatile device
+/// cache, and will be lost on power failure like any other.
+///
+/// **The flush operation is the only durability primitive the ring has**, and
+/// only with [`FlushCoverage::CoversPrecedingOperations`]. Reaching for
+/// write-through instead of a covering flush is the mistake this doc exists to
+/// prevent; reaching for it *as well* is a legitimate latency optimization.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WriteCaching {
+    /// `FILE_WRITE_FLAGS_NONE`: the write may be satisfied into the system
+    /// cache, and reaching the device is a later flush's job.
+    ///
+    /// The default, and the right choice for the streaming writes of an epoch
+    /// that a covering flush will close.
+    #[default]
+    Cached,
+    /// `FILE_WRITE_FLAGS_WRITE_THROUGH`: ask the OS not to leave the data in
+    /// the system cache.
+    ///
+    /// A latency-shaping knob, not a durability marker -- see this type's
+    /// docs. It does not remove the need for a flush.
+    WriteThrough,
+}
+
+impl WriteCaching {
+    fn raw(self) -> FILE_WRITE_FLAGS {
+        match self {
+            Self::Cached => FILE_WRITE_FLAGS_NONE,
+            Self::WriteThrough => FILE_WRITE_FLAGS_WRITE_THROUGH,
+        }
+    }
+}
+
+/// How much a flush is asked to push, and whether it syncs the device at all
+/// (M12.4, D-25 in `DESIGN-NOTES.md`).
+///
+/// This is `BuildIoRingFlushFile`'s `FILE_FLUSH_MODE` parameter, which the
+/// crate previously hardcoded to `FILE_FLUSH_DEFAULT`. Exposing it is the
+/// other half of D-25: the kernel offers a durability parameter here and a
+/// wrapper that hides it narrows the platform to what its own examples needed.
+///
+/// [`FlushMode::Default`] is what a caller closing an epoch wants, and is
+/// what the crate did before this existed.
+///
+/// # `NoSync` is not a durability operation
+///
+/// Three of these four modes issue the device sync; [`FlushMode::NoSync`] does
+/// not. That is worth stating rather than inferring, and the inference runs
+/// the other way too: **the existence of a distinct "no sync" mode is the
+/// evidence that the other three do sync.** Nothing in the Win32
+/// documentation says so directly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FlushMode {
+    /// `FILE_FLUSH_DEFAULT`: flush the file's data and metadata, and sync the
+    /// device.
+    ///
+    /// The default, and the mode a durability barrier wants. Pair it with
+    /// [`FlushCoverage::CoversPrecedingOperations`] or it covers nothing.
+    #[default]
+    Default,
+    /// `FILE_FLUSH_DATA`: flush the file's data, and sync the device.
+    ///
+    /// Metadata that is not required to read the data back may be left
+    /// unflushed. The analogue of `fdatasync`, and the usual choice for a log
+    /// whose records are self-describing.
+    Data,
+    /// `FILE_FLUSH_MIN_METADATA`: flush the data plus the minimum metadata
+    /// needed to retrieve it, and sync the device.
+    MinMetadata,
+    /// `FILE_FLUSH_NO_SYNC`: flush to the device **without** issuing the sync.
+    ///
+    /// **This is the one mode that makes nothing durable.** It pushes data out
+    /// of the system cache and stops there, so anything still held in a
+    /// volatile device cache is lost on power failure exactly as if no flush
+    /// had been issued at all. A completion from this mode is not a commit
+    /// point and must never be reported to a caller as one.
+    ///
+    /// It is useful for shaping when cache pressure is paid -- moving data
+    /// deviceward early so a later real flush is short -- which is the same
+    /// role [`WriteCaching::WriteThrough`] plays on the write side, and it
+    /// carries the same warning: a latency knob, not a durability primitive.
+    NoSync,
+}
+
+impl FlushMode {
+    fn raw(self) -> FILE_FLUSH_MODE {
+        match self {
+            Self::Default => FILE_FLUSH_DEFAULT,
+            Self::Data => FILE_FLUSH_DATA,
+            Self::MinMetadata => FILE_FLUSH_MIN_METADATA,
+            Self::NoSync => FILE_FLUSH_NO_SYNC,
         }
     }
 }
@@ -770,6 +889,11 @@ impl<'ring> Batch<'ring> {
 
     /// Queue a write of `buffer.bytes_len()` bytes to `file` at `offset`.
     ///
+    /// `caching` is `FILE_WRITE_FLAGS`; see [`WriteCaching`], and note that
+    /// write-through is a cache directive rather than a durability guarantee.
+    /// Durability comes from [`Batch::flush`] with
+    /// [`FlushCoverage::CoversPrecedingOperations`], never from a write flag.
+    ///
     /// Prefer [`Batch::write`] unless `file` needs to address a raw
     /// `FileRef` directly, without `SharedFile`'s `Arc` bookkeeping.
     ///
@@ -786,6 +910,7 @@ impl<'ring> Batch<'ring> {
         buffer: B,
         offset: u64,
         options: PushOptions,
+        caching: WriteCaching,
     ) -> io::Result<Token<B>> {
         self.require(Op::Write)?;
         let len = checked_len(buffer.bytes_len())?;
@@ -804,7 +929,7 @@ impl<'ring> Batch<'ring> {
                 raw_buffer_ref(address),
                 len,
                 offset,
-                FILE_WRITE_FLAGS_NONE,
+                caching.raw(),
                 user_data,
                 options.sqe_flags(),
             )
@@ -826,6 +951,7 @@ impl<'ring> Batch<'ring> {
         buffer: B,
         offset: u64,
         options: PushOptions,
+        caching: WriteCaching,
     ) -> io::Result<Token<(B, F::Guard)>> {
         self.require(Op::Write)?;
         let len = checked_len(buffer.bytes_len())?;
@@ -842,7 +968,7 @@ impl<'ring> Batch<'ring> {
                 raw_buffer_ref(address),
                 len,
                 offset,
-                FILE_WRITE_FLAGS_NONE,
+                caching.raw(),
                 user_data,
                 options.sqe_flags(),
             )
@@ -892,11 +1018,15 @@ impl<'ring> Batch<'ring> {
         }
     }
 
-    /// Queue a flush of `file`'s buffered data (`FILE_FLUSH_DEFAULT`).
+    /// Queue a flush of `file`'s buffered data.
     ///
     /// `coverage` decides whether this flush covers the operations queued
     /// before it. It is required rather than defaulted because there is no
     /// safe default -- see [`FlushCoverage`] and the measured contract below.
+    ///
+    /// `mode` is `FILE_FLUSH_MODE`; [`FlushMode::Default`] is the durability
+    /// barrier. Note that [`FlushMode::NoSync`] issues no device sync and so
+    /// makes nothing durable, whatever `coverage` says.
     ///
     /// There is no buffer, so this returns the raw `UserData` identity
     /// rather than a [`Token`]: nothing owns a buffer for a completion to
@@ -910,9 +1040,10 @@ impl<'ring> Batch<'ring> {
     /// write-through is a cache-bypass directive to the OS rather than a
     /// device-level durability guarantee -- whether it becomes a Force Unit
     /// Access bit depends on the driver, the volume, and whether the device's
-    /// write cache is enabled. So this operation is the only way the ring
-    /// makes anything durable, and only with
-    /// [`FlushCoverage::CoversPrecedingOperations`].
+    /// write cache is enabled (see [`WriteCaching`]). So this operation is the
+    /// only way the ring makes anything durable, and only with
+    /// [`FlushCoverage::CoversPrecedingOperations`] and a syncing
+    /// [`FlushMode`].
     ///
     /// # The measured contract (D-23 in `DESIGN-NOTES.md`)
     ///
@@ -923,6 +1054,11 @@ impl<'ring> Batch<'ring> {
     /// still outstanding. A caller that reads such a completion as "the
     /// writes before it are now durable" has lost data it believes it has
     /// committed, and nothing reports the loss until power fails.
+    ///
+    /// Which *direction* the reordering shows in is device-dependent, and a
+    /// machine where the flush happens to land last anyway proves nothing:
+    /// that is incidental behavior of one device stack, not a guarantee. Only
+    /// the barrier makes it one.
     ///
     /// Durability on this ring is therefore a property of an **epoch**, never
     /// of an individual write, because there is no per-write primitive to
@@ -946,6 +1082,7 @@ impl<'ring> Batch<'ring> {
         &mut self,
         file: impl Into<FileRef>,
         coverage: FlushCoverage,
+        mode: FlushMode,
     ) -> io::Result<usize> {
         self.require(Op::Flush)?;
         let target = handle_ref(file.into(), self.ring.ring_id())?;
@@ -957,7 +1094,7 @@ impl<'ring> Batch<'ring> {
             BuildIoRingFlushFile(
                 self.ring.raw_handle(),
                 target,
-                FILE_FLUSH_DEFAULT,
+                mode.raw(),
                 user_data,
                 coverage.sqe_flags(),
             )
@@ -976,7 +1113,9 @@ impl<'ring> Batch<'ring> {
     ///
     /// `coverage` is required for the reason [`FlushCoverage`] documents: an
     /// unflagged flush does not cover preceding writes (D-23), so there is no
-    /// default spelling of this call that is safe to inherit.
+    /// default spelling of this call that is safe to inherit. `mode` selects
+    /// how much is flushed and whether the device is synced at all; see
+    /// [`FlushMode`].
     ///
     /// # Errors
     ///
@@ -986,6 +1125,7 @@ impl<'ring> Batch<'ring> {
         &mut self,
         file: &F,
         coverage: FlushCoverage,
+        mode: FlushMode,
     ) -> io::Result<Token<F::Guard>> {
         self.require(Op::Flush)?;
         let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
@@ -997,7 +1137,7 @@ impl<'ring> Batch<'ring> {
             BuildIoRingFlushFile(
                 self.ring.raw_handle(),
                 target,
-                FILE_FLUSH_DEFAULT,
+                mode.raw(),
                 user_data,
                 coverage.sqe_flags(),
             )
@@ -1382,6 +1522,7 @@ impl<'ring> Batch<'ring> {
         span: RegisteredSpan,
         file_offset: u64,
         options: PushOptions,
+        caching: WriteCaching,
     ) -> io::Result<Token<RegisteredUse>> {
         self.require(Op::Write)?;
         self.check_registration_ring(registration)?;
@@ -1402,7 +1543,7 @@ impl<'ring> Batch<'ring> {
                 registered_buffer_ref(index, span.offset),
                 span.len,
                 file_offset,
-                FILE_WRITE_FLAGS_NONE,
+                caching.raw(),
                 user_data,
                 options.sqe_flags(),
             )
@@ -1429,6 +1570,7 @@ impl<'ring> Batch<'ring> {
         span: RegisteredSpan,
         file_offset: u64,
         options: PushOptions,
+        caching: WriteCaching,
     ) -> io::Result<Token<(RegisteredUse, F::Guard)>> {
         self.require(Op::Write)?;
         self.check_registration_ring(registration)?;
@@ -1452,7 +1594,7 @@ impl<'ring> Batch<'ring> {
                 registered_buffer_ref(index, span.offset),
                 span.len,
                 file_offset,
-                FILE_WRITE_FLAGS_NONE,
+                caching.raw(),
                 user_data,
                 options.sqe_flags(),
             )
