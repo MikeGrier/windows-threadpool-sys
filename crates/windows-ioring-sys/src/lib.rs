@@ -111,7 +111,7 @@ mod token;
 
 #[cfg(windows)]
 pub use batch::{
-    Batch, FileRef, PendingBufferRegistration, PendingFileRegistration, PushOptions,
+    Batch, FileRef, FileTarget, PendingBufferRegistration, PendingFileRegistration, PushOptions,
     RegisteredBuffers, RegisteredFile, RegisteredFiles, RegisteredSpan, RegisteredUse, SharedFile,
 };
 #[cfg(windows)]

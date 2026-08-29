@@ -485,6 +485,191 @@ fn a_registered_file_from_a_different_ring_is_rejected() {
 }
 
 #[test]
+fn a_registered_file_is_readable_through_the_safe_api_without_unsafe() {
+    // M10.4 / D-29: a RegisteredFile carries no lifetime obligation -- the
+    // index names a table the ring owns and was checked against the minting
+    // ring -- so reaching it must not require an `unsafe` call whose contract
+    // is vacuous for exactly this input. Note the absence of `unsafe` below:
+    // that absence is the whole point of the test.
+    let path = temp_file("safe-registered-file");
+    let content = vec![13_u8; 128];
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: `handle` stays open for the whole test. (Registering is still
+    // unsafe -- the handles must outlive the ring -- it is only *using* the
+    // resulting index that M10.4 made safe.)
+    let files_pending =
+        unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let registered_file = files_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("file registration succeeded")
+        .get(0)
+        .expect("index 0 exists");
+
+    let mut batch = Batch::new(&mut ring);
+    let token = batch
+        .read(&registered_file, vec![0_u8; 128], 0, PushOptions::new())
+        .expect("queue a safe read against the registered file");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    assert_eq!(completion.result().expect("read succeeded"), 128);
+    let (buffer, returned_file) = token
+        .claim_if(&completion)
+        .expect("token claims completion");
+    assert_eq!(buffer, content);
+    assert_eq!(
+        returned_file, registered_file,
+        "the guard hands the registered file back unchanged"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_registered_file_and_a_registered_buffer_compose_through_the_safe_api() {
+    // The fully-registered form -- registered file *and* registered buffer --
+    // which before M10.4 the safe API could not express at all (D-29).
+    let path = temp_file("safe-fully-registered");
+    let content = vec![21_u8; 64];
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: `handle` stays open for the whole test.
+    let files_pending =
+        unsafe { batch.register_files(&[handle]) }.expect("queue file registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let registered_file = files_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("file registration succeeded")
+        .get(0)
+        .expect("index 0 exists");
+
+    let mut batch = Batch::new(&mut ring);
+    let buffers_pending = batch
+        .register_buffers(vec![vec![0_u8; 64]])
+        .expect("queue buffer registration");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let registered_buffers = buffers_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("buffer registration succeeded");
+
+    let mut batch = Batch::new(&mut ring);
+    let span = RegisteredSpan {
+        buffer_index: 0,
+        offset: 0,
+        len: 64,
+    };
+    let token = batch
+        .read_registered(
+            &registered_file,
+            &registered_buffers,
+            span,
+            0,
+            PushOptions::new(),
+        )
+        .expect("queue a safe fully-registered read");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    assert_eq!(completion.result().expect("read succeeded"), 64);
+    let (registered_use, returned_file) = token
+        .claim_if(&completion)
+        .expect("token claims completion");
+    assert_eq!(returned_file, registered_file);
+    drop(registered_use);
+
+    assert_eq!(
+        registered_buffers.get(0).expect("buffer 0 exists"),
+        &content,
+        "the read must have landed in the registered buffer"
+    );
+
+    drop(registered_buffers);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn the_safe_api_rejects_a_registered_file_from_a_different_ring() {
+    // The cross-ring check (D-17) still applies on the safe path: making
+    // RegisteredFile reachable without `unsafe` must not weaken it.
+    let path = temp_file("safe-cross-ring-file");
+    std::fs::write(&path, b"content").expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring_a = IoRing::new(8, 8).expect("create ring a");
+    let mut ring_b = IoRing::new(8, 8).expect("create ring b");
+
+    let mut batch = Batch::new(&mut ring_a);
+    // SAFETY: `handle` stays open for the whole test.
+    let files_pending =
+        unsafe { batch.register_files(&[handle]) }.expect("queue file registration on ring a");
+    batch.submit_and_wait(1, 5_000).expect("submit and wait");
+    let completion = ring_a
+        .try_pop()
+        .expect("pop completion")
+        .expect("a completion is ready");
+    let registered_file = files_pending
+        .claim_if(&completion)
+        .expect("id matches")
+        .expect("file registration succeeded")
+        .get(0)
+        .expect("index 0 exists");
+
+    let mut batch = Batch::new(&mut ring_b);
+    let error = batch
+        .read(&registered_file, vec![0_u8; 8], 0, PushOptions::new())
+        .expect_err("a RegisteredFile from a different ring must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    drop(batch);
+
+    // And the rejection cost ring b nothing: no identity was reserved, so
+    // nothing counts against its rundown (M10.1).
+    assert_eq!(ring_b.outstanding(), 0);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn a_registered_buffers_from_a_different_ring_is_rejected() {
     let path = temp_file("cross-ring-buffers");
     let content = vec![9_u8; 32];

@@ -114,12 +114,12 @@ fn checked_len(len: usize) -> io::Result<u32> {
 /// A file, addressed either by a raw `HANDLE` or by the index a prior
 /// [`Batch::register_files`] assigned it (M5.1).
 ///
-/// Reaching the [`FileRef::Registered`] form currently requires one of the
-/// `unsafe fn` `_raw` pushes, because every safe push hardcodes
-/// [`FileRef::Raw`] from its [`SharedFile`]. That is a known gap, not the
-/// intended shape: a registered index carries no lifetime obligation, so the
-/// `unsafe` is vacuous for exactly that case (M10.2, D-29; the safe entry
-/// points are M10.4).
+/// This enum is the `_raw` pushes' addressing parameter. A safe push takes a
+/// [`FileTarget`] instead -- a [`SharedFile`] or a [`RegisteredFile`] -- so
+/// reaching a registered file has not required `unsafe` since M10.4 (D-29,
+/// D-33). Constructing a `FileRef` directly is only necessary for the `_raw`
+/// pushes, whose reason to exist is a bare `HANDLE` this crate cannot keep
+/// alive for you.
 ///
 /// A distinct type per addressing mode -- rather than one method accepting
 /// either a `HANDLE` or a bare `u32` -- is what makes "read against a
@@ -193,6 +193,72 @@ impl RegisteredFile {
     #[must_use]
     pub fn index(self) -> u32 {
         self.index
+    }
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::SharedFile {}
+    impl Sealed for super::RegisteredFile {}
+}
+
+/// A file a *safe* push can address: either a [`SharedFile`] or a
+/// [`RegisteredFile`] (M10.4; D-29 and D-33 in `DESIGN-NOTES.md`).
+///
+/// This exists because the two carry different lifetime obligations, and
+/// exactly one of them has none. A `SharedFile` is a raw `HANDLE` underneath,
+/// so something must keep it open until the kernel is finished; a
+/// `RegisteredFile` is an index into a table the ring itself owns, minted by
+/// this crate and checked against the minting ring, so there is nothing for a
+/// caller to keep alive. Both are therefore safe to push, and neither needs
+/// `unsafe` -- which is why [`Batch::read`] and its siblings are generic over
+/// this trait rather than hardcoding `SharedFile`.
+///
+/// [`Guard`](FileTarget::Guard) is what the returned [`Token`] holds until the
+/// operation's completion is observed. For `SharedFile` that is a clone of its
+/// `Arc`, which is what makes the handle outlive the operation; for
+/// `RegisteredFile` there is nothing to keep alive, so it is the (`Copy`)
+/// index itself, handed back for symmetry rather than out of necessity.
+///
+/// **Sealed**: this crate implements it for exactly those two types and no
+/// others. An outside implementation could return an arbitrary raw `HANDLE`
+/// from [`as_file_ref`](FileTarget::as_file_ref) with no guard keeping it
+/// alive, which is precisely the unsoundness the `_raw` pushes make a caller
+/// take responsibility for with `unsafe`.
+pub trait FileTarget: sealed::Sealed {
+    /// What the operation's [`Token`] must hold until its completion is
+    /// observed.
+    type Guard: Send + 'static;
+
+    /// How this target addresses its file.
+    fn as_file_ref(&self) -> FileRef;
+
+    /// Produce the value the [`Token`] will hold for the operation's
+    /// duration.
+    fn guard(&self) -> Self::Guard;
+}
+
+impl FileTarget for SharedFile {
+    type Guard = SharedFile;
+
+    fn as_file_ref(&self) -> FileRef {
+        FileRef::Raw(self.raw_handle())
+    }
+
+    fn guard(&self) -> Self::Guard {
+        self.clone()
+    }
+}
+
+impl FileTarget for RegisteredFile {
+    type Guard = RegisteredFile;
+
+    fn as_file_ref(&self) -> FileRef {
+        FileRef::Registered(*self)
+    }
+
+    fn guard(&self) -> Self::Guard {
+        *self
     }
 }
 
@@ -570,25 +636,27 @@ impl<'ring> Batch<'ring> {
     ///
     /// # Errors
     ///
-    /// As [`Batch::read_raw`].
-    pub fn read<B: IoBufMut>(
+    /// As [`Batch::read_raw`], plus [`io::ErrorKind::InvalidInput`] if `file`
+    /// is a [`RegisteredFile`] from a different ring.
+    pub fn read<B: IoBufMut, F: FileTarget>(
         &mut self,
-        file: &SharedFile,
+        file: &F,
         mut buffer: B,
         offset: u64,
         options: PushOptions,
-    ) -> io::Result<Token<(B, SharedFile)>> {
+    ) -> io::Result<Token<(B, F::Guard)>> {
         self.require(Op::Read)?;
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_mut_ptr().cast::<c_void>();
-        let raw = file.raw_handle();
-        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
-        let token = Token::new(self.ring, (buffer, file.clone()))?;
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let token = Token::new(self.ring, (buffer, file.guard()))?;
         let user_data = token.id();
         // SAFETY: `self.ring`'s handle is live; `address` is `IoBufMut`'s
         // promised stable, exclusively-owned pointer, valid for `len` bytes
-        // until `token` is claimed; `raw` stays valid at least that long
-        // too, since `token` holds its own clone of `file`'s `Arc`.
+        // until `token` is claimed; `target` stays valid at least that long
+        // too, because `token` holds `file`'s guard -- a clone of the `Arc`
+        // for a `SharedFile`, and nothing needing to be kept alive at all for
+        // a `RegisteredFile`, whose index names the ring's own table.
         let hr = unsafe {
             BuildIoRingReadFile(
                 self.ring.raw_handle(),
@@ -653,23 +721,23 @@ impl<'ring> Batch<'ring> {
     ///
     /// # Errors
     ///
-    /// As [`Batch::write_raw`].
-    pub fn write<B: IoBuf>(
+    /// As [`Batch::write_raw`], plus [`io::ErrorKind::InvalidInput`] if `file`
+    /// is a [`RegisteredFile`] from a different ring.
+    pub fn write<B: IoBuf, F: FileTarget>(
         &mut self,
-        file: &SharedFile,
+        file: &F,
         buffer: B,
         offset: u64,
         options: PushOptions,
-    ) -> io::Result<Token<(B, SharedFile)>> {
+    ) -> io::Result<Token<(B, F::Guard)>> {
         self.require(Op::Write)?;
         let len = checked_len(buffer.bytes_len())?;
         let address = buffer.stable_ptr().cast_mut().cast::<c_void>();
-        let raw = file.raw_handle();
-        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
-        let token = Token::new(self.ring, (buffer, file.clone()))?;
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let token = Token::new(self.ring, (buffer, file.guard()))?;
         let user_data = token.id();
-        // SAFETY: as `write_raw`'s; `raw` stays valid at least as long as
-        // `token`'s own clone of `file`'s `Arc` does.
+        // SAFETY: as `write_raw`'s; `target` stays valid at least as long as
+        // `token`'s hold on `file`'s guard does (see `Batch::read`).
         let hr = unsafe {
             BuildIoRingWriteFile(
                 self.ring.raw_handle(),
@@ -771,25 +839,26 @@ impl<'ring> Batch<'ring> {
         Ok(user_data)
     }
 
-    /// As [`Batch::flush_raw`], but safe: `file` is a [`SharedFile`], and
-    /// the returned [`Token`] (rather than a bare `UserData`) keeps
-    /// `file`'s clone alive until this operation's completion is observed.
+    /// As [`Batch::flush_raw`], but safe: `file` is a [`FileTarget`] -- a
+    /// [`SharedFile`] or a [`RegisteredFile`] -- and the returned [`Token`]
+    /// (rather than a bare `UserData`) holds its guard until this
+    /// operation's completion is observed.
     ///
     /// # Errors
     ///
-    /// As [`Batch::flush_raw`].
-    pub fn flush(
+    /// As [`Batch::flush_raw`], plus [`io::ErrorKind::InvalidInput`] if
+    /// `file` is a [`RegisteredFile`] from a different ring.
+    pub fn flush<F: FileTarget>(
         &mut self,
-        file: &SharedFile,
+        file: &F,
         options: PushOptions,
-    ) -> io::Result<Token<SharedFile>> {
+    ) -> io::Result<Token<F::Guard>> {
         self.require(Op::Flush)?;
-        let raw = file.raw_handle();
-        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
-        let token = Token::new(self.ring, file.clone())?;
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let token = Token::new(self.ring, file.guard())?;
         let user_data = token.id();
-        // SAFETY: `raw` stays valid at least as long as `token`'s own clone
-        // of `file`'s `Arc` does; there is no buffer.
+        // SAFETY: `target` stays valid at least as long as `token`'s hold on
+        // `file`'s guard does (see `Batch::read`); there is no buffer.
         let hr = unsafe {
             BuildIoRingFlushFile(
                 self.ring.raw_handle(),
@@ -857,15 +926,18 @@ impl<'ring> Batch<'ring> {
     /// # Errors
     ///
     /// As [`Batch::cancel_raw`].
-    pub fn cancel(&mut self, file: &SharedFile, target: usize) -> io::Result<Token<SharedFile>> {
+    pub fn cancel<F: FileTarget>(
+        &mut self,
+        file: &F,
+        target: usize,
+    ) -> io::Result<Token<F::Guard>> {
         self.require(Op::Cancel)?;
-        let raw = file.raw_handle();
-        let handle = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
-        let token = Token::new(self.ring, file.clone())?;
+        let handle = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
+        let token = Token::new(self.ring, file.guard())?;
         let user_data = token.id();
-        // SAFETY: `raw` stays valid at least as long as `token`'s own clone
-        // of `file`'s `Arc` does; `BuildIoRingCancelRequest` takes no
-        // SQE-flags parameter.
+        // SAFETY: `handle` stays valid at least as long as `token`'s hold on
+        // `file`'s guard does (see `Batch::read`);
+        // `BuildIoRingCancelRequest` takes no SQE-flags parameter.
         let hr =
             unsafe { BuildIoRingCancelRequest(self.ring.raw_handle(), handle, target, user_data) };
         self.finish_push(hr, token)
@@ -1103,37 +1175,43 @@ impl<'ring> Batch<'ring> {
     }
 
     /// As [`Batch::read_registered_raw`], but safe: `file` is a
-    /// [`SharedFile`] rather than a bare [`FileRef`]. The returned token
-    /// yields `(RegisteredUse, file)` once claimed.
+    /// [`FileTarget`] rather than a bare [`FileRef`]. The returned token
+    /// yields `(RegisteredUse, guard)` once claimed.
+    ///
+    /// Passing a [`RegisteredFile`] here is the fully-registered form --
+    /// registered file *and* registered buffer, neither costing a handle
+    /// lookup nor a buffer pin per operation -- which before M10.4 the safe
+    /// API could not express at all.
     ///
     /// # Errors
     ///
-    /// As [`Batch::read_registered_raw`].
-    pub fn read_registered<B: IoBufMut>(
+    /// As [`Batch::read_registered_raw`], plus
+    /// [`io::ErrorKind::InvalidInput`] if `file` is a [`RegisteredFile`] from
+    /// a different ring.
+    pub fn read_registered<B: IoBufMut, F: FileTarget>(
         &mut self,
-        file: &SharedFile,
+        file: &F,
         registration: &RegisteredBuffers<B>,
         span: RegisteredSpan,
         file_offset: u64,
         options: PushOptions,
-    ) -> io::Result<Token<(RegisteredUse, SharedFile)>> {
+    ) -> io::Result<Token<(RegisteredUse, F::Guard)>> {
         self.require(Op::Read)?;
         self.check_registration_ring(registration)?;
-        let raw = file.raw_handle();
-        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         registration.outstanding.fetch_add(1, Ordering::SeqCst);
         let token = Token::new(
             self.ring,
             (
                 RegisteredUse(Arc::clone(&registration.outstanding)),
-                file.clone(),
+                file.guard(),
             ),
         )?;
         let user_data = token.id();
         // SAFETY: `index` was just checked against `registration`, whose
-        // buffer stays put until it drops; `raw` stays valid at least as
-        // long as `token`'s own clone of `file`'s `Arc` does.
+        // buffer stays put until it drops; `target` stays valid at least as
+        // long as `token`'s hold on `file`'s guard does (see `Batch::read`).
         let hr = unsafe {
             BuildIoRingReadFile(
                 self.ring.raw_handle(),
@@ -1199,31 +1277,35 @@ impl<'ring> Batch<'ring> {
     }
 
     /// As [`Batch::write_registered_raw`], but safe: `file` is a
-    /// [`SharedFile`] rather than a bare [`FileRef`]. The returned token
-    /// yields `(RegisteredUse, file)` once claimed.
+    /// [`FileTarget`] rather than a bare [`FileRef`]. The returned token
+    /// yields `(RegisteredUse, guard)` once claimed.
+    ///
+    /// Passing a [`RegisteredFile`] here is the fully-registered form, as
+    /// for [`Batch::read_registered`].
     ///
     /// # Errors
     ///
-    /// As [`Batch::write_registered_raw`].
-    pub fn write_registered<B: IoBufMut>(
+    /// As [`Batch::write_registered_raw`], plus
+    /// [`io::ErrorKind::InvalidInput`] if `file` is a [`RegisteredFile`] from
+    /// a different ring.
+    pub fn write_registered<B: IoBufMut, F: FileTarget>(
         &mut self,
-        file: &SharedFile,
+        file: &F,
         registration: &RegisteredBuffers<B>,
         span: RegisteredSpan,
         file_offset: u64,
         options: PushOptions,
-    ) -> io::Result<Token<(RegisteredUse, SharedFile)>> {
+    ) -> io::Result<Token<(RegisteredUse, F::Guard)>> {
         self.require(Op::Write)?;
         self.check_registration_ring(registration)?;
-        let raw = file.raw_handle();
-        let target = handle_ref(FileRef::Raw(raw), self.ring.ring_id())?;
+        let target = handle_ref(file.as_file_ref(), self.ring.ring_id())?;
         let index = registration.checked_span(span)?;
         registration.outstanding.fetch_add(1, Ordering::SeqCst);
         let token = Token::new(
             self.ring,
             (
                 RegisteredUse(Arc::clone(&registration.outstanding)),
-                file.clone(),
+                file.guard(),
             ),
         )?;
         let user_data = token.id();

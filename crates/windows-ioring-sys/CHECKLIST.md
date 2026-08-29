@@ -155,7 +155,7 @@ are not a work queue".
   buffer addressing are genuinely orthogonal (all four combinations reachable), but file addressing and
   *safety* co-vary and in the wrong direction -- `FileRef::Registered` is reachable only through an
   `unsafe fn` whose safety obligation is vacuous for that very input
-  ([D-29](DESIGN-NOTES.md#d-29), queued as M10.4). Category 2: **every successfully queued SQE produces
+  ([D-29](DESIGN-NOTES.md#d-29), fixed in M10.4). Category 2: **every successfully queued SQE produces
   exactly one completion**, unconditionally -- the rule `run_down`'s termination silently depended on --
   plus the two "may" readings that were too weak (`submit*` returns entries submitted, not completed; a
   cancel is a request that yields a second completion rather than replacing its target's). Category 6: a
@@ -178,14 +178,19 @@ are not a work queue".
   reserved-at-queue-time, gave D-14 the required adjacent status marker, and corrected the audit section's
   category-4 paragraph, which still described the assumption as live.
 
-- [ ] **M10.4** -- Give `FileRef::Registered` safe entry points ([D-29](DESIGN-NOTES.md#d-29)). Today every
-  safe push hardcodes `FileRef::Raw` from its `SharedFile`, so using a registered file forces an `unsafe`
-  call whose contract is vacuous for that input -- the index is minted by this crate, checked against the
-  minting ring (D-17), and names a table the ring owns, leaving the caller nothing to keep alive. Vacuous
-  `unsafe` is worse than none: it trains a caller to discharge safety contracts by rote. Accept a
-  `RegisteredFile` without `unsafe` across the read/write/flush/cancel surface, including the
-  registered-buffer variants, and cover the file-registered x buffer-registered combination the safe API
-  currently cannot express at all.
+- [x] **M10.4** -- Gave `FileRef::Registered` safe entry points ([D-29](DESIGN-NOTES.md#d-29)), via a sealed
+  `FileTarget` trait with an associated `Guard` type ([D-33](DESIGN-NOTES.md#d-33)) rather than a parallel
+  family of `*_registered_file` methods. `read`, `write`, `flush`, `cancel`, `read_registered`, and
+  `write_registered` are now generic over it, so a `RegisteredFile` pushes without `unsafe` and the
+  file-registered x buffer-registered combination is expressible for the first time. `Guard` carries the
+  one real difference between the two targets -- what the `Token` must hold until the completion is
+  observed: an `Arc` clone for `SharedFile`, nothing needing to be kept alive for `RegisteredFile` (which
+  hands its `Copy` index back for symmetry). **Non-breaking**: `read(&SharedFile, ..)` still resolves to
+  `Token<(B, SharedFile)>` and every existing call site compiled untouched; generic params are ordered
+  `<B, F>` so an existing `read::<Vec<u8>>` turbofish still resolves. Sealing is load-bearing rather than
+  tidiness -- an outside impl could return `FileRef::Raw(arbitrary)` with a guard keeping nothing alive,
+  reintroducing what D-16 closed. Three tests: a safe registered-file read, the fully-registered
+  composition, and a cross-ring rejection confirming D-17's check still holds on the safe path.
 
 - [ ] **M10.5** -- A named predicate for the ring conditions a consumer must branch on, starting with
   `IORING_E_SUBMISSION_QUEUE_FULL` ([D-30](DESIGN-NOTES.md#d-30)). Every push's rustdoc names queue-full as
