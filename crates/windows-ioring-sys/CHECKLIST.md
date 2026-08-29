@@ -469,15 +469,41 @@ design note. `proptest` is randomized sampling. M17.2 exists to get that decisio
 than smuggled in under a dev-dependency. M15.2's seeded poison already needed the same permission and got it,
 so the question is narrower than it was -- see M17.2.
 
-- [ ] **M17.1** -- Close the two open cells of the handover precondition. A coverage inventory taken after M16
+- [x] **M17.1** -- Close the two open cells of the handover precondition. A coverage inventory taken after M16
   found this axis is mostly covered already, so this is no longer a matrix to build: *fresh* and
   *queued-non-empty* are covered by [tests/completion_event.rs](tests/completion_event.rs),
   *drained-then-resubmitted* by its `the_edge_re_arms_after_every_drain_to_empty`, and #47's own repro by
   [tests/event_delivery.rs](tests/event_delivery.rs). What remains is (a) attaching while operations are
   **in flight but no completion has landed**, for both `IoRing::completion_event` and `EventDelivery::new`,
-  and (b) drain-then-resubmit for `EventDelivery`. The in-flight cell is inherently racy to construct --
-  submit-then-attach-immediately samples both it and the queued cell, which is acceptable and is the point.
-  Gated on nothing; done first so #47's own axis is banked before any convention decision.
+  and (b) drain-then-resubmit for `EventDelivery`. Gated on nothing; done first so #47's own axis is banked
+  before any convention decision.
+  **Done:** [tests/handover.rs](tests/handover.rs), four tests, each bound to `RingContract` so a lost,
+  duplicated or unclaimed completion is a contract violation rather than an inferred count.
+  **The planned approach for cell (a) was wrong, and its sabotage is what proved it.** The item called for
+  racing the attach against in-flight operations. That state does not exist for *buffered* reads: they
+  complete **synchronously inside** `submit_and_wait`, measured at 80 of 80 attempts across five shapes up to
+  512 reads of 64 KiB, always leaving a full queue at attach time and never a partial split. The first draft
+  swept a delay across the supposed window and passed; sabotaging [D-20](DESIGN-NOTES.md#d-20)'s setup signal
+  failed it on *attempt 0*, revealing the sweep sat entirely on the already-queued side and the test was a
+  slower restatement of `attaching_to_a_ring_whose_queue_is_already_non_empty_still_signals`. Recorded as
+  [D-40](DESIGN-NOTES.md#d-40). Cell (a) is covered two ways instead. **Deterministically:** one attach
+  serving a backlog queued *before* it **and** a wave submitted *after* it into the still-non-empty queue,
+  which is where a seam between the setup signal and the edge would strand work exactly as #47 did.
+  **And genuinely in flight:** unbuffered (`FILE_FLAG_NO_BUFFERING`) reads *are* asynchronous, so the state
+  is reachable after all -- reusing the aligned-buffer shape [tests/flush_barrier.rs](tests/flush_barrier.rs)
+  already had, extended to `IoBufMut`. That test **checks its own precondition**, counting what was already
+  queued at the instant of attach and failing if no attempt caught a read in flight, so it cannot decay into
+  the already-queued case on faster hardware; dropping only the `NO_BUFFERING` flag makes it fail with
+  exactly that message.
+  **Calibrated, and the two mechanisms are separable:** suppressing the setup signal fails only the two
+  mixed-queue tests; suppressing `EventDelivery`'s `activation.rearm` fails only the re-arm test. Disjoint
+  failure sets, so neither test is passing on the other's behalf.
+  **Cell (b) was genuinely open, shown by mutation rather than asserted:** with `activation.rearm` removed,
+  **all 107 pre-existing tests still pass** -- the entire suite was blind to `EventDelivery` silently
+  ceasing delivery after its first drain -- and only the new test catches it. The three targets that did not
+  get to run reference no `EventDelivery`, so they could not have caught it either.
+  Whether other test files should also bind to `RingContract` is left to **M18.3**'s `cargo-mutants` triage
+  to answer with evidence, rather than retrofitted blind now.
 
 - [ ] **M17.2** -- Decide and record whether randomized property testing is permitted here, as a
   [DESIGN-NOTES.md](DESIGN-NOTES.md) decision. [D-39](DESIGN-NOTES.md#d-39) already fixed the terms under which
