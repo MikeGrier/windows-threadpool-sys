@@ -236,15 +236,31 @@ The example is a miniature write-ahead log: records appended through the ring, m
 group commit, with durability reported by epoch. It is deliberately the shape a real consumer
 needs, and it exercises `windows-ioring-sys` and `windows-threadpool-sys` together.
 
-**Depends on M11.1** (`IoRing::completion_event`) and **M12.1** (explicit flush barrier). Do not
-start before both have landed; the example cannot be written correctly against the current surface.
+**Depends on M11.1** (`IoRing::completion_event`) and **M12.1** (explicit flush barrier). Both have
+landed, so this milestone is unblocked.
 
-- [ ] **M13.1** -- Scaffolding under `examples/epoch_log/`, and the example's **own** durability
-  contract written down first, in its own words, per the Design Autonomy rule: *a record is durable
-  when the commit of the epoch containing it has completed*. State equally plainly what it does not
-  guarantee -- no per-record durability, no ordering between records within an epoch, and no
-  atomicity for a record larger than the device's power-fail atomic write unit. The contract is the
-  deliverable of this item; the code that follows implements it.
+- [x] **M13.1** -- Scaffolding under [examples/epoch_log/](examples/epoch_log/) --
+  [main.rs](examples/epoch_log/main.rs) and [contract.rs](examples/epoch_log/contract.rs) -- with the
+  sample's own durability contract written down first, before any code that implements it.
+
+  The contract is phrased as *this program's specification*, not as a description of what the ring
+  happens to do, which is the Design Autonomy rule applied rather than cited: the mechanisms it picks
+  (a covering flush, the ring's completion event) are recorded as chosen *because* they satisfy the
+  specification, and the file states plainly that a dependency which stops satisfying it is the thing
+  that is wrong. The guarantee is the item's sentence -- **a record is durable when the commit of the
+  epoch containing it has completed** -- with each of its four load-bearing phrases unpacked, since
+  "has completed" doing the work of "was submitted" is exactly how this contract gets misread.
+
+  All three non-guarantees the item names are stated as plainly as the guarantee (no per-record
+  durability, no ordering within an epoch, no atomicity past the device's power-fail atomic write
+  unit), plus two the writing surfaced: nothing is promised about records after the last committed
+  epoch -- present, absent, and torn are all legal outcomes of one crash -- and the whole contract
+  rests on the device honoring the flush, which nothing here can verify. Those are recorded as an
+  explicit `Assumes` clause rather than left silent.
+
+  The contract is also machine-readable (`CONTRACT: &[Statement]`, grouped by `Clause`) and the
+  sample prints it, so a reader who only runs the program still learns what it does and does not
+  promise. M13.5's verification pass has something concrete to refer back to.
 
 - [ ] **M13.2** -- The append path: a record format with a length, a sequence number, and a checksum
   (so a torn tail is detectable at replay), written into registered buffers and pushed via `Batch`.
@@ -286,7 +302,11 @@ forced the original consumer conversation -- operations the ring cannot express,
 - [ ] **M14.2** -- A control-plane and background path on `windows-threadpool-sys`: checkpointing or
   reclamation driven from the pool while the pinned log thread keeps the data path. Demonstrates the
   hybrid the design notes recommend -- Model B on the hot path, Model A for everything else -- in one
-  program, which nothing in the crate currently shows.
+  program, which nothing in the crate currently shows. **Must also add an explicit `[[example]]`
+  entry for `epoch_log` with `required-features = ["threadpool"]`** (found while doing M13.1): the
+  sample uses no thread pool through M13, so it builds under `--no-default-features` today, and the
+  moment this item introduces `EventDelivery` it stops -- which the `ioring-no-threadpool` CI job
+  from M11.4 will catch as a build failure rather than a warning.
 
 - [ ] **M14.3** -- Implement all three epoch-commit strategies from "Durability on the ring" behind
   one interface, selectable at run time: covering flush (ring stalls), host sequencing (a userspace
