@@ -33,6 +33,21 @@ jobs:
         shell: pwsh
         run: ./tools/check-encoding.ps1
 
+  # The edition, MSRV, and pinned channel are declared once in Cargo.toml and
+  # rust-toolchain.toml, then restated a dozen times -- in this file's `msrv`
+  # job below, in README/DEVELOPMENT prose, and in the instruction files a code
+  # reviewer reads. The restatements cannot be deleted (a reviewer cannot follow
+  # a link out of a diff to resolve `edition.workspace = true`), so this job
+  # keeps them honest instead. Needs no toolchain: it only reads files.
+  baseline:
+    name: language baseline consistency
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check-baseline.ps1
+        shell: pwsh
+        run: ./tools/check-baseline.ps1
+
   build-test:
     name: build + test
     runs-on: windows-latest

@@ -1122,6 +1122,38 @@ running the audit is what created several of the copies.
    cites it; and any contract correction is preceded by a blast-radius sweep for every other statement of the
    same fact.
 
+**A fourth remedy, for a fact none of the three reach: check the restatements mechanically.** The Rust
+language baseline -- edition, MSRV, pinned toolchain channel -- is restated a dozen times across six files,
+and every remedy above misses it. It is not a predicate over values, so no `is_terminal()`-style function can
+own it. It is not Rust prose, so `cfg(doctest)` cannot compile it: the copies live in YAML job names, in a
+toolchain action pin, in a Dependabot ignore rationale, and in ordinary English sentences. And convention
+alone was never going to hold, because each copy is *correct when written* and only drifts later, on a day
+nobody is thinking about it.
+
+[tools/check-baseline.ps1](tools/check-baseline.ps1) closes the gap, running as the
+`language baseline consistency` job in [.github/workflows/ci.yml](.github/workflows/ci.yml). It parses the two
+authoritative declarations -- `[workspace.package]` in [Cargo.toml](Cargo.toml) and `[toolchain]` in
+[rust-toolchain.toml](rust-toolchain.toml) -- and makes two independent passes: each labelled claim is matched
+by its own regex and compared against the value it purports to state, and separately every
+Rust-version-shaped token in a registered file must be the MSRV, the channel, or an explicitly allow-listed
+historical version with a recorded reason. A claim that no longer matches its regex **fails rather than
+passes**, which is what catches a reword that quietly drops the value; the token sweep is what catches drift
+in prose, for which no per-claim regex is ever written.
+
+Verified by sabotage, as item 1 requires of any such binding. Changing `rust-version`, changing `channel`,
+changing `edition`, deleting a claim's value, and planting a stale version in prose each produce a distinct
+failure naming the file and line; a check that passes but cannot fail would be worse than none, because it
+would license exactly the confidence it fails to earn.
+
+**The copies deliberately survive.** Deleting them is the obvious move and it is wrong. The reason the
+baseline had to be stated at all is that a reviewer reading a pull-request diff cannot resolve
+`edition.workspace = true` against a `[workspace.package]` table that appears in no hunk -- so replacing the
+prose with a pointer would reinstate the very defect that produced seven false "this will not compile"
+findings on [PR #46](https://github.com/MikeGrier/windows-threadpool-sys/pull/46). The check makes the copies
+derived *in effect* rather than in form: still written by hand, no longer able to disagree in silence. This
+section states the baseline's *shape* and never its values for the same reason -- a concrete version number
+here would be a thirteenth restatement, in a file the checker does not police.
+
 **The deepest lesson is about audits themselves.** Our audit recorded "now stated" for a qualification it had
 written into the *audit table* while the decision row it contradicted still said the opposite. An audit
 finding is not discharged by being recorded in the audit. It is discharged when the statement it contradicted
