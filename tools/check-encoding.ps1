@@ -141,17 +141,26 @@ foreach ($file in $files) {
     #    a mis-joined edit looks like, and one lived in a doc example for nine
     #    review rounds before being spotted by eye.
     #
-    #    The pattern deliberately does NOT anchor to end of line. It did once,
-    #    and that let a second variant of the same damage through: a closing
-    #    doc-comment code fence with a relocated sentence welded to it, as in
+    #    The pattern deliberately does NOT anchor to a line. It once matched
+    #    `^.*\S///\s*$`, and that end-of-line anchor let a second variant of the
+    #    same damage through: a closing doc-comment code fence with a relocated
+    #    sentence welded to it, as in
     #    ```/// general form for a call whose convention is none of those.
     #    Three of those reached review in windows-namespace-request-sys, each
     #    leaving its own `# Errors` section truncated or empty where the moved
-    #    text had come from. Matching `///` after any non-space character costs
-    #    nothing -- it is zero-hit across this repository when clean -- and
-    #    covers both shapes.
+    #    text had come from.
+    #
+    #    `\S///` is the whole condition: a doc marker touching a non-space
+    #    character. The surrounding `^.*` and `.*$` the pattern used to carry are
+    #    not just redundant once the anchors are gone, they are the expensive
+    #    part -- `^.*` matches to end of line and then backtracks looking for the
+    #    marker, on every line of every file. Measured over 1.47 MB of this
+    #    repository's own Rust, dropping them cut a no-match scan (the case CI
+    #    runs on every clean build) from 872 ms to 288 ms across 20 passes. The
+    #    match index still identifies the line, because the marker and the
+    #    character it is glued to are on it.
     if ([System.IO.Path]::GetExtension($file) -eq '.rs') {
-        $glued = [regex]::Match($text, '(?m)^.*\S///.*$')
+        $glued = [regex]::Match($text, '\S///')
         if ($glued.Success) {
             $prefix = $text.Substring(0, $glued.Index)
             $line = ($prefix -split "`n").Count
