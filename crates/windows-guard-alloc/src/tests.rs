@@ -18,7 +18,9 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 
-use super::{ALLOCATION_GRANULARITY, GuardAlloc, PAGE, data_bytes, data_offset};
+use super::{
+    ALLOCATION_GRANULARITY, GuardAlloc, PAGE, PoisonCheck, data_bytes, data_offset, poison,
+};
 
 /// What the OS says about a page: its state, its protection, and how far the
 /// run of identically-attributed pages extends.
@@ -217,6 +219,163 @@ fn a_zero_sized_allocation_still_gets_a_guard_page() {
     let ptr = unsafe { alloc.alloc(layout) };
     assert!(!ptr.is_null());
     assert_eq!(query(ptr).Protect, PAGE_READWRITE);
+    // SAFETY: `ptr` came from this allocator with this layout.
+    unsafe { alloc.dealloc(ptr, layout) };
+}
+
+#[test]
+fn a_fresh_allocation_arrives_poisoned_rather_than_zeroed() {
+    // Fresh pages from the OS are already zero, so without poison an untouched
+    // buffer is indistinguishable from one that something wrote zeros into --
+    // and a kernel writing outside the span it was handed would leave no
+    // trace. This is the property M15.3's checks rest on.
+    let alloc = GuardAlloc::new();
+    let layout = Layout::from_size_align(64, 8).expect("valid layout");
+    // SAFETY: non-zero-size layout; freed below.
+    let ptr = unsafe { alloc.alloc(layout) };
+    assert!(!ptr.is_null());
+
+    // SAFETY: `alloc` promises 64 readable bytes here.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, 64) };
+    assert!(
+        bytes.iter().any(|b| *b != 0),
+        "a fresh allocation must not be all zeros, or poison is not being written"
+    );
+
+    // SAFETY: `ptr` came from this allocator with this layout.
+    unsafe { alloc.dealloc(ptr, layout) };
+}
+
+#[test]
+fn an_allocation_identifies_itself_from_its_own_bytes() {
+    // The payoff of a *tracked* pattern over a constant: a caller can ask "is
+    // this still pristine?" without having snapshotted the buffer, because the
+    // leading word names the allocation it belongs to.
+    let alloc = GuardAlloc::new();
+    let layout = Layout::from_size_align(128, 8).expect("valid layout");
+    // SAFETY: non-zero-size layout; freed below.
+    let ptr = unsafe { alloc.alloc(layout) };
+    assert!(!ptr.is_null());
+
+    // SAFETY: 128 readable bytes, as promised by `alloc`.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, 128) };
+    match alloc.poison_check(bytes, 0, 128) {
+        PoisonCheck::Pristine { .. } => {}
+        other => panic!("a fresh allocation must verify as pristine poison, got {other:?}"),
+    }
+
+    // SAFETY: as above.
+    unsafe { alloc.dealloc(ptr, layout) };
+}
+
+#[test]
+fn poison_check_reports_the_first_byte_something_wrote() {
+    // A stray write must be located, not merely detected: "the write began at
+    // offset 70" is what makes an out-of-span kernel write attributable to a
+    // particular operation.
+    let alloc = GuardAlloc::new();
+    let layout = Layout::from_size_align(128, 8).expect("valid layout");
+    // SAFETY: non-zero-size layout; freed below.
+    let ptr = unsafe { alloc.alloc(layout) };
+    assert!(!ptr.is_null());
+
+    // SAFETY: writing inside the allocation this test owns.
+    unsafe { std::ptr::write(ptr.add(70), 0x00) };
+    // SAFETY: 128 readable bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, 128) };
+
+    match alloc.poison_check(bytes, 0, 128) {
+        PoisonCheck::Overwritten { at, .. } => assert_eq!(
+            at, 70,
+            "the reported offset must be where the write actually landed"
+        ),
+        // A one-in-256 chance the poison byte there was already 0x00, in which
+        // case nothing was overwritten and pristine is the truthful answer.
+        PoisonCheck::Pristine { .. } => {
+            let seed = alloc.seed();
+            let mut leading = [0_u8; 8];
+            leading.copy_from_slice(&bytes[..8]);
+            let ordinal = poison::identify(seed, u64::from_le_bytes(leading), u64::MAX)
+                .expect("the allocation identifies itself");
+            assert_eq!(
+                poison::byte_at(seed, ordinal, 70),
+                0x00,
+                "pristine is only correct if the poison byte there was already zero"
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    // SAFETY: `ptr` came from this allocator with this layout.
+    unsafe { alloc.dealloc(ptr, layout) };
+}
+
+#[test]
+fn poison_check_can_examine_a_region_that_starts_partway_in() {
+    // "Everything outside the span is untouched" means checking a slice that
+    // begins partway into the allocation, so the phase has to shift with the
+    // offset rather than restarting.
+    let alloc = GuardAlloc::new();
+    let layout = Layout::from_size_align(256, 8).expect("valid layout");
+    // SAFETY: non-zero-size layout; freed below.
+    let ptr = unsafe { alloc.alloc(layout) };
+    assert!(!ptr.is_null());
+
+    // Overwrite a "span" the kernel was permitted to fill, leaving the rest.
+    // SAFETY: writing inside the allocation this test owns.
+    unsafe { std::ptr::write_bytes(ptr, 0xCC, 100) };
+    // SAFETY: 256 readable bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, 256) };
+
+    // Identification needs pristine leading bytes, which the write above
+    // destroyed -- so this is checked from a copy whose head is intact, which
+    // is exactly how M15.3 will hold a snapshot of the buffer's identity.
+    let mut intact = bytes.to_vec();
+    // SAFETY: restoring the leading word from the same allocation's pattern.
+    let seed = alloc.seed();
+    let ordinal = alloc.total_allocations() as u64 - 1;
+    unsafe { poison::fill(intact.as_mut_ptr(), 8, seed, ordinal) };
+
+    match alloc.poison_check(&intact, 100, 156) {
+        PoisonCheck::Pristine { .. } => {}
+        other => panic!("the region beyond the written span must still be poison, got {other:?}"),
+    }
+
+    // SAFETY: `ptr` came from this allocator with this layout.
+    unsafe { alloc.dealloc(ptr, layout) };
+}
+
+#[test]
+fn the_seed_is_stable_within_a_run() {
+    // Every allocation in the process must share one pattern space, or
+    // `identify` would resolve ordinals against the wrong seed.
+    let a = GuardAlloc::new();
+    let b = GuardAlloc::new();
+    assert_eq!(
+        a.seed(),
+        b.seed(),
+        "the seed is per-process, not per-allocator"
+    );
+    assert_ne!(a.seed(), u64::MAX, "the unset sentinel must never escape");
+}
+
+#[test]
+fn alloc_zeroed_still_returns_zeros_despite_the_poison() {
+    // `GlobalAlloc::alloc_zeroed`'s default implementation calls `alloc` and
+    // then zeroes, so poisoning underneath it is safe -- but only as long as
+    // this crate does not override it. If someone ever does, this test is what
+    // catches the resulting silent breakage of every `vec![0; n]`.
+    let alloc = GuardAlloc::new();
+    let layout = Layout::from_size_align(64, 8).expect("valid layout");
+    // SAFETY: non-zero-size layout; freed below.
+    let ptr = unsafe { alloc.alloc_zeroed(layout) };
+    assert!(!ptr.is_null());
+    // SAFETY: 64 readable bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, 64) };
+    assert!(
+        bytes.iter().all(|b| *b == 0),
+        "alloc_zeroed must hand back zeros even though alloc poisons"
+    );
     // SAFETY: `ptr` came from this allocator with this layout.
     unsafe { alloc.dealloc(ptr, layout) };
 }

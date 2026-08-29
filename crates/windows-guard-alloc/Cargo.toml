@@ -22,4 +22,10 @@ windows-sys = { version = "0.61", features = [
 	"Win32_Foundation",
 	"Win32_System_Memory",
 	"Win32_System_SystemInformation",
+	# The seed is read straight from the environment block and timed with the
+	# performance counter, rather than through `std::env::var` and
+	# `SystemTime`. Both of those allocate, and this code runs *inside* the
+	# global allocator, where allocating would recurse.
+	"Win32_System_Environment",
+	"Win32_System_Performance",
 ] }

@@ -56,13 +56,17 @@
 //! indistinguishable from one that is not there, and forgetting the attribute
 //! is silent -- the tests still pass, and instrument nothing.
 
-use std::alloc::{GlobalAlloc, Layout};
-use std::sync::atomic::{AtomicUsize, Ordering};
+pub mod poison;
 
+use std::alloc::{GlobalAlloc, Layout};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+use windows_sys::Win32::System::Environment::GetEnvironmentVariableW;
 use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEM_DECOMMIT, MEM_RESERVE, PAGE_NOACCESS, PAGE_READWRITE, VirtualAlloc,
     VirtualFree, VirtualProtect,
 };
+use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
 
 /// Windows' page size. Fixed at 4 KiB on every architecture this repository
 /// targets; a wrong value here would be a correctness bug rather than a
@@ -75,8 +79,106 @@ const PAGE: usize = 4096;
 /// below sound for any `align` up to and including this value.
 const ALLOCATION_GRANULARITY: usize = 64 * 1024;
 
-/// A global allocator that places every allocation against a guard page and
-/// never reuses a freed address.
+/// Sentinel for "the seed has not been established yet".
+///
+/// Zero is a legitimate seed a caller might pin deliberately, so it cannot
+/// double as the sentinel; `u64::MAX` is used instead and refused as an
+/// explicit choice.
+const SEED_UNSET: u64 = u64::MAX;
+
+/// The run seed, shared by every `GuardAlloc` in the process.
+///
+/// A `static` rather than a field because it must be resolvable from the very
+/// first allocation, which happens before `main` and therefore before any test
+/// could configure it.
+static SEED: AtomicU64 = AtomicU64::new(SEED_UNSET);
+
+/// Read [`poison::SEED_VAR`] without allocating.
+///
+/// `std::env::var` allocates, and this runs inside the global allocator, where
+/// allocating would recurse into the very call that is trying to finish. So
+/// the environment block is read straight into a stack buffer instead.
+fn seed_from_environment() -> Option<u64> {
+    // Wide, null-terminated, on the stack. Long enough for any `u64` in
+    // decimal or hex with room to spare; a longer value is not a valid seed
+    // anyway.
+    let mut name = [0_u16; 32];
+    for (slot, ch) in name.iter_mut().zip(poison::SEED_VAR.encode_utf16()) {
+        *slot = ch;
+    }
+    let mut value = [0_u16; 64];
+
+    // SAFETY: both buffers are live stack arrays, `name` is null-terminated by
+    // construction (it is zero-initialised and the variable name is shorter
+    // than it), and the length passed matches `value`.
+    let written = unsafe {
+        GetEnvironmentVariableW(
+            name.as_ptr(),
+            value.as_mut_ptr(),
+            u32::try_from(value.len()).unwrap_or(0),
+        )
+    };
+    // Zero means unset; a value at least as long as the buffer means it was
+    // truncated, which is not a seed worth guessing at.
+    if written == 0 || written as usize >= value.len() {
+        return None;
+    }
+
+    const ZERO: u16 = b'0' as u16;
+    const LOWER_X: u16 = b'x' as u16;
+    const UPPER_X: u16 = b'X' as u16;
+
+    let digits = &value[..written as usize];
+    let (digits, radix) = match digits {
+        [ZERO, LOWER_X | UPPER_X, rest @ ..] => (rest, 16),
+        _ => (digits, 10),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+
+    let mut accumulated = 0_u64;
+    for unit in digits {
+        let digit = char::from_u32(u32::from(*unit))?.to_digit(radix)?;
+        accumulated = accumulated
+            .checked_mul(u64::from(radix))?
+            .checked_add(u64::from(digit))?;
+    }
+    Some(accumulated)
+}
+
+/// Establish the run seed exactly once, and return it.
+fn seed() -> u64 {
+    let current = SEED.load(Ordering::Relaxed);
+    if current != SEED_UNSET {
+        return current;
+    }
+
+    let chosen = seed_from_environment().unwrap_or_else(|| {
+        // `SystemTime::now` allocates on some paths and is the wrong tool
+        // inside an allocator; the performance counter is a bare syscall.
+        let mut ticks = 0_i64;
+        // SAFETY: `ticks` is a live local of the expected type.
+        unsafe { QueryPerformanceCounter(&raw mut ticks) };
+        // Mixed so that a low-resolution or slow-moving counter still yields a
+        // seed whose bytes do not resemble a small integer.
+        poison::word(ticks.cast_unsigned(), 0)
+    });
+    // A pinned seed of `u64::MAX` would be indistinguishable from "unset", so
+    // it is nudged rather than silently ignored.
+    let chosen = if chosen == SEED_UNSET { 0 } else { chosen };
+
+    // Whoever wins the race establishes the seed; everyone else adopts it, so
+    // every allocation in the process shares one pattern space.
+    match SEED.compare_exchange(SEED_UNSET, chosen, Ordering::Relaxed, Ordering::Relaxed) {
+        Ok(_) => chosen,
+        Err(established) => established,
+    }
+}
+
+/// A global allocator that places every allocation against a guard page,
+/// never reuses a freed address, and fills fresh memory with a tracked poison
+/// pattern.
 ///
 /// See the module documentation for what it catches and what it costs.
 pub struct GuardAlloc {
@@ -109,6 +211,85 @@ impl GuardAlloc {
     pub fn total_allocations(&self) -> usize {
         self.total.load(Ordering::Relaxed)
     }
+
+    /// This run's poison seed.
+    ///
+    /// Pin it with the `WINDOWS_GUARD_ALLOC_SEED` environment variable
+    /// (decimal, or hex with a `0x` prefix) to reproduce a run exactly.
+    pub fn seed(&self) -> u64 {
+        seed()
+    }
+
+    /// Print the seed, once per process, so a failing run can be replayed.
+    ///
+    /// This is what reconciles a varying poison pattern with the requirement
+    /// that tests be reproducible: the pattern changes between runs, and the
+    /// line below is what turns any particular run back into a fixed one.
+    /// Call it from a test rather than from the allocator, which must not
+    /// perform I/O while satisfying an allocation.
+    pub fn announce_seed(&self) {
+        use std::sync::Once;
+        static ANNOUNCED: Once = Once::new();
+        ANNOUNCED.call_once(|| {
+            let seed = self.seed();
+            println!(
+                "windows-guard-alloc: poison seed {seed:#018x} -- \
+                 re-run with {}={seed:#x} to reproduce",
+                poison::SEED_VAR
+            );
+        });
+    }
+
+    /// Whether `bytes`, taken from `offset` bytes into an allocation, is still
+    /// the untouched poison that allocation started with.
+    ///
+    /// The allocation identifies *itself*: the first eight bytes name their
+    /// own ordinal, so a caller does not have to have snapshotted the buffer
+    /// beforehand. Returns the offset of the first byte that has changed.
+    ///
+    /// `None` for a region shorter than eight bytes at `offset` zero, or one
+    /// whose leading word is not poison at all -- in both cases there is
+    /// nothing to identify the allocation with.
+    pub fn poison_check(&self, whole: &[u8], offset: usize, len: usize) -> PoisonCheck {
+        if whole.len() < 8 {
+            return PoisonCheck::Unidentifiable;
+        }
+        let mut leading = [0_u8; 8];
+        leading.copy_from_slice(&whole[..8]);
+        let seed = self.seed();
+        let Some(ordinal) = poison::identify(
+            seed,
+            u64::from_le_bytes(leading),
+            self.total_allocations() as u64,
+        ) else {
+            return PoisonCheck::Unidentifiable;
+        };
+        let end = offset.saturating_add(len).min(whole.len());
+        let region = &whole[offset.min(whole.len())..end];
+        match poison::first_mismatch(seed, ordinal, offset, region) {
+            None => PoisonCheck::Pristine { ordinal },
+            Some(at) => PoisonCheck::Overwritten {
+                ordinal,
+                at: offset + at,
+            },
+        }
+    }
+}
+
+/// The outcome of a [`GuardAlloc::poison_check`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoisonCheck {
+    /// The region is untouched poison from the named allocation.
+    Pristine { ordinal: u64 },
+    /// Something wrote into the region; `at` is the first changed byte,
+    /// measured from the start of the allocation.
+    Overwritten { ordinal: u64, at: usize },
+    /// The allocation could not be identified, so nothing can be concluded.
+    ///
+    /// Deliberately **not** folded into `Overwritten`: "I cannot tell" and
+    /// "this was definitely written" are different answers, and reporting the
+    /// second when the first is true would manufacture a defect.
+    Unidentifiable,
 }
 
 impl Default for GuardAlloc {
@@ -200,11 +381,22 @@ unsafe impl GlobalAlloc for GuardAlloc {
         }
 
         self.live.fetch_add(1, Ordering::Relaxed);
-        self.total.fetch_add(1, Ordering::Relaxed);
+        // `fetch_add` returns the previous value, which is this allocation's
+        // ordinal -- the number its poison pattern is derived from.
+        let ordinal = self.total.fetch_add(1, Ordering::Relaxed) as u64;
 
         // SAFETY: `data_offset` returns a value in `0..=data - size`, so the
         // whole allocation lies inside the committed, writable region.
-        unsafe { base.add(data_offset(size, align, data)) }
+        let ptr = unsafe { base.add(data_offset(size, align, data)) };
+
+        // Poison the bytes the caller is about to receive. Fresh pages are
+        // already zero, so without this an untouched buffer is indistinguishable
+        // from one someone wrote zeros into -- and a kernel that writes outside
+        // the span it was given would leave no trace.
+        // SAFETY: `ptr` addresses `size` writable bytes, established above.
+        unsafe { poison::fill(ptr, size, seed(), ordinal) };
+
+        ptr
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
@@ -220,6 +412,13 @@ unsafe impl GlobalAlloc for GuardAlloc {
         // layout, so this reverses exactly the addition made there.
         let base = unsafe { ptr.sub(data_offset(size, align, data)) };
 
+        // Note what is deliberately *not* done here: the block is not poisoned
+        // before release. M15.2 originally called for poisoning freed blocks
+        // too, and implementing it showed that to be dead code -- decommitting
+        // makes those bytes unreadable, so poison written there could never be
+        // observed by anything. It would cost a full memset per free and buy a
+        // guarantee strictly weaker than the one already in force.
+        //
         // Decommit rather than release: the address stays reserved, so it can
         // never be handed out again and any later touch faults. Releasing it
         // would return the range to the allocator and reintroduce exactly the

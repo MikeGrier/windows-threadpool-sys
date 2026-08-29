@@ -287,7 +287,7 @@ wait on the state-space work.
   `the_guard_allocator_is_installed_for_this_test_binary` assertion catches the silent failure mode where the
   `#[global_allocator]` attribute is missing and everything passes uninstrumented.
 
-- [ ] **M15.2** -- Fill every allocation and every freed block with a **tracked** poison pattern, derived from
+- [x] **M15.2** -- Fill every allocation and every freed block with a **tracked** poison pattern, derived from
   a per-run seed plus a per-allocation ordinal so the bytes identify *which* allocation they came from rather
   than merely being "not real data". A fixed constant like `0xDD` is worth much less: it collides with real
   payloads, and it cannot answer "where did this come from".
@@ -297,6 +297,20 @@ wait on the state-space work.
   permitted here.
   Keep the pattern cheap to write (a repeating 8-byte word carrying the ordinal, not a per-byte hash) since it
   runs on every allocation.
+  **Done:** `windows-guard-alloc`'s `poison` module. The pattern is `splitmix64(seed ^ ordinal)` repeated
+  across the allocation, and the mixing function is a **bijection with a computable inverse**, so
+  `GuardAlloc::poison_check` recovers *which* allocation a region belongs to from its own leading bytes --
+  no snapshot needed, which is what M15.3 will build on. Seeding terms recorded as
+  [D-39](DESIGN-NOTES.md#d-39) and verified end to end: two unpinned runs differ, two pinned runs reproduce
+  byte-for-byte, and both decimal and `0x` hex parse.
+  **Two findings while implementing.** (1) *Poisoning freed blocks is dead code here* -- `dealloc` decommits,
+  so those bytes are unreadable and poison written there could never be observed by anything. It would cost a
+  memset per free for a guarantee strictly weaker than the one already in force, so it is deliberately not
+  done, and `dealloc` says why. The item text above is left as originally written rather than quietly edited,
+  since the planning error is the more useful record. (2) The first draft **hardcoded two multiplicative
+  inverses and both were wrong**; `the_multiplicative_inverses_are_actually_inverses` caught it. They are now
+  *derived* by a `const fn` Newton iteration, which makes that class of error unrepresentable rather than
+  merely tested for.
 
 - [ ] **M15.3** -- Verify the poison at the points where the *kernel* is the suspect, which is the gap guard
   pages structurally cannot cover: a guard page only catches access to memory that should not be touched at

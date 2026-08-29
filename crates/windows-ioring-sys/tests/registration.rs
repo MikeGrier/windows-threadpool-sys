@@ -28,6 +28,10 @@ static ALLOC: windows_guard_alloc::GuardAlloc = windows_guard_alloc::GuardAlloc:
 /// assertion rather than an assumption.
 #[test]
 fn the_guard_allocator_is_installed_for_this_test_binary() {
+    // Printed, not merely available: the poison pattern varies per run, and
+    // this line is what turns any particular run back into a reproducible one
+    // (M15.2).
+    ALLOC.announce_seed();
     assert!(
         ALLOC.total_allocations() > 0,
         "the guard-page allocator is not installed, so every other test in this file \
