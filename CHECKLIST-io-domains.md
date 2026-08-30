@@ -29,13 +29,29 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
 
 ## M30 -- The queue crate: name, skeleton, and the SPSC shape
 
-- [ ] **M30.1** -- Decide the crate's name and record why, **before** anything depends on it, because
+- [x] **M30.1** -- Decide the crate's name and record why, **before** anything depends on it, because
   renaming a crate that has dependents is churn this repository avoids. Two things to settle together:
   whether the `-sys` suffix applies (every existing `windows-*-sys` crate is thin-over-Win32, and this is
   a data structure with an opinion, so it probably does not), and the name of the domain runtime crate
   that will sit above it, since the pair should read as a pair. Candidates raised: `windows-io-queue`,
   `windows-signalled-queue`, `windows-queue`. Record the decision in [DESIGN-NOTES.md](DESIGN-NOTES.md)
   so the reasoning survives the choice.
+  **Decided: `windows-waitable-queues`**, no `-sys` suffix, recorded in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#the-waitable-queues-crate-is-named-plural-and-carries-no-sys-suffix).
+  The engineer proposed the plural and it is right for a reason stronger than taste:
+  [windows-platform-probes](crates/windows-platform-probes/README.md) is already plural, so the workspace
+  distinguishes singular-for-one-facility from plural-for-a-collection-of-peers, and this is the second
+  kind. **`windows-io-queue`, floated during the same discussion, was rejected** -- the queues have
+  nothing to do with I/O, and naming a general facility after its first consumer is the mistake
+  `windows-topology-sys` avoided. What unifies them is waitability, a word this workspace already owns
+  through `WaitableHandle`.
+  **One consequence accepted deliberately:** the plural forbids a bare `Queue` type, since a crate named
+  "queues" exporting one would claim a primacy the name denies. Every type is specifically named and a
+  consumer must say which it wants.
+  **The runtime crate's name is deliberately NOT fixed here**, which narrows this item as written. The
+  churn argument applies to a crate with dependents, and M30.2 creates the queue crate immediately while
+  the runtime does not exist until M33+. The rule is recorded instead -- the pair should read as a pair,
+  and the runtime's name may carry `io` because that crate genuinely is about I/O.
 
 - [ ] **M30.2** -- Create the crate with `publish = true` (the engineer's decision: this is general-purpose
   and worth publishing, unlike `windows-guard-alloc`), and write its `DESIGN-NOTES.md` with the decisions

@@ -85,6 +85,48 @@ within a consumer's reach, and if not, what would put it there".
 weighing future proposals, not a change to existing code, so the absence of a
 checklist item for it is intentional rather than an oversight.
 
+## <a id="the-waitable-queues-crate-is-named-plural-and-carries-no-sys-suffix"></a>`windows-waitable-queues` is plural, and carries no `-sys` suffix
+
+Two naming decisions for the queue crate that
+[CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30 introduces, recorded before anything
+depends on the name, because renaming a crate that has dependents is churn.
+
+**No `-sys` suffix.** Every `windows-*-sys` crate in this workspace is thin-over-Win32: it makes
+an existing API memory-safe without adding policy. This crate is a data structure with an
+opinion -- it chooses a slot protocol, an overflow policy, and a signalling discipline that Win32
+has no equivalent of. Calling it `-sys` would misdescribe the layer, and the suffix is the only
+signal a reader has for how much the crate decides on their behalf.
+
+**Plural, because it is a collection of peers rather than one facility.** The workspace already
+draws this distinction: `windows-topology-sys` is singular because it provides *the* topology,
+while [windows-platform-probes](crates/windows-platform-probes/README.md) is plural because it
+provides many probes with none of them canonical. The queue crate is the second kind. SPSC and
+MPSC are siblings, and the shapes deferred to `M-inf` -- intrusive-linked and sharded -- are
+siblings too. No single queue is the queue.
+
+**The consequence is accepted deliberately: there is no bare `Queue` type.** A crate named
+"queues" that exported one would be claiming a primacy the name denies, so every type is
+specifically named (`SpscRing`, `MpscRing`) and a consumer must say which it wants. That stops a
+default from accreting by accident, which is the failure the plural is chosen to prevent.
+
+**What unifies the family is waitability, not I/O.** An earlier candidate, `windows-io-queue`,
+was rejected on this point: the queues themselves have nothing to do with I/O, and the domain
+runtime is merely their first consumer. Naming a general facility after its first client is the
+mistake `windows-topology-sys` avoided when it declined to become a partitioning policy. What
+every queue here shares is that it can be waited on **alongside other kernel objects**, which is
+precisely what `crossbeam-channel` structurally cannot offer: its `Select` accepts only channel
+operations, so `WaitForMultipleObjects` cannot see a crossbeam channel and `Select` cannot see an
+`IoRing` completion event. That gap is the reason to build rather than depend, so it belongs in
+the name.
+
+"Waitable" is chosen over a coined word because this workspace already owns it with a precise
+meaning -- `windows-threadpool-sys` exposes `WaitableHandle`, governed by the two decisions
+[below](#a-safe-wait-constructor-takes-proven-wait-provenance-not-any-handle) on wait provenance
+and close routines. The new crate inherits an established concept rather than inventing one.
+
+**"Ring" was considered and is wrong for the family.** It is accurate for the array shapes and
+false for the intrusive-linked one, which is genuinely not a ring. `queues` covers both.
+
 ## Windows SDK model and constraints
 
 This crate targets the object-based thread pool API (introduced in Windows Vista) rather than the legacy
