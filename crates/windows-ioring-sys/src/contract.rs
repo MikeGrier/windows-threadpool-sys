@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mike Grier
-//! [`RingContract`]: this crate's conservation rules, made executable.
+//! [`RingContract`](crate::contract::RingContract) -- this crate's conservation
+//! rules, made executable.
 //!
 //! # Why an oracle rather than more assertions
 //!
@@ -39,8 +40,9 @@
 //!
 //! Not every push carries a token: the `_raw` flush and cancel entry points
 //! return a bare `user_data`, because they own nothing a claim could hand
-//! back. Report those with [`RingContract::observe_tokenless_push`], or the
-//! oracle will demand a claim that cannot be made.
+//! back. Report those with
+//! [`RingContract::observe_tokenless_push`](crate::contract::RingContract::observe_tokenless_push),
+//! or the oracle will demand a claim that cannot be made.
 //! | Nothing is outstanding at quiescence | what `IoRing::run_down`'s termination depends on |
 //!
 //! # What it deliberately does **not** check

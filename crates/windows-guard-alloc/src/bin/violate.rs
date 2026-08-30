@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mike Grier
-//! A binary that commits a chosen memory violation under [`GuardAlloc`], so
+//! A binary that commits a chosen memory violation under
+//! [`GuardAlloc`](windows_guard_alloc::GuardAlloc), so
 //! the `faults` integration test can observe what the allocator does about it.
 //!
 //! This exists because an access violation cannot be caught in-process: the

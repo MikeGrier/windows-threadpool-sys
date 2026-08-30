@@ -266,7 +266,7 @@ impl Completion {
     /// untouched, and claiming against the result is exactly as sound as
     /// claiming against the original.
     ///
-    /// [`Completion::synthetic`] is the opposite, and is why it is not
+    /// `Completion::synthetic` is the opposite, and is why it is not
     /// reachable from here. A fabricated completion can name an operation that
     /// is **still in flight**, and claiming a token against one hands a buffer
     /// back to the caller while the kernel is still writing through it -- the
