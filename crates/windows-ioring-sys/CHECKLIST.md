@@ -607,10 +607,31 @@ instead prove it reached the state it claims to exercise.
   sabotage build, not to flakiness. Timestamps were checked against the rebuild before any conclusion was
   drawn from a direct binary run; a calibration that mistakes a stale artefact for a result is worse than none.
 
-- [ ] **M17.5** -- Make discovered failures permanent: every sequence the generator finds becomes a named,
+- [x] **M17.5** -- Make discovered failures permanent: every sequence the generator finds becomes a named,
   seed-free regression test committed alongside the corpus. A property test that finds a bug and then forgets
   it has bought a single debugging session rather than a guarantee.
-
+  **The trap in this item is that the generator has found no defect in shipping code**, which makes "nothing
+  to make permanent" look like a reason to defer. It is not: the first real failure is exactly the moment
+  nobody wants to be inventing a corpus format, so the mechanism is built and proven now.
+  **Corpus:** named, seed-free entries replayed verbatim through the generator's own executor, each carrying
+  *why* it was recorded. Seeded with `regression_issue_47_backlog_at_handover` -- #47's shape exactly as M17.4
+  reported it, kept in the shape it was found rather than tidied into a minimal one, because a corpus that
+  rewrites what it was given cannot be trusted to have preserved the failing case. This is a real
+  strengthening rather than bookkeeping: the generator reaches that shape within a handful of sequences on
+  *most* seeds, and the corpus reaches it on *every* run.
+  **Verified load-bearing:** with [D-20](DESIGN-NOTES.md#d-20) reverted the entry fails deterministically,
+  reporting "reproduced a defect that was fixed", the recorded reason, and the step trace.
+  **The calibration itself is now automated**, which M17.4's could not be. That procedure edits `src/`, so
+  nothing in CI would notice if `wait_then_drain`'s wait were later "simplified" back into a poll -- the exact
+  change that made the generator blind to #47 ([D-42](DESIGN-NOTES.md#d-42)).
+  `the_lost_wakeup_detector_fires_when_no_wakeup_is_owed` constructs the lost-wakeup condition against a
+  *correct* ring instead -- attach, consume the setup signal, then wait again without draining, so no
+  empty-to-non-empty edge can occur -- and asserts the detector reports it. Sabotaging the wait makes it fail,
+  so the guard is real. A short 250 ms budget is used because that wait is *expected* to expire; `WAIT_MS`
+  would add five seconds per run to learn the same thing.
+  **Found while adding tests:** `temp_file` keyed its fixture on the process id alone, so the second test in
+  this binary would have raced the first for one path -- libtest runs them as concurrent threads. Now tagged
+  per test.
 ## M18 -- The population no runtime technique reaches
 
 Population C, and the one that produced the two most severe findings of the M14 review round. `get_mut`

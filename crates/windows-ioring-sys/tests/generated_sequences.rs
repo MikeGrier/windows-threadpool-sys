@@ -324,15 +324,18 @@ struct Run {
 
 // --- executing a plan --------------------------------------------------------
 
-fn temp_file() -> PathBuf {
+/// Tagged per test, not just per process: libtest runs the tests in this file
+/// concurrently as threads, so one shared path would have them writing and
+/// opening the same file at the same time.
+fn temp_file(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "windows-ioring-sys-generated-{}.tmp",
+        "windows-ioring-sys-generated-{tag}-{}.tmp",
         std::process::id()
     ))
 }
 
-fn fixture() -> (File, PathBuf) {
-    let path = temp_file();
+fn fixture(tag: &str) -> (File, PathBuf) {
+    let path = temp_file(tag);
     let mut content = vec![0_u8; FILE_LEN];
     for (index, chunk) in content.chunks_mut(BUF_LEN).enumerate() {
         chunk.fill(index as u8);
@@ -438,7 +441,7 @@ fn run_plan(
         match step {
             Step::DrainNow => {
                 coverage.mid_sequence_drains += 1;
-                match wait_then_drain(&mut ring, &mut run, event.as_ref()) {
+                match wait_then_drain(&mut ring, &mut run, event.as_ref(), WAIT_MS) {
                     Ok(popped) => run.trace.push(format!("drain to empty ({popped} popped)")),
                     Err(lost) => {
                         run.trace.push("drain to empty".to_owned());
@@ -489,7 +492,7 @@ fn run_plan(
             forfeit(registered_buffers);
             return Err(report);
         }
-        if let Err(lost) = wait_then_drain(&mut ring, &mut run, event.as_ref()) {
+        if let Err(lost) = wait_then_drain(&mut ring, &mut run, event.as_ref(), WAIT_MS) {
             let report = format!("{lost}\ntrace:\n{}", render(&run.trace));
             forfeit(registered_buffers);
             return Err(report);
@@ -557,15 +560,16 @@ fn wait_then_drain(
     ring: &mut IoRing,
     run: &mut Run,
     event: Option<&OwnedHandle>,
+    timeout_ms: u32,
 ) -> Result<usize, String> {
     if ring.outstanding() == 0 {
         return Ok(drain_to_empty(ring, run));
     }
     if let Some(event) = event
-        && !signalled_within(event, WAIT_MS)
+        && !signalled_within(event, timeout_ms)
     {
         return Err(format!(
-            "waited {WAIT_MS} ms on an attached completion event with {} operations \
+            "waited {timeout_ms} ms on an attached completion event with {} operations \
              outstanding and was never woken -- a wakeup was lost",
             ring.outstanding()
         ));
@@ -827,7 +831,7 @@ fn generated_sequences_satisfy_the_ring_contract() {
          uninstrumented and only prove that nothing crashed"
     );
 
-    let (file, path) = fixture();
+    let (file, path) = fixture("sweep");
     let shared = SharedFile::new(duplicate_handle(&file));
     let mut rng = Rng(seed);
     let mut coverage = Coverage::default();
@@ -903,6 +907,175 @@ fn generated_sequences_satisfy_the_ring_contract() {
         coverage.attaches_with_work_outstanding,
         coverage.buffer_downgrades
     );
+
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+}
+
+// --- the regression corpus (M17.5) -------------------------------------------
+//
+// A generated run samples. A corpus does not: every entry here replays exactly,
+// on every run, with no seed involved. That difference is the whole point --
+// the generator reaches #47's shape within a handful of sequences on most
+// seeds, but "on most seeds" is not a guarantee, and a shape that only some
+// runs exercise is a shape that some runs do not.
+//
+// **Entries are added when a sequence is found, not when it is convenient.**
+// The corpus is currently seeded from M17.4's calibration rather than from a
+// live defect, because the generator has not found one in shipping code. That
+// is not a reason to leave the mechanism unbuilt: the first real failure is
+// exactly the moment nobody wants to be inventing a corpus format, and a
+// property test that finds a bug and then forgets it has bought one debugging
+// session rather than a guarantee.
+
+/// A sequence that must keep passing, replayed verbatim rather than generated.
+struct Regression {
+    /// What went wrong, in the terms of the defect rather than the mechanism.
+    why: &'static str,
+    steps: Vec<Step>,
+}
+
+fn read(target: TargetKind, buffer: BufferKind, slot: u64) -> Step {
+    Step::Op(GenOp {
+        kind: OpKind::Read,
+        target,
+        buffer,
+        claim: true,
+        drain_preceding: false,
+        slot,
+    })
+}
+
+fn write(target: TargetKind, buffer: BufferKind, slot: u64) -> Step {
+    Step::Op(GenOp {
+        kind: OpKind::Write,
+        target,
+        buffer,
+        claim: true,
+        drain_preceding: false,
+        slot,
+    })
+}
+
+/// [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47), as the
+/// generator reported it during M17.4's calibration.
+///
+/// Recorded in the shape it was actually found in rather than a tidied-up
+/// minimal one: the essential part is the operation *before* the attach, which
+/// leaves the completion queue non-empty at handover so that only
+/// [D-20](DESIGN-NOTES.md#d-20)'s deliberate setup signal can wake a waiter --
+/// but a corpus that quietly rewrites what it was given is a corpus nobody can
+/// trust to have preserved the failing case.
+fn issue_47_backlog_at_handover() -> Regression {
+    Regression {
+        why: "a completion queued before the event was attached left a waiter with no wakeup, \
+              because the queue never returns to empty to re-arm the edge (D-19) and only D-20's \
+              deliberate setup signal covers the backlog",
+        steps: vec![
+            write(TargetKind::Registered, BufferKind::Registered, 4),
+            Step::Attach,
+            read(TargetKind::Registered, BufferKind::Owned, 1),
+            read(TargetKind::Registered, BufferKind::Registered, 1),
+            read(TargetKind::Registered, BufferKind::Registered, 5),
+        ],
+    }
+}
+
+fn replay(tag: &str, regression: &Regression) {
+    let (file, path) = fixture(tag);
+    let shared = SharedFile::new(duplicate_handle(&file));
+    let mut coverage = Coverage::default();
+    let plan = Plan {
+        steps: regression.steps.clone(),
+    };
+
+    let outcome = run_plan(&plan, &file, &shared, &mut coverage);
+
+    drop(file);
+    let _ = std::fs::remove_file(&path);
+
+    if let Err(failure) = outcome {
+        panic!(
+            "regression `{tag}` reproduced a defect that was fixed\n\
+             what this sequence caught when it was found: {}\n\
+             {failure}",
+            regression.why
+        );
+    }
+}
+
+#[test]
+fn regression_issue_47_backlog_at_handover() {
+    replay("issue-47", &issue_47_backlog_at_handover());
+}
+
+// --- guarding the detector itself --------------------------------------------
+
+/// The lost-wakeup detector must actually fire, and this proves it without
+/// reverting anything in the crate.
+///
+/// M17.4 established by hand that [`wait_then_drain`] catches #47, by removing
+/// D-20's setup signal and watching the generator go red. That procedure cannot
+/// run in CI -- it edits `src/` -- so nothing automated would notice if the wait
+/// were later "simplified" back into a poll, which is exactly the change that
+/// made the generator blind in the first place (`D-42`).
+///
+/// This constructs the lost-wakeup condition against a *correct* ring instead:
+/// attach, consume the setup signal, then wait again **without draining**. The
+/// queue is non-empty and nothing new can complete, so no empty-to-non-empty
+/// edge can occur and no wakeup is owed -- the same observable state a real lost
+/// wakeup produces. A detector that reports nothing here reports nothing for
+/// #47 either.
+#[test]
+fn the_lost_wakeup_detector_fires_when_no_wakeup_is_owed() {
+    /// Short, because this wait is *expected* to expire; the full `WAIT_MS`
+    /// would add five seconds to every run to learn the same thing.
+    const EXPECT_TIMEOUT_MS: u32 = 250;
+
+    let (file, path) = fixture("detector");
+    let handle = file.as_raw_handle();
+    let mut ring = IoRing::new(64, 64).expect("create ring");
+    let mut run = Run {
+        contract: RingContract::new(),
+        held: HashMap::new(),
+        dropped: HashMap::new(),
+        buffer_in_use: HashMap::new(),
+        trace: Vec::new(),
+    };
+
+    {
+        let mut batch = Batch::new(&mut ring);
+        // SAFETY: `file` outlives every operation queued here -- all of them are
+        // drained before this test returns.
+        let token = unsafe { batch.read_raw(handle, vec![0_u8; BUF_LEN], 0, PushOptions::new()) }
+            .expect("queue read");
+        run.contract.observe_push(token.id());
+        run.held.insert(token.id(), Held::RawOwned(token));
+        batch.submit().expect("submit");
+    }
+
+    let event = ring.completion_event().expect("attach completion event");
+    assert!(
+        signalled_within(&event, WAIT_MS),
+        "attaching must raise the deliberate setup signal (D-20); without it this test would \
+         pass for the wrong reason"
+    );
+
+    // Deliberately do not drain. The completion is sitting in a non-empty queue,
+    // so the edge cannot re-arm and no further wakeup is owed.
+    let outcome = wait_then_drain(&mut ring, &mut run, Some(&event), EXPECT_TIMEOUT_MS);
+    let report = outcome.expect_err(
+        "the detector reported no lost wakeup while waiting on a queue that cannot signal again \
+         -- it would be equally silent for #47",
+    );
+    assert!(
+        report.contains("a wakeup was lost"),
+        "the detector fired but did not say why: {report}"
+    );
+
+    // Leave the ring quiet so it can be dropped: the completion is still there.
+    drain_to_empty(&mut ring, &mut run);
+    run.contract.assert_quiescent();
 
     drop(file);
     let _ = std::fs::remove_file(&path);
