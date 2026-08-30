@@ -2,8 +2,11 @@
 //! End-to-end test of Model A delivery: the completion event wired to the
 //! thread pool (M4.4).
 
-#![cfg(windows)]
+// `EventDelivery` is behind the default-on `threadpool` feature (D-22), so
+// this whole file compiles out with `--no-default-features`.
+#![cfg(all(windows, feature = "threadpool"))]
 
+use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use windows_ioring_sys::{Batch, EventDelivery, IoRing, PushOptions};
+use windows_ioring_sys::{Batch, EventDelivery, IoRing, PushOptions, Token};
 
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 512;
@@ -66,8 +69,8 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
     // through the completion path this test does not need to exercise
     // (submission_lifecycle.rs already covers buffer round-tripping).
     {
-        let mut ring = delivery.ring().lock().expect("lock ring");
-        let mut batch = Batch::new(&mut ring);
+        let mut scope = delivery.scope();
+        let mut batch = scope.batch();
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
@@ -122,8 +125,8 @@ fn teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early() 
     .expect("wire event delivery");
 
     {
-        let mut ring = delivery.ring().lock().expect("lock ring");
-        let mut batch = Batch::new(&mut ring);
+        let mut scope = delivery.scope();
+        let mut batch = scope.batch();
         for _ in 0..8 {
             let buffer = vec![0_u8; content.len()];
             let _token = unsafe { batch.read_raw(handle, buffer, 0, PushOptions::new()) }
@@ -146,4 +149,85 @@ fn teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early() 
     // sane outcome is *some* deliveries happened before or during teardown,
     // never a panic or a hang getting here.
     let _ = delivered.load(Ordering::SeqCst);
+}
+
+#[test]
+fn completions_queued_before_handover_are_still_delivered() {
+    // The M11.3 regression test, from the spike that found the bug (D-19).
+    //
+    // Every other test in this file hands over a *fresh* ring, which is why
+    // this went unnoticed: `SetIoRingCompletionEvent` does not signal when it
+    // attaches to a ring whose completion queue is already non-empty, and
+    // nothing afterwards signals either, because the queue never returns to
+    // empty to re-arm the edge. Those completions were stranded permanently
+    // while `EventDelivery::new`'s own rustdoc promised they were delivered.
+    //
+    // The fix is `IoRing::completion_event`'s deliberate signal-once-on-attach
+    // (D-20), which this exercises by doing the one thing the old tests never
+    // did: let the completions land *before* the handover.
+    let path = temp_file("queued-before-handover");
+    let content = filled_content();
+    std::fs::write(&path, &content).expect("write fixture file");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open for read");
+    let handle = file.as_raw_handle();
+
+    let mut ring = IoRing::new(64, 64).expect("create ring");
+    let mut pending: HashMap<usize, (usize, Token<Vec<u8>>)> = HashMap::new();
+    {
+        let mut batch = Batch::new(&mut ring);
+        for chunk_index in 0..CHUNKS {
+            let buffer = vec![0_u8; CHUNK_LEN];
+            let offset = (chunk_index * CHUNK_LEN) as u64;
+            let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
+                .expect("queue read");
+            pending.insert(token.id(), (chunk_index, token));
+        }
+        // Wait for all of them here, on this thread, so the ring is handed
+        // over with a full completion queue. This is the whole point: no
+        // completion arrives after the handover, so delivery can only happen
+        // if attaching covers the backlog.
+        batch
+            .submit_and_wait(CHUNKS as u32, 5_000)
+            .expect("submit and wait for every completion to land");
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let delivery = EventDelivery::new(
+        ring,
+        move |completion| {
+            let _ = tx.send(completion);
+        },
+        None,
+    )
+    .expect("wire event delivery to a ring that already has completions queued");
+
+    // Claim on this thread rather than in the callback, so a delivered
+    // completion is checked against the token that minted it -- a delivery
+    // that reported the wrong `UserData` would fail here rather than pass.
+    for _ in 0..CHUNKS {
+        let completion = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a completion queued before handover must still be delivered");
+        let transferred = completion.result().expect("read succeeded");
+        let (chunk_index, token) = pending
+            .remove(&completion.user_data())
+            .expect("completion matches a held token");
+        let buffer = token
+            .claim_if(&completion)
+            .expect("a token claims its own completion");
+        assert_eq!(transferred, CHUNK_LEN);
+        assert_eq!(
+            buffer,
+            content[chunk_index * CHUNK_LEN..(chunk_index + 1) * CHUNK_LEN]
+        );
+    }
+    assert!(
+        pending.is_empty(),
+        "every completion queued before the handover must have been delivered"
+    );
+
+    drop(delivery);
 }

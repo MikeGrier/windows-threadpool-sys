@@ -60,8 +60,9 @@ pub struct Capabilities {
     pub max_submission_queue_size: u32,
     /// The largest completion queue a ring can request.
     pub max_completion_queue_size: u32,
-    /// Whether `SetIoRingCompletionEvent` is available. The thread-pool
-    /// delivery path refuses to construct without this.
+    /// Whether `SetIoRingCompletionEvent` is available. Both
+    /// [`crate::IoRing::completion_event`] and the thread-pool delivery path
+    /// built on it refuse to construct without this.
     pub supports_completion_event: bool,
     /// Whether the ring is emulated in user mode rather than backed by the
     /// kernel. A consumer reaching for this crate to maximize throughput
@@ -85,13 +86,34 @@ pub fn capabilities() -> io::Result<Capabilities> {
     // needs no ring.
     let hr = unsafe { QueryIoRingCapabilities(&raw mut raw) };
     check(hr)?;
-    Ok(Capabilities {
+    Ok(decode(&raw))
+}
+
+/// Turn a raw `IORING_CAPABILITIES` into this crate's shape.
+///
+/// Split out of [`capabilities`] so the flag decoding can be exercised with
+/// values the running system does not report (M18.7). `QueryIoRingCapabilities`
+/// reports whatever the host supports and nothing can vary it, so while this
+/// lived inside the query it was unreachable from any test -- M18.3's mutation
+/// run found all four of its bit operations surviving, including the one
+/// deciding `supports_completion_event`, which gates every completion-event
+/// path in the crate ([D-20](../DESIGN-NOTES.md#d-20)) and which
+/// [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47) lived
+/// downstream of.
+///
+/// Pure, and takes the raw struct by reference: no syscall, no global state, so
+/// a test can hand it any flag combination including ones no Windows build
+/// produces.
+fn decode(raw: &IORING_CAPABILITIES) -> Capabilities {
+    Capabilities {
         max_version: RingVersion(raw.MaxVersion),
         max_submission_queue_size: raw.MaxSubmissionQueueSize,
         max_completion_queue_size: raw.MaxCompletionQueueSize,
+        // Each flag is tested on its own bit: a mask that happens to carry
+        // other feature bits must not change either answer.
         supports_completion_event: raw.FeatureFlags & IORING_FEATURE_SET_COMPLETION_EVENT != 0,
         is_emulated: raw.FeatureFlags & IORING_FEATURE_UM_EMULATION != 0,
-    })
+    }
 }
 
 #[cfg(test)]

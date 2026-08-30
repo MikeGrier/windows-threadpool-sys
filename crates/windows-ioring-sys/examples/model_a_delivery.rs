@@ -7,15 +7,16 @@
 //!
 //! This submits several reads and returns immediately (`wait_operations =
 //! 0`): the submitting thread never blocks waiting for a completion. Every
-//! completion is instead delivered on a thread-pool callback thread, via
-//! [`EventDelivery`]'s wired-up `SetIoRingCompletionEvent`.
+//! completion is instead delivered on a thread-pool callback thread, via the
+//! ring's own completion event, which [`EventDelivery`] takes from
+//! [`IoRing::completion_event`] and hands to a `ThreadpoolWait`.
 
 use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;
 use std::sync::Mutex;
 use std::sync::mpsc;
 
-use windows_ioring_sys::{Batch, EventDelivery, IoRing, PushOptions, Token};
+use windows_ioring_sys::{EventDelivery, IoRing, PushOptions, Token};
 
 const CHUNKS: usize = 8;
 const CHUNK_LEN: usize = 4096;
@@ -60,8 +61,8 @@ fn main() -> std::io::Result<()> {
     // `UserData` identity `Batch::read_raw` minted for it.
     let tokens: Mutex<HashMap<usize, Token<Vec<u8>>>> = Mutex::new(HashMap::new());
     {
-        let mut ring = delivery.ring().lock().expect("lock ring");
-        let mut batch = Batch::new(&mut ring);
+        let mut scope = delivery.scope();
+        let mut batch = scope.batch();
         let mut tokens = tokens.lock().expect("lock tokens");
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];

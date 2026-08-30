@@ -2,11 +2,78 @@
 
 Design decisions are in [DESIGN-NOTES.md](DESIGN-NOTES.md); the session that produced them is
 [DESIGN-SESSION-2026-08-22-ioring-architecture.md](design-sessions/DESIGN-SESSION-2026-08-22-ioring-architecture.md).
-M1 through M7 (ring lifecycle through the `ring-copy` sample) are archived in
-[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-22----m1-through-m6-ring-lifecycle-through-consumer-documentation)
-and
-[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-23----m7-ring-copy-a-topology-aligned-sample).
+Everything through M18 is archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md): M1-M6
+[here](COMPLETED-CHECKLIST.md#moved-2026-08-22----m1-through-m6-ring-lifecycle-through-consumer-documentation),
+M7 [here](COMPLETED-CHECKLIST.md#moved-2026-08-23----m7-ring-copy-a-topology-aligned-sample), M11-M14 in their
+own dated groups, M8-M10
+[here](COMPLETED-CHECKLIST.md#moved-2026-08-30----m8-through-m10-handle-lifetime-cross-ring-identity-and-the-contract-audit),
+and M15-M18
+[here](COMPLETED-CHECKLIST.md#moved-2026-08-30----m15-through-m18-the-testing-strategy-response-to-eight-defects).
 
+**Only `M6+` remains, and it is parked rather than pending** -- see the `M{n}+` convention: it is gated work
+with no current obligation, not an unfinished milestone. `M19` below is complete and awaits archival with the
+next group.
+
+## M19 -- Close the `get()` borrow hole (was release-blocking for 0.2.0)
+
+Found by the code review of the M15-M18 branch, and **measured**: safe code can hold the `&[u8]` that
+`RegisteredBuffers::get` returns across a submit that makes the kernel write into that same buffer. A probe
+observed the bytes change from `0x11` to `0xEE` through the live borrow while a *fresh* `get(0)` at that same
+instant correctly refused with `WouldBlock`.
+
+The [D-36](DESIGN-NOTES.md#d-36) fix checks `kernel_writes` at the instant of the call, but returns a slice
+whose lifetime is tied to `&self` -- and `Batch::read_registered` takes the registration by **shared**
+reference, so the borrow and the read coexist. `get_mut` is unaffected: `&mut self` conflicts with the shared
+borrow, so the compiler already rejects the analogous sequence. Only `get` is exposed.
+
+This matters more than its severity alone suggests: it is the same hazard class D-36 was filed to close, in
+the API whose breaking change 0.2.0 is being cut for, and it is reachable with no `unsafe` anywhere.
+
+- [x] **M19.1** -- Make the borrow's *existence* conflict with starting a read into that buffer, not merely
+  its creation. The options differ in what they cost, and the choice is the engineer's:
+  (a) `get(&mut self)`, which is one line and closes it completely, but forfeits the concession D-36
+  deliberately kept -- a caller could no longer read a buffer while its own *write* is in flight, which is
+  sound because a write means the kernel only reads;
+  (b) a `with_bytes(i, |bytes: &[u8]| ...)` callback, or a returned guard type holding a reader count that
+  `begin_use(KernelAccess::WritesBuffer)` then refuses against, which preserves (a)'s concession at the cost
+  of a wider API change.
+  **Chose (a), after the engineer's question collapsed the choice:** does a caller ever *need* access during
+  the hazard window? No -- while a read is in flight the bytes are indeterminate, partially written in
+  arbitrary order, and only become meaningful once the completion is observed; while a write is in flight the
+  caller wrote them and already knows. Earlier or later is always available, so the concession (b) preserves
+  has no legitimate use.
+  **The codebase agreed before the change was made:** all ~40 read sites across tests, examples and the
+  epoch-log sample already read at a quiescent point -- their own `expect` messages say "is quiet", "is quiet
+  again", "neighbour slot is quiet". Converting them needed nothing but `mut` on ten locals; not one held a
+  borrow across a submit.
+  The SAFETY comment now states an invariant the signature actually provides, and the rustdoc explains why
+  `&mut self` hands back a shared slice.
+  **The arena pattern is intact**, which was the thing worth checking: a `Token` holds a `RegisteredUse`, not
+  a borrow of the registration, so quiet neighbours stay readable while operations are outstanding.
+
+- [x] **M19.2** -- Add the regression test the probe became: hold the borrow across a submit and assert the
+  bytes cannot change, or that the sequence no longer compiles. Verify it by sabotage like every other
+  instrument in M15-M18 -- reverting the fix must turn it red.
+  **Done as a `compile_fail` doctest on `get`**, since the hazard is now a type error rather than a runtime
+  one. **Sabotage-verified:** reverting the signature to `&self` makes it fail -- the sequence compiles again,
+  which is exactly the hole.
+  Paired with a `no_run` doctest asserting the *neighbour* case still compiles, because a `compile_fail`
+  passes on any error and a guard that over-constrained the arena would look identical to one that did not.
+
+- [x] **M19.3** -- Sweep for the same shape elsewhere. The M18.1 audit asked what a returned value *permits*,
+  not how long its borrow *lasts*; those are different questions and only the first was asked. Re-check every
+  borrow-returning entry in [BORROW-SURFACE.txt](BORROW-SURFACE.txt) against the second, and record the
+  distinction in [DESIGN-INSTRUCTIONS.md](DESIGN-INSTRUCTIONS.md) so the recurring question covers both.
+  **Swept all seven entries; `get` was the only one.** `get_mut` never had it (`&mut self` already conflicts
+  with the shared borrow `read_registered` needs -- confirmed by compiling the analogous sequence and getting
+  `E0502`). `RingScope::batch` and `EventDelivery::scope` both borrow exclusively and confine what they hand
+  out. `RingContract::violations` holds no kernel resource and every `observe_*` takes `&mut self`.
+  `IoRingError::name` returns `&'static str` from a literal.
+  [DESIGN-INSTRUCTIONS.md](DESIGN-INSTRUCTIONS.md) now poses **both** questions, with a mechanical form for
+  the second -- take the borrow, then try to call everything that could start work against the same object --
+  and D-45 is added to its table of shipped defects of this shape.
+  **Swept the count restatements too:** that file said "three defects" in four places and is now four, which
+  is the restatement drift the repository's own conventions warn about.
 ## M6+ -- Model B: explicit-thread delivery and affinity
 
 Parked, not pending. Deferred by the engineer's explicit direction during the 2026-08-22 design session,
@@ -33,123 +100,3 @@ with the plan scoped now so the shape is not lost. This is **not** a fallback fo
 - [ ] **M6+.6** -- Decide `IoBuf`: extract to a shared crate, re-export from
   `windows-overlapped-io-sys`, or leave duplicated (D-1). The merge-or-delete decision that duplicate-then-decide
   defers to the point where the new path is proven -- which is here, not earlier.
-
-## M8 -- `FileRef::Raw(HANDLE)` lifetime safety (PR #20 review finding)
-
-A caller can close or reuse the raw `HANDLE` passed to `Batch::read`/`write`/`flush`/`cancel`/
-`register_files` before the kernel finishes with it: unlike a buffer (owned by a `Token` until claimed),
-`FileRef::Raw` carries no lifetime and nothing in this crate borrow-checks a handle across the async gap
-between push and completion.
-
-- [x] **M8.1** -- Ownership model decided: `Batch::read`/`write`/`flush`/`cancel`/`register_files` become
-  `unsafe fn` when addressing a raw `HANDLE` (their existing `SAFETY` comments already state the
-  caller-keeps-it-alive obligation informally; this makes it a real, compiler-checked boundary), paired
-  with a safe `SharedFile` wrapper (`Arc<OwnedHandle>`) for the common case: each push clones the `Arc` into
-  the same `Token` that already tracks the operation's buffer (or, for `flush`/`cancel`, a standalone
-  `Token<Arc<OwnedHandle>>`), so the underlying handle survives until every operation referencing it is
-  claimed or leaked, regardless of what the caller does with its own `SharedFile` clone. Rejected:
-  borrowing `FileRef::Raw` for the `Batch`'s own lifetime (does not solve the completion-outlives-the-push-
-  call problem) and forcing every raw handle through an owning wrapper the way
-  `windows-overlapped-io-sys`'s endpoints do (defeats `FileRef::Raw`'s zero-setup reason to exist).
-  `FileRef::Registered` needs none of this and stays unaffected.
-
-- [x] **M8.2** -- Added `SharedFile` (`pub struct SharedFile(Arc<OwnedHandle>)`) with a constructor from
-  `OwnedHandle`, `Clone`, and a raw-handle accessor for building an `IORING_HANDLE_REF`.
-
-- [x] **M8.3** -- Marked `Batch::read`/`write`/`flush`/`cancel`/`register_files`'s raw-`HANDLE`-taking
-  forms `unsafe fn` with a `# Safety` section stating the real obligation (valid handle, correct access
-  rights, remains valid until the pushed operation's completion is observed or the ring runs down).
-  **Scope correction found during execution:** `read_registered`/`write_registered` take the identical
-  `impl Into<FileRef>` shape for their own `file` argument and carry the same hazard, so they were marked
-  `unsafe fn` too, with no separate checklist item -- the original enumeration omitted them by oversight,
-  not by decision. Committed as `feat(ioring)!`.
-
-- [x] **M8.4** -- Added safe overloads `read_shared`/`write_shared`/`flush_shared`/`cancel_shared` (plus
-  `read_registered_shared`/`write_registered_shared`, for the same reason as M8.3's correction) taking
-  `&SharedFile`, cloning the `Arc` into the same `Token` (a tuple with the buffer for `read`/`write`-shaped
-  pushes, or `Token<SharedFile>` alone for `flush`/`cancel`, which have no buffer of their own) so a caller
-  never needs `unsafe` for the common case. `register_files` gets no `_shared` counterpart: a registration's
-  handles must stay valid for the ring's remaining life, a lifetime no single push's `Token` can express.
-
-- [x] **M8.5** -- Integration test
-  (`dropping_the_callers_own_sharedfile_clone_does_not_close_a_still_outstanding_handle`,
-  `tests/submission_lifecycle.rs`): drop the caller's own `SharedFile` clone (its only external reference)
-  while a push against it is still outstanding; the read still completes correctly against a live handle,
-  proving the `Arc` clone inside the token -- not the caller's copy -- is what kept it open.
-
-- [x] **M8.6** -- Renamed the API so the safe path gets the plain names: the raw/`unsafe` entry points
-  became `read_raw`/`write_raw`/`flush_raw`/`cancel_raw`/`read_registered_raw`/`write_registered_raw`, and
-  the safe `SharedFile`-taking overloads (previously `*_shared`) took over the plain names
-  `read`/`write`/`flush`/`cancel`/`read_registered`/`write_registered` -- since the safe path is the one
-  this crate wants to steer callers toward. `register_files` keeps its plain name unsafe, since it has no
-  safe counterpart to make way for.
-
-## M9 -- Cross-ring identity and registration-drop safety (PR #20 review findings)
-
-`UserData`, `RegisteredFile`, and `RegisteredBuffers` indices are each meaningful only against the
-specific ring that minted them, but nothing enforced that when more than one `IoRing` exists in the same
-process.
-
-- [x] **M9.1** -- Added `RingId` (`ring.rs`): a monotonic, process-lifetime-unique `AtomicU64` counter,
-  never the ring's own `HANDLE` (which Windows can reuse for the next object after a ring closes). Every
-  `IoRing` gets one at construction; every popped `Completion` now carries the id of the ring that
-  produced it (D-17).
-
-- [x] **M9.2** -- `Token::claim_if` now requires both the `UserData` identity and the `RingId` to match,
-  closing the gap where two different rings' own zero-based `UserData` counters could coincide. Added
-  `claim_if_rejects_a_matching_user_data_from_a_different_ring` (`src/token/tests.rs`).
-
-- [x] **M9.3** -- `RegisteredFile`/`RegisteredFiles`/`PendingFileRegistration` and
-  `RegisteredBuffers`/`PendingBufferRegistration` now carry the minting ring's `RingId`; `handle_ref`
-  (fallible now) and a new `Batch::check_registration_ring` reject a `FileRef::Registered`/
-  `RegisteredBuffers` argument from a different ring with `io::ErrorKind::InvalidInput`, checked before any
-  `Build*` call runs. Added `a_registered_file_from_a_different_ring_is_rejected` and
-  `a_registered_buffers_from_a_different_ring_is_rejected` (`tests/registration.rs`).
-
-- [x] **M9.4** -- `PendingBufferRegistration` now leaks its buffers (via `ManuallyDrop` plus a
-  deliberately empty `Drop`) if dropped without a matching `claim_if`, mirroring `Token`/
-  `RegisteredBuffers` (D-18) -- previously it dropped `Vec<B>` normally, freeing memory the kernel might
-  still reference from an already-queued `BuildIoRingRegisterBuffers` call. Added
-  `dropping_an_unclaimed_pending_buffer_registration_leaks_rather_than_frees` (`tests/registration.rs`).
-
-- [x] **M9.5** -- `Batch::do_submit` now marks itself attempted (`self.submitted = true`) *before*
-  propagating `SubmitIoRing`'s `HRESULT`, not after: `submit_and_wait` takes `self` by value, so a failed
-  call still runs `Drop` once its caller's `self` goes out of scope, and the old ordering left `Drop` free
-  to silently retry an already-attempted submit -- which could succeed on the retry without the original
-  caller's `Err` ever saying so.
-
-- [x] **M9.6** -- Output-abstraction cleanup in the two examples the review flagged
-  (`examples/model_a_delivery.rs`, `examples/l3_domains.rs`): routed through a single writer seam per the
-  repository's architectural pre-step, matching `src/bin/run_scenario.rs` (in `windows-file-watcher`) and
-  `examples/ring_copy/main.rs`'s existing pattern. `PLANS.md`'s bare `COMPLETED-PLANS.md`/
-  `COMPLETED-CHECKLIST.md` references were also made clickable relative links.
-
-
-## M10 -- Finish the contract audit against the ten specification-gap categories
-
-[DESIGN-NOTES.md](DESIGN-NOTES.md) -> "Specifying this contract" audits this crate against
-[the ten categories](../../DESIGN-NOTES.md#specifying-a-delivery-contract) and reaches four of them: D-17's
-`RingId` (categories 4/5, handled correctly), `Completion::synthetic`'s test-only gate (category 10, handled
-correctly), D-14's registration-index continuity (category 4, recorded as an explicitly unverified
-assumption), and the previously-unstated completion-ordering rule. Categories 1, 2, 3, 6, 8, and 9 were
-**not examined**, and that is recorded as "not looked at" rather than "does not apply".
-
-- [ ] **M10.1** -- Audit category 3 (state-dependent legality unenumerated) first: capability negotiation
-  (D-6) makes the legal op set a per-ring *runtime* property, so which pushes are legal depends on state the
-  type system does not carry. Enumerate, per capability state, which `Batch` methods can succeed and what a
-  caller may infer from `supports_raw`.
-
-- [ ] **M10.2** -- Audit the remaining categories (1, 2, 6, 8, 9) against the ring/token/registration
-  surface, stating each answer including "unspecified, deliberately" where that is honest.
-
-- [ ] **M10.3** -- Resolve or re-record D-14's unverified registration-index continuity assumption. It is a
-  cross-message invariant a consumer can silently depend on; either establish it by measurement (the spike's
-  precedent) or state plainly on the public API that index continuity is not guaranteed.
-  **The measurement now exists**: the 2026-08-27 session established that a second
-  `BuildIoRingRegisterFileHandles` replaces the whole table and re-bases indices at zero, that a table holds
-  at least 65536 handles, and that an index is resolved at submission so a replacement does not disturb an
-  operation already in flight. Discharge this item against that result rather than re-measuring; the work is
-  scheduled workspace-side as
-  [M19.1](../../CHECKLIST.md), with the relaxation of the one-registration-per-ring rule it enables as
-  M19.2. See
-  [DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md](../../design-sessions/DESIGN-SESSION-2026-08-27-pseudo-async-namespace-operations.md).

@@ -48,6 +48,23 @@ jobs:
         shell: pwsh
         run: ./tools/check-baseline.ps1
 
+  # windows-ioring-sys has shipped three defects of one shape: a public method
+  # whose return type permitted an operation nobody intended (D-35, D-36, D-43).
+  # All three arrived through ordinary, well-reviewed changes -- what was missing
+  # was a specific question asked at a specific moment, and "remember to ask it"
+  # is not a mechanism. This job fails when that crate's borrow-returning surface
+  # changes, so the question in its DESIGN-INSTRUCTIONS.md cannot be skipped.
+  # Checks shape, not correctness: it asks for a sentence, it does not judge the
+  # design. Needs no toolchain -- it only reads files.
+  borrow-surface:
+    name: ioring borrow-surface inventory
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check-borrow-surface.ps1
+        shell: pwsh
+        run: ./tools/check-borrow-surface.ps1
+
   build-test:
     name: build + test
     runs-on: windows-latest
@@ -187,6 +204,54 @@ jobs:
           RUST_BACKTRACE: 1
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-overlapped-io-sys --no-default-features --features "${{ matrix.feature }}" --locked --no-fail-fast
+
+  ioring-no-threadpool:
+    name: windows-ioring-sys (no threadpool feature)
+    runs-on: windows-latest
+    # `EventDelivery` sits behind the default-on `threadpool` feature (D-22),
+    # which makes `default-features = false` a published configuration that
+    # nothing above builds: every `--workspace` step uses the default set, and
+    # `--all-features` turns the gate back on. Without this job that path rots
+    # silently -- a missing `cfg` on an item, a test, or an example is invisible
+    # until a Model B consumer hits it. This is the cost the feature gate was
+    # accepted with, so it is paid here rather than assumed.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build
+        run: cargo build -p windows-ioring-sys --all-targets --no-default-features --locked
+      - name: cargo clippy
+        run: cargo clippy -p windows-ioring-sys --all-targets --no-default-features --locked -- -D warnings
+      - name: cargo test
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-ioring-sys --no-default-features --locked --no-fail-fast
+      # The `docs` job only documents `--all-features`, so an intra-doc link
+      # from ungated prose to a gated item resolves there and dangles here.
+      # Measured, not hypothetical: the crate docs linked `[EventDelivery]`
+      # from the ungated "Choosing a delivery architecture" section, and this
+      # step is what fails on it.
+      - name: cargo doc (deny broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc -p windows-ioring-sys --no-deps --no-default-features --locked
+      # The converse, so the gate is not vacuous in the other direction either:
+      # selecting the crate alone with its default features isolates it from any
+      # `--workspace` feature unification, the same reason windows-file-watcher
+      # gets its own isolated steps above.
+      - name: cargo clippy (default features, isolated)
+        run: cargo clippy -p windows-ioring-sys --all-targets --locked -- -D warnings
+      - name: cargo test (default features, isolated)
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-ioring-sys --locked --no-fail-fast
 
   fmt:
     name: rustfmt

@@ -1,0 +1,37 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-guard-alloc"
+version = "0.0.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A Windows guard-page global allocator for test builds: every allocation abuts a PAGE_NOACCESS guard page, and a freed address is decommitted and never reused, so an overrun or a use-after-free faults deterministically instead of reading stale bytes."
+
+# Test instrumentation, not library surface. Publishing it would invite a
+# consumer to depend on an allocator whose whole design trades memory for
+# determinism -- it never reuses an address, so a long-running process grows
+# without bound. That is correct for a test binary and wrong for anything else.
+publish = false
+
+[dependencies]
+# `default-features = false` matches every other crate in the workspace. It
+# changes nothing today -- windows-sys 0.61 declares `default = []`, so there is
+# no surface to disable -- and that is exactly why it is worth spelling: the
+# guard is against a future version giving `default` contents, not against
+# anything present. Being the workspace's lone outlier would otherwise read as a
+# deliberate exception and invite someone to work out why.
+windows-sys = { version = "0.61.2", default-features = false, features = [
+	"Win32_Foundation",
+	"Win32_System_Memory",
+	"Win32_System_SystemInformation",
+	# The seed is read straight from the environment block and timed with the
+	# performance counter, rather than through `std::env::var` and
+	# `SystemTime`. Both of those allocate, and this code runs *inside* the
+	# global allocator, where allocating would recurse.
+	"Win32_System_Environment",
+	"Win32_System_Performance",
+] }

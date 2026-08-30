@@ -8,7 +8,9 @@ use std::ops::Range;
 use std::ptr;
 use std::time::{Duration, Instant};
 
-use windows_ioring_sys::{Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, Token};
+use windows_ioring_sys::{
+    Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, Token, WriteCaching,
+};
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::SystemInformation::GROUP_AFFINITY;
 use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadGroupAffinity};
@@ -94,6 +96,7 @@ pub fn copy_domain(
                     write_span,
                     offset,
                     PushOptions::new(),
+                    WriteCaching::Cached,
                 )
             }
         })?;

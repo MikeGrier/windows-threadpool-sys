@@ -25,7 +25,7 @@ runs a continuation), this crate exposes the mechanism and documents the trade-o
 |---|---|
 | <a id="d-1"></a>D-1 | **IoRing lives in its own crate, not as a third backend inside `windows-overlapped-io-sys`.** Duplicate-then-decide, per the repository's PLATFORM INTEGRITY rule: the ring path is speculative, and building it beside the working IOCP path keeps that path stable. The genuinely shared surface turned out to be small (see D-2), which strengthens rather than weakens the separation. `IoBuf`/`IoBufMut` are duplicated initially; the extract-or-share decision is deferred until the ring path is proven, and tracked as M6+ rather than left implicit. |
 | <a id="d-2"></a>D-2 | **IoRing is a file data plane, not a general completion backend, and the division is forced by the kernel rather than chosen by us.** The op table is fixed: `NOP`, `READ`, `WRITE`, `FLUSH`, `REGISTER_FILES`, `REGISTER_BUFFERS`, `CANCEL`. Verified by spike against `IsIoRingOpSupported` on a fully current machine (`MaxVersion` 400). There is no ioctl op, no socket op, and no directory-change op, and unlike Linux's `io_uring` -- which grew to roughly fifty opcodes including full socket support -- Windows IoRing has not grown beyond file I/O. So `windows-overlapped-io-sys` remains the crate for arbitrary I/O (any handle, any operation), and this crate covers a strict subset of one of its three families. Neither can subsume the other. |
-| <a id="d-3"></a>D-3 | **There are two delivery architectures, both first-class; neither is a degraded form of the other.** See the detail section below. This supersedes an earlier framing in which the thread-pool path was "primary" and the pinned-thread path was a "fallback" for a missing capability. That framing was wrong twice over: the pinned-thread path is the high-performance architecture, and the capability fallback is only its least interesting justification. |
+| <a id="d-3"></a>D-3 | **There are two delivery architectures, both first-class; neither is a degraded form of the other.** See the detail section below. This supersedes an earlier framing in which the thread-pool path was "primary" and the pinned-thread path was a "fallback" for a missing capability. That framing was wrong twice over: the pinned-thread path is the high-performance architecture, and the capability fallback is only its least interesting justification. **Amended by [D-20](#d-20):** the two architectures remain the two, but this decision was read -- reasonably -- as also fixing each one's *wakeup mechanism*, which coupled reaching the completion event to surrendering the ring. Model B's wakeup source is separable from Model B's identity; see D-20. |
 | <a id="d-4"></a>D-4 | **Completion allocates nothing: the token owns the buffer, and the caller supplies the type.** `push()` returns a `Token<B>` that owns the `B` it was given; the ring stores only a generation counter and an in-flight count for rundown. No slab entry, no box, no type erasure -- the caller already knows `B`, so making it say so is free. Dropping a token whose operation is still in flight `mem::forget`s the buffer: leaking is safe, use-after-free is not, and this is the same leak-and-reclaim discipline `windows-overlapped-io-sys`'s `Operation` uses with the leak as the failure mode rather than the normal path. The ergonomic, allocating variant is layered on top of this, never underneath it. |
 | <a id="d-5"></a>D-5 | **The submission queue is ring state, not batch state, so buffers are owned from `Build*` and not from `Submit`.** Once `BuildIoRingReadFile` returns, the SQE is queued and there is no rewind. If a batch could be abandoned and its buffers freed, a later unrelated `submit()` would hand the kernel freed memory. A `Batch` therefore submits on drop, and holds `&mut IoRing` so that two concurrent batches do not compile -- which turns Win32's "you must serialize submission" footnote into a compiler-enforced guarantee. |
 | <a id="d-6"></a>D-6 | **Capability is negotiated and cached, never assumed.** The ring version is `min(highest we understand, caps.MaxVersion)`, stored and exposed, because the spike found an OS reporting `MaxVersion = 400` while `windows-sys` 0.61.2 names only up to `IORING_VERSION_3 = 300`; hardcoding a version would cap us permanently. `IsIoRingOpSupported` is probed once per op at construction into a capability set, so per-call cost is a bit test. `QueryIoRingCapabilities` needs no ring at all, so capability inspection is free and side-effect-free. |
@@ -36,11 +36,201 @@ runs a continuation), this crate exposes the mechanism and documents the trade-o
 | <a id="d-11"></a>D-11 | **`IoBuf`/`IoBufMut`'s safety contract is extended, at duplication time, to also cover a buffer registered for many operations, not only one in flight.** `windows-overlapped-io-sys`'s original contract only had to hold for the lifetime of a single operation, because that crate has no registration concept. This crate's M5 (`RegisterIoRingBuffers`) will hand the kernel a buffer's address for the life of the *registration*, which can span many submissions. Rather than silently reinterpreting the inherited contract when M5 lands, M2.1 states the wider requirement up front in `buf.rs`'s doc comments: a `stable_ptr`/`stable_mut_ptr` implementation must not move for as long as *any* outstanding use exists, whether that use is one `Token` or a standing registration. This is D-1's "duplicate-then-decide" playing out concretely: the duplicate is not a frozen copy, it is free to diverge the moment this crate's actual needs diverge from the original's. |
 | <a id="d-12"></a>D-12 | **Completion retrieval is one primitive, `IoRing::try_pop`, used by both delivery architectures rather than each growing its own.** It pops one `Completion` (an identity plus a `Result` over `ResultCode`/`Information`) without blocking, added during M3 once M3.6's own tests showed nothing exposed a *typed* completion outside the untyped rundown drain (a re-plan, not an omission -- see M3.7 in `CHECKLIST.md`). Model B's pinned thread calls it in a loop after `submit_and_wait`; Model A's event callback (M4) will call it in the same drain-to-empty pattern. Neither needs its own popping logic. The matching raw-SQE seam, `IoRing::push_raw` (M3.5), follows the same shape as `windows-overlapped-io-sys`'s unsafe `ioctl`: the mechanics of building an SQE need nothing unsafe, but this crate cannot audit an arbitrary caller-supplied `Build*` call, so the seam itself is `unsafe`, and a failed `push_raw`/`Batch` push releases its reservation immediately rather than waiting for a rundown to notice an operation that never queued. |
 | <a id="d-13"></a>D-13 | **`EventDelivery`'s quiesce-then-close teardown (M4.3) is Rust's own struct-field-drop order, not a hand-written `Drop` impl.** Its `wait: ThreadpoolWait` field is declared before its `ring: Arc<Mutex<IoRing>>` field; fields drop top-to-bottom, so `ThreadpoolWait`'s own `Drop` (disarm, suppress re-arming, drain any in-flight callback, close, then free its context -- releasing its captured `Arc` clone) always finishes before `ring`'s last strong reference drops and runs `IoRing`'s own `run_down` then `CloseIoRing`. No callback can be touching the ring when it closes, and no new `Drop` logic had to be written to guarantee it. This is also why `EventDelivery` cannot be placed in a `CleanupGroup`: a group only knows how to bulk-release objects it created itself, and `EventDelivery` owns a ring with its own teardown obligation a group's `CloseThreadpoolCleanupGroupMembers` has no way to run -- the same reasoning `windows-threadpool-sys` already applies to exclude `ThreadpoolIo`. |
-| <a id="d-14"></a>D-14 | **Recorded as an explicitly unverified assumption (mirroring D-10): registration bookkeeping (`IoRing::registered_file_count`/`registered_buffer_count`) advances the instant a `BuildIoRingRegisterFileHandles`/`BuildIoRingRegisterBuffers` call successfully queues, not once its completion is observed.** Neither function takes an `IORING_SQE_FLAGS` parameter, so this crate cannot force a drain barrier around them the way `Batch`'s other pushes can. Whether the kernel actually claims the assigned indices synchronously at build time or only when the op later runs is not documented anywhere this crate could verify. Advancing eagerly is the safe direction regardless: it can only ever waste indices (skip ahead too far), never collide two registrations onto the same index (the only failure mode that would actually corrupt a later registration's base index). No work is scheduled against this decision; like D-10, the design consequence -- eager, monotonic advancement -- is the same whichever way the truth turns out. |
+| <a id="d-14"></a>D-14 | **Dissolved by [D-31](#d-31) (M10.3) -- the assumption below is no longer load-bearing, because the failure mode it reasons about became unreachable.** Retained as written for the record. Originally: **recorded as an explicitly unverified assumption (mirroring D-10): registration bookkeeping (`IoRing::registered_file_count`/`registered_buffer_count`) advances the instant a `BuildIoRingRegisterFileHandles`/`BuildIoRingRegisterBuffers` call successfully queues, not once its completion is observed.** Neither function takes an `IORING_SQE_FLAGS` parameter, so this crate cannot force a drain barrier around them the way `Batch`'s other pushes can. Whether the kernel actually claims the assigned indices synchronously at build time or only when the op later runs is not documented anywhere this crate could verify. Advancing eagerly is the safe direction regardless: it can only ever waste indices (skip ahead too far), never collide two registrations onto the same index (the only failure mode that would actually corrupt a later registration's base index). Like D-10, the design consequence -- eager, monotonic advancement -- is the same whichever way the truth turns out. (That last clause is what [D-31](#d-31) makes decisive: a second registration was forbidden the day after this was written, so there is no "later registration" left to corrupt.) |
 | <a id="d-15"></a>D-15 | **`Token<B: IoBuf>` was generalized to `Token<T: Send + 'static>` to build M5's registration types on the exact same forget-unless-claimed mechanism, rather than a parallel one.** Nothing inside `Token` ever called an `IoBuf` method; the bound only ever documented intent. `Batch::register_files`/`register_buffers` return plain data (`PendingFileRegistration`/`PendingBufferRegistration<B>`) with their own `claim_if`, because there is no buffer to forget-or-free for a registration *push* itself. `Batch::read_registered`/`write_registered` reuse `Token<RegisteredUse>` for the *use* of an already-registered buffer: `RegisteredUse`'s own `Drop` decrements `RegisteredBuffers`'s outstanding-use count, so it fires only when a completion is actually observed and claimed (D-4's rule -- an unclaimed, dropped token forgets its value) -- never merely because a caller gave up on the token. `RegisteredBuffers` itself extends the same "leak is safe, use-after-free is not" philosophy one level up: since Win32's `IoRing` has no unregister call at all, `RegisteredBuffers::drop` refuses to free its `ManuallyDrop`-held buffers while that count is nonzero (loud via `debug_assert!` in debug builds, a silent permanent leak in release) rather than freeing memory a still-outstanding `IORING_BUFFER_REF` might address. |
 | <a id="d-16"></a>D-16 | **`FileRef::Raw(HANDLE)`'s lifetime hole (PR #20 review finding, M8) is closed by making the raw-handle-taking pushes `unsafe fn`, paired with a safe, `Arc<OwnedHandle>`-backed `SharedFile` wrapper for the common case -- not by forcing every raw handle through an owning wrapper the way `windows-overlapped-io-sys`'s endpoints do.** A bare `HANDLE` carries no lifetime, so nothing stopped a caller from closing or reusing it before the kernel finished with it; the existing `SAFETY` comments already said "the caller's to keep alive" on functions with no `unsafe` keyword, the textbook shape of an unsound safe API. `windows-overlapped-io-sys` never has this hazard because every endpoint owns its handle -- but forcing that shape here would eliminate `FileRef::Raw`'s reason to exist: zero-setup addressing for a handle used across many concurrent pushes, which an owning-endpoint model cannot express without wrapping every file first. `SharedFile` instead shares by reference count: each `*_shared` push clones the `Arc` into the same `Token` that already tracks the operation's own payload (bundled as a tuple with the buffer for `read`/`write`-shaped pushes, or as `Token<SharedFile>` alone for `flush`/`cancel`, which have no buffer of their own), so the underlying handle survives until that token is claimed or leaked regardless of what the caller does with its own clone -- the same discipline `Token`/`RegisteredBuffers` already apply, adapted for a resource with multiple simultaneous holders instead of one. `register_files` gets no `_shared` counterpart: its handles must stay valid for the ring's remaining life, a lifetime no single push's `Token` can express. |
 | <a id="d-17"></a>D-17 | **Every `Token`, `RegisteredFile`, and `RegisteredBuffers` now carries the identity of the ring that minted it (PR #20 review finding), and every popped `Completion` carries the identity of the ring that produced it, so a value from one ring can never be mistaken for one from another.** `UserData` is a plain counter this crate assigns starting at zero per ring, so two different rings routinely hand out the same value -- a `Token`'s `id == completion.user_data()` check alone cannot tell those apart, and a `RegisteredFile`/`RegisteredBuffers` index is only meaningful against the specific table it was assigned in. `RingId` is a monotonic, process-lifetime-unique counter (`AtomicU64`, starting at 1) rather than the ring's own `HANDLE`: Windows is free to hand a closed ring's numeric handle value to the next object it creates, which would let a stale identity collide with a genuinely new ring. `Token::claim_if` now requires both identities to match; `Batch`'s pushes reject a `FileRef::Registered`/`RegisteredBuffers` argument whose `RingId` differs from `self.ring`'s own with an `InvalidInput` error, checked before any `Build*` call runs (so a rejected push never reserves `UserData` or counts against rundown). |
 | <a id="d-18"></a>D-18 | **`PendingBufferRegistration` now leaks its buffers on an unclaimed drop instead of freeing them, mirroring `Token`/`RegisteredBuffers` (PR #20 review finding).** `Batch::register_buffers` queues `BuildIoRingRegisterBuffers` -- and hands the buffer addresses to the kernel -- the instant it returns, before any completion is ever observed; a caller that drops the returned `PendingBufferRegistration` without matching a completion to it (via `claim_if`) has no proof the kernel is done deciding whether to retain those addresses. Freeing them anyway would risk handing memory the kernel still references back to the allocator, so `buffers` moved behind a `ManuallyDrop` and `PendingBufferRegistration`'s own `Drop` is now deliberately empty, exactly like `Token`'s. `claim_if` explicitly takes the buffers back out of the `ManuallyDrop` once a *matching* completion proves the kernel has decided one way or the other -- success or failure -- so the previously-documented "dropped normally on a failed registration" behavior is unchanged; only the never-observed-a-completion case changed, from an unsound free to a safe leak. |
+| <a id="d-19"></a>D-19 | **The ring's completion event is edge-triggered on the completion queue going empty -> non-empty, not level-triggered and not one signal per completion. Measured, not inferred.** See "The completion event is an edge, not a level" below for the measurements and the two rules that follow (drain to empty before waiting again; a wake with nothing to pop is normal). This was found by spike during the M11 exchange, and it is not inferable from the Win32 API surface: `SetIoRingCompletionEvent` takes an event and documents nothing about when it fires. The consequence is severe rather than cosmetic -- a waiter that waits again without draining to empty blocks until some *later* completion arrives after the queue has been emptied, which is a lost-wakeup deadlock, not a latency wobble. |
+| <a id="d-20"></a>D-20 | **Fully implemented: `IoRing::completion_event` in M11.1, `EventDelivery`'s consolidation onto it in M11.3.** **The completion event is reachable without surrendering the ring, via `IoRing::completion_event() -> io::Result<OwnedHandle>`: the ring creates and owns the event, and hands the caller a duplicate.** This opens the shape D-3 accidentally closed off -- a caller that owns its ring *and* can wait on the ring alongside other handles (`WaitForMultipleObjects`), which is what any consumer mixing ring I/O with non-ring I/O needs, since `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` orders SQEs against SQEs only and cannot order across the two paths. This is not a third delivery architecture: it is **Model B with a multiplexed wakeup source**, changing only what the domain thread blocks on, never who owns, submits, or drains. Rejected: taking a caller-supplied `BorrowedHandle<'_>` (the borrow ends at return but the kernel retains the handle for the ring's life -- a use-after-free reachable from safe code), and promoting `raw_handle()` to `pub` (exports the handle for arbitrary use, moves the capability check out of the crate, and pushes `unsafe` onto every consumer -- while also forfeiting the D-19 protections below). The event is signalled once before the method returns, so a caller that had already submitted never misses the backlog; the cost is one spurious wakeup at setup, which the contract requires callers to tolerate anyway. `EventDelivery` is re-expressed on top of this rather than remaining the only route to it. |
+| <a id="d-21"></a>D-21 | **Auto-reset, and exactly one waiter per ring.** Forced by D-19 rather than chosen: a manual-reset event would stay signalled after the drain and spin the waiter, and two threads waiting on one ring's event cannot be made correct, because the drain that restores the empty state -- and therefore re-arms the edge -- must run to empty exactly once. The consumer whose request prompted this confirmed a single waiter, serialized behind their own lock, and separately flagged that a future move to less serialization on their side would reopen the question. Recorded so that a later multi-waiter request is recognised as a genuine design change rather than a flag. No work is scheduled against that possibility. |
+| <a id="d-22"></a>D-22 | **Implemented in M11.4.** **`windows-threadpool-sys` becomes an optional dependency behind a default-on `threadpool` feature.** `EventDelivery` is its only consumer, so a Model B consumer currently links a thread pool it never uses. Default-on keeps the change additive: no existing consumer is affected, and a caller opts out with `default-features = false`. Recorded with its rationale corrected: the requesting consumer argued a runtime "correctness-of-posture" cost, and that is false -- linking the crate creates no threads, since the Win32 default pool is a process-wide facility instantiated lazily on first use. The gate is justified on layering alone (a ring wrapper does not intrinsically depend on a thread pool), and its real cost is that CI must build and test both feature combinations or the `default-features = false` path rots silently. |
+| <a id="d-23"></a>D-23 | **A flush is not a durability barrier unless it carries `IOSQE_FLAGS_DRAIN_PRECEDING_OPS`. Measured.** A flush pushed after a batch of writes, with no barrier flag, routinely completes while many of those writes are still outstanding -- observed at 17 of 32 and 23 of 32 writes finishing *after* the flush's own completion. So the natural spelling, "push the writes, then push a flush", silently does not make those writes durable. See "Durability on the ring" below. This is a property of the operation, not of any wrapper, and it is the single most dangerous undocumented fact this crate has found: the failure is invisible except after power loss. **Amended by M12.2's measurement:** which *direction* the reordering shows in is device-dependent -- a second machine showed 0 of 32 preceding writes finishing after the flush, while 11 of 32 writes queued after it finished first. The rule is unchanged and the trap is sharper: seeing your flush land last is incidental behavior of one stack, never evidence the barrier can be omitted. See "The two measured facts" below. |
+| <a id="d-24"></a>D-24 | **`IOSQE_FLAGS_DRAIN_PRECEDING_OPS` is a full, ring-wide barrier that spans submissions -- not a one-sided wait, and not scoped to a file. Measured.** Operations pushed *after* a drained op are held until it completes, even when they target an entirely different file, which rules out filesystem-level serialization as the cause. The barrier also reaches every outstanding operation on the ring rather than only the current submission batch: results were identical whether the sequence went in one `submit()` or three. This matches `io_uring`'s `IOSQE_IO_DRAIN` and it means **cross-epoch pipelining through a single ring is not available** -- a consumer that closes an epoch with a drained flush stalls the whole ring for its duration. The alternatives, and their costs, are in "Durability on the ring" below. |
+| <a id="d-25"></a>D-25 | **Implemented: the flush barrier decision in M12.1 (`FlushCoverage`), the write flags in M12.3 (`WriteCaching`), the flush modes in M12.4 (`FlushMode`).** **Every durability parameter the kernel exposes is exposed by this crate, and the barrier decision is never taken by default.** `BuildIoRingWriteFile` takes `FILE_WRITE_FLAGS` and `BuildIoRingFlushFile` takes a `FILE_FLUSH_MODE`; this crate hardcoded `FILE_WRITE_FLAGS_NONE` and `FILE_FLUSH_DEFAULT`, so a consumer reading the API saw ordering but no way to express durability at all, and reasonably concluded the ring could not express it. That is a PLATFORM INTEGRITY failure -- the platform narrowed to what the crate's own examples needed -- and it is the second instance found in one review cycle, which makes it a pattern rather than an accident. Given [D-23](#d-23), `Batch::flush` additionally must not have a default spelling that produces a non-covering flush: the barrier decision is made explicit at the call site rather than inherited from `PushOptions::default()`. Queued as M12. |
+| <a id="d-35"></a>D-35 | **A registered buffer's outstanding-operation count is per buffer, not per registration, so a caller can refill a quiet slot while its neighbours are in flight (M13.2).** Found by writing M13's worked example: `RegisteredBuffers` exposed `get` but no mutable accessor, so a registered arena could only carry bytes the *kernel* produced -- there was no way to put a caller-composed record into one, which is exactly what an arena-backed log does. `ring_copy` never hit it because it reads into a registered buffer and writes back out of the same one. The fix is `get_mut`, and the reason it needed more than an accessor is that **`&mut self` is not sufficient for safety**: an operation in flight holds no borrow (`write_registered` takes `&RegisteredBuffers` for the length of the call; the `Token` keeps only a `RegisteredUse`), so the borrow checker would allow mutating a buffer the kernel is reading through -- a data race with the kernel. `get_mut` therefore pairs `&mut self` with a runtime check of that buffer's own count, refusing with `WouldBlock` while it is busy and `InvalidInput` when the index does not exist. Per-registration counting would have been simpler and useless: it would refuse every slot whenever any slot was in flight, which is the normal state of a pipelined arena. Rejected: a narrow `unsafe fn get_mut_unchecked` seam, which would have been smaller but pushed the hazard onto every consumer of an arena, for a check that costs one relaxed load. **Corrected by code review: `get_mut` hands back `&mut [u8]`, not `&mut B`.** The first version returned the buffer type, which closed the *temporal* hole (no mutation while an operation is in flight) and left the *address-stability* hole wide open: `IoRing` has no unregister call, so the address and length given to `BuildIoRingRegisterBuffers` are live for the ring's remaining life, and `&mut Vec<u8>` lets entirely safe code `reserve`, `resize`, or assign a whole new vector -- each of which frees or moves that allocation, with no `unsafe` anywhere and at a moment when the outstanding count is legitimately zero, so no runtime check could catch it. A byte slice of exactly the length recorded at registration grants the one power a caller needs and none of the powers that break the registration. The same correction moved `checked_span` off the live `bytes_len()` and onto that recorded length, since the kernel's view is the registered one. The lesson worth carrying: a per-operation temporal check is not a substitute for a lifetime-of-the-registration structural one, and reasoning about "what can mutate this" missed "what can *replace* this". |
+| <a id="d-39"></a>D-39 | **Non-fixed test data is permitted in this component only when it is seeded, announced, and pinnable -- and M15.2's poison is the first thing admitted under that rule.** The component's standing rule is that tests be reproducible and not use randomized sampling without explicit approval. A poison pattern that never varies would satisfy it trivially and be worth much less: a fixed byte like `0xDD` collides with real payloads, and code can come to depend on the constant without anyone noticing. The terms that reconcile the two: (1) the varying input is a single **seed**, not per-value randomness, so one number reproduces the entire run; (2) the seed is **announced** on stdout by `GuardAlloc::announce_seed` at test start, including the exact command to replay it; (3) it is **pinnable** from the environment (`WINDOWS_GUARD_ALLOC_SEED`, decimal or `0x` hex), verified end-to-end -- two unpinned runs produced different seeds, and two pinned runs reproduced byte-for-byte. A run with a pinned seed is exactly as deterministic as a constant; what varies is *which* deterministic pattern, which is the point. Two implementation constraints worth recording because they are not obvious: the seed must be readable **without allocating** (this code runs inside the global allocator, so `std::env::var` would recurse -- `GetEnvironmentVariableW` into a stack buffer is used instead, and `QueryPerformanceCounter` rather than `SystemTime` for the default), and the mixing function must be a **bijection with a computable inverse**, since identifying which allocation a region of poison came from is done by inverting it rather than by scanning. This rule governed the poison only; the separate question of whether randomized *property* testing is permitted has since been **settled by [D-41](#d-41)**, which admits it and generalises these same three terms to any generator. |
+| <a id="d-37"></a>D-37 | **Heap instrumentation for this crate's tests is a guard-page global allocator in-process, not Application Verifier / PageHeap -- because IFEO is keyed by image file name and cargo rehashes test binaries.** Measured rather than assumed, since PageHeap was the obvious first answer. What was established: `gflags` is **not** preinstalled on GitHub's `windows-2022` runners (though the runners do run as administrator); `gflags /p /enable <exe> /full` writes exactly two `REG_SZ` values under `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\<exe>` -- `GlobalFlag = 0x02000000` and `PageHeapFlags = 0x3` -- so `reg add` alone is sufficient and the SDK dependency is avoidable (verified on a fresh image name with no `gflags` involvement: the use-after-free went from a silent stale read to `0xC0000005`). The blocker is not availability but **keying**: IFEO matches on image file name, and one test target produced six distinct hashed names (`registration-<hash>.exe`) during a single day's work, so CI would have to enumerate, register and unregister every built test binary on every job, degrading silently to testing nothing whenever the enumeration missed one. A guard-page `GlobalAlloc` -- `VirtualAlloc` per allocation with a trailing `PAGE_NOACCESS` guard page, right-aligned so the allocation abuts it, and the address never reused after free -- gets the same detection (measured: clean `0`, use-after-free `0xC0000005`, overrun `0xC0000005`, against a system-allocator baseline that silently read a freed byte and exited `0`) with no admin, no SDK, no registry and no cleanup, and is immune to renaming because it lives inside the binary. Two honest limits recorded so they are not rediscovered: it governs only allocations made through Rust's global allocator (sufficient here -- [D-32](#d-32)'s `IORING_BUFFER_INFO` array is a `Vec`), and never reusing addresses means free must `MEM_DECOMMIT` rather than merely `VirtualProtect`, or a long suite grows without bound. Also corrected while measuring: PageHeap's "immediate access violation" is true for *user-mode* access, but a **kernel** read of freed memory probes and returns `STATUS_ACCESS_VIOLATION`, surfacing as a completion error rather than a user-mode crash -- so the win over the status quo is determinism, not a louder failure. |
+| <a id="d-38"></a>D-38 | **Guard pages cannot see the kernel writing into a live allocation, so registered buffers are poisoned with a tracked pattern and verified after every operation.** A guard page catches *access to memory that should not be touched at all*; it is structurally blind to the kernel writing into a committed, valid buffer -- which is exactly the shape of this crate's two unverified promises: `write_registered` says the kernel only **reads** the slot, and `read_registered` says it writes only within the declared `RegisteredSpan`. Both are asserted in prose and checked nowhere. The poison is **tracked** rather than a fixed constant like `0xDD`: derived from a per-run seed plus a per-allocation ordinal, so the bytes identify *which* allocation they came from instead of merely being "not real data", and so they cannot be confused with a real payload that happens to contain the constant. Verification points, chosen by which party is the suspect: after a registered *write* completes the slot must be byte-identical to what was submitted (the kernel may only read it); after a registered *read* completes every byte outside `[span.offset, span.offset + information)` must still be poison (which binds the kernel to the declared span **and** catches this crate's own `checked_span` or offset arithmetic being wrong); and at quiescence every never-written region still holds its pattern. The tracking is also what reconciles this with the component rule that tests be reproducible: the seed is logged at test start and accepted from the environment, so a failure replays exactly rather than being a one-off, which is the term under which non-fixed test data is permitted here. Credit where due: the gap and the tracked-poison remedy were the engineer's, raised as "if there's a gap" after the guard-page measurements came back clean -- a reminder that a technique passing its own demonstration says nothing about the cases it cannot express. |
+| <a id="d-36"></a>D-36 | **`RegisteredBuffers::get` refuses while a *read* is outstanding into that buffer, and only a read -- the direction of the kernel's access is what decides, so the count is split in two.** Found by a security review of the M14 branch, which correctly scoped it out of its findings (the line predates the branch, `26af335`) and flagged it anyway. `get` returned `&B` with no check at all, which made a data race with the kernel reachable from entirely safe code: `read_registered` takes `&RegisteredBuffers` and leaves no borrow behind, so `read_registered(...); submit(); arena.get(i)` reads memory the kernel is concurrently filling, with no `unsafe` anywhere. Demonstrated rather than argued -- with the check removed the regression test reads back `[0xEE, ...]`, the file's own bytes, out of a buffer whose read was still in flight. The asymmetry with [`get_mut`](#d-35) is the substance of this decision and is deliberate: mutating races the kernel whichever way it is touching the buffer, so `get_mut` refuses on *any* outstanding operation; reading races only a kernel that is **writing into** the buffer, so `get` refuses only on an outstanding read. A caller may read the bytes of a write it has in flight, because the kernel is reading them too and two readers do not race. That required splitting `BufferState`'s single count into `outstanding` plus a `kernel_writes` subset, and threading a `KernelAccess` through `begin_use`'s four call sites -- named from the kernel's point of view precisely because "a read means the kernel writes" is the inversion that is easy to get backwards. Rejected: refusing on `outstanding` for both, which is three lines and sound, but denies a sound operation and so narrows the platform to make the fix easy -- the thing PLATFORM INTEGRITY forbids. Both directions are sabotage-verified, the over-strict variant included, so a later "simplification" back to one counter fails the test rather than passing it quietly. Breaking (`get` now returns `io::Result<&[u8]>` rather than `Option<&B>`), and folded into the 0.2.0 that [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47) and [#48](https://github.com/MikeGrier/windows-threadpool-sys/issues/48) already force -- deferring it would have cost a 0.3.0 for a three-line change. The lesson worth carrying, and it is [D-35](#d-35)'s twin: that decision asked "what can mutate this" and missed "what can *replace* this"; this one asked "is anything in flight" and missed "in flight in which direction". |
+| <a id="d-26"></a>D-26 | **Windows mechanism belongs in this crate; durability policy belongs to the consumer; an example is how the knowledge crosses between them.** The dividing test is whether the answer depends on *how Windows behaves* or on *the consumer's workload and contract*. Ours: exposing the kernel's parameters, stating the measured contracts ([D-19](#d-19), [D-23](#d-23), [D-24](#d-24)), and making the footguns hard to hold. Theirs: epoch bookkeeping, which barrier strategy to pay for, how durability is reported, and how non-ring operations are sequenced against ring ones -- all of which depend on epoch sizes and latency targets, and so would be policy baked into a primitive ([D-8](#d-8) refuses exactly this). The residue is that a consumer must otherwise rediscover the same composition, so the transfer vehicle is a worked example (M13/M14), not a library: it demonstrates the pattern without this crate owning the policy. |
+| <a id="d-27"></a>D-27 | **One ring per thread is userspace's proxy for one ring per CPU, and pinning is what makes the proxy real.** Kernels affine hot structures to *CPUs*, not threads, because per-CPU exclusion is free (disable preemption, or raise IRQL) and because interrupt context has no meaningful owning thread. The hardware agrees: NVMe queue pairs are per-CPU with their completion interrupt vector routed to that CPU. Userspace has no per-CPU primitive and cannot disable preemption, so the only durable ownership unit available is the thread -- which is why the SPDK/Seastar discipline pins one. This is the reason under guidance this crate already gives ([D-8](#d-8), and the L3-domain advice): an *unpinned* per-thread ring still gets the single-producer safety the SQ/CQ protocol requires, but none of the locality that motivated the structure, and the interesting count is therefore cores or LLC domains rather than threads. |
+| <a id="d-28"></a>D-28 | **`IoRing::supports` answers what the kernel's op table contains, not what this crate's safe push surface reaches; and every legality check runs before anything is reserved (category 3 audit, M10.1).** Six of the seven named ops gate one or more `Batch` methods; `Op::Nop` gates none and is reachable only through `push_raw`, because a nop owns no buffer for a `Token` to hand back. Reading `supports` as "a push for this op will be accepted" is therefore wrong for exactly the op a consumer reaches for to wake a parked `submit_and_wait` (M6+.3). `supports_raw` is the same truth uncached rather than a different question -- it accepts named codes too and agrees with `supports` on them -- and it never widens the push surface, since an op outside `Op` has no builder regardless. Separately, the registration one-shot is enforced against the registered count rather than a flag, which makes the real rule "at most one registration that assigned an index" (a zero-length registration does not spend it) and makes a *failed* registration unretryable on that ring (the count advances at queue time, [D-14](#d-14)). |
+| <a id="d-29"></a>D-29 | **Implemented in M10.4 via the sealed [`FileTarget`] trait; the resolution is [D-33](#d-33).** Originally: **`FileRef::Registered` must be reachable without `unsafe`, because a registered index carries no lifetime obligation for a caller to get wrong (category 1 audit, M10.2).** Every safe push method hardcodes `FileRef::Raw` internally and only the six `unsafe fn` `_raw` variants accept an `impl Into<FileRef>`, so today the *only* route to a registered file is an `unsafe` call. That inverts the safety argument [D-16](#d-16) built: `read_raw`'s own contract says a `FileRef::Registered` target "needs none of this", which means the `unsafe` obligation is vacuous for exactly that input -- and vacuous `unsafe` is worse than none, since it trains a caller to discharge safety contracts by rote. The index is minted by this crate, checked against the minting ring ([D-17](#d-17)), and names a table the ring itself owns; there is nothing left for the caller to keep alive. Queued as M10.4. Note this is a PLATFORM INTEGRITY instance rather than a mere ergonomic one: registration is a platform capability that the safe surface currently does not reach at all, so the safe API is narrower than the platform for no reason the design supports. |
+| <a id="d-30"></a>D-30 | **Implemented in M10.5; the resolution is [D-34](#d-34).** Originally: **`io::Error::kind()` discriminates this crate's own rejections and never the kernel's, and that asymmetry is stated rather than papered over (category 9 audit, M10.2).** `check` wraps every failing `HRESULT` as `io::Error::other(IoRingError)`, so a kernel-reported failure always surfaces as `ErrorKind::Other` while this crate's own refusals carry `Unsupported`/`InvalidInput`/`AlreadyExists`. The `HRESULT` is not lost -- it survives behind `downcast_ref::<IoRingError>()` -- but the derived form a consumer naturally matches on is lossy, which is category 9 applied to an error type rather than a name. The alternative, mapping `IORING_E_*` onto `io::ErrorKind` variants, is refused: the kinds are not a faithful target (there is no "submission queue full" kind, and `WouldBlock` would misdescribe a condition that is not retryable without draining), so the mapping would trade an honest `Other` for a lossy guess. Instead the downcast recipe is documented on `IoRingError`, and a named predicate for the one condition consumers must branch on -- `IORING_E_SUBMISSION_QUEUE_FULL`, which the push rustdoc already names as the backpressure signal -- is queued as M10.5. |
+| <a id="d-31"></a>D-31 | **[D-14](#d-14)'s unverified registration-index continuity assumption is dissolved rather than verified: the failure mode it reasoned about became unreachable a day after it was written, and what remains is a naming question this crate can answer entirely from its own code (M10.3).** D-14 justified advancing the registered count at queue time on the grounds that erring early "can only ever waste indices, never collide two registrations onto the same index". That collision requires a *second* registration, and the PR #20 review response later made a second registration of either kind impossible -- so `base_index` is now always zero, no later base index is ever computed from the count, and the kernel's actual claim timing has no observable consequence for index assignment. Measuring it would establish a fact with nothing downstream of it. What *is* observable, and is now stated on the public API rather than left to the accessor's name, is that `registered_file_count`/`registered_buffer_count` report a **reserved** count rather than a confirmed one: they advance when the `Build*` call queues, so they are already advanced before any completion is popped, and they stay advanced after a registration whose completion reported failure (which is why such a registration cannot be retried on that ring, [D-28](#d-28)). The `base_index` machinery is kept rather than folded to a constant, because it is the correct shape if the one-registration rule is ever relaxed; it is documented as currently always zero so its presence is not misread as evidence that multiple registrations work. |
+| <a id="d-32"></a>D-32 | **`BuildIoRingRegisterBuffers` reads its `IORING_BUFFER_INFO` array when the registration op *runs*, not when the `Build*` call returns -- the opposite of `BuildIoRingRegisterFileHandles`, and measured rather than assumed.** This was a live use-after-free in shipped 0.1.2: `Batch::register_buffers` built the array in a local `Vec` and dropped it before `SubmitIoRing`, so the kernel read freed heap and the registration completed with `ERROR_NOACCESS` (`0x800703E6`). Because `register_buffers` is a **safe** `pub fn`, safe code could make the kernel dereference a dangling pointer -- a soundness hole, not merely a failing test. The spike (`.scratch/ioring-bufreg-spike`) crossed array-lifetime against buffer alignment and found alignment irrelevant in both directions (an align-1 `Vec<u8>` succeeds with the array alive; a page-aligned buffer still fails with it dropped), and separately established that the array may be released once `SubmitIoRing` returns, and that `BuildIoRingRegisterFileHandles` genuinely *does* read synchronously. **The array is therefore held by the `IoRing`, not by the `Batch` that built it**: a failed submit leaves the SQE queued as ring state ([D-5](#d-5)), so a later unrelated submit can be what finally runs it, after that batch is gone. A ring accepts at most one buffer registration, so the cost is one small allocation per ring. |
+| <a id="d-33"></a>D-33 | **[D-29](#d-29) is resolved by making the safe pushes generic over a *sealed* `FileTarget` trait with an associated `Guard` type, rather than by adding a parallel family of `*_registered_file` methods (M10.4).** The two safe targets differ in exactly one respect -- what the operation's `Token` must hold until its completion is observed -- so that difference, and nothing else, becomes the associated type: `SharedFile::Guard = SharedFile` (a clone of its `Arc`, which is what keeps the raw handle open) and `RegisteredFile::Guard = RegisteredFile` (nothing needs keeping alive; the index is handed back for symmetry). This makes the change **non-breaking**: `read(&SharedFile, ..)` still resolves to `Token<(B, SharedFile)>` exactly as before, and every existing call site compiles untouched. The generic parameters are ordered `<B, F>` rather than `<F, B>` so an existing `read::<Vec<u8>>` turbofish still resolves. The alternative -- six new concrete methods -- was refused because the naming does not survive the combinatorics: `read_registered` already means *registered buffer*, so a registered-file sibling would need a name like `read_registered_file_registered_buffer` to stay unambiguous. **Sealing is load-bearing, not tidiness:** an outside implementation could return `FileRef::Raw(arbitrary_handle)` from `as_file_ref` with a guard that keeps nothing alive, reintroducing precisely the unsoundness D-16 closed -- so the trait is public to *name* in bounds, and closed to implement. |
+| <a id="d-34"></a>D-34 | **[D-30](#d-30) is resolved with a complete `RingCondition` enum plus a sealed `IoRingErrorExt` on `io::Error`, and the `HRESULT` -> name mapping is defined once rather than twice (M10.5).** Three parts, each answering a different half of the problem D-30 named. (1) `RingCondition` is `#[non_exhaustive]` and covers **every** `IORING_E_*` this crate names, not only the ones a submission loop branches on -- narrowing it to the actionable three would be exactly the "narrow the platform to serve the visible goal" failure PLATFORM INTEGRITY forbids. (2) Predicates (`is_submission_queue_full`, `is_completion_queue_too_full`, `is_submit_in_progress`) exist only for the runtime-actionable conditions, because a predicate asserts that a branch exists; the rest stay reachable through `condition()`, so nothing is unreachable, merely unsugared. (3) `IoRingErrorExt` puts those answers on `io::Error` itself, which is what actually removes the hand-rolled `get_ref().downcast_ref::<IoRingError>()` from call sites -- the crate's own integration tests had two such helpers, and deleting them was the first use of the new API. `IoRingError::name` is now **derived** from `condition()` rather than matching the `HRESULT` a second time, per CONTRACT INTEGRITY's "prefer a derived fact to a restated one": the mapping had been a single `match` that a new condition could be added to while `name` silently kept the old answer. D-30's refusal to map onto `io::ErrorKind` stands unchanged. |
+| <a id="d-40"></a>D-40 | **A read from a cached file completes synchronously inside `submit_and_wait`, so the handover tests reach the genuinely-in-flight state with unbuffered I/O and construct a mixed queue deterministically rather than racing for one.** M17.1 was planned as a race: submit without waiting, attach immediately, and sweep the attach across the window in which the kernel might still be working. Measured before being believed, that window does not exist for **buffered** reads -- 512 reads of 64 KiB, plus four smaller shapes, left the completion queue **full** at attach time in 80 of 80 attempts, with no partial split at any size. A sweep across it therefore samples one cell repeatedly and only looks like coverage; the first draft was in effect a slower restatement of `attaching_to_a_ring_whose_queue_is_already_non_empty_still_signals`, which is exactly what its sabotage revealed by failing on *attempt 0*. Two things follow, and the handover tests do both. **(1) The in-flight state is reachable, just not that way:** unbuffered (`FILE_FLAG_NO_BUFFERING`) reads are genuinely asynchronous, so `attaching_while_unbuffered_reads_are_still_in_flight_strands_nothing` attaches while real device reads are outstanding. It **verifies its own precondition** rather than assuming it -- counting what was already queued at the instant of attach and failing if no attempt caught a read in flight -- so it cannot silently decay into the already-queued case on faster hardware. That guard is itself calibrated: dropping only the `FILE_FLAG_NO_BUFFERING` flag makes it fail with exactly that message, which re-derives this decision's central measurement from the test suite. The buffer is the same over-allocate-and-offset shape [tests/flush_barrier.rs](tests/flush_barrier.rs) already uses, extended to `IoBufMut`, because a `Vec<u8>` cannot carry a sector-aligned allocation safely -- its layout alignment is 1, so a hand-aligned block would be freed under the wrong layout. **(2) The union of the two wakeup mechanisms is tested deterministically:** one attach serving a backlog queued *before* it (covered by [D-20](#d-20)'s deliberate setup signal) **and** a wave submitted *after* it into the still-non-empty queue (covered by [D-19](#d-19)'s edge plus the drain-to-empty rule), which is where a seam would strand work exactly as [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47) did. The mechanisms are calibrated separately and their sabotages produce **disjoint** failures, so no test is passing on another's behalf. |
+| <a id="d-41"></a>D-41 | **Randomized property testing is permitted in this component, under two conditions: seed it whenever it can be seeded, and where non-determinism is inherent and outside our control, randomness is fair game.** This settles the question [D-39](#d-39) left open when it admitted seeded poison. **Condition 1 -- seed what can be seeded.** A randomized run must be reproducible from a single number, and varying that number is how permutations of whatever variance was in play get generated. That is [D-39](#d-39)'s rule generalised from the poison pattern to any generator, and its three terms carry over unchanged: **seeded** (one number reproduces the whole run, rather than per-value randomness), **announced** (the seed is printed with the command to replay it, since a seed nobody can learn after a CI failure is not reproducibility), and **pinnable** from the environment. **Condition 2 -- inherent non-determinism is fair game.** Multiprocessor scheduling, kernel completion order, and thread-pool dispatch are not ours to control, and a test that depends on them cannot be seeded. Such tests are legitimate; pretending otherwise would only produce a test that is deterministic in its inputs while remaining nondeterministic in the behaviour it actually observes. **The corollary that keeps condition 2 from becoming a loophole: inherent non-determinism excuses irreproducibility, never unverifiability.** A test that cannot be replayed must instead **prove it reached the state it claims to exercise**, because the failure mode of a timing-dependent test is not a crash but a silent decay into testing something easier. M17.1 is the worked example on both halves: the racing draft looked like coverage of the in-flight handover state while in fact sampling the already-queued one, and its replacement cannot make that mistake because it counts what was already queued at the instant of attach and fails if no attempt ever caught a read in flight -- a guard itself calibrated by dropping `FILE_FLAG_NO_BUFFERING` and watching it fire ([D-40](#d-40)). Two operational terms follow for property tests specifically: any failure a generator discovers becomes a **named, seed-free regression test** committed alongside the corpus, since a property test that finds a bug and then forgets it has bought one debugging session rather than a guarantee; and they are **integration** tests, because they cross the OS boundary and will exceed the one-second unit budget. |
+| <a id="d-42"></a>D-42 | **A test that collects completions by polling `try_pop` cannot observe a lost wakeup, so any test exercising an attached completion event must wait for the signal it is owed -- and wait *before* draining, not after.** Measured, and the measurement is the reason M17.4 exists: with [D-20](#d-20)'s deliberate setup signal removed -- [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47) exactly as it shipped -- M17.3's generator reported **green**. It attached the event and sampled the right states, but drained with unconditional `try_pop`, which recovers every completion whether or not the ring ever signalled. The wakeup contract was simply not among the things it could observe. This is the sharpest available illustration that **sampling the right state is not the same as being sensitive to the defect that lives in it**, and it is why a generator's green result is worthless until a known-real defect has been shown to turn it red. The ordering matters as much as the waiting: a backlog queued *before* the attach is reachable only through the setup signal, so a drain-then-wait loop consumes that backlog by polling and hides the signal's absence, while wait-then-drain does not. With the fix, the generator catches #47 in 10 of 10 runs on fresh seeds, always within six sequences. Any future test that attaches a completion event inherits this rule; polling is legitimate only when no event is attached, where it is the whole consumer model rather than a hole in one. |
+| <a id="d-43"></a>D-43 | **Fixed in M18.6: `EventDelivery` hands out a `RingScope` -- every read-only part of `IoRing` plus batch construction, and no `&mut IoRing` -- because any `&mut IoRing` permits whole-value assignment, which let safe code replace the ring and silently stop delivery.** The defect, for the record: `EventDelivery::ring` returned `&Mutex<IoRing>`. Found by [M18.1's borrow-surface audit](#borrow-surface-audit-m181) and **measured, not argued**: `*delivery.ring().lock().unwrap() = IoRing::new(64, 64)?` compiles, and a probe recorded one completion delivered before the swap and **none** after it, despite four further operations being submitted and completed on the replacement. The mechanism is that the pool's wait holds its own duplicate of the *original* ring's completion event ([D-20](#d-20)); replacing the ring drops that ring and attaches nothing to the new one, so the armed wait can never be signalled again. **This is [D-35](#d-35)'s shape at a different layer** -- there, `&mut Vec<u8>` permitted `reserve` and reassignment where only byte writes were intended, and the fix was to narrow the returned type to `&mut [u8]`. Here the returned type permits replacing the whole ring where only submitting work was intended. Note the trap in the obvious fixes: a `Deref`/`DerefMut` newtype does **not** close it, because `*guard = ...` works through `DerefMut` just as well, and neither does a `with_ring(\|ring: &mut IoRing\| ...)` closure, for the same reason. Closing it meant never letting a `&mut IoRing` escape -- `RingScope` hands out a `Batch` instead -- which changed all nine call sites including the `epoch_log` example. The refusal is now enforced by a `compile_fail` doctest, itself verified by adding a `DerefMut` impl and watching that doctest fail, which is also the empirical proof of the claim above that a `Deref` newtype would not have closed the hole. **Severity was silent correctness, not unsoundness.** No use-after-free is reachable: the old ring runs down normally, the wait's duplicate handle stays valid, and completions on the replacement are still claimable. Delivery simply stops, which is the failure mode hardest to notice. The existing rustdoc warns against calling `completion_event` on the shared ring but says nothing about replacing it. |
+| <a id="d-44"></a>D-44 | **A spike against the real kernel is a budgeted, first-class technique for every new Win32 surface this crate wraps -- not something that happens after a test fails mysteriously.** The full argument is in [Testing strategy](#testing-strategy-m185); the decision is that the budget is allocated *before* the wrapper is written. Two of the eight defects behind M15-M18 exist because a Win32 contract was assumed rather than measured: the completion event is edge-triggered ([D-19](#d-19)) and `BuildIoRingRegisterBuffers` reads its array when the operation *runs* ([D-32](#d-32)). No oracle, generator, allocator or mutation run supplies that knowledge, because each of them checks code against **our** stated contract -- and in both cases our stated contract was the thing that was wrong. What they detect is a *consequence*, and only on a path some test already walks: the guard allocator does turn D-32 into a hard `STATUS_ACCESS_VIOLATION`, measured in M17.4's calibration, but that is the crash after the mistake, not the knowledge that would have prevented it. A spike is also the only technique here that can be run *before* there is code to test. Two obligations follow, both learned the hard way and recorded in [design-sessions/spikes/README.md](design-sessions/spikes/README.md): a spike must carry a **control case**, because the first two drain-ordering spikes could not discriminate and would have returned confidently wrong answers; and it must be **kept**, as a standalone single-file program depending only on `windows-sys`, so that what it measures stays the operating system's behaviour rather than ours. |
+| <a id="d-45"></a>D-45 | **A borrow-returning method must be audited on two questions, not one: what the returned value *permits*, and how long the *borrow* lasts. `RegisteredBuffers::get` therefore takes `&mut self`.** [M18.1's audit](#borrow-surface-audit-m181) asked only the first, of all nineteen items, and the second is where [D-36](#d-36)'s fix was still open: `get` checked `kernel_writes` at the instant of the call but returned a slice living as long as the borrow, and `Batch::read_registered` takes the registration by **shared** reference -- so safe code could take the borrow while the buffer was quiet, then submit a read into that same buffer and keep reading. Measured before being believed: a probe watched the bytes change from `0x11` to `0xEE` through the live slice while a fresh `get(0)` at that same instant correctly refused with `WouldBlock`. The guard worked; the borrow outlived it. **`&mut self` costs nothing real**, because no caller needs to read a buffer during the window it is refused -- while a read is in flight the bytes are indeterminate and only become meaningful once the completion is observed, so earlier or later is always available. That is not merely an argument: all ~40 read sites in this crate's tests, examples and the epoch-log sample already read at a quiescent point, and converting them needed nothing but `mut` on a local. The concession D-36 deliberately kept (reading a buffer whose own *write* is in flight, where the kernel only reads) is given up with it, and is likewise unused. The arena pattern survives, because a [`Token`] holds a [`RegisteredUse`] rather than a borrow of the registration, so quiet neighbours stay readable while operations are outstanding. Enforced by a `compile_fail` doctest, itself verified by reverting the signature and watching it fail, and paired with a `no_run` doctest asserting the neighbour case still compiles so the guard cannot become over-constraining unnoticed. `get_mut` never had the defect: `&mut self` already conflicted with the shared borrow. |
+
+## Durability on the ring
+
+Written for consumers, like the two sections that follow it, and for the same reason: the default
+spelling is wrong and the failure is invisible until power is lost.
+
+### What the ring offers
+
+Three separate things, which are routinely conflated and must not be:
+
+| Concept | Meaning | On this ring |
+|---|---|---|
+| **Ordering** | does B start after A completes | `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` only |
+| **Durability** | data is on non-volatile media | the flush operation only |
+| **Atomicity** | a torn write is impossible across power loss | not exposed; a device property (NVMe `AWUN`/`AWUPF`) |
+
+**There is no FUA.** `BuildIoRingWriteFile`'s entire flag set is `{FILE_WRITE_FLAGS_NONE,
+FILE_WRITE_FLAGS_WRITE_THROUGH}`, and write-through is a cache-bypass directive to the OS, not a
+device-level durability guarantee -- whether it becomes a Force Unit Access bit on the underlying
+command depends on the driver, the volume, and whether the device's write cache is enabled. It is
+useful as a latency-shaping knob (data already at the device shortens the subsequent flush) and must
+never be treated as a durability marker.
+
+**So the flush operation is the only durability primitive the ring has.** That is a narrowing
+constraint, and it is worth stating plainly rather than leaving a consumer to discover it by
+elimination.
+
+### The two measured facts
+
+[D-23](#d-23): **an unflagged flush does not cover preceding writes.** It is an ordinary operation
+competing with them, and it frequently wins.
+
+[D-24](#d-24): **the barrier that fixes that is a full ring-wide stall.** Operations pushed after a
+drained flush are held until it completes, even against unrelated files.
+
+Together these mean the correct durability construction is also the expensive one, and a consumer
+must choose deliberately how to pay for it.
+
+**How the reordering shows up is device-dependent, and that is a trap rather than a detail.** M12.2
+re-ran the D-23 shape as a permanent test and measured a second machine behaving differently from the
+spike's: there, *no* preceding write ever completed after an unflagged flush (0 of 32, against the
+spike's 17 and 23), yet 11 of 32 writes queued *after* the flush completed before it. Reordering was
+plainly happening; it simply did not manifest as the flush overtaking the writes ahead of it, because
+that stack appears to order a flush behind its own file's outstanding writes on its own.
+
+The consumer-facing consequence is the important part: **observing that your flush lands last is not
+evidence that you can omit the barrier.** It is incidental behavior of one device stack, exactly the
+kind of thing PLATFORM INTEGRITY says never to bind to, and it can change with the drive, the driver,
+the filesystem, or the virtualization layer underneath. The barrier is what makes it a guarantee.
+This is also why M12.2's test treats *either* direction of reordering as its control and skips when
+it sees neither -- requiring D-23's specific observable would have made it silently vacuous on the
+second machine.
+
+### The construction this implies
+
+Durability is a property of an **epoch**, never of an individual write, because there is no per-write
+primitive to make it one:
+
+1. Writes stream with no durability flag and are tagged with an epoch number.
+2. Closing epoch *N* pushes a flush with `FlushCoverage::CoversPrecedingOperations`, carrying *N* as
+   its identity.
+3. When that flush's completion is observed, every write in epochs `<= N` is durable.
+4. Callers wait on epochs, not on writes.
+
+One expensive operation amortized over many writes -- the group-commit shape every write-ahead log
+uses. Note that step 2's barrier is not optional decoration: without it, step 3 is false. Since M12.1
+that is enforced by the signature rather than left to a default -- `Batch::flush` has no spelling that
+omits the decision.
+
+### Paying for the barrier
+
+Because [D-24](#d-24) makes the drained flush a ring-wide stall, there are three strategies and no
+free one. Which is right depends on epoch size and latency target, which is why this crate exposes
+the mechanism and declines to choose ([D-8](#d-8), [D-26](#d-26)):
+
+| Strategy | Cost | Suits |
+|---|---|---|
+| **Drained flush** (`FlushCoverage::CoversPrecedingOperations`) | ring stalls for the flush's duration | large epochs, where the stall amortizes |
+| **Host sequencing** -- observe the epoch's write completions, then push a `FlushCoverage::Unordered` flush | one userspace round trip per epoch (completion must reach your thread: wake, schedule, syscall) | any epoch big enough that ~tens of microseconds is noise |
+| **Alternating rings** -- one drains while the other fills | doubled registration, split buffer pools, two completion events to wait on | latency-sensitive work that cannot tolerate either |
+
+Host sequencing looks worst per-operation and is often right per-epoch: group commit means one
+ordering point per epoch rather than per write.
+
+### Two device facts worth querying before doing any of this
+
+- **Volatile write cache disabled?** Then writes are already durable and flushes are unnecessary. A
+  consumer that flushes anyway is paying commit latency for nothing.
+- **Atomic write unit.** A write larger than the device's power-fail atomic unit can tear, which
+  decides how large a commit record can be before it needs its own checksum and replay.
+
+Neither is exposed by this crate today, and neither is reachable through the ring API; a consumer
+that needs them queries the device directly.
+
+### A worked implementation of everything above
+
+[examples/epoch_log/](examples/epoch_log/) builds this section as a running program, and is the
+place to look when the prose above is clear but the composition is not. It carries a written-down
+durability contract (authored before the code that implements it), group commit over a registered
+arena, a multiplexed wait that services a non-ring `FSCTL` alongside ring completions, a thread-pool
+control plane on a second ring, replay with a negative control, and all three commit strategies from
+the table above implemented behind one interface and measured against each other.
+
+Two of its findings belong here rather than only in the sample:
+
+- Measured on the machine this was written on, the three strategies are **indistinguishable**: the
+  spread across strategies is the same size as one strategy's run-to-run spread, because all three
+  pay exactly one device flush per epoch at hundreds of microseconds while their actual differences
+  land in the tens. The table's distinctions are real, and at that workload they sit two orders of
+  magnitude below the dominant term. A device with a fast flush, a log committing far more often, or
+  an arena under real pressure moves the balance -- which is why the sample measures rather than
+  quotes.
+- The barrier's cost is invisible to a benchmark that awaits each commit before appending again,
+  because a ring-wide barrier costs nothing when nothing is queued behind it. Measuring it requires
+  the shape a real log has: keep appending while the commit is outstanding.
+
+The sample is a demonstration of a pattern, not supported API surface -- it makes exactly the policy
+choices [D-8](#d-8) and [D-26](#d-26) say this crate must not make.
+
+## The completion event is an edge, not a level
+
+This is the second section written for consumers rather than for maintainers, for the same reason as
+"Two delivery architectures" below: getting it wrong produces a hang, and nothing in the Win32 surface
+warns you.
+
+**The event is signalled when the completion queue transitions from empty to non-empty.** It is not
+signalled once per completion, and it is not level-triggered. Measured directly against the Win32 API
+(`IoRing` version 400, real kernel ring, `UM_EMULATION` absent):
+
+| Case | Result |
+|---|---|
+| Completion arrives into an **empty** CQ | event **is** signalled |
+| Completion arrives into a **non-empty** CQ | event is **not** signalled |
+| CQ drained to empty, next completion arrives | event **is** signalled again |
+| Event attached while the CQ is **already non-empty** | never signalled -- and subsequent completions do not signal it either, because the queue never returns to empty |
+| 8 completions submitted at once into an empty CQ | exactly **one** wakeup; a single drain-to-empty retrieved all 8 |
+| Event still signalled after a full drain | no -- no spurious leftover signal |
+
+Two rules follow, and they are part of this crate's published contract rather than advice:
+
+1. **A waiter must drain to empty before waiting again** -- `try_pop` until it yields `None`, on *every*
+   pass through a multiplexed wait loop, not only on the pass where the ring's own handle signalled. A
+   wait entered with entries still in the CQ blocks until some later completion arrives after the queue
+   has been emptied, which may be never.
+2. **A wake with nothing to pop is normal** and must not be treated as an error or as evidence of a
+   spurious wakeup. `completion_event` deliberately produces one at setup (D-20).
+
+The same measurements also settled what `SetIoRingCompletionEvent` permits, none of which is documented:
+it may be called at any time including with operations in flight; calling it again replaces the event;
+passing `NULL` clears it and leaves the ring fully usable via `SubmitIoRing`'s own wait; and a
+`DuplicateHandle`'d copy is still signalled after the original handle is closed, which is what makes
+D-20's hand-back-a-duplicate shape sound.
+
+**This bit us before it bit anyone else.** `EventDelivery::new` attached the event and armed the wait
+with no initial drain, while its rustdoc claimed delivery covered completions "already queued when
+`ring` was handed over". Rule 2's attach case makes that false: a ring handed over with a non-empty CQ
+stranded those completions permanently, because nothing would drain the queue back to empty and no
+later completion could signal. The existing M4 test only ever handed over a *fresh* ring, which is why
+it passed. Fixed in M11.3, in the same change that re-expressed `EventDelivery` on top of
+`completion_event` -- the signal-once-on-attach in D-20 is what closes it. The repro is kept as
+`completions_queued_before_handover_are_still_delivered` in `tests/event_delivery.rs`, and it was
+watched failing (a five-second delivery timeout) against the old implementation before the fix landed,
+so it is known to bind rather than merely to pass.
 
 ## Specifying this contract: the ten gap categories
 
@@ -68,14 +258,21 @@ this crate sits against them.
   learn and `windows-overlapped-io-sys`'s `post`/`post_raw` still lacks -- a test seam confined to test
   builds, rather than a public one documented as "do not misuse".
 
-**One recorded as an assumption, which is category 4 (cross-message continuity) and is honest about it.**
-[D-14](#d-14) states that registration bookkeeping advances when a `BuildIoRingRegister*` call queues, not
-when its completion is observed, and says outright that this is unverified because neither function takes an
-`IORING_SQE_FLAGS` parameter to force a drain barrier. The continuity rule -- that the next registration's
-base index follows the previous one's -- is exactly the shape of invariant that lives *between* two messages
-and so has no natural home in either. Recording it as an explicitly unverified assumption, with the argument
-for why eager advancement is the safe direction, is the correct handling of a category-4 rule that cannot yet
-be confirmed.
+**One recorded as an assumption, which is category 4 (cross-message continuity) -- and which the audit then
+dissolved.** [D-14](#d-14) stated that registration bookkeeping advances when a `BuildIoRingRegister*` call
+queues rather than when its completion is observed, and said outright that this was unverified because
+neither function takes an `IORING_SQE_FLAGS` parameter to force a drain barrier. The continuity rule -- that
+the next registration's base index follows the previous one's -- is exactly the shape of invariant that lives
+*between* two messages and so has no natural home in either, which is why recording it explicitly was right.
+
+M10.3 then found that the rule had stopped being load-bearing without anyone noticing: D-14's safety argument
+turns on never colliding *two* registrations, and a second registration of either kind was forbidden the day
+after D-14 was written. `base_index` is therefore always zero and no later base index is ever derived, so the
+kernel's claim timing has no observable consequence and measuring it would settle nothing. The assumption is
+dissolved rather than verified ([D-31](#d-31)); what survives is the *reserved-not-confirmed* meaning of the
+public counts, which is now stated on them. Worth noting as a category-4 lesson in its own right: the
+decision did not become wrong, it became irrelevant, and nothing in the process would have surfaced that if
+the audit had not gone looking.
 
 ### Completion ordering is unspecified, and a ring invites the opposite assumption
 
@@ -99,12 +296,187 @@ by its position in the completion stream.** This is the same rule `windows-overl
 its own stream, reached independently on both sides -- which is the point of writing the category down rather
 than the instance.
 
-### Not yet audited
+**The barrier's scope stops at the ring's edge.** `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` orders SQEs against
+SQEs. A completion that is not an SQE -- an overlapped `DeviceIoControl`, anything issued through
+`windows-overlapped-io-sys` -- is outside the barrier entirely, in both directions: the flag can neither
+make a ring op wait for an overlapped op nor make an overlapped op wait for ring ops. A consumer that
+needs ordering across both paths must enforce it in its own code, and this crate's job is to make that
+expressible without blocking (D-20's `completion_event`) rather than to provide the barrier itself,
+which belongs to whoever knows the semantics of the operations being ordered. The sentence above was
+previously available to be read as stronger than it is; this states the limit explicitly, since a
+consumer mixing both paths is exactly the case D-2 says is normal.
 
-Categories 1, 2, 3, 6, 8, and 9 have not been examined against this crate's surface. Their absence above means
-"not looked at", not "does not apply" -- the distinction the taxonomy exists to keep visible. Category 3
-(state-dependent legality) is the strongest candidate, given that capability negotiation ([D-6](#d-6)) makes
-the legal op set a per-ring runtime property. Queued as [CHECKLIST.md](CHECKLIST.md) -> M10.
+### Category 3: which pushes are legal is per-ring runtime state
+
+Category 3 asks: the contract lists the modes; which messages is each mode *capable* of emitting? Here the
+modes are ring capability states and the messages are pushes. [D-6](#d-6) makes the legal op set a per-ring
+*runtime* property -- `IsIoRingOpSupported` is probed once per op at construction -- so which `Batch` methods
+can succeed is state neither the type system nor the prose carried. The mapping, previously derivable only by
+reading every `self.require(..)` call in `batch.rs`:
+
+| Probed op | `Batch` methods it gates |
+|---|---|
+| `Op::Read` | `read`, `read_raw`, `read_registered`, `read_registered_raw` |
+| `Op::Write` | `write`, `write_raw`, `write_registered`, `write_registered_raw` |
+| `Op::Flush` | `flush`, `flush_raw` |
+| `Op::Cancel` | `cancel`, `cancel_raw` |
+| `Op::RegisterFiles` | `register_files` |
+| `Op::RegisterBuffers` | `register_buffers` |
+| `Op::Nop` | **none** -- see below |
+
+Four rules follow, and each is a place the prose was silent.
+
+**The capability set answers for the kernel, not for this crate's push surface.** `supports(Op::Nop)` is true
+on every ring this crate has run on, and there is no `Batch::nop`: `IORING_OP_NOP` is reachable only through
+`IoRing::push_raw`'s unsafe seam. That asymmetry is deliberate rather than a gap to close on demand -- a nop
+owns no buffer, so there is nothing for a `Token` to hand back -- but it does mean `supports` must not be read
+as "this ring will accept a push for this op through the safe API". It answers what the kernel's op table
+contains. The distinction is not academic: it is exactly the op a consumer reaches for to wake a thread parked
+in `submit_and_wait`, which is the shutdown problem [CHECKLIST.md](CHECKLIST.md) -> M6+.3 records.
+
+**`supports_raw` is not restricted to ops outside `Op`, and agrees with `supports` where they overlap.** Its
+name and its stated purpose ([D-7](#d-7): reach an op this crate has not wrapped) invited the reading that
+passing a named op's `code()` is out of contract. It is not -- the two answer identically for every named op,
+which the `capability_reporting_never_claims_more_than_is_io_ring_op_supported_reports` test already asserted
+against a live ring while the rustdoc still read as excluding the case. The difference between them is cost
+and caching, not truth: `supports` is a bit test against the set probed at construction, `supports_raw` is an
+`IsIoRingOpSupported` call every time. What `supports_raw` never does is widen what `Batch` can push: an op
+outside `Op` has no builder method whatever it answers, so `push_raw` stays the only route to one.
+
+**Legality is decided before anything is reserved.** Every pre-`Build*` rejection -- an unsupported op, a
+cross-ring `RegisteredFile`/`RegisteredBuffers` ([D-17](#d-17)), an out-of-range span, an oversized buffer, a
+second registration -- returns before `reserve_user_data` runs. A rejected push therefore consumes no
+`UserData`, counts nothing against `IoRing::run_down`, and leaves the ring exactly as it found it. D-17 states
+this for the cross-ring check specifically; it holds for every legality check in `batch.rs`, and it is the
+property that makes "just attempt the push and read the error" a safe probing strategy for a consumer rather
+than one that silently strands an identity.
+
+**A registration is a one-shot per ring, and the shot is spent by queueing, not by succeeding.**
+`register_files` and `register_buffers` each refuse once the corresponding count is non-zero, because
+`BuildIoRingRegister*` replaces the whole table rather than appending, so a second call would invalidate every
+index the first handed out. Two consequences the prose did not state, both from the guard testing the *count*
+rather than a flag:
+
+- A zero-length registration does not spend the shot: it advances the count by zero, so a later registration
+  is still accepted. This is correct rather than an oversight -- an empty registration hands out no index, so
+  a later replacement invalidates nothing -- but the enforced rule is "at most one registration that assigned
+  an index", not the "at most one call" the rustdoc claimed.
+- The count advances when the `Build*` call queues ([D-14](#d-14)), so a registration whose *completion*
+  reports failure has still spent the ring's one registration. There is no retry: a consumer whose
+  registration fails must build it on a new ring. That is a real constraint on a consumer's error path, and
+  it was previously discoverable only by reading `reserve_registered_files`'s call site.
+
+### Category 1: independent options read as one concept
+
+Two axes look independent on the push surface, and one pair genuinely is. **File addressing**
+(`FileRef::Raw` vs `FileRef::Registered`) and **buffer addressing** (an owned buffer vs a registered one) are
+fully orthogonal: all four combinations are legal and reachable, because `read_raw`/`write_raw` take
+`impl Into<FileRef>` with an owned buffer and `read_registered_raw`/`write_registered_raw` take the same
+`impl Into<FileRef>` with a registered span. A reader could reasonably have guessed the registered forms
+pair up -- that registered buffers require registered files -- and they do not.
+
+**What was *not* independent, when this audit ran, was file addressing and safety -- and the coupling ran
+the wrong way.** Every safe method (`read`, `write`, `flush`, `cancel`, `read_registered`,
+`write_registered`) took a `SharedFile` and hardcoded `FileRef::Raw(..)` internally; only the six
+`unsafe fn` `_raw` variants accepted an `impl Into<FileRef>`. So `FileRef::Registered` -- the addressing
+mode with *no* handle-lifetime hazard at all, since the ring holds the table and the caller passes only an
+index this crate minted -- could be reached only through an `unsafe fn` whose own safety contract says, of
+that very case, "A `FileRef::Registered` target needs none of this." The requirement was vacuous and the
+`unsafe` unearned. That is a real API gap rather than a statement gap, which is why it became
+[D-29](#d-29) and was implemented in M10.4 rather than merely written down.
+
+**Fixed:** the safe pushes are now generic over the sealed `FileTarget` trait ([D-33](#d-33)), so a
+`RegisteredFile` is pushed without `unsafe` and the fully-registered combination (registered file *and*
+registered buffer) is expressible for the first time. The change is non-breaking -- `SharedFile` call sites
+resolve exactly as before.
+
+A smaller one: `PushOptions` is not universal, though its presence on most pushes implies it. Neither
+`cancel` nor `cancel_raw` takes one, because `BuildIoRingCancelRequest` has no SQE-flags parameter, and
+neither registration takes one either -- which is not an oversight but the precise root of [D-14](#d-14),
+since it is what stops this crate from forcing a drain barrier around a registration.
+
+### <a id="one-sqe-one-completion"></a>Category 2: unconditional read as probabilistic
+
+The rule the prose never stated, and that `run_down`'s termination silently depends on: **every SQE that
+successfully queues produces exactly one completion -- always, not usually.** `try_pop` returning `Option`
+describes whether the completion queue has an entry *at this instant*, never whether one is ever coming.
+`IoRing::run_down` loops until `outstanding` reaches zero and would not terminate if this were probabilistic.
+The one case that produces no completion is the push that never queued at all: a `Build*` failing
+synchronously releases its reservation (`cancel_reservation`), so it is not merely uncompleted, it is
+un-counted.
+
+Two consequences worth stating in the same breath, because both are places "may" reads too weakly:
+
+- **`submit` and `submit_and_wait` return entries *submitted*, not completed.** `submit_and_wait(n, timeout)`
+  returning does not mean `n` completions are poppable -- the timeout can expire first, and the return value
+  counts submissions regardless. A consumer still drains with `try_pop` and still counts for itself.
+- **A cancel is a request, not a guarantee, and it does not replace its target's completion.** The target may
+  complete normally anyway; either way the cancel produces its *own* completion in addition to the target's,
+  so a cancelled operation yields two. `ERROR_NOT_FOUND` on the cancel's own result means the target was no
+  longer outstanding, which is a normal race rather than a caller error.
+
+### Category 6: which state a transition is entered from
+
+**A popped `Completion` matching no live `Token` is normal, not a bug**, and a drain loop that treats it as
+one is wrong. There are four distinct ways to reach that state, and only the last is a mistake:
+
+- a **registration** completion, which is claimed by `PendingFileRegistration`/`PendingBufferRegistration`
+  rather than by a `Token`;
+- a **`flush_raw` or `cancel_raw`** completion, for which no `Token` was ever created -- both return a bare
+  `usize` identity, because neither op owns a buffer to hand back;
+- a **cancel's own** completion, distinct from its target's;
+- a completion whose `Token` the caller **dropped** unclaimed, which by [D-4](#d-4) forgets the buffer rather
+  than freeing it.
+
+Relatedly, completions can arrive for work the caller never explicitly submitted: `Batch` submits on `Drop`
+([D-5](#d-5)), so abandoning a batch queues its pushes rather than discarding them.
+
+### Category 8: values deliberately never correlated
+
+**This crate joins nothing, deliberately.** Matching a completion to what it completes is the consumer's
+loop, and every place a pairing could have been offered is left to them on purpose:
+
+- a `Completion` is never joined to its `Token` -- `claim_if` is offered so the consumer can, and [D-4](#d-4)
+  is why the crate does not do it for them (it would require the ring to retain a map keyed by `UserData`,
+  which is exactly the per-operation allocation this design exists to avoid);
+- a cancel's completion is never paired with its target's, though the consumer holds both identities;
+- a registration's completion is never paired with the reads and writes that later address that registration;
+- `Completion::information` is returned uninterpreted, since its meaning is per-op.
+
+Stated plainly so the absence reads as a decision rather than an omission.
+
+### Category 9: boundary-type fidelity lost at the consumer
+
+Most boundaries here are lossless or narrow loudly. `UserData` is `usize` from `IORING_CQE` through `Token`
+with no conversion. Buffer lengths narrow `usize` to `u32` through `checked_len`, which *reports*
+`InvalidInput` rather than truncating. `RegisteredBuffers::len`'s saturating `unwrap_or(u32::MAX)` is
+unreachable by construction, because `register_buffers` runs the same `checked_len` over the same `Vec`
+before the registration is ever built. `RingVersion` wraps a raw `i32` precisely so a version this crate
+cannot name survives ([D-6](#d-6)).
+
+**The exception is `io::Error::kind()`, and it is the shape category 9 describes exactly: the value is
+lossless, the derived form the consumer actually matches on is not.** Every kernel-reported failure goes
+through `check`, which produces `io::Error::other(IoRingError)` -- so `kind()` is **always**
+`ErrorKind::Other` and discriminates nothing, while the `HRESULT` itself survives intact behind
+`downcast_ref::<IoRingError>()`. This crate's *own* rejections, by contrast, carry meaningful kinds
+(`Unsupported`, `InvalidInput`, `AlreadyExists`). So `kind()` reliably answers "did this crate refuse the
+push?" and never answers "why did the kernel refuse it?" -- including for `IORING_E_SUBMISSION_QUEUE_FULL`,
+which the push rustdoc names as the expected backpressure signal and which is therefore the one a consumer
+most needs to match. See [D-30](#d-30).
+
+**Fixed:** M10.5 added the `RingCondition` enum, predicates for the runtime-actionable conditions, and the
+sealed `IoRingErrorExt` that puts them on `io::Error` itself ([D-34](#d-34)), so the downcast is named once
+in the crate rather than hand-rolled per call site -- `error.is_submission_queue_full()`. The lossiness of
+`kind()` itself is unchanged and deliberate: mapping `IORING_E_*` onto `ErrorKind` would trade an honest
+`Other` for a lossy guess, so the fix is a faithful second channel rather than a distortion of the first.
+
+### Audit status
+
+All ten categories have now been examined against this crate's surface (M10.1, M10.2). Categories 4, 5, and
+10 were reached by the first pass above; 3 by M10.1; 1, 2, 6, 8, and 9 by M10.2. Category 7 (branch and
+terminal paths documented by omission) is answered jointly by the category-2 and category-6 sections: the
+terminal paths are "exactly one completion per queued SQE" and "no completion for a push that never queued",
+and the branch paths are the four ways a completion can match no token.
 
 ## Two delivery architectures
 
@@ -116,8 +488,10 @@ There are two coherent high-performance shapes, and they are mutually exclusive 
 **Model A -- shared queue, kernel load-balances.** A pool of threads waits; work is handed to whichever
 thread the system picks. Load balancing is automatic, locality is incidental. Classic Windows IOCP is this,
 and the Win32 thread pool *is* this, architecturally. In this crate, Model A is
-`SetIoRingCompletionEvent` plus a `ThreadpoolWait` from `windows-threadpool-sys`: the ring signals an
-event, the pool wakes a thread, the callback drains the completion queue.
+`IoRing::completion_event` plus a `ThreadpoolWait` from `windows-threadpool-sys`: the ring signals an
+event, the pool wakes a thread, the callback drains the completion queue. (`EventDelivery` reached the
+event by calling `SetIoRingCompletionEvent` itself until M11.3 consolidated it onto the primitive; see
+[D-20](#d-20).)
 
 **Model B -- shared-nothing execution domains.** One pinned thread per domain, owning its ring, its buffer
 pool, and its shard of the application's state, with no cross-thread synchronization on the data path.
@@ -129,6 +503,79 @@ race, because there is nothing to re-arm.
 **IoRing is shaped for Model B.** The submission queue not being thread-safe, registration being per-ring,
 and there being exactly one completion event per ring are not limitations to work around; they are the API
 assuming a shared-nothing consumer.
+
+### Model B's wakeup source is separable from Model B's identity ([D-20](#d-20))
+
+The paragraph above describes Model B's *usual* wakeup source, and an earlier revision of this section
+offered no other, which is how the framing came to be read as fixing it. It does not. Model B's identity
+is **who owns, submits, and drains** -- one pinned thread per domain, no sharing on the data path. What
+that thread happens to *block on* is a separate axis, and there are two answers:
+
+| Wakeup source | The thread blocks in | Use when |
+|---|---|---|
+| **Fused submit-and-wait** | `Batch::submit_and_wait` (`SubmitIoRing` with `wait_n`) | The domain's only I/O is ring I/O. Nothing to re-arm, nothing to multiplex, lowest overhead. |
+| **Multiplexed wait** | `WaitForMultipleObjects` over `IoRing::completion_event` plus other handles | The domain must also service non-ring handles: a shutdown event, a socket, an overlapped operation, a timer. |
+
+Both are Model B. Switching between them changes neither ownership nor the submission path, and neither
+one is a degraded form of the other -- picking the second does not make a consumer "Model A with extra
+steps", and does not cost the locality that motivated Model B in the first place.
+
+The second row exists because of a limit stated in full under Category 2 above and worth repeating
+here, since this is where a consumer decides: **`IOSQE_FLAGS_DRAIN_PRECEDING_OPS` stops at the ring's
+edge.** It orders SQEs against SQEs and is powerless in both directions across the ring boundary -- it
+can neither make a ring op wait for an overlapped one nor make an overlapped op wait for ring ops. A
+consumer mixing both paths therefore cannot get its ordering from the barrier flag and must enforce it
+itself; the multiplexed wait is what lets it do so without either surrendering the ring or parking a
+thread in a blocking drain.
+
+The cost of the multiplexed row is that the waiter inherits [D-19](#d-19)'s edge-trigger contract in
+full: drain to empty before waiting again, on every pass, and treat a wake with nothing to pop as
+normal. The fused row has no such obligation, which is the honest reason to prefer it when it fits.
+`examples/model_b_multiplexed.rs` (M11.6) is the worked shape, including shutdown with I/O still
+outstanding; sabotaging its drain-to-empty into a single `try_pop` reproduces the lost-wakeup deadlock
+directly.
+
+### Why per-thread, and why pinning is not optional ([D-27](#d-27))
+
+Model B's "one ring per thread" is usually presented as a convention. It is not -- it is userspace
+reconstructing a discipline that exists one layer down, and knowing that changes how you size it.
+
+**Kernels affine hot structures to CPUs, not threads.** Per-CPU state gets mutual exclusion for free
+(disable preemption on Linux, raise IRQL on Windows) with no atomics and no contended cache line, and much
+of the hot work has no owning thread to speak of -- an interrupt or DPC runs in whatever context the CPU
+was in. Hence per-CPU run queues, per-CPU allocator caches, per-CPU deferred-work queues.
+
+**The hardware agrees.** NVMe queue pairs are per-CPU, with each pair's completion interrupt routed by its
+own MSI-X vector to that same CPU, so a completion lands where the command was submitted and the context is
+still cache-warm. The affinity that produces the benefit is CPU-to-queue-to-interrupt-vector, established
+in the device's programming. Threads are nowhere in it.
+
+**Userspace has no per-CPU primitive.** It cannot disable preemption and its threads migrate. The only
+durable ownership unit available is the thread -- so a *pinned* thread is the best available proxy for a
+CPU, and that is the whole content of the SPDK/Seastar discipline.
+
+Two consequences follow, and they are why this matters beyond terminology:
+
+- **An unpinned per-thread ring keeps the safety and loses the point.** The SQ/CQ head/tail protocol is
+  single-producer, and per-thread ownership satisfies that whether or not the thread is pinned. But the
+  cache and NUMA locality that motivated the whole structure comes from the pinning, not from the
+  per-thread split. This is a configuration people ship by accident.
+- **The interesting count is cores, or LLC domains -- not threads.** Which is exactly what
+  [D-8](#d-8) and the L3-domain guidance below already recommend; this is the reason underneath them.
+
+### The two models are Windows' own two completion mechanisms
+
+Worth noting because it makes the taxonomy less arbitrary than it looks. Windows has long had exactly two
+ways to finish an I/O:
+
+- **A special kernel APC delivered to the originating thread** -- work returns to the thread that issued
+  it. That is Model B's shape, and it is the direct analogue of Linux's `task_work`.
+- **A completion packet posted to an I/O completion port's queue**, taken by whichever pool thread is
+  available. That is Model A, and it is why [D-9](#d-9) is right that the device-to-CPU association is
+  already gone by the time a packet enters the port.
+
+So Model A and Model B are not this crate's invention, nor `io_uring`'s. They are the two shapes the
+platform has always had, showing up again at the ring.
 
 ### Why the three-way tension dissolves in Model B
 
@@ -228,3 +675,153 @@ above depends on:
   backpressure, which is what D-5's design leans on.
 - Cancelling a target that is not outstanding succeeds at build time and reports `0x80070490`
   (`ERROR_NOT_FOUND`) in the completion, not at build time.
+
+## <a id="borrow-surface-audit-m181"></a>Borrow-surface audit (M18.1)
+
+Population C -- what safe code is *permitted* to do -- is the one no runtime
+technique reaches, because nothing has to execute for the hole to exist. Both
+of the M14 review round's most severe findings were of this kind:
+[D-35](#d-35) (`get_mut` returned `&mut Vec<u8>`, which permits `reserve`,
+`resize` and reassignment where only byte writes were intended) and
+[D-36](#d-36) (`get` returned an unchecked `&[u8]` while the kernel might still
+be writing into it).
+
+This is a pass over every public item that hands out a borrow or an owned
+value, against one mechanical question:
+
+> **What can safe code do with this, and does the registration or the kernel
+> still hold anything it could invalidate?**
+
+**Every item is recorded, including the ones where the answer is "nothing".**
+An audit that lists only its findings cannot be distinguished, later, from an
+audit that stopped early -- so the absence of a hole is written down as
+evidence rather than left as silence.
+
+| Item | Hands out | What safe code may do with it | Finding |
+|---|---|---|---|
+| `RegisteredBuffers::get` | `&[u8]`, from `&mut self` | Read the bytes. Cannot resize or reassign -- the slice, not the `Vec`, is the returned type. Cannot start an operation against the registration while the slice is alive. | **Was the audit's blind spot, fixed in M19 -- see [D-45](#d-45).** Refuses with `WouldBlock` while `kernel_writes > 0`, so a read cannot race a kernel write ([D-36](#d-36)); direction-aware, since a *write* in flight means the kernel only reads. The row as first written stopped there, and that was the omission: the check held at the instant of the call while the returned slice lived as long as the borrow, so `&self` let a caller take the borrow, then submit a read into that same buffer. `&mut self` makes the borrow itself conflict with the push. |
+| `RegisteredBuffers::get_mut` | `&mut [u8]` | Write bytes in place. Cannot `reserve`, `resize`, or assign a new `Vec` -- that is exactly what [D-35](#d-35) narrowed. Cannot start an operation against the registration while the slice is alive. | **Guarded, and never had `get`'s second hole.** Refuses with `WouldBlock` while `outstanding > 0`. Per-buffer rather than per-registration, so a quiet buffer stays writable while its neighbours are busy. M19.3 re-checked it on the duration question and found it immune for free: `&mut self` already conflicts with the shared borrow a submission needs, so the analogous sequence is `E0502` rather than a hole. |
+| `RegisteredBuffers::outstanding` | `Option<usize>` | Read a count. | **No hole.** A snapshot of an atomic; inherently stale the moment it is returned, and callers cannot act on it soundly -- which is why `get`/`get_mut` do their own checks rather than inviting a check-then-use. |
+| `RegisteredFiles::get` | `RegisteredFile` (a `Copy` index + `RingId`) | Copy it, keep it past the registration, submit with it. | **No hole.** Every submission path validates `ring_id`, so a file from another ring is rejected rather than dereferenced. Keeping it past the *handle's* life is covered by `register_files`'s existing `unsafe` contract: the caller promises the handles stay open. |
+| `RegisteredFile::index` | `u32` | Read the raw index; pass it to `push_raw`. | **No hole here; the hazard is `push_raw`'s.** A raw index used in a hand-built SQE is already inside that method's `unsafe` contract. |
+| `Token::claim_if` | `T` (the buffer, plus any file guard) | Take back the buffer and use it freely. | **Sound by construction.** Handing the value back requires a `Completion` whose `user_data` *and* `ring_id` match, which is the proof the kernel is finished. A mismatched completion returns the token instead. |
+| `Token` (dropped, not claimed) | nothing | Drop it. | **Safe but terminal for registered buffers.** `Token`'s drop is deliberately empty ([D-4](#d-4)), so the payload leaks rather than freeing memory the kernel may still touch. For a `Token<RegisteredUse>` that means the buffer index stays outstanding for ever and the registration can never drop cleanly -- which is why `read_registered_raw`'s rustdoc states the token **must** be claimed. Found the hard way in M17.3, whose generator emitted the drop and tripped the registration's own drop guard. |
+| `PendingBufferRegistration::claim_if` | `io::Result<RegisteredBuffers<B>>` | Take the registration, or observe the failure. | **Sound, with a documented sharp edge.** A *failed* completion is treated as proof the kernel did not retain the addresses, so the buffers are dropped. M16.4 recorded that injecting a synthetic failure here would therefore free memory the kernel genuinely holds -- inert only because nothing does so outside the fault-injection seam. |
+| `PendingFileRegistration::claim_if` | `io::Result<RegisteredFiles>` | Take the registration. | **No hole.** `BuildIoRingRegisterFileHandles` reads its array synchronously ([D-32](#d-32)), so nothing outlives the call that could be invalidated. |
+| `EventDelivery::scope` (was `ring`) | `RingScope` | Submit work through [`RingScope::batch`], read the ring's read-only state. **Cannot** obtain a `&mut IoRing`, and so cannot replace the ring. | **WAS THE ONE FINDING -- [D-43](#d-43), fixed in M18.6.** The previous `ring -> &Mutex<IoRing>` let safe code assign a whole new ring through the guard, which compiled and silently stopped delivery: measured at one completion delivered before the swap and none after. [D-35](#d-35)'s shape at a different layer, and fixed the same way -- by narrowing the returned type to exactly what the caller needs. Now enforced by a `compile_fail` doctest. |
+| `IoRing::completion_event` | `OwnedHandle` | Wait on it, close it, hand it elsewhere. | **No hole.** The returned handle is a *duplicate*; the ring keeps its own, so closing the caller's does not stop the ring signalling ([D-20](#d-20)). Repeat calls duplicate the same event rather than attaching a second. The one real hazard -- two waiters on one ring -- is a documented misuse, not a memory-safety hole. |
+| `IoRing::try_pop` | `Option<Completion>` | Read `user_data`, `code`, `result`; use it to claim a token. | **No hole.** `Completion` is a plain value carrying no borrow of ring state. Its power is that it authorises a claim, and that power is bounded by the id/ring checks in `claim_if`. |
+| `Completion::with_injected_failure` | `Completion` | Rewrite the result of a *real* completion. | **Sound because it transforms rather than fabricates.** Same `user_data` and `ring_id`, so the "a completion exists therefore the kernel is done" argument is untouched. `Completion::synthetic`, which *would* fabricate, is `#[cfg(test)] pub(crate)` for exactly this reason. Behind the off-by-default `fault-injection` feature. |
+| `Batch::{read,write,flush,cancel,*_registered}` | `Token<...>` | Hold, claim, or drop it. | **No hole beyond the `Token` row above.** The token is the only handle to the in-flight buffer, which is what keeps the buffer alive for the kernel's benefit. |
+| `Batch::{flush_raw,cancel_raw}` | `usize` (a bare `UserData`) | Match it against a completion. | **No hole.** These operations own nothing a claim could hand back, which is why they return an id rather than a token -- and why `RingContract` has a separate `observe_tokenless_push`. |
+| `IoRing::{info,version,supports,supports_raw,registered_*_count,outstanding}` | plain values | Read them. | **No hole.** Copies of state, no borrow of anything the kernel holds. |
+| `capabilities()` | `Capabilities` | Read it. | **No hole.** A cached snapshot of a process-wide probe. |
+| `IoRingError::{name,code,condition}` | `&'static str`, `HRESULT`, `RingCondition` | Read them. | **No hole.** `&'static str` borrows a literal, not ring state. |
+| `contract::RingContract::{violations,check_quiescent}` | `&[Violation]`, `Vec<Violation>` | Read or keep them. | **No hole.** The oracle is pure bookkeeping over values the caller already reported; it holds no kernel resource. |
+
+**One finding in nineteen items**, and it is the same shape as the two that
+prompted the audit: a returned type that permits an operation nobody intended.
+That is the pattern worth carrying forward into M18.2's recurring rule -- the
+question that finds these is not "is this correct?" but "what else does this
+type allow?"
+
+## <a id="testing-strategy-m185"></a>Testing strategy (M18.5)
+
+Eight defects came out of the 0.1.x line and the M11-M14 branch. M15 through
+M18 were built by sorting them by **what would have caught them**, rather than
+by adding whichever technique was closest to hand. This section records the
+result: which population each technique reaches, what each one actually found
+when run, and -- the part worth reading if you read nothing else -- what none of
+them reach at all.
+
+### The three populations
+
+| | The defects | What finds them | Built in |
+|---|---|---|---|
+| **A -- preconditions never varied** | [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47): every `event_delivery` test handed over a *fresh* ring, so "completion queue non-empty at handover" was never a test input | Generated operation sequences, so the state space is sampled rather than enumerated by hand | M17 |
+| **B -- failure paths never taken** | The checkpoint path authorising a reclaim after a failed write; [#48](https://github.com/MikeGrier/windows-threadpool-sys/issues/48) surfacing as a *lucky* `ERROR_NOACCESS` rather than corruption | Deterministic memory instrumentation, an executable contract oracle, and a seam that injects failure into a real completion | M15, M16 |
+| **C -- permissions, not behaviour** | [D-35](#d-35) (`&mut Vec<u8>` permits `reserve`), [D-36](#d-36) (`&B` handed out while the kernel writes), and [D-43](#d-43), found by the audit itself | Review, made recurring by a mechanical trigger; mutation testing for the weaker cousin of the same problem | M18 |
+
+Population C is the one worth dwelling on: **no runtime technique reaches it at
+all.** Nothing has to execute for the hole to exist, so a fuzzer, an oracle, an
+allocator and a chaos harness are all looking in the wrong place. That is why
+review is a *primary* technique for this crate rather than a backstop, and why
+M18.2 gave it a written question and a CI trigger instead of an exhortation.
+
+### What each technique actually found
+
+Recorded as measured, because the honest numbers are more useful than the
+hoped-for ones.
+
+| Technique | Found |
+|---|---|
+| Guard-page allocator + tracked poison (M15) | **No new defects.** Calibrated against D-32, which it turns into a hard `STATUS_ACCESS_VIOLATION` where 0.1.2 got a survivable `ERROR_NOACCESS` |
+| `RingContract` oracle + fault-injection seam (M16) | **No new defects in shipping code.** Found two gaps in its own design (tokenless pushes, a claim path that frees on failure) |
+| Generated sequences (M17) | **No new defects.** Found an API precondition the generator was violating, and -- once calibrated -- rediscovers #47 in 10 of 10 runs |
+| Borrow-surface audit (M18.1) | **One defect: [D-43](#d-43)**, in 19 items audited. Same shape as the two that prompted the audit |
+| Mutation testing (M18.3/4/7) | **A third vacuous test** four review rounds had read past, plus 36 further weak assertions. 79.7% to 95.8% |
+
+Two observations that only appear once the table is read as a whole.
+
+**M15 and M16 found nothing, and that is not reassurance.** They are *passive*:
+they check invariants during whatever operations the existing tests happen to
+perform. Zero findings meant the detectors had only ever seen the twenty or so
+hand-written scenarios that already passed. M17 exists to feed them, which is
+why its milestone is titled that way rather than "more testing".
+
+**Every one of these instruments was wrong the first time, and only sabotage
+found it.** M17.3's generator reported green with #47 reintroduced, because it
+polled `try_pop` instead of waiting for the wakeup it was owed ([D-42](#d-42)).
+Four of M18.4's mutation-killing tests did not kill their mutant, each for a
+different and individually plausible reason. M15.2's poison inverse was
+fabricated twice. The rule that falls out of this is stated in
+[D-41](#d-41)'s corollary and is the single most transferable thing in M15-M18:
+**a green result from an instrument nobody has shown can go red is not
+evidence.** Budget the calibration, not just the instrument.
+
+### What none of them cover
+
+All five techniques check this crate's code against **this crate's stated
+contract**. None of them can tell you the stated contract is wrong -- and in the
+two most expensive defects, that is exactly what happened. The completion event
+is edge-triggered ([D-19](#d-19)) and `BuildIoRingRegisterBuffers` reads its
+array when the operation runs rather than when `Build*` returns
+([D-32](#d-32)). Both were discovered by a spike against the real kernel, and
+neither could have come from anywhere else in this toolkit.
+
+Be precise about the failure mode, because "the allocator would not have caught
+D-32" is not quite true and the imprecision matters. The guard allocator *does*
+catch it, loudly, once a test walks the registration path -- M17.4 measured
+that. What no technique here supplies is the *knowledge* that the kernel reads
+late, and without that knowledge the code is written wrong in the first place.
+These techniques detect consequences on paths that already exist. A spike
+produces the platform knowledge that determines what the code should be, and it
+is the only technique that can run **before there is any code to test**.
+
+Hence [D-44](#d-44): a spike is a budgeted, first-class technique for every new
+Win32 surface, allocated before the wrapper is written. It carries two
+obligations, both learned by getting them wrong -- a **control case**, because
+the first two drain-ordering spikes could not discriminate and would have
+returned confidently wrong answers; and it is **kept** as a standalone program
+depending only on `windows-sys`, so what it measures stays the operating
+system's behaviour and not ours. The surviving spikes and the reasoning behind
+their shape are in
+[design-sessions/spikes/README.md](design-sessions/spikes/README.md), and what
+they established is summarised under
+[What the spike established](#what-the-spike-established).
+
+### Two techniques deliberately rejected
+
+Recorded so they are not re-proposed as obvious wins.
+
+**A mock `IoRing`.** Both shipped defects were the kernel behaving differently
+from this crate's assumptions. A mock *encodes* the assumption, so one written
+before those discoveries would have passed both bugs green -- it would not
+merely have failed to find them, it would have manufactured evidence they were
+absent. A model belongs here as an **oracle over observed sequences**
+([`RingContract`](src/contract.rs)), never as a substitute for the kernel.
+
+**Application Verifier / PageHeap**, rejected after measuring rather than
+assuming ([D-37](#d-37)): it works, and needs no SDK, but it is keyed by *image
+file name* and cargo rehashes test binaries on every meaningful rebuild -- so
+it would degrade silently to instrumenting nothing.

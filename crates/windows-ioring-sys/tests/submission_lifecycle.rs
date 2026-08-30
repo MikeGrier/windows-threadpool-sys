@@ -8,7 +8,11 @@ use std::io;
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::PathBuf;
 
-use windows_ioring_sys::{Batch, IoRing, IoRingError, PushOptions, SharedFile, Token};
+use windows_ioring_sys::contract::RingContract;
+use windows_ioring_sys::{
+    Batch, FlushCoverage, FlushMode, IoRing, IoRingErrorExt, PushOptions, RingCondition,
+    SharedFile, Token,
+};
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 
 const CHUNKS: usize = 8;
@@ -29,17 +33,9 @@ fn filled_content() -> Vec<u8> {
     content
 }
 
-fn error_name(error: &io::Error) -> Option<&'static str> {
-    error
-        .get_ref()
-        .and_then(|inner| inner.downcast_ref::<IoRingError>())
-        .and_then(IoRingError::name)
-}
-
 fn error_code(error: &io::Error) -> windows_sys::core::HRESULT {
     error
-        .get_ref()
-        .and_then(|inner| inner.downcast_ref::<IoRingError>())
+        .as_ioring_error()
         .expect("error is an IoRingError")
         .code()
 }
@@ -56,6 +52,11 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
     let handle = file.as_raw_handle();
 
     let mut ring = IoRing::new(64, 64).expect("create ring");
+    // Conservation is checked alongside the assertions this test was written
+    // for (M16.2). It costs three calls and catches a class none of them can:
+    // an operation that never completes, a completion nobody claimed, or a
+    // completion arriving twice.
+    let mut contract = RingContract::new();
     let mut pending: HashMap<usize, (usize, Token<Vec<u8>>)> = HashMap::new();
     {
         let mut batch = Batch::new(&mut ring);
@@ -64,6 +65,7 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
             let offset = (chunk_index * CHUNK_LEN) as u64;
             let token = unsafe { batch.read_raw(handle, buffer, offset, PushOptions::new()) }
                 .expect("queue read");
+            contract.observe_push(token.id());
             pending.insert(token.id(), (chunk_index, token));
         }
         batch
@@ -82,6 +84,7 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
             continue;
         };
         let user_data = completion.user_data();
+        contract.observe_completion(user_data);
         let transferred = completion.result().expect("read succeeded");
         let (chunk_index, token) = pending
             .remove(&user_data)
@@ -89,12 +92,15 @@ fn many_reads_round_trip_every_user_data_and_buffer() {
         let buffer = token
             .claim_if(&completion)
             .expect("a token claims its own completion");
+        contract.observe_claim(user_data);
         assert_eq!(transferred, CHUNK_LEN);
         assert_eq!(
             buffer,
             content[chunk_index * CHUNK_LEN..(chunk_index + 1) * CHUNK_LEN]
         );
     }
+
+    contract.assert_quiescent();
 }
 
 #[test]
@@ -110,13 +116,21 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
         .expect("open");
     let handle = file.as_raw_handle();
 
+    // This test is the reason `observe_tokenless_push` exists (M16.2): it
+    // pushes nothing but raw flushes, which return a bare `user_data` because
+    // they own nothing a token could hand back. It also exercises the rule's
+    // other half -- the rejected push is deliberately *not* observed, because
+    // a `Build*` that fails synchronously releases its reservation and
+    // produces no completion.
+    let mut contract = RingContract::new();
     let mut queued = 0_u32;
     let overflow_error = {
         let mut batch = Batch::new(&mut ring);
         loop {
             // SAFETY: `handle` stays open for the whole test.
-            match unsafe { batch.flush_raw(handle, PushOptions::new()) } {
-                Ok(_user_data) => {
+            match unsafe { batch.flush_raw(handle, FlushCoverage::Unordered, FlushMode::Default) } {
+                Ok(user_data) => {
+                    contract.observe_tokenless_push(user_data);
                     queued += 1;
                     assert!(
                         queued <= capacity + 1,
@@ -135,14 +149,27 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
         queued, capacity,
         "backpressure must trip exactly at the negotiated queue capacity"
     );
-    assert_eq!(
-        error_name(&overflow_error),
-        Some("IORING_E_SUBMISSION_QUEUE_FULL")
+    // Asked through the named predicate rather than a hand-rolled downcast
+    // plus HRESULT comparison (M10.5, D-30). This binds the predicate to a
+    // *real* kernel-reported queue-full rather than a synthetic
+    // `IoRingError`, which is what the unit tests in `error/tests.rs` cover.
+    assert!(
+        overflow_error.is_submission_queue_full(),
+        "the backpressure signal every push's docs name must be what the \
+         predicate reports: got {:?}",
+        overflow_error.ring_condition()
     );
+    assert_eq!(
+        overflow_error.ring_condition(),
+        Some(RingCondition::SubmissionQueueFull)
+    );
+    // And `kind()` still cannot answer -- the asymmetry D-30 records.
+    assert_eq!(overflow_error.kind(), io::ErrorKind::Other);
 
     let mut remaining = queued;
     while remaining > 0 {
-        if ring.try_pop().expect("pop completion").is_some() {
+        if let Some(completion) = ring.try_pop().expect("pop completion") {
+            contract.observe_completion(completion.user_data());
             remaining -= 1;
         }
     }
@@ -150,15 +177,23 @@ fn pushing_past_submission_queue_capacity_reports_backpressure_and_the_ring_stay
     // The ring stays usable: push and submit once more, cleanly.
     let mut batch = Batch::new(&mut ring);
     // SAFETY: `handle` stays open for the whole test.
-    let user_data = unsafe { batch.flush_raw(handle, PushOptions::new()) }
-        .expect("ring still accepts pushes after backpressure");
+    // `Unordered` because this test is about backpressure and ring
+    // reusability, not durability: a covering flush would add a ring-wide
+    // barrier that has nothing to do with what is under test.
+    let user_data =
+        unsafe { batch.flush_raw(handle, FlushCoverage::Unordered, FlushMode::Default) }
+            .expect("ring still accepts pushes after backpressure");
+    contract.observe_tokenless_push(user_data);
     batch.submit_and_wait(1, 5_000).expect("submit and wait");
     let completion = ring
         .try_pop()
         .expect("pop completion")
         .expect("a completion is ready");
     assert_eq!(completion.user_data(), user_data);
+    contract.observe_completion(completion.user_data());
     completion.result().expect("flush succeeded");
+
+    contract.assert_quiescent();
 }
 
 #[test]

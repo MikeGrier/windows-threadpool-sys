@@ -37,7 +37,7 @@ println!("read {} bytes", buffer.len());
 # Ok::<(), std::io::Error>(())
 ```
 
-[`EventDelivery`] wires completions to the thread pool instead, so no thread
+`EventDelivery` wires completions to the thread pool instead, so no thread
 ever calls `try_pop` itself; see `examples/model_a_delivery.rs` for that shape,
 and the "Choosing a delivery architecture" section below for when to reach for
 each.
@@ -93,10 +93,121 @@ owning its ring, its buffer pool, and its shard of the work, parked directly in
 `Batch::submit_and_wait` -- the fused submit-and-wait *is* the event loop. This
 is the shape `IoRing`'s own API is built for.
 
+**Model B's wakeup source is separable from Model B's identity.** What makes it
+Model B is who owns, submits, and drains -- one pinned thread, no sharing on the
+data path -- not what that thread blocks on. There are two answers for the
+latter, and both are Model B:
+
+- **Fused submit-and-wait**, blocking in `Batch::submit_and_wait`. Use it when
+  the domain's only I/O is ring I/O: nothing to re-arm, nothing to multiplex.
+- **A multiplexed wait**, blocking in `WaitForMultipleObjects` over
+  `IoRing::completion_event` alongside other handles. Use it when the domain
+  must also service a shutdown event, a socket, an overlapped operation, or a
+  timer. `IoRing::completion_event` hands back an owned *duplicate* of the
+  ring's event, so the caller keeps its ring. See
+  [examples/model_b_multiplexed.rs](examples/model_b_multiplexed.rs) for the
+  whole shape end to end, including shutdown with I/O still outstanding.
+
+Picking the second is not "Model A with extra steps" and costs none of the
+locality that motivated Model B. It does inherit one contract: the ring's event
+is **edge-triggered on the completion queue going empty to non-empty**, so a
+waiter must drain to empty before waiting again, on every pass, and must treat a
+wake with nothing to pop as normal. That is measured rather than documented by
+Win32, and getting it wrong hangs rather than merely slows -- read
+`IoRing::completion_event`'s own docs before using it.
+
+**The `drain_preceding` barrier stops at the ring's edge.** This is the reason
+the multiplexed shape has to exist. `IOSQE_FLAGS_DRAIN_PRECEDING_OPS` orders
+SQEs against SQEs and is powerless in both directions across the ring boundary:
+it can neither make a ring operation wait for an overlapped one nor make an
+overlapped operation wait for ring operations. A consumer mixing ring and
+non-ring I/O -- the normal case, not an exotic one -- must therefore enforce
+that ordering in its own code, and the multiplexed wait is what lets it do so
+without surrendering the ring or parking a thread in a blocking drain. The
+barrier is also ring-wide and spans submissions, so a drained flush stalls the
+whole ring for its duration; see `PushOptions::drain_preceding`.
+
 Most real applications want Model B on the hot data path and Model A everywhere
 else -- the control plane, background work, cold paths -- where the thread
 pool's quiescence is worth more than locality. This crate supports both as
 first-class; neither is a degraded form of the other.
+
+## Durability
+
+Three facts, all measured rather than documented by Win32, and all of them
+things a consumer gets wrong by default. `Batch::flush`, `FlushCoverage`,
+`WriteCaching` and `FlushMode` state them in full; this is the summary that
+stops a reader from never looking.
+
+1. **There is no FUA.** `BuildIoRingWriteFile`'s entire flag set is
+   `{FILE_WRITE_FLAGS_NONE, FILE_WRITE_FLAGS_WRITE_THROUGH}`, and write-through
+   is a cache directive to the OS, not a device-level guarantee -- whether it
+   becomes a Force Unit Access bit depends on the driver, the volume, and the
+   device's write-cache setting. A completed write-through write may still be
+   sitting in a volatile device cache.
+2. **The flush operation is the only durability primitive the ring has**, and
+   only in a mode that syncs the device -- `FlushMode::NoSync` deliberately
+   does not, which makes it the one mode that commits nothing.
+3. **A flush without the barrier covers nothing.** An unflagged flush is an
+   ordinary operation competing with the writes before it, and it frequently
+   wins, so its completion proves nothing about them. This is why
+   `Batch::flush` requires a `FlushCoverage` rather than defaulting: the
+   obvious spelling was a silent data-loss bug, invisible until power is lost.
+   Note that seeing your flush land last on your hardware is not evidence you
+   can omit the barrier -- which direction the reordering shows in is
+   device-dependent.
+
+So **durability is a property of an epoch, never of an individual write**,
+because the ring offers no per-write primitive to make it one: stream the
+writes, close the epoch with one covering flush, and wait on the flush rather
+than on the writes. The barrier that makes this correct is also a ring-wide
+stall, so the correct construction is also the expensive one. "Durability on
+the ring" in [DESIGN-NOTES.md](DESIGN-NOTES.md) has the full shape and the three
+ways to pay for it.
+
+[examples/epoch_log/](examples/epoch_log/) builds all of that as a running
+program: a write-ahead log with a written-down durability contract, group
+commit, a multiplexed wait, a thread-pool control plane, replay with a negative
+control, and all three commit strategies measured against each other on your
+machine. It needs the `threadpool` feature, and it is a **demonstration of a
+pattern, not supported API surface** -- see the caveat under
+[Cargo features](#cargo-features) below.
+
+## Cargo features
+
+| Feature | Default | What it adds |
+|---|---|---|
+| `threadpool` | on | `EventDelivery` (Model A), and with it the dependency on `windows-threadpool-sys`. |
+
+`EventDelivery` is the only item in this crate that needs a thread pool, so a
+Model B consumer -- one pinned thread per domain, parked in
+`Batch::submit_and_wait`, owning its own ring -- otherwise links a dependency it
+never calls. Turning the feature off drops that dependency entirely:
+
+```toml
+[dependencies]
+windows-ioring-sys = { version = "0.1", default-features = false }
+```
+
+The gate is justified on layering rather than runtime cost: linking
+`windows-threadpool-sys` creates no threads, because the Win32 default pool is a
+process-wide facility instantiated lazily on first use. A ring wrapper simply
+does not intrinsically depend on a thread pool. Default-on keeps the change
+additive, so no existing consumer has to do anything.
+
+### The examples are demonstrations, not API
+
+`examples/` is where this crate shows compositions it deliberately does not
+ship. [examples/epoch_log/](examples/epoch_log/) is the largest: it makes
+policy choices -- what an epoch is, when to commit, what durability is reported
+as, which of the three commit strategies to pay for -- that the crate itself
+refuses to make, because they depend on a workload the crate cannot see (D-8,
+D-26).
+
+So treat it as a worked answer to "how do these primitives go together", not as
+a component. **Nothing under `examples/` is public API, none of it is covered
+by this crate's semantic versioning, and vendoring it makes its policy choices
+yours to maintain.** If you copy it, copy it as a starting point you own.
 
 ## Topology guidance
 
