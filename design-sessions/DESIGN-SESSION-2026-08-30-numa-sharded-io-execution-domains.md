@@ -421,6 +421,291 @@ namespace plane keeps the pool because it needs quarantine and elasticity for
 blocking calls; the data plane owns threads because it needs pinning. Neither
 can serve the other, and that is the design rather than a compromise.
 
+## The target architecture: a two-layer ring
+
+The engineer's refined vision: an SQ/CQ against an "async API substrate". You
+post a deferred `CreateFileW`; the CQ may return a request to clarify NUMA
+placement (behind an option set on the SQ, so the complexity is opt-in); you
+answer; you get back a token for high-performance I/O using the epoch/durability
+metaphor. All ring-based, NUMA-aware, "without a lot of exotic client
+programming".
+
+**The structural resolution is that the client-facing ring is ours, and the
+`IoRing` lives inside a domain as an implementation detail.**
+
+```
+client thread --post--> [ our SQ: MPSC + doorbell ] --> domain thread --> IoRing SQ
+client thread <-drain-- [ our CQ: MPSC + doorbell ] <-- domain thread <-- IoRing CQ
+```
+
+Four problems collapse into that one decision, which is the main reason to
+believe the decomposition is right:
+
+- **Submission thread-safety.** Only the domain thread touches the real SQ. This
+  is a *third* answer to `M6+.2`, which is parked with "needs either a
+  submit-ownership handoff or an internal lock. Neither is obviously right" --
+  the answer is neither: a queue only the domain drains.
+- **The missing post entry point.** The namespace session rejected posting a
+  completion into an `IoRing` CQ on mechanism. Our CQ is ours, so the
+  clarification CQE the vision needs becomes possible.
+- **One ring or two.** The client sees one; the namespace and data planes keep
+  separate storage. That is decision 7 -- "share the ring type, not the storage;
+  unify at the wait" -- seen from the client's side.
+- **The epoch metaphor ports**, because it is already written against a CQ.
+
+### The client never allocates an I/O buffer
+
+This, rather than the ring shape, is what removes the "exotic client
+programming". The facility owns the registered pool: `VirtualAllocExNuma` on the
+domain's node, sector-aligned, registered once. The client acquires a **slot**,
+writes into it, submits, and gets it back.
+
+The client cannot place a buffer wrongly because it never chooses. Every
+alternative -- client allocates and we validate, client hints and we advise --
+returns the decision to where the knowledge is not. It also fits the one-shot
+registration constraint exactly: the pool is the long-lived fixed thing, so
+registration's principal limitation stops being one.
+
+### Three policy tiers, generalized beyond placement
+
+| Tier | Client says | Facility does |
+|---|---|---|
+| Default | nothing | picks; at N=1 there is no choice, so this is free |
+| Informed | "tell me" | completion carries the hint and its provenance; client routes |
+| Consulted | "ask me" (SQ option) | posts a clarification CQE; client answers |
+
+The engineer generalized this past NUMA: most things "need to just be taken care
+of for people", but policy in general must be expressible either as **optional
+parameters** or as **queries via CQE/SQE pairs**. So the tiers are the shape for
+every policy decision the facility must make, not a placement-specific device.
+
+## Costs of the target architecture, and their mitigations
+
+### C-1 The queue hop
+
+Every foreign-thread submission crosses an MPSC push plus a doorbell before
+reaching the ring, where a run-to-completion client would have none.
+
+- **The push is cheap; the doorbell is the syscall.** Signal only on the
+  empty-to-non-empty edge, and only when the consumer is parked. A queue that
+  stays non-empty needs no signal at all, so a busy domain -- the case that
+  matters -- pays approximately zero doorbells.
+- **A brief consumer spin before parking** removes the park/unpark round trip
+  under load. Spin duration is another knob sized by the topology: generous when
+  a domain owns a core exclusively, zero when it shares one with the rest of a
+  laptop.
+- **The hop is where batching happens.** N submissions become N pushes, one
+  doorbell, one drain, and **one** `SubmitIoRing`. Under load it plausibly
+  reduces syscalls rather than adding them.
+- **It should be pay-for-what-you-use**: a client whose continuation runs on the
+  domain thread submits directly, with no queue and no doorbell.
+- **Measurable now**, on this hardware, with no infrastructure: time `SetEvent`,
+  an uncontended atomic push, and a `SubmitIoRing` round trip. If `SetEvent` is
+  a few percent of the syscall, the hop is noise.
+
+### C-1a Why the doorbell must be a HANDLE, and cannot be `WaitOnAddress`
+
+`WaitOnAddress` is plausibly cheaper in isolation. It is still unusable here,
+and cost does not enter into it: `WaitOnAddress` waits on a **memory location**,
+`WaitForMultipleObjects` waits on **kernel objects**, and no API combines them.
+A domain that must wake on either "my ring completed" or "a peer sent me work"
+waits on both at once, and the ring's completion event is a HANDLE.
+
+This is the same structural constraint reached from a different direction than
+the crossbeam analysis above, which is good evidence it is a property of the
+platform rather than of a library.
+
+The two ideas also interact decisively: **the skip-when-busy rule removes the
+very cost `WaitOnAddress` would save.** They are alternatives, not complements,
+and only one of them composes.
+
+A corollary worth stating plainly: a domain parked in the fused
+`SubmitIoRing(wait_n)` cannot observe a queue at all. **A domain that accepts
+foreign submissions must use [D-20](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-20)'s
+multiplexed-wait row.** Accepting foreign work and using the lowest-overhead
+park are mutually exclusive.
+
+### C-1b Which side of the lock the doorbell is touched on
+
+Asked directly by the engineer: why can the event not be signalled after the
+lock is released, and does it have to represent the fullness of the queue?
+
+**It can be signalled outside the lock. Only the reset must be inside.** A late
+`SetEvent` can at worst arrive after the consumer already drained that item and
+parked, producing a spurious wakeup -- the consumer wakes, finds nothing, parks
+again. A reset outside the lock is fatal:
+
+```
+Consumer: lock, drain to empty, unlock
+Producer: lock, push(B), unlock, SetEvent
+Consumer: ResetEvent          <-- clears the signal for B
+Consumer: park                <-- lost wakeup; B is stranded
+```
+
+So the invariant is precisely: **the reset must be atomic with the observation
+that there is nothing to take.** And yes -- the event represents the fullness of
+the queue. It is *level* state, a function of the contents rather than a record
+of edges, which is why it is manual-reset and why a redundant signal is free
+while a stale reset is fatal.
+
+### C-2 The pending-clarification handle -- dissolved
+
+Deliver the handle **with** the question rather than holding it behind the
+question. The client then owns it under ordinary rules; a client that never
+answers has leaked its own resource, not stranded a facility-held object with no
+owner and no deadline.
+
+Following that through: **at the primitive layer the consulted tier collapses
+into the informed tier.** Ask what the facility would do with the answer.
+Register the file into that domain's ring? Unavailable -- registration is
+one-shot. Allocate slots on the right node? Those come from the domain when the
+client asks it. There is no work the answer unlocks that the client cannot do by
+submitting to the domain it chose. The round trip has no payload.
+
+The consulted tier survives where the facility performs I/O **on the client's
+behalf** -- a higher-level "read this whole file" API that must choose placement
+and has nobody to ask. That is a layer above the primitive.
+
+Whatever the facility still holds transiently needs a deadline and a disposal
+path **allowed to block**, since closing a handle to a dead network path is
+exactly the work this facility exists to keep off a caller's thread.
+
+### C-3 The durability model graduates to its own crate
+
+Recorded as the engineer's decision: the `epoch_log` sample becomes a canonical
+layer, probably a separate crate. Durability groups are a natural capability
+whose absence is surprising.
+
+It composes because the mechanism it needs was already measured:
+[D-23](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-23) (an unflagged flush
+does **not** cover preceding writes) and
+[D-24](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-24)
+(`DRAIN_PRECEDING_OPS` is a full ring-wide barrier spanning submissions). Group
+commit is policy over that mechanism, which is a textbook reason for a separate
+crate rather than a feature.
+
+**One constraint to carry from the start:** the barrier stops at the ring's
+edge, so a durability epoch is **per-domain**. A client writing through two
+domains and wanting one durability point needs two flushes and an explicit join.
+The crate must represent that or refuse it; it must not quietly imply an epoch
+spans domains.
+
+### C-4 The composed layer swallows the sharp edges
+
+The engineer's direction: primitives matter, but this is the "build layers that
+compose them" phase, and the composed layer should not expose sharp edges.
+
+The mechanism is already recorded as the namespace session's decision 8 -- a
+type-level traversal where each step offers only the legal next steps -- and
+this repository already applies it (`RingScope` so no `&mut IoRing` escapes;
+`get(&mut self)` so a hazard is a type error). The edges to swallow:
+
+- edge-triggered drain ([D-19](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-19)):
+  drain to empty every pass; a single `try_pop` deadlocks;
+- buffer slot lifecycle: acquire, outstanding accounting, release only on an
+  observed completion;
+- one-shot registration: fixed at construction, never named by the client;
+- token claiming: `claim_if` matching both `user_data` and `ring_id`;
+- flush barrier semantics (D-23);
+- handle disposal, including the blocking close.
+
+**If the client can name any of these, the layer has leaked.**
+
+## Rejected: a `Ring` trait with a client-implemented `ring_doorbell()`
+
+Proposed during the session, and rejected -- but the first argument offered
+against it was wrong and is corrected here rather than quietly dropped.
+
+**The withdrawn argument.** It was claimed that a client callback would run
+under the queue lock and therefore risk deadlock. C-1b shows the signal side
+need not be under the lock at all, so that argument does not hold.
+
+**The arguments that do hold:**
+
+1. **Set and reset are two halves of one invariant** and cannot be split across
+   an ownership boundary. The reset must happen under our lock, atomic with the
+   emptiness observation; if the client owns the signalling object, we cannot
+   perform it. This is the file-watcher's recorded reason: owning the doorbell
+   "makes the reset discipline an internal invariant rather than a client
+   obligation".
+2. **A client callback on the producer's submit path is a cadence hazard** -- if
+   it blocks, it stalls the producer.
+3. **Type-parameter propagation**, which is the cost the file-watcher actually
+   measured: a `Doorbell` trait "would have made `Monitor`, `Session`, and
+   `Sender` all generic over it".
+
+And the extension point already exists at no cost: hand out the HANDLE. The
+client composes it into `WaitForMultipleObjects`, a `ThreadpoolWait`, an async
+reactor, or ignores it -- outside our lock, on their own schedule, with no type
+parameter reaching `Ring`, `Domain`, and every producer handle.
+
+On the narrower question of generics versus `dyn` should polymorphism be needed
+elsewhere: static dispatch on the hot path, but the cost that actually bites is
+the type parameter infecting every type that touches a queue, not the dispatch.
+
+## Two locality consumers, not one
+
+Raised by the engineer's question about what a client gets back and whether it
+is affinitized to the calling thread. It exposes an incompleteness in the ioring
+notes' strongest placement claim.
+
+There are **two** consumers of a buffer's locality:
+
+- the **device**, which DMAs into it;
+- the **client**, which reads it after completion.
+
+The notes argue placement dominates because "a buffer on a node remote from the
+device means every byte crosses the interconnect, on every operation, forever".
+That is true of the DMA and silent about the read side. With the device on one
+node and the client thread on another, both cannot be satisfied:
+
+| Buffer placed | DMA cost | Client read cost |
+|---|---|---|
+| near the device | local | remote, on every read |
+| near the client | one crossing | local |
+
+**A DMA writes once; a consumer may read many times.** So "near the device" is
+not automatically right -- it wins when the consumer barely touches the bytes,
+and loses when the consumer works over them repeatedly. The notes' claim is
+incomplete rather than wrong, and the completion is that the *access pattern*
+decides.
+
+**On binding to the calling thread: no, not implicitly.** An unpinned client
+thread migrates, so a binding inferred from where it happened to be is stale
+before it is used. That is the namespace session's decision 9 -- "ambient state
+is derived from an explicit binding, never the origin of one".
+
+**Proposed instead:** the client *asks* -- "which domain is nearest me?" -- and
+then uses it explicitly. Topology becomes an input the client may consult, never
+an authority applied behind its back. A foreign thread has in any case already
+accepted a hop and probably a remote read; a client wanting true consumer
+locality should be running *on* the domain.
+
+## Coherence assessment
+
+Honest state of the design at the end of this session, since it was asked
+directly.
+
+**Solid.** The two-layer ring resolves submission thread-safety, the missing CQ
+post entry point, and "one ring or two" with a single decision; three
+constraints falling to one choice is usually a sign the decomposition is right.
+The domain-owned pool makes NUMA invisible rather than merely easy. The uniform
+architecture sizes from 1 to N without a second mode.
+
+**Structurally open, and not to be papered over:**
+
+1. **The client-facing ring is a substantial new artifact** -- MPSC, doorbell,
+   descriptor format, completion tagging -- existing nowhere in this workspace.
+   It needs a home and probably its own crate, and it is larger than anything
+   this session has called "the seam".
+2. **CQ cardinality.** One shared CQ is a contention point every domain writes
+   to, which is shared-nothing violated at the last step. One per domain
+   preserves the model but makes the client multiplex, and
+   `WaitForMultipleObjects` caps at 64 handles.
+3. **Whether the client ever sees an `IoRing`.** If it is fully wrapped,
+   `windows-ioring-sys` becomes an implementation detail of a higher crate --
+   a layering statement to be made deliberately rather than discovered.
+
 ## Working position on domain counts (not a decision)
 
 Only the first row is measured. The rest are from published topologies and must
@@ -472,6 +757,10 @@ and no more.
 
 ## Open questions
 
+- **The three structural gaps** in the coherence assessment above: where the
+  client-facing ring lives, CQ cardinality, and whether the client ever sees an
+  `IoRing`. These are now the session's principal open questions and they
+  supersede the framing below.
 - **Which end to design from.** Three candidates were put: (a) the seam between
   the pooled namespace plane and the pinned data plane, given one-shot
   registration and no shared ring storage; (b) the `RingFleet` that
