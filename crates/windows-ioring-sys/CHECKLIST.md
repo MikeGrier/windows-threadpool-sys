@@ -682,17 +682,30 @@ Independent of M17; may run in parallel.
   spikes as a budgeted technique for each new Win32 surface rather than something that happens when a test
   mysteriously fails.
 
-- [ ] **M18.6** -- Narrow `EventDelivery`'s ring surface so safe code cannot replace the ring out from under
+- [x] **M18.6** -- Narrow `EventDelivery`'s ring surface so safe code cannot replace the ring out from under
   the pool's wait. Spawned by M18.1, recorded as [D-43](DESIGN-NOTES.md#d-43), and **measured**: the
-  replacement compiles today and silently stops delivery -- one completion before the swap, none after.
+  replacement compiled and silently stopped delivery -- one completion before the swap, none after.
   **The two obvious fixes do not work.** A `Deref`/`DerefMut` newtype still permits `*guard = ...`, and so
   does handing a `&mut IoRing` to a closure. Closing the hole means never letting a `&mut IoRing` escape at
-  all: expose a *submission scope* that can build a [`Batch`] against the ring and nothing else, keeping the
-  `&mut` private. Decide deliberately what else the scope must expose -- `outstanding` is a reasonable
-  read-only addition; `try_pop` is not, because in Model A the pool is the single drainer ([D-21](DESIGN-NOTES.md#d-21)).
-  Blast radius is every current caller, including the `epoch_log` example and the delivery tests, which is why
-  it was scheduled rather than taken inline during the audit. 0.2.0 is already a breaking release, so the
-  window is open.
-  Prove it by construction rather than by review: a `compile_fail` doctest asserting the replacement no longer
-  compiles, plus a delivery test that keeps working across the new API. A fix whose only evidence is that
-  someone read it is exactly what M18 exists to stop relying on.
+  all.
+  **Done:** `EventDelivery::ring -> &Mutex<IoRing>` is replaced by `EventDelivery::scope -> RingScope`.
+  The exposure rule is stated rather than ad hoc: **every read-only part of `IoRing`, plus batch
+  construction -- and nothing that can retarget the ring or steal the pool's completions.** So `batch`,
+  `outstanding`, `info`, `version`, `supports`, `supports_raw` and the registered counts; deliberately no
+  `try_pop` ([D-21](DESIGN-NOTES.md#d-21) makes the pool the single drainer), no `completion_event` (two
+  waiters on one ring), no `run_down`, and no `&mut IoRing`.
+  **Reviewed for sizing before starting, and one item was right.** Nine call sites across six files, all of
+  which stop compiling the moment `ring()` is removed -- so any split would have produced a non-compiling
+  intermediate commit, and the add-alongside-then-remove shape would have left the hole open across commits.
+  Larger than the item text implied, though: it also forced `handover.rs`'s `submit_wave` to split into a
+  `queue_wave` that fills a caller-owned `Batch` (four plain-ring call sites kept their old shape), because
+  `Batch::submit_and_wait` consumes the batch and the scope hands out a `Batch` rather than a ring.
+  **Proved by construction, not by review**, which is the whole point of M18: a `compile_fail` doctest
+  asserts the replacement no longer compiles. That doctest was itself verified -- adding a `DerefMut` impl
+  makes it **fail**, so it is passing for the right reason rather than on a typo in its own setup, and that
+  same experiment is the empirical proof of the "a `Deref` newtype would not close this" claim above. It is
+  paired with a normal doctest sharing the setup, since a `compile_fail` example passes on *any* error.
+  **Incidental fix:** call sites were inconsistent about mutex poisoning -- some `expect`, some
+  `unwrap_or_else(PoisonError::into_inner)`. `scope()` absorbs poisoning internally, matching what the wait
+  callback's own drain already did, so the question no longer reaches callers at all.
+  Verified: 148 tests pass, both affected examples (`model_a_delivery`, `epoch_log`) still run to exit 0.

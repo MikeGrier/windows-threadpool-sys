@@ -58,7 +58,7 @@ use std::os::windows::io::RawHandle;
 use std::sync::{Arc, Mutex};
 
 use windows_ioring_sys::{
-    Batch, EventDelivery, FlushCoverage, FlushMode, IoRing, PushOptions, Token, WriteCaching,
+    EventDelivery, FlushCoverage, FlushMode, IoRing, PushOptions, Token, WriteCaching,
 };
 
 use crate::commit::Epoch;
@@ -290,12 +290,8 @@ impl Checkpointer {
         record.extend_from_slice(MAGIC);
         record.extend_from_slice(&watermark.0.to_le_bytes());
 
-        let mut ring = self
-            .delivery
-            .ring()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut batch = Batch::new(&mut ring);
+        let mut scope = self.delivery.scope();
+        let mut batch = scope.batch();
         // SAFETY: `record` is moved into the token, which is kept alive in
         // `State::writes` until its own completion is observed and claimed --
         // so the buffer stays at a stable address for as long as the kernel

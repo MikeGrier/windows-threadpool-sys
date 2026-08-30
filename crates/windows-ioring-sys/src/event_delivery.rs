@@ -3,13 +3,15 @@
 //! (M4).
 
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use windows_sys::Win32::Storage::FileSystem::IORING_OP_CODE;
 use windows_threadpool_sys::callback_env::CallbackEnviron;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 
-use crate::ring::{Completion, IoRing};
-
+use crate::batch::Batch;
+use crate::capability::RingVersion;
+use crate::ring::{Completion, IoRing, Op, RingInfo};
 /// Pop every completion currently available and hand each to `on_completion`.
 ///
 /// Each pop is its own short lock: `on_completion` always runs with the
@@ -149,26 +151,133 @@ impl EventDelivery {
         Ok(Self { wait, ring })
     }
 
-    /// The wrapped ring, shared with the wait callback above.
+    /// Lock the wrapped ring and return a scope for submitting work to it.
     ///
-    /// A caller submits new work by locking this and building a
-    /// [`crate::Batch`] against it, the same way the callback locks it to
-    /// pop completions.
+    /// A caller submits by opening a [`RingScope::batch`], the same ring the
+    /// wait callback locks to pop completions. Mutex poisoning is absorbed
+    /// here rather than surfaced: a panic elsewhere does not invalidate a ring
+    /// handle, and the callback's own drain already takes the same view, so
+    /// making every caller write `unwrap_or_else(PoisonError::into_inner)` only
+    /// invited the inconsistency this method removes.
     ///
-    /// **Do not call [`IoRing::completion_event`] on it.** That call
-    /// succeeds -- it returns a duplicate of the very event this
-    /// `EventDelivery` is already waiting on, since the ring attaches at most
-    /// one (D-20) -- and the result is two waiters on one ring's event, which
-    /// D-21 says cannot be made correct: the drain that restores the empty
-    /// state, and so re-arms the edge, has to run to empty exactly once.
-    /// Before M11.3 the same call was worse rather than better, silently
-    /// detaching the pool's event by replacing it, so delivery simply
-    /// stopped. A consumer that wants to wait on the ring itself wants Model
-    /// B with a multiplexed wakeup instead, and should not hand its ring to
-    /// `EventDelivery` at all.
+    /// # What the scope deliberately withholds
+    ///
+    /// The rule is: **every read-only part of [`IoRing`], plus batch
+    /// construction -- and nothing that can retarget the ring or steal the
+    /// pool's completions.** So there is no `try_pop` (D-21 makes the pool the
+    /// single drainer; a second one breaks the drain-to-empty that re-arms the
+    /// edge), no `completion_event` (it hands back a duplicate of the event
+    /// this `EventDelivery` already waits on, giving two waiters on one ring),
+    /// no `run_down`, and above all **no `&mut IoRing`**.
+    ///
+    /// That last one is the point, and it is why this returns a scope rather
+    /// than the `&Mutex<IoRing>` it used to. Any `&mut IoRing` permits
+    /// whole-value assignment, so safe code could replace the ring while the
+    /// pool's wait stayed armed on the *original* ring's event -- measured, and
+    /// delivery stopped silently ([D-43](../DESIGN-NOTES.md#d-43)). Note a
+    /// `Deref`/`DerefMut` newtype would not have closed that, since
+    /// `*scope = ...` works through `DerefMut` just as well; nor would handing
+    /// a `&mut IoRing` to a closure.
+    ///
+    /// Replacing the ring is therefore refused at compile time:
+    ///
+    /// ```compile_fail
+    /// # use windows_ioring_sys::{EventDelivery, IoRing};
+    /// let delivery =
+    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_| {}, None).unwrap();
+    /// let mut scope = delivery.scope();
+    /// // No `DerefMut`, so there is no `&mut IoRing` to assign through.
+    /// *scope = IoRing::new(8, 8).unwrap();
+    /// ```
+    ///
+    /// The same setup doing the legitimate thing must still compile. A
+    /// `compile_fail` example passes on *any* error, including a typo in its
+    /// own setup, so this pair is what keeps the one above honest:
+    ///
+    /// ```
+    /// # use windows_ioring_sys::{EventDelivery, IoRing};
+    /// let delivery =
+    ///     EventDelivery::new(IoRing::new(8, 8).unwrap(), |_| {}, None).unwrap();
+    /// let scope = delivery.scope();
+    /// assert_eq!(scope.outstanding(), 0);
+    /// ```
     #[must_use]
-    pub fn ring(&self) -> &Mutex<IoRing> {
-        &self.ring
+    pub fn scope(&self) -> RingScope<'_> {
+        RingScope {
+            ring: self
+                .ring
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        }
+    }
+}
+
+/// Exclusive access to an [`EventDelivery`]'s ring, narrowed to what a
+/// submitting caller needs (M18.6).
+///
+/// Held for as long as the value lives, so keep it to the shortest scope that
+/// covers a submission: the wait callback needs the same lock to deliver
+/// completions.
+///
+/// See [`EventDelivery::scope`] for what this deliberately does not expose,
+/// and why handing out anything that yields a `&mut IoRing` would reopen
+/// [D-43](../DESIGN-NOTES.md#d-43).
+pub struct RingScope<'delivery> {
+    ring: MutexGuard<'delivery, IoRing>,
+}
+
+impl RingScope<'_> {
+    /// Open a [`Batch`] against the ring.
+    ///
+    /// The borrow is confined to the returned batch, so no `&mut IoRing`
+    /// escapes to the caller.
+    pub fn batch(&mut self) -> Batch<'_> {
+        Batch::new(&mut self.ring)
+    }
+
+    /// Operations submitted but not yet popped, as [`IoRing::outstanding`].
+    #[must_use]
+    pub fn outstanding(&self) -> usize {
+        self.ring.outstanding()
+    }
+
+    /// This ring's negotiated version, as [`IoRing::version`].
+    #[must_use]
+    pub fn version(&self) -> RingVersion {
+        self.ring.version()
+    }
+
+    /// Query the ring, as [`IoRing::info`].
+    ///
+    /// # Errors
+    ///
+    /// As [`IoRing::info`].
+    pub fn info(&self) -> io::Result<RingInfo> {
+        self.ring.info()
+    }
+
+    /// Whether this ring supports `op`, as [`IoRing::supports`].
+    #[must_use]
+    pub fn supports(&self, op: Op) -> bool {
+        self.ring.supports(op)
+    }
+
+    /// Whether this ring supports `op_code`, as [`IoRing::supports_raw`].
+    #[must_use]
+    pub fn supports_raw(&self, op_code: IORING_OP_CODE) -> bool {
+        self.ring.supports_raw(op_code)
+    }
+
+    /// Registered file count, as [`IoRing::registered_file_count`].
+    #[must_use]
+    pub fn registered_file_count(&self) -> u32 {
+        self.ring.registered_file_count()
+    }
+
+    /// Registered buffer count, as [`IoRing::registered_buffer_count`].
+    #[must_use]
+    pub fn registered_buffer_count(&self) -> u32 {
+        self.ring.registered_buffer_count()
     }
 }
 

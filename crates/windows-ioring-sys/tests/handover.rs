@@ -211,19 +211,23 @@ fn signalled_within(event: &OwnedHandle, timeout_ms: u32) -> bool {
     }
 }
 
-/// Queue wave `wave`'s `CHUNKS` reads and submit them without waiting.
+/// Queue wave `wave`'s `CHUNKS` reads into `batch`, without submitting.
+///
+/// Split from `submit_wave` so the same queueing serves both a plain ring and
+/// an [`EventDelivery`] scope, which hands out a [`Batch`] rather than a
+/// `&mut IoRing` (M18.6). Submitting stays with the caller because
+/// `Batch::submit_and_wait` consumes the batch.
 ///
 /// Each wave reads a disjoint span of the fixture, so a completion carrying
 /// the wrong `UserData` is caught by the claim rather than passing unnoticed.
-fn submit_wave(
-    ring: &mut IoRing,
+fn queue_wave(
+    batch: &mut Batch<'_>,
     file: &File,
     wave: usize,
     contract: &mut RingContract,
     pending: &mut Pending,
 ) {
     let handle = file.as_raw_handle();
-    let mut batch = Batch::new(ring);
     for chunk_index in 0..CHUNKS {
         let buffer = vec![0_u8; CHUNK_LEN];
         let offset = ((wave * CHUNKS + chunk_index) * CHUNK_LEN) as u64;
@@ -234,6 +238,18 @@ fn submit_wave(
         contract.observe_push(token.id());
         pending.insert(token.id(), token);
     }
+}
+
+/// [`queue_wave`] against a ring the test owns outright, then submit.
+fn submit_wave(
+    ring: &mut IoRing,
+    file: &File,
+    wave: usize,
+    contract: &mut RingContract,
+    pending: &mut Pending,
+) {
+    let mut batch = Batch::new(ring);
+    queue_wave(&mut batch, file, wave, contract, pending);
     batch.submit_and_wait(0, 0).expect("submit without waiting");
 }
 
@@ -363,8 +379,10 @@ fn a_handover_serves_both_the_backlog_and_the_wave_that_follows_it() {
     // Submitted after the handover, without waiting for the backlog to be
     // delivered first -- so the pool sees one queue holding both waves.
     {
-        let mut ring = delivery.ring().lock().expect("lock ring");
-        submit_wave(&mut ring, &file, 1, &mut contract, &mut pending);
+        let mut scope = delivery.scope();
+        let mut batch = scope.batch();
+        queue_wave(&mut batch, &file, 1, &mut contract, &mut pending);
+        batch.submit_and_wait(0, 0).expect("submit without waiting");
     }
 
     // Claim on this thread rather than in the callback, so a delivery that
@@ -497,8 +515,10 @@ fn a_wave_submitted_after_the_pool_drained_the_queue_is_still_delivered() {
     for wave in 0..WAVES {
         let mut pending = Pending::new();
         {
-            let mut ring = delivery.ring().lock().expect("lock ring");
-            submit_wave(&mut ring, &file, wave, &mut contract, &mut pending);
+            let mut scope = delivery.scope();
+            let mut batch = scope.batch();
+            queue_wave(&mut batch, &file, wave, &mut contract, &mut pending);
+            batch.submit_and_wait(0, 0).expect("submit without waiting");
         }
 
         // Draining this wave completely before submitting the next is what

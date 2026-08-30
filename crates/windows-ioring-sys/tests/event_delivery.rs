@@ -69,8 +69,8 @@ fn completions_are_delivered_on_pool_threads_without_the_submitting_thread_waiti
     // through the completion path this test does not need to exercise
     // (submission_lifecycle.rs already covers buffer round-tripping).
     {
-        let mut ring = delivery.ring().lock().expect("lock ring");
-        let mut batch = Batch::new(&mut ring);
+        let mut scope = delivery.scope();
+        let mut batch = scope.batch();
         for chunk_index in 0..CHUNKS {
             let buffer = vec![0_u8; CHUNK_LEN];
             let offset = (chunk_index * CHUNK_LEN) as u64;
@@ -125,8 +125,8 @@ fn teardown_with_operations_in_flight_neither_hangs_nor_closes_the_ring_early() 
     .expect("wire event delivery");
 
     {
-        let mut ring = delivery.ring().lock().expect("lock ring");
-        let mut batch = Batch::new(&mut ring);
+        let mut scope = delivery.scope();
+        let mut batch = scope.batch();
         for _ in 0..8 {
             let buffer = vec![0_u8; content.len()];
             let _token = unsafe { batch.read_raw(handle, buffer, 0, PushOptions::new()) }

@@ -424,11 +424,8 @@ fn event_delivery_hands_a_failed_completion_to_the_callback() {
     .expect("the completion event is available");
 
     {
-        let mut ring = delivery
-            .ring()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut batch = Batch::new(&mut ring);
+        let mut scope = delivery.scope();
+        let mut batch = scope.batch();
         // A cancel naming a `UserData` that is not outstanding: a real error,
         // reported through the completion rather than at push time.
         let token = batch.cancel(&file, 0xDEAD_BEEF).expect("queue the cancel");
