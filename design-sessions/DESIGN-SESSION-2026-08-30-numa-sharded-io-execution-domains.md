@@ -267,10 +267,169 @@ with the hardware gap stated in the spikes
 documentation defect is independent of the measurement and is queued as M20.4
 regardless.
 
+## Converged: one uniform, tunable architecture, sized by the topology
+
+This is the session's first converged position, and it arrived by correcting a
+framing this record had already adopted.
+
+**The framing that was wrong.** An earlier turn concluded that because almost
+every consumer machine yields a single domain, "this entire apparatus is
+server-class-only, and should be sized and justified as such." The engineer
+rejected that, on the grounds that it sounds like the feature does not work on
+laptops, and that it should extend up and down smoothly instead.
+
+That objection is right, and it is right against a **standing rule of this
+repository** rather than merely on taste. PLATFORM INTEGRITY says: "do not
+narrow the platform to serve the visible goal -- every platform component must
+remain a *level* platform, its lower baselines first-class, not optional
+trimmings to cut because the current task does not need them." Scoping the work
+to server hardware is exactly that narrowing. The ioring notes already had the
+correct words where this session lost them: a machine that yields one ring is
+"correct", not degraded.
+
+**The architecture.** There is one shape at every size -- a domain is a pinned
+thread, its ring, its node-local registered pool, and its shard of the work.
+A laptop runs one. A server runs several. There is no laptop mode and no server
+mode; there is one shape and a count. N=1 is not a fallback that lost something:
+on a single-node, single-LLC machine one domain **is** the optimal partition.
+
+**What is genuinely additive above one domain**, and it is additive rather than
+a second mode:
+
+- the cross-domain queue and its doorbell -- with one domain there is no peer to
+  message;
+- the routing policy -- with one domain there is no choice to make, so the
+  volume-to-node key has nothing to select.
+
+Both are **absent** at N=1, not stubbed or bypassed. Nothing on the
+single-domain path consults a router that always answers zero.
+
+**Consequence for build order, and it inverts what this session had implied.**
+N=1 is the **first deliverable and the substrate**, not the leftover. It is the
+common case, it is complete and correct on its own, and N>1 extends it without
+disturbing it. That is a better sequencing argument than starting from the
+fleet, and it means the first thing built is useful on every machine in the
+table below rather than on none of them.
+
+**The mechanism that makes "smooth" concrete: affinity is a set, not a point.**
+`SetThreadGroupAffinity` takes a mask, and `windows-topology-sys` already hands
+out `ProcessorSet` with correct multi-group handling. A domain's affinity is
+simply the `ProcessorSet` of its partition:
+
+| Machine | N | Each domain's affinity set |
+|---|---|---|
+| Uniform laptop or VM | 1 | the whole machine |
+| Heterogeneous laptop (P/E, or ARM clusters) | 1 | the performance cluster only |
+| 2-CCD desktop | 1-2 | each CCD's processors |
+| 12-CCD EPYC | 4-12 | each CCD's processors |
+
+Same call, same type, different set. Nothing special-cases the small end.
+
+**Domain count and pinning tightness are separate knobs.** Pinning to a single
+core buys locality *relative to other domains*; with one domain there is nothing
+to be local relative to, and hard-pinning an I/O thread to one core of a laptop
+that is also running everything else may be worse than letting it float across
+the performance cores. But **heterogeneity means even N=1 wants an affinity
+mask**, because an unconstrained thread can be scheduled onto an efficiency core
+or an LPE island. The development machine is the case in point: two clusters of
+six, and `efficiency_class` is already exposed on `Core` by the topology crate.
+So the small end does not want *no* affinity -- it wants a *set*, which is
+exactly what the large end wants too.
+
+Stated once: **one mechanism, sized by the topology.** A domain is affinitized
+to a `ProcessorSet`; how many domains exist, and how wide each set is, falls out
+of the machine.
+
+## Converged: round-robin is incoherent with the model, not merely suboptimal
+
+The engineer's position was that round-robin assignment "seems actually
+dangerous" and that a high-performance consumer might prefer a single thread on
+a single processor. Agreed, and the reason is stronger than the averaging
+argument that first suggested it.
+
+Round-robin across domains **breaks the ownership premise Model B exists for**.
+If a file's I/O lands on domain 1 now and domain 3 next, that file's state --
+buffer slots, outstanding accounting, continuations -- is owned by no single
+shard. That is sharing on the data path, which is the one thing shared-nothing
+is defined by. It is not a worse point on the same curve; it is off the curve.
+
+The consequence for a latency-sensitive consumer follows directly: a single
+thread on a single processor is deterministic and owned, where round-robin is
+non-deterministic and shared. A known cost can be engineered around; jitter
+cannot.
+
+**Position:** round-robin is acceptable only as an explicitly chosen default for
+consumers who have expressed no preference, and it should be named to admit what
+it is rather than offered beside "by node" as though it were a peer policy.
+
+## Converged: report, do not route
+
+The engineer proposed that when no useful mapping is available, the facility
+should message the caller and have them respond with how to proceed.
+
+**One mechanism correction:** an arbitrary completion cannot be posted into an
+`IoRing` completion queue. The namespace session already rejected that path --
+"the `IoRing` API has no post/user-completion entry point, so a namespace
+completion cannot be placed in its CQ." (`IORING_OP_NOP` can inject a marker,
+but only the ring's owning thread may submit, so a namespace worker on another
+thread cannot reach in.) On the facility's **own** ring, which it owns outright,
+posting is available.
+
+**A simpler form needs no new mechanism at all.** Rather than the facility
+asking a question and awaiting an answer, the open's completion carries the hint
+and the client routes:
+
+```
+completion = { handle, volume_node: Option<u32>, provenance: Measured | Absent | Overridden }
+```
+
+The client already receives that completion. No round trip, no pending-decision
+state, no "what if the client never answers," and no new queue direction. It is
+the principle the ioring notes already state -- "leaves the mapping to whoever
+knows their storage layout" -- made concrete: the facility reports, the client
+routes.
+
+The upcall form remains the right answer for a higher layer that owns a flow
+end to end and cannot hand control back. Both are kept, with the reporting form
+as the primitive and the upcall as something built on it if a consumer needs it.
+
+## Converged: a domain runtime is not a thread pool
+
+The engineer raised a fear of ending up writing a thread pool, given that the
+Windows pool cannot affinitize to any of the objects of interest.
+
+What Model B needs is a **domain runtime**, and every distinguishing feature is
+the *absence* of a thread-pool feature:
+
+| A thread pool does | A domain runtime does |
+|---|---|
+| dynamic sizing, injection, retirement | spawn N at startup, join at shutdown |
+| work stealing and load balancing | nothing -- stealing would violate share-nothing |
+| queue management, priorities, quarantine | one loop per thread: park, drain, run |
+| grow under blocking (`runs_long`) | never blocks on namespace work by construction |
+
+`ring_copy` already contains a working instance of it inline: pin, allocate
+node-local, register, loop. The ioring notes already committed to the shape --
+"Model B on the hot data path ... and Model A for the control plane, background,
+and cold paths" -- and `M6+.4` already queues binding a ring's thread with
+`SetThreadGroupAffinity`.
+
+The load-bearing point is the one that motivated the fear: the Windows pool
+**cannot** affinitize, so this capability cannot come from it. That is not a
+reason to rebuild the pool; it is the reason the two halves are separate. The
+namespace plane keeps the pool because it needs quarantine and elasticity for
+blocking calls; the data plane owns threads because it needs pinning. Neither
+can serve the other, and that is the design rather than a compromise.
+
 ## Working position on domain counts (not a decision)
 
 Only the first row is measured. The rest are from published topologies and must
 be treated as unverified until probed.
+
+Read this as **the count the one architecture takes on each machine**, not as a
+boundary between supported and unsupported hardware -- see the convergence above.
+Every row runs the same domain shape; the rows differ only in N and in how wide
+each domain's affinity set is.
 
 | Configuration | Cores / LPs | Cache domains | Nodes | Groups | I/O domains |
 |---|---|---|---|---|---|

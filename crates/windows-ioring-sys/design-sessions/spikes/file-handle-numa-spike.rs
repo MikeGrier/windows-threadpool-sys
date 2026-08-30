@@ -18,6 +18,19 @@
 //!      degradation path has to handle it?
 //!   Q5 does a directory handle behave the same as a file handle? The IFS docs
 //!      say the FSCTL accepts either.
+//!   Q6 **what does a Storage Space report?** Run this against a file on a
+//!      striped or parity space whose columns are NVMe devices on different
+//!      PCIe roots, ideally attached to different nodes. Three outcomes, and
+//!      they are not equally good:
+//!        - no answer: honest, and the consumer degrades to "any domain";
+//!        - one node that genuinely matches every column: useful;
+//!        - **one node for a device set that spans several: a fiction, and
+//!          worse than no answer**, because a consumer would act on it.
+//!      The third is the case worth knowing about, and it cannot be
+//!      distinguished from the second without independently knowing where the
+//!      columns live -- so record the space's layout (`Get-StoragePool`,
+//!      `Get-PhysicalDisk`) alongside whatever this prints, or the result
+//!      cannot be interpreted.
 //!
 //! Why it matters: `DESIGN-NOTES.md` asserts that mapping a file handle to the
 //! NUMA node of its backing device "has no clean user-mode path" and "means
@@ -135,7 +148,19 @@ fn main() -> std::io::Result<()> {
     println!("NOTE: on a single-NUMA-node machine this spike is VACUOUS.");
     println!("Check the node count first; if it is 1, these results say nothing.\n");
 
-    let path = std::env::temp_dir().join("numa-probe-target.bin");
+    // Q6: pass a directory on a Storage Space as argv[1] to ask the harder
+    // question. Default target is the temp directory, i.e. the boot volume.
+    let dir = match std::env::args().nth(1) {
+        Some(arg) => {
+            println!("target directory overridden: {arg}");
+            println!("for Q6, record the space's layout (Get-StoragePool,");
+            println!("Get-PhysicalDisk) alongside this output, or the result");
+            println!("cannot be interpreted.\n");
+            std::path::PathBuf::from(arg)
+        }
+        None => std::env::temp_dir(),
+    };
+    let path = dir.join("numa-probe-target.bin");
     fs::write(&path, vec![0_u8; 4096])?;
 
     // Q1-Q4: a garden-variety data file, opened the ordinary way. This is the
@@ -154,10 +179,10 @@ fn main() -> std::io::Result<()> {
     // `File::open` and could never have answered Q5 -- caught by running it on
     // hardware where the rest of the spike is vacuous, which is a decent
     // argument for smoke-running an instrument even when its result cannot be.
-    let dir = to_wide(&std::env::temp_dir());
+    let dir_wide = to_wide(&dir);
     let handle = unsafe {
         CreateFileW(
-            dir.as_ptr(),
+            dir_wide.as_ptr(),
             GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             std::ptr::null(),
@@ -172,7 +197,7 @@ fn main() -> std::io::Result<()> {
             std::io::Error::last_os_error()
         );
     } else {
-        probe("directory handle (temp dir)", handle);
+        probe(&format!("directory handle: {}", dir.display()), handle);
         unsafe { CloseHandle(handle) };
     }
 
