@@ -556,6 +556,72 @@ lost-wakeup risk. R3 and R4 are amended accordingly.
 carrying real I/O. That is the number that would justify adopting the
 eventcount, and it needs a workload rather than a microbenchmark.
 
+### What these microbenchmarks do not establish
+
+Both C-1 and the request-cost measurement below are **per-operation overheads
+of single, uncontended operations**. That is not the same thing as queue
+efficiency, and the distinction is worth stating because both numbers invite the
+same over-reading:
+
+- **Per-operation overhead is not throughput.** What makes a queue good or bad
+  is its behaviour under contention, the cache traffic of its ring, how well
+  batching amortises, and how it behaves at capacity. None of that is visible in
+  a single push or a single `SetEvent`.
+- **One operation type is not the operation mix.** A namespace open is the
+  heaviest payload the queue carries; a registered-buffer read is the lightest,
+  and it is the hot path. A conclusion drawn from either says nothing about the
+  other.
+
+So neither measurement licenses a claim of the form "the queue's mechanics do
+not matter". What C-1 supports is narrow and still useful: **batching alone
+makes the doorbell cheap enough that the eventcount need not be bought up
+front.**
+
+### The request's cost, and what it says about operation mix
+
+Measured on the same machine by `probe-request-cost`:
+
+| operation | ns/op | x a doorbell |
+|---|---|---|
+| `prepare_short_path` | 534.7 | 3.2 |
+| `prepare_long_path` | 1593.0 | 9.7 |
+| `build_open_request` | 452.7 | 2.7 |
+| `clone_prepared_units` | 95.3 | 0.6 |
+| `capture_handle` | 282.5 | 1.7 |
+
+**The queue can carry an owned request, and the R7 contradiction dissolves.**
+`OpenFile` is `Send` (verified by compile-time assertion), owns its
+`PreparedPath`, and carries a `CapturedHandle` that is already a *duplicate* --
+so nothing borrowed crosses the hop and no lifetime outlives the submitting
+thread. The design does not need the "write the path into a buffer slot" scheme
+proposed earlier in this session; the namespace crate was built for exactly this
+and already solves it.
+
+**R7 needs amending rather than satisfying.** "POD descriptors, no allocation on
+push" cannot hold for a payload that owns a heap string. Split it: the queue's
+*slot* stays fixed-size and POD (tag, correlation id, index), while the
+*payload* is an owned request the client allocated before pushing. The property
+that mattered survives -- no allocation inside the push, and no lifetime hazard.
+
+**Two costs that are easy to under-count:**
+
+- **`prepare` is a Win32 call, not an allocation.** It invokes
+  `GetFullPathNameW`, because the namespace session settled that the path is
+  resolved at submission -- the process CWD is mutable by any thread, so
+  resolving later would be racy. No allocator change removes that. Cloning
+  already-prepared units costs 95.3 ns, which *bounds* what an inline-storage or
+  recycling scheme could recover, and only for a caller that can reuse a
+  resolved path.
+- **A handle must be duplicated**, at 282.5 ns -- a kernel transition, not a
+  memory copy. Raised by the engineer, and it is the part a "what does an SQE
+  hold" analysis focused on memory would miss entirely.
+
+**Scope:** this is a statement about **operation mix**, not about the queue. For
+an open-heavy workload, doorbell tuning would be optimizing the small half of
+the cost. It says nothing about the registered-buffer read path, where the
+descriptor is a slot index and an offset and the queue's mechanics are the whole
+per-operation cost.
+
 ### C-1a Why the doorbell must be a HANDLE, and cannot be `WaitOnAddress`
 
 `WaitOnAddress` is plausibly cheaper in isolation. It is still unusable here,
@@ -811,9 +877,20 @@ consumer must tolerate them. Drain to empty on every pass.
 and **sized by the topology** -- generous when a domain owns a core exclusively,
 zero when it shares one with the rest of a laptop.
 
-**R7 Payload.** POD descriptors only, never bytes: operation, target, buffer
-slot index, offset, user tag. **No allocation on push.** Carrying bytes would
-mean copying out of the registered pool, defeating the reason to register.
+**R7 Payload.** Two parts, because an earlier single-sentence form of this
+requirement ("POD descriptors only, no allocation on push") could not hold for a
+namespace open, whose payload owns a heap-allocated path:
+
+- **The slot is fixed-size and POD**: operation, correlation id, buffer slot
+  index, offset, user tag.
+- **The payload may be an owned value moved in** -- an `OpenFile` from
+  [windows-namespace-request-sys](../crates/windows-namespace-request-sys/README.md),
+  which is `Send`, owns its `PreparedPath`, and holds a *duplicated* handle.
+
+**No allocation inside the push**, and no borrowed lifetime crossing the hop:
+the client allocates before pushing, on its own thread, where blocking and
+failing are both acceptable. Never bytes -- carrying bytes would mean copying
+out of the registered pool, defeating the reason to register.
 
 **R8 Shutdown.** The consumer learns when all producers are gone; producers
 learn when the consumer is gone and fail with a typed error. Descriptors in

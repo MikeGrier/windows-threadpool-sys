@@ -186,6 +186,10 @@ jobs:
       # hang is a probe that can hang a build.
       - name: probe magnitudes (doorbell cost)
         run: cargo run -p windows-platform-probes --bin probe-doorbell-cost --locked
+      # Read with the doorbell probe above: together they say whether the
+      # queue's mechanics or the request's own cost deserves the attention.
+      - name: probe magnitudes (request cost)
+        run: cargo run -p windows-platform-probes --bin probe-request-cost --locked
 
   # The NUMA questions the 2026-08-30 design session could not answer, run
   # against whatever machine the runner fleet supplies.

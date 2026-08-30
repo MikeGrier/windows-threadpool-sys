@@ -228,9 +228,11 @@ dependencies = [
 name = "windows-platform-probes"
 version = "0.0.0"
 dependencies = [
+ "windows-namespace-request-sys",
  "windows-sys",
  "windows-threadpool-sys",
  "windows-topology-sys",
+ "wtf-string",
 ]
 
 [[package]]

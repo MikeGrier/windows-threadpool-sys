@@ -52,6 +52,10 @@ name = "probe-doorbell-cost"
 path = "src/bin/doorbell_cost.rs"
 
 [[bin]]
+name = "probe-request-cost"
+path = "src/bin/request_cost.rs"
+
+[[bin]]
 name = "probe-topology"
 path = "src/bin/topology.rs"
 
@@ -64,6 +68,10 @@ windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys"
 # a second parse written here, which would only measure itself. The raw Win32
 # counters it cross-checks against are read independently through windows-sys.
 windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
+# The request-cost probe measures the real request types the design would put on
+# a queue, not a stand-in, for the same reason.
+windows-namespace-request-sys = { version = "0.2.0", path = "../windows-namespace-request-sys" }
+wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
 [dependencies.windows-sys]
 version = "0.61.2"
