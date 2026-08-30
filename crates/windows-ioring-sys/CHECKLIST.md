@@ -712,10 +712,38 @@ Independent of M17; may run in parallel.
   needed because several mutants hang, and a cap derived from the ~5 s baseline is too tight for a suite whose
   own waits are 5 s. All of this is in the reproduction section of the survivors file.
   Note `cargo-mutants` has no `cargo_*` MCP tool, so it is the rare case where the terminal is the only route.
-- [ ] **M18.4** -- Resolve the survivors: strengthen the test, or record why the mutant is equivalent and
+- [x] **M18.4** -- Resolve the survivors: strengthen the test, or record why the mutant is equivalent and
   harmless. Do not delete an assertion merely because a mutant survives it -- a dead assertion beside a live
   one is worse than none, which is why M14.3's was removed rather than repaired.
+  **Result: 48 survivors down to 12, and the score from 79.7% to 94.9%** (219 caught, 12 missed, 6 timeouts,
+  69 unviable of 306). 18 new unit tests; no production code changed. Verified by re-running `cargo-mutants`,
+  not by assuming the tests would kill what they targeted -- which mattered, because four of them did not.
+  **The vacuous `Arc<[u8]>` tests are fixed** by comparing `stable_ptr()` against `Arc::as_ptr`, an
+  independently obtained address, exactly as the neighbouring `&'static [u8]` test already did.
+  **Four tests failed to kill what they aimed at, and re-running found each one.** Worth recording, because
+  every one of them looked correct: (1) the sort-order test used three busy buffers, and with the sort key
+  deleted `sort_by_key` is stable, so `HashMap` order came out sorted anyway -- now eight; (2) `checked_index`
+  is the *span* bounds check, not `get`'s, so an out-of-range `get` never reached it -- now submits a span;
+  (3) `user_data() -> 0` matched because a fresh ring's first operation *is* zero -- now burns ids first, and
+  then `-> 1` matched for the same reason, so it burns two; (4) `supports_raw` was asserted only in the
+  negative, which a constant `false` satisfies. **A test written against a mutant is not verified until the
+  mutant is re-run.**
+  **Two survivors are provably unkillable**, argued rather than assumed: `as_hresult`'s `|` versus `^` operate
+  on disjoint bit sets and are the same function; `with_injected_failure`'s zeroed `information` is
+  unreachable because `result()` returns `Err` first. Recorded with proofs.
+  **The rest are recorded with named reasons** in [MUTATION-SURVIVORS.md](MUTATION-SURVIVORS.md), separated
+  into unkillable, host-blocked (two `supports -> true` mutants need an `Op` this host does not support, and
+  widening a closed enum to satisfy a mutant would be inventing API for a test), queued (capability decoding,
+  spawned as **M18.7**), and two `Debug` impls whose exact wording an assertion would only change-detect.
+  "Hard to test" is written down as that, never as "equivalent".
 
+- [ ] **M18.7** -- Extract the capability flag decoding in `capabilities()` into a pure function over the raw
+  `IORING_CAPABILITIES`, so it can be exercised with synthetic flag values. Spawned by M18.4: four mutants on
+  `raw.FeatureFlags & FLAG != 0` survive because nothing can vary what `QueryIoRingCapabilities` returns, and
+  the decoding of `supports_completion_event` in particular gates every completion-event path in the crate --
+  [D-20](DESIGN-NOTES.md#d-20), and #47 lived downstream of it. A pure `fn decode(raw) -> Capabilities` plus a
+  table of flag combinations kills all four and makes the one capability that matters testable in both
+  directions, which no test can do today.
 - [ ] **M18.5** -- Document the strategy as a whole in [DESIGN-NOTES.md](DESIGN-NOTES.md): the three defect
   populations, which technique covers which, and -- most importantly -- **what none of them cover.** Two of the
   eight defects came from spikes against the real kernel, and no oracle, generator or allocator would have

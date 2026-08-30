@@ -192,3 +192,42 @@ fn claim_if_rejects_a_matching_user_data_from_a_different_ring() {
     settle(&mut ring_a);
     settle(&mut ring_b);
 }
+
+#[test]
+fn a_tokens_debug_names_its_operation() {
+    // `Token`'s `Debug` is hand-written rather than derived, because deriving
+    // would demand `T: Debug` from a caller's buffer type, and the id is the
+    // only part worth printing (D-4). M18.3 showed nothing asserted either
+    // half of that choice: the impl could return an empty string unnoticed.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+
+    // A buffer type that is deliberately *not* `Debug`, which is the constraint
+    // that forced the hand-written impl in the first place.
+    struct NotDebug(Vec<u8>);
+    // SAFETY: the bytes live in a heap allocation whose address is independent
+    // of where this value sits, and nothing here reallocates.
+    unsafe impl IoBuf for NotDebug {
+        fn stable_ptr(&self) -> *const u8 {
+            self.0.as_ptr()
+        }
+        fn bytes_len(&self) -> usize {
+            self.0.len()
+        }
+    }
+
+    let token = Token::new(&mut ring, NotDebug(vec![0_u8; 8])).expect("mint a token");
+    let id = token.id();
+    let rendered = format!("{token:?}");
+
+    assert!(
+        rendered.contains(&id.to_string()),
+        "a token's Debug must name the operation it will claim, but was {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Token"),
+        "a token's Debug must name its type, but was {rendered:?}"
+    );
+
+    drop(token);
+    settle(&mut ring);
+}

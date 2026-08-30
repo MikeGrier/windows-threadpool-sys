@@ -1,14 +1,17 @@
-# Mutation survivors: windows-ioring-sys (M18.3)
+# Mutation survivors: windows-ioring-sys (M18.3, resolved in M18.4)
 
-`cargo-mutants`, run over the crate with `--all-features`. This is the triage;
-resolving the survivors is M18.4.
+`cargo-mutants`, run over the crate with `--all-features`. M18.3 produced the
+triage below; M18.4 resolved it, and the outcome per category is recorded
+against each heading.
 
 ```
-306 mutants tested in 32m: 182 caught, 48 missed, 7 timeouts, 69 unviable
+M18.3   306 mutants: 182 caught, 48 missed,  7 timeouts, 69 unviable   79.7%
+M18.4   306 mutants: 219 caught, 12 missed,  6 timeouts, 69 unviable   94.9%
 ```
 
-Counting timeouts as detections (see T1), that is **189 of 237 viable mutants
-caught, 79.7%**.
+Counting timeouts as detections (see T1). **36 survivors killed**; the twelve
+that remain are itemised in "What is left, and why" at the end -- three of them
+provably unkillable, the rest with a named reason rather than a shrug.
 
 **Why this was worth running.** M18.3 was justified by a measured rate rather
 than a hunch: this branch had already produced two vacuously-passing tests and
@@ -114,12 +117,9 @@ batch.rs:923   <impl Drop for RegisteredBuffers>::drop -> ()
 ring.rs:963    <impl Drop for IoRing>::drop -> ()
 ```
 
-**Fault-injection seam.** Off by default, so lightly covered:
-
-```
-ring.rs:187    | -> ^ in InjectedFailure::as_hresult
-ring.rs:334    delete field `information` in Completion::with_injected_failure
-```
+**Fault-injection seam.** Off by default, so lightly covered. Both of these
+turned out to be **provably equivalent** -- see the T6 section, which is where
+they were moved after M18.4 analysed them rather than assumed they were gaps.
 
 ## T4 -- Accessors no test ever calls (19)
 
@@ -161,18 +161,37 @@ ring.rs:427    IoRing::fmt
 token.rs:110   Token::fmt
 ```
 
-## T6 -- Equivalent under the current tests (1)
+## T6 -- Equivalent mutants (3)
 
-```
-contract.rs:317  delete match arm Violation::BufferStillInUse in check_quiescent
-```
+Two of these are equivalent **as a matter of arithmetic and visibility**, not
+merely under the current tests. No test can kill them, and writing one that
+appeared to would mean asserting something the code does not promise.
 
-This arm is the **sort key**, not the detection -- `check_quiescent` sorts busy
+**`ring.rs:187  | -> ^ in InjectedFailure::as_hresult`.** The expression is
+`0x8007_0000 | (code & 0xFFFF)`. The right operand is masked to the low 16 bits
+and the left has no bits below bit 16, so the two bit sets are **disjoint** --
+and on disjoint operands `|` and `^` are the same function. The mutant is the
+identity.
+
+**`ring.rs:334  delete field 'information' in with_injected_failure`.** The
+struct literal ends in `..self`, so deleting the explicit `information: 0`
+makes the field inherit the original completion's byte count instead of being
+zeroed. That value is unreachable: `information` is private, and the only path
+that returns it is `Completion::result`, which returns `Err` first because
+`with_injected_failure` set a failing `result_code`. The zeroing is a
+correctness-of-modelling choice ("a failed operation transferred nothing"), not
+an observable one, and its comment already says so.
+
+**`contract.rs:317  delete match arm Violation::BufferStillInUse in
+check_quiescent`** -- equivalent only under the *old* tests, and now killed.
+This arm is the **sort key**, not the detection: `check_quiescent` sorts busy
 buffers so a failure reads the same way twice. `a_busy_registered_buffer_is_
-reported_at_quiescence` has exactly one busy buffer, so ordering is
-unobservable and deleting the arm changes nothing. Not a hole in the oracle's
+reported_at_quiescence` had exactly one busy buffer, so ordering was
+unobservable and deleting the arm changed nothing. Not a hole in the oracle's
 detection; a hole in the test's ability to see the ordering the sort exists to
-provide. Two busy buffers would close it.
+provide. M18.4 added `busy_registered_buffers_are_reported_in_index_order`,
+which registers four buffers out of order with one quiet, so the arm is now
+load-bearing.
 
 ## Reproducing
 
@@ -192,3 +211,62 @@ cargo mutants --package windows-ioring-sys --all-features -j 4 --timeout 180
 
 The 180 s cap matters: several mutants hang rather than fail, and the default
 derived from a ~5 s baseline is too tight for a suite whose own waits are 5 s.
+
+## What is left, and why (M18.4)
+
+Twelve survivors remain. M18.4's rule is that each is either killed, or given a
+reason -- and "hard to test" is a reason to record, not a synonym for
+"equivalent". These are separated accordingly.
+
+### Provably unkillable (2)
+
+Both are argued in T6 above: `as_hresult`'s `|` and `^` are the same function on
+disjoint bit sets, and `with_injected_failure`'s zeroed `information` is
+unreachable through any public path. No test can distinguish either, and one
+that appeared to would be asserting something the code does not promise.
+
+### Blocked on the host, not on the tests (2)
+
+```
+event_delivery.rs:262 RingScope::supports -> true
+ring.rs:547           IoRing::supports -> true
+```
+
+Killing the two `supports -> true` mutants needs an `Op` this host does *not*
+support, and every operation this crate names is supported on Windows 11. The
+negative direction is covered for `supports_raw`, which accepts an arbitrary
+opcode and so can be handed a reserved one -- but `Op` is a closed enum by
+design, and widening it to carry an unsupported variant purely to satisfy a
+mutant would be inventing API for the benefit of a test. Revisit if the crate
+ever runs against an emulated ring with a narrower operation set.
+
+### Genuinely open, and queued (5)
+
+```
+capability.rs:93,94   & -> |, & -> ^, != -> ==  (4 mutants)
+batch.rs:656          RegisteredBuffers::is_empty -> false
+```
+
+The capability flag decoding is inline in `capabilities()`, which reads the real
+OS through `QueryIoRingCapabilities`. Nothing can vary `FeatureFlags`, so the
+decoding cannot be exercised without extracting it into a pure function over the
+raw struct. That extraction is worth doing and is **queued as M18.7** rather
+than folded into a test-only change.
+
+`is_empty -> false` needs a registration covering zero buffers. Nothing rejects
+`register_buffers(vec![])` in this crate, but whether Win32 accepts a
+zero-length registration was not established, so this is left open rather than
+guessed at.
+
+### Debug formatting (2)
+
+```
+batch.rs:1050  PendingBufferRegistration::fmt
+error.rs:275   IoRingError::fmt
+```
+
+Nothing asserts either rendering. `IoRing`'s and `Token`'s `Debug` mutants were
+killed -- `Token`'s deliberately, because its hand-written impl exists to avoid
+demanding `T: Debug` from a caller's buffer type and that choice was worth
+pinning. These two carry no comparable design decision, and an assertion on
+their exact wording would be a change-detector rather than a test.

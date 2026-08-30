@@ -301,3 +301,37 @@ fn a_push_that_was_rejected_is_simply_never_observed() {
     // deliberately not observed.
     assert_eq!(contract.check_quiescent(), Vec::new());
 }
+
+#[test]
+fn busy_registered_buffers_are_reported_in_index_order() {
+    // `check_quiescent` sorts its busy buffers so a failure reads the same way
+    // twice -- `HashMap` iteration order is deliberately unspecified. M18.3
+    // showed the sort's match arm could be deleted without any test noticing,
+    // because the only test with a busy buffer had exactly one of them, and one
+    // element is sorted whatever the key says.
+    // Enough of them that an unsorted report is implausible rather than merely
+    // unlikely: deleting the sort key leaves every entry comparing equal, and
+    // `sort_by_key` is stable, so the output becomes `HashMap` iteration order.
+    // With three entries that lands sorted one time in six -- which is exactly
+    // what happened on the first attempt at this test, and the mutant survived.
+    const BUSY: u32 = 8;
+
+    let mut contract = RingContract::new();
+    contract.observe_buffer(99, 0); // quiet, and highest -- must not appear
+    for index in (0..BUSY).rev() {
+        contract.observe_buffer(index, (index + 1) as usize);
+    }
+
+    let reported = contract.check_quiescent();
+    let expected: Vec<_> = (0..BUSY)
+        .map(|index| Violation::BufferStillInUse {
+            index,
+            outstanding: (index + 1) as usize,
+        })
+        .collect();
+
+    assert_eq!(
+        reported, expected,
+        "busy buffers must be reported by ascending index, and the quiet one omitted"
+    );
+}

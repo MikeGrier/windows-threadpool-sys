@@ -159,3 +159,61 @@ fn a_fatal_condition_is_reachable_even_without_its_own_predicate() {
     assert_eq!(error.ring_condition(), Some(RingCondition::Corrupt));
     assert!(!error.is_submission_queue_full());
 }
+
+// --- the condition predicates on io::Error (M18.4) ---------------------------
+//
+// `is_completion_queue_too_full` and `is_submit_in_progress` both survived
+// M18.3 as `-> false`: the round-trip tests cover `IoRingError`'s own
+// predicates, but nothing asked the `io::Error` extension trait about these two
+// conditions. They are the ones a caller branches on to back off and retry, so
+// a constant `false` would silently turn a recoverable condition into an
+// unhandled error.
+
+#[test]
+fn the_io_error_extension_recognises_every_condition_it_names() {
+    let cases = [
+        (
+            IORING_E_SUBMISSION_QUEUE_FULL,
+            "submission queue full",
+            [true, false, false],
+        ),
+        (
+            IORING_E_COMPLETION_QUEUE_TOO_FULL,
+            "completion queue too full",
+            [false, true, false],
+        ),
+        (
+            IORING_E_SUBMIT_IN_PROGRESS,
+            "submit in progress",
+            [false, false, true],
+        ),
+    ];
+
+    for (code, name, expected) in cases {
+        let error = check(code).expect_err("these codes are failures");
+        let actual = [
+            error.is_submission_queue_full(),
+            error.is_completion_queue_too_full(),
+            error.is_submit_in_progress(),
+        ];
+        assert_eq!(
+            actual, expected,
+            "{name} must be recognised as itself and as nothing else"
+        );
+    }
+}
+
+#[test]
+fn the_io_error_extension_claims_nothing_for_an_unrelated_error() {
+    // An error that is an IoRing condition, but not one of these three.
+    let corrupt = check(IORING_E_CORRUPT).expect_err("a failure");
+    assert!(!corrupt.is_submission_queue_full());
+    assert!(!corrupt.is_completion_queue_too_full());
+    assert!(!corrupt.is_submit_in_progress());
+
+    // And an error that is not an IoRing condition at all.
+    let unrelated = std::io::Error::from(std::io::ErrorKind::NotFound);
+    assert!(!unrelated.is_submission_queue_full());
+    assert!(!unrelated.is_completion_queue_too_full());
+    assert!(!unrelated.is_submit_in_progress());
+}

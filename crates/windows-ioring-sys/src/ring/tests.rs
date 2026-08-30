@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Mike Grier
-use super::{IoRing, Op, OpSupport};
+use super::{Completion, InjectedFailure, IoRing, Op, OpSupport};
+use crate::IoRingErrorExt;
 use crate::capability::{RingVersion, capabilities};
 
 #[test]
@@ -340,4 +341,113 @@ fn every_named_condition_injects_a_genuine_failure() {
             "Win32({code}) must inject a genuine failure"
         );
     }
+}
+
+// --- opcode mapping, support probing, and the injection seam (M18.4) ---------
+
+#[test]
+fn every_op_maps_to_its_own_win32_opcode() {
+    // `Op::code -> Default::default()` survived M18.3: nothing asserted the
+    // mapping, only that operations built successfully.
+    use windows_sys::Win32::Storage::FileSystem::{
+        IORING_OP_CANCEL, IORING_OP_FLUSH, IORING_OP_NOP, IORING_OP_READ,
+        IORING_OP_REGISTER_BUFFERS, IORING_OP_REGISTER_FILES, IORING_OP_WRITE,
+    };
+
+    assert_eq!(Op::Nop.code(), IORING_OP_NOP);
+    assert_eq!(Op::Read.code(), IORING_OP_READ);
+    assert_eq!(Op::Write.code(), IORING_OP_WRITE);
+    assert_eq!(Op::Flush.code(), IORING_OP_FLUSH);
+    assert_eq!(Op::Cancel.code(), IORING_OP_CANCEL);
+    assert_eq!(Op::RegisterFiles.code(), IORING_OP_REGISTER_FILES);
+    assert_eq!(Op::RegisterBuffers.code(), IORING_OP_REGISTER_BUFFERS);
+
+    // Distinctness matters as much as the values: a mapping that collapsed two
+    // operations onto one opcode would still satisfy each equality above if the
+    // constants happened to agree.
+    let mut codes: Vec<_> = Op::ALL.iter().map(|op| op.code()).collect();
+    codes.sort_unstable();
+    let before = codes.len();
+    codes.dedup();
+    assert_eq!(codes.len(), before, "every Op must have a distinct opcode");
+}
+
+#[test]
+fn op_support_reads_the_bit_belonging_to_the_op_it_was_asked_about() {
+    // `OpSupport::contains` finds the op's position in `Op::ALL` and tests that
+    // bit. Replacing `==` with `!=` in the search survived M18.3, because every
+    // op is supported on a healthy host and every answer was `true` regardless.
+    // Constructed masks make the question observable.
+    for (index, &op) in Op::ALL.iter().enumerate() {
+        let only_this_one = OpSupport(1 << index);
+        assert!(
+            only_this_one.contains(op),
+            "{op:?} must be reported supported when its own bit is set"
+        );
+        for other in Op::ALL {
+            if other != op {
+                assert!(
+                    !only_this_one.contains(other),
+                    "{other:?} must not be reported supported by {op:?}'s bit"
+                );
+            }
+        }
+    }
+
+    let none = OpSupport(0);
+    for op in Op::ALL {
+        assert!(!none.contains(op));
+    }
+}
+
+#[test]
+fn a_reserved_opcode_is_not_supported() {
+    // `IoRing::supports_raw -> true` survived because every opcode this crate
+    // names is supported here. An opcode Win32 does not define is not.
+    let ring = IoRing::new(8, 8).expect("create ring");
+    assert!(!ring.supports_raw(0xFFFF));
+    assert!(
+        ring.supports_raw(Op::Read.code()),
+        "the same call must still report a real opcode as supported"
+    );
+}
+
+#[test]
+fn an_injected_failure_carries_the_condition_it_names() {
+    // The seam's own arithmetic: `Win32` wraps into an `HRESULT_FROM_WIN32`,
+    // and a `Ring` condition keeps its documented code.
+    use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+
+    let ring = IoRing::new(8, 8).expect("create ring");
+    let base = Completion::synthetic(9, 0, ring.ring_id());
+
+    let win32 = base.with_injected_failure(InjectedFailure::Win32(ERROR_ACCESS_DENIED));
+    let error = win32.result().expect_err("an injected failure must fail");
+    // `check` wraps the HRESULT in a custom error rather than an OS one, so the
+    // code comes back through the crate's own accessor.
+    assert_eq!(
+        error
+            .as_ioring_error()
+            .expect("an injected failure is an IoRing error")
+            .code(),
+        0x8007_0005_u32.cast_signed(),
+        "Win32(ERROR_ACCESS_DENIED) must become HRESULT_FROM_WIN32 of that code"
+    );
+
+    let hresult = base.with_injected_failure(InjectedFailure::Hresult(-2_147_024_882));
+    assert_eq!(
+        hresult
+            .result()
+            .expect_err("an injected failure must fail")
+            .as_ioring_error()
+            .expect("an injected failure is an IoRing error")
+            .code(),
+        -2_147_024_882,
+        "an HRESULT injection must be passed through unchanged"
+    );
+
+    // The transformation keeps the operation's identity, which is what makes
+    // the seam sound: it rewrites a real completion rather than fabricating one.
+    assert_eq!(win32.user_data(), base.user_data());
+    assert_eq!(win32.ring_id(), base.ring_id());
 }

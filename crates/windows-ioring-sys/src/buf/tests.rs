@@ -57,6 +57,15 @@ fn an_arc_slice_is_readable_and_shares_one_allocation() {
     let buffer: Arc<[u8]> = Arc::from(vec![9_u8; 12].into_boxed_slice());
     let clone = Arc::clone(&buffer);
     assert_eq!(buffer.bytes_len(), 12);
+    // Against an *independently* obtained address, not against another call to
+    // `stable_ptr`. Comparing the function to itself passes even when it
+    // returns null -- which is the address this crate hands the kernel -- and
+    // mutation testing caught exactly that here (M18.3/M18.4).
+    assert_eq!(
+        buffer.stable_ptr(),
+        Arc::as_ptr(&buffer).cast::<u8>(),
+        "the reported address must be the allocation's own"
+    );
     assert_eq!(
         buffer.stable_ptr(),
         clone.stable_ptr(),
@@ -67,7 +76,9 @@ fn an_arc_slice_is_readable_and_shares_one_allocation() {
 #[test]
 fn an_arc_slices_address_survives_moving_the_arc() {
     let buffer: Arc<[u8]> = Arc::from(vec![0_u8; 24].into_boxed_slice());
-    let before = buffer.stable_ptr();
+    // Independent of `stable_ptr`, so a constant return cannot satisfy this.
+    let before = Arc::as_ptr(&buffer).cast::<u8>();
+    assert_eq!(buffer.stable_ptr(), before);
     let moved = buffer;
     assert_eq!(moved.stable_ptr(), before);
 }
