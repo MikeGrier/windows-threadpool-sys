@@ -30,18 +30,17 @@
 //! operation. Absolute values are host-specific and uninteresting; the
 //! **ratios** are the finding.
 //!
-//!   - `atomic_fetch_add`  -- the uncontended atomic that a queue push costs,
-//!                            as a floor for "the cheapest useful thing".
-//!   - `set_event_already_signalled` -- `SetEvent` on an event that is already
-//!                            set, which is the redundant-signal case the skip
-//!                            rule removes.
-//!   - `set_reset_event`   -- `SetEvent` then `ResetEvent`, the honest cost of
-//!                            one doorbell cycle with nobody waiting.
-//!   - `wait_zero_signalled` -- `WaitForSingleObject(handle, 0)` on a signalled
-//!                            event: the consumer's cost of observing it.
-//!   - `submit_io_ring_empty` -- `SubmitIoRing` with nothing queued, which is
-//!                            the syscall the doorbell would be amortised
-//!                            against. Absent when `IoRing` is unavailable.
+//! - `atomic_fetch_add` -- the uncontended atomic that a queue push costs, as a
+//!   floor for "the cheapest useful thing".
+//! - `set_event_already_signalled` -- `SetEvent` on an event that is already
+//!   set, which is the redundant-signal case the skip rule removes.
+//! - `set_reset_event` -- `SetEvent` then `ResetEvent`, the honest cost of one
+//!   doorbell cycle with nobody waiting.
+//! - `wait_zero_signalled` -- `WaitForSingleObject(handle, 0)` on a signalled
+//!   event: the consumer's cost of observing it.
+//! - `submit_io_ring_empty` -- `SubmitIoRing` with nothing queued, which is the
+//!   syscall the doorbell would be amortised against. Absent when `IoRing` is
+//!   unavailable.
 //!
 //! # The empty submit is not a fair denominator, and the first run proved it
 //!
