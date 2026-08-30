@@ -61,7 +61,17 @@ fn an_allocation_is_writable_across_its_whole_length() {
         let layout = Layout::from_size_align(size, 1).expect("valid layout");
         // SAFETY: non-zero-size layout; the pointer is freed below.
         let ptr = unsafe { alloc.alloc(layout) };
-        assert!(!ptr.is_null(), "allocation of {size} bytes failed");
+        // Spelled as an `if`/`panic!` rather than `assert!` because CodeQL's
+        // `rust/access-invalid-pointer` does not model `assert!` as a null
+        // barrier, and this pointer is dereferenced directly below. Measured on
+        // PR #51: the identical guard in `lib.rs` -- `if base.is_null() {
+        // return null_mut(); }` before a `poison::fill` -- raises nothing,
+        // while the `assert!` here raised three high-severity alerts tracing
+        // `alloc`'s three `null_mut()` returns straight past it. Same rule,
+        // same crate, same null sources; the guard form is the only difference.
+        if ptr.is_null() {
+            panic!("allocation of {size} bytes failed");
+        }
 
         // SAFETY: `alloc` promises `size` writable bytes here.
         unsafe {
@@ -319,7 +329,12 @@ fn poison_check_can_examine_a_region_that_starts_partway_in() {
     let layout = Layout::from_size_align(256, 8).expect("valid layout");
     // SAFETY: non-zero-size layout; freed below.
     let ptr = unsafe { alloc.alloc(layout) };
-    assert!(!ptr.is_null());
+    // An `if`/`panic!` rather than `assert!`, for the reason given in
+    // `an_allocation_is_writable_across_its_whole_length`: CodeQL does not read
+    // `assert!` as a null barrier, and this pointer is dereferenced below.
+    if ptr.is_null() {
+        panic!("allocation of 256 bytes failed");
+    }
 
     // Overwrite a "span" the kernel was permitted to fill, leaving the rest.
     // SAFETY: writing inside the allocation this test owns.
