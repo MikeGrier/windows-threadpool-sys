@@ -296,8 +296,16 @@ on a single-node, single-LLC machine one domain **is** the optimal partition.
 **What is genuinely additive above one domain**, and it is additive rather than
 a second mode:
 
-- the cross-domain queue and its doorbell -- with one domain there is no peer to
-  message;
+- the **cross-domain** queue and its doorbell -- with one domain there is no peer
+  to message. **This is not the client-facing queue**, and the distinction
+  matters enough to state plainly, because reading "the queue" as "all queues"
+  would wrongly suggest no queue work is needed for the first deliverable.
+  There are two roles:
+  - **client to domain (the SQ), and domain to client (the CQ)** -- needed at
+    **every** size including N=1, because a foreign client thread must still
+    reach the single domain. This is the two-layer ring, and it is on the N=1
+    critical path.
+  - **domain to domain** -- genuinely absent below two domains.
 - the routing policy -- with one domain there is no choice to make, so the
   volume-to-node key has nothing to select.
 
