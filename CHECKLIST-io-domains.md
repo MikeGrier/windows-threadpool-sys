@@ -53,7 +53,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   the runtime does not exist until M33+. The rule is recorded instead -- the pair should read as a pair,
   and the runtime's name may carry `io` because that crate genuinely is about I/O.
 
-- [ ] **M30.2** -- Create the crate with `publish = true` (the engineer's decision: this is general-purpose
+- [x] **M30.2** -- Create the crate with `publish = true` (the engineer's decision: this is general-purpose
   and worth publishing, unlike `windows-guard-alloc`), and write its `DESIGN-NOTES.md` with the decisions
   the session already reached: the shape menu and which shapes ship now, the
   concrete-types-plus-optional-trait rule, the overflow policy, and the doorbell invariant. This is the
@@ -65,6 +65,26 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   waits, while the producer merely rings -- so a single trait would be consumer-side and the producer's
   contract would go unnamed. Decide rather than defer, because M30.3 writes the first signatures against
   whichever answer this gives.
+  **Answered, and the question turned out to be the wrong one.** The engineer's observation that the
+  shapes would be "sliced and diced by various traits as we go along" is right, and following it shows a
+  single `WaitableQueue` trait -- one *or* a producer/consumer pair -- is not merely inelegant but
+  **unimplementable by the shapes that are planned**: a poll-only queue has no doorbell to return, and an
+  unbounded one has no capacity to report. So the answer is **narrow capability traits** on the
+  `std::io` model (`Read`/`Write`/`Seek`, not one `Io`), each naming one capability, with a shape
+  implementing the subset it genuinely has. Recorded as [D-2](crates/windows-waitable-queues/DESIGN-NOTES.md#d-2)
+  with the anticipated set.
+  **And no trait ships until a second implementation exists to validate it** ([D-3](crates/windows-waitable-queues/DESIGN-NOTES.md#d-3)):
+  a trait written against one type designs in a vacuum, since every signature that type happens to have
+  looks like a requirement. The trait *shape* is fixed now because it constrains M30.3; the traits
+  themselves land with M31.1.
+  Crate created with `DESIGN-NOTES.md` (D-1..D-8), `README.md`, `PLANS.md` pointing back at this file, and
+  registration in the workspace members, `release-please-config.json`, and `.release-please-manifest.json`
+  -- the last two because `publish = true` makes it release-managed, and omitting them would have left it
+  silently unreleasable.
+  **One earlier position reversed with its reason recorded** ([D-7](crates/windows-waitable-queues/DESIGN-NOTES.md#d-7)):
+  shapes are plain modules, not Cargo features. Two features are four configurations against a
+  `feature-matrix` CI job that would have to grow, and the benefit is one dead-code elimination already
+  provides.
 
 - [ ] **M30.3** -- The SPSC bounded ring, with no doorbell and no Win32 at all: a pure data structure with
   acquire/release head and tail and no CAS on either side. It is the CQ direction (R1), and it is first

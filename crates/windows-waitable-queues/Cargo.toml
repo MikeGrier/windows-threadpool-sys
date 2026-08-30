@@ -1,0 +1,35 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-waitable-queues"
+version = "0.1.0" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/windows-waitable-queues"
+description = "Bounded producer/consumer queues whose readiness is a waitable Windows HANDLE, so a consumer can park on a queue and a kernel object in the same wait."
+readme = "README.md"
+keywords = ["windows", "queue", "spsc", "mpsc", "concurrency"]
+categories = ["concurrency", "os::windows-apis", "data-structures"]
+
+# Deliberately publishable, unlike `windows-guard-alloc` next door: this is a
+# general-purpose facility whose value is that it exists, and its first consumer
+# (the I/O domain runtime) is not its only plausible one. Publishing is
+# therefore an obligation accepted, not an oversight -- see DESIGN-NOTES.md D-8
+# for what it commits us to.
+publish = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_System_Threading",
+]
