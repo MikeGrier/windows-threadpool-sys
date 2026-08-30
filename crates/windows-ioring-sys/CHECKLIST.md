@@ -10,7 +10,7 @@ own dated groups, M8-M10
 and M15-M18
 [here](COMPLETED-CHECKLIST.md#moved-2026-08-30----m15-through-m18-the-testing-strategy-response-to-eight-defects).
 
-**Only `M6+` remains, and it is parked rather than pending** -- see the `M{n}+` convention: it is gated work
+**`M20` is pending; `M6+` is parked rather than pending** -- see the `M{n}+` convention: it is gated work
 with no current obligation, not an unfinished milestone. `M19` below is complete and awaits archival with the
 next group.
 
@@ -74,6 +74,43 @@ the API whose breaking change 0.2.0 is being cut for, and it is reachable with n
   and D-45 is added to its table of shipped defects of this shape.
   **Swept the count restatements too:** that file said "three defects" in four places and is now four, which
   is the restatement drift the repository's own conventions warn about.
+
+## M20 -- Repairs from the 2026-08-30 NUMA-sharding measurement
+
+Queued from
+[DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md),
+which measured a shipping ARM laptop and found the L3 heuristic's justification does not hold there. These
+are documentation and policy repairs only; **no defect was found in `ring_copy`** -- `Policy::select`
+already degrades to a whole-machine domain and reports it, which an initial reading of the session got
+wrong and the code corrected.
+
+The design questions the session opened are deliberately **not** queued here. It is still open, and its
+conclusions belong to it until it converges.
+
+- [ ] **M20.1** -- Correct the L3 heuristic's justification in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md). It currently says the last-level-cache domain "is meaningful on Intel
+  and ARM too, where the NUMA node often is not." **Measured counter-example:** a Snapdragon X2 Elite
+  (X2E80100, Qualcomm Oryon; 12 cores, no SMT) reports **zero** L3 cache domains -- `L3CacheSize = 0` from
+  WMI, and `GetLogicalProcessorInformationEx` yields L1 and L2 only, with L2 forming two domains of six
+  processors that agree with the two `Module` domains. The claim that L3 is meaningful on ARM is false on a
+  shipping part. Keep the finding that L3 beats the NUMA node; restate the rule as **the outermost cache
+  level that actually partitions the machine**, and say what happens when no such level is reported. Sweep
+  every restatement of the L3 rule per the repository's blast-radius convention, including the README and
+  `ring_copy`'s `policy.rs` doc comments, not only the one sentence quoted above.
+
+- [ ] **M20.2** -- Record the measurement itself as a decision in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md), so the next reader inherits the datapoint rather than re-measuring:
+  an ARM Windows laptop with no L3 at all, and zero `Win32_NumaNode` instances, is the *common* consumer
+  shape now rather than an exotic one. This is the ARM sibling of the existing zero-NUMA-node VM
+  observation and belongs beside it.
+
+- [ ] **M20.3** -- Make `ring_copy`'s degraded-fallback path observable in a test. The whole-machine
+  fallback in `Policy::select` is the branch every zero-relation machine takes, and this session was the
+  first time anyone confirmed it runs. Assert both halves on a synthetic topology: that a policy whose
+  relation is absent returns one whole-machine domain with `degraded = true`, and that a policy whose
+  relation is present is **not** flagged degraded -- the second half matters because a test of the first
+  alone would pass against a function that always degrades.
+
 ## M6+ -- Model B: explicit-thread delivery and affinity
 
 Parked, not pending. Deferred by the engineer's explicit direction during the 2026-08-22 design session,
