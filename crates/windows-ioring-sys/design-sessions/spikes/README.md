@@ -19,6 +19,32 @@ windows-sys = { version = "0.61.2", default-features = false, features = [
 | [completion-event-spike.rs](completion-event-spike.rs) | [D-19](../../DESIGN-NOTES.md#d-19) -- the completion event is edge-triggered on the completion queue going empty to non-empty; also what `SetIoRingCompletionEvent` permits (call at any time, replace, clear with `NULL`, duplicate survives closing the original) |
 | [drain-ordering-spike.rs](drain-ordering-spike.rs) | [D-23](../../DESIGN-NOTES.md#d-23) -- an unflagged flush does not cover preceding writes; [D-24](../../DESIGN-NOTES.md#d-24) -- `DRAIN_PRECEDING_OPS` is a full, ring-wide barrier spanning submissions |
 
+## One spike here establishes nothing yet
+
+[file-handle-numa-spike.rs](file-handle-numa-spike.rs) is the exception to the table above: it is a
+**ready instrument with no result**, checked in deliberately rather than held back. It asks whether a
+file handle yields a NUMA node, and which question that answer answers.
+
+It is unrun because of a **hardware gap, not a decision to defer**: it needs more than one NUMA node
+and storage whose PDO advertises a proximity domain, and the machine this workspace is developed on
+has a single node and reports zero `Win32_NumaNode` instances. On such a machine the spike is
+vacuous in the same sense the drain spike's control case guards against -- failure would prove
+nothing and success could only ever report `0`. It prints that warning itself before running.
+
+Anyone with a multi-node server and a real NVMe or SAN volume can settle it in a few minutes, and the
+result would correct a claim
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md) currently makes about what is reachable from user mode.
+
+It **has** been smoke-run here, which is why it compiles and why its Q5 works: the first version
+opened the directory with `File::open`, which fails on a directory without
+`FILE_FLAG_BACKUP_SEMANTICS`, so that question could never have been answered. Running an instrument
+on hardware where its result is vacuous still validates the apparatus.
+
+That run also settled one narrow thing worth knowing before you start: on ARM64 Windows with a single
+node, **both** calls succeed on an ordinary NTFS data file and on a directory handle, and agree on
+`0`. So "ordinary NTFS file" is not the no-association case; absence must come from a device layer
+advertising no proximity domain, which is what needs the other hardware.
+
 ## Why the drain spike looks over-built
 
 It carries a concurrency check and a control case because the first two versions of it **could not

@@ -172,6 +172,101 @@ difference is between describing two clusters and describing one whole machine.
 Whether the two-cluster structure is worth using is a separate question this
 session has not answered.
 
+## Finding F-1: a file handle's NUMA node is reachable, and answers a coarser question
+
+Contributed by the engineer as research, **not measured here**. It corrects the
+ioring notes on mechanism while leaving their conclusion standing for a better
+reason.
+
+- **`FSCTL_QUERY_VOLUME_NUMA_INFO` is documented and takes a file or directory
+  handle directly**, returning `FSCTL_QUERY_VOLUME_NUMA_INFO_OUTPUT { ULONG
+  NumaNode }`. Confirmed independently against the IFS documentation during the
+  session. The ioring notes say this mapping "has no clean user-mode path" and
+  "means walking volume to disk to device instance and reading
+  `DEVPKEY_Device_Numa_Node`". **That is wrong**: there is one documented call,
+  and it accepts the handle a caller already has.
+- **What it returns is the node the *volume* resides on**, not where the file's
+  extents live. NTFS does not expose per-file or per-extent NUMA through this
+  API, and nothing states that `FileNumaNodeInformation` is filled from MFT or
+  runlist locality.
+- **`GetNumaNodeNumberFromHandle` is the other path**: a Win32 wrapper over
+  `NtQueryInformationFile` with `FileNumaNodeInformation` (class 53, Windows 7
+  and later), yielding `FILE_NUMA_NODE_INFORMATION { USHORT NodeNumber }`. PHNT
+  and the WDK mark that class **reserved for system use**. Documented Win32
+  behaviour when there is no node is `FALSE` with an undefined `NodeNumber`.
+  This crate must not build on it.
+- **The volume node exists only when the device layer advertised one**:
+  `IoGetDeviceNumaNode` on the PDO, or user-mode
+  `DEVPKEY_Numa_Proximity_Domain` with `GetNumaProximityNode`. A single-node
+  machine, a PDO returning `STATUS_NOT_FOUND`, or a software or virtual disk
+  with no proximity data is precisely the "no association" case.
+- **No published experiment could be found** showing either call succeeding on a
+  garden-variety NTFS data file and naming a node. There is also no evidence
+  that success depends on `FILE_FLAG_NO_BUFFERING`, on overlapped I/O, or on
+  which process opened the file.
+
+### F-1a: one weak datapoint from the vacuous machine
+
+The spike was smoke-run on the development machine, not for an answer but to
+prove the instrument works before handing it to someone with real hardware. It
+was worth doing twice over.
+
+**It found a defect in itself.** The first version opened the directory for Q5
+with `File::open`, which fails on a directory without
+`FILE_FLAG_BACKUP_SEMANTICS`, so Q5 could never have been answered. Corrected to
+`CreateFileW`. An instrument checked in unrun is one whose bugs are still in it;
+running it on hardware where the *result* is vacuous still validates the
+*apparatus*.
+
+**And it does establish one thing, narrowly.** On ARM64 Windows, single node:
+
+```
+regular NTFS data file  : FSCTL ok, NumaNode = 0 | GetNumaNodeNumberFromHandle ok, NodeNumber = 0
+directory handle        : FSCTL ok, NumaNode = 0 | GetNumaNodeNumberFromHandle ok, NodeNumber = 0
+```
+
+Both calls **succeed** on a garden-variety NTFS data file, and agree. That is
+directly responsive to "no published experiment shows
+`GetNumaNodeNumberFromHandle` succeeding on a garden-variety NTFS data file":
+here it does. It also shows the FSCTL accepting a directory handle, as the IFS
+docs say.
+
+**What it does not establish**, and the distinction is the whole value of the
+result: node `0` is the *only* node this machine has, so neither call is shown
+to name a *meaningful* node. What is refined is the negative case -- the
+documented "returns FALSE when the object has no node" did **not** occur here,
+so "ordinary NTFS file" is not itself the absent case. Absence must come from
+the device layer advertising no proximity domain, which is exactly what cannot
+be reproduced on this hardware.
+
+**Why this matters to the seam, and it is an opportunity rather than a
+problem.** The discriminating check is to call both on the same handle: if they
+agree, what is being observed is volume locality. And volume locality, though
+coarse, arrives at exactly the right moment -- the namespace worker has the
+handle in hand at the instant it completes the open, so a routing key for
+"which domain should own this file's I/O" is available **for free at the seam**,
+with no extra open and no device-tree walk. That does not make automatic
+placement correct, and the conclusion below stands, but it does mean the
+information is cheaper than the notes imply.
+
+The conclusion the notes draw survives, restated: the crate should still not
+offer "put this file's I/O on the right ring," because the answer is
+volume-granular, frequently absent, and meaningless for spanned volumes and
+Storage Spaces where one volume sits on several devices. It also still does not
+pin thread-pool completions.
+
+**Named blocker, per the repository's deferral protocol.** Settling this
+empirically needs a multi-node machine with storage whose PDO advertises a
+proximity domain. The development machine has one node and reports zero
+`Win32_NumaNode` instances, so any run here is vacuous: failure would prove
+nothing and success could only report `0`. The instrument is therefore checked
+in unrun as
+[file-handle-numa-spike.rs](../crates/windows-ioring-sys/design-sessions/spikes/file-handle-numa-spike.rs),
+with the hardware gap stated in the spikes
+[README.md](../crates/windows-ioring-sys/design-sessions/spikes/README.md). The
+documentation defect is independent of the measurement and is queued as M20.4
+regardless.
+
 ## Working position on domain counts (not a decision)
 
 Only the first row is measured. The rest are from published topologies and must
@@ -205,10 +300,12 @@ The reasoning behind the numbers matters more than the numbers:
   one-shot per ring, so N domains means N separately pinned pools: a 256 MiB
   working set is 256 MiB pinned at one domain, or 3 GiB at twelve, or twelve
   pools too small to keep a device busy.
-- **The mapping needed is not discoverable.** The ioring notes state that file
-  handle to device NUMA node "has no clean user-mode path" and that the crate
-  will not offer an automatic placement. Device topology is therefore
-  configuration, not detection.
+- **The mapping needed is coarse and often absent** -- see F-1 above, which
+  corrects the ioring notes' stronger claim that it is unreachable. A volume's
+  node is one documented FSCTL away, but it is volume-granular, frequently has
+  no answer, and is meaningless where one volume spans several devices. Device
+  topology is therefore still configuration rather than detection, for a
+  narrower reason than the notes currently give.
 
 **Proposed default, not yet agreed:** one domain, adding one only when the
 device it serves can be named; above 64 logical processors take the group floor

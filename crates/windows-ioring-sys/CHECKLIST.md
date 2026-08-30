@@ -111,6 +111,24 @@ conclusions belong to it until it converges.
   relation is present is **not** flagged degraded -- the second half matters because a test of the first
   alone would pass against a function that always degrades.
 
+- [ ] **M20.4** -- Correct "What is not reachable" in [DESIGN-NOTES.md](DESIGN-NOTES.md). It says mapping a
+  file handle to its backing device's NUMA node "has no clean user-mode path" and "means walking volume to
+  disk to device instance and reading `DEVPKEY_Device_Numa_Node`". **That is wrong on mechanism.**
+  `FSCTL_QUERY_VOLUME_NUMA_INFO` is documented in the IFS docs, takes a handle to a **file or directory**
+  directly, and returns `FSCTL_QUERY_VOLUME_NUMA_INFO_OUTPUT { ULONG NumaNode }`. No walking required.
+  The **conclusion survives for a better reason**, and that is the point of the rewrite: the documented
+  meaning is the node the *volume* resides on, not where the file's extents live, so it cannot answer
+  "which ring should this file's I/O go to" even when it succeeds; and it is absent whenever the device
+  advertised no proximity domain. Record `GetNumaNodeNumberFromHandle` as the other path -- a wrapper over
+  `NtQueryInformationFile` with `FileNumaNodeInformation` (class 53) -- and that PHNT and the WDK mark that
+  class **reserved for system use**, so this crate must not build on it. State plainly that no published
+  measurement of either call succeeding on an ordinary NTFS data file could be found, and cite
+  [file-handle-numa-spike.rs](design-sessions/spikes/file-handle-numa-spike.rs) as the unrun instrument.
+  **Blocked on hardware, not on a decision:** settling it needs a multi-node machine with storage whose
+  PDO advertises a proximity domain. Write the correction now (the documentation defect is independent of
+  the measurement) and leave the empirical question open.
+
+
 ## M6+ -- Model B: explicit-thread delivery and affinity
 
 Parked, not pending. Deferred by the engineer's explicit direction during the 2026-08-22 design session,
