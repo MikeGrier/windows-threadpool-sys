@@ -31,6 +31,22 @@
 //!      columns live -- so record the space's layout (`Get-StoragePool`,
 //!      `Get-PhysicalDisk`) alongside whatever this prints, or the result
 //!      cannot be interpreted.
+//!   Q7 **does a thread created with `PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY`
+//!      get a node-local stack?** Binding a thread's affinity *after* it starts
+//!      cannot move its stack, which was allocated at creation on the creating
+//!      thread's node -- so a domain runtime must construct threads with the
+//!      affinity already set, and this asks whether the kernel then honours it
+//!      for the stack allocation. Measured with `QueryWorkingSetEx`, whose
+//!      `PSAPI_WORKING_SET_EX_BLOCK` carries a `Node` field: take the address
+//!      of a local in the new thread and ask which node its page is on.
+//!      Compare a thread created with an affinity attribute for a *remote*
+//!      node against one created with none. If the stacks report different
+//!      nodes, creation-time affinity governs stack placement and the builder
+//!      is justified; if they match, it does not and the design should stop
+//!      claiming it does.
+//!      **This question is not implemented below.** It needs a second spike
+//!      with `CreateRemoteThreadEx` and an attribute list, and is recorded here
+//!      so it is not lost -- see the session record.
 //!
 //! Why it matters: `DESIGN-NOTES.md` asserts that mapping a file handle to the
 //! NUMA node of its backing device "has no clean user-mode path" and "means

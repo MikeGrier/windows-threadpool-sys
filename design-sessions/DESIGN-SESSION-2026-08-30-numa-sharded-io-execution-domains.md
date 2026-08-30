@@ -812,32 +812,75 @@ own threads.
 against a real consumer that neither serves. The risk worth guarding is not
 building (b) but building it *first*, before knowing whether (c) suffices.
 
-**And (c) is smaller than a `CreateThread` wrapper.** The missing platform
-capability is not *creating* a thread -- `std::thread::spawn` does that -- it is
-**placing** one. So the facility provides exactly that:
+### Two tiers of thread construction, because binding afterwards is not equivalent
 
-```rust
-let _guard = domain.bind_current_thread()?;   // restores on drop
-```
+An earlier form of this section concluded that a one-call binder was sufficient
+and that a `CreateThread` wrapper would be "edging too close to the slippery
+slope". **That was wrong, and the engineer corrected it**: constructing a thread
+so that it has the right attributes *from the beginning* -- stack as well as
+processor affinity -- is the difficult part, and it is the part a consumer
+cannot easily do.
 
-applied by the client from its own thread, whatever created it. This is
-slope-proof for one reason: **we never own a thread.** There is no handle kept,
-no lifetime managed, no failure to respond to, nothing to restart -- so there is
-no first step to take. It also composes with thread sources that could not be
-anticipated: `std::thread`, an existing worker, another runtime's pool.
+**Why binding afterwards is strictly worse.** A thread's stack is allocated at
+creation time, on whatever node the *creating* thread's policy selects. Spawn
+from node 0, bind to node 1, and the stack stays on node 0 permanently -- every
+local, every spill, every call frame is a remote access for the life of the
+thread, and no amount of later `SetThreadGroupAffinity` moves it. There is also
+a window before the bind lands in which the thread runs on the wrong processor
+and warms the wrong caches.
 
-The restore guard is required rather than decorative: a client binding a *pool*
-thread must restore it, because the thread-pool contract is that a callback
-restores any thread state it changes. That observation also places the feature --
-affinity is thread-scoped state applied and restored, which is exactly the family
+**Why this is a missing layer rather than a convenience.** Creation-time
+affinity requires `CreateRemoteThreadEx` against one's own process with a
+`PROC_THREAD_ATTRIBUTE_LIST` carrying `PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY` and
+`PROC_THREAD_ATTRIBUTE_IDEAL_PROCESSOR`, assembled through
+`InitializeProcThreadAttributeList` and `UpdateProcThreadAttribute` -- a two-pass
+sizing call, a manually managed opaque buffer, and lifetime rules requiring the
+attribute values to outlive the call. `std::thread::Builder` can set a stack
+size and **nothing else**; it spawns with no attribute list. So a Rust consumer
+has *no path* to a correctly constructed thread without dropping to raw Win32,
+and once there must also re-supply what `std` was doing for it, notably catching
+unwind at the entry so a panic does not cross an `extern "system"` boundary.
+
+Each of those steps is simple. Collectively they are a minefield nobody crosses,
+which is the [SMOP principle](../DESIGN-NOTES.md#the-value-is-existence-not-cleverness)
+exactly: the value is existence, and when the correct construction is difficult,
+providing the constructor *is* the feature.
+
+**The line is ownership, not construction.** The facility helps *construct* a
+thread and never *owns* one: a builder assembles the attribute list, applies the
+domain's `GROUP_AFFINITY`, sets a stack reservation, wraps the entry in
+`catch_unwind`, and hands back a thread **the client owns**. No handle kept,
+nothing monitored, nothing restarted. The slope is ownership; construction is
+not a step down it.
+
+| | correct from birth | for threads you did not create |
+|---|---|---|
+| stack placement | follows the creation-time affinity | already fixed, possibly remote |
+| pre-bind window | none | exists |
+| API | domain thread builder | `bind_current_thread()` plus restore guard |
+
+The binder remains, honestly labelled as the degraded path, for threads the
+client did not create -- a pool thread, an existing worker. Its restore guard is
+required rather than decorative: a client binding a *pool* thread must restore
+it, because the thread-pool contract is that a callback restores any thread
+state it changes. That also places the feature, since affinity is thread-scoped
+state applied and restored, exactly the family
 [windows-thread-ambient-sys](../crates/windows-thread-ambient-sys/README.md)
 already handles. It either belongs there or must mirror that crate's guard
 discipline rather than inventing a second pattern.
 
-So (c) is concrete: the domain's `ProcessorSet`, an answer to "which domain is
-nearest me", and a one-call binder with a restore guard. Every piece needed to
-process a CQ on the right thread with the right affinity, and not one thread of
-ours.
+**Unverified, and worth measuring rather than assuming:** whether a thread
+created with `PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY` actually receives a
+node-local *stack*. It is measurable -- `QueryWorkingSetEx` returns
+`PSAPI_WORKING_SET_EX_BLOCK` with a `Node` field, so the address of a local in
+the new thread can be asked which node its page is on -- and it is added as Q7
+to [file-handle-numa-spike.rs](../crates/windows-ioring-sys/design-sessions/spikes/file-handle-numa-spike.rs).
+Same hardware blocker as F-1: on a single-node machine the answer is always 0.
+
+So option (c) is concrete: the domain's `ProcessorSet`, an answer to "which
+domain is nearest me", a builder that constructs a correctly placed thread, and
+a binder for threads that already exist. Every piece needed to process a CQ on
+the right thread with the right affinity, and not one thread of ours.
 
 ## Working position on domain counts (not a decision)
 

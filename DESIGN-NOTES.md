@@ -40,6 +40,51 @@ wants to avoid contributing to it. The Windows threadpool types are inherently m
 choices up to the developer. The `windows-sys` crate published by Microsoft helps with the basics of the FFI
 to the APIs, but does little to help turn the alphabet and phrasebook into a useful programming model.
 
+## <a id="the-value-is-existence-not-cleverness"></a>The value is existence, not cleverness: "it is only a SMOP" is why it is missing, not a reason to skip it
+
+A governing principle for the whole repository, stated because it decides
+questions that otherwise get decided by an instinct to keep scope small.
+
+Nothing here is magic. Every layer in this repository is a Simple Matter Of
+Programming -- attribute lists, guard pages, ring buffers, affinity masks, all
+of it documented and none of it clever. **The reason these layers are worth
+building is precisely that they do not exist**, and their absence is why
+capable people muddle along with the most reachable tools: `fprintf`,
+`CreateFileW` with default parameters, a thread created with no attributes at
+all. Not because those are believed to be right, but because the correct
+alternative was never within reach.
+
+Three rules follow, in decreasing order of how often they are needed:
+
+1. **"It is only a SMOP" is never an argument against building something.** It
+   is the explanation for why it is still missing. The observation that a thing
+   is straightforward is evidence *for* providing it, since straightforward work
+   nobody has done is exactly the gap a platform layer fills. Difficulty is not
+   what makes a layer valuable; availability is.
+
+2. **The measure of success is whether the correct path is easier to reach than
+   the obvious wrong one.** `fprintf` and a default `CreateFileW` win by being
+   reachable. A faster, safer, more correct facility that is harder to reach
+   than the wrong thing has failed, however good it is, because it will not be
+   reached. Ergonomics is not polish applied at the end; it is the feature.
+
+3. **When the correct construction is difficult, providing the constructor is
+   the feature.** If getting a thing right requires a two-pass sizing call, an
+   opaque buffer with lifetime rules, and three attributes that must be set
+   before creation rather than after, then assembling that correctly *is* the
+   deliverable. Declining it on the grounds that each step is simple leaves the
+   consumer exactly where they started.
+
+The failure mode this rule exists to prevent is an assistant or an engineer
+optimizing to protect *the library* from scope, when the whole purpose is to
+absorb difficulty on the *consumer's* behalf. The question is never "is this
+small enough to be worth our while"; it is "is the correct thing currently
+within a consumer's reach, and if not, what would put it there".
+
+**This principle schedules no work of its own.** It is a decision rule for
+weighing future proposals, not a change to existing code, so the absence of a
+checklist item for it is intentional rather than an oversight.
+
 ## Windows SDK model and constraints
 
 This crate targets the object-based thread pool API (introduced in Windows Vista) rather than the legacy

@@ -45,6 +45,22 @@ node, **both** calls succeed on an ordinary NTFS data file and on a directory ha
 `0`. So "ordinary NTFS file" is not the no-association case; absence must come from a device layer
 advertising no proximity domain, which is what needs the other hardware.
 
+### Q7 is recorded there but not implemented
+
+That file's Q7 asks a different question and needs a **second spike that does not exist yet**: does a
+thread created with `PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY` receive a node-local *stack*? It matters
+because a stack is allocated at thread creation on the creating thread's node, so binding affinity
+afterwards cannot move it -- which is the whole argument for constructing domain threads with the
+affinity already set rather than applying it later.
+
+It is measurable: `QueryWorkingSetEx` reports a `Node` per page, so take the address of a local in
+the new thread and compare a thread created with a remote-node affinity attribute against one created
+with none. Different nodes means creation-time affinity governs stack placement and the thread
+builder is justified; the same node means it does not, and the design must stop claiming otherwise.
+
+Writing it needs `CreateRemoteThreadEx` with an attribute list. It is recorded rather than written
+because it is vacuous on the single-node development machine, exactly like the questions above.
+
 ## Why the drain spike looks over-built
 
 It carries a concurrency check and a control case because the first two versions of it **could not
