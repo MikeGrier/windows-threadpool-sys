@@ -18,7 +18,13 @@ description = "A Windows guard-page global allocator for test builds: every allo
 publish = false
 
 [dependencies]
-windows-sys = { version = "0.61", features = [
+# `default-features = false` matches every other crate in the workspace. It
+# changes nothing today -- windows-sys 0.61 declares `default = []`, so there is
+# no surface to disable -- and that is exactly why it is worth spelling: the
+# guard is against a future version giving `default` contents, not against
+# anything present. Being the workspace's lone outlier would otherwise read as a
+# deliberate exception and invite someone to work out why.
+windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
 	"Win32_System_Memory",
 	"Win32_System_SystemInformation",
