@@ -683,12 +683,35 @@ Independent of M17; may run in parallel.
   the failure mode to guard against.
   **Found while writing it:** `.Count` on a `Where-Object` pipeline is a `StrictMode` error when the result is
   empty or a single item -- the check crashed rather than passing on its first clean run. Fixed with `@(...)`.
-- [ ] **M18.3** -- Run `cargo-mutants` over the crate and triage the surviving mutants. There is a measured
+
+- [x] **M18.3** -- Run `cargo-mutants` over the crate and triage the surviving mutants. There is a measured
   rate to justify it: this branch produced two vacuously-passing tests (the M11.2 idempotence pair, which
   asserted through a freshly attached event and so could not observe a detached one) and one `debug_assert`
   that could never fire (`Option::take` had already emptied the slot it checked). Both are exactly what a
   surviving mutant looks like.
-
+  **Result:** 306 mutants in 32 minutes -- 182 caught, 48 missed, 7 timeouts, 69 unviable. Counting timeouts
+  as detections (a mutant that hangs the suite fails CI as surely as one that trips an assertion), that is
+  **189 of 237 viable mutants caught, 79.7%**. Triaged into six categories in
+  [MUTATION-SURVIVORS.md](MUTATION-SURVIVORS.md), which is M18.4's input.
+  **It found a third vacuous test, which four review rounds had read past.** Both `Arc<[u8]>` tests in
+  `src/buf/tests.rs` compare `stable_ptr()` against *another call to the same function*, so returning a **null
+  pointer** -- the buffer address this crate hands the kernel -- passes both. They assert self-consistency,
+  never that the address is real. The neighbouring `&'static [u8]` test already shows the fix: compare against
+  an independently obtained address.
+  **And it caught the previous commit's author.** Every read-only accessor M18.6 added to `RingScope` survives,
+  because no test calls any of them. The surface was added on the stated principle that a platform layer is
+  not narrowed to its current caller, which stands -- but mutation testing showed within one commit that none
+  of it is exercised.
+  **A first reading of one survivor was wrong, and checking corrected it.** The `contract.rs` mutant deletes a
+  match arm in `check_quiescent`, which looked like the oracle's own busy-buffer detection going untested. It
+  is the **sort key**, not the detection: the test has one busy buffer, so ordering is unobservable. Recorded
+  as equivalent-under-current-tests rather than as a hole.
+  **Tooling, measured rather than assumed:** `cargo install cargo-mutants --locked` fails on this host --
+  the locked `winapi` does not compile for `aarch64-pc-windows-msvc` (285 errors). Installing unlocked, from
+  outside the repo so `rust-toolchain.toml`'s 1.98.0 pin does not apply to the tool, works. `--timeout 180` is
+  needed because several mutants hang, and a cap derived from the ~5 s baseline is too tight for a suite whose
+  own waits are 5 s. All of this is in the reproduction section of the survivors file.
+  Note `cargo-mutants` has no `cargo_*` MCP tool, so it is the rare case where the terminal is the only route.
 - [ ] **M18.4** -- Resolve the survivors: strengthen the test, or record why the mutant is equivalent and
   harmless. Do not delete an assertion merely because a mutant survives it -- a dead assertion beside a live
   one is worse than none, which is why M14.3's was removed rather than repaired.
