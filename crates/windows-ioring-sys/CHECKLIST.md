@@ -575,13 +575,37 @@ instead prove it reached the state it claims to exercise.
   it shows the oracle reports a fault injected into buffer accounting, not that the generator can emit the
   shapes that trigger the defects which actually shipped.
 
-- [ ] **M17.4** -- Calibrate the generator before its green result is allowed to count. Show that it
+- [x] **M17.4** -- Calibrate the generator before its green result is allowed to count. Show that it
   rediscovers a defect known to be real -- #47's handover shape, or D-32's registration timing -- when the fix
   is reverted. Every M15 and M16 item carried a sabotage step and this milestone had none: a generator that
   cannot emit the shape that triggers #47 reports green for ever, and that green would feed straight into
   release confidence. Until this item passes, M17.3's result is uninformative by construction. Note M18.3's
   `cargo-mutants` run is a general form of the same calibration; this targeted version comes first because it
   is cheaper and aims at two known-real defects rather than synthetic mutants.
+  **The calibration failed the generator, which is the entire reason this item exists.** With
+  [D-20](DESIGN-NOTES.md#d-20)'s setup signal removed -- #47 exactly as it shipped -- the M17.3 generator
+  reported **green**. It attached the completion event but drained with `try_pop`, and unconditional polling
+  recovers every completion whether or not the ring ever signalled, so a lost wakeup was invisible to it. A
+  generator can sample the right *states* and still be blind to the defect that lives in them.
+  **Fix:** once an event is attached, a sequence now **waits for the wakeup it is owed** before draining, and
+  a wait that times out with work still outstanding is reported. Waiting precedes draining rather than
+  following it, because a backlog queued *before* the attach is reachable only through the setup signal --
+  drain-first would consume it by polling and hide the signal's absence. Recorded as
+  [D-42](DESIGN-NOTES.md#d-42).
+  **Re-calibrated, and the detection is reliable rather than lucky:** with the sabotage restored the generator
+  caught it in **10 of 10 runs on fresh seeds**, always within the first six sequences, and the reported trace
+  is #47's own shape -- an operation queued, `attach completion event (queue had 1 outstanding)`, then a lost
+  wakeup. With the fix in place, 10 of 10 clean runs at ~80 ms.
+  **Second defect, D-32:** reintroducing the 0.1.2 use-after-free (build the SQE from an array dropped before
+  submit) is caught as a hard `STATUS_ACCESS_VIOLATION`. Worth recording precisely, because it is *not* what
+  0.1.2 did: there the same defect surfaced as a survivable `ERROR_NOACCESS` because the freed pages happened
+  to still be mapped. The only difference is the guard allocator decommitting them, which is M15.1's stated
+  purpose demonstrated against the real historical defect rather than a synthetic one. Note this one is caught
+  at the registration *setup* boundary, which every registering test crosses, so it calibrates the allocator
+  rather than the generated space -- #47 is the calibration that is specifically about the generator.
+  **Process note:** an intermediate "failure" run was traced to a stale test binary left by the previous
+  sabotage build, not to flakiness. Timestamps were checked against the rebuild before any conclusion was
+  drawn from a direct binary run; a calibration that mistakes a stale artefact for a result is worse than none.
 
 - [ ] **M17.5** -- Make discovered failures permanent: every sequence the generator finds becomes a named,
   seed-free regression test committed alongside the corpus. A property test that finds a bug and then forgets

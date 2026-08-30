@@ -15,6 +15,17 @@
 //! completion is reported as a contract violation rather than inferred (M16).
 //! Without those, a generator would only be checking that nothing crashed.
 //!
+//! **Calibrated, and it failed the first time.** M17.4 reverted D-20's setup
+//! signal -- #47 exactly as it shipped -- and this file reported green. It
+//! attached the event and sampled the right states, but drained by polling
+//! `try_pop`, which recovers every completion whether or not the ring ever
+//! signalled. Sampling the right state is not the same as being sensitive to
+//! the defect that lives in it. Hence [`wait_then_drain`]: once an event is
+//! attached, a sequence waits for the wakeup it is owed *before* draining.
+//! **Do not "simplify" that back into a poll** -- it is load-bearing, and
+//! removing it silently restores a generator that cannot see #47. With it, the
+//! defect is caught in 10 of 10 runs on fresh seeds. See `D-42`.
+//!
 //! **Seeding, per [DESIGN-NOTES.md](DESIGN-NOTES.md) `D-41`.** One number
 //! replays a whole run, it is announced with the command to replay it, and it
 //! is pinnable from the environment. There are deliberately **two** seeds --
@@ -46,6 +57,8 @@ use windows_ioring_sys::{
     Batch, Completion, FlushCoverage, FlushMode, IoRing, PushOptions, RegisteredBuffers,
     RegisteredFile, RegisteredSpan, RegisteredUse, SharedFile, Token, WriteCaching,
 };
+use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 /// A use-after-free in a generated sequence must fault rather than read stale
 /// bytes, or the generator is only testing that nothing happened to crash.
@@ -81,6 +94,13 @@ const FILE_LEN: usize = 128 * BUF_LEN;
 
 /// Bounded so a lost completion fails instead of hanging.
 const MAX_DRAIN_ROUNDS: usize = 4096;
+
+/// How long to wait for a wakeup that the ring owes an attached waiter.
+///
+/// Generous, because a wait that is *expected* to succeed must not flake on a
+/// loaded machine. It is only ever paid in full by a run that is about to fail,
+/// and a run that pays it is reporting a lost wakeup -- which is #47.
+const WAIT_MS: u32 = 5_000;
 
 // --- the model ---------------------------------------------------------------
 
@@ -418,8 +438,15 @@ fn run_plan(
         match step {
             Step::DrainNow => {
                 coverage.mid_sequence_drains += 1;
-                let popped = drain_to_empty(&mut ring, &mut run);
-                run.trace.push(format!("drain to empty ({popped} popped)"));
+                match wait_then_drain(&mut ring, &mut run, event.as_ref()) {
+                    Ok(popped) => run.trace.push(format!("drain to empty ({popped} popped)")),
+                    Err(lost) => {
+                        run.trace.push("drain to empty".to_owned());
+                        let report = format!("{lost}\ntrace:\n{}", render(&run.trace));
+                        forfeit(registered_buffers);
+                        return Err(report);
+                    }
+                }
             }
             Step::Attach => {
                 // Repeat attaches hand back a duplicate of the same event
@@ -462,7 +489,11 @@ fn run_plan(
             forfeit(registered_buffers);
             return Err(report);
         }
-        drain_to_empty(&mut ring, &mut run);
+        if let Err(lost) = wait_then_drain(&mut ring, &mut run, event.as_ref()) {
+            let report = format!("{lost}\ntrace:\n{}", render(&run.trace));
+            forfeit(registered_buffers);
+            return Err(report);
+        }
     }
     drain_to_empty(&mut ring, &mut run);
 
@@ -494,6 +525,52 @@ fn run_plan(
 /// Only ever reached on a path that is about to fail the test.
 fn forfeit(registration: RegisteredBuffers<Vec<u8>>) {
     std::mem::forget(registration);
+}
+
+/// Wait up to `timeout_ms` for `event`, consuming the signal when it fires.
+fn signalled_within(event: &OwnedHandle, timeout_ms: u32) -> bool {
+    // SAFETY: `event` is a live event handle this sequence owns.
+    let result = unsafe { WaitForSingleObject(event.as_raw_handle(), timeout_ms) };
+    if result == WAIT_OBJECT_0 {
+        true
+    } else if result == WAIT_TIMEOUT {
+        false
+    } else {
+        panic!("unexpected WaitForSingleObject result 0x{result:08X}");
+    }
+}
+
+/// Collect completions the way a consumer actually would.
+///
+/// This is the difference between a generator that can find #47 and one that
+/// cannot. Polling `try_pop` unconditionally recovers every completion whether
+/// or not the ring ever signalled, so a lost wakeup is invisible to it -- which
+/// is exactly what M17.4's calibration caught. Once an event is attached, the
+/// sequence therefore **waits for the wakeup it is owed** before draining, and a
+/// wait that times out with work still outstanding is reported rather than
+/// papered over by another poll.
+///
+/// Waiting happens before draining, not after, because a backlog queued *before*
+/// the attach is only reachable through the deliberate setup signal (D-20).
+/// Draining first would consume that backlog by polling and hide its absence.
+fn wait_then_drain(
+    ring: &mut IoRing,
+    run: &mut Run,
+    event: Option<&OwnedHandle>,
+) -> Result<usize, String> {
+    if ring.outstanding() == 0 {
+        return Ok(drain_to_empty(ring, run));
+    }
+    if let Some(event) = event
+        && !signalled_within(event, WAIT_MS)
+    {
+        return Err(format!(
+            "waited {WAIT_MS} ms on an attached completion event with {} operations \
+             outstanding and was never woken -- a wakeup was lost",
+            ring.outstanding()
+        ));
+    }
+    Ok(drain_to_empty(ring, run))
 }
 
 fn render(trace: &[String]) -> String {
