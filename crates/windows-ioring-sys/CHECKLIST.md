@@ -660,11 +660,29 @@ Independent of M17; may run in parallel.
   this type allow?" Note also that the two obvious fixes do not work -- a `Deref`/`DerefMut` newtype still
   permits `*guard = ...`, and so does a `with_ring(|ring: &mut IoRing| ...)` closure. Anything that lets a
   `&mut IoRing` escape keeps the hole.
-- [ ] **M18.2** -- Turn M18.1 into a recurring obligation rather than a one-time pass, as a
+- [x] **M18.2** -- Turn M18.1 into a recurring obligation rather than a one-time pass, as a
   `DESIGN-INSTRUCTIONS.md` rule for this component: any change adding or widening a public borrow-returning
   method answers M18.1's question in the PR. Both C-population defects were introduced by ordinary,
   well-reviewed changes; what was missing was the specific question, not the diligence.
-
+  **Done:** [DESIGN-INSTRUCTIONS.md](DESIGN-INSTRUCTIONS.md) -- the repository's first, so it is kept tightly
+  component-scoped. It states the question, what counts as answering it (three points, with the M18.1 audit's
+  nineteen rows as worked examples), and that "no hole" is a complete answer that must still be written down.
+  **A document alone would not have made this an obligation**, which is the item's own point: the rule it
+  replaces was "remember to ask", and that failed three times. So the trigger is mechanical.
+  [BORROW-SURFACE.txt](BORROW-SURFACE.txt) is a generated inventory of every public function in `src/` whose
+  return type carries a borrow; `tools/check-borrow-surface.ps1` regenerates it and fails on any
+  disagreement, wired into CI beside the existing `encoding` and `baseline` sanity jobs -- whose own header
+  describes this same restatement-drift problem, so the pattern was already established here rather than
+  invented.
+  **Scope of the trigger, chosen deliberately:** a reference *or* a lifetime-carrying wrapper. A `&`-only
+  scan would have missed `Batch<'_>` and `RingScope<'_>` -- which is precisely where M18.6's fix lives, so the
+  narrower scan would have gone blind to the surface it was written for. Seven entries today.
+  **Verified load-bearing:** adding `pub fn sabotage_ring(&mut self) -> &mut IoRing` -- D-43's exact shape --
+  makes the check fail and print the question. It checks *shape*, not correctness, and the instructions say so
+  plainly: it cannot tell a safe accessor from a dangerous one, and tuning it until it stops firing would be
+  the failure mode to guard against.
+  **Found while writing it:** `.Count` on a `Where-Object` pipeline is a `StrictMode` error when the result is
+  empty or a single item -- the check crashed rather than passing on its first clean run. Fixed with `@(...)`.
 - [ ] **M18.3** -- Run `cargo-mutants` over the crate and triage the surviving mutants. There is a measured
   rate to justify it: this branch produced two vacuously-passing tests (the M11.2 idempotence pair, which
   asserted through a freshly attached event and so could not observe a detached one) and one `debug_assert`

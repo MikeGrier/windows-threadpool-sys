@@ -48,6 +48,23 @@ jobs:
         shell: pwsh
         run: ./tools/check-baseline.ps1
 
+  # windows-ioring-sys has shipped three defects of one shape: a public method
+  # whose return type permitted an operation nobody intended (D-35, D-36, D-43).
+  # All three arrived through ordinary, well-reviewed changes -- what was missing
+  # was a specific question asked at a specific moment, and "remember to ask it"
+  # is not a mechanism. This job fails when that crate's borrow-returning surface
+  # changes, so the question in its DESIGN-INSTRUCTIONS.md cannot be skipped.
+  # Checks shape, not correctness: it asks for a sentence, it does not judge the
+  # design. Needs no toolchain -- it only reads files.
+  borrow-surface:
+    name: ioring borrow-surface inventory
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check-borrow-surface.ps1
+        shell: pwsh
+        run: ./tools/check-borrow-surface.ps1
+
   build-test:
     name: build + test
     runs-on: windows-latest
