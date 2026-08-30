@@ -931,6 +931,76 @@ The reasoning behind the numbers matters more than the numbers:
 device it serves can be named; above 64 logical processors take the group floor
 and no more.
 
+## Working under a hardware gap: what is blocked, and what breaks
+
+The engineer expects access to a genuine multi-node NUMA machine eventually, but
+not soon. Until then this design rests on documentation rather than measurement,
+which is a different grade of evidence than most decisions in this repository
+and must not be allowed to blur into them.
+
+**Sorted by dependence on an unverified NUMA claim:**
+
+| Not blocked -- verifiable on the development machine | Blocked on NUMA hardware |
+|---|---|
+| the MPSC, eventcount, and doorbell (R1-R10 is pure concurrency) | whether the FSCTL names a *meaningful* volume node (F-1) |
+| the two-layer ring and the client-facing API shape | Q6, whether a Storage Space reports honestly or reports a fiction |
+| one-shot registration semantics (already established) | Q7, whether creation-time affinity yields a node-local stack |
+| the C-1 doorbell measurement (`SetEvent` against `SubmitIoRing`) | the *magnitude* of the buffer-placement benefit |
+| the composed layer's type-level traversal | domain-count tuning above one |
+| the durability crate, whose mechanism was already measured as D-23/D-24 | |
+| whether `CreateRemoteThreadEx` with an attribute list works at all | |
+
+**The pattern in the blocked column is the reassuring part: none of those
+threaten the structure. They threaten the justification and the tuning.** If
+every one came back badly, the architecture would stand and the NUMA-specific
+features would be decorative rather than wrong.
+
+**And the first deliverable depends on none of them.** At N=1 there is no
+routing, no placement choice, and the buffer goes on the only node there is. So
+"build N=1 first", chosen above because it is the common case and the substrate,
+is *also* the plan that needs no NUMA hardware. The whole first deliverable and
+most of the second can be built before the machine exists.
+
+### Practices to adopt while the gap lasts
+
+1. **Mark documented-but-unwitnessed claims distinctly from measured ones.**
+   This repository's decisions are unusually well measured, which creates its own
+   hazard: a reader cannot tell
+   [D-23](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-23) -- measured, with a
+   control case -- from a claim taken off a documentation page. Anything
+   load-bearing that rests on documentation must say so *in the decision*, the
+   way F-1 above says "contributed by the engineer as research, not measured
+   here".
+
+2. **Quarantine each unverified claim so that a correction is surgical.** Do not
+   let "creation-time affinity yields a node-local stack" become load-bearing for
+   anything beyond the thread builder's justification. If Q7 returns false, the
+   response should be editing one rationale, not restructuring a design.
+
+3. **Pre-build the instruments now, while the context is fresh.** Time on a
+   borrowed machine is likely to be short and should be spent measuring, not
+   writing `CreateRemoteThreadEx` attribute-list code. F-1's spike is already
+   written *and smoke-tested*, and that smoke run found a real defect in it --
+   the `File::open` directory failure that would otherwise have surfaced on the
+   borrowed machine. Every remaining question deserves the same treatment before
+   the hardware appears.
+
+### What to run when the machine is available
+
+Ordered so that a short session yields the most:
+
+1. **F-1 / Q1-Q5** -- [file-handle-numa-spike.rs](../crates/windows-ioring-sys/design-sessions/spikes/file-handle-numa-spike.rs),
+   as-is, against an ordinary volume. Establishes whether either call names a
+   meaningful node, and whether they agree.
+2. **Q6** -- the same spike with a Storage Space directory as `argv[1]`, with the
+   space's layout recorded alongside. Distinguishes an honest answer from a
+   fiction, which is the outcome that would be worse than no answer.
+3. **Q7** -- the thread-stack spike, once written. Decides whether the thread
+   builder's principal justification holds.
+4. **Magnitude** -- a read benchmark with the registered pool placed local
+   against remote, which is the number the entire domain-count argument rests on
+   and which nothing in this session has measured.
+
 ## Open questions
 
 - **The three structural gaps** in the coherence assessment above: where the
