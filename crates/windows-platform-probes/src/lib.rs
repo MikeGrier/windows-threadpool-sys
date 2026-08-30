@@ -112,6 +112,7 @@
 pub mod cancel_io;
 pub mod completion_port;
 pub mod device_map;
+pub mod doorbell_cost;
 pub mod error_mode;
 pub mod handle_state;
 pub mod ioring;

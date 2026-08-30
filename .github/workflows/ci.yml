@@ -179,6 +179,13 @@ jobs:
       # of logs mechanically rather than read by eye.
       - name: probe magnitudes (topology)
         run: cargo run -p windows-platform-probes --bin probe-topology --locked
+      # Decides how much machinery the two-layer ring's doorbell needs. Its
+      # park-and-wake handshake is bounded rather than INFINITE on purpose: the
+      # first version of it deadlocked, because an auto-reset event does not
+      # count signals and the waiter's count never caught up. A probe that can
+      # hang is a probe that can hang a build.
+      - name: probe magnitudes (doorbell cost)
+        run: cargo run -p windows-platform-probes --bin probe-doorbell-cost --locked
 
   # The NUMA questions the 2026-08-30 design session could not answer, run
   # against whatever machine the runner fleet supplies.

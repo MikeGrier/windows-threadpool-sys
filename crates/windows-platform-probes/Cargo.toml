@@ -48,6 +48,10 @@ name = "probe-pool-growth"
 path = "src/bin/pool_growth.rs"
 
 [[bin]]
+name = "probe-doorbell-cost"
+path = "src/bin/doorbell_cost.rs"
+
+[[bin]]
 name = "probe-topology"
 path = "src/bin/topology.rs"
 
