@@ -507,9 +507,54 @@ reaching the ring, where a run-to-completion client would have none.
   reduces syscalls rather than adding them.
 - **It should be pay-for-what-you-use**: a client whose continuation runs on the
   domain thread submits directly, with no queue and no doorbell.
-- **Measurable now**, on this hardware, with no infrastructure: time `SetEvent`,
-  an uncontended atomic push, and a `SubmitIoRing` round trip. If `SetEvent` is
-  a few percent of the syscall, the hop is noise.
+### C-1 measured: batching settles it, and the eventcount can wait
+
+Measured on the ARM64 development machine by
+`probe-doorbell-cost`, now part of the platform-probes CI job so the numbers
+accumulate across the runner fleet.
+
+| operation | ns/op |
+|---|---|
+| `atomic_fetch_add` | 7.2 |
+| `set_event_already_signalled` | 81.2 |
+| `set_reset_event` (one doorbell cycle) | 164.9 |
+| `wait_zero_signalled` | 94.8 |
+| `submit_io_ring_empty` | 79.2 |
+| park and wake, round trip | 2196.4 |
+
+**The finding is that batching, not the skip rule, is the lever.** One doorbell
+per drained batch costs 164.9 ns at a batch of one, 20.6 at eight, and 5.2 at
+thirty-two -- so at a batch of about **23 the doorbell already costs less per
+operation than the atomic push it accompanies**. A first implementation may
+always-signal and remain honest.
+
+So **the eventcount is deferred, not adopted.** Publish-recheck-park is the
+highest-risk protocol in this design, and nothing yet shows it is worth its
+lost-wakeup risk. R3 and R4 are amended accordingly.
+
+**Two mistakes in the probe are recorded because they nearly produced findings:**
+
+- **It deadlocked.** The first park-and-wake had one thread calling `SetEvent`
+  in a loop against another in `WaitForSingleObject(INFINITE)`. An auto-reset
+  event does not count signals, so two arriving before one wait collapse into
+  one, the waiter's count never catches up, and it blocks for ever -- it hung
+  for over four hundred seconds before being killed. A probe that can hang is a
+  probe that can hang a build. It now uses a two-event ping-pong for strict
+  alternation, bounds every wait, and returns nothing at all on timeout rather
+  than averaging a partial run.
+- **Its headline ratio had a denominator that is not a syscall.** The probe was
+  written to divide the doorbell cost by an empty `SubmitIoRing` and report
+  "the doorbell is N% of a syscall". It reported **210%**, which should have
+  been read as a broken denominator rather than a result: 79 ns is far too cheap
+  for a kernel transition, so an empty submit is almost certainly
+  short-circuiting in user mode. The verdict logic was deleted rather than
+  tuned. The honest denominator is the cost of the real work a submission
+  carries, which this probe does not measure -- so it reports absolute costs and
+  the batching arithmetic and forms no ratio.
+
+**Still unmeasured, and worth naming:** the doorbell's cost against a submission
+carrying real I/O. That is the number that would justify adopting the
+eventcount, and it needs a workload rather than a microbenchmark.
 
 ### C-1a Why the doorbell must be a HANDLE, and cannot be `WaitOnAddress`
 
@@ -733,17 +778,31 @@ backpressure** -- an unbounded queue has none, which is why `SegQueue` was the
 wrong model.
 
 **R3 Lock-free producers.** No mutex on the producer path. A producer-side lock
-serializes precisely what multi-producer exists to parallelize. Park and notify
-go through an **eventcount**: the consumer publishes intent to park, re-checks
-the queue, and only then waits. That re-check closes the lost-wakeup gap without
-a lock.
+serializes precisely what multi-producer exists to parallelize.
+
+**Park and notify may start as an unconditional signal.** An earlier form of
+this requirement mandated an **eventcount** -- consumer publishes intent to
+park, re-checks the queue, then waits -- as the way to close the lost-wakeup gap
+without a lock. **C-1 measured that and the mandate does not survive**: batching
+alone drives the doorbell below the cost of the atomic push it accompanies, so a
+first implementation may always-signal. The eventcount stays in the design as a
+*later* step, adopted against a measurement of real work rather than up front,
+because publish-recheck-park is the highest-risk protocol here and its
+lost-wakeup risk should be bought only once something has shown it is worth
+paying for.
 
 **R4 Doorbell.** A queue-owned **manual-reset event**, created **lazily** so a
 polling-only consumer allocates no kernel object. Level semantics: signalled
 exactly when the consumer has something to observe. **The reset is atomic with
-the emptiness observation; the signal may be outside any lock** (see C-1b). The
-signal is *skipped* when the queue was already non-empty, or when the consumer
-is not parked. Handed out as a borrowed handle plus an owned duplicate.
+the emptiness observation; the signal may be outside any lock** (see C-1b).
+Handed out as a borrowed handle plus an owned duplicate.
+
+Skipping the signal when the queue was already non-empty, or when the consumer
+is not parked, is an **optimization rather than a requirement** -- see R3 and
+C-1. The skip that costs nothing and can be taken immediately is the
+already-non-empty one, which needs no knowledge of the consumer's state; the
+one that needs the consumer to publish whether it is parked is the part C-1 says
+to defer.
 
 **R5 Wakeup safety.** No lost wakeups. Spurious wakeups are permitted, and the
 consumer must tolerate them. Drain to empty on every pass.
@@ -953,7 +1012,7 @@ and must not be allowed to blur into them.
 | the MPSC, eventcount, and doorbell (R1-R10 is pure concurrency) | whether the FSCTL names a *meaningful* volume node (F-1) |
 | the two-layer ring and the client-facing API shape | Q6, whether a Storage Space reports honestly or reports a fiction |
 | one-shot registration semantics (already established) | Q7, whether creation-time affinity yields a node-local stack |
-| the C-1 doorbell measurement (`SetEvent` against `SubmitIoRing`) | the *magnitude* of the buffer-placement benefit |
+| ~~the C-1 doorbell measurement~~ -- **done**, see "C-1 measured" above | the *magnitude* of the buffer-placement benefit |
 | the composed layer's type-level traversal | domain-count tuning above one |
 | the durability crate, whose mechanism was already measured as D-23/D-24 | |
 | whether `CreateRemoteThreadEx` with an attribute list works at all | |
