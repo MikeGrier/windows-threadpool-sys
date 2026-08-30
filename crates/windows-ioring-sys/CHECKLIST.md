@@ -737,13 +737,33 @@ Independent of M17; may run in parallel.
   spawned as **M18.7**), and two `Debug` impls whose exact wording an assertion would only change-detect.
   "Hard to test" is written down as that, never as "equivalent".
 
-- [ ] **M18.7** -- Extract the capability flag decoding in `capabilities()` into a pure function over the raw
+- [x] **M18.7** -- Extract the capability flag decoding in `capabilities()` into a pure function over the raw
   `IORING_CAPABILITIES`, so it can be exercised with synthetic flag values. Spawned by M18.4: four mutants on
   `raw.FeatureFlags & FLAG != 0` survive because nothing can vary what `QueryIoRingCapabilities` returns, and
   the decoding of `supports_completion_event` in particular gates every completion-event path in the crate --
   [D-20](DESIGN-NOTES.md#d-20), and #47 lived downstream of it. A pure `fn decode(raw) -> Capabilities` plus a
   table of flag combinations kills all four and makes the one capability that matters testable in both
   directions, which no test can do today.
+  **Done:** `decode(&IORING_CAPABILITIES) -> Capabilities` split out of `capabilities()`, which now does the
+  syscall and nothing else. Pure refactor -- no behaviour change -- plus five tests, and a round-trip test
+  tying `decode` back to the query so the split cannot drift.
+  **All four mutants killed**, verified by a scoped re-run: `capability.rs` reports 12 mutants, 9 caught and
+  3 unviable, none missed. The killing cases fall straight out of the pure function: an empty mask kills
+  `& -> |` (because `flags | FLAG` is non-zero whatever `flags` holds), a mask carrying exactly one named flag
+  kills `& -> ^` (which clears the very bit it is testing), and any positive case kills `!= -> ==`. An
+  unknown-feature-bit case is included because this crate has already been surprised once by a Windows
+  reporting a version it did not name.
+  **Crate-wide: 307 mutants, 221 caught, 10 missed, 6 timeouts, 70 unviable -- 95.8%**, up from 79.7% before
+  M18.4.
+  **Recorded a caveat on the headline number rather than quoting it flat.** Two mutants -- `Batch::require`
+  and `IoRing`'s `Debug` -- were reported caught in one run and missed in another *with identical sources*.
+  The suite has timing-dependent tests and `cargo-mutants` runs four jobs in parallel, so a mutant can be
+  "caught" by a test that merely flaked. Both are now filed as unresolved rather than fixed, and
+  [MUTATION-SURVIVORS.md](MUTATION-SURVIVORS.md) says a single run's score is approximate.
+  **`Batch::require -> Ok(())` was reclassified on the evidence:** `require` returns `Ok` exactly when
+  `supports` is true, so on a host supporting every operation it is equivalent *in practice*. Filed under
+  host-blocked rather than provably-unkillable, because the equivalence is a property of the host, not the
+  code -- and its single "caught" result is consistent with the flake above.
 - [ ] **M18.5** -- Document the strategy as a whole in [DESIGN-NOTES.md](DESIGN-NOTES.md): the three defect
   populations, which technique covers which, and -- most importantly -- **what none of them cover.** Two of the
   eight defects came from spikes against the real kernel, and no oracle, generator or allocator would have

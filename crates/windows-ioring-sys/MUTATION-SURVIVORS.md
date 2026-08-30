@@ -7,11 +7,21 @@ against each heading.
 ```
 M18.3   306 mutants: 182 caught, 48 missed,  7 timeouts, 69 unviable   79.7%
 M18.4   306 mutants: 219 caught, 12 missed,  6 timeouts, 69 unviable   94.9%
+M18.7   307 mutants: 221 caught, 10 missed,  6 timeouts, 70 unviable   95.8%
 ```
 
-Counting timeouts as detections (see T1). **36 survivors killed**; the twelve
-that remain are itemised in "What is left, and why" at the end -- three of them
-provably unkillable, the rest with a named reason rather than a shrug.
+Counting timeouts as detections (see T1). **38 survivors killed**; the ten that
+remain are itemised in "What is left, and why" at the end -- two of them
+provably unkillable, the rest with a named reason rather than a shrug. M18.7
+adds a mutant because it split a function out; the extra unviable one is on it.
+
+**The result is not perfectly reproducible, and the number should be read with
+that in mind.** Two mutants -- `Batch::require -> Ok(())` and `IoRing`'s `Debug`
+-- were reported caught in one run and missed in another with identical sources.
+This suite contains timing-dependent tests, and `cargo-mutants` runs four jobs
+in parallel, so a mutant can be "caught" by a test that happened to flake.
+Treat a single run's score as approximate, and a mutant that moves between runs
+as unresolved rather than as fixed.
 
 **Why this was worth running.** M18.3 was justified by a measured rate rather
 than a hunch: this branch had already produced two vacuously-passing tests and
@@ -214,9 +224,9 @@ derived from a ~5 s baseline is too tight for a suite whose own waits are 5 s.
 
 ## What is left, and why (M18.4)
 
-Twelve survivors remain. M18.4's rule is that each is either killed, or given a
-reason -- and "hard to test" is a reason to record, not a synonym for
-"equivalent". These are separated accordingly.
+Ten survivors remain after M18.4 and M18.7. The rule is that each is either
+killed, or given a reason -- and "hard to test" is a reason to record, not a
+synonym for "equivalent". These are separated accordingly.
 
 ### Provably unkillable (2)
 
@@ -225,11 +235,12 @@ disjoint bit sets, and `with_injected_failure`'s zeroed `information` is
 unreachable through any public path. No test can distinguish either, and one
 that appeared to would be asserting something the code does not promise.
 
-### Blocked on the host, not on the tests (2)
+### Blocked on the host, not on the tests (3)
 
 ```
 event_delivery.rs:262 RingScope::supports -> true
 ring.rs:547           IoRing::supports -> true
+batch.rs:1080         Batch::require -> Ok(())
 ```
 
 Killing the two `supports -> true` mutants needs an `Op` this host does *not*
@@ -240,33 +251,54 @@ design, and widening it to carry an unsupported variant purely to satisfy a
 mutant would be inventing API for the benefit of a test. Revisit if the crate
 ever runs against an emulated ring with a narrower operation set.
 
-### Genuinely open, and queued (5)
+`Batch::require -> Ok(())` is the same fact one layer up: `require` returns
+`Ok` exactly when `supports` is true, so on a host where every operation is
+supported the mutant is **equivalent in practice**, and only a host with a
+narrower operation set could distinguish it. It is filed here rather than under
+"provably unkillable" because the equivalence is a property of the *host*, not
+of the code -- and it is one of the two mutants that moved between runs, which
+is consistent with its one "caught" result having been a flake.
+
+### Genuinely open (1)
 
 ```
-capability.rs:93,94   & -> |, & -> ^, != -> ==  (4 mutants)
 batch.rs:656          RegisteredBuffers::is_empty -> false
 ```
-
-The capability flag decoding is inline in `capabilities()`, which reads the real
-OS through `QueryIoRingCapabilities`. Nothing can vary `FeatureFlags`, so the
-decoding cannot be exercised without extracting it into a pure function over the
-raw struct. That extraction is worth doing and is **queued as M18.7** rather
-than folded into a test-only change.
 
 `is_empty -> false` needs a registration covering zero buffers. Nothing rejects
 `register_buffers(vec![])` in this crate, but whether Win32 accepts a
 zero-length registration was not established, so this is left open rather than
 guessed at.
 
-### Debug formatting (2)
+### Closed by M18.7: the capability decoding (4)
+
+```
+capability.rs:93,94   & -> |, & -> ^, != -> ==  (4 mutants)   [all killed]
+```
+
+The flag decoding was inline in `capabilities()`, which reads the real OS
+through `QueryIoRingCapabilities`. Nothing can vary `FeatureFlags`, so no test
+could reach the decision either way. M18.7 extracted a pure
+`decode(&IORING_CAPABILITIES) -> Capabilities`, and the flag combinations that
+kill each mutant fall straight out of it: an empty mask (kills `& -> |`, since
+`flags | FLAG` is non-zero whatever `flags` holds), a mask carrying exactly one
+named flag (kills `& -> ^`, which clears the bit it is testing), and any
+positive case at all (kills `!= -> ==`). An unknown-feature-bit case covers the
+future Windows this crate has already been surprised by once.
+
+`capability.rs` now reports 12 mutants, 9 caught and 3 unviable -- none missed.
+
+### Debug formatting (3)
 
 ```
 batch.rs:1050  PendingBufferRegistration::fmt
 error.rs:275   IoRingError::fmt
+ring.rs:427    IoRing::fmt
 ```
 
-Nothing asserts either rendering. `IoRing`'s and `Token`'s `Debug` mutants were
-killed -- `Token`'s deliberately, because its hand-written impl exists to avoid
-demanding `T: Debug` from a caller's buffer type and that choice was worth
-pinning. These two carry no comparable design decision, and an assertion on
-their exact wording would be a change-detector rather than a test.
+Nothing asserts any of these renderings. `Token`'s `Debug` mutant *was* killed,
+deliberately: its hand-written impl exists to avoid demanding `T: Debug` from a
+caller's buffer type, and that design choice was worth pinning. These three
+carry no comparable decision, and an assertion on their exact wording would be a
+change-detector rather than a test. `IoRing`'s is the second mutant that moved
+between runs.
