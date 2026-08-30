@@ -698,13 +698,146 @@ architecture sizes from 1 to N without a second mode.
    descriptor format, completion tagging -- existing nowhere in this workspace.
    It needs a home and probably its own crate, and it is larger than anything
    this session has called "the seam".
-2. **CQ cardinality.** One shared CQ is a contention point every domain writes
-   to, which is shared-nothing violated at the last step. One per domain
-   preserves the model but makes the client multiplex, and
-   `WaitForMultipleObjects` caps at 64 handles.
-3. **Whether the client ever sees an `IoRing`.** If it is fully wrapped,
-   `windows-ioring-sys` becomes an implementation detail of a higher crate --
-   a layering statement to be made deliberately rather than discovered.
+2. ~~**CQ cardinality.**~~ **Resolved** -- one CQ per domain, client chooses the
+   observation strategy. See "Resolved: CQ cardinality" above.
+3. ~~**Whether the client ever sees an `IoRing`.**~~ **Resolved by the
+   engineer: it does not.** `windows-ioring-sys` becomes an implementation
+   detail of the higher crate. This is layering rather than absorption -- it
+   remains a published crate in its own right (0.2.0 shipped 2026-08-30) and
+   gains a dependent; direct consumers can still use it.
+
+## Specification: the submission and completion queues
+
+Requested as a specification rather than a sketch. These are the requirements
+the session's conclusions imply. The two directions are **not** the same shape.
+
+**R1 Cardinality.** The SQ is **MPSC** -- many client threads, one domain
+thread. The CQ is **SPSC** -- one domain thread, one drainer. The CQ constraint
+is deliberate: "drain to empty" is ambiguous with two racing drainers, and
+drain-to-empty is what
+[D-19](../crates/windows-ioring-sys/DESIGN-NOTES.md#d-19) requires. Nothing is
+lost, because per-domain CQs already give a client N drainers; a client wanting
+parallel processing drains on one thread and dispatches.
+
+**R2 Bounded.** Fixed capacity at construction. `push` on a full queue returns a
+typed error; it never blocks and never grows. **That failure is the
+backpressure** -- an unbounded queue has none, which is why `SegQueue` was the
+wrong model.
+
+**R3 Lock-free producers.** No mutex on the producer path. A producer-side lock
+serializes precisely what multi-producer exists to parallelize. Park and notify
+go through an **eventcount**: the consumer publishes intent to park, re-checks
+the queue, and only then waits. That re-check closes the lost-wakeup gap without
+a lock.
+
+**R4 Doorbell.** A queue-owned **manual-reset event**, created **lazily** so a
+polling-only consumer allocates no kernel object. Level semantics: signalled
+exactly when the consumer has something to observe. **The reset is atomic with
+the emptiness observation; the signal may be outside any lock** (see C-1b). The
+signal is *skipped* when the queue was already non-empty, or when the consumer
+is not parked. Handed out as a borrowed handle plus an owned duplicate.
+
+**R5 Wakeup safety.** No lost wakeups. Spurious wakeups are permitted, and the
+consumer must tolerate them. Drain to empty on every pass.
+
+**R6 Parking.** Optional consumer spin before parking, with the duration tunable
+and **sized by the topology** -- generous when a domain owns a core exclusively,
+zero when it shares one with the rest of a laptop.
+
+**R7 Payload.** POD descriptors only, never bytes: operation, target, buffer
+slot index, offset, user tag. **No allocation on push.** Carrying bytes would
+mean copying out of the registered pool, defeating the reason to register.
+
+**R8 Shutdown.** The consumer learns when all producers are gone; producers
+learn when the consumer is gone and fail with a typed error. Descriptors in
+flight at teardown are **accounted, not dropped** -- some own handles, and their
+disposal must be allowed to block.
+
+**R9 Observability.** Depth and high-water for tuning, plus **a count of
+doorbells actually rung**. That makes R4's skip rule measurable rather than
+assumed, and sabotage-verifiable: disabling the skip must change the number.
+
+**R10 No client callbacks.** No trait and no closure on the producer or consumer
+path. The HANDLE is the extension point.
+
+**What is reused from the file-watcher, and what is not.** The *invariant* is
+reused: the event is level state, signalled exactly when there is something to
+observe, with the reset atomic against the emptiness decision. The
+*implementation* is not: [queue.rs](../crates/windows-file-watcher/src/queue.rs)
+uses `Mutex` and `Condvar`, which is right for change-notification cadence and
+wrong for an I/O hot path, because it puts a lock on the producer side. Stating
+this explicitly so that "reuse the queue" does not become reuse of the wrong
+half.
+
+## Resolved: CQ cardinality, and a correction about how wide waits work
+
+**Correction, from the engineer.** An earlier turn in this session claimed
+`ThreadpoolWait` "internally manages the 64-handle groups". That is wrong. Modern
+thread-pool waits are backed by **kernel-side wait completion packets**
+associated with the pool's completion port; there is no user-mode grouping and
+no fan-out of waiting threads per 64 handles.
+
+That improves the answer rather than complicating it: wide waits cost the
+dispatch hop, not a thread per group.
+
+**Resolution: one CQ per domain, one HANDLE each, and the client chooses how to
+observe them** -- `WaitForMultipleObjects` on its own thread when the count is
+within the limit and no hop is wanted, `ThreadpoolWait` when wider or when the
+hop is acceptable.
+
+This preserves shared-nothing, since there is no single queue every domain
+writes to, and it pushes the trade-off to the only party that knows which side
+of it it is on. It is also the payoff from rejecting the `Ring` trait: because
+the extension point is a HANDLE, this strategy did not have to be anticipated.
+
+## Resolved: how a client places its own threads
+
+Following from "two locality consumers" above and the question of whether the
+facility would end up building a thread pool. There are three thread
+populations, and each has a distinct justification:
+
+| Population | Owner | Why |
+|---|---|---|
+| Namespace and blocking operations | the **Windows pool** | needs quarantine and elasticity; `runs_long`; must survive a wedged network call |
+| Domain I/O threads | **us**, one per domain | pinning; the Windows pool cannot affinitize |
+| Client continuations | **the client** | see below |
+
+Three options were considered for the third row: (a) continuations run on the
+domain thread, Seastar-style -- best locality, but client code must never block;
+(b) placed worker threads per domain, which is the thread pool the engineer
+wanted to avoid; (c) the facility reports placement and the client places its
+own threads.
+
+**Chosen: (c)**, with (a) available for consumers who want it, and (b) only
+against a real consumer that neither serves. The risk worth guarding is not
+building (b) but building it *first*, before knowing whether (c) suffices.
+
+**And (c) is smaller than a `CreateThread` wrapper.** The missing platform
+capability is not *creating* a thread -- `std::thread::spawn` does that -- it is
+**placing** one. So the facility provides exactly that:
+
+```rust
+let _guard = domain.bind_current_thread()?;   // restores on drop
+```
+
+applied by the client from its own thread, whatever created it. This is
+slope-proof for one reason: **we never own a thread.** There is no handle kept,
+no lifetime managed, no failure to respond to, nothing to restart -- so there is
+no first step to take. It also composes with thread sources that could not be
+anticipated: `std::thread`, an existing worker, another runtime's pool.
+
+The restore guard is required rather than decorative: a client binding a *pool*
+thread must restore it, because the thread-pool contract is that a callback
+restores any thread state it changes. That observation also places the feature --
+affinity is thread-scoped state applied and restored, which is exactly the family
+[windows-thread-ambient-sys](../crates/windows-thread-ambient-sys/README.md)
+already handles. It either belongs there or must mirror that crate's guard
+discipline rather than inventing a second pattern.
+
+So (c) is concrete: the domain's `ProcessorSet`, an answer to "which domain is
+nearest me", and a one-call binder with a restore guard. Every piece needed to
+process a CQ on the right thread with the right affinity, and not one thread of
+ours.
 
 ## Working position on domain counts (not a decision)
 
