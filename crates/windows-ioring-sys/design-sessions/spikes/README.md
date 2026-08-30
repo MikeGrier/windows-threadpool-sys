@@ -45,21 +45,31 @@ node, **both** calls succeed on an ordinary NTFS data file and on a directory ha
 `0`. So "ordinary NTFS file" is not the no-association case; absence must come from a device layer
 advertising no proximity domain, which is what needs the other hardware.
 
-### Q7 is recorded there but not implemented
+### The second unrun spike: does creation-time affinity place the stack?
 
-That file's Q7 asks a different question and needs a **second spike that does not exist yet**: does a
-thread created with `PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY` receive a node-local *stack*? It matters
-because a stack is allocated at thread creation on the creating thread's node, so binding affinity
-afterwards cannot move it -- which is the whole argument for constructing domain threads with the
-affinity already set rather than applying it later.
+[thread-stack-numa-spike.rs](thread-stack-numa-spike.rs) is the other ready-instrument-without-a-result.
+It asks whether a thread created with `PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY` receives a node-local
+*stack*. That matters because a stack is allocated at thread creation on the creating thread's node,
+so binding affinity afterwards cannot move it -- which is the entire argument for constructing domain
+threads with the affinity already set rather than applying it later. The argument is currently
+**assumed**, and this measures it.
 
-It is measurable: `QueryWorkingSetEx` reports a `Node` per page, so take the address of a local in
-the new thread and compare a thread created with a remote-node affinity attribute against one created
-with none. Different nodes means creation-time affinity governs stack placement and the thread
-builder is justified; the same node means it does not, and the design must stop claiming otherwise.
+Three threads discriminate the possibilities: **A** created with the affinity attribute, **B** created
+with no attribute list at all (the baseline, and what `std::thread` does), and **C** created plain then
+bound to the far node from inside itself -- the shape a naive consumer writes. Each reports the node of
+a **shallow** stack page and a **deep** one behind a 64 KiB frame, because Windows commits stack pages
+on demand and the two may be placed by different mechanisms. `shallow != deep` on either thread means
+pages follow **first touch** under the running affinity rather than a decision made once at creation,
+which would make the whole question subtler than the design assumes.
 
-Writing it needs `CreateRemoteThreadEx` with an attribute list. It is recorded rather than written
-because it is vacuous on the single-node development machine, exactly like the questions above.
+It reports `Valid` beside every node, because `QueryWorkingSetEx` only fills `Node` for a resident
+page, and it refuses to print a conclusion when a probe was non-resident or when the machine has one
+node -- rather than emitting a confident zero.
+
+Smoke-run here, so the apparatus is proven even though the result is vacuous: the attribute list
+assembles, all three threads are created, `GetNumaNodeProcessorMaskEx` returns `mask 0xfff` matching
+this machine's twelve cores, all six probes come back resident, and the vacuity guard fires instead of
+concluding. What remains untested is only what one node cannot show.
 
 ## Why the drain spike looks over-built
 

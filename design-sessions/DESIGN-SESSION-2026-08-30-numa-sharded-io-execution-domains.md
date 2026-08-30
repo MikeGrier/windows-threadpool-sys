@@ -995,8 +995,11 @@ Ordered so that a short session yields the most:
 2. **Q6** -- the same spike with a Storage Space directory as `argv[1]`, with the
    space's layout recorded alongside. Distinguishes an honest answer from a
    fiction, which is the outcome that would be worse than no answer.
-3. **Q7** -- the thread-stack spike, once written. Decides whether the thread
-   builder's principal justification holds.
+3. **Q7** -- [thread-stack-numa-spike.rs](../crates/windows-ioring-sys/design-sessions/spikes/thread-stack-numa-spike.rs),
+   written and smoke-tested. Decides whether the thread builder's principal
+   justification holds. Three threads (attribute at creation, plain control,
+   plain-then-bound) each report a shallow and a deep stack page, which also
+   distinguishes creation-time placement from first-touch placement.
 4. **Magnitude** -- a read benchmark with the registered pool placed local
    against remote, which is the number the entire domain-count argument rests on
    and which nothing in this session has measured.

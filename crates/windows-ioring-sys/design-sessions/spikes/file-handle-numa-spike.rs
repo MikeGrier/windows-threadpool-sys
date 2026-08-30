@@ -44,9 +44,9 @@
 //!      nodes, creation-time affinity governs stack placement and the builder
 //!      is justified; if they match, it does not and the design should stop
 //!      claiming it does.
-//!      **This question is not implemented below.** It needs a second spike
-//!      with `CreateRemoteThreadEx` and an attribute list, and is recorded here
-//!      so it is not lost -- see the session record.
+//!      **This question is not implemented below**, because it needs
+//!      `CreateRemoteThreadEx` and an attribute list rather than a file handle.
+//!      It now has its own instrument: `thread-stack-numa-spike.rs`.
 //!
 //! Why it matters: `DESIGN-NOTES.md` asserts that mapping a file handle to the
 //! NUMA node of its backing device "has no clean user-mode path" and "means
