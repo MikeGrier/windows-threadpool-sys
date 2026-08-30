@@ -101,10 +101,16 @@ fn a_scope_reports_registration_counts_that_change_with_registrations() {
         let mut batch = scope.batch();
         // SAFETY: `file` outlives the registration -- it is dropped at the end
         // of this test, after the delivery that owns the ring.
-        let pending =
+        // Left to fall out of scope rather than `forget`-ed or explicitly
+        // dropped: a `PendingFileRegistration` owns no resource the kernel is
+        // still using -- unlike `PendingBufferRegistration`, it holds only
+        // indices -- so both of those spellings are no-ops that clippy rightly
+        // rejects, and both would read as if something were being kept alive.
+        // The completion is delivered to the pool, so this thread never claims
+        // it.
+        let _pending =
             unsafe { batch.register_files(&[handle, handle]) }.expect("queue file registration");
         batch.submit().expect("submit");
-        std::mem::forget(pending);
     }
     assert_eq!(
         delivery.scope().registered_file_count(),
