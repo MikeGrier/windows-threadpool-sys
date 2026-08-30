@@ -764,13 +764,31 @@ Independent of M17; may run in parallel.
   `supports` is true, so on a host supporting every operation it is equivalent *in practice*. Filed under
   host-blocked rather than provably-unkillable, because the equivalence is a property of the host, not the
   code -- and its single "caught" result is consistent with the flake above.
-- [ ] **M18.5** -- Document the strategy as a whole in [DESIGN-NOTES.md](DESIGN-NOTES.md): the three defect
+
+- [x] **M18.5** -- Document the strategy as a whole in [DESIGN-NOTES.md](DESIGN-NOTES.md): the three defect
   populations, which technique covers which, and -- most importantly -- **what none of them cover.** Two of the
   eight defects came from spikes against the real kernel, and no oracle, generator or allocator would have
   produced either, because both were cases of Windows behaving differently from the assumed contract. Record
   spikes as a budgeted technique for each new Win32 surface rather than something that happens when a test
   mysteriously fails.
-
+  **Done:** [DESIGN-NOTES.md](DESIGN-NOTES.md) -> [Testing strategy](DESIGN-NOTES.md#testing-strategy-m185),
+  plus [D-44](DESIGN-NOTES.md#d-44) making the spike rule citable from the decision index rather than reachable
+  only through prose.
+  **The item's own premise needed a correction, and checking found it.** "No allocator would have produced
+  D-32" is not quite true: the guard allocator *does* catch it, as a hard `STATUS_ACCESS_VIOLATION`, measured
+  in M17.4's calibration. The accurate statement is sharper and is what got written down -- every technique
+  here checks this crate's code against **this crate's stated contract**, and in both spike-found defects the
+  stated contract was the thing that was wrong. They detect a *consequence*, on a path some test already
+  walks; a spike produces the platform knowledge that decides what the code should be, and is the only
+  technique that runs **before there is code to test**.
+  **Two things the write-up records that no single milestone did.** First, M15 and M16 finding nothing is not
+  reassurance: they are passive, so zero findings meant the detectors had only seen the twenty-odd
+  hand-written scenarios that already passed -- which is why M17 exists to feed them. Second, **every one of
+  these instruments was wrong the first time and only sabotage found it**: M17.3's generator reported green
+  with #47 reintroduced, four of M18.4's mutation-killing tests did not kill their mutant, and M15.2's poison
+  inverse was fabricated twice. Budget the calibration, not just the instrument.
+  Also records the two rejected techniques -- a mock `IoRing` and PageHeap -- so neither is re-proposed as an
+  obvious win, and a per-technique table of what each actually found rather than what it was hoped to find.
 - [x] **M18.6** -- Narrow `EventDelivery`'s ring surface so safe code cannot replace the ring out from under
   the pool's wait. Spawned by M18.1, recorded as [D-43](DESIGN-NOTES.md#d-43), and **measured**: the
   replacement compiled and silently stopped delivery -- one completion before the swap, none after.

@@ -66,6 +66,7 @@ runs a continuation), this crate exposes the mechanism and documents the trade-o
 | <a id="d-41"></a>D-41 | **Randomized property testing is permitted in this component, under two conditions: seed it whenever it can be seeded, and where non-determinism is inherent and outside our control, randomness is fair game.** This settles the question [D-39](#d-39) left open when it admitted seeded poison. **Condition 1 -- seed what can be seeded.** A randomized run must be reproducible from a single number, and varying that number is how permutations of whatever variance was in play get generated. That is [D-39](#d-39)'s rule generalised from the poison pattern to any generator, and its three terms carry over unchanged: **seeded** (one number reproduces the whole run, rather than per-value randomness), **announced** (the seed is printed with the command to replay it, since a seed nobody can learn after a CI failure is not reproducibility), and **pinnable** from the environment. **Condition 2 -- inherent non-determinism is fair game.** Multiprocessor scheduling, kernel completion order, and thread-pool dispatch are not ours to control, and a test that depends on them cannot be seeded. Such tests are legitimate; pretending otherwise would only produce a test that is deterministic in its inputs while remaining nondeterministic in the behaviour it actually observes. **The corollary that keeps condition 2 from becoming a loophole: inherent non-determinism excuses irreproducibility, never unverifiability.** A test that cannot be replayed must instead **prove it reached the state it claims to exercise**, because the failure mode of a timing-dependent test is not a crash but a silent decay into testing something easier. M17.1 is the worked example on both halves: the racing draft looked like coverage of the in-flight handover state while in fact sampling the already-queued one, and its replacement cannot make that mistake because it counts what was already queued at the instant of attach and fails if no attempt ever caught a read in flight -- a guard itself calibrated by dropping `FILE_FLAG_NO_BUFFERING` and watching it fire ([D-40](#d-40)). Two operational terms follow for property tests specifically: any failure a generator discovers becomes a **named, seed-free regression test** committed alongside the corpus, since a property test that finds a bug and then forgets it has bought one debugging session rather than a guarantee; and they are **integration** tests, because they cross the OS boundary and will exceed the one-second unit budget. |
 | <a id="d-42"></a>D-42 | **A test that collects completions by polling `try_pop` cannot observe a lost wakeup, so any test exercising an attached completion event must wait for the signal it is owed -- and wait *before* draining, not after.** Measured, and the measurement is the reason M17.4 exists: with [D-20](#d-20)'s deliberate setup signal removed -- [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47) exactly as it shipped -- M17.3's generator reported **green**. It attached the event and sampled the right states, but drained with unconditional `try_pop`, which recovers every completion whether or not the ring ever signalled. The wakeup contract was simply not among the things it could observe. This is the sharpest available illustration that **sampling the right state is not the same as being sensitive to the defect that lives in it**, and it is why a generator's green result is worthless until a known-real defect has been shown to turn it red. The ordering matters as much as the waiting: a backlog queued *before* the attach is reachable only through the setup signal, so a drain-then-wait loop consumes that backlog by polling and hides the signal's absence, while wait-then-drain does not. With the fix, the generator catches #47 in 10 of 10 runs on fresh seeds, always within six sequences. Any future test that attaches a completion event inherits this rule; polling is legitimate only when no event is attached, where it is the whole consumer model rather than a hole in one. |
 | <a id="d-43"></a>D-43 | **Fixed in M18.6: `EventDelivery` hands out a `RingScope` -- every read-only part of `IoRing` plus batch construction, and no `&mut IoRing` -- because any `&mut IoRing` permits whole-value assignment, which let safe code replace the ring and silently stop delivery.** The defect, for the record: `EventDelivery::ring` returned `&Mutex<IoRing>`. Found by [M18.1's borrow-surface audit](#borrow-surface-audit-m181) and **measured, not argued**: `*delivery.ring().lock().unwrap() = IoRing::new(64, 64)?` compiles, and a probe recorded one completion delivered before the swap and **none** after it, despite four further operations being submitted and completed on the replacement. The mechanism is that the pool's wait holds its own duplicate of the *original* ring's completion event ([D-20](#d-20)); replacing the ring drops that ring and attaches nothing to the new one, so the armed wait can never be signalled again. **This is [D-35](#d-35)'s shape at a different layer** -- there, `&mut Vec<u8>` permitted `reserve` and reassignment where only byte writes were intended, and the fix was to narrow the returned type to `&mut [u8]`. Here the returned type permits replacing the whole ring where only submitting work was intended. Note the trap in the obvious fixes: a `Deref`/`DerefMut` newtype does **not** close it, because `*guard = ...` works through `DerefMut` just as well, and neither does a `with_ring(|ring: &mut IoRing| ...)` closure, for the same reason. Closing it meant never letting a `&mut IoRing` escape -- `RingScope` hands out a `Batch` instead -- which changed all nine call sites including the `epoch_log` example. The refusal is now enforced by a `compile_fail` doctest, itself verified by adding a `DerefMut` impl and watching that doctest fail, which is also the empirical proof of the claim above that a `Deref` newtype would not have closed the hole. **Severity was silent correctness, not unsoundness.** No use-after-free is reachable: the old ring runs down normally, the wait's duplicate handle stays valid, and completions on the replacement are still claimable. Delivery simply stops, which is the failure mode hardest to notice. The existing rustdoc warns against calling `completion_event` on the shared ring but says nothing about replacing it. |
+| <a id="d-44"></a>D-44 | **A spike against the real kernel is a budgeted, first-class technique for every new Win32 surface this crate wraps -- not something that happens after a test fails mysteriously.** The full argument is in [Testing strategy](#testing-strategy-m185); the decision is that the budget is allocated *before* the wrapper is written. Two of the eight defects behind M15-M18 exist because a Win32 contract was assumed rather than measured: the completion event is edge-triggered ([D-19](#d-19)) and `BuildIoRingRegisterBuffers` reads its array when the operation *runs* ([D-32](#d-32)). No oracle, generator, allocator or mutation run supplies that knowledge, because each of them checks code against **our** stated contract -- and in both cases our stated contract was the thing that was wrong. What they detect is a *consequence*, and only on a path some test already walks: the guard allocator does turn D-32 into a hard `STATUS_ACCESS_VIOLATION`, measured in M17.4's calibration, but that is the crash after the mistake, not the knowledge that would have prevented it. A spike is also the only technique here that can be run *before* there is code to test. Two obligations follow, both learned the hard way and recorded in [design-sessions/spikes/README.md](design-sessions/spikes/README.md): a spike must carry a **control case**, because the first two drain-ordering spikes could not discriminate and would have returned confidently wrong answers; and it must be **kept**, as a standalone single-file program depending only on `windows-sys`, so that what it measures stays the operating system's behaviour rather than ours. |
 
 ## Durability on the ring
 
@@ -721,3 +722,104 @@ prompted the audit: a returned type that permits an operation nobody intended.
 That is the pattern worth carrying forward into M18.2's recurring rule -- the
 question that finds these is not "is this correct?" but "what else does this
 type allow?"
+
+## <a id="testing-strategy-m185"></a>Testing strategy (M18.5)
+
+Eight defects came out of the 0.1.x line and the M11-M14 branch. M15 through
+M18 were built by sorting them by **what would have caught them**, rather than
+by adding whichever technique was closest to hand. This section records the
+result: which population each technique reaches, what each one actually found
+when run, and -- the part worth reading if you read nothing else -- what none of
+them reach at all.
+
+### The three populations
+
+| | The defects | What finds them | Built in |
+|---|---|---|---|
+| **A -- preconditions never varied** | [#47](https://github.com/MikeGrier/windows-threadpool-sys/issues/47): every `event_delivery` test handed over a *fresh* ring, so "completion queue non-empty at handover" was never a test input | Generated operation sequences, so the state space is sampled rather than enumerated by hand | M17 |
+| **B -- failure paths never taken** | The checkpoint path authorising a reclaim after a failed write; [#48](https://github.com/MikeGrier/windows-threadpool-sys/issues/48) surfacing as a *lucky* `ERROR_NOACCESS` rather than corruption | Deterministic memory instrumentation, an executable contract oracle, and a seam that injects failure into a real completion | M15, M16 |
+| **C -- permissions, not behaviour** | [D-35](#d-35) (`&mut Vec<u8>` permits `reserve`), [D-36](#d-36) (`&B` handed out while the kernel writes), and [D-43](#d-43), found by the audit itself | Review, made recurring by a mechanical trigger; mutation testing for the weaker cousin of the same problem | M18 |
+
+Population C is the one worth dwelling on: **no runtime technique reaches it at
+all.** Nothing has to execute for the hole to exist, so a fuzzer, an oracle, an
+allocator and a chaos harness are all looking in the wrong place. That is why
+review is a *primary* technique for this crate rather than a backstop, and why
+M18.2 gave it a written question and a CI trigger instead of an exhortation.
+
+### What each technique actually found
+
+Recorded as measured, because the honest numbers are more useful than the
+hoped-for ones.
+
+| Technique | Found |
+|---|---|
+| Guard-page allocator + tracked poison (M15) | **No new defects.** Calibrated against D-32, which it turns into a hard `STATUS_ACCESS_VIOLATION` where 0.1.2 got a survivable `ERROR_NOACCESS` |
+| `RingContract` oracle + fault-injection seam (M16) | **No new defects in shipping code.** Found two gaps in its own design (tokenless pushes, a claim path that frees on failure) |
+| Generated sequences (M17) | **No new defects.** Found an API precondition the generator was violating, and -- once calibrated -- rediscovers #47 in 10 of 10 runs |
+| Borrow-surface audit (M18.1) | **One defect: [D-43](#d-43)**, in 19 items audited. Same shape as the two that prompted the audit |
+| Mutation testing (M18.3/4/7) | **A third vacuous test** four review rounds had read past, plus 36 further weak assertions. 79.7% to 95.8% |
+
+Two observations that only appear once the table is read as a whole.
+
+**M15 and M16 found nothing, and that is not reassurance.** They are *passive*:
+they check invariants during whatever operations the existing tests happen to
+perform. Zero findings meant the detectors had only ever seen the twenty or so
+hand-written scenarios that already passed. M17 exists to feed them, which is
+why its milestone is titled that way rather than "more testing".
+
+**Every one of these instruments was wrong the first time, and only sabotage
+found it.** M17.3's generator reported green with #47 reintroduced, because it
+polled `try_pop` instead of waiting for the wakeup it was owed ([D-42](#d-42)).
+Four of M18.4's mutation-killing tests did not kill their mutant, each for a
+different and individually plausible reason. M15.2's poison inverse was
+fabricated twice. The rule that falls out of this is stated in
+[D-41](#d-41)'s corollary and is the single most transferable thing in M15-M18:
+**a green result from an instrument nobody has shown can go red is not
+evidence.** Budget the calibration, not just the instrument.
+
+### What none of them cover
+
+All five techniques check this crate's code against **this crate's stated
+contract**. None of them can tell you the stated contract is wrong -- and in the
+two most expensive defects, that is exactly what happened. The completion event
+is edge-triggered ([D-19](#d-19)) and `BuildIoRingRegisterBuffers` reads its
+array when the operation runs rather than when `Build*` returns
+([D-32](#d-32)). Both were discovered by a spike against the real kernel, and
+neither could have come from anywhere else in this toolkit.
+
+Be precise about the failure mode, because "the allocator would not have caught
+D-32" is not quite true and the imprecision matters. The guard allocator *does*
+catch it, loudly, once a test walks the registration path -- M17.4 measured
+that. What no technique here supplies is the *knowledge* that the kernel reads
+late, and without that knowledge the code is written wrong in the first place.
+These techniques detect consequences on paths that already exist. A spike
+produces the platform knowledge that determines what the code should be, and it
+is the only technique that can run **before there is any code to test**.
+
+Hence [D-44](#d-44): a spike is a budgeted, first-class technique for every new
+Win32 surface, allocated before the wrapper is written. It carries two
+obligations, both learned by getting them wrong -- a **control case**, because
+the first two drain-ordering spikes could not discriminate and would have
+returned confidently wrong answers; and it is **kept** as a standalone program
+depending only on `windows-sys`, so what it measures stays the operating
+system's behaviour and not ours. The surviving spikes and the reasoning behind
+their shape are in
+[design-sessions/spikes/README.md](design-sessions/spikes/README.md), and what
+they established is summarised under
+[What the spike established](#what-the-spike-established).
+
+### Two techniques deliberately rejected
+
+Recorded so they are not re-proposed as obvious wins.
+
+**A mock `IoRing`.** Both shipped defects were the kernel behaving differently
+from this crate's assumptions. A mock *encodes* the assumption, so one written
+before those discoveries would have passed both bugs green -- it would not
+merely have failed to find them, it would have manufactured evidence they were
+absent. A model belongs here as an **oracle over observed sequences**
+([`RingContract`](src/contract.rs)), never as a substitute for the kernel.
+
+**Application Verifier / PageHeap**, rejected after measuring rather than
+assuming ([D-37](#d-37)): it works, and needs no SDK, but it is keyed by *image
+file name* and cargo rehashes test binaries on every meaningful rebuild -- so
+it would degrade silently to instrumenting nothing.
