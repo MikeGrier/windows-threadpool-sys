@@ -86,7 +86,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   `feature-matrix` CI job that would have to grow, and the benefit is one dead-code elimination already
   provides.
 
-- [ ] **M30.3** -- The SPSC bounded ring, with no doorbell and no Win32 at all: a pure data structure with
+- [x] **M30.3** -- The SPSC bounded ring, with no doorbell and no Win32 at all: a pure data structure with
   acquire/release head and tail and no CAS on either side. It is the CQ direction (R1), and it is first
   because everything harder is a variation on it. Tests are ordinary fast unit tests -- capacity edges,
   wraparound, full and empty, and that a `pop` never observes a partially written `T`.
@@ -99,6 +99,31 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   match, the `WaitableQueue` trait becomes a breaking change to one of them rather than an addition.
   Verify it the cheap way: write the trait's method signatures down as a comment before writing the
   type, and confirm the type satisfies them.
+  **Done, and the signatures are written down in `spsc.rs`'s module documentation before the type**, as
+  the item asked. `push`/`pop` take **`&self`**, not `&mut self`: the latter would also make
+  single-producer sound and is what several SPSC crates use, but it cannot generalize to a shape where
+  several threads push through a shared handle, and one spelling has to serve every shape.
+  Cardinality is carried by the auto traits instead -- the handles are `Send` but **not `Sync`** and not
+  `Clone`, so "single" is a fact the compiler checks. A multi-producer shape relaxes exactly one cell of
+  that table.
+  **Sabotage-verified rather than merely green.** Six deliberate defects, each confirmed to fail the
+  suite: a drop loop starting at zero instead of `head`, an off-by-one in the full test, `Full` reported
+  where `Disconnected` is owed, `pop` not advancing `head`, `push` not advancing `tail`, and a mask of
+  `capacity` instead of `capacity - 1`.
+  **One sabotage was NOT caught, and it is recorded rather than smoothed over:** weakening the producer's
+  `Acquire` load to `Relaxed` leaves the suite green. That is a genuine limit of stress testing, not a
+  missing test -- an ordering bug needs an interleaving the hardware and scheduler must be coaxed into
+  producing, and neither ARM64 nor x86-64 will oblige on demand. Queued as M31.6.
+  **A harness defect worth remembering:** the first sabotage sweep reported "not caught" for the
+  `pop`-does-not-advance case, because the detector matched on the string `test result: FAILED` and the
+  test process had instead died with `STATUS_HEAP_CORRUPTION`, which prints no such line. Nine tests had
+  in fact failed. A sabotage harness that recognizes only one failure shape will eventually certify a
+  hole that is not there -- or miss one that is. Detect by exit code.
+  The same defect then bit the *gate*: piping `cargo clippy` through `Select-String` makes
+  `$LASTEXITCODE` report the filter's status, not cargo's, so a clean-looking `exit=0` was hiding a real
+  `-D warnings` failure (`clippy::doc_overindented_list_items`, seven sites in `windows-platform-probes`,
+  actual exit 101) that CI would have caught. Fixed in the preceding commit. Redirect with `*>` and read
+  `$LASTEXITCODE` before any pipe.
 
 - [ ] **M30.4** -- The doorbell, as its own reviewable unit: a queue-owned **manual-reset** event created
   **lazily**, so a polling-only consumer allocates no kernel object. Level semantics -- signalled exactly
@@ -143,6 +168,21 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
 
   Record the result either way -- a measurement that says "the simple thing is fine" is worth as much as
   one that does not, and is the cheaper outcome to lose track of.
+
+- [ ] **M31.6** -- Verify the memory orderings with a model checker, because stress testing demonstrably
+  cannot. **Measured, not assumed:** during M30.3's sabotage sweep, weakening the producer's `Acquire`
+  load of `head` to `Relaxed` left all twenty tests green, while every *logic* defect injected alongside
+  it was caught. A stress test can only observe the interleavings the hardware and scheduler happen to
+  produce, and neither ARM64 nor x86-64 will produce the reordering that makes a missing acquire visible
+  just because a test asks nicely.
+  `loom` is the tool: it enumerates interleavings under a weak-memory model rather than sampling them, so
+  a missing `Acquire`/`Release` pair becomes a deterministic failure. It is a dev-dependency and a
+  `cfg(loom)` shim over the atomics, so it costs the shipped crate nothing.
+  **Sabotage-verify the verifier**, exactly as here: the loom test is only worth its weight if
+  reintroducing that same `Relaxed` makes it fail. If it does not, the model is not covering the path
+  and the test is decoration.
+  Scope it to the orderings, not the logic -- loom explores exponentially, so a loom test that also
+  checks FIFO order over a thousand items will not terminate.
 
 ## M32 -- Contracts the runtime cannot be written without
 

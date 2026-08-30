@@ -43,10 +43,31 @@
 //!
 //! # Status
 //!
-//! Skeleton. The shapes land in the milestones tracked by
-//! `CHECKLIST-io-domains.md` at the workspace root; the decisions they will be
+//! [`spsc`] is implemented and has no doorbell yet -- it is a plain concurrent
+//! ring, and the `HANDLE` the crate is named for arrives with the milestone
+//! after it. The remaining shapes land in the milestones tracked by
+//! `CHECKLIST-io-domains.md` at the workspace root; the decisions they are
 //! built against are recorded in `DESIGN-NOTES.md` beside this file.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 #![warn(unsafe_op_in_unsafe_fn)]
+
+mod error;
+pub mod spsc;
+
+pub use error::{CapacityError, PushError};
+
+/// Pads and aligns a value onto its own cache line.
+///
+/// The producer's position and the consumer's position are written by different
+/// threads on every operation. Left adjacent they would share a cache line, and
+/// each write would invalidate the other thread's copy of a value it only ever
+/// reads -- false sharing, which converts an uncontended queue into a
+/// contended one while every load and store remains individually correct.
+///
+/// 128 rather than 64: that is the cache line on aarch64, and on x86-64 the
+/// adjacent-line prefetcher pulls pairs of 64-byte lines, so 64 does not
+/// reliably separate them.
+#[repr(align(128))]
+struct CacheAligned<T>(T);
