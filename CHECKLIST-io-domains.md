@@ -60,10 +60,25 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   Tier-1 transcription of Tier-3 session content -- design notes are not a work queue, so a decision that
   lives only in the session record is orphaned.
 
+  **Settle one question here that M30.3 then depends on:** whether `WaitableQueue` is a single
+  consumer-side trait, or a producer trait and a consumer trait. Waitability lives on the consumer -- it
+  waits, while the producer merely rings -- so a single trait would be consumer-side and the producer's
+  contract would go unnamed. Decide rather than defer, because M30.3 writes the first signatures against
+  whichever answer this gives.
+
 - [ ] **M30.3** -- The SPSC bounded ring, with no doorbell and no Win32 at all: a pure data structure with
   acquire/release head and tail and no CAS on either side. It is the CQ direction (R1), and it is first
   because everything harder is a variation on it. Tests are ordinary fast unit tests -- capacity edges,
   wraparound, full and empty, and that a `pop` never observes a partially written `T`.
+
+  **This item sets the shape every later queue must match**, so it is where the trait-compatibility
+  constraint binds: split producer and consumer handles, with cardinality carried by whether each is
+  `Clone` (see
+  [DESIGN-NOTES.md](DESIGN-NOTES.md#the-waitable-queues-crate-is-named-plural-and-carries-no-sys-suffix)).
+  Getting this wrong is not a local mistake -- if the first shape ships a signature the second cannot
+  match, the `WaitableQueue` trait becomes a breaking change to one of them rather than an addition.
+  Verify it the cheap way: write the trait's method signatures down as a comment before writing the
+  type, and confirm the type satisfies them.
 
 - [ ] **M30.4** -- The doorbell, as its own reviewable unit: a queue-owned **manual-reset** event created
   **lazily**, so a polling-only consumer allocates no kernel object. Level semantics -- signalled exactly

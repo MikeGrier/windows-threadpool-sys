@@ -109,6 +109,42 @@ siblings too. No single queue is the queue.
 specifically named (`SpscRing`, `MpscRing`) and a consumer must say which it wants. That stops a
 default from accreting by accident, which is the failure the plural is chosen to prevent.
 
+**A `WaitableQueue` *trait* is the opposite case, and is anticipated.** The rule above forbids a
+bare `Queue` *type*, and the distinction matters: a type named `Queue` sitting among peers claims
+to be the one that matters, while a trait names the contract those peers *share* and claims
+nothing. The two are complementary. Concrete types remain the primary API -- usable directly,
+with no type parameter and no dispatch -- and the trait exists for consumers who want to be
+generic over a shape, exactly as `std::io::Read` sits beside `File`.
+
+**Anticipating that trait is a constraint on the concrete types now, not an addition later.** If
+one shape ships `pop(&mut self) -> Option<T>` and another ships `try_pop(&self) -> Result<T,
+Empty>`, no trait unifies them afterwards without a breaking change to one of them. Signatures
+must therefore be trait-compatible from the first type, whether or not the trait ever ships.
+
+**So every shape is split into producer and consumer handles, and cardinality is expressed by
+`Clone`.** This is the hard part, because the conventions differ by shape: an SPSC queue is
+usually a split `Producer`/`Consumer` pair, while a shared MPMC queue is usually one `Arc<Q>`
+with `&self` on both ends, and no trait spans those two structures. Making every shape
+split-handle resolves it, and buys something better than uniformity:
+
+| Shape | Producer | Consumer |
+|---|---|---|
+| SPSC | not `Clone` | not `Clone` |
+| MPSC | `Clone` | not `Clone` |
+| MPMC | `Clone` | `Clone` |
+
+Cardinality becomes a **compile-time guarantee rather than a documented precondition**: an SPSC
+producer that cannot be cloned cannot become a second producer. The alternative -- a shared
+`&self` queue carrying an unchecked "only one consumer" contract -- is precisely the kind of
+rule-you-must-remember that
+[`RingScope`](crates/windows-ioring-sys/DESIGN-NOTES.md#d-43) and `get(&mut self)` were
+introduced to eliminate elsewhere in this workspace.
+
+**The doorbell belongs on the consumer side**, since the consumer is what waits and the producer
+merely rings. Whether that makes `WaitableQueue` a consumer-side trait, or splits the contract
+into a producer trait and a consumer trait, is left to the crate's own design notes rather than
+guessed here.
+
 **What unifies the family is waitability, not I/O.** An earlier candidate, `windows-io-queue`,
 was rejected on this point: the queues themselves have nothing to do with I/O, and the domain
 runtime is merely their first consumer. Naming a general facility after its first client is the
