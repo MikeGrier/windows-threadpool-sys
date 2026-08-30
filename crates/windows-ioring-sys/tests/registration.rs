@@ -85,7 +85,7 @@ fn a_read_addressing_a_registered_file_and_a_registered_buffer_round_trips() {
         .try_pop()
         .expect("pop completion")
         .expect("a completion is ready");
-    let registered_buffers = buffers_pending
+    let mut registered_buffers = buffers_pending
         .claim_if(&completion)
         .expect("id matches")
         .expect("buffer registration succeeded");
@@ -255,7 +255,7 @@ fn a_buffer_registration_survives_heap_churn_between_the_push_and_the_submit() {
         .try_pop()
         .expect("pop completion")
         .expect("a completion is ready");
-    let registered_buffers = pending
+    let mut registered_buffers = pending
         .claim_if(&completion)
         .expect("id matches")
         .expect("buffer registration must survive heap churn before the submit");
@@ -611,7 +611,7 @@ fn a_registered_file_and_a_registered_buffer_compose_through_the_safe_api() {
         .try_pop()
         .expect("pop completion")
         .expect("a completion is ready");
-    let registered_buffers = buffers_pending
+    let mut registered_buffers = buffers_pending
         .claim_if(&completion)
         .expect("id matches")
         .expect("buffer registration succeeded");
@@ -1107,7 +1107,7 @@ fn get_refuses_a_buffer_a_read_is_landing_into_but_allows_one_a_write_is_reading
         .try_pop()
         .expect("pop completion")
         .expect("a completion is ready");
-    let buffers = pending
+    let mut buffers = pending
         .claim_if(&completion)
         .expect("id matches")
         .expect("buffer registration succeeded");

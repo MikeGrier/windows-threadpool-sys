@@ -151,7 +151,7 @@ fn a_registered_write_leaves_its_source_slot_byte_identical() {
     let file = open_shared(&path, true);
 
     let mut ring = IoRing::new(16, 16).expect("create a ring");
-    let buffers = registered_arena(&mut ring, 1, seed);
+    let mut buffers = registered_arena(&mut ring, 1, seed);
 
     // What the slot holds before the kernel sees it.
     let before = buffers.get(0).expect("slot 0 is quiet").to_vec();
@@ -213,7 +213,7 @@ fn a_registered_read_writes_only_inside_the_span_it_was_given() {
     let file = open_shared(&path, false);
 
     let mut ring = IoRing::new(16, 16).expect("create a ring");
-    let buffers = registered_arena(&mut ring, 1, seed);
+    let mut buffers = registered_arena(&mut ring, 1, seed);
 
     let span = RegisteredSpan {
         buffer_index: 0,
@@ -284,7 +284,7 @@ fn a_short_read_leaves_the_unfilled_remainder_of_the_span_untouched() {
     let file = open_shared(&path, false);
 
     let mut ring = IoRing::new(16, 16).expect("create a ring");
-    let buffers = registered_arena(&mut ring, 1, seed);
+    let mut buffers = registered_arena(&mut ring, 1, seed);
 
     let span = RegisteredSpan {
         buffer_index: 0,
@@ -340,7 +340,7 @@ fn a_read_into_one_slot_leaves_its_neighbours_untouched() {
     let file = open_shared(&path, false);
 
     let mut ring = IoRing::new(16, 16).expect("create a ring");
-    let buffers = registered_arena(&mut ring, 3, seed);
+    let mut buffers = registered_arena(&mut ring, 3, seed);
 
     let span = RegisteredSpan {
         buffer_index: TARGET,
@@ -408,7 +408,7 @@ fn a_mixed_workload_leaves_every_unaccounted_byte_poisoned() {
     let write_file = open_shared(&write_path, true);
 
     let mut ring = IoRing::new(32, 64).expect("create a ring");
-    let buffers = registered_arena(&mut ring, SLOTS, seed);
+    let mut buffers = registered_arena(&mut ring, SLOTS, seed);
 
     let mut slots: Vec<Slot> = (0..SLOTS)
         .map(|slot| Slot {

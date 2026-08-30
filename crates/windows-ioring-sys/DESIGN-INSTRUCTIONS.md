@@ -9,8 +9,23 @@ instructions. Locate them by the nearest-ancestor rule, the same as
 **Any change that adds a public function returning a borrow, or widens what an
 existing one returns, must answer this question in the pull request:**
 
-> What can safe code do with this, and does the registration or the kernel
-> still hold anything it could invalidate?
+> 1. **What can safe code do with this**, and does the registration or the
+>    kernel still hold anything it could invalidate?
+> 2. **How long does the borrow last**, and what can safe code start *while it
+>    is alive* that would invalidate it?
+
+Both questions, every time. The second is not a refinement of the first -- they
+have different answers, and asking only the first is how [D-45](DESIGN-NOTES.md#d-45)
+survived an audit of the whole surface. `RegisteredBuffers::get` answered
+question 1 correctly (it refuses while the kernel is writing) and question 2 was
+never put to it: the check held at the instant of the call, while the returned
+slice lived as long as the borrow, and `&self` let a caller start the very
+operation the check exists to exclude.
+
+The mechanical form of question 2 is: **take the returned borrow, then try to
+call every other method that could start work against the same object.** If any
+of them compiles, the check is a point-in-time check guarding a
+lifetime-shaped hazard, and the receiver probably needs to be `&mut self`.
 
 A borrow here means a reference, or a lifetime-carrying wrapper such as
 `Batch<'_>` or `RingScope<'_>`. Widening includes returning a more capable type
@@ -19,7 +34,7 @@ it wrapped.
 
 ### Why this specific question, and why it recurs
 
-This crate has shipped three defects of exactly one shape: a public method whose
+This crate has shipped four defects of exactly one shape: a public method whose
 return type permitted an operation nobody intended.
 
 | | The return type | What it wrongly permitted |
@@ -27,9 +42,10 @@ return type permitted an operation nobody intended.
 | [D-35](DESIGN-NOTES.md#d-35) | `&mut Vec<u8>` | `reserve`, `resize`, and whole-value assignment, where only byte writes were intended |
 | [D-36](DESIGN-NOTES.md#d-36) | `&[u8]`, unchecked | reading a buffer the kernel might still be writing into |
 | [D-43](DESIGN-NOTES.md#d-43) | `&Mutex<IoRing>` | replacing the ring, silently stopping delivery |
+| [D-45](DESIGN-NOTES.md#d-45) | `&[u8]` from `&self` | holding the borrow across a submit that makes the kernel write into that buffer |
 
-None of these was careless. All three arrived through ordinary, well-reviewed
-changes, and two of the three were caught only by a later review that happened
+None of these was careless. All four arrived through ordinary, well-reviewed
+changes, and three of the four were caught only by a later review that happened
 to ask this question. **What was missing was not diligence -- it was a specific
 question being asked at a specific moment.** That is worth stating plainly,
 because "review harder" is not a mechanism and would not have caught any of
@@ -71,7 +87,7 @@ the source, so CI stops on any addition or widening. Refresh it with
 
 The check verifies *shape*, not correctness: it cannot tell a safe accessor from
 a dangerous one, and it is not trying to. Its only job is to make the question
-unavoidable at the moment the surface changes -- which is the moment all three
+unavoidable at the moment the surface changes -- which is the moment all four
 defects above went past.
 
 Two consequences worth being explicit about:
@@ -81,7 +97,7 @@ Two consequences worth being explicit about:
 - **Do not silence it by narrowing the check.** If it fires on something
   uninteresting, that is a cheap sentence in the audit table. A check tuned
   until it stops firing is a check that has stopped working, and this one exists
-  precisely because the previous mechanism -- remembering -- failed three times.
+  precisely because the previous mechanism -- remembering -- failed four times.
 
 ## Design tiers
 

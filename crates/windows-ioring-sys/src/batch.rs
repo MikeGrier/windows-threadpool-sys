@@ -674,14 +674,49 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     /// let bytes = arena.get(span.buffer_index)?;
     /// ```
     ///
+    /// The reverse order is the one the check alone could not stop, and is why
+    /// this takes `&mut self` -- see below:
+    ///
+    /// ```ignore
+    /// let bytes = arena.get(0)?;       // quiet here, so the check passes
+    /// batch.read_registered(&file, &arena, span, 0, PushOptions::new())?;
+    /// batch.submit()?;                 // kernel now filling that same buffer
+    /// let stale = bytes[0];            // ... read through the live borrow
+    /// ```
+    ///
+    /// # Why this takes `&mut self` to hand back a shared slice
+    ///
+    /// The refusal above is a check at one instant, but the slice it returns
+    /// lives as long as the borrow. Taking `&self` made those two different
+    /// lengths of time, and the gap was reachable: `read_registered` takes the
+    /// registration by *shared* reference, so a caller could take the borrow
+    /// while the buffer was quiet, then push and submit a read into that same
+    /// buffer and keep reading through the still-live slice. Measured, not
+    /// argued -- a probe watched the bytes change under a live `&[u8]` while a
+    /// fresh `get` at that same instant correctly refused.
+    ///
+    /// `&mut self` closes it by making the *borrow* conflict with starting the
+    /// operation, not merely its creation: `read_registered(&arena, ..)` cannot
+    /// be called while this slice is alive. That costs nothing real, because
+    /// **no caller needs to read a buffer during the window it is refused**.
+    /// While a read is in flight the bytes are indeterminate -- partially
+    /// written, in arbitrary order -- and only become meaningful once the
+    /// completion is observed. Earlier or later is always available.
+    ///
+    /// It does not restrict an arena. A [`Token`] holds a [`RegisteredUse`],
+    /// not a borrow of this registration, so the shared borrow ends when the
+    /// push returns; a caller may still read or fill *quiet* buffers while
+    /// operations are outstanding against their neighbours, which is what makes
+    /// a registered arena usable at all.
+    ///
     /// # Why it refuses less than [`get_mut`] does
     ///
     /// `get_mut` refuses while *any* operation is outstanding, because
     /// mutating races the kernel whichever way the kernel is touching the
     /// buffer. Reading is narrower: it races only a kernel that is **writing
-    /// into** the buffer, so this refuses only while a *read* is outstanding.
-    /// A caller may read the bytes of a write it has in flight -- the kernel
-    /// is reading them too, and two readers do not race.
+    /// into** the buffer, so this refuses only while a *read* is outstanding --
+    /// the bytes of a write in flight are stable, and the kernel is reading
+    /// them too.
     ///
     /// A count returns to zero only when a [`Token`] is claimed against a real
     /// popped [`Completion`], so "not outstanding" means the operation was
@@ -697,13 +732,56 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
     ///
     /// [`get_mut`]: RegisteredBuffers::get_mut
     ///
+    /// # Holding the borrow across a push is refused at compile time
+    ///
+    /// This is the regression guard for the hazard described above. Taking the
+    /// borrow while the buffer is quiet and *then* submitting a read into it
+    /// must not compile:
+    ///
+    /// ```compile_fail
+    /// # use windows_ioring_sys::{Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedFile};
+    /// # fn hazard<B: windows_ioring_sys::IoBufMut>(
+    /// #     ring: &mut IoRing,
+    /// #     arena: &mut RegisteredBuffers<B>,
+    /// #     file: &SharedFile,
+    /// #     span: RegisteredSpan,
+    /// # ) -> std::io::Result<u8> {
+    /// let bytes: &[u8] = arena.get(0)?;      // quiet here, so the check passes
+    /// let mut batch = Batch::new(ring);
+    /// let _token = batch.read_registered(file, arena, span, 0, PushOptions::new())?;
+    /// batch.submit()?;                       // kernel now filling that buffer
+    /// Ok(bytes[0])                           // ... read through the live borrow
+    /// # }
+    /// ```
+    ///
+    /// Reading a *quiet* buffer while an operation is outstanding against a
+    /// neighbour is still allowed, because a [`Token`] borrows nothing from the
+    /// registration -- that is the arena pattern, and it must keep working:
+    ///
+    /// ```no_run
+    /// # use windows_ioring_sys::{Batch, IoRing, PushOptions, RegisteredBuffers, RegisteredSpan, SharedFile};
+    /// # fn arena_still_works<B: windows_ioring_sys::IoBufMut>(
+    /// #     ring: &mut IoRing,
+    /// #     arena: &mut RegisteredBuffers<B>,
+    /// #     file: &SharedFile,
+    /// #     span: RegisteredSpan,
+    /// # ) -> std::io::Result<()> {
+    /// let mut batch = Batch::new(ring);
+    /// let token = batch.read_registered(file, arena, span, 0, PushOptions::new())?;
+    /// batch.submit()?;
+    /// let _neighbour = arena.get(1)?;        // a different, quiet buffer
+    /// # let _ = token;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Errors
     ///
     /// [`io::ErrorKind::InvalidInput`] if `i` is out of range for this
     /// registration, or [`io::ErrorKind::WouldBlock`] if a read is still
     /// outstanding into that buffer -- pop its completion and claim its token
     /// first.
-    pub fn get(&self, i: u32) -> io::Result<&[u8]> {
+    pub fn get(&mut self, i: u32) -> io::Result<&[u8]> {
         let index = usize::try_from(i).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -734,10 +812,13 @@ impl<B: IoBufMut> RegisteredBuffers<B> {
             .expect("state and buffers are built together and have equal length");
         // SAFETY: `stable_ptr` is `IoBuf`'s promised stable address for this
         // buffer, and `registered_len` was recorded from that same buffer at
-        // registration, so those bytes are allocated and initialized. `&self`
-        // excludes concurrent mutation through `get_mut`, and the
-        // zero-`kernel_writes` check above excludes the kernel writing into
-        // them for this borrow's life.
+        // registration, so those bytes are allocated and initialized. `&mut
+        // self` excludes concurrent mutation through `get_mut` *and* -- because
+        // the returned slice borrows it for its whole life -- excludes pushing
+        // a new operation against this registration while the slice is alive,
+        // since `read_registered` needs `&RegisteredBuffers`. So the
+        // zero-`kernel_writes` check above cannot be outrun: no read into this
+        // buffer can start before the borrow ends.
         Ok(unsafe { std::slice::from_raw_parts(buffer.stable_ptr(), len) })
     }
 

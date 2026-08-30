@@ -308,7 +308,7 @@ fn a_pending_buffer_registration_claims_only_its_own_completion() {
         real.user_data(),
         "the reported user_data must be the one the ring completed"
     );
-    let buffers = pending
+    let mut buffers = pending
         .claim_if(&real)
         .expect("its own completion is accepted")
         .expect("the registration succeeded");
