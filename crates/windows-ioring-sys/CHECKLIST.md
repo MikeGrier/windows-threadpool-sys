@@ -643,12 +643,23 @@ than a backstop -- and that deserves a written procedure instead of depending on
 
 Independent of M17; may run in parallel.
 
-- [ ] **M18.1** -- Audit every public type that hands out a borrow or an owned value, against one mechanical
+- [x] **M18.1** -- Audit every public type that hands out a borrow or an owned value, against one mechanical
   question: **what can safe code do with this, and does the registration or the kernel still hold anything it
   could invalidate?** `&mut Vec<u8>` permits `reserve`, `resize` and whole-value assignment; `&mut [u8]`
   permits none of them. Record the finding per item even when the answer is "nothing", so the absence of a
   hole is evidence rather than silence.
-
+  **Done:** [DESIGN-NOTES.md](DESIGN-NOTES.md) -> [Borrow-surface audit](DESIGN-NOTES.md#borrow-surface-audit-m181),
+  nineteen items, each recorded including the sixteen where the answer is "no hole".
+  **One finding, and it is the same shape as the two that prompted the audit.** `EventDelivery::ring` hands
+  out `&Mutex<IoRing>`, and *any* `&mut IoRing` permits whole-value assignment, so safe code can replace the
+  ring and silently stop delivery. Measured rather than argued: the replacement compiles, and a probe recorded
+  one completion delivered before the swap and **none** after, despite four further operations completing on
+  the replacement. The pool's wait holds a duplicate of the *original* ring's event, and nothing is ever
+  attached to the new one. Recorded as [D-43](DESIGN-NOTES.md#d-43); the fix is **M18.6** below.
+  **Worth carrying into M18.2:** the question that finds these is not "is this correct?" but "what else does
+  this type allow?" Note also that the two obvious fixes do not work -- a `Deref`/`DerefMut` newtype still
+  permits `*guard = ...`, and so does a `with_ring(|ring: &mut IoRing| ...)` closure. Anything that lets a
+  `&mut IoRing` escape keeps the hole.
 - [ ] **M18.2** -- Turn M18.1 into a recurring obligation rather than a one-time pass, as a
   `DESIGN-INSTRUCTIONS.md` rule for this component: any change adding or widening a public borrow-returning
   method answers M18.1's question in the PR. Both C-population defects were introduced by ordinary,
@@ -670,3 +681,18 @@ Independent of M17; may run in parallel.
   produced either, because both were cases of Windows behaving differently from the assumed contract. Record
   spikes as a budgeted technique for each new Win32 surface rather than something that happens when a test
   mysteriously fails.
+
+- [ ] **M18.6** -- Narrow `EventDelivery`'s ring surface so safe code cannot replace the ring out from under
+  the pool's wait. Spawned by M18.1, recorded as [D-43](DESIGN-NOTES.md#d-43), and **measured**: the
+  replacement compiles today and silently stops delivery -- one completion before the swap, none after.
+  **The two obvious fixes do not work.** A `Deref`/`DerefMut` newtype still permits `*guard = ...`, and so
+  does handing a `&mut IoRing` to a closure. Closing the hole means never letting a `&mut IoRing` escape at
+  all: expose a *submission scope* that can build a [`Batch`] against the ring and nothing else, keeping the
+  `&mut` private. Decide deliberately what else the scope must expose -- `outstanding` is a reasonable
+  read-only addition; `try_pop` is not, because in Model A the pool is the single drainer ([D-21](DESIGN-NOTES.md#d-21)).
+  Blast radius is every current caller, including the `epoch_log` example and the delivery tests, which is why
+  it was scheduled rather than taken inline during the audit. 0.2.0 is already a breaking release, so the
+  window is open.
+  Prove it by construction rather than by review: a `compile_fail` doctest asserting the replacement no longer
+  compiles, plus a delivery test that keeps working across the new API. A fix whose only evidence is that
+  someone read it is exactly what M18 exists to stop relying on.
