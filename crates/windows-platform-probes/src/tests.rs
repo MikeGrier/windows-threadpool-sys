@@ -693,3 +693,132 @@ fn the_impersonation_guard_reverts_even_while_unwinding() {
         "the thread must not have been left impersonating after the unwind"
     );
 }
+
+// --- topology -------------------------------------------------------------
+//
+// Every interesting number the topology probe prints is host-specific, so
+// nothing here asserts a *value*. What is asserted is internal consistency,
+// which must hold on any machine and therefore catches a parsing regression in
+// `windows-topology-sys` on whatever hardware CI happens to run on -- which is
+// the whole reason the probe reads the shipping crate rather than a second
+// parse written here.
+
+#[test]
+fn the_machine_reports_at_least_one_processor_one_group_and_one_core() {
+    let observation = crate::topology::measure().expect("topology discovery");
+
+    assert!(
+        observation.online_processors >= 1,
+        "a running process implies at least one online processor"
+    );
+    assert!(
+        observation.groups >= 1,
+        "every machine has at least one processor group"
+    );
+    assert!(
+        !observation.cores.is_empty(),
+        "a machine with processors must report cores"
+    );
+    assert!(
+        observation.packages >= 1,
+        "every machine has at least one package"
+    );
+}
+
+#[test]
+fn the_shipping_parse_agrees_with_the_raw_win32_counters() {
+    let observation = crate::topology::measure().expect("topology discovery");
+
+    // This is the cross-check that makes the probe worth running everywhere: a
+    // disagreement means windows-topology-sys parsed
+    // GetLogicalProcessorInformationEx differently from what the simple
+    // counters report on this host.
+    let complaints = observation.cross_check();
+    assert!(
+        complaints.is_empty(),
+        "topology crate disagrees with the raw counters: {complaints:?}"
+    );
+}
+
+#[test]
+fn every_core_reports_processors_and_smt_agrees_with_the_count() {
+    let observation = crate::topology::measure().expect("topology discovery");
+
+    for core in &observation.cores {
+        assert!(
+            core.processors >= 1,
+            "a core with no processors is a parse error, not a machine"
+        );
+        assert_eq!(
+            core.simultaneous_multithreading,
+            core.processors > 1,
+            "SMT is exactly the condition of a core carrying more than one processor"
+        );
+    }
+}
+
+#[test]
+fn every_cache_level_reports_at_least_one_domain_with_at_least_one_processor() {
+    let observation = crate::topology::measure().expect("topology discovery");
+
+    for cache in &observation.caches {
+        assert!(
+            cache.level >= 1,
+            "a cache level of zero is a parse error, not a machine"
+        );
+        assert_eq!(
+            cache.domains,
+            cache.processors_per_domain.len(),
+            "the domain count must be the length of the per-domain spans"
+        );
+        assert!(
+            cache.processors_per_domain.iter().all(|&span| span >= 1),
+            "a cache domain covering no processors is a parse error"
+        );
+    }
+}
+
+#[test]
+fn the_outermost_partitioning_cache_is_the_deepest_level_that_splits_the_machine() {
+    let observation = crate::topology::measure().expect("topology discovery");
+
+    match observation.outermost_partitioning_cache() {
+        Some(chosen) => {
+            assert!(
+                chosen.domains > 1,
+                "a level that does not partition cannot be the partitioning level"
+            );
+            // Nothing deeper may also partition, or the wrong one was chosen.
+            assert!(
+                observation
+                    .caches
+                    .iter()
+                    .all(|other| other.level <= chosen.level || other.domains <= 1),
+                "a deeper cache level also partitions this machine, so the outermost \
+                 one was mis-selected"
+            );
+        }
+        None => assert!(
+            observation.caches.iter().all(|cache| cache.domains <= 1),
+            "no level was chosen even though one partitions the machine"
+        ),
+    }
+}
+
+#[test]
+fn every_policy_would_produce_at_least_one_domain() {
+    let observation = crate::topology::measure().expect("topology discovery");
+
+    // The point of this one is the degenerate cases: a machine reporting zero
+    // NUMA nodes, or no cache that partitions, must still yield a usable domain
+    // count rather than zero. A fleet sized at zero domains does no I/O at all,
+    // and that is exactly the shape the ARM64 laptop in the 2026-08-30 session
+    // would have produced under a policy keyed literally on L3.
+    for (name, count) in observation.domain_counts() {
+        assert!(
+            count >= 1,
+            "policy {name} would produce {count} domains, and a fleet of zero \
+             domains can perform no I/O"
+        );
+    }
+}

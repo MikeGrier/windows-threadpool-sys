@@ -170,6 +170,55 @@ jobs:
         run: cargo run -p windows-platform-probes --bin probe-ioring --locked
       - name: probe magnitudes (completion port)
         run: cargo run -p windows-platform-probes --bin probe-completion-port --locked
+      # Printed on every build on purpose. Hosted runners are a heterogeneous
+      # fleet, so accumulating this across builds turns ordinary CI into a slow
+      # survey of what real machines look like -- and the negative result, that
+      # cloud runners are consistently single-node, is itself evidence for how
+      # the execution-domain design should size itself by default. The probe
+      # emits one `x-probe-topology` JSON line so the results can be mined out
+      # of logs mechanically rather than read by eye.
+      - name: probe magnitudes (topology)
+        run: cargo run -p windows-platform-probes --bin probe-topology --locked
+
+  # The NUMA questions the 2026-08-30 design session could not answer, run
+  # against whatever machine the runner fleet supplies.
+  #
+  # BOTH SPIKES ARE EXPECTED TO BE VACUOUS on a single-node runner, and they say
+  # so themselves rather than printing a confident zero. That is the point: the
+  # cost is a minute per build, and the payoff is that if a multi-node runner
+  # ever appears, the answer is already in that build's log. A design decision
+  # is currently resting on documentation because no such machine is available.
+  #
+  # A FAILURE HERE MUST NOT BREAK THE BUILD. These are observations, not
+  # assertions -- `continue-on-error` is deliberate, not laziness.
+  #
+  # They are compiled through the scratch-crate procedure their own README
+  # documents, rather than being made workspace members, because each is
+  # deliberately written against `windows-sys` alone so that what it measures is
+  # the operating system and not us. A useful side effect: this job is the
+  # executable form of that README instruction, so the instruction cannot rot
+  # without turning this step red.
+  numa-spikes:
+    name: NUMA spikes (observational, never fails the build)
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the spikes
+        shell: pwsh
+        run: ./tools/run-numa-spikes.ps1 -Summary $env:GITHUB_STEP_SUMMARY
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: numa-spikes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .scratch/numa-spikes/*.txt
+          if-no-files-found: warn
 
   feature-matrix:
     name: windows-overlapped-io-sys (${{ matrix.feature }} only)

@@ -417,4 +417,36 @@ fn main() {
             }
         }
     }
+
+    // One machine-readable line, so accumulated CI logs can be mined without
+    // parsing the prose above. `usable` is reported so a miner can discard runs
+    // where a probed page was not resident rather than reading a meaningless
+    // node out of them.
+    let probe_json = |p: Probe| {
+        if p.queried && p.valid {
+            p.node.to_string()
+        } else {
+            "null".to_string()
+        }
+    };
+    println!(
+        concat!(
+            r#"{{"reason":"x-spike-thread-stack-numa","arch":"{}","numa_nodes":{},"#,
+            r#""far_node":{},"vacuous":{},"usable":{},"#,
+            r#""created_far":{{"shallow":{},"deep":{}}},"#,
+            r#""control_near":{{"shallow":{},"deep":{}}},"#,
+            r#""bound_after":{{"shallow":{},"deep":{}}}}}"#
+        ),
+        std::env::consts::ARCH,
+        highest + 1,
+        far_node,
+        highest == 0,
+        usable,
+        probe_json(slots[0].shallow),
+        probe_json(slots[0].deep),
+        probe_json(slots[1].shallow),
+        probe_json(slots[1].deep),
+        probe_json(slots[2].shallow),
+        probe_json(slots[2].deep),
+    );
 }

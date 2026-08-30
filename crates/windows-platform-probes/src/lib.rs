@@ -116,6 +116,7 @@ pub mod error_mode;
 pub mod handle_state;
 pub mod ioring;
 pub mod pool_growth;
+pub mod topology;
 pub mod worker_context;
 
 #[cfg(test)]

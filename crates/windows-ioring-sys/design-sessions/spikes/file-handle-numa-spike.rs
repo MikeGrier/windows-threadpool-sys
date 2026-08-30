@@ -64,6 +64,34 @@
 //! PHNT and the WDK mark that class **reserved for system use**, so this spike
 //! measures it for comparison only. Do not build on it.
 //!
+//! # The storage topology is captured too, and it is useful even at one node
+//!
+//! Whether the node query *succeeds at all* is itself a finding, independent of
+//! how many nodes exist. On the ARM64 development machine both calls succeed
+//! and report `0` -- so "an ordinary NTFS file" is not the no-association case.
+//! If the same calls **fail** on some other host, the association depends on
+//! the storage stack rather than on node count, and the interesting question
+//! becomes *which* stacks have it.
+//!
+//! So the spike also records what the volume is made of:
+//!
+//!   - the bus type and product identity (`IOCTL_STORAGE_QUERY_PROPERTY`),
+//!     which distinguishes real NVMe from a virtual disk -- and hosted CI
+//!     runners are virtual;
+//!   - the physical disk number (`IOCTL_STORAGE_GET_DEVICE_NUMBER`);
+//!   - **how many disks back the volume**
+//!     (`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`). More than one means the volume
+//!     spans devices, which is exactly the Q6 hazard: a single reported node
+//!     for a multi-device volume is a fiction, and worse than no answer.
+//!
+//! That last one needs no NUMA hardware, so a spanned volume anywhere in a CI
+//! fleet is a result.
+//!
+//! # Machine-readable output
+//!
+//! The final `x-spike-file-handle-numa` line is a single JSON object, so
+//! accumulated build logs can be mined mechanically instead of read.
+//!
 //! Run with:
 //! ```toml
 //! [dependencies]
@@ -73,7 +101,7 @@
 //! ] }
 //! ```
 
-use std::ffi::c_void;
+use std::ffi::{OsStr, c_void};
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
@@ -82,13 +110,203 @@ use std::path::Path;
 use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING,
+    GetVolumePathNameW, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
-use windows_sys::Win32::System::Ioctl::FSCTL_QUERY_VOLUME_NUMA_INFO;
+use windows_sys::Win32::System::Ioctl::{
+    FSCTL_QUERY_VOLUME_NUMA_INFO, IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY,
+    PropertyStandardQuery, STORAGE_DEVICE_DESCRIPTOR, STORAGE_DEVICE_NUMBER,
+    STORAGE_PROPERTY_QUERY, StorageDeviceProperty,
+};
 
 fn to_wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+/// What the volume under a path is physically made of.
+///
+/// Every field is optional because every query can fail, and a failure is a
+/// result here rather than an error: it says this host does not expose that
+/// fact, which is precisely what varies across a runner fleet.
+#[derive(Default)]
+struct Storage {
+    volume_root: Option<String>,
+    bus_type: Option<u8>,
+    product: Option<String>,
+    removable: Option<bool>,
+    disk_number: Option<u32>,
+    /// Disks backing the volume. Greater than one means it spans devices, and a
+    /// single NUMA node reported for it cannot be true of all of them.
+    disk_extents: Option<u32>,
+}
+
+/// `STORAGE_BUS_TYPE` values worth naming. A virtual bus is the tell for a
+/// hosted runner; NVMe and SAS are the cases where device proximity data
+/// plausibly exists.
+fn bus_name(bus: u8) -> &'static str {
+    match bus {
+        0x01 => "SCSI",
+        0x02 => "ATAPI",
+        0x03 => "ATA",
+        0x04 => "1394",
+        0x05 => "SSA",
+        0x06 => "Fibre",
+        0x07 => "USB",
+        0x08 => "RAID",
+        0x09 => "iSCSI",
+        0x0A => "SAS",
+        0x0B => "SATA",
+        0x0C => "SD",
+        0x0D => "MMC",
+        0x0E => "Virtual",
+        0x0F => "FileBackedVirtual",
+        0x10 => "Spaces",
+        0x11 => "NVMe",
+        0x12 => "SCM",
+        0x13 => "UFS",
+        _ => "unknown",
+    }
+}
+
+fn open_volume(root: &str) -> HANDLE {
+    // `\\.\C:` form: strip the trailing separator the volume-path API returns.
+    let device = format!(r"\\.\{}", root.trim_end_matches('\\'));
+    let wide: Vec<u16> = OsStr::new(&device).encode_wide().chain(Some(0)).collect();
+    // Zero desired access is enough for query-only IOCTLs and, unlike
+    // GENERIC_READ, does not require elevation -- which matters because this is
+    // meant to run unprivileged in CI.
+    unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    }
+}
+
+fn describe_storage(path: &Path) -> Storage {
+    let mut out = Storage::default();
+
+    // Which volume is this path on?
+    let wide = to_wide(path);
+    let mut root = vec![0_u16; 260];
+    let ok = unsafe {
+        GetVolumePathNameW(
+            wide.as_ptr(),
+            root.as_mut_ptr(),
+            u32::try_from(root.len()).unwrap(),
+        )
+    };
+    if ok == 0 {
+        return out;
+    }
+    let len = root.iter().position(|&c| c == 0).unwrap_or(root.len());
+    out.volume_root = Some(String::from_utf16_lossy(&root[..len]));
+
+    let Some(volume_root) = out.volume_root.clone() else {
+        return out;
+    };
+    let handle = open_volume(&volume_root);
+    if handle == INVALID_HANDLE_VALUE {
+        return out;
+    }
+
+    let mut returned: u32 = 0;
+
+    // Bus type and product identity: distinguishes real NVMe from a virtual
+    // disk, which is the correlation worth having when the node query fails.
+    let query = STORAGE_PROPERTY_QUERY {
+        PropertyId: StorageDeviceProperty,
+        QueryType: PropertyStandardQuery,
+        AdditionalParameters: [0],
+    };
+    let mut buf = vec![0_u8; 1024];
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            (&raw const query).cast::<c_void>(),
+            u32::try_from(size_of::<STORAGE_PROPERTY_QUERY>()).unwrap(),
+            buf.as_mut_ptr().cast::<c_void>(),
+            u32::try_from(buf.len()).unwrap(),
+            &raw mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok != 0 && (returned as usize) >= size_of::<STORAGE_DEVICE_DESCRIPTOR>() {
+        // SAFETY: the driver filled at least a descriptor's worth of `buf`.
+        let desc = unsafe { &*buf.as_ptr().cast::<STORAGE_DEVICE_DESCRIPTOR>() };
+        out.bus_type = Some(desc.BusType as u8);
+        out.removable = Some(desc.RemovableMedia);
+        // The ID offsets are byte offsets into the same buffer, or 0 for absent.
+        let text_at = |offset: u32| -> Option<String> {
+            if offset == 0 || offset as usize >= buf.len() {
+                return None;
+            }
+            let start = offset as usize;
+            let end = buf[start..]
+                .iter()
+                .position(|&b| b == 0)
+                .map_or(buf.len(), |n| start + n);
+            let s = String::from_utf8_lossy(&buf[start..end]).trim().to_string();
+            (!s.is_empty()).then_some(s)
+        };
+        let vendor = text_at(desc.VendorIdOffset);
+        let product = text_at(desc.ProductIdOffset);
+        out.product = match (vendor, product) {
+            (Some(v), Some(p)) => Some(format!("{v} {p}")),
+            (Some(v), None) => Some(v),
+            (None, Some(p)) => Some(p),
+            (None, None) => None,
+        };
+    }
+
+    // Which physical disk.
+    let mut number = STORAGE_DEVICE_NUMBER::default();
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_GET_DEVICE_NUMBER,
+            std::ptr::null(),
+            0,
+            (&raw mut number).cast::<c_void>(),
+            u32::try_from(size_of::<STORAGE_DEVICE_NUMBER>()).unwrap(),
+            &raw mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok != 0 {
+        out.disk_number = Some(number.DeviceNumber);
+    }
+
+    // How many disks back this volume. This is the Q6 question, and it needs no
+    // NUMA hardware: more than one extent means a reported node cannot be true
+    // of every device the volume sits on.
+    let mut extents = vec![0_u8; 4096];
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            std::ptr::null(),
+            0,
+            extents.as_mut_ptr().cast::<c_void>(),
+            u32::try_from(extents.len()).unwrap(),
+            &raw mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok != 0 && (returned as usize) >= size_of::<u32>() {
+        // SAFETY: the first field of VOLUME_DISK_EXTENTS is NumberOfDiskExtents.
+        let count = unsafe { *extents.as_ptr().cast::<u32>() };
+        out.disk_extents = Some(count);
+    }
+
+    unsafe { CloseHandle(handle) };
+    out
 }
 
 // Not present in windows-sys 0.61, so declared here.
@@ -179,10 +397,40 @@ fn main() -> std::io::Result<()> {
     let path = dir.join("numa-probe-target.bin");
     fs::write(&path, vec![0_u8; 4096])?;
 
+    // What the volume is physically made of. Printed before the node queries so
+    // that a reader has the context to interpret a failure: a virtual disk
+    // failing to report a node means something different from an NVMe failing.
+    let storage = describe_storage(&path);
+    println!("-- storage under {} --", path.display());
+    println!(
+        "  volume root  : {}",
+        storage.volume_root.as_deref().unwrap_or("(unknown)")
+    );
+    match storage.bus_type {
+        Some(bus) => println!("  bus type     : {bus} ({})", bus_name(bus)),
+        None => println!("  bus type     : (query failed)"),
+    }
+    println!(
+        "  product      : {}",
+        storage.product.as_deref().unwrap_or("(unknown)")
+    );
+    match storage.disk_number {
+        Some(n) => println!("  disk number  : {n}"),
+        None => println!("  disk number  : (query failed)"),
+    }
+    match storage.disk_extents {
+        Some(1) => println!("  disk extents : 1 (single device)"),
+        Some(n) => println!(
+            "  disk extents : {n} -- THIS VOLUME SPANS {n} DEVICES, so any single \
+             node reported for it cannot be true of all of them"
+        ),
+        None => println!("  disk extents : (query failed)"),
+    }
+
     // Q1-Q4: a garden-variety data file, opened the ordinary way. This is the
     // case for which no published measurement could be found.
     let file = fs::File::open(&path)?;
-    probe(
+    let (file_volume_node, file_handle_node) = probe(
         &format!("regular NTFS data file: {}", path.display()),
         file.as_raw_handle() as HANDLE,
     );
@@ -216,6 +464,39 @@ fn main() -> std::io::Result<()> {
         probe(&format!("directory handle: {}", dir.display()), handle);
         unsafe { CloseHandle(handle) };
     }
+
+    // One machine-readable line, so accumulated CI logs can be mined without
+    // parsing the prose above.
+    let json_opt_u32 = |v: Option<u32>| v.map_or("null".to_string(), |n| n.to_string());
+    let json_opt_str = |v: Option<&str>| {
+        v.map_or("null".to_string(), |s| {
+            format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+        })
+    };
+    println!(
+        concat!(
+            r#"{{"reason":"x-spike-file-handle-numa","arch":"{}","volume_root":{},"#,
+            r#""bus_type":{},"bus_name":{},"product":{},"removable":{},"disk_number":{},"#,
+            r#""disk_extents":{},"spans_devices":{},"fsctl_volume_node":{},"#,
+            r#""handle_node":{},"both_succeeded":{}}}"#
+        ),
+        std::env::consts::ARCH,
+        json_opt_str(storage.volume_root.as_deref()),
+        json_opt_u32(storage.bus_type.map(u32::from)),
+        json_opt_str(storage.bus_type.map(bus_name)),
+        json_opt_str(storage.product.as_deref()),
+        storage
+            .removable
+            .map_or("null".to_string(), |b| b.to_string()),
+        json_opt_u32(storage.disk_number),
+        json_opt_u32(storage.disk_extents),
+        storage
+            .disk_extents
+            .map_or("null".to_string(), |n| (n > 1).to_string()),
+        json_opt_u32(file_volume_node),
+        json_opt_u32(file_handle_node.map(u32::from)),
+        file_volume_node.is_some() && file_handle_node.is_some(),
+    );
 
     drop(file);
     let _ = fs::remove_file(&path);

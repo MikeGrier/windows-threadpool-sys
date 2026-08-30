@@ -47,11 +47,19 @@ path = "src/bin/ioring.rs"
 name = "probe-pool-growth"
 path = "src/bin/pool_growth.rs"
 
+[[bin]]
+name = "probe-topology"
+path = "src/bin/topology.rs"
+
 [dependencies]
 # The pool-growth probe measures the shipping API rather than a
 # reimplementation of the SDK's inline environment helpers, so it depends on the
 # real crate.
 windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys" }
+# Same reason: the topology probe measures what the shipping parse produces, not
+# a second parse written here, which would only measure itself. The raw Win32
+# counters it cross-checks against are read independently through windows-sys.
+windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
 
 [dependencies.windows-sys]
 version = "0.61.2"
