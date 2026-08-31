@@ -573,3 +573,32 @@ that confirms the null should do.
 
 Like `probe-queue-contention`, this probe is **absent from the CI probe job**, and for the same
 measured reason: the effects it studies are coherence effects that a debug build's overhead buries.
+
+## The fingerprint carries provenance inside the string, not beside it
+
+The fingerprint is documented as **canonical**: two hosts rendering the same string can express the
+same placements, so string equality is a supported comparison. That property is what forces the
+provenance marker to live *inside* the rendered form. A marker kept alongside -- a separate field, a
+second printed line, a note in the surrounding prose -- would leave a fabricated machine claiming the
+exact shape of a real one **comparing equal to it**. That is a concrete bug rather than a display
+preference, and it has a test named for it.
+
+Three details are deliberate:
+
+- **A measured host renders exactly as before, with no prefix.** Every fingerprint already recorded in
+  a checklist or design note came from a real machine, so those strings stay valid and comparable
+  rather than being silently reinterpreted by this change.
+- **The prefix leads**, so a reader scanning a column of pasted results cannot skip it, and it is
+  removable -- stripping `!!SYNTHETIC!! ` yields exactly the measured rendering, so a synthetic host
+  can still be compared against a real one on purpose.
+- **`RESTORED` and `SYNTHETIC` are distinguished** rather than collapsed into one "untrusted". They
+  are different claims: one describes some real machine, the other describes none, and a reader
+  deciding how far to believe a number needs to know which.
+
+`Fingerprint::from_topology` exists so provenance *flows* from the topology rather than being stamped
+on afterwards. `discover` is now a thin wrapper over it, which means there is no path that invents an
+answer -- whatever the topology says is what the fingerprint reports.
+
+`print_banner` was split so the line is available as a string. The taint marker reaching that line is
+the entire point of carrying provenance, and a property that load-bearing should not rest on someone
+having read a format string correctly.

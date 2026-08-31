@@ -10,6 +10,8 @@
 //! assertion about its output would be an assertion about whatever hardware
 //! happens to run the suite.
 
+use windows_topology_sys::Provenance;
+
 use super::Fingerprint;
 
 /// The development host: 12 cores, no SMT, two L2 domains, two efficiency
@@ -24,6 +26,10 @@ fn arm64_dev_host() -> Fingerprint {
         cache_domain_sizes: vec![6, 6],
         efficiency_classes: vec![(0, 6), (1, 6)],
         numa_node_sizes: vec![12],
+        // These fixtures stand in for real hosts, so they render as real hosts
+        // do -- without a taint prefix. The exact-string assertions below are
+        // assertions about what those machines actually print.
+        provenance: Provenance::Measured,
     }
 }
 
@@ -38,6 +44,7 @@ fn x64_smt_host() -> Fingerprint {
         cache_domain_sizes: vec![16],
         efficiency_classes: vec![(0, 16)],
         numa_node_sizes: vec![16],
+        provenance: Provenance::Measured,
     }
 }
 
@@ -86,6 +93,7 @@ fn a_machine_no_cache_partitions_says_so() {
         cache_domain_sizes: vec![4],
         efficiency_classes: vec![(0, 4)],
         numa_node_sizes: vec![4],
+        provenance: Provenance::Measured,
     };
     assert!(
         flat.to_string().contains("L-[4]"),
@@ -157,4 +165,128 @@ fn every_field_that_changes_the_answer_appears_in_the_render() {
             "changing {name} must change the fingerprint"
         );
     }
+}
+
+#[test]
+fn a_measured_host_renders_without_any_marker() {
+    // Every fingerprint recorded in a checklist or design note before the
+    // marker existed was measured, so this is what keeps those strings valid
+    // and comparable rather than silently reinterpreted.
+    let rendered = arm64_dev_host().to_string();
+
+    assert!(!rendered.contains("!!"), "got {rendered}");
+    assert!(rendered.starts_with("aarch64"), "got {rendered}");
+}
+
+#[test]
+fn a_synthetic_host_is_marked_at_the_front() {
+    let mut fabricated = x64_smt_host();
+    fabricated.provenance = Provenance::Synthetic;
+
+    let rendered = fabricated.to_string();
+
+    assert!(
+        rendered.starts_with("!!SYNTHETIC!! "),
+        "the marker must lead, so a reader scanning a column cannot skip it: {rendered}"
+    );
+}
+
+#[test]
+fn a_restored_host_is_marked_and_says_which_kind_of_untrusted_it_is() {
+    // Restored and synthetic are different claims -- one describes some real
+    // machine, the other describes none -- and a reader deciding how much to
+    // believe a number needs to know which.
+    let mut loaded = x64_smt_host();
+    loaded.provenance = Provenance::Restored;
+
+    let rendered = loaded.to_string();
+
+    assert!(rendered.starts_with("!!RESTORED!! "), "got {rendered}");
+    assert!(!rendered.contains("SYNTHETIC"), "got {rendered}");
+}
+
+#[test]
+fn an_untrusted_host_never_compares_equal_to_the_real_one_it_imitates() {
+    // The specific bug the marker exists to prevent, and the reason it lives
+    // inside the string rather than beside it. The fingerprint is documented as
+    // canonical, so equality of the rendered form is a supported comparison --
+    // which means a fabricated machine claiming the exact shape of a real one
+    // must not produce the same string.
+    let real = x64_smt_host();
+    for untrusted in [Provenance::Synthetic, Provenance::Restored] {
+        let mut imitation = x64_smt_host();
+        imitation.provenance = untrusted;
+
+        assert_eq!(
+            imitation.processors, real.processors,
+            "the fixtures must otherwise be identical for this test to mean anything"
+        );
+        assert_ne!(
+            imitation.to_string(),
+            real.to_string(),
+            "{untrusted:?} rendered identically to a measured host"
+        );
+    }
+}
+
+#[test]
+fn the_marker_is_the_only_difference_an_untrusted_host_renders() {
+    // The taint must not disturb the shape it prefixes, or a tainted
+    // fingerprint could not be compared against a real one at all -- which is
+    // exactly what someone validating synthetic selection logic needs to do.
+    let real = x64_smt_host();
+    let mut fabricated = x64_smt_host();
+    fabricated.provenance = Provenance::Synthetic;
+
+    let rendered = fabricated.to_string();
+    let stripped = rendered
+        .strip_prefix("!!SYNTHETIC!! ")
+        .expect("the marker must be a removable prefix");
+
+    assert_eq!(stripped, real.to_string());
+}
+
+#[test]
+fn a_fingerprint_read_from_this_machine_reports_itself_as_measured() {
+    // Ties the rendering to the real path: `discover` goes through
+    // `Topology::discover`, which is the only thing entitled to claim the
+    // machine. If provenance ever stopped flowing, every probe banner would
+    // quietly start printing a taint marker -- or worse, stop printing one.
+    let fingerprint = Fingerprint::discover().expect("this machine must be discoverable");
+
+    assert!(fingerprint.provenance.is_measured());
+    assert!(!fingerprint.to_string().contains("!!"));
+}
+
+#[test]
+fn a_fingerprint_built_from_a_hand_made_topology_is_not_measured() {
+    // The path a synthetic host takes. `Topology::default` is untrusted by
+    // construction, and `from_topology` must carry that through rather than
+    // inventing an answer.
+    let fingerprint = Fingerprint::from_topology(&windows_topology_sys::Topology::default());
+
+    assert!(!fingerprint.provenance.is_measured());
+    assert!(
+        fingerprint.to_string().starts_with("!!SYNTHETIC!! "),
+        "got {fingerprint}"
+    );
+}
+
+#[test]
+fn the_banner_carries_whatever_the_fingerprint_says() {
+    // On this machine the topology is real, so the banner must be clean. The
+    // point is that the banner is not a second, independent rendering that
+    // could drift from the fingerprint's own.
+    let banner = super::banner_line();
+    let fingerprint = Fingerprint::discover().expect("this machine must be discoverable");
+
+    assert!(banner.starts_with("host:  "), "got {banner}");
+    assert!(
+        banner.contains(&fingerprint.to_string()),
+        "the banner must embed the fingerprint verbatim: {banner}"
+    );
+    assert!(
+        !banner.contains("!!"),
+        "a real machine's banner must carry no taint marker: {banner}"
+    );
 }

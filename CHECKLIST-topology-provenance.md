@@ -41,16 +41,28 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
 
 ## M2: making it loud where it is read
 
-- [ ] **TP-2.1** -- `Fingerprint` in [crates/windows-platform-probes/src/fingerprint.rs](crates/windows-platform-probes/src/fingerprint.rs)
+- [x] **TP-2.1** -- `Fingerprint` in [crates/windows-platform-probes/src/fingerprint.rs](crates/windows-platform-probes/src/fingerprint.rs)
   carries the provenance and renders it **first and unmissably** when it is not `Measured`. The
   fingerprint string is documented as canonical, so string equality is a usable comparison -- which
   means the marker must be *inside* the string, or a synthetic host could compare equal to a real one.
   That is the specific bug this prevents, not merely a display nicety.
 
-- [ ] **TP-2.2** -- Every probe banner and every persisted probe line inherits it, since
+- [x] **TP-2.2** -- Every probe banner and every persisted probe line inherits it, since
   `print_banner` and `Slice` are what end up pasted into checklists and design notes. A number quoted
   from a synthetic run must arrive already labelled, because the label is what a reader will not think
   to ask for.
+  **Done, and the banner inherits it by construction** -- it embeds the fingerprint's own `Display`
+  rather than re-rendering, so the two cannot drift. `print_banner` was split so the line is available
+  as a string (`banner_line`) and the marker's arrival is asserted rather than confirmed by reading a
+  format string.
+  **`Slice` deliberately carries no marker of its own, and the reason is structural rather than an
+  oversight.** A `Slice` records which processors a measurement was pinned to, and one can only exist
+  from a real `measure()` run: `measure` takes no injected topology (and
+  [crates/windows-platform-probes/src/core_affinity.rs](crates/windows-platform-probes/src/core_affinity.rs)
+  now documents why it must not), and pinning to a processor that does not exist panics. A slice is
+  therefore always real, and it is always printed beneath the banner that carries the host's
+  provenance. **If `measure` ever does gain such a seam, this reasoning collapses and `Slice` needs its
+  own marker** -- which is a second, independent reason not to add one.
 
 ## M3: closing the loop with the probes
 

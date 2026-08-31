@@ -25,6 +25,7 @@
 //! ```text
 //! aarch64 12p/12c smt- L2[6,6] ec[0:6,1:6] numa[12]
 //! x86_64 16p/8c smt+ L3[16] ec[0:16] numa[16]
+//! !!SYNTHETIC!! x86_64 32p/16c smt+ L3[16,16] ec[0:32] numa[16,16]
 //! ```
 //!
 //! - `<arch>` -- the target architecture.
@@ -41,6 +42,17 @@
 //!   entry means a homogeneous machine.
 //! - `numa[...]` -- processors per NUMA node.
 //!
+//! A line **prefixed `!!SYNTHETIC!!` or `!!RESTORED!!` did not come from the
+//! machine that printed it.** The first was fabricated; the second was loaded
+//! from a description of some machine, which is not the same as a description
+//! of this one. A measured host carries no prefix at all, so every fingerprint
+//! recorded before this marker existed remains valid and comparable.
+//!
+//! The prefix is deliberately inside the string rather than reported beside
+//! it. Because the string is canonical (below), a marker kept outside would let
+//! a synthetic host compare *equal* to a real one -- and the comparison is the
+//! whole point of having a canonical form.
+//!
 //! **It is canonical**, so two hosts that render the same string can express
 //! the same placements, and string equality is a usable comparison. It
 //! deliberately omits clock speeds, cache sizes, and model names: those vary
@@ -49,7 +61,7 @@
 
 use std::fmt;
 
-use windows_topology_sys::{DomainKind, Topology};
+use windows_topology_sys::{DomainKind, Provenance, Topology};
 
 /// One logical processor's position in the machine.
 ///
@@ -217,6 +229,15 @@ pub struct Fingerprint {
     pub efficiency_classes: Vec<(u8, usize)>,
     /// Processors per NUMA node, ascending.
     pub numa_node_sizes: Vec<usize>,
+    /// Where the topology behind this fingerprint came from.
+    ///
+    /// Rendered *inside* the string, not beside it. The fingerprint is
+    /// documented as canonical -- two hosts rendering the same string can
+    /// express the same placements, so string equality is a usable comparison.
+    /// A marker kept outside the string would leave a synthetic host comparing
+    /// equal to a real one, which is the specific bug this prevents rather than
+    /// a display nicety.
+    pub provenance: Provenance,
 }
 
 impl Fingerprint {
@@ -226,8 +247,17 @@ impl Fingerprint {
     ///
     /// Returns whatever [`Topology::discover`] failed with.
     pub fn discover() -> std::io::Result<Self> {
-        let topology = Topology::discover()?;
+        Ok(Self::from_topology(&Topology::discover()?))
+    }
 
+    /// Read a shape from any topology, discovered or not.
+    ///
+    /// Separate from [`Self::discover`] so provenance *flows* rather than being
+    /// stamped on afterwards: whatever the topology says about where it came
+    /// from is what the fingerprint reports, and there is no path here that
+    /// invents the answer.
+    #[must_use]
+    pub fn from_topology(topology: &Topology) -> Self {
         let cores: Vec<_> = topology.cores().collect();
         let processors: usize = cores.iter().map(|core| core.processors.len()).sum();
         let smt = cores.iter().any(|core| core.processors.len() > 1);
@@ -277,7 +307,7 @@ impl Fingerprint {
             .collect();
         numa_node_sizes.sort_unstable();
 
-        Ok(Self {
+        Self {
             arch: std::env::consts::ARCH,
             processors,
             cores: cores.len(),
@@ -286,7 +316,8 @@ impl Fingerprint {
             cache_domain_sizes,
             efficiency_classes,
             numa_node_sizes,
-        })
+            provenance: topology.provenance,
+        }
     }
 
     /// Whether this machine is heterogeneous.
@@ -303,7 +334,17 @@ impl Fingerprint {
 }
 
 impl fmt::Display for Fingerprint {
+    /// Renders the shape, preceded by a taint marker when the topology behind
+    /// it was not measured.
+    ///
+    /// A measured fingerprint renders exactly as it always did, so every string
+    /// already recorded in a checklist or design note stays valid and
+    /// comparable. Only the untrusted cases gain a prefix, and they gain it at
+    /// the *front*, where a reader scanning a column of results cannot skip it.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.provenance.is_measured() {
+            write!(f, "!!{}!! ", self.provenance)?;
+        }
         write!(
             f,
             "{} {}p/{}c smt{}",
@@ -409,9 +450,20 @@ pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
 /// having, and is far better than one that refused to run. But it says so
 /// loudly, because an unlabelled number is what this exists to prevent.
 pub fn print_banner() {
+    println!("{}", banner_line());
+}
+
+/// The banner as a string, so what a probe prints can be asserted rather than
+/// inspected.
+///
+/// Separated from [`print_banner`] for one reason: the taint marker reaching
+/// this line is the whole point of carrying provenance, and a property that
+/// matters that much should not rest on a human having read the format string.
+#[must_use]
+pub fn banner_line() -> String {
     match Fingerprint::discover() {
-        Ok(fingerprint) => println!("host:  {fingerprint}"),
-        Err(error) => println!("host:  UNKNOWN -- topology discovery failed: {error}"),
+        Ok(fingerprint) => format!("host:  {fingerprint}"),
+        Err(error) => format!("host:  UNKNOWN -- topology discovery failed: {error}"),
     }
 }
 
