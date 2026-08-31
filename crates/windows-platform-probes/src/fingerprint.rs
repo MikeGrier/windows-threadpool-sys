@@ -73,6 +73,15 @@ pub struct ProcessorPlace {
     /// Which cache domain it sits behind, at the outermost level that
     /// partitions the machine, or `None` if no level does.
     pub cache_domain: Option<u32>,
+    /// Which NUMA node it belongs to.
+    ///
+    /// Carried even though every host measured so far reports a single node,
+    /// because the cost of *not* carrying it is paid at exactly the wrong
+    /// moment. Without it a cross-node pair is indistinguishable from a
+    /// cross-cache one, so a scarce run on a genuine NUMA machine would record
+    /// a node crossing as a cache effect and nothing in the output would say
+    /// which had been measured.
+    pub numa_node: u32,
 }
 
 impl fmt::Display for ProcessorPlace {
@@ -83,9 +92,10 @@ impl fmt::Display for ProcessorPlace {
             self.number, self.core, self.efficiency_class
         )?;
         match self.cache_domain {
-            Some(id) => write!(f, "/cd{id}"),
-            None => write!(f, "/cd-"),
+            Some(id) => write!(f, "/cd{id}")?,
+            None => write!(f, "/cd-")?,
         }
+        write!(f, "/n{}", self.numa_node)
     }
 }
 
@@ -371,6 +381,15 @@ pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
         }
     }
 
+    // Node 0 is the correct default rather than a fallback: a machine with no
+    // NUMA partitioning has exactly one node, and every processor is in it.
+    let mut numa_of = std::collections::BTreeMap::new();
+    for domain in topology.memory_domains() {
+        for (_group, number) in domain.processors.iter() {
+            numa_of.insert(number, domain.id);
+        }
+    }
+
     Ok(class_of
         .into_iter()
         .map(|(number, efficiency_class)| ProcessorPlace {
@@ -378,6 +397,7 @@ pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
             core: core_of.get(&number).copied().unwrap_or(u32::from(number)),
             efficiency_class,
             cache_domain: cache_of.get(&number).copied(),
+            numa_node: numa_of.get(&number).copied().unwrap_or(0),
         })
         .collect())
 }

@@ -108,6 +108,7 @@ fn main() -> std::io::Result<()> {
         Placement::SameCacheCrossClass,
         Placement::CrossCacheSameClass,
         Placement::CrossCacheCrossClass,
+        Placement::CrossNumaNode,
     ];
 
     for placement in all {

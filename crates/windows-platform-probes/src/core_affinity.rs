@@ -97,6 +97,21 @@ pub enum Placement {
     CrossCacheSameClass,
     /// Different cache domain, different efficiency class.
     CrossCacheCrossClass,
+    /// Different NUMA nodes.
+    ///
+    /// Listed last because it is the loosest coupling a machine can offer, and
+    /// classified *first* for the same reason `SameCoreSiblings` is: crossing a
+    /// node dominates any statement about the cache domain or the class, since
+    /// two nodes necessarily have different last-level caches anyway.
+    ///
+    /// Kept as its own bucket rather than merged into `CrossCache*` because the
+    /// merge is silent and the run that would expose it is the expensive one. A
+    /// machine with real NUMA would otherwise report a node crossing under a
+    /// cache label, with nothing in the output saying which had been measured.
+    ///
+    /// Absent on every host measured so far -- all three are VM slices that
+    /// present a single node -- and reported inexpressible rather than merged.
+    CrossNumaNode,
 }
 
 impl Placement {
@@ -109,6 +124,7 @@ impl Placement {
             Self::SameCacheCrossClass => "same cache, cross class",
             Self::CrossCacheSameClass => "cross cache, same class",
             Self::CrossCacheCrossClass => "cross cache, cross class",
+            Self::CrossNumaNode => "cross NUMA node",
         }
     }
 }
@@ -172,6 +188,13 @@ pub fn classify(producer: ProcessorPlace, consumer: ProcessorPlace) -> Placement
     // statement about the cache domain or the class they also share.
     if producer.core == consumer.core {
         return Placement::SameCoreSiblings;
+    }
+    // Tested before cache and class for the mirror-image reason: crossing a
+    // NUMA node dominates both, since separate nodes have separate last-level
+    // caches. Without this the pair would be reported under a cache label and
+    // the node crossing would be invisible.
+    if producer.numa_node != consumer.numa_node {
+        return Placement::CrossNumaNode;
     }
     let same_cache = producer.cache_domain == consumer.cache_domain;
     let same_class = producer.efficiency_class == consumer.efficiency_class;

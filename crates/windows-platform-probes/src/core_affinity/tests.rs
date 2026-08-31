@@ -11,13 +11,22 @@ use super::{Placement, classify, representative_pairs};
 use crate::fingerprint::ProcessorPlace;
 
 /// A processor on its own physical core, which is the non-SMT case.
+///
+/// Single-node, matching every host measured so far; use [`on_node`] to move
+/// one onto another NUMA node.
 fn place(number: u8, efficiency_class: u8, cache_domain: Option<u32>) -> ProcessorPlace {
     ProcessorPlace {
         number,
         core: u32::from(number),
         efficiency_class,
         cache_domain,
+        numa_node: 0,
     }
+}
+
+/// The same processor, relocated to another NUMA node.
+fn on_node(place: ProcessorPlace, numa_node: u32) -> ProcessorPlace {
+    ProcessorPlace { numa_node, ..place }
 }
 
 /// Two processors sharing one physical core: SMT siblings.
@@ -32,6 +41,7 @@ fn sibling(
         core,
         efficiency_class,
         cache_domain,
+        numa_node: 0,
     }
 }
 
@@ -233,5 +243,91 @@ fn a_non_smt_host_cannot_express_the_sibling_placement() {
     assert!(
         !pairs.contains_key(&Placement::SameCoreSiblings),
         "a machine with one processor per core has no siblings to measure"
+    );
+}
+
+#[test]
+fn different_numa_nodes_are_classified_as_a_node_crossing() {
+    let a = place(0, 1, Some(0));
+    let b = on_node(place(1, 1, Some(1)), 1);
+
+    assert_eq!(classify(a, b), Placement::CrossNumaNode);
+}
+
+#[test]
+fn a_node_crossing_outranks_the_cache_and_class_it_also_crosses() {
+    // The whole point of the variant: without it this pair reports as
+    // `CrossCacheCrossClass` and the node crossing is invisible, so an
+    // expensive run on a real NUMA machine would be recorded as a cache
+    // effect.
+    let a = place(0, 1, Some(0));
+    let b = on_node(place(1, 0, Some(1)), 1);
+
+    assert_eq!(classify(a, b), Placement::CrossNumaNode);
+}
+
+#[test]
+fn a_node_crossing_is_reported_even_when_cache_and_class_match() {
+    // Same cache domain id and same class on two different nodes is not a
+    // configuration real hardware offers, but the classifier must not depend on
+    // that: it decides on the node, not on the fields the node happens to
+    // correlate with.
+    let a = place(0, 1, Some(0));
+    let b = on_node(place(1, 1, Some(0)), 1);
+
+    assert_eq!(classify(a, b), Placement::CrossNumaNode);
+}
+
+#[test]
+fn siblings_outrank_a_node_crossing_because_one_core_cannot_span_nodes() {
+    // Ordering check rather than a hardware claim. `SameCoreSiblings` is tested
+    // before the node, so if a topology ever reported one core on two nodes the
+    // sibling relationship would win. Pinning the order down here means a later
+    // reordering of `classify` is caught by a test rather than by a confusing
+    // table on a machine nobody has yet run.
+    let a = sibling(0, 0, 1, Some(0));
+    let b = on_node(sibling(1, 0, 1, Some(0)), 1);
+
+    assert_eq!(classify(a, b), Placement::SameCoreSiblings);
+}
+
+#[test]
+fn a_single_node_machine_never_produces_a_node_crossing() {
+    // Every host measured so far is a VM slice presenting one node, so this is
+    // the case that must stay quiet: the new variant must not appear where it
+    // cannot apply.
+    let places: Vec<_> = (0..8)
+        .map(|number| place(number, u8::from(number < 4), Some(u32::from(number) / 2)))
+        .collect();
+
+    let pairs = representative_pairs(&places);
+
+    assert!(
+        !pairs.contains_key(&Placement::CrossNumaNode),
+        "a single-node machine reported a node crossing: {:?}",
+        pairs.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_two_node_machine_expresses_the_node_crossing() {
+    let places: Vec<_> = (0..8)
+        .map(|number| {
+            let base = place(number, 1, Some(u32::from(number) / 2));
+            on_node(base, u32::from(number) / 4)
+        })
+        .collect();
+
+    let pairs = representative_pairs(&places);
+
+    assert!(
+        pairs.contains_key(&Placement::CrossNumaNode),
+        "a two-node machine did not express a node crossing: {:?}",
+        pairs.keys().collect::<Vec<_>>()
+    );
+    let (producer, consumer) = pairs[&Placement::CrossNumaNode];
+    assert_ne!(
+        producer.numa_node, consumer.numa_node,
+        "the pair chosen for a node crossing is on one node"
     );
 }

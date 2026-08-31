@@ -678,6 +678,7 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   | same cache, cross class | not expressible (confounded) | not expressible (one class) | **neither** |
   | cross cache, same class | not expressible (confounded) | **yes** | x64 only |
   | cross cache, cross class | **yes** | not expressible (one class) | ARM64 only |
+  | cross NUMA node | not expressible (one node) | not expressible (one node) | **neither** |
 
   A machine cannot express a placement when its topology makes the pair impossible: ARM64 confounds
   cache domain with efficiency class (crossing one crosses the other), and the x64 slice has exactly
@@ -687,19 +688,37 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   **is unmeasurable on either host, and no re-run of either will produce it.** It needs heterogeneous
   cores inside one cache domain.
 
-  **A third host is expected and is worth a run: an Intel hybrid dev box (P-cores with SMT, E-cores
-  without, clustered).** Its value is not "another architecture" -- that framing is the one this
-  investigation already falsified -- but that it should express **four** rows at once, and would be the
-  first machine to hold both `SMT siblings` and `same cache, same class` at the same time. That matters
-  because those two rows currently sit on different machines, so the claim that sharing a cache
-  produces deep batches is confounded with the host it was measured on. One machine expressing both
-  decouples them.
-  Predictions to falsify rather than confirm, since a hybrid's outermost *partitioning* cache is
-  probably still L2 (per-core on P, per-cluster on E):
-  - `SMT siblings` from a P-core pair, and `same cache, same class` from two E-cores in one L2 cluster.
-  - `cross cache, same class` from two P-cores, and `cross cache, cross class` from a P/E pair.
-  - `same cache, cross class` **probably still absent**, because P and E cores are unlikely to share
-    the outermost partitioning cache. If it does appear, that is the missing row and should be called
-    out loudly.
-  Run `probe-topology` first: whether that host's outermost partitioning cache is L2 or L3 determines
-  which rows exist at all, and it is not predictable from the part number.
+  **`cross NUMA node` is the other unmeasured row, and the probe was silently unable to report it
+  until now.** `ProcessorPlace` carried core, class and cache domain but *not* the NUMA node, and
+  `Placement` had no node dimension, so a cross-node pair would have been bucketed under a cache label
+  with nothing in the output saying so -- and `representative_pairs` picks whichever pair it enumerates
+  first, so which one you got would not have been reproducible either. On a scarce NUMA machine that
+  would have produced a large number attributed to the wrong cause. Fixed ahead of the machine rather
+  than after it: `numa_node` is now carried, `Placement::CrossNumaNode` is classified *first* (crossing
+  a node dominates cache and class, exactly as sharing a core does), and six tests cover it including
+  the precedence cases. Verified by sabotage -- removing the check fails four of them.
+  This is the same defect class as the omitted `SMT siblings` row, and the third time in this
+  investigation that an instrument's *classification or presentation*, rather than its measurement,
+  was the thing about to produce a wrong answer.
+
+  **A third host is planned -- an Intel cloud dev box -- and it should be expected to add no new rows.**
+  An earlier revision of this item predicted it would express four placements at once, on the
+  assumption of a *hybrid client* part (P-cores with SMT, E-cores without). That assumption is wrong
+  for a cloud VM: cloud Intel means Xeon, which has no efficiency cores, so `ec[...]` will almost
+  certainly read as a single class exactly like the EPYC slice, and the two class-crossing rows stay
+  inexpressible.
+  **All three hosts are VM slices, and a slice flattens topology.** The EPYC slice is the proof
+  already in hand: a 7763 is 64 cores across eight CCXs each with its own L3, and 16 of those cores
+  would span two of them -- yet `probe-topology` reports `L3[16]`, a single domain, and a single NUMA
+  node. The hypervisor presented a flat view. **So the missing rows are not merely unmeasured, they
+  are probably unreachable from any dev-box-sized VM slice**, and expecting a third slice to supply
+  them would repeat the error of expecting a third architecture to.
+  The Intel slice is still worth running, for a narrower and more honest reason: **it tests whether
+  the SMT-sibling result reproduces on Intel Hyper-Threading rather than AMD SMT.** That row currently
+  rests on one machine and one vendor's implementation of the feature, and it is the row carrying the
+  claim that sharing L1 produces deep batches. A second SMT vendor either strengthens it or breaks it.
+  Run `probe-topology` first regardless: whether the outermost partitioning cache is L2 or L3 decides
+  which rows exist at all, and on a VM slice it is not predictable from the part number.
+  **What would actually add rows**, if either becomes available: bare metal for `same cache, same
+  class` and `same cache, cross class`, or a deliberately large multi-NUMA VM SKU (not a dev box) for
+  a genuine node crossing. See the NUMA gap recorded below before spending time on the latter.
