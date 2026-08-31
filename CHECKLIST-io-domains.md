@@ -452,7 +452,12 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   > **-> CROSS-COMPONENT NOTE:** this run also contradicted D-28, which is recorded against that decision
   > and against M31.8's use of it below, not here.
 
-- [ ] **M31.8** -- Decide merge-or-delete for `mpsc` and `reserving_mpsc`, now that M31.5 has measured
+- [ ] **M31.8** -- **MIRRORED BY [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md)
+  SH-1.1 -- one piece of work seen from two plans. Check both off in the same commit; neither is done
+  alone.** That file also records why this is *release*-blocking rather than merely design-blocking:
+  the decision may delete a public type, which is free before `windows-waitable-queues` 0.1.0 and a
+  yank-and-migrate after it.
+  Decide merge-or-delete for `mpsc` and `reserving_mpsc`, now that M31.5 has measured
   them and M31.7 will have checked the other architecture.
   **The decision changed shape once the investigation ran.** M31.2 framed it as "if the shared-line read
   is cheap, the two merge and the non-reserving one goes". The read is not merely cheap -- it is cheaper
@@ -485,7 +490,11 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   protocol; whether any shape then *adopts* caching is a separate question that needs a policy for a
   measurement that inverts by host, and that question is M-inf.4 rather than this item.
 
-- [ ] **M31.6** -- Verify the memory orderings with a model checker, because stress testing demonstrably
+- [ ] **M31.6** -- **GOVERNED BY [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md)
+  SH-1.2, which decides only whether this blocks the 0.1.0 release. SH-1.2 completing does NOT complete
+  this item**; it records an answer here. Once that answer exists, note it on this line so the reader
+  knows whether the crate shipped with this open deliberately.
+  Verify the memory orderings with a model checker, because stress testing demonstrably
   cannot. **Measured, not assumed:** during M30.3's sabotage sweep, weakening the producer's `Acquire`
   load of `head` to `Relaxed` left all twenty tests green, while every *logic* defect injected alongside
   it was caught. A stress test can only observe the interleavings the hardware and scheduler happen to
@@ -614,10 +623,12 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   cpu`), so "place the thread in the domain" has only ever been evaluated as "place the thread on one
   chosen member of the domain". A set mask permits placements a single-processor mask forbids,
   including both ends of a queue on one logical processor, which on an SMT host is the *common* case
-  for a same-cache set rather than a corner one. See
-  [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) M6, which measures set-wide against pinned
-  affinity under two interference models and reports migration and co-residency counts so a null result
-  can be distinguished from a scheduler that never moved anything. **If the sets are not equivalent,
+  for a same-cache set rather than a corner one.
+  **FED BY [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) M6.7, which does not check this
+  item off** -- this item is the domain-local placement work itself -- **but whose answer must be
+  written in here when it lands.** M6 measures set-wide against pinned affinity under two interference
+  models and reports migration and co-residency counts, so a null result can be distinguished from a
+  scheduler that never moved anything. **If the sets are not equivalent,
   the 5.6x is a number about pinned threads and this item needs restating**, not merely re-measuring.
 
   The design already intends one pinned thread per domain, so the queue between two threads of the same

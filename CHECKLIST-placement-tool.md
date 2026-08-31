@@ -6,6 +6,12 @@ from hardware it does not own. **The motivating gap is concrete: every host avai
 one NUMA node**, so the entire `cross NUMA node` row and the whole inter-node hop matrix are
 unmeasured, and no amount of local work will change that.
 
+**GATED BY [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) SH-4.1
+(topology 0.2.0) and SH-4.3 (queues 0.1.0). This paragraph is the gate of record: when those land,
+edit it to say the gate is lifted and name the two published versions.** Leaving it as-is after the
+releases is the failure mode -- a reader arriving here should never have to reconstruct whether the
+gate still applies. M6 below is deliberately *outside* this gate and says so.
+
 **Gated on shipping [crates/windows-topology-sys](crates/windows-topology-sys) and
 [crates/windows-waitable-queues](crates/windows-waitable-queues) first.** Not a preference: the tool
 depends on the former, and calibrates against the latter's `spsc`. Both are `0.1.0` and the topology
@@ -320,9 +326,13 @@ so this is not a corner case there, it is the common one.
   that appears only under adversarial spinners is a real finding with a narrower consequence, and
   collapsing the two would lose exactly that distinction.
 
-- [ ] **M6.7** -- Report per set kind whether the equivalence holds, in the tool's own words, derived
-  from the measurement rather than asserted. Feed the answer back into
-  [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.5, whose premise this is. **A null result is
+- [ ] **M6.7** -- **FEEDS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.5, whose premise
+  this tests. On completing this, edit M-inf.5 with the answer** -- it does not check M-inf.5 off (that
+  item is the domain-local placement work itself), but M-inf.5's 5.6x is a number about *pinned*
+  threads until this says otherwise, and leaving that unstated is how a measured caveat quietly becomes
+  an assumed fact.
+  Report per set kind whether the equivalence holds, in the tool's own words, derived
+  from the measurement rather than asserted. **A null result is
   a real result here** -- "the sets behaved equivalently under both interference models, and here are
   the migration counts showing the scheduler was genuinely exercised" retires a long-standing doubt,
   and is worth as much as a difference would be.

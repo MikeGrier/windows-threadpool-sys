@@ -4,6 +4,26 @@
 placement tool in [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) has something to build
 against and other people can run it on hardware this workspace does not own.
 
+## Before checking anything off in this file
+
+Items here are cross-linked to the other plans, and **a cross-reference is an instruction, not a
+footnote**. Every marker names its counterpart and states what completing this item obliges, because
+the reciprocal edit is the step that gets skipped: the work feels finished, the box gets ticked, and
+a second plan silently keeps describing a world that no longer exists.
+
+The markers, and what each obliges when its item completes:
+
+- **MIRRORS / MIRRORED BY** -- the same work seen from two plans. **Check both boxes in the same
+  commit**, and cite both IDs in the message. Neither is done alone.
+- **GOVERNS / GOVERNED BY** -- this item decides something *about* the other; it never completes it.
+  Write the decision onto the governed item, and leave its box alone.
+- **UNBLOCKS / LIFTS THE GATE ON / GATED BY** -- edit the gated file's gate paragraph so it states the
+  new reality. A gate that has silently lifted is as harmful as one that has not.
+- **FEEDS / FED BY** -- write the *answer* into the fed item. It does not check that item off.
+
+Every marker in this repository's root checklists is reciprocal: if you follow one and find no
+counterpart at the other end, that is a defect to fix, not a link to ignore.
+
 **Deliberately redundant with [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md).** That file plans the
 *design*; this one plans the *release*, and a release has its own failure modes that a design checklist
 will not surface. Where the two overlap -- M31.8 in particular -- this file states why the item is
@@ -22,7 +42,9 @@ release-blocking rather than restating the decision itself.
 
 ## M1: settle the public surface before it is public
 
-- [ ] **SH-1.1** -- **Decide M31.8 (merge-or-delete for `mpsc` and `reserving_mpsc`) before the first
+- [ ] **SH-1.1** -- **MIRRORS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M31.8 -- one piece of
+  work seen from two plans. Check both off in the same commit; neither is done alone.**
+  **Decide M31.8 (merge-or-delete for `mpsc` and `reserving_mpsc`) before the first
   publish, not after.** This is the highest-leverage item in the file and it is release-blocking for a
   mechanical reason: the decision may *delete a public type*. Doing that before 0.1.0 costs nothing;
   doing it after means a breaking release, a yank-and-migrate for anyone who adopted it, and a
@@ -30,7 +52,12 @@ release-blocking rather than restating the decision itself.
   The measurement is already done and agrees across both architectures -- see M31.5 and M31.7 in
   [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) -- so this needs a decision, not more work.
 
-- [ ] **SH-1.2** -- **Decide explicitly whether M31.6 (loom verification) gates 0.1.0**, and record the
+- [ ] **SH-1.2** -- **GOVERNS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M31.6 -- this is not
+  that item and does not complete it.** It decides only whether M31.6 blocks SH-4.3. If the answer is
+  "it gates", record that on M31.6 and SH-4.3 cannot proceed until M31.6 is done; if "it does not",
+  record that too, so a later reader does not mistake a considered choice for an oversight. **Checking
+  this off never checks off M31.6.**
+  **Decide explicitly whether M31.6 (loom verification) gates 0.1.0**, and record the
   answer either way rather than letting it drift into "not yet".
   The reason it deserves a deliberate answer rather than a default: the sabotage sweep demonstrated
   that weakening the producer's `Acquire` load of `head` to `Relaxed` left **all twenty tests green**,
@@ -85,12 +112,20 @@ release-blocking rather than restating the decision itself.
 - [ ] **SH-4.1** -- Release `windows-topology-sys` 0.2.0 and confirm it appears on crates.io and builds
   on docs.rs. Docs.rs builds under its own configuration, so a crate that documents locally can still
   fail there.
+  **UNBLOCKS half of [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md), which is gated on both
+  releases. On completing this, update that file's gate note to record that topology has shipped** --
+  the gate lifts only when SH-4.3 lands too, and a half-lifted gate that reads as lifted is how work
+  starts against a dependency that is not there yet.
 
 - [ ] **SH-4.2** -- Update `windows-ioring-sys` to depend on the published 0.2.0 and release it, per
   the order settled in SH-2.2.
 
 - [ ] **SH-4.3** -- Release `windows-waitable-queues` 0.1.0, with SH-2.1's fix in place. Confirm the
   tag triggered a publish rather than assuming it did.
+  **LIFTS THE GATE ON [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md). On completing this,
+  edit that file's opening gate paragraph to say the gate is lifted and name the two published
+  versions**, so a reader arriving there later does not have to reconstruct whether it still applies.
+  Blocked by SH-1.1, and by M31.6 as well if SH-1.2 decided that it gates.
 
 ## M5: verify from outside the workspace
 
