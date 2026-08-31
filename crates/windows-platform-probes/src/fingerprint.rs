@@ -388,8 +388,32 @@ impl fmt::Display for Fingerprint {
 ///
 /// Returns whatever [`Topology::discover`] failed with.
 pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
-    let topology = Topology::discover()?;
+    Ok(places_from_topology(&Topology::discover()?))
+}
 
+/// Work out where each logical processor sits, in any topology.
+///
+/// # Why this seam exists when `measure` deliberately has none
+///
+/// This is a **pure conversion**: topology in, positions out, nothing measured
+/// and nothing pinned. Feeding it a synthetic topology yields synthetic
+/// positions, which is exactly what a caller asked for and cannot be mistaken
+/// for a measurement. The seam refused on
+/// [`measure`](crate::core_affinity::measure) is a different thing entirely --
+/// there, a synthetic topology's processor *numbers* would still be valid on
+/// the real host, so every pin would succeed and real timings would be filed
+/// under fabricated labels.
+///
+/// The distinction is the rule: **a seam that only moves data is safe; a seam
+/// that lets fabricated labels reach real hardware is not.**
+///
+/// Without this, the rules below -- which cache level partitions the machine,
+/// which core and class each processor belongs to, and which NUMA node -- could
+/// only ever execute against whatever machine ran the suite. The NUMA mapping
+/// in particular was unverifiable on a single-node host, where a completely
+/// broken lookup and a correct one both yield node 0.
+#[must_use]
+pub fn places_from_topology(topology: &Topology) -> Vec<ProcessorPlace> {
     let mut class_of = std::collections::BTreeMap::new();
     let mut core_of = std::collections::BTreeMap::new();
     for core in topology.cores() {
@@ -431,7 +455,7 @@ pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
         }
     }
 
-    Ok(class_of
+    class_of
         .into_iter()
         .map(|(number, efficiency_class)| ProcessorPlace {
             number,
@@ -440,7 +464,7 @@ pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
             cache_domain: cache_of.get(&number).copied(),
             numa_node: numa_of.get(&number).copied().unwrap_or(0),
         })
-        .collect())
+        .collect()
 }
 
 /// Print the host fingerprint as a probe's first line, or say why it could not

@@ -1584,3 +1584,104 @@ with the three rejected alternatives).
   `rust-version`, `channel`, or `edition`, deleting a claim's value, and planting a stale
   version in prose each produce a distinct located failure; exit 2 is reserved for
   configuration errors and the script is cwd-independent.
+
+## Moved 2026-08-31 -- topology provenance: a topology now carries where it came from, and cannot pass as measured
+
+# Checklist: topology provenance
+
+**Problem.** [crates/windows-topology-sys/src/topology.rs](crates/windows-topology-sys/src/topology.rs)
+documents that a `Topology` is "built either by `Topology::discover` from the running system, by hand,
+or (with the `serde` feature) by deserializing a fed-in description" -- and **nothing distinguishes the
+three once built**. `Topology` derives `Default`, has public fields, and derives `Deserialize`. There is
+a passing test that parses a *Linux-shaped* description, complete with an ACPI SLIT-style distance
+matrix, on a Windows-only crate. A consumer handed that value treats another machine's topology, or a
+fabricated one, as this machine's truth.
+
+This is not hypothetical for the work in flight. `probe-core-affinity` needs synthetic multi-node
+topologies precisely because no NUMA machine is available, and the whole point of a probe is that its
+output is believed.
+
+**Decision.** Topology content carries its own provenance, defaulting to the *untrusted* value so that
+forgetting is safe and claiming is deliberate. Persisted forms carry it visibly, and loading can only
+ever downgrade -- a file cannot assert that it is this machine.
+
+Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is what surfaced this.
+
+## M1: the marker, and its invariants
+
+- [x] **TP-1.1** -- Add `Provenance` to `windows-topology-sys` with three states ordered by trust:
+  `Measured` (read from the running system), `Restored` (deserialized from a description of some
+  machine), `Synthetic` (constructed by hand). **`Synthetic` is `Default`.** That is the load-bearing
+  choice: `Topology::default()`, `..Default::default()`, and any construction that omits the field all
+  come out tainted, so a caller must do work to claim data is real rather than work to admit it is not.
+  Document that the threat model is *accident*, not forgery -- a caller who writes
+  `provenance: Measured` over fabricated data has lied deliberately, and no type prevents that.
+
+- [x] **TP-1.2** -- Add the field to `Topology` and set `Measured` in `discover()`. This is a **breaking
+  change** for struct-literal construction, and deliberately so: every existing site is forced to state
+  which kind of data it holds. Update the crate's own tests and every dependent that constructs a
+  `Topology` by hand.
+
+- [x] **TP-1.3** -- Serde: serialize the marker so it is *visible* in the persisted form, and
+  **downgrade on load** -- `Measured` becomes `Restored`, everything else is unchanged. The rule is
+  **never upgrade**, so a hand-edited `"provenance": "measured"` is ignored rather than honoured. A
+  description absent the field loads as `Synthetic`. Test each of the four load cases, including that a
+  round trip of a measured topology does not come back measured.
+
+## M2: making it loud where it is read
+
+- [x] **TP-2.1** -- `Fingerprint` in [crates/windows-platform-probes/src/fingerprint.rs](crates/windows-platform-probes/src/fingerprint.rs)
+  carries the provenance and renders it **first and unmissably** when it is not `Measured`. The
+  fingerprint string is documented as canonical, so string equality is a usable comparison -- which
+  means the marker must be *inside* the string, or a synthetic host could compare equal to a real one.
+  That is the specific bug this prevents, not merely a display nicety.
+
+- [x] **TP-2.2** -- Every probe banner and every persisted probe line inherits it, since
+  `print_banner` and `Slice` are what end up pasted into checklists and design notes. A number quoted
+  from a synthetic run must arrive already labelled, because the label is what a reader will not think
+  to ask for.
+  **Done, and the banner inherits it by construction** -- it embeds the fingerprint's own `Display`
+  rather than re-rendering, so the two cannot drift. `print_banner` was split so the line is available
+  as a string (`banner_line`) and the marker's arrival is asserted rather than confirmed by reading a
+  format string.
+  **`Slice` deliberately carries no marker of its own, and the reason is structural rather than an
+  oversight.** A `Slice` records which processors a measurement was pinned to, and one can only exist
+  from a real `measure()` run: `measure` takes no injected topology (and
+  [crates/windows-platform-probes/src/core_affinity.rs](crates/windows-platform-probes/src/core_affinity.rs)
+  now documents why it must not), and pinning to a processor that does not exist panics. A slice is
+  therefore always real, and it is always printed beneath the banner that carries the host's
+  provenance. **If `measure` ever does gain such a seam, this reasoning collapses and `Slice` needs its
+  own marker** -- which is a second, independent reason not to add one.
+
+## M3: closing the loop with the probes
+
+- [x] **TP-3.1** -- Reconsider whether `probe-core-affinity`'s synthetic hosts should be expressed as
+  `Topology` values rather than as `Vec<ProcessorPlace>`. Going through `Topology` would exercise the
+  provenance path end to end and let a synthetic *NUMA* host drive selection through the real
+  `discover_places` conversion; staying at `ProcessorPlace` keeps the tests pure and fast. **Decide on
+  the evidence, and record the decision either way** -- this item is not "do it", it is "choose".
+  Note the constraint from
+  [crates/windows-platform-probes/src/core_affinity.rs](crates/windows-platform-probes/src/core_affinity.rs):
+  `measure()` must still not gain a topology-injection seam, whatever is decided here.
+
+  **Decided: both, because they are tests of different units -- and the evidence that settled it was a
+  hole, not a preference.** `classify`, `representative_pairs` and `node_pairs` take `ProcessorPlace`;
+  that *is* their input type, so `ProcessorPlace` fixtures test them at their own boundary and stay.
+  What was missing is that `discover_places` -- which carries the rules for which cache level
+  partitions the machine, which core and class each processor belongs to, and which NUMA node -- took
+  no argument, called `Topology::discover()` internally, and appeared in **zero tests**. It was not
+  merely untested; it was untestable.
+
+  **That hole was load-bearing and is now proven closed.** The NUMA lookup added earlier could not be
+  verified on a single-node host, because a correct map and a completely broken one both yield node 0.
+  Replacing the whole lookup with a hardcoded `0` was tried against the suite as it stood before this
+  item: **it passed everything.** Against the suite now, three tests fail. The `ProcessorPlace`
+  fixtures could never have caught it, because they encode what a test author *assumed* the conversion
+  produces -- the exact "depend on specified primitives, never on incidental behavior" trap.
+
+  **A pure `places_from_topology` seam was added; `measure()` still has none.** The distinction is the
+  rule worth keeping: *a seam that only moves data is safe; a seam that lets fabricated labels reach
+  real hardware is not.* Feeding a synthetic topology to a conversion yields synthetic positions, which
+  is what the caller asked for and cannot be mistaken for a measurement. Feeding one to `measure()`
+  would produce genuine timings under fabricated node ids, because a synthetic topology's processor
+  *numbers* are still valid on the real host and every pin would succeed.

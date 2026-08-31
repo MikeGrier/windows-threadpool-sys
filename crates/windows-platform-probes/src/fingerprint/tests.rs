@@ -290,3 +290,286 @@ fn the_banner_carries_whatever_the_fingerprint_says() {
         "a real machine's banner must carry no taint marker: {banner}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Converting a whole topology into processor positions.
+//
+// `places_from_topology` carries real rules -- which cache level partitions the
+// machine, which core and efficiency class each processor belongs to, and which
+// NUMA node -- and until it gained a seam none of them could be exercised
+// against anything but whatever machine ran the suite. The NUMA lookup was the
+// worst case: on a single-node host a completely broken map and a correct one
+// both yield node 0, so it was shipped unverified.
+// ---------------------------------------------------------------------------
+
+mod from_topology {
+    use windows_topology_sys::{
+        Domain, DomainKind, Processor, ProcessorId, ProcessorSet, Topology,
+    };
+
+    use crate::fingerprint::places_from_topology;
+
+    /// How many processors each core carries, and where each core sits.
+    struct CoreSpec {
+        efficiency_class: u8,
+        cache_domain: u32,
+        numa_node: u32,
+        threads: u8,
+    }
+
+    /// Assemble a topology from a list of cores, the way Windows would report
+    /// one: a group domain, a core domain per core, a cache domain per distinct
+    /// cache id, and a memory domain per distinct node.
+    fn topology_of(cores: &[CoreSpec]) -> Topology {
+        let mut processors = Vec::new();
+        let mut domains = Vec::new();
+        let mut next_number = 0_u8;
+        let mut cache_members: Vec<(u32, Vec<u8>)> = Vec::new();
+        let mut node_members: Vec<(u32, Vec<u8>)> = Vec::new();
+        let mut all = Vec::new();
+
+        for (index, core) in cores.iter().enumerate() {
+            let mut members = Vec::new();
+            for _ in 0..core.threads {
+                processors.push(Processor {
+                    id: ProcessorId {
+                        group: 0,
+                        number: next_number,
+                    },
+                    online: true,
+                    capacity: 0,
+                });
+                members.push(next_number);
+                all.push(next_number);
+                next_number += 1;
+            }
+
+            domains.push(Domain {
+                kind: DomainKind::Core {
+                    simultaneous_multithreading: core.threads > 1,
+                    efficiency_class: core.efficiency_class,
+                },
+                id: index as u32,
+                processors: set_of(&members),
+            });
+
+            push_members(&mut cache_members, core.cache_domain, &members);
+            push_members(&mut node_members, core.numa_node, &members);
+        }
+
+        domains.insert(
+            0,
+            Domain {
+                kind: DomainKind::Group,
+                id: 0,
+                processors: set_of(&all),
+            },
+        );
+
+        for (id, members) in cache_members {
+            domains.push(Domain {
+                kind: DomainKind::Cache {
+                    level: 2,
+                    associativity: 8,
+                    line_size: 64,
+                    size_bytes: 512 * 1024,
+                    cache_type: windows_topology_sys::CacheKind::Unified,
+                },
+                id,
+                processors: set_of(&members),
+            });
+        }
+        for (id, members) in node_members {
+            domains.push(Domain {
+                kind: DomainKind::Memory { memory_bytes: None },
+                id,
+                processors: set_of(&members),
+            });
+        }
+
+        Topology {
+            processors,
+            domains,
+            distances: None,
+            ..Default::default()
+        }
+    }
+
+    fn set_of(numbers: &[u8]) -> ProcessorSet {
+        let mask = numbers.iter().fold(0_usize, |mask, n| mask | (1 << n));
+        ProcessorSet::from_group_mask(0, mask)
+    }
+
+    fn push_members(into: &mut Vec<(u32, Vec<u8>)>, id: u32, members: &[u8]) {
+        match into.iter_mut().find(|(existing, _)| *existing == id) {
+            Some((_, list)) => list.extend_from_slice(members),
+            None => into.push((id, members.to_vec())),
+        }
+    }
+
+    /// Two nodes, two cores each, two threads per core.
+    fn two_node_host() -> Topology {
+        topology_of(&[
+            CoreSpec {
+                efficiency_class: 0,
+                cache_domain: 0,
+                numa_node: 0,
+                threads: 2,
+            },
+            CoreSpec {
+                efficiency_class: 0,
+                cache_domain: 1,
+                numa_node: 0,
+                threads: 2,
+            },
+            CoreSpec {
+                efficiency_class: 0,
+                cache_domain: 2,
+                numa_node: 1,
+                threads: 2,
+            },
+            CoreSpec {
+                efficiency_class: 0,
+                cache_domain: 3,
+                numa_node: 1,
+                threads: 2,
+            },
+        ])
+    }
+
+    #[test]
+    fn every_processor_is_placed() {
+        let places = places_from_topology(&two_node_host());
+
+        assert_eq!(places.len(), 8);
+        let mut numbers: Vec<u8> = places.iter().map(|p| p.number).collect();
+        numbers.sort_unstable();
+        assert_eq!(numbers, (0..8).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn numa_nodes_are_read_from_the_memory_domains() {
+        // The assertion that could not be made before this seam existed. On a
+        // single-node host this passes whether the lookup works or returns the
+        // fallback, so it was previously untested in the only way that matters.
+        let places = places_from_topology(&two_node_host());
+
+        for place in &places {
+            let expected = u32::from(place.number >= 4);
+            assert_eq!(
+                place.numa_node, expected,
+                "cpu{} landed on node {} rather than {expected}",
+                place.number, place.numa_node
+            );
+        }
+    }
+
+    #[test]
+    fn both_nodes_are_actually_represented() {
+        // Guards the degenerate pass: if the lookup silently returned 0 for
+        // everything, the test above would still fail, but a future refactor
+        // that collapsed the map could otherwise leave a suite that only ever
+        // sees one node.
+        let places = places_from_topology(&two_node_host());
+        let mut nodes: Vec<u32> = places.iter().map(|p| p.numa_node).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+
+        assert_eq!(nodes, vec![0, 1]);
+    }
+
+    #[test]
+    fn smt_siblings_share_a_core_id() {
+        let places = places_from_topology(&two_node_host());
+
+        for pair in places.chunks(2) {
+            assert_eq!(
+                pair[0].core, pair[1].core,
+                "cpu{} and cpu{} were reported on different cores",
+                pair[0].number, pair[1].number
+            );
+        }
+        assert_ne!(places[0].core, places[2].core);
+    }
+
+    #[test]
+    fn the_partitioning_cache_level_is_the_outermost_one_that_divides() {
+        // Four distinct L2 domains here, so every core sits behind its own and
+        // the two siblings of a core share one.
+        let places = places_from_topology(&two_node_host());
+
+        assert_eq!(places[0].cache_domain, places[1].cache_domain);
+        assert_ne!(places[0].cache_domain, places[2].cache_domain);
+    }
+
+    #[test]
+    fn a_single_cache_domain_partitions_nothing() {
+        // One cache covering the whole machine divides it into one piece, which
+        // is no division at all -- the rule the real hosts exercise from the
+        // other side, since one reports a single L3 and falls back to L2.
+        let flat = topology_of(&[
+            CoreSpec {
+                efficiency_class: 0,
+                cache_domain: 0,
+                numa_node: 0,
+                threads: 1,
+            },
+            CoreSpec {
+                efficiency_class: 0,
+                cache_domain: 0,
+                numa_node: 0,
+                threads: 1,
+            },
+        ]);
+
+        let places = places_from_topology(&flat);
+
+        assert!(
+            places.iter().all(|p| p.cache_domain.is_none()),
+            "an undivided machine reported a partitioning cache domain"
+        );
+    }
+
+    #[test]
+    fn efficiency_classes_are_carried_through() {
+        let hybrid = topology_of(&[
+            CoreSpec {
+                efficiency_class: 1,
+                cache_domain: 0,
+                numa_node: 0,
+                threads: 2,
+            },
+            CoreSpec {
+                efficiency_class: 0,
+                cache_domain: 1,
+                numa_node: 0,
+                threads: 1,
+            },
+        ]);
+
+        let places = places_from_topology(&hybrid);
+
+        assert_eq!(places[0].efficiency_class, 1);
+        assert_eq!(places[1].efficiency_class, 1);
+        assert_eq!(places[2].efficiency_class, 0);
+    }
+
+    #[test]
+    fn a_synthetic_topology_drives_the_classifier_end_to_end() {
+        // The whole point of routing through `Topology`: selection now runs on
+        // positions the real conversion produced, not on positions a test
+        // author assumed it would produce.
+        use crate::core_affinity::{Placement, node_pairs, representative_pairs};
+
+        let places = places_from_topology(&two_node_host());
+        let pairs = representative_pairs(&places);
+
+        assert!(pairs.contains_key(&Placement::SameCoreSiblings));
+        assert!(pairs.contains_key(&Placement::CrossCacheSameClass));
+        assert!(pairs.contains_key(&Placement::CrossNumaNode));
+
+        let hops = node_pairs(&places);
+        assert_eq!(hops.len(), 1);
+        assert!(hops.contains_key(&(0, 1)));
+    }
+}

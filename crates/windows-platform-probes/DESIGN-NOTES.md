@@ -602,3 +602,37 @@ answer -- whatever the topology says is what the fingerprint reports.
 `print_banner` was split so the line is available as a string. The taint marker reaching that line is
 the entire point of carrying provenance, and a property that load-bearing should not rest on someone
 having read a format string correctly.
+
+## Which seams are safe: data may be injected, labels may not reach hardware
+
+Two topology-injection seams were considered during this work and they were decided opposite ways.
+The rule that separates them is worth stating on its own, because "add a seam for testability" reads
+as unambiguously good and here it is only half true:
+
+**A seam that only moves data is safe. A seam that lets fabricated labels reach real hardware is
+not.**
+
+- [`places_from_topology`](src/fingerprint.rs) **has** a seam. It is a pure conversion -- topology in,
+  processor positions out, nothing pinned and nothing timed. A synthetic topology yields synthetic
+  positions, which is what the caller asked for and cannot be mistaken for a measurement.
+- [`measure`](src/core_affinity.rs) **must not**, and its documentation says so at the definition.
+  A synthetic topology's processor *numbers* are still valid on the real host, so every pin would
+  succeed and the run would produce genuine timings filed under fabricated node ids -- output
+  indistinguishable from a real NUMA measurement that measured no such thing. The pin assertion does
+  not catch it: it rejects a processor that does not exist, not a label that is wrong.
+
+The absence of the second seam is also what lets `Slice` carry no provenance marker of its own, so
+the two decisions hold each other up.
+
+### The hole this closed, and how it was proven
+
+`discover_places` took no argument and appeared in no test. It was untestable, not merely untested,
+and it carries the rules for the partitioning cache level, core and class membership, and the NUMA
+node. The NUMA lookup in particular was **unverifiable on every host available to this workspace**:
+with a single node, a correct map and a completely broken one both yield node 0.
+
+Replacing the entire lookup with a hardcoded `0` was run against the suite as it stood before this
+change. **It passed everything.** Against the suite now, three tests fail. That is the difference the
+seam bought, and it is why the existing `ProcessorPlace` fixtures were kept rather than treated as
+sufficient: they encode what a test author assumed the conversion produces, which is precisely the
+thing that cannot catch the conversion being wrong.
