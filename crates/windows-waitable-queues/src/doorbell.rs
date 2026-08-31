@@ -145,7 +145,7 @@
 //! re-check sees the item and the caller does not wait. **That argument is
 //! sound only when the re-check is guaranteed to see anything that producer
 //! published**, and it silently assumed a queue whose emptiness is a single
-//! position comparison. `mpsc` broke the assumption -- its re-check asks whether
+//! position comparison. `slotwise_mpsc` broke the assumption -- its re-check asks whether
 //! the *head* slot is published, so a producer publishing at a later position
 //! is invisible to it, and the consumer parks in exactly the wedged state above.
 //! The failure was a rare permanent hang, reproduced once in a sabotage

@@ -23,7 +23,7 @@ pub struct CapacityError {
     /// The smallest capacity the rejecting shape accepts.
     ///
     /// Carried for the same reason as [`Self::max_valid`], and it is not always
-    /// one: `mpsc` cannot represent a capacity below two, because its slot
+    /// one: `slotwise_mpsc` cannot represent a capacity below two, because its slot
     /// state machine reuses a sequence number one lap later and a one-slot ring
     /// would make "published" and "free again" the same value.
     min_valid: usize,

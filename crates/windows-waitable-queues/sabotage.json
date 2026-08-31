@@ -1,6 +1,6 @@
 {
   "package": "windows-waitable-queues",
-  "description": "Sabotages for the SPSC ring, the MPSC array queue, the doorbell they share, and the blocking receive loop they share. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "description": "Sabotages for the SPSC ring, the two MPSC shapes, the doorbell they share, and the blocking receive loop they share. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
   "notCoveredHere": "The two SeqCst fences in doorbell.rs are deliberately ABSENT from this manifest, and their absence is not an oversight. Removing either leaves every test green, because the defect they prevent is a store-buffer reordering that no amount of stress testing reliably produces -- it is a fact about the memory model, not about any interleaving a scheduler will hand you. Adding them here with expect:'caught' would fail the sweep; adding them with expect:'survives' would assert they are harmless, which is false and far worse. They are verifiable only under a model checker, and are the named target of checklist item M31.6.",
   "sabotages": [
     {
@@ -193,7 +193,7 @@
       "name": "clear clears the mirror flag before resetting the event",
       "file": "src/doorbell.rs",
       "expect": "caught",
-      "why": "The historical order, and a lost wakeup. A producer signalling between the two lines finds a clear flag, sets it, and issues a real SetEvent; the ResetEvent that follows erases that signal and leaves the flag set, so the doorbell is dark while claiming to be lit and every later signal skips its syscall. It survived review and a whole sabotage sweep because the argument for it -- 'the caller's re-check sees the racing producer's item' -- is true for spsc and false for mpsc, whose re-check asks only whether the HEAD slot is published. Found by a sabotage BASELINE hanging once in a run that was otherwise green six times over. The race_hooks::CLEAR hook drives the real clear through its own window on one thread, so this is caught every run rather than occasionally.",
+      "why": "The historical order, and a lost wakeup. A producer signalling between the two lines finds a clear flag, sets it, and issues a real SetEvent; the ResetEvent that follows erases that signal and leaves the flag set, so the doorbell is dark while claiming to be lit and every later signal skips its syscall. It survived review and a whole sabotage sweep because the argument for it -- 'the caller's re-check sees the racing producer's item' -- is true for spsc and false for slotwise_mpsc, whose re-check asks only whether the HEAD slot is published. Found by a sabotage BASELINE hanging once in a run that was otherwise green six times over. The race_hooks::CLEAR hook drives the real clear through its own window on one thread, so this is caught every run rather than occasionally.",
       "find": [
         "        unsafe {",
         "            ResetEvent(event.as_raw_handle());",
@@ -212,8 +212,8 @@
       ]
     },
     {
-      "name": "mpsc push does not signal the doorbell",
-      "file": "src/mpsc.rs",
+      "name": "slotwise_mpsc push does not signal the doorbell",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "caught",
       "why": "A producer that never rings the bell leaves a parked consumer asleep on a queue with items in it. Caught as a hang, which is the correct shape for this defect.",
       "find": [
@@ -225,8 +225,8 @@
       ]
     },
     {
-      "name": "mpsc: the last producer's drop does not signal",
-      "file": "src/mpsc.rs",
+      "name": "slotwise_mpsc: the last producer's drop does not signal",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "caught",
       "why": "Disconnection is a wakeup, and the only one no other party can deliver. Without it a blocked consumer waits forever for an item that can no longer be sent. NOTE the shape of this patch -- it deletes the live call rather than inserting unreachable code beside it, because a sabotage that does not sabotage retires a question that was never asked.",
       "find": [
@@ -244,8 +244,8 @@
       ]
     },
     {
-      "name": "CONTROL: mpsc signals on every producer's departure, not only the last",
-      "file": "src/mpsc.rs",
+      "name": "CONTROL: slotwise_mpsc signals on every producer's departure, not only the last",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "survives",
       "why": "A control, not a defect. Ringing when a non-final producer leaves is a SPURIOUS wakeup: the consumer wakes, finds nothing, sees producers still alive, and parks again. The contract says a wakeup may be spurious, so the suite MUST stay green. If this is ever reported as caught, a test has started asserting that no extra wakeups occur -- which is asserting the implementation -- and that test is the thing to fix. Note this is NOT the same as the entry above: that one deletes the last producer's signal, which is a lost wakeup and a hang.",
       "find": [
@@ -258,8 +258,8 @@
       ]
     },
     {
-      "name": "mpsc arm checks readiness before clearing",
-      "file": "src/mpsc.rs",
+      "name": "slotwise_mpsc arm checks readiness before clearing",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "caught",
       "why": "The lost wakeup itself, in the second shape. A push landing between the check and the clear both signals and has its signal erased, so the consumer sleeps on a queue that is not empty and will never be signalled again. Driven deterministically through the REAL arm by the shared ARM_RACE hook rather than through a copy of it, which is what makes this caught every run rather than one in three.",
       "find": [
@@ -280,8 +280,8 @@
       ]
     },
     {
-      "name": "mpsc arm does not create the doorbell before checking",
-      "file": "src/mpsc.rs",
+      "name": "slotwise_mpsc arm does not create the doorbell before checking",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "caught",
       "why": "Lazy creation is the same hazard a third time: a producer running while no event exists skips signalling, so the readiness check has to come after the event exists to catch what that skip left behind.",
       "find": [
@@ -293,8 +293,8 @@
       ]
     },
     {
-      "name": "mpsc frees a slot one short of the next lap",
-      "file": "src/mpsc.rs",
+      "name": "slotwise_mpsc frees a slot one short of the next lap",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "caught",
       "why": "The sequence protocol's whole arithmetic in one line. A slot freed at `pos + capacity - 1` is never equal to the position that next claims it, so every producer reads a negative difference and reports Full for ever: the queue works for exactly one lap and then wedges. An off-by-one here is invisible to any test that never wraps, which is why the wrap tests run a thousand rounds through four slots.",
       "find": [
@@ -305,8 +305,8 @@
       ]
     },
     {
-      "name": "mpsc cloning a producer does not count it",
-      "file": "src/mpsc.rs",
+      "name": "slotwise_mpsc cloning a producer does not count it",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "caught",
       "why": "The count is what makes multi-producer disconnection work, and a clone that does not register makes the FIRST departure look like the last. The consumer then ends the stream while producers are still pushing into it.",
       "find": [
@@ -317,8 +317,8 @@
       ]
     },
     {
-      "name": "mpsc accepts a capacity of one",
-      "file": "src/mpsc.rs",
+      "name": "slotwise_mpsc accepts a capacity of one",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "caught",
       "why": "With one slot, 'published at position p' and 'free again at position p + capacity' are the SAME number, so a producer reads the sequence of the item it just pushed, concludes the slot is free, and overwrites an item the consumer has not read. spsc accepts one, which is exactly why the minimum belongs to the shape rather than to the crate -- and why it is asserted rather than assumed.",
       "find": [
@@ -433,7 +433,7 @@
       "name": "high-water is tracked even when nobody asked",
       "file": "src/metrics.rs",
       "expect": "caught",
-      "why": "Tracking must be genuinely off by default, because it is the one metric that costs the push path something -- on mpsc it makes the producer read the consumer's position, which is the shared line that shape exists to avoid. If the default silently tracked, every mpsc user would be paying for an answer they never asked for, and the only visible symptom would be a number appearing where None belongs.",
+      "why": "Tracking must be genuinely off by default, because it is the one metric that costs the push path something -- on slotwise_mpsc it makes the producer read the consumer's position, which is the shared line that shape exists to avoid. If the default silently tracked, every slotwise_mpsc user would be paying for an answer they never asked for, and the only visible symptom would be a number appearing where None belongs.",
       "find": [
         "            high_water: if track_high_water {"
       ],
@@ -442,10 +442,10 @@
       ]
     },
     {
-      "name": "CONTROL: mpsc reads head unconditionally, skipping the tracking guard",
-      "file": "src/mpsc.rs",
+      "name": "CONTROL: slotwise_mpsc reads head unconditionally, skipping the tracking guard",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "survives",
-      "why": "A control, and the replacement for the one M31.4 converted into a defect. The guard around mpsc's `head` load is an OPTIMISATION, not a correctness device -- `record_depth` already returns early when tracking is off, so reading head regardless changes no observable behaviour and the suite MUST stay green. What it changes is the cost, which is the whole reason the guard is there. If this is ever reported as caught, a test has started asserting the implementation rather than the contract.",
+      "why": "A control, and the replacement for the one M31.4 converted into a defect. The guard around slotwise_mpsc's `head` load is an OPTIMISATION, not a correctness device -- `record_depth` already returns early when tracking is off, so reading head regardless changes no observable behaviour and the suite MUST stay green. What it changes is the cost, which is the whole reason the guard is there. If this is ever reported as caught, a test has started asserting the implementation rather than the contract.",
       "find": [
         "        if self.shared.metrics.tracks_high_water() {"
       ],
@@ -491,8 +491,8 @@
       ]
     },
     {
-      "name": "mpsc teardown destroys survivors instead of handing them over",
-      "file": "src/mpsc.rs",
+      "name": "slotwise_mpsc teardown destroys survivors instead of handing them over",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "caught",
       "why": "As for spsc, and this walk differs: it consults each slot's sequence rather than assuming the whole resident range is published.",
       "find": [
@@ -520,7 +520,7 @@
       "name": "spsc: a best-effort push may take a reserved slot",
       "file": "src/spsc.rs",
       "expect": "caught",
-      "why": "The same guarantee on the single-producer shape, where the mechanism is a plain counter rather than a packed word. Worth its own entry precisely because the two implementations share nothing: a test that only covered the mpsc path would leave this one unguarded.",
+      "why": "The same guarantee on the single-producer shape, where the mechanism is a plain counter rather than a packed word. Worth its own entry precisely because the two implementations share nothing: a test that only covered the slotwise_mpsc path would leave this one unguarded.",
       "find": [
         "        if tail.wrapping_sub(head) + reserved >= self.shared.capacity {",
         "            // Report disconnection in preference to fullness"
@@ -546,8 +546,8 @@
       ]
     },
     {
-      "name": "mpsc reports Full for a full queue whose consumer is gone",
-      "file": "src/mpsc.rs",
+      "name": "slotwise_mpsc reports Full for a full queue whose consumer is gone",
+      "file": "src/slotwise_mpsc.rs",
       "expect": "caught",
       "why": "Full invites a retry and Disconnected does not, and a full queue with no consumer will never drain -- so reporting Full here is telling the caller to spin forever. The preference has to be stated at the fullness branch specifically, because that branch returns before the general disconnection check below it is ever reached.",
       "find": [

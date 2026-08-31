@@ -46,16 +46,75 @@
 //! [`Reserving`] -- each naming one thing a queue can do, so a caller can be
 //! generic over exactly what it needs and nothing more.
 //!
-//! # Choosing between `mpsc` and `reserving_mpsc`
+//! # Where these algorithms come from
+//!
+//! **None of the queue algorithms here are novel, and that is deliberate.** A
+//! concurrent queue is a bad place to be original: the failure mode is a
+//! reordering that appears on one machine, under load, months later. Each shape
+//! implements a published design, and the value this crate adds is the waiting,
+//! not the queueing.
+//!
+//! - [`spsc`] is the classic single-producer single-consumer ring buffer, with
+//!   the producer's and consumer's positions on separate cache lines so the two
+//!   ends stop invalidating each other's line. The structure is old -- Lamport
+//!   gave the concurrent-reader/writer treatment in 1983 -- and the padding is
+//!   standard modern practice.
+//! - [`slotwise_mpsc`] implements Dmitry Vyukov's bounded MPMC array queue,
+//!   specialised to one consumer. Each slot carries its own sequence number, so
+//!   a producer claims a position and then asks *that slot* whether it is ready,
+//!   which keeps producers off any single shared line. It is among the most
+//!   widely reimplemented concurrent queues in existence.
+//! - [`reserving_mpsc`] uses the other classic approach: a producer counts free
+//!   slots against the consumer's position, so space can be *claimed in advance*.
+//!   Credit- or ticket-based admission of this kind is long-established in flow
+//!   control, and it is the only way to answer "will there be room later?".
+//!
+//! Where this crate departs from a reference implementation it says so, and why,
+//! in `DESIGN-NOTES.md`. The measured behaviour of both MPSC shapes is below,
+//! including one case where the published intuition turned out to be wrong on
+//! our hardware.
+//!
+//! # Why not an existing queue crate
+//!
+//! Rust has excellent channel crates, and for most programs one of them is the
+//! right answer. **They are not usable here for one structural reason: on
+//! Windows, waiting is a kernel-object operation, and a queue whose readiness is
+//! not a `HANDLE` cannot take part in one.**
+//!
+//! A thread that must wait for "an item arrived **or** an I/O completed **or**
+//! this process exited **or** cancellation was requested" waits on all of them
+//! at once, in a single `WaitForMultipleObjects`. Every participant in that wait
+//! has to be a kernel object. A channel that signals readiness through an
+//! internal condition variable, a futex, or a parked-thread list cannot be one
+//! of them, however good its own blocking receive is -- and however rich its own
+//! select mechanism, because that mechanism can only select over its own
+//! channels.
+//!
+//! The alternatives to a waitable queue are all worse in the same way:
+//!
+//! - **Poll the queue on a timer.** Trades latency against wakeups, and the
+//!   thread is awake to discover nothing happened.
+//! - **Dedicate a thread to blocking on the channel, which signals an event.**
+//!   Correct, and costs a thread and a hop per item to convert a condition
+//!   variable back into the kernel object you needed from the start.
+//! - **Move everything to async.** A real answer for a program that is already
+//!   async; not one for a thread whose other obligations are `HANDLE`s.
+//!
+//! So the queue owns a manual-reset event and keeps it consistent with the
+//! queue's state -- which is the hard part, and what this crate is actually
+//! for. The event is created lazily, so a consumer that only ever polls never
+//! allocates a kernel object at all.
+//!
+//! # Choosing between `slotwise_mpsc` and `reserving_mpsc`
 //!
 //! They are **two different claim protocols, not one queue with a switch**.
-//! [`mpsc`] is Vyukov's bounded array queue, where a producer asks a slot's own
+//! [`slotwise_mpsc`] is Vyukov's bounded array queue, where a producer asks a slot's own
 //! sequence number whether it is free. [`reserving_mpsc`] counts free slots
 //! against the consumer's position, which is the only way a reservation can be
 //! answered at all. Both are well-studied designs in production use elsewhere,
 //! which is why this crate ships both instead of picking one for you.
 //!
-//! - Need [`Reserving`]? Only [`reserving_mpsc`] has it; [`mpsc`] structurally
+//! - Need [`Reserving`]? Only [`reserving_mpsc`] has it; [`slotwise_mpsc`] structurally
 //!   cannot.
 //! - Otherwise **start with [`reserving_mpsc`]**: it was the faster of the two
 //!   at every producer count above one that we measured.
@@ -64,7 +123,7 @@
 //! Measured ns per push, isolated regime, median of three. An AMD EPYC 7763
 //! slice (8 cores, 16 threads) and a Snapdragon X2 Elite (12 cores, no SMT):
 //!
-//! | producers | `mpsc` x64 | `reserving` x64 | `mpsc` ARM64 | `reserving` ARM64 |
+//! | producers | `slotwise_mpsc` x64 | `reserving` x64 | `slotwise_mpsc` ARM64 | `reserving` ARM64 |
 //! |---|---|---|---|---|
 //! | 1 | 9.0 | 8.6 | 6.5 | 6.1 |
 //! | 2 | 49.0 | 28.0 | 29.8 | 9.4 |
@@ -75,16 +134,16 @@
 //!
 //! **Read these as two data points, not as a law**, and measure your own
 //! workload before treating them as settled. This comparison has already
-//! inverted once: the split was designed on the assumption that `mpsc` would be
+//! inverted once: the split was designed on the assumption that `slotwise_mpsc` would be
 //! the cheaper shape, and measurement disagreed on both machines. Producer
 //! count, how hard the consumer drains, and where the threads are scheduled all
 //! move the answer -- placement alone moved an SPSC handoff by 5.6x on one of
 //! these hosts.
 //!
 //! Two things that look like reasons to choose and are not. **Capacity**:
-//! `mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, but that counts slots
+//! `slotwise_mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, but that counts slots
 //! allocated up front rather than items ever pushed, and 2^31 slots is tens of
-//! gigabytes before the ring holds anything useful. **`mpsc` winning at one
+//! gigabytes before the ring holds anything useful. **`slotwise_mpsc` winning at one
 //! producer**: true in one regime, and at one producer you want [`spsc`].
 //!
 //! # Shutting down
@@ -104,7 +163,7 @@
 //!
 //! # Status
 //!
-//! [`spsc`] and [`mpsc`] are implemented, both with their doorbell: either can
+//! [`spsc`] and [`slotwise_mpsc`] are implemented, both with their doorbell: either can
 //! be polled with no kernel object at all, blocked on directly, or waited on
 //! alongside other handles. The remaining shapes land in the milestones tracked
 //! by `CHECKLIST-io-domains.md` at the workspace root; the decisions they are
@@ -120,11 +179,11 @@ pub mod disposal;
 mod doorbell;
 mod error;
 mod metrics;
-pub mod mpsc;
 mod options;
 #[cfg(test)]
 mod race_hooks;
 pub mod reserving_mpsc;
+pub mod slotwise_mpsc;
 pub mod spsc;
 pub mod traits;
 

@@ -2,11 +2,11 @@
 
 //! The multi-producer, single-consumer bounded array queue **that can reserve**.
 //!
-//! Everything [`mpsc`](crate::mpsc) is, plus [`Producer::reserve`]: a slot
+//! Everything [`slotwise_mpsc`](crate::slotwise_mpsc) is, plus [`Producer::reserve`]: a slot
 //! claimed in advance, so that a later delivery cannot be refused for want of
 //! room. *Reserved is guaranteed, unreserved is best-effort.*
 //!
-//! # Why this is a separate shape rather than a method on `mpsc`
+//! # Why this is a separate shape rather than a method on `slotwise_mpsc`
 //!
 //! Because the two ask different questions to claim a slot, and only this one's
 //! question can answer a reservation. They are two claim protocols, not one
@@ -14,15 +14,15 @@
 //!
 //! Honouring a reservation costs the producer a read of the consumer's position
 //! on **every** push, including the pushes that never reserve anything -- which
-//! is what `mpsc` avoids and why it cannot offer reservation at all.
+//! is what `slotwise_mpsc` avoids and why it cannot offer reservation at all.
 //!
 //! **That cost is not what makes either shape slower.** This one measured
-//! *faster* than `mpsc` under contention on both architectures tried, by up to
-//! 6.4x, because the slot sequence `mpsc` reads instead marches through memory
+//! *faster* than `slotwise_mpsc` under contention on both architectures tried, by up to
+//! 6.4x, because the slot sequence `slotwise_mpsc` reads instead marches through memory
 //! while other producers write it. See the crate documentation for the numbers
 //! and for how to choose.
 //!
-//! `mpsc`'s producer never reads the consumer's position. It asks a different
+//! `slotwise_mpsc`'s producer never reads the consumer's position. It asks a different
 //! question -- "is the slot I am about to claim free?" -- and reads that from
 //! the slot's own sequence number, which is spread across the slot array, so
 //! producers working at different positions touch different cache lines.
@@ -34,11 +34,11 @@
 //! requires exactly that count -- which requires the consumer's position, on one
 //! line every thread in the system touches.
 //!
-//! So the two ship as peers ([D-16](../../DESIGN-NOTES.md#d-16)): `mpsc` for a
+//! So the two ship as peers ([D-16](../../DESIGN-NOTES.md#d-16)): `slotwise_mpsc` for a
 //! caller who wants the cheapest possible push and can treat a refusal as
 //! backpressure, this shape for a caller with a message it must not lose. That
 //! is the narrow-trait argument from [D-2](../../DESIGN-NOTES.md#d-2) reaching
-//! its sharpest case -- `mpsc` does not implement
+//! its sharpest case -- `slotwise_mpsc` does not implement
 //! [`Reserving`](crate::Reserving) because it genuinely cannot, not because
 //! nobody got round to it.
 //!
@@ -116,7 +116,7 @@ const POSITION_MASK: u64 = (1 << POSITION_BITS) - 1;
 
 /// What this shape accepts as a capacity.
 ///
-/// The minimum is two for the same reason [`mpsc`](crate::mpsc)'s is: with a
+/// The minimum is two for the same reason [`slotwise_mpsc`](crate::slotwise_mpsc)'s is: with a
 /// single slot, "published at `p`" and "free again on the next lap" would be the
 /// same sequence number.
 ///
@@ -237,7 +237,7 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
 /// quietly. Pairing a reservation with a disposal sink is what closes that.
 ///
 /// [`Options::tracking_high_water`] costs this shape almost nothing, unlike
-/// [`mpsc`](crate::mpsc): the producer already reads the consumer's position
+/// [`slotwise_mpsc`](crate::slotwise_mpsc): the producer already reads the consumer's position
 /// to decide whether there is room beyond the reservations, so the depth is a
 /// subtraction of two numbers it is already holding.
 ///
@@ -300,12 +300,12 @@ struct Slot<T> {
     /// writing, and anything else before that.
     ///
     /// **This shape uses the sequence for one direction only.** In
-    /// [`mpsc`](crate::mpsc) it answers both "has this been published?" for the
+    /// [`slotwise_mpsc`](crate::slotwise_mpsc) it answers both "has this been published?" for the
     /// consumer and "is this slot free?" for the producer. Here the producer
     /// answers the second from the consumer's position instead -- it has to read
     /// that position anyway, to count free slots for the reservations -- so
     /// nothing ever stores a "free again" value and the consumer's `pop` is one
-    /// store shorter than `mpsc`'s.
+    /// store shorter than `slotwise_mpsc`'s.
     sequence: AtomicU32,
     value: UnsafeCell<MaybeUninit<T>>,
 }
@@ -324,7 +324,7 @@ struct Shared<T> {
     /// Where the consumer will next read. Written only by the consumer.
     ///
     /// Padded onto its own cache line, and here the padding earns its place
-    /// twice over: unlike `mpsc`, *every* producer reads this on *every* push,
+    /// twice over: unlike `slotwise_mpsc`, *every* producer reads this on *every* push,
     /// so letting the claim word share the line would put the consumer's writes
     /// directly in their path.
     head: CacheAligned<AtomicU32>,
@@ -395,7 +395,7 @@ impl<T> Shared<T> {
     /// Items currently held, as a snapshot.
     ///
     /// Counts slots a producer has claimed but not yet finished writing, for the
-    /// reason `mpsc`'s does: counting only published items would need a walk of
+    /// reason `slotwise_mpsc`'s does: counting only published items would need a walk of
     /// the ring, and this number is a metric rather than a control-flow input.
     fn len(&self) -> usize {
         let position = position_of(self.claim.0.load(Ordering::Acquire));
@@ -450,7 +450,7 @@ impl<T> Shared<T> {
     /// must not have published it already. A position is claimed by exactly one
     /// producer, so this is the only writer of the slot.
     unsafe fn publish(&self, position: u32, item: T) {
-        // Near-free on this shape, unlike `mpsc`: the producer has already
+        // Near-free on this shape, unlike `slotwise_mpsc`: the producer has already
         // read `head` to decide there was room beyond the reservations, so the
         // depth is a subtraction of two numbers it is holding. Only the
         // counter's line is shared, and it is written rarely -- see
@@ -891,7 +891,7 @@ impl<T> Consumer<T> {
         // the position and overwrite an item this thread had not finished
         // taking.
         //
-        // Note that nothing stores a "free again" sequence here, unlike `mpsc`.
+        // Note that nothing stores a "free again" sequence here, unlike `slotwise_mpsc`.
         // Advancing `head` *is* the release, because this shape's producers
         // decide freedom from `head` rather than from the sequence.
         self.shared

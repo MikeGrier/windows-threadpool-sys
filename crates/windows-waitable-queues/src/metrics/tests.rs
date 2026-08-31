@@ -3,7 +3,7 @@
 //! Tests for the counters in isolation, with no queue attached.
 //!
 //! Their behaviour *through* a queue is asserted in each shape's own suite,
-//! because each records depth from a different place -- and on `mpsc` records
+//! because each records depth from a different place -- and on `slotwise_mpsc` records
 //! it only when asked. What is tested here is the arithmetic they share.
 
 use super::Metrics;

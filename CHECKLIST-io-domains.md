@@ -220,7 +220,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   `ResetEvent` that followed erased the signal while leaving the flag set -- so the doorbell was dark
   while claiming to be lit and every later signal skipped. The order had a written argument behind it
   ("the caller's re-check sees the racing producer's item") that is **true for `spsc` and false for
-  `mpsc`**, whose re-check asks only whether the *head* slot is published. The fix moves the guarantee
+  `slotwise_mpsc`**, whose re-check asks only whether the *head* slot is published. The fix moves the guarantee
   from the caller to the type: once `clear` returns the flag is false, so no future shape has to have a
   re-check strong enough to cover the window. [D-15](crates/windows-waitable-queues/DESIGN-NOTES.md#d-15),
   which amends D-9 rather than being filed beside it.
@@ -242,10 +242,10 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   **Done, and the multi-producer case forced a decision the item did not anticipate.** Honouring a
   reservation means knowing how many slots remain, which means reading the consumer's position -- one
   line every thread touches -- on *every* push, including the pushes that never reserve anything.
-  `mpsc`'s producer avoids that read by design: it asks the slot's own sequence "are you free", and those
-  are dispersed across the slot array. So `mpsc` genuinely cannot answer the reservation question, and
+  `slotwise_mpsc`'s producer avoids that read by design: it asks the slot's own sequence "are you free", and those
+  are dispersed across the slot array. So `slotwise_mpsc` genuinely cannot answer the reservation question, and
   rather than charge every caller for a capability not every caller wants, **`reserving_mpsc` ships as a
-  peer and `mpsc` is untouched** ([D-16](crates/windows-waitable-queues/DESIGN-NOTES.md#d-16)). The
+  peer and `slotwise_mpsc` is untouched** ([D-16](crates/windows-waitable-queues/DESIGN-NOTES.md#d-16)). The
   engineer chose this split over the alternatives when it was raised.
   **The reservation count and the claim position share one 64-bit word, and that is the correctness
   argument rather than tidiness** ([D-17](crates/windows-waitable-queues/DESIGN-NOTES.md#d-17)). With the
@@ -257,7 +257,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   the shape at 2^31 items, reported through the same per-shape bound D-12 introduced for the minimum.
   Two consequences worth noting: redeeming is a single exchange that moves both halves, so
   `occupied + reserved` is never momentarily wrong; and the producer stops needing the slot sequence for
-  the "free" direction, so this shape's `pop` is one store *shorter* than `mpsc`'s.
+  the "free" direction, so this shape's `pop` is one store *shorter* than `slotwise_mpsc`'s.
   **A 128-bit compare-and-swap was raised and refused**
   ([D-18](crates/windows-waitable-queues/DESIGN-NOTES.md#d-18)): it lifts the cap and nothing else, since
   the consumer's position still has to be read, and it costs a new dependency, a target-feature floor not
@@ -343,10 +343,10 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   **High-water is the one that cannot be placed that way, and the cost is uneven in a way that lands on
   D-16.** A peak must observe every change. On `spsc` that is free (the producer already reads `head` and
   owns `tail`) and on `reserving_mpsc` near-free (its producer reads `head` for the room check), but
-  `mpsc`'s producer **never reads `head`** -- that is the property D-16 built a separate shape to
-  preserve. Always-on would have imposed D-16's refused cost on every `mpsc` user, to serve a metric most
+  `slotwise_mpsc`'s producer **never reads `head`** -- that is the property D-16 built a separate shape to
+  preserve. Always-on would have imposed D-16's refused cost on every `slotwise_mpsc` user, to serve a metric most
   will never read, immediately before M31.5 measures that exact path. Omitting it would have narrowed the
-  shape. So it is **opt-in at construction**, off by default, and `mpsc` pays one predictable branch on a
+  shape. So it is **opt-in at construction**, off by default, and `slotwise_mpsc` pays one predictable branch on a
   read-only field when it is off ([D-23](crates/windows-waitable-queues/DESIGN-NOTES.md#d-23)). The
   engineer chose this over the narrow-trait and always-on alternatives when it was raised.
   Untracked reports `None` rather than `0`, because "nobody was counting" and "it never filled" are
@@ -361,7 +361,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   the same patch now has to be **caught**, and the entry changed sides. That is R9 working rather than a
   regression: an optimisation nobody can measure is an assumption. What it costs is that the skip is now
   part of what the queue promises, which is the right trade for a queue whose reason to exist is a wakeup
-  protocol -- but it is a trade. The vacated control is replaced rather than dropped, by `mpsc`'s
+  protocol -- but it is a trade. The vacated control is replaced rather than dropped, by `slotwise_mpsc`'s
   tracking guard, which is genuinely an optimisation and must still survive removal.
   **`Observable` deliberately does not restate depth**
   ([D-25](crates/windows-waitable-queues/DESIGN-NOTES.md#d-25)), though D-2's sketch listed it: `len`
@@ -378,7 +378,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   Record the result either way -- a measurement that says "the simple thing is fine" is worth as much as
   one that does not, and is the cheaper outcome to lose track of.
 
-  **Also measure `reserving_mpsc` against `mpsc`, and decide their merge-or-delete here.** M31.2 shipped
+  **Also measure `reserving_mpsc` against `slotwise_mpsc`, and decide their merge-or-delete here.** M31.2 shipped
   them as two shapes because reservation costs the producer a read of the consumer's position on every
   push, and *how much* that costs was a judgement rather than a measurement
   ([D-16](crates/windows-waitable-queues/DESIGN-NOTES.md#d-16)). This benchmark already stands up N
@@ -396,14 +396,14 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   **The tail claim contends, so the licence to close M-inf.1 was not granted** -- but the gate there is
   now a number rather than a judgement, because contending and being the bottleneck are different things.
   See M-inf.1 for the quantified trigger.
-  **`reserving_mpsc` is up to 4x FASTER than `mpsc` under contention, which inverts D-16's premise**
+  **`reserving_mpsc` is up to 4x FASTER than `slotwise_mpsc` under contention, which inverts D-16's premise**
   ([D-26](crates/windows-waitable-queues/DESIGN-NOTES.md#d-26)). The split shipped on the reasoning that
   reading the consumer's position made the reserving shape the expensive one; it is the cheaper one at
   every producer count from two upward, and the premise survives only at a single producer against a live
   consumer -- where `spsc` is the right answer anyway.
   **Investigated before concluding, at the engineer's direction, and the gap is intrinsic rather than a
   fixable flaw** ([D-27](crates/windows-waitable-queues/DESIGN-NOTES.md#d-27)). Both protocols do one CAS
-  plus one load per attempt; the difference is *which* load. `mpsc` must read the slot's own sequence
+  plus one load per attempt; the difference is *which* load. `slotwise_mpsc` must read the slot's own sequence
   before claiming -- an address that marches through memory as the tail advances, written by the producers
   it is racing -- where `reserving_mpsc` reads one fixed `head`. The false-sharing hypothesis was tested
   and rejected: padding each slot onto its own cache line recovers about a fifth at eight producers for
@@ -437,14 +437,14 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   | 16 | 194.9 | 30.6 | 10.6 | 6.4x | 3.7x |
   | 32 | 195.0 | 30.6 | 9.9 | 6.4x | 4.2x |
 
-  Claim 1 (throughput falls as producers are added) holds: `mpsc` costs 30x more per push at 32
+  Claim 1 (throughput falls as producers are added) holds: `slotwise_mpsc` costs 30x more per push at 32
   producers than at one. Claim 2 (`reserving_mpsc` is up to 4x faster) holds and is exceeded -- **6.4x
   here against 4.2x on x64**. So M31.8's merge decision is not weakened by the second architecture; the
   evidence for the head-based protocol is stronger on ARM64 than it was on x64.
-  Two differences worth having on the record rather than smoothing away. `mpsc` **plateaus at ~195 ns
+  Two differences worth having on the record rather than smoothing away. `slotwise_mpsc` **plateaus at ~195 ns
   from 16 producers upward** where x64 kept climbing to 239.7 -- expected, since this host has 12 cores
   and no SMT, so 16 and 32 are oversubscribed and the curve saturates. And **N=4 is by far the noisiest
-  point** (`mpsc` ranged 49.5 to 104.1 across the three runs, against under 2% spread at N=16 and above);
+  point** (`slotwise_mpsc` ranged 49.5 to 104.1 across the three runs, against under 2% spread at N=16 and above);
   with two six-core L2 clusters and no L3, whether four threads land inside one cluster or straddle both
   changes the answer, and at N>=8 straddling is forced so the variance disappears. Read the N=4 row as a
   range, not a point.
@@ -457,23 +457,23 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   alone.** That file also records why this is *release*-blocking rather than merely design-blocking:
   the decision may delete a public type, which is free before `windows-waitable-queues` 0.1.0 and a
   yank-and-migrate after it.
-  Decide merge-or-delete for `mpsc` and `reserving_mpsc`, now that M31.5 has measured
+  Decide merge-or-delete for `slotwise_mpsc` and `reserving_mpsc`, now that M31.5 has measured
   them and M31.7 will have checked the other architecture.
   **The decision changed shape once the investigation ran.** M31.2 framed it as "if the shared-line read
   is cheap, the two merge and the non-reserving one goes". The read is not merely cheap -- it is cheaper
   than the read it replaces -- so the real question is **which claim protocol survives**: Vyukov's
   sequence, which reads a marching slot, or the head-based one, which reads a fixed line.
   The candidates, with what each costs:
-  - **Delete `mpsc`, keep `reserving_mpsc`.** Simplest surface, and the faster shape under contention.
-    Loses the 2x advantage `mpsc` holds at one producer with a live consumer, and lowers the maximum
+  - **Delete `slotwise_mpsc`, keep `reserving_mpsc`.** Simplest surface, and the faster shape under contention.
+    Loses the 2x advantage `slotwise_mpsc` holds at one producer with a live consumer, and lowers the maximum
     capacity from 2^63 to 2^31 for every caller.
   - **Keep both**, and correct their documentation, which currently states D-16's falsified premise as
     the reason the split exists. The split would then be justified by *profile* -- one shape for few
     producers, one for many -- which is a real distinction but a harder one to explain.
-  - **Change `mpsc`'s protocol** to decide freedom from `head`, closing the gap. This makes the two
+  - **Change `slotwise_mpsc`'s protocol** to decide freedom from `head`, closing the gap. This makes the two
     shapes genuinely "one queue with and without reservations", which is what D-16 assumed they already
     were, and is the only option that removes the surprise rather than documenting it.
-  Whichever is chosen, D-16's and `mpsc`'s own documentation must be corrected in the same change: they
+  Whichever is chosen, D-16's and `slotwise_mpsc`'s own documentation must be corrected in the same change: they
   currently assert a cost relationship the measurement reversed. That sweep is part of this item.
   **An input that was written off has come back, and this paragraph previously said the opposite.**
   Peer-index caching is available to the head-based protocol and structurally unavailable to Vyukov's.
@@ -590,7 +590,7 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
 - [ ] **M-inf.1** -- The linked and sharded MPSC shapes, if and only if M31.5 shows the array queue's tail
   CAS contends at realistic producer counts.
   **M31.5 has run, and the gate is now quantified rather than open.** The tail claim *does* contend, on
-  x64: aggregate throughput falls with every producer added, `mpsc` from 111M to 4.2M pushes/sec and
+  x64: aggregate throughput falls with every producer added, `slotwise_mpsc` from 111M to 4.2M pushes/sec and
   `reserving_mpsc` from 116M to 17.6M, against a bare contended atomic that falls only to a third. So the
   licence M31.5 offered to close this item outright -- "if the tail CAS does not contend, the array queue
   is the only MPSC this crate ever needs" -- was **not** granted.

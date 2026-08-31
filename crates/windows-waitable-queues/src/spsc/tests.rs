@@ -951,7 +951,7 @@ fn the_real_arm_still_blesses_a_wait_when_its_window_stays_empty() {
 // two implementations share nothing, so the guarantee has to be asserted
 // separately on each -- a point made empirically rather than by argument: the
 // sabotage sweep found this whole section missing, because the reserving_mpsc
-// tests covered the mpsc path and left this one unguarded.
+// tests covered the slotwise_mpsc path and left this one unguarded.
 // ---------------------------------------------------------------------------
 
 /// Fills every slot the best-effort path is allowed to take, and reports how

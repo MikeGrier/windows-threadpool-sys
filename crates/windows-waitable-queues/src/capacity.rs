@@ -15,7 +15,7 @@
 //! constants, because both follow from how a shape represents its positions --
 //! and the shipped shapes disagree about both.
 //!
-//! - **The minimum.** `spsc` accepts a capacity of one; `mpsc` cannot, because
+//! - **The minimum.** `spsc` accepts a capacity of one; `slotwise_mpsc` cannot, because
 //!   its slot state machine encodes "published" as one past the claim position
 //!   and "free again" as one lap past it, and with a single slot those are the
 //!   same number.
@@ -38,7 +38,7 @@ use crate::error::CapacityError;
 /// - `spsc` computes the number of items held as `tail.wrapping_sub(head)`,
 ///   which is the true difference only while that difference cannot exceed half
 ///   the range.
-/// - `mpsc` compares a slot's sequence number against a position by
+/// - `slotwise_mpsc` compares a slot's sequence number against a position by
 ///   interpreting `sequence.wrapping_sub(position)` as an [`isize`], which is
 ///   the same requirement written a different way.
 ///

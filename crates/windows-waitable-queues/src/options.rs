@@ -22,7 +22,7 @@
 //! **High-water tracking** is off because it is the one metric that cannot be
 //! made free. Refusals and doorbell rings sit on paths that were already paying
 //! for themselves, but a peak has to observe every change, and on
-//! [`mpsc`](crate::mpsc) observing the depth means the producer reading the
+//! [`slotwise_mpsc`](crate::slotwise_mpsc) observing the depth means the producer reading the
 //! consumer's position -- the single shared line that shape's push is built to
 //! avoid touching. So it is a switch, and the cost lands only on queues that
 //! asked for the answer.
@@ -80,7 +80,7 @@ impl<T> Options<T> {
     ///
     /// **This is the one option that costs the push path something**, which is
     /// why it is off by default. A peak has to observe every change, so on
-    /// `mpsc` it makes the producer read the consumer's position -- the shared
+    /// `slotwise_mpsc` it makes the producer read the consumer's position -- the shared
     /// line that shape's push exists to avoid. On `spsc` and `reserving_mpsc`
     /// the producer already knows the depth, so it costs those two almost
     /// nothing.

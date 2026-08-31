@@ -36,7 +36,7 @@
 //! ```
 //!
 //! **They have since shipped, and they kept those signatures.**
-//! [`mpsc`](crate::mpsc) was written against this sketch and matched it, which
+//! [`slotwise_mpsc`](crate::slotwise_mpsc) was written against this sketch and matched it, which
 //! is the validation [D-3](../../DESIGN-NOTES.md#d-3) demanded before any trait
 //! was allowed to exist. The sketch is left here because it is the artefact
 //! that made the check possible: what [`crate::traits`] says now is what this
@@ -86,7 +86,7 @@ use crate::options::Options;
 ///
 /// The minimum is one, and there is nothing to work around: a single slot is
 /// either inside `[head, tail)` or outside it, and those are the only two
-/// states this shape's positions have to distinguish. [`mpsc`](crate::mpsc)
+/// states this shape's positions have to distinguish. [`slotwise_mpsc`](crate::slotwise_mpsc)
 /// needs two, because its slots carry a third state, and that difference is why
 /// each shape names its own bounds rather than sharing one pair.
 ///
@@ -761,9 +761,9 @@ impl<T> Consumer<T> {
     /// empty and will never be signalled again.
     ///
     /// The first of those two cases is stronger here than it is for
-    /// [`mpsc`](crate::mpsc): there is one producer and one position, so *any*
+    /// [`slotwise_mpsc`](crate::slotwise_mpsc): there is one producer and one position, so *any*
     /// push before the clear makes this check find something. That is why this
-    /// shape never exhibited the doorbell defect `mpsc` exposed, and why the
+    /// shape never exhibited the doorbell defect `slotwise_mpsc` exposed, and why the
     /// fix for it belongs to the doorbell rather than to either caller.
     ///
     /// This also creates the doorbell if it does not exist, which must happen

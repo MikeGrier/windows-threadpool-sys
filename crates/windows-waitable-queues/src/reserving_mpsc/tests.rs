@@ -2,7 +2,7 @@
 
 //! Tests for the reserving MPSC bounded array queue.
 //!
-//! The shape's queueing behaviour is `mpsc`'s and is covered there; what is
+//! The shape's queueing behaviour is `slotwise_mpsc`'s and is covered there; what is
 //! tested here is the part that is different -- the reservation, the packed
 //! claim word, and the ways the two interact with everything else.
 //!
@@ -108,7 +108,7 @@ fn the_two_halves_do_not_bleed_into_each_other() {
 #[test]
 fn a_capacity_above_this_shapes_ceiling_is_refused_even_though_others_accept_it() {
     // The bound is a property of the shape, which is exactly what D-12 argued
-    // and what this shape is the second instance of. `mpsc` takes this capacity
+    // and what this shape is the second instance of. `slotwise_mpsc` takes this capacity
     // happily; the packing means this one cannot.
     let error = bounded::<u8>(BOUNDS_MAX * 2).expect_err("beyond the packed position's range");
     assert_eq!(error.max_valid(), BOUNDS_MAX);
@@ -504,7 +504,7 @@ fn items_come_out_in_the_order_they_went_in() {
 #[test]
 fn the_ring_wraps_many_times_without_losing_order() {
     // The test that indicts the position arithmetic, and it matters more here
-    // than in `mpsc`: this shape decides a slot is free from the consumer's
+    // than in `slotwise_mpsc`: this shape decides a slot is free from the consumer's
     // position rather than from the slot's own sequence, so an error in the
     // wrapping subtraction is a use-after-free rather than a wrong answer.
     let (tx, rx) = bounded::<usize>(4).expect("a power-of-two capacity");
@@ -685,7 +685,7 @@ fn the_real_arm_still_blesses_a_wait_when_its_window_stays_empty() {
 }
 
 // ---------------------------------------------------------------------------
-// Through the traits, which is where this shape and `mpsc` visibly differ.
+// Through the traits, which is where this shape and `slotwise_mpsc` visibly differ.
 // ---------------------------------------------------------------------------
 
 #[test]

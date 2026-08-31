@@ -16,7 +16,7 @@
 //! the failure D-3 exists to prevent -- these would not compile against the
 //! other, which is a stronger check than any assertion in the bodies.
 
-use crate::{Bounded, Consumer, Producer, PushError, Waitable, mpsc, spsc};
+use crate::{Bounded, Consumer, Producer, PushError, Waitable, slotwise_mpsc, spsc};
 
 /// Fills a queue through nothing but the [`Producer`] and [`Bounded`] traits,
 /// and reports what the refusal said.
@@ -85,7 +85,7 @@ where
 #[test]
 fn both_shapes_satisfy_the_producer_and_bounded_traits() {
     let (spsc_tx, spsc_rx) = spsc::bounded::<u32>(4).expect("4 is valid for both shapes");
-    let (mpsc_tx, mpsc_rx) = mpsc::bounded::<u32>(4).expect("4 is valid for both shapes");
+    let (mpsc_tx, mpsc_rx) = slotwise_mpsc::bounded::<u32>(4).expect("4 is valid for both shapes");
 
     assert!(
         matches!(fill_to_capacity(&spsc_tx), PushError::Full(u32::MAX)),
@@ -103,7 +103,7 @@ fn both_shapes_satisfy_the_producer_and_bounded_traits() {
 #[test]
 fn both_shapes_report_disconnection_through_the_traits() {
     let (spsc_tx, spsc_rx) = spsc::bounded::<u32>(4).expect("4 is valid for both shapes");
-    let (mpsc_tx, mpsc_rx) = mpsc::bounded::<u32>(4).expect("4 is valid for both shapes");
+    let (mpsc_tx, mpsc_rx) = slotwise_mpsc::bounded::<u32>(4).expect("4 is valid for both shapes");
 
     fn producer_sees_it<P: Producer<Item = u32>>(producer: &P) -> bool {
         producer.is_disconnected()
@@ -129,7 +129,7 @@ fn both_shapes_report_disconnection_through_the_traits() {
 #[test]
 fn both_shapes_satisfy_the_waitable_trait() {
     let (spsc_tx, spsc_rx) = spsc::bounded::<u32>(4).expect("4 is valid for both shapes");
-    let (mpsc_tx, mpsc_rx) = mpsc::bounded::<u32>(4).expect("4 is valid for both shapes");
+    let (mpsc_tx, mpsc_rx) = slotwise_mpsc::bounded::<u32>(4).expect("4 is valid for both shapes");
 
     assert!(arm_and_report(&spsc_rx), "an empty ring is safe to wait on");
     assert!(
@@ -152,7 +152,7 @@ fn the_multi_producer_shape_is_usable_through_the_producer_trait_from_a_clone() 
     // that are, and `push` taking `&self` is what lets it span both. Had the
     // first shape shipped `push(&mut self)` -- which single-producer soundness
     // would have permitted -- this could not compile.
-    let (tx, rx) = mpsc::bounded::<u32>(4).expect("4 is a valid capacity");
+    let (tx, rx) = slotwise_mpsc::bounded::<u32>(4).expect("4 is a valid capacity");
     let second = tx.clone();
 
     fn push_one<P: Producer<Item = u32>>(producer: &P, value: u32) {
@@ -170,7 +170,7 @@ fn drain_stops_at_the_current_end_rather_than_at_the_end_of_the_stream() {
     // not a way to consume a queue to its end. A caller that read it as the
     // latter would drop items pushed afterwards, so the distinction is asserted
     // rather than left to the documentation.
-    let (tx, rx) = mpsc::bounded::<u32>(4).expect("4 is a valid capacity");
+    let (tx, rx) = slotwise_mpsc::bounded::<u32>(4).expect("4 is a valid capacity");
     tx.push(1).expect("there is room");
 
     assert_eq!(drain_all(&rx), vec![1]);

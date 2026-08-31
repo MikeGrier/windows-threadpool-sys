@@ -44,7 +44,7 @@ release-blocking rather than restating the decision itself.
 
 - [x] **SH-1.1** -- **MIRRORS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M31.8 -- one piece of
   work seen from two plans. Check both off in the same commit; neither is done alone.**
-  **Decide M31.8 (merge-or-delete for `mpsc` and `reserving_mpsc`) before the first
+  **Decide M31.8 (merge-or-delete for `slotwise_mpsc` and `reserving_mpsc`) before the first
   publish, not after.** This is the highest-leverage item in the file and it is release-blocking for a
   mechanical reason: the decision may *delete a public type*. Doing that before 0.1.0 costs nothing;
   doing it after means a breaking release, a yank-and-migrate for anyone who adopted it, and a
@@ -64,6 +64,26 @@ release-blocking rather than restating the decision itself.
   while every logic defect injected beside it was caught. So this is not an untested-by-omission gap,
   it is a gap this workspace has *evidence* the existing tests cannot close. Publishing a lock-free
   queue with it open is a defensible choice; making it unknowingly is not.
+
+- [x] **SH-1.3** -- **Qualify both MPSC shapes by name.** `mpsc` beside `reserving_mpsc` made one
+  canonical by implication -- which contradicts this crate's own "no shape is the canonical one", and
+  after SH-1.1 is simply false. Renamed to `slotwise_mpsc`, which names its claim protocol: it claims
+  slot by slot with no shared counter. `sequence_mpsc` was considered and rejected for inviting the
+  reading that it alone preserves FIFO order, which both shapes do. Recorded as D-30.
+  **Belongs in M1 for the same reason SH-1.1 does**: it is a public-surface change, free before the
+  first publish and a breaking rename with a deprecation path afterwards.
+
+- [x] **SH-1.4** -- **State the algorithms' pedigree and why an existing crate is not used.** A public
+  concurrent-queue crate has to answer both questions or a reader assumes the worst: that the
+  algorithms are homegrown, and that the author did not look at the alternatives.
+  Neither is true, and the honest answers are load-bearing. The algorithms are *published designs*
+  chosen deliberately, because a concurrent queue is a bad place to be original -- the failure mode is
+  a reordering that appears on one machine, under load, months later. And the reason no channel crate
+  fits is structural rather than dismissive: **on Windows, waiting is a kernel-object operation**, so a
+  queue whose readiness is not a `HANDLE` cannot join a `WaitForMultipleObjects` alongside an I/O
+  completion, a process handle, or a cancellation event -- however good its own blocking receive, and
+  however rich its own `select`, which can only select over its own channels.
+  Written into both the crate docs and the README, because docs.rs shows one and crates.io the other.
 
 ## M2: repair the release plumbing before relying on it
 

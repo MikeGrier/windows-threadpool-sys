@@ -138,9 +138,9 @@ const BOUNDS: Bounds = Bounds {
 /// # Examples
 ///
 /// ```
-/// use windows_waitable_queues::mpsc;
+/// use windows_waitable_queues::slotwise_mpsc;
 ///
-/// let (tx, rx) = mpsc::bounded::<u32>(4)?;
+/// let (tx, rx) = slotwise_mpsc::bounded::<u32>(4)?;
 /// let second = tx.clone();
 ///
 /// tx.push(1).expect("a fresh queue has room");
@@ -369,7 +369,7 @@ impl<T> Drop for Shared<T> {
     }
 }
 
-/// A writing half of an [`mpsc`](self) queue.
+/// A writing half of an [`slotwise_mpsc`](self) queue.
 ///
 /// [`Clone`], and that is the only difference from `spsc`'s producer: cloning
 /// is how a second producer comes into existence, and the queue is disconnected
@@ -561,7 +561,7 @@ impl<T> Clone for Producer<T> {
 // queue's state instead.
 impl<T> fmt::Debug for Producer<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("mpsc::Producer")
+        f.debug_struct("slotwise_mpsc::Producer")
             .field("capacity", &self.capacity())
             .field("len", &self.len())
             .field("producers", &self.shared.producers.load(Ordering::Relaxed))
@@ -595,7 +595,7 @@ impl<T> Drop for Producer<T> {
     }
 }
 
-/// The reading half of an [`mpsc`](self) queue.
+/// The reading half of an [`slotwise_mpsc`](self) queue.
 ///
 /// Neither [`Clone`] nor [`Sync`], which is what makes "single consumer" a fact
 /// the compiler checks rather than a rule to remember.
@@ -717,10 +717,10 @@ impl<T> Consumer<T> {
     /// whether waiting is safe, or the wait can miss an item and block forever:
     ///
     /// ```no_run
-    /// # use windows_waitable_queues::mpsc;
+    /// # use windows_waitable_queues::slotwise_mpsc;
     /// # use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
     /// # use std::os::windows::io::AsRawHandle;
-    /// # fn demo(rx: &mpsc::Consumer<u32>) -> std::io::Result<()> {
+    /// # fn demo(rx: &slotwise_mpsc::Consumer<u32>) -> std::io::Result<()> {
     /// loop {
     ///     while let Some(item) = rx.pop() {
     ///         let _ = item;
@@ -880,7 +880,7 @@ impl<T> Parked for Consumer<T> {
 /// See [`Producer`]'s impl for why this is hand-written.
 impl<T> fmt::Debug for Consumer<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("mpsc::Consumer")
+        f.debug_struct("slotwise_mpsc::Consumer")
             .field("capacity", &self.capacity())
             .field("len", &self.len())
             .field("producers", &self.shared.producers.load(Ordering::Relaxed))

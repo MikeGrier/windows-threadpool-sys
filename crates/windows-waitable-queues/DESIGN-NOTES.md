@@ -35,24 +35,25 @@ preferred.
 | <a id="d-8"></a>D-8 | **Published, and the obligation is accepted deliberately.** Unlike `windows-guard-alloc`, this is general-purpose and its first consumer is not its only plausible one. |
 | <a id="d-10"></a>D-10 | **The multi-producer shape is Vyukov's bounded array queue: a sequence number per slot, claimed by a compare-and-swap on the tail and published by a release store.** The sequence is what lets the consumer tell a *claimed* slot from a *written* one, which a plain fetch-and-add cannot. Lock-free rather than wait-free, bounded by construction, and no allocation after the constructor. |
 | <a id="d-11"></a>D-11 | **The capability traits shipped with this second shape, and the signatures `spsc` wrote down in advance held unchanged.** That is [D-3](#d-3)'s check actually being run rather than assumed. The load-bearing choice was `push(&self)`: `&mut self` would have been sound for one producer and would have made the trait unimplementable by this one. |
-| <a id="d-12"></a>D-12 | **A shape's *minimum* capacity belongs to the shape, not to the crate, and `mpsc`'s is two.** One slot cannot encode three states when the lap stride is the capacity, so "published at `p`" and "free again at `p + capacity`" collide. Reported through `CapacityError` rather than worked around, because every available workaround puts a load back on the producer's hot path for every queue in order to serve a capacity of one. |
+| <a id="d-12"></a>D-12 | **A shape's *minimum* capacity belongs to the shape, not to the crate, and `slotwise_mpsc`'s is two.** One slot cannot encode three states when the lap stride is the capacity, so "published at `p`" and "free again at `p + capacity`" collide. Reported through `CapacityError` rather than worked around, because every available workaround puts a load back on the producer's hot path for every queue in order to serve a capacity of one. |
 | <a id="d-13"></a>D-13 | **The arming protocol is written once, in `blocking.rs`, and a shape binds to it by implementing a crate-private `Parked` trait.** The blocking receive loop *is* [D-9](#d-9), not glue around it; a second shape spelling it out again would be a second copy of a rule -- the exact mistake this crate has already paid for once. |
-| <a id="d-14"></a>D-14 | **`mpsc`'s arming asks "would `pop` find something", not "is `len` zero".** The two disagree over a slot a producer has claimed but not published, and only the first answer lets the consumer park on it instead of spinning until that producer is rescheduled. |
+| <a id="d-14"></a>D-14 | **`slotwise_mpsc`'s arming asks "would `pop` find something", not "is `len` zero".** The two disagree over a slot a producer has claimed but not published, and only the first answer lets the consumer park on it instead of spinning until that producer is rescheduled. |
 | <a id="d-15"></a>D-15 | **`Doorbell::clear` resets the event *before* clearing the flag that mirrors it, and the original order was a lost wakeup.** A producer signalling between the two lines set the flag and issued a real `SetEvent`; the `ResetEvent` that followed erased the signal and left the flag set, wedging the doorbell dark while it claimed to be lit. **Amends [D-9](#d-9)**, whose "there is no third case" holds only for a queue whose emptiness is one position comparison. |
-| <a id="d-16"></a>D-16 | **Its cost premise is falsified by [D-26](#d-26); the conclusion stands on capability instead -- see [D-29](#d-29).** Reservation is a capability a shape may lack, so the reserving multi-producer queue ships as a peer of `mpsc` rather than replacing it. Honouring a reservation requires counting free slots, which requires the consumer's position -- a single shared line `mpsc`'s push deliberately never reads. The original rationale added that this made reserving the *more expensive* shape and that both should ship rather than charge every caller for it; measurement reversed that, and the split is now justified by the capability alone. **Amends [D-6](#d-6)**, which assumed one queue would carry every policy. |
+| <a id="d-16"></a>D-16 | **Its cost premise is falsified by [D-26](#d-26); the conclusion stands on capability instead -- see [D-29](#d-29).** Reservation is a capability a shape may lack, so the reserving multi-producer queue ships as a peer of `slotwise_mpsc` rather than replacing it. Honouring a reservation requires counting free slots, which requires the consumer's position -- a single shared line `slotwise_mpsc`'s push deliberately never reads. The original rationale added that this made reserving the *more expensive* shape and that both should ship rather than charge every caller for it; measurement reversed that, and the split is now justified by the capability alone. **Amends [D-6](#d-6)**, which assumed one queue would carry every policy. |
 | <a id="d-17"></a>D-17 | **The reservation count and the claim position live in one word, because a check-and-claim over both must be a single atomic operation.** Two atomics cannot be made correct with any amount of fencing: the pushing producer is load-then-store and the reserving one store-then-load, so the Dekker argument does not apply and both can miss each other. The 32/32 split is forced by the arithmetic, and caps this shape at 2^31 items. |
 | <a id="d-18"></a>D-18 | **A 128-bit compare-and-swap is refused.** It would lift the 2^31 cap and nothing else -- the consumer's position still has to be read -- at the cost of a dependency, a target-feature floor not in the x86-64 baseline, and a different instruction on the ARM64 machine this workspace measures on. Revisit only for a tagged pointer, which is what [M-inf.1](../../CHECKLIST-io-domains.md)'s linked and sharded shapes would need. |
 | <a id="d-19"></a>D-19 | **The coalesced loss latch is deliberately not generalised from the file watcher.** Coalescing there is sound because a desync is *idempotent* -- two mean the same as one, and the answer to both is a re-scan. A queue of arbitrary `T` has no such property, so what generalises is a loss *count*, which is [M31.4](../../CHECKLIST-io-domains.md)'s observability rather than a policy. |
 | <a id="d-20"></a>D-20 | **Undrained items are handed to a caller-supplied sink at teardown, and the sink is chosen at construction because `Drop` has nowhere to hand them back to.** Without one they are destroyed on whichever thread released the last handle -- which may be a pool callback that must not block, and closing a handle to a dead network path can block for a long time. The default is unchanged; what changes is that it is now a named choice. |
 | <a id="d-21"></a>D-21 | **A panicking disposal sink is caught and the teardown walk continues.** The sink is caller code inside a destructor: a panic escaping it abandons every item behind it -- the exact handles the mechanism exists to account for -- and during an unwind aborts the process. Catching declines to turn a caller's bug into a much larger one. |
 | <a id="d-22"></a>D-22 | **No `into_remaining`, because it would not close the hole and `drain` already covers what it would do.** A consumer can take everything available, but a producer may push afterwards, so an orderly drain covers only the orderly path. The last handle to drop is the only place that sees every survivor. |
-| <a id="d-23"></a>D-23 | **High-water tracking is opt-in at construction; refusals and doorbell rings are always on.** The difference is where each can be paid for: refusals sit on the failure path and rings on a path that already costs a syscall, but a peak has to observe *every* change -- and on `mpsc` that means the producer reading the consumer's position, the shared line [D-16](#d-16) built a separate shape to avoid. Untracked reports `None`, not `0`. |
+| <a id="d-23"></a>D-23 | **High-water tracking is opt-in at construction; refusals and doorbell rings are always on.** The difference is where each can be paid for: refusals sit on the failure path and rings on a path that already costs a syscall, but a peak has to observe *every* change -- and on `slotwise_mpsc` that means the producer reading the consumer's position, the shared line [D-16](#d-16) built a separate shape to avoid. Untracked reports `None`, not `0`. |
 | <a id="d-24"></a>D-24 | **Counting the doorbell's rings turns the skip optimisation into part of the observable contract, and that is the point rather than a side effect.** R9 asks for the count precisely so "disabling the skip must change the number" -- so the sabotage entry for removing the skip changed from a control expecting `survives` to a defect expecting `caught`. An optimisation nobody can measure is an assumption. |
 | <a id="d-25"></a>D-25 | **`Observable` deliberately does not restate depth.** [D-2](#d-2)'s sketch listed it, but `Bounded::len` already reports it from positions the queue keeps anyway. Naming it twice would give one number two spellings and two places to drift. What belongs on `Observable` is only what must be *accumulated*. |
-| <a id="d-26"></a>D-26 | **Measured: the tail claim contends badly, and `reserving_mpsc` is up to 4x FASTER than `mpsc` under contention -- the opposite of what [D-16](#d-16) assumed.** Aggregate throughput *falls* as producers are added, for both shapes and far more than a bare contended atomic explains. D-16's premise, that reading the consumer's position makes the reserving shape the expensive one, is falsified everywhere except a single producer with a live consumer. |
-| <a id="d-27"></a>D-27 | **The gap is intrinsic to Vyukov's sequence protocol, not a fixable flaw in `mpsc`'s retry loop.** Its producer must read a slot's sequence *before* claiming, and that slot marches through memory as the tail advances while other producers write it. Padding slots onto their own cache lines was tested and rejected: it recovers about a fifth at eight producers, for four times the memory, and leaves the shape still 2.8x slower. |
+| <a id="d-26"></a>D-26 | **Measured: the tail claim contends badly, and `reserving_mpsc` is up to 4x FASTER than `slotwise_mpsc` under contention -- the opposite of what [D-16](#d-16) assumed.** Aggregate throughput *falls* as producers are added, for both shapes and far more than a bare contended atomic explains. D-16's premise, that reading the consumer's position makes the reserving shape the expensive one, is falsified everywhere except a single producer with a live consumer. |
+| <a id="d-27"></a>D-27 | **The gap is intrinsic to Vyukov's sequence protocol, not a fixable flaw in `slotwise_mpsc`'s retry loop.** Its producer must read a slot's sequence *before* claiming, and that slot marches through memory as the tail advances while other producers write it. Padding slots onto their own cache lines was tested and rejected: it recovers about a fifth at eight producers, for four times the memory, and leaves the shape still 2.8x slower. |
 | <a id="d-28"></a>D-28 | **Amended -- the blanket rejection is withdrawn; the verdict depends on thread placement, and the open question is queued as [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) M-inf.4.** Caching the peer's index was measured, and it engaged as designed. It cost ~1.8x on x64 with the threads across cores, and *won* 17x on ARM64 and 1.8x on x64 SMT siblings. Batch depth decides the sign, and batch depth is set by where the two threads are scheduled -- not by the architecture and not by our code. A prefetch-only "warming" control changed nothing on any host. |
 | <a id="d-29"></a>D-29 | **Both multi-producer shapes ship. The crate publishes what it measured and declines to choose for the caller.** [D-26](#d-26) falsified [D-16](#d-16)'s cost premise, which reopened merge-or-delete; the answer is neither. Vyukov's sequence protocol and the head-based one are independently researched designs, both in production use, and our own workload having settled which *we* want is not evidence about anyone else's. Deleting a shape because no visible consumer wants it is what PLATFORM INTEGRITY forbids. What the crate owes instead is the data and, through `probe-core-affinity`, the means to gather it on the caller's own hardware. |
+| <a id="d-30"></a>D-30 | **Both MPSC shapes are qualified by name; neither is `mpsc`.** A bare `mpsc` beside `reserving_mpsc` makes one canonical by implication, which contradicts this crate's own "no shape is the canonical one" and, after [D-29](#d-29), is simply false. `slotwise_mpsc` names its claim protocol -- it claims slot by slot, with no shared counter -- and avoids the reading `sequence_mpsc` invites, that it alone preserves FIFO order when both shapes do. Renamed before first publish, where it is free. |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -187,7 +188,7 @@ signals a doorbell that is no longer about to be reset.
 
 **"There is no third case" is what this decision originally said next, and it was wrong** -- see
 [D-15](#d-15). It holds for `spsc`, where one producer and one position mean that *any* push before the
-clear makes the check find something. It fails for `mpsc`, where the check asks whether the *head* slot
+clear makes the check find something. It fails for `slotwise_mpsc`, where the check asks whether the *head* slot
 is published: a producer publishing at a later position before the clear is the third case, invisible to
 the check. The remedy is in `Doorbell::clear` rather than here, because what that case needs is not a
 better check but a doorbell that is guaranteed able to ring again once the clear returns.
@@ -287,7 +288,7 @@ anything but a test binary. These queues carry no such trap, the first consumer 
 one, and a Windows Rust program that wants to wait on a queue and a kernel object together currently has
 to write this itself.
 
-## D-10: the MPSC shape is Vyukov's bounded array queue
+## D-10: the slot-wise MPSC shape is Vyukov's bounded array queue
 
 The obvious multi-producer array queue claims an index with a fetch-and-add, writes the slot, and lets the
 consumer read it. It does not work, and the reason is worth stating because it is the whole justification
@@ -331,7 +332,7 @@ promissory note came due.
 
 **The signatures held unchanged.** `push`, `pop`, `is_disconnected`, `capacity`, `len`, `is_empty` are
 what [`traits.rs`](src/traits.rs) says now and what that comment said then. The check is not rhetorical:
-`mpsc` is a lock-free array queue with a per-slot state machine and no structural resemblance to a
+`slotwise_mpsc` is a lock-free array queue with a per-slot state machine and no structural resemblance to a
 two-position ring, so a signature fitted to the first shape would have failed here rather than in a
 consumer's code.
 
@@ -351,9 +352,9 @@ Two smaller decisions recorded so they are not re-litigated:
   They belong to work that has not happened (M31.2, M31.4), and shipping an empty trait now would be the
   design-in-a-vacuum D-3 forbids, one level up.
 
-## D-12: the minimum capacity belongs to the shape, and mpsc's is two
+## D-12: the minimum capacity belongs to the shape, and `slotwise_mpsc`'s is two
 
-`spsc` accepts a capacity of one. `mpsc` cannot, and the reason is arithmetic rather than taste. Its slot
+`spsc` accepts a capacity of one. `slotwise_mpsc` cannot, and the reason is arithmetic rather than taste. Its slot
 sequence distinguishes three states by counting -- `pos` is free, `pos + 1` is published, `pos + capacity`
 is free again on the next lap -- and when `capacity == 1` the second and third are the *same number*. A
 producer would read the sequence of the item it had just pushed, conclude the slot was free, and overwrite
@@ -368,7 +369,7 @@ exactly.
 The consequence for the error type is small and was anticipated: `CapacityError` already carried a
 `max_valid` on the argument that a bound "follows from how a shape represents its positions", and it now
 carries a `min_valid` for the same reason. The suggestion methods respect it, so `bounded::<T>(1)` on an
-`mpsc` reports `next_valid() == Some(2)` rather than a correction that would itself be refused.
+`slotwise_mpsc` reports `next_valid() == Some(2)` rather than a correction that would itself be refused.
 
 Each shape names its own minimum as a documented constant next to the code that needs it, rather than
 passing a bare literal, so the number is never separated from the reason for it.
@@ -390,9 +391,9 @@ being reversed. The `ARM_RACE` hook is shared for the same reason.
 ask of a queue; `Parked` says what the blocking loop needs from one, and the difference shows in `finish`,
 whose contract is a precondition no external caller can check.
 
-## D-14: mpsc arms on readiness, not on emptiness
+## D-14: ``slotwise_mpsc`` arms on readiness, not on emptiness
 
-`Consumer::arm` must answer "is it safe to park?", and for `mpsc` that is not the same question as "is the
+`Consumer::arm` must answer "is it safe to park?", and for `slotwise_mpsc` that is not the same question as "is the
 queue empty". They disagree over a slot a producer has claimed but not yet published, and the disagreement
 matters in both directions:
 
@@ -429,7 +430,7 @@ wait. It is sound -- for a queue whose re-check is guaranteed to see anything an
 `spsc` is such a queue: one producer, one tail, and `is_empty` covers every push. So the argument was
 tested against the only shape that could not falsify it, and it was written down as a general rule.
 
-`mpsc` falsifies it. Its re-check asks whether the **head** slot is published ([D-14](#d-14)), so a
+`slotwise_mpsc` falsifies it. Its re-check asks whether the **head** slot is published ([D-14](#d-14)), so a
 producer publishing at a later position is invisible to it. The consumer parks in exactly the wedged
 state, the producer holding the head publishes, its `signal` is skipped, and the queue hangs with an item
 sitting in it.
@@ -438,7 +439,7 @@ sitting in it.
 suite passed 120 tests in 0.28 s, six runs in a row. It was found because the sabotage harness refuses to
 sweep against a red baseline, and its *baseline* run -- the one that exists only to prove the suite is
 green before any defect is injected -- hung once in
-`mpsc::tests::many_producers_deliver_every_item_exactly_once`. A single unreproducible hang is exactly
+`slotwise_mpsc::tests::many_producers_deliver_every_item_exactly_once`. A single unreproducible hang is exactly
 the finding it is tempting to dismiss as a slow machine, and the crate's own sabotage documentation
 already says not to: "a flaky sabotage is a finding, not noise". The same applies to a flaky baseline.
 
@@ -458,7 +459,7 @@ depends on next: `signal` must still be able to ring. Reversed, the test fails e
 entry keeps it that way. A control with an empty window sits beside it, so the test cannot pass by
 `clear` simply never leaving the doorbell ringable.
 
-**Two temptations refused.** Making `mpsc` arm on `len` instead of readiness would also have masked this,
+**Two temptations refused.** Making `slotwise_mpsc` arm on `len` instead of readiness would also have masked this,
 by restoring the property that any push makes the re-check find something -- but it would have left the
 doorbell able to reach the inconsistent state, waiting for the next shape, and it would have cost the
 consumer a spin whenever a claim was in flight. Adding a lock around the two lines would have fixed it
@@ -474,7 +475,7 @@ account of *why the two shapes differ*, which remains correct, and not as an acc
 cheaper, which [D-26](#d-26) reversed. [D-29](#d-29) records what the split rests on now.
 
 **Honouring a reservation costs the producer something on every push, including the pushes that never
-reserve anything.** `mpsc`'s producer never reads the consumer's position: it asks the slot's own
+reserve anything.** `slotwise_mpsc`'s producer never reads the consumer's position: it asks the slot's own
 sequence number "are you free?", and those are spread across the slot array, so producers working at
 different positions touch different cache lines. Avoiding a single shared position is not incidental to
 Vyukov's design; it is most of the point of it.
@@ -483,15 +484,15 @@ A reservation cannot be answered from that question. "Is this slot free" does no
 remain, and withholding one from the best-effort path requires exactly that count -- which requires the
 consumer's position, on one line every thread in the system touches.
 
-So the choice was: pay that on every `mpsc` push, or ship two shapes. Two shapes, for three reasons:
+So the choice was: pay that on every `slotwise_mpsc` push, or ship two shapes. Two shapes, for three reasons:
 
 - **The cost falls on the shape [M31.5](../../CHECKLIST-io-domains.md) exists to measure.** Degrading
-  `mpsc`'s push before the contention benchmark runs would corrupt the measurement that decides whether
+  `slotwise_mpsc`'s push before the contention benchmark runs would corrupt the measurement that decides whether
   the deferred shapes are needed at all.
 - **The crate is built for this.** It is named in the plural, [D-7](#d-7) makes shapes plain modules, and
   [D-4](#d-4) already has shapes differing in what they can do. A third one is the pattern working, not
   an exception to it.
-- **It is [D-2](#d-2)'s argument reaching its sharpest case.** `mpsc` does not implement `Reserving`
+- **It is [D-2](#d-2)'s argument reaching its sharpest case.** `slotwise_mpsc` does not implement `Reserving`
   because it genuinely *cannot*, not because nobody got round to it -- which is exactly the situation
   narrow traits were chosen for. A fat trait would have forced the cost on both shapes or excluded
   reservation from the contract entirely.
@@ -503,7 +504,7 @@ packed word puts one shared *load*. Its only advantage is preserving the crate-w
 [D-17](#d-17) explains why that ceiling is unreachable anyway.
 
 **The merge-or-delete decision is deferred to M31.5, deliberately and with a trigger.** If the benchmark
-shows the shared-line read costs little at realistic contention, `mpsc` and `reserving_mpsc` should merge
+shows the shared-line read costs little at realistic contention, `slotwise_mpsc` and `reserving_mpsc` should merge
 and the plain one should go. If it shows the read is expensive, both stay. What must not happen is the
 duplicated path becoming permanent because nobody circled back, so the decision is recorded as an item on
 M31.5 rather than as an intention here.
@@ -537,7 +538,7 @@ Three consequences fall out, and all three are improvements:
 - **A racing `reserve` and `push` cannot both win.** The loser's exchange fails and it re-reads, which is
   the ordinary lock-free retry rather than a special case.
 - **The producer stops needing the slot sequence for the "free" direction**, because it now reads the
-  consumer's position anyway. So `reserving_mpsc`'s `pop` is one store shorter than `mpsc`'s: nothing
+  consumer's position anyway. So `reserving_mpsc`'s `pop` is one store shorter than `slotwise_mpsc`'s: nothing
   writes a "free again" sequence.
 
 **The 32/32 split is forced, not chosen.** A position of `b` bits keeps a wrapping difference unambiguous
@@ -706,14 +707,14 @@ Peak depth is the awkward one, and the awkwardness is not uniform:
   depth is a subtraction of two values in hand, and the counter's line is producer-owned.
 - **`reserving_mpsc`** -- near-free, for the same reason: its producer reads `head` for the room check
   that honours reservations. Only the counter's line is shared, and it is written rarely.
-- **`mpsc`** -- *not* free. Its producer never reads `head`; that is the whole property
+- **`slotwise_mpsc`** -- *not* free. Its producer never reads `head`; that is the whole property
   [D-16](#d-16) built a separate shape to preserve, because `head` is the one line every thread touches.
   Tracking makes it read that line on every push.
 
-Making it always-on would have imposed D-16's refused cost on every `mpsc` user to serve a metric most of
+Making it always-on would have imposed D-16's refused cost on every `slotwise_mpsc` user to serve a metric most of
 them will never read -- and would have done it just before [M31.5](../../CHECKLIST-io-domains.md) measures
-exactly that path. Omitting it from `mpsc` would have narrowed the shape. So it is a switch, off by
-default, and the cost lands only on queues that asked. Off, `mpsc` pays one predictable branch on a field
+exactly that path. Omitting it from `slotwise_mpsc` would have narrowed the shape. So it is a switch, off by
+default, and the cost lands only on queues that asked. Off, `slotwise_mpsc` pays one predictable branch on a field
 written once at construction: the line is shared but read-only, which is the cheap kind.
 
 **Untracked reports `None`, not `0`.** They are different answers -- "nobody was counting" versus "it
@@ -749,7 +750,7 @@ of what the queue promises rather than a private cleverness -- so removing it la
 change, not a refactor. That is the right trade for a queue whose entire reason to exist is a wakeup
 protocol, but it is a trade, and it should be made knowingly.
 
-The control it vacated is replaced rather than dropped: `mpsc`'s guard around the `head` load is an
+The control it vacated is replaced rather than dropped: `slotwise_mpsc`'s guard around the `head` load is an
 optimisation and not a correctness device, so removing *that* must still leave the suite green. A sweep
 with no controls left is a sweep that has stopped asking whether its tests describe the contract.
 
@@ -778,7 +779,7 @@ gap rather than extending the ARM64 record, and the two are not interchangeable.
 Isolated regime -- producers only, capacity large enough that nothing is refused, so the curve is the
 claim and nothing else:
 
-| producers | `mpsc` ns/push | `reserving_mpsc` ns/push | contended `fetch_add` |
+| producers | `slotwise_mpsc` ns/push | `reserving_mpsc` ns/push | contended `fetch_add` |
 |---|---|---|---|
 | 1 | 9.0 | 8.6 | 5.0 |
 | 2 | 49.0 | 28.0 | 8.1 |
@@ -789,12 +790,12 @@ claim and nothing else:
 
 **Two findings, and the second one was not the expected result.**
 
-**The tail claim contends, and severely.** Aggregate throughput *falls* as producers are added: `mpsc`
+**The tail claim contends, and severely.** Aggregate throughput *falls* as producers are added: `slotwise_mpsc`
 from 111M to 4.2M pushes per second, `reserving_mpsc` from 116M to 17.6M. A bare contended `fetch_add`
 falls only to a third and then plateaus, so most of both curves is the queue rather than what this
 processor does to a fought-over line.
 
-**`reserving_mpsc` is up to 4x faster than `mpsc` under contention**, which inverts [D-16](#d-16). That
+**`reserving_mpsc` is up to 4x faster than `slotwise_mpsc` under contention**, which inverts [D-16](#d-16). That
 decision shipped the two as peers on the reasoning that honouring a reservation costs the producer a read
 of the consumer's position, making the reserving shape the expensive one. It is the cheaper one at every
 producer count from two upward. The premise survives in exactly one place: a *single* producer against a
@@ -807,12 +808,12 @@ single consumer rather than the claim.
 
 ## D-27: why, and why it is not a bug to fix
 
-The obvious response to D-26 is that `mpsc` must have a defect. It does not, and the difference is worth
+The obvious response to D-26 is that `slotwise_mpsc` must have a defect. It does not, and the difference is worth
 understanding because it is a property of the two *protocols* rather than of two implementations of one.
 
 Both do one compare-and-swap plus one load per attempt. The load is what differs:
 
-- **`mpsc` reads `slots[tail & mask].sequence`** -- and must, because in Vyukov's protocol the slot's own
+- **`slotwise_mpsc` reads `slots[tail & mask].sequence`** -- and must, because in Vyukov's protocol the slot's own
   sequence is what says the slot is free. That address **marches through memory as the tail advances**,
   and the slots it walks are being written by the very producers it is racing.
 - **`reserving_mpsc` reads `head`** -- one fixed address, which stays hot in every core's cache and, in
@@ -823,7 +824,7 @@ came out backwards from the prediction.
 
 **The false-sharing hypothesis was tested and rejected.** `Slot<u64>` is sixteen bytes, so four
 consecutive positions share a cache line, and the obvious fix is to pad each slot onto its own. Measured:
-at eight producers that moves `mpsc` from 140.8 to 109.1 ns -- about a fifth -- for four times the
+at eight producers that moves `slotwise_mpsc` from 140.8 to 109.1 ns -- about a fifth -- for four times the
 memory, and leaves it 2.8x slower than `reserving_mpsc`'s 38.5. False sharing between neighbouring slots
 is a contributor, not the cause. The padding was reverted; the note on `Slot` that says slots deliberately
 share lines is therefore correct, and now correct for a measured reason rather than an assumed one.
@@ -1024,7 +1025,7 @@ what it claimed, should the shapes merge, or should one be deleted?
 
 **Neither. Both ship, and the crate declines to choose between them on the caller's behalf.**
 
-The two are not one queue with a feature flag. `mpsc` implements Vyukov's bounded array protocol, where
+The two are not one queue with a feature flag. `slotwise_mpsc` implements Vyukov's bounded array protocol, where
 a producer asks a slot's own sequence number whether it is free; `reserving_mpsc` counts free slots
 against the consumer's position, which is the only way a reservation can be answered at all. Both are
 independently studied designs with production track records, chosen by different systems for different
@@ -1046,15 +1047,15 @@ What the crate owes a caller instead is honesty and equipment:
 Two justifications are available and both are refused, because a rationale that evaporates on
 inspection is worse than none:
 
-- **Not capacity.** `mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, and that difference is
+- **Not capacity.** `slotwise_mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, and that difference is
   unreachable: it counts slots allocated at construction, not items ever pushed, and 2^31 slots is tens
   of gigabytes before the ring holds anything useful. See [D-17](#d-17) for why the packing forces it.
-- **Not `mpsc` being faster somewhere.** Its one measured advantage is a single producer with a live
+- **Not `slotwise_mpsc` being faster somewhere.** Its one measured advantage is a single producer with a live
   consumer -- and at one producer the right shape is [`spsc`](#d-1), which is faster still and which
   this crate also ships. A shape kept for a regime already better served elsewhere is kept on
   sentiment.
 
-The split rests on **capability**: `reserving_mpsc` implements `Reserving` and `mpsc` cannot, for the
+The split rests on **capability**: `reserving_mpsc` implements `Reserving` and `slotwise_mpsc` cannot, for the
 structural reason D-16's surviving half explains. Everything else is profile, and profile is the
 caller's to measure.
 

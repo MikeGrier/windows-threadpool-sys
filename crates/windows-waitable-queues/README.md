@@ -6,7 +6,7 @@ Bounded producer/consumer queues whose readiness is a waitable Windows `HANDLE`.
 an empty shell on other platforms.
 
 **Status: three shapes, all waitable.** `spsc` is a bounded ring with no
-compare-and-swap on either side; `mpsc` is a bounded array queue using Vyukov's
+compare-and-swap on either side; `slotwise_mpsc` is a bounded array queue using Vyukov's
 sequence protocol, so any number of producers may push without a lock; and
 `reserving_mpsc` is that queue plus the ability to claim a slot in advance. Any
 of them can be polled with no kernel object at all, blocked on directly, or
@@ -54,7 +54,7 @@ cardinality is carried by whether those handles are `Clone`:
 | Shape | Producer | Consumer | Reserves | Shipped |
 |---|---|---|---|---|
 | `spsc` | not `Clone` | not `Clone` | yes | yes |
-| `mpsc` | `Clone` | not `Clone` | **no** | yes |
+| `slotwise_mpsc` | `Clone` | not `Clone` | **no** | yes |
 | `reserving_mpsc` | `Clone` | not `Clone` | yes | yes |
 | MPMC | `Clone` | `Clone` | -- | not yet |
 
@@ -63,13 +63,69 @@ comment: the handles are also not `Sync`, so a handle that cannot be cloned and
 cannot be shared is held by exactly one thread.
 
 The two shapes also disagree about their smallest usable capacity, and the error
-says so rather than the documentation: `spsc` accepts one slot, and `mpsc` needs
+says so rather than the documentation: `spsc` accepts one slot, and `slotwise_mpsc` needs
 two, because its per-slot sequence cannot distinguish "just published" from "free
 again next lap" in a one-slot ring.
 
-## Choosing between `mpsc` and `reserving_mpsc`
+## Where these algorithms come from
 
-They are **two different claim protocols**, not one queue with a switch. `mpsc`
+**None of the queue algorithms here are novel, and that is deliberate.** A
+concurrent queue is a bad place to be original: the failure mode is a reordering
+that shows up on one machine, under load, months later. Each shape implements a
+published design, and what this crate adds is the waiting, not the queueing.
+
+- **`spsc`** is the classic single-producer single-consumer ring buffer, with the
+  two positions on separate cache lines so the ends stop invalidating each
+  other. The structure is old -- Lamport gave the concurrent reader/writer
+  treatment in 1983 -- and the padding is standard modern practice.
+- **`slotwise_mpsc`** implements Dmitry Vyukov's bounded MPMC array queue,
+  specialised to one consumer. Each slot carries its own sequence number, so a
+  producer claims a position and asks *that slot* whether it is ready, which
+  keeps producers off any single shared line. It is among the most widely
+  reimplemented concurrent queues in existence.
+- **`reserving_mpsc`** uses the other classic approach: count free slots against
+  the consumer's position, so space can be **claimed in advance**. Credit- and
+  ticket-based admission is long established in flow control, and counting is
+  the only way to answer "will there be room later?".
+
+Where this crate departs from a reference implementation it says so, and why, in
+[DESIGN-NOTES.md](DESIGN-NOTES.md). The measured behaviour of both MPSC shapes is
+below -- including one case where the published intuition turned out to be wrong
+on our hardware.
+
+## Why not an existing queue crate
+
+Rust has excellent channel crates, and for most programs one of them is the right
+answer. **They are not usable here for one structural reason: on Windows,
+waiting is a kernel-object operation, and a queue whose readiness is not a
+`HANDLE` cannot take part in one.**
+
+A thread that must wait for *an item arrived* **or** *an I/O completed* **or**
+*this process exited* **or** *cancellation was requested* waits on all of them at
+once, in a single `WaitForMultipleObjects`. Every participant has to be a kernel
+object. A channel that signals readiness through a condition variable, a futex,
+or a parked-thread list cannot be one of them -- however good its blocking
+receive is, and however rich its `select`, because that select can only cover its
+own channels.
+
+The alternatives are all worse in the same way:
+
+- **Poll on a timer.** Trades latency against wakeups, and the thread wakes to
+  discover nothing happened.
+- **Dedicate a thread to blocking on the channel and signalling an event.**
+  Correct, and costs a thread plus a hop per item to convert a condition variable
+  back into the kernel object you needed in the first place.
+- **Move everything to async.** A real answer if the program is already async;
+  not one for a thread whose other obligations are `HANDLE`s.
+
+So the queue owns a manual-reset event and keeps it consistent with the queue's
+state. That consistency is the hard part and is what this crate is actually for.
+The event is created lazily, so a consumer that only polls never allocates a
+kernel object at all.
+
+## Choosing between `slotwise_mpsc` and `reserving_mpsc`
+
+They are **two different claim protocols**, not one queue with a switch. `slotwise_mpsc`
 is Vyukov's bounded array queue: a producer asks a slot's own sequence number
 whether it is free. `reserving_mpsc` counts free slots against the consumer's
 position, which is the only way a reservation can be answered at all. Both are
@@ -78,7 +134,7 @@ both rather than picking one for you.
 
 **Start here:**
 
-- Need `reserve`? Only `reserving_mpsc` has it, and `mpsc` structurally cannot.
+- Need `reserve`? Only `reserving_mpsc` has it, and `slotwise_mpsc` structurally cannot.
 - Otherwise, **start with `reserving_mpsc`.** It was the faster of the two at
   every producer count we measured above one.
 - Only one producer *and* one consumer? Use `spsc`, which beats both.
@@ -86,7 +142,7 @@ both rather than picking one for you.
 **What we measured**, in ns per push, isolated regime, median of three runs.
 Higher producer counts oversubscribe both hosts:
 
-| producers | `mpsc` (x64) | `reserving` (x64) | `mpsc` (ARM64) | `reserving` (ARM64) |
+| producers | `slotwise_mpsc` (x64) | `reserving` (x64) | `slotwise_mpsc` (ARM64) | `reserving` (ARM64) |
 |---|---|---|---|---|
 | 1 | 9.0 | 8.6 | 6.5 | 6.1 |
 | 2 | 49.0 | 28.0 | 29.8 | 9.4 |
@@ -98,7 +154,7 @@ Higher producer counts oversubscribe both hosts:
 x64 is an AMD EPYC 7763 slice (8 cores, 16 threads); ARM64 is a Snapdragon X2
 Elite (12 cores, no SMT). **Read these as two data points, not as a law.** This
 comparison has already inverted once: it was designed on the assumption that
-`mpsc` would be the cheaper shape, and measurement said otherwise on both
+`slotwise_mpsc` would be the cheaper shape, and measurement said otherwise on both
 machines.
 
 **Measure your own workload before treating any of this as settled.** Producer
@@ -109,10 +165,10 @@ can run that measurement on your hardware instead of inheriting ours.
 
 Two things that look like reasons to choose and are not:
 
-- **Capacity.** `mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, but that
+- **Capacity.** `slotwise_mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, but that
   counts slots allocated up front, not items ever pushed. A ring of 2^31 slots
   is tens of gigabytes before it holds anything useful.
-- **`mpsc` winning at one producer.** True in one regime, and at one producer
+- **`slotwise_mpsc` winning at one producer.** True in one regime, and at one producer
   you want `spsc` anyway.
 
 ## What it will not do
@@ -121,12 +177,12 @@ Two things that look like reasons to choose and are not:
   slot. Overwrite-oldest is right for telemetry, where a lost entry is a lost
   sample; here an entry may be an I/O submission, where a lost entry is a lost
   operation.
-- **It will not decide between two real queue designs on your behalf.** `mpsc`
+- **It will not decide between two real queue designs on your behalf.** `slotwise_mpsc`
   and `reserving_mpsc` are different claim protocols, both well studied and both
-  used in production and in research. `mpsc` asks each slot's own sequence
+  used in production and in research. `slotwise_mpsc` asks each slot's own sequence
   number "are you free?"; `reserving_mpsc` counts free slots against the
   consumer's position, which is what makes a reservation answerable at all --
-  and why `mpsc` does not implement the `Reserving` trait. It genuinely cannot,
+  and why `slotwise_mpsc` does not implement the `Reserving` trait. It genuinely cannot,
   which is the whole reason the traits are narrow.
   **Which is faster is a property of your workload, not of the designs**, and we
   publish what we measured rather than choosing for you -- see "Choosing between

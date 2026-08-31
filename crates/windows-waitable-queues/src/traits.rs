@@ -25,16 +25,16 @@
 //! tests whether the abstraction is the right one. So the trait *shape* was
 //! fixed in prose when `spsc` was written -- the signatures were spelled out in
 //! its module documentation before the type existed -- and the traits
-//! themselves waited for `mpsc` to exist to be checked against. That is
+//! themselves waited for `slotwise_mpsc` to exist to be checked against. That is
 //! [D-3](../../DESIGN-NOTES.md#d-3), and the check it demands is not rhetorical:
-//! `mpsc` is a lock-free multi-producer array queue with no structural
+//! `slotwise_mpsc` is a lock-free multi-producer array queue with no structural
 //! resemblance to `spsc` beyond its interface, so a signature that fitted only
 //! the first shape would have failed here rather than in a consumer's code.
 //!
 //! # The name a trait shares with a handle
 //!
 //! [`Producer`] and [`Consumer`] are also the names of the concrete handles in
-//! [`spsc`](crate::spsc) and [`mpsc`](crate::mpsc). That is deliberate: the
+//! [`spsc`](crate::spsc) and [`slotwise_mpsc`](crate::slotwise_mpsc). That is deliberate: the
 //! trait is named for the role, the handle is named for the role, and the
 //! handle plays the role. `std` does the same thing with `fmt::Write` and
 //! `io::Write`, and the module path disambiguates. Importing the traits
@@ -172,11 +172,11 @@ pub trait Bounded {
 ///
 /// # Why this is a trait a shape may lack
 ///
-/// [`mpsc`](crate::mpsc) deliberately does **not** implement this, and that is
+/// [`slotwise_mpsc`](crate::slotwise_mpsc) deliberately does **not** implement this, and that is
 /// the clearest illustration of why the capability traits are narrow
 /// ([D-2](../../DESIGN-NOTES.md#d-2)). Honouring a reservation means knowing how
 /// many slots remain, which costs a producer a read of the consumer's position
-/// on every push -- a single line every thread touches. `mpsc`'s push avoids
+/// on every push -- a single line every thread touches. `slotwise_mpsc`'s push avoids
 /// that read by design, so it cannot answer the question, and
 /// [`reserving_mpsc`](crate::reserving_mpsc) exists beside it for callers who
 /// would rather pay than lose a message.
