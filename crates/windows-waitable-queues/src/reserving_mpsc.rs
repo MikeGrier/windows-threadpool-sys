@@ -34,10 +34,10 @@
 //! requires exactly that count -- which requires the consumer's position, on one
 //! line every thread in the system touches.
 //!
-//! So the two ship as peers ([D-16](../../DESIGN-NOTES.md#d-16)): `slotwise_mpsc` for a
+//! So the two ship as peers ([D-16](../DESIGN-NOTES.md#d-16)): `slotwise_mpsc` for a
 //! caller who wants the cheapest possible push and can treat a refusal as
 //! backpressure, this shape for a caller with a message it must not lose. That
-//! is the narrow-trait argument from [D-2](../../DESIGN-NOTES.md#d-2) reaching
+//! is the narrow-trait argument from [D-2](../DESIGN-NOTES.md#d-2) reaching
 //! its sharpest case -- `slotwise_mpsc` does not implement
 //! [`Reserving`](crate::Reserving) because it genuinely cannot, not because
 //! nobody got round to it.
@@ -80,7 +80,7 @@
 //! `b + b = 64` gives `b = 32`. There is no cleverer division of the word.
 //!
 //! **A 128-bit compare-and-swap would lift that cap and is deliberately not
-//! used** ([D-18](../../DESIGN-NOTES.md#d-18)). It would not remove the cost that
+//! used** ([D-18](../DESIGN-NOTES.md#d-18)). It would not remove the cost that
 //! matters -- the consumer's position still has to be read -- and 2^31 slots is
 //! a ring this shape allocates in full at construction.
 
@@ -975,7 +975,7 @@ impl<T> Consumer<T> {
     /// missed. `false` means something arrived in the meantime.
     ///
     /// Clearing must come before the check, which is the reverse of the order
-    /// that reads naturally; see [D-9](../../DESIGN-NOTES.md#d-9).
+    /// that reads naturally; see [D-9](../DESIGN-NOTES.md#d-9).
     ///
     /// # Errors
     ///

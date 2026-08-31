@@ -11,7 +11,7 @@
 //! merely preferred, because a fat trait is *unimplementable* by shapes this
 //! crate plans to ship: a queue that is never waited on has no doorbell to
 //! return, and an unbounded one has no capacity to report. Recorded as
-//! [D-2](../../DESIGN-NOTES.md#d-2).
+//! [D-2](../DESIGN-NOTES.md#d-2).
 //!
 //! What that buys is a consumer generic over exactly what it needs. A drainer
 //! that parks on a queue asks for [`Consumer`] and [`Waitable`], and stays
@@ -26,7 +26,7 @@
 //! fixed in prose when `spsc` was written -- the signatures were spelled out in
 //! its module documentation before the type existed -- and the traits
 //! themselves waited for `slotwise_mpsc` to exist to be checked against. That is
-//! [D-3](../../DESIGN-NOTES.md#d-3), and the check it demands is not rhetorical:
+//! [D-3](../DESIGN-NOTES.md#d-3), and the check it demands is not rhetorical:
 //! `slotwise_mpsc` is a lock-free multi-producer array queue with no structural
 //! resemblance to `spsc` beyond its interface, so a signature that fitted only
 //! the first shape would have failed here rather than in a consumer's code.
@@ -174,7 +174,7 @@ pub trait Bounded {
 ///
 /// [`slotwise_mpsc`](crate::slotwise_mpsc) deliberately does **not** implement this, and that is
 /// the clearest illustration of why the capability traits are narrow
-/// ([D-2](../../DESIGN-NOTES.md#d-2)). Honouring a reservation means knowing how
+/// ([D-2](../DESIGN-NOTES.md#d-2)). Honouring a reservation means knowing how
 /// many slots remain, which costs a producer a read of the consumer's position
 /// on every push -- a single line every thread touches. `slotwise_mpsc`'s push avoids
 /// that read by design, so it cannot answer the question, and
@@ -191,7 +191,7 @@ pub trait Reserving {
     ///
     /// **Generic over a lifetime because the two shapes genuinely differ**, and
     /// that difference is the trait being validated by two implementations
-    /// rather than shaped around one ([D-3](../../DESIGN-NOTES.md#d-3)).
+    /// rather than shaped around one ([D-3](../DESIGN-NOTES.md#d-3)).
     /// [`reserving_mpsc`](crate::reserving_mpsc) hands out an owned, [`Send`]
     /// reservation, because its use case is to claim a slot when an operation is
     /// submitted and redeem it from whichever thread the completion arrives on.
@@ -230,7 +230,7 @@ pub trait Reserving {
 ///
 /// # Why depth is not here
 ///
-/// [D-2](../../DESIGN-NOTES.md#d-2)'s sketch of this trait listed "depth,
+/// [D-2](../DESIGN-NOTES.md#d-2)'s sketch of this trait listed "depth,
 /// high-water, doorbells actually rung", and depth has been left off
 /// deliberately. [`Bounded::len`] already reports it, computed on demand from
 /// positions the queue keeps anyway. Naming it again here would give one number
@@ -251,7 +251,7 @@ pub trait Observable {
     /// coalesced loss latch that generalises: a latch can only coalesce losses
     /// that are *idempotent*, which is a property of the payload rather than of
     /// the queue, but counting them needs nothing of the payload at all. See
-    /// [D-19](../../DESIGN-NOTES.md#d-19).
+    /// [D-19](../DESIGN-NOTES.md#d-19).
     ///
     /// Counts refusals for **room** only. A push refused because every consumer
     /// is gone is the end of the stream rather than a loss, and folding the two
@@ -326,7 +326,7 @@ pub trait Waitable {
     ///
     /// **Waiting without arming is a permanent hang, not an occasional missed
     /// wakeup.** The full argument is in
-    /// [D-9](../../DESIGN-NOTES.md#d-9); the short form is that clearing must come
+    /// [D-9](../DESIGN-NOTES.md#d-9); the short form is that clearing must come
     /// before the emptiness check, which is the reverse of the order that reads
     /// naturally.
     ///

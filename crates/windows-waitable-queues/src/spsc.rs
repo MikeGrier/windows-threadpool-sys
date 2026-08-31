@@ -11,7 +11,7 @@
 //!
 //! This is the first shape written, so its method signatures become the ones a
 //! capability trait must be able to name. Written down before the type, per
-//! [D-3](../../DESIGN-NOTES.md#d-3), because a second shape that spells the
+//! [D-3](../DESIGN-NOTES.md#d-3), because a second shape that spells the
 //! same operation differently cannot later be unified without breaking one of
 //! them:
 //!
@@ -37,7 +37,7 @@
 //!
 //! **They have since shipped, and they kept those signatures.**
 //! [`slotwise_mpsc`](crate::slotwise_mpsc) was written against this sketch and matched it, which
-//! is the validation [D-3](../../DESIGN-NOTES.md#d-3) demanded before any trait
+//! is the validation [D-3](../DESIGN-NOTES.md#d-3) demanded before any trait
 //! was allowed to exist. The sketch is left here because it is the artefact
 //! that made the check possible: what [`crate::traits`] says now is what this
 //! comment said before either type existed.
@@ -51,7 +51,7 @@
 //! one that serves the widest is chosen.
 //!
 //! Cardinality is then carried by the auto traits instead, which is
-//! [D-4](../../DESIGN-NOTES.md#d-4):
+//! [D-4](../DESIGN-NOTES.md#d-4):
 //!
 //! | | [`Clone`] | [`Send`] | [`Sync`] |
 //! |---|---|---|---|

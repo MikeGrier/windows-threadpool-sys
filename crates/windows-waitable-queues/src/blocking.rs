@@ -5,7 +5,7 @@
 //! # Why this is not simply copied into each shape
 //!
 //! The loop below is not glue -- it *is* the arming protocol, the contract
-//! recorded as [D-9](../../DESIGN-NOTES.md#d-9): drain, arm, and wait only if
+//! recorded as [D-9](../DESIGN-NOTES.md#d-9): drain, arm, and wait only if
 //! arming blessed it, with the disconnection check placed between the arming
 //! and the wait so a producer that vanished cannot leave a consumer parked.
 //! Every step is load-bearing and the order is the whole correctness argument.
@@ -36,6 +36,9 @@ use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
 
 use crate::error::{RecvError, RecvTimeoutError};
+
+#[cfg(test)]
+mod tests;
 
 /// What a shape must offer for [`recv`] and [`recv_timeout`] to park on it.
 pub(crate) trait Parked {
@@ -132,14 +135,43 @@ pub(crate) fn recv_timeout<C: Parked>(
         if remaining.is_zero() {
             return Err(RecvTimeoutError::Timeout);
         }
-        // Saturating rather than wrapping: a duration longer than a `u32` of
-        // milliseconds is roughly 49 days, and clamping it to that is a longer
-        // wait than any caller meant, where truncating it would be a far
-        // shorter one. The loop re-arms and waits again, so clamping costs an
-        // extra turn and nothing else.
-        let millis = u32::try_from(remaining.as_millis()).unwrap_or(u32::MAX);
-        wait(consumer.doorbell()?, millis)?;
+        wait(consumer.doorbell()?, wait_millis(remaining))?;
     }
+}
+
+/// The longest finite wait `WaitForSingleObject` accepts, in milliseconds.
+///
+/// **Derived from `INFINITE`, not written as a number, because it is exactly
+/// one less than it.** `INFINITE` is `u32::MAX`, so a clamp to `u32::MAX` does
+/// not mean "wait a very long time" -- it means *wait forever*, and the loop
+/// that was supposed to re-check the deadline never regains control to do so.
+const MAX_FINITE_WAIT_MILLIS: u32 = INFINITE - 1;
+
+/// How long to block for, given the time left on the caller's deadline.
+///
+/// Saturating rather than wrapping: a duration longer than a `u32` of
+/// milliseconds is roughly 49 days, and clamping it to that is a longer wait
+/// than any caller meant, where truncating it would be a far shorter one. The
+/// loop re-arms and waits again, so clamping costs an extra turn and nothing
+/// else.
+///
+/// **The clamp is to one below `INFINITE`.** An earlier version clamped to
+/// `u32::MAX`, which is the same bit pattern as `INFINITE`: a `recv_timeout`
+/// longer than about 49.7 days waited forever instead of timing out, silently
+/// converting a bounded call into an unbounded one. The comment above was
+/// already there and was right about everything except the one value it chose.
+///
+/// **The `min` is not redundant with the `unwrap_or`**, and a boundary test is
+/// what showed it. Changing only the fallback leaves the hole open from the
+/// other side: a duration of exactly `u32::MAX` milliseconds *converts*
+/// successfully, so the fallback never fires and `INFINITE` is returned by the
+/// conversion itself. The two guards cover different inputs -- one the
+/// durations too large to represent, the other the one that is representable
+/// and still means forever.
+fn wait_millis(remaining: Duration) -> u32 {
+    u32::try_from(remaining.as_millis())
+        .unwrap_or(MAX_FINITE_WAIT_MILLIS)
+        .min(MAX_FINITE_WAIT_MILLIS)
 }
 
 /// Block on a doorbell handle, translating the Win32 result.

@@ -33,7 +33,7 @@
 //! - **Peak depth** cannot be placed that way, because it must observe every
 //!   change. It is therefore **opt-in**, and off by default; see
 //!   [`Metrics::record_depth`] and
-//!   [D-23](../../DESIGN-NOTES.md#d-23).
+//!   [D-23](../DESIGN-NOTES.md#d-23).
 
 use core::fmt;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

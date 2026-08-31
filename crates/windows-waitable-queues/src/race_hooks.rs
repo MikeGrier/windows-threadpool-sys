@@ -36,6 +36,8 @@
 use core::cell::RefCell;
 use std::thread::LocalKey;
 
+mod tests;
+
 type Slot = RefCell<Option<Box<dyn FnMut()>>>;
 
 thread_local! {
@@ -70,11 +72,29 @@ impl Hook {
     }
 
     /// Installs a hook for the duration of a closure.
+    ///
+    /// **The removal is a guard rather than a statement after `body`**, so an
+    /// unwind takes the hook with it. A test that installs a hook and then
+    /// fails an assertion is the ordinary case, not an exotic one, and a hook
+    /// surviving that would fire inside whatever ran next on this thread --
+    /// turning one failure into an unrelated second one, in a facility the
+    /// crate's central correctness argument rests on.
     pub(crate) fn with<R>(&self, race: impl FnMut() + 'static, body: impl FnOnce() -> R) -> R {
         self.0
             .with(|hook| *hook.borrow_mut() = Some(Box::new(race)));
-        let result = body();
-        self.0.with(|hook| *hook.borrow_mut() = None);
-        result
+        let _installed = Installed(self.0);
+        body()
+    }
+}
+
+/// Removes a hook when it goes out of scope, however that happens.
+struct Installed(&'static LocalKey<Slot>);
+
+impl Drop for Installed {
+    fn drop(&mut self) {
+        // `try_with`, not `with`: a hook can outlive its thread-local during
+        // thread teardown, and panicking there would replace whatever unwind is
+        // already in progress.
+        let _ = self.0.try_with(|hook| *hook.borrow_mut() = None);
     }
 }

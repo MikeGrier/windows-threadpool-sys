@@ -52,7 +52,7 @@
 //! spelling came first. This is that second shape, and it matches: `push` and
 //! `pop` take `&self`, the handles are split, and the error type is the shared
 //! one. The traits themselves therefore ship with this module -- see
-//! [`crate::traits`] and [D-3](../../DESIGN-NOTES.md#d-3).
+//! [`crate::traits`] and [D-3](../DESIGN-NOTES.md#d-3).
 //!
 //! Exactly one cell of `spsc`'s auto-trait table changes, which is what "the
 //! multi-producer shape relaxes exactly one cell" was written to predict:
