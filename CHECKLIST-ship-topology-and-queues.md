@@ -1,0 +1,104 @@
+# Checklist: ship the topology and queue crates
+
+**Goal.** Get `windows-topology-sys` 0.2.0 and `windows-waitable-queues` 0.1.0 released, so the
+placement tool in [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) has something to build
+against and other people can run it on hardware this workspace does not own.
+
+**Deliberately redundant with [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md).** That file plans the
+*design*; this one plans the *release*, and a release has its own failure modes that a design checklist
+will not surface. Where the two overlap -- M31.8 in particular -- this file states why the item is
+release-blocking rather than restating the decision itself.
+
+## The state this starts from, verified rather than assumed
+
+- `windows-topology-sys` **0.1.0 is published**. The `provenance` field added on this branch is a
+  breaking change to a struct with public fields, so the next release is **0.2.0**, not 0.1.1.
+- `windows-waitable-queues` **is not published**. First release, and its packaging is already complete:
+  description, keywords, categories, README, documentation link and a workspace license are all
+  present. Packaging is not a blocker; do not re-investigate it.
+- `windows-ioring-sys` **0.2.0 is published and depends on `windows-topology-sys = "0.1.0"`.**
+- This branch is **54 commits ahead of `main` with no pull request**, and release automation runs on
+  `main`. Nothing ships until it merges.
+
+## M1: settle the public surface before it is public
+
+- [ ] **SH-1.1** -- **Decide M31.8 (merge-or-delete for `mpsc` and `reserving_mpsc`) before the first
+  publish, not after.** This is the highest-leverage item in the file and it is release-blocking for a
+  mechanical reason: the decision may *delete a public type*. Doing that before 0.1.0 costs nothing;
+  doing it after means a breaking release, a yank-and-migrate for anyone who adopted it, and a
+  permanent line in the changelog explaining why a shape existed for one version.
+  The measurement is already done and agrees across both architectures -- see M31.5 and M31.7 in
+  [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) -- so this needs a decision, not more work.
+
+- [ ] **SH-1.2** -- **Decide explicitly whether M31.6 (loom verification) gates 0.1.0**, and record the
+  answer either way rather than letting it drift into "not yet".
+  The reason it deserves a deliberate answer rather than a default: the sabotage sweep demonstrated
+  that weakening the producer's `Acquire` load of `head` to `Relaxed` left **all twenty tests green**,
+  while every logic defect injected beside it was caught. So this is not an untested-by-omission gap,
+  it is a gap this workspace has *evidence* the existing tests cannot close. Publishing a lock-free
+  queue with it open is a defensible choice; making it unknowingly is not.
+
+## M2: repair the release plumbing before relying on it
+
+- [ ] **SH-2.1** -- **Add `windows-waitable-queues-v*` to the tag trigger list in
+  [.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml).** It is missing. The
+  crate *is* registered with release-please, so release-please will happily raise the release PR and
+  push the tag -- and then nothing will publish it, with no error, because no workflow matches the tag.
+  **This is a silent failure, which is why it is its own item**: the symptom is a tag that exists, a
+  changelog that looks right, and a crate that never appears on crates.io.
+
+- [ ] **SH-2.2** -- Plan the **`windows-topology-sys` 0.2.0 ripple**. `windows-ioring-sys` is published
+  and pins `windows-topology-sys = "0.1.0"`, so the breaking bump obliges updating that dependency and
+  releasing `windows-ioring-sys` too. Decide the order and whether ioring's release is part of this
+  push or follows it -- but decide it, because a workspace that builds locally via `path` dependencies
+  will not reveal this and the first symptom is a consumer unable to resolve the two together.
+
+- [ ] **SH-2.3** -- Dry-run both publishes (`cargo publish --dry-run`) from the merge commit, and read
+  the packaged file list rather than only the exit code. A crate that builds in a workspace can still
+  fail to package -- excluded files, a path dependency without a version, a README that is not in the
+  package.
+
+## M3: land the branch
+
+- [ ] **SH-3.1** -- Open the pull request, and **review it as a diff rather than as a memory of having
+  written it**. 54 commits across the topology crate, the queue crate and the probes is more than fits
+  in a session's recollection, and the branch contains at least one deliberate breaking change plus
+  several documented reversals of earlier conclusions.
+
+- [ ] **SH-3.2** -- Run the full gate on the merge result, not merely on the branch tip: `cargo fmt
+  --check`, `cargo clippy --all-targets`, `cargo check --all-targets` in **both** debug and release,
+  and the in-scope test suites including doctests. Release-mode warnings differ from debug ones, which
+  is why the milestone discipline names both.
+
+- [ ] **SH-3.3** -- Run the `windows-waitable-queues` sabotage sweep on a clean tree and confirm every
+  entry still behaves as declared. It is the crate about to become public and the sweep is what has
+  caught its real defects -- including a lost wakeup that only surfaced because a *baseline* run hung
+  once in an otherwise green suite.
+
+- [ ] **SH-3.4** -- Merge to `main`, and confirm release-please raises a release PR proposing
+  **0.2.0** for the topology crate. If it proposes 0.1.1, the breaking-change marker did not take and
+  the version would silently understate the break -- fix the marker rather than editing the version by
+  hand, or the next break will do the same thing.
+
+## M4: release
+
+- [ ] **SH-4.1** -- Release `windows-topology-sys` 0.2.0 and confirm it appears on crates.io and builds
+  on docs.rs. Docs.rs builds under its own configuration, so a crate that documents locally can still
+  fail there.
+
+- [ ] **SH-4.2** -- Update `windows-ioring-sys` to depend on the published 0.2.0 and release it, per
+  the order settled in SH-2.2.
+
+- [ ] **SH-4.3** -- Release `windows-waitable-queues` 0.1.0, with SH-2.1's fix in place. Confirm the
+  tag triggered a publish rather than assuming it did.
+
+## M5: verify from outside the workspace
+
+- [ ] **SH-5.1** -- In a scratch project **outside this repository**, depend on both crates from
+  crates.io and build something that uses each. This is the first exercise of the crates as
+  *dependencies* rather than as path members, and it is where a missing `version` on a path dependency,
+  an unexported type, or a feature that only resolves inside the workspace will show up.
+
+- [ ] **SH-5.2** -- Confirm the published `windows-topology-sys` still reports `Provenance::Measured`
+  from `discover()` when consumed as a dependency, and that a `Topology::default()` is `Synthetic`.
+  The provenance rules are the newest thing in the crate and the least exercised outside it.
