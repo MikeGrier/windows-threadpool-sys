@@ -301,11 +301,17 @@ that carries them is written.
   times two million items, on top of the placements. On a four-node machine that is a materially
   longer run than on this one, and the person deserves to know before it starts.
 
-- [ ] **PT-4.6** -- **Set up the Discussions thread people paste into, and link it from the tool.**
+- [x] **PT-4.6** -- **Set up the Discussions thread people paste into, and link it from the tool.**
   The tool's output names where to send a result, so that destination has to exist before the tool
   ships, not after -- an instruction pointing at a thread that is not there is worse than no
   instruction. Pin it, and state in the first post what is collected and what a submission is used
   for, so a reader who arrives from a search rather than from the README still sees it.
+  **Done: [discussion 55](https://github.com/MikeGrier/windows-threadpool-sys/discussions/55), "Please
+  share data from `windows-placement-probe`".** The tool points at that thread rather than at the
+  discussions index, so a runner lands on the reply box instead of a list they have to search -- a
+  link that costs an extra navigation is one more place a submission stops. A test asserts the URL
+  still ends in a discussion number, which catches the plausible later mistake of trimming it back to
+  the index during a tidy-up.
 
 - [x] **PT-4.3** -- **Say exactly what is collected and what is not**, in the tool's own output and in
   its README, and make it verifiable by reading the record. Collected, per PT-1.2: core/cache/NUMA

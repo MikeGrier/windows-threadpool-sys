@@ -30,7 +30,12 @@ use crate::record::SubmissionRecord;
 use crate::report;
 
 /// Where a runner is asked to send a result.
-pub const DISCUSSION_URL: &str = "https://github.com/MikeGrier/windows-threadpool-sys/discussions";
+///
+/// **The specific thread, not the discussions index.** Someone doing a favour
+/// should land on the reply box rather than on a list they have to search: a
+/// link costing an extra navigation is one more place a submission stops.
+pub const DISCUSSION_URL: &str =
+    "https://github.com/MikeGrier/windows-threadpool-sys/discussions/55";
 
 /// A 64-bit FNV-1a digest, rendered as sixteen hex characters.
 ///

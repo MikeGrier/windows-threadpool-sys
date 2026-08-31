@@ -21,6 +21,27 @@ fn the_submission_carries_its_own_markdown_fences() {
 }
 
 #[test]
+fn the_destination_is_a_specific_thread_rather_than_the_discussions_index() {
+    // The mistake this catches is a plausible one to make later: trimming the
+    // URL back to the index during a tidy-up, or a thread being recreated and
+    // the number not following. Either leaves a runner searching a list, and
+    // some of them will simply stop there.
+    let tail = DISCUSSION_URL
+        .rsplit('/')
+        .next()
+        .expect("a URL has at least one segment");
+
+    assert!(
+        tail.chars().all(|c| c.is_ascii_digit()) && !tail.is_empty(),
+        "the destination must end in a discussion number, got {DISCUSSION_URL:?}"
+    );
+    assert!(
+        DISCUSSION_URL.contains("/discussions/"),
+        "got {DISCUSSION_URL:?}"
+    );
+}
+
+#[test]
 fn the_submission_names_where_to_send_it() {
     // An instruction that lives only in a README is one that half of them will
     // not have read.
