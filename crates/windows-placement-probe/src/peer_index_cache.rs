@@ -61,6 +61,9 @@ use windows_sys::Win32::System::SystemInformation::GROUP_AFFINITY;
 use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadGroupAffinity};
 use windows_waitable_queues::spsc;
 
+#[cfg(test)]
+mod tests;
+
 /// Items handed across the ring in one timed run.
 pub const ITEMS: usize = 2_000_000;
 
@@ -170,6 +173,12 @@ pub fn measure() -> Observation {
 /// One timed pass, with the shared-read counts that pass performed.
 #[derive(Debug, Clone, Copy)]
 pub struct Sample {
+    /// Which NUMA node held the ring, when that could be arranged.
+    ///
+    /// None means no placement was requested, or one was requested and could
+    /// not be achieved -- recorded rather than assumed, because a hop measured
+    /// with the data somewhere unknown is not a measurement of that hop.
+    pub memory_node: Option<u32>,
     /// Wall-clock nanoseconds for the whole pass.
     pub nanos: f64,
     /// How many times the consumer read the producer's shared position.
@@ -231,6 +240,9 @@ fn time_real_spsc() -> Sample {
         // a retry.
         consumer_refreshes: ITEMS as u64,
         producer_refreshes: ITEMS as u64,
+        // The calibration runs the shipping queue, which allocates its own ring
+        // wherever it likes: this path has no placement to report.
+        memory_node: None,
     }
 }
 
@@ -245,6 +257,8 @@ struct Ring {
     capacity: usize,
     head: CacheAligned<AtomicUsize>,
     tail: CacheAligned<AtomicUsize>,
+    /// Which NUMA node the slots were placed on, if the placement succeeded.
+    memory_node: Option<u32>,
 }
 
 // SAFETY: the two positions partition the slots between the threads exactly as
@@ -254,17 +268,91 @@ struct Ring {
 unsafe impl Sync for Ring {}
 
 impl Ring {
-    fn new(capacity: usize) -> Self {
+    /// Build a ring whose slots live on a chosen NUMA node.
+    ///
+    /// # Why the node is a parameter rather than left to chance
+    ///
+    /// Windows places a page on the node of the thread that **first touches**
+    /// it. The obvious implementation allocates on whichever thread happens to
+    /// call this -- here, an unpinned orchestrator -- so the ring lands on a
+    /// node that may be neither the producer's nor the consumer's, and a re-run
+    /// can differ purely because that thread migrated.
+    ///
+    /// On a multi-socket machine that makes the number meaningless: a hop
+    /// measured with the data on an unknown third node is not a measurement of
+    /// that hop. So the caller names the node, and the record carries it beside
+    /// the two processor nodes.
+    ///
+    /// `None` allocates without a preference, which is the honest behaviour on
+    /// a machine with one node and the only option when the allocation fails.
+    fn new_on(capacity: usize, node: Option<u32>) -> Self {
         let mut slots = Vec::with_capacity(capacity);
         slots.resize_with(capacity, || UnsafeCell::new(0));
-        Self {
+        let mut ring = Self {
             slots: slots.into_boxed_slice(),
             mask: capacity - 1,
             capacity,
             head: CacheAligned(AtomicUsize::new(0)),
             tail: CacheAligned(AtomicUsize::new(0)),
+            memory_node: node,
+        };
+        ring.place_on(node);
+        ring
+    }
+
+    /// Bind the slots to `node` by touching them from a thread pinned there.
+    ///
+    /// **First touch is the mechanism, so a thread on the target node has to do
+    /// the touching.** `VirtualAllocExNuma` would express the preference more
+    /// directly, but it allocates whole pages outside Rust's allocator and
+    /// would mean hand-managing the slot array's lifetime for a property that
+    /// first-touch already provides.
+    ///
+    /// A failure to pin is deliberately *not* fatal here, unlike in
+    /// [`pin_current_thread`]: the fallback is a ring on the orchestrator's
+    /// node, and `memory_node` then records `None` rather than claiming a
+    /// placement that did not happen.
+    fn place_on(&mut self, node: Option<u32>) {
+        let Some(node) = node else {
+            return;
+        };
+        let Some(cpu) = first_processor_of_node(node) else {
+            self.memory_node = None;
+            return;
+        };
+
+        let slots = &mut self.slots;
+        let placed = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    if !try_pin_current_thread(cpu) {
+                        return false;
+                    }
+                    // Write, not read: a read can be served from a shared
+                    // zero page on some configurations, which would leave the
+                    // pages unplaced while looking touched.
+                    for slot in slots.iter_mut() {
+                        *slot.get_mut() = 0;
+                    }
+                    true
+                })
+                .join()
+                .unwrap_or(false)
+        });
+
+        if !placed {
+            self.memory_node = None;
         }
     }
+}
+
+/// The first logical processor belonging to `node`, for pinning the toucher.
+fn first_processor_of_node(node: u32) -> Option<(u16, u8)> {
+    crate::fingerprint::discover_places()
+        .ok()?
+        .into_iter()
+        .find(|place| place.numa_node == node)
+        .map(|place| place.id())
 }
 
 fn time_model(strategy: Strategy) -> Sample {
@@ -289,7 +377,23 @@ pub fn time_model_on(
     producer_cpu: Option<(u16, u8)>,
     consumer_cpu: Option<(u16, u8)>,
 ) -> Sample {
-    let ring = Ring::new(CAPACITY);
+    time_model_placed(strategy, producer_cpu, consumer_cpu, None)
+}
+
+/// As [`time_model_on`], and also chooses which NUMA node holds the ring.
+///
+/// The third position. With the memory on the producer's node the producer
+/// writes locally and the consumer reads remotely; moving it to the consumer's
+/// node reverses exactly that, and those are different costs rather than two
+/// samples of one.
+pub fn time_model_placed(
+    strategy: Strategy,
+    producer_cpu: Option<(u16, u8)>,
+    consumer_cpu: Option<(u16, u8)>,
+    memory_node: Option<u32>,
+) -> Sample {
+    let ring = Ring::new_on(CAPACITY, memory_node);
+    let placed_on = ring.memory_node;
     let started = Instant::now();
     let (consumer_refreshes, producer_refreshes) = thread::scope(|scope| {
         let shared = &ring;
@@ -306,6 +410,7 @@ pub fn time_model_on(
         nanos: started.elapsed().as_nanos() as f64,
         consumer_refreshes,
         producer_refreshes,
+        memory_node: placed_on,
     }
 }
 
@@ -323,6 +428,26 @@ pub fn time_model_on(
 /// processors that is not a matter of widening the mask; the call has no way to
 /// express the target at all. `SetThreadGroupAffinity` takes the group
 /// explicitly, and is the only way to pin across the whole machine.
+/// Pin without stopping the run on failure.
+///
+/// Separate from [pin_current_thread] because the two failures mean different
+/// things. A measurement thread that cannot be pinned invalidates the run and
+/// must stop; the page-touching thread only decides *where the memory lands*,
+/// and a failure there is recorded as an unknown node rather than a lie.
+fn try_pin_current_thread(cpu: (u16, u8)) -> bool {
+    let (group, number) = cpu;
+    if u32::from(number) >= usize::BITS {
+        return false;
+    }
+    let affinity = GROUP_AFFINITY {
+        Mask: 1_usize << number,
+        Group: group,
+        Reserved: [0; 3],
+    };
+    // SAFETY: as in pin_current_thread.
+    unsafe { SetThreadGroupAffinity(GetCurrentThread(), &affinity, ptr::null_mut()) != 0 }
+}
+
 fn pin_current_thread(cpu: Option<(u16, u8)>) {
     let Some((group, number)) = cpu else {
         return;

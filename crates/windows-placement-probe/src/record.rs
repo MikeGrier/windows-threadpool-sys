@@ -51,7 +51,7 @@ use crate::machine::MachineDescription;
 /// **The golden files are append-only and a published version is never
 /// redefined.** Once a record exists in the wild claiming schema N, N's meaning
 /// is fixed, because that record cannot be regenerated.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// One run's complete output.
 #[derive(Clone, Debug)]
@@ -124,6 +124,18 @@ pub struct MeasurementRecord {
     pub consumer_batch: f64,
     /// The same for the producer side.
     pub producer_batch: f64,
+    /// Which NUMA node held the ring's slots.
+    ///
+    /// **The third position.** A hop measured with the data on an unknown node
+    /// is not a measurement of that hop, so this is recorded rather than left
+    /// to whichever node the orchestrating thread happened to occupy.
+    ///
+    /// `null` means two different things, told apart by which array the row is
+    /// in. In `node_hops` a placement was always arranged, so `null` there means
+    /// one was attempted and **could not be achieved** -- a caveat on that row.
+    /// In `placements` and `by_class` none is ever arranged, so `null` is the
+    /// normal case and means the ring was left wherever the allocator put it.
+    pub memory_node: Option<u32>,
 }
 
 impl From<&Measurement> for MeasurementRecord {
@@ -141,6 +153,7 @@ impl From<&Measurement> for MeasurementRecord {
             nanos_per_item: measurement.nanos_per_item,
             consumer_batch: measurement.consumer_batch,
             producer_batch: measurement.producer_batch,
+            memory_node: measurement.memory_node,
         }
     }
 }

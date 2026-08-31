@@ -568,9 +568,13 @@ mod from_topology {
         assert!(pairs.contains_key(&Placement::CrossCacheSameClass));
         assert!(pairs.contains_key(&Placement::CrossNumaNode));
 
+        // Both directions, from positions the real conversion produced: the
+        // edge is one link but two measurements, because the producer writes
+        // and the consumer reads.
         let hops = node_pairs(&places);
-        assert_eq!(hops.len(), 1);
+        assert_eq!(hops.len(), 2);
         assert!(hops.contains_key(&(0, 1)));
+        assert!(hops.contains_key(&(1, 0)));
     }
 }
 

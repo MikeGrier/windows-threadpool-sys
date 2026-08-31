@@ -7,7 +7,7 @@
 //! seconds. What is worth testing here is that the probe cannot silently
 //! mislabel a pair, because every conclusion it prints is keyed on that label.
 
-use super::{Placement, classify, node_pairs, representative_pairs};
+use super::{Placement, RunPlan, classify, memory_placements, node_pairs, representative_pairs};
 use crate::fingerprint::ProcessorPlace;
 
 /// A processor on its own physical core, which is the non-SMT case.
@@ -581,18 +581,18 @@ fn a_four_node_host_still_reports_exactly_one_node_crossing_row() {
 // measures each hop separately; as above, only selection is testable offline.
 // ---------------------------------------------------------------------------
 
-/// Every chosen pair must genuinely span the two nodes it is filed under, in
-/// canonical order.
+/// Every chosen pair must genuinely span the two nodes it is filed under, with
+/// the producer on the node the key names first.
 fn assert_node_pairs_are_faithful(places: &[ProcessorPlace]) {
-    for ((low, high), (producer, consumer)) in node_pairs(places) {
-        assert!(low < high, "key ({low}, {high}) is not in canonical order");
+    for ((from, to), (producer, consumer)) in node_pairs(places) {
+        assert_ne!(from, to, "key ({from}, {to}) is not a crossing");
         assert_eq!(
-            producer.numa_node, low,
-            "producer {producer} is not on node {low}"
+            producer.numa_node, from,
+            "producer {producer} is not on node {from}"
         );
         assert_eq!(
-            consumer.numa_node, high,
-            "consumer {consumer} is not on node {high}"
+            consumer.numa_node, to,
+            "consumer {consumer} is not on node {to}"
         );
         assert_eq!(
             classify(producer, consumer),
@@ -618,19 +618,22 @@ fn a_single_node_host_has_no_node_pairs() {
 }
 
 #[test]
-fn a_two_node_host_has_exactly_one_node_pair() {
+fn a_two_node_host_measures_its_one_edge_in_both_directions() {
     let places = two_socket_many_cache_domains();
     let pairs = node_pairs(&places);
 
-    assert_eq!(pairs.len(), 1);
+    // Two rows for one edge: the producer on node 0 and the producer on
+    // node 1 are different measurements of it.
+    assert_eq!(pairs.len(), 2);
     assert!(pairs.contains_key(&(0, 1)));
+    assert!(pairs.contains_key(&(1, 0)));
     assert_node_pairs_are_faithful(&places);
 }
 
 #[test]
-fn a_four_node_host_measures_every_hop_exactly_once() {
-    // The whole reason this exists: six distinct hops, not one row standing in
-    // for all of them.
+fn a_four_node_host_measures_every_hop_in_both_directions() {
+    // The whole reason this exists: twelve distinct hops -- six edges, each
+    // measured both ways -- not one row standing in for all of them.
     let places = synthesize(&HostSpec {
         nodes: 4,
         cache_domains_per_node: 1,
@@ -641,15 +644,34 @@ fn a_four_node_host_measures_every_hop_exactly_once() {
 
     let mut keys: Vec<_> = pairs.keys().copied().collect();
     keys.sort_unstable();
-    assert_eq!(keys, vec![(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]);
+    assert_eq!(
+        keys,
+        vec![
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (1, 0),
+            (1, 2),
+            (1, 3),
+            (2, 0),
+            (2, 1),
+            (2, 3),
+            (3, 0),
+            (3, 1),
+            (3, 2),
+        ]
+    );
     assert_node_pairs_are_faithful(&places);
 }
 
 #[test]
-fn node_pairs_are_undirected_so_a_hop_is_never_measured_twice() {
-    // `0 -> 1` and `1 -> 0` traverse the same link, so measuring both would
-    // double the cost of the table and invite a reader to treat the difference
-    // between them as signal when it is noise.
+fn node_pairs_are_directed_so_both_ends_take_a_turn_producing() {
+    // The correction this replaced: an earlier version selected one direction
+    // per edge, reasoning that both traverse the same link. The link is
+    // symmetric; the workload is not. The producer writes and the consumer
+    // reads, so `0 -> 1` and `1 -> 0` measure a remote write and a remote read
+    // over that link, which are different quantities and on some interconnects
+    // not close ones.
     let places = synthesize(&HostSpec {
         nodes: 3,
         cache_domains_per_node: 1,
@@ -658,20 +680,20 @@ fn node_pairs_are_undirected_so_a_hop_is_never_measured_twice() {
     });
     let pairs = node_pairs(&places);
 
-    assert_eq!(pairs.len(), 3);
-    for (low, high) in pairs.keys() {
-        assert!(low < high);
+    assert_eq!(pairs.len(), 6);
+    for (from, to) in pairs.keys() {
         assert!(
-            !pairs.contains_key(&(*high, *low)),
-            "both directions of ({low}, {high}) were selected"
+            pairs.contains_key(&(*to, *from)),
+            "({from}, {to}) was selected but its reverse was not"
         );
     }
 }
 
 #[test]
-fn the_hop_count_is_the_triangular_number_of_the_node_count() {
+fn the_hop_count_is_every_ordered_pair_of_distinct_nodes() {
     // A property rather than a fixture, so a host size nobody wrote a test for
-    // is still covered.
+    // is still covered. `n * (n - 1)`, not the triangular number: every ordered
+    // pair, because order is what decides who writes.
     for nodes in 1..=8_u32 {
         let places = synthesize(&HostSpec {
             nodes,
@@ -679,7 +701,7 @@ fn the_hop_count_is_the_triangular_number_of_the_node_count() {
             cores_per_cache_domain: 1,
             threads_per_core: 1,
         });
-        let expected = (nodes * nodes.saturating_sub(1) / 2) as usize;
+        let expected = (nodes * nodes.saturating_sub(1)) as usize;
 
         assert_eq!(
             node_pairs(&places).len(),
@@ -725,8 +747,9 @@ fn a_node_pair_is_still_selected_when_the_nodes_are_not_numbered_from_zero() {
 
     let pairs = node_pairs(&places);
 
-    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs.len(), 2);
     assert!(pairs.contains_key(&(2, 5)));
+    assert!(pairs.contains_key(&(5, 2)));
     assert_node_pairs_are_faithful(&places);
 }
 
@@ -856,5 +879,146 @@ mod processor_groups {
             hops.is_empty(),
             "a single-node machine with two groups reported a node crossing: {hops:?}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The plan.
+//
+// The plan is printed before a run starts, and someone decides whether to spend
+// their afternoon on the strength of it. It has been wrong twice: once quoting
+// 18 timed handoffs against a run that performed 12, and once quoting a floor of
+// 1 second against a run that took 0.6. Both had the same cause -- the plan
+// counted independently of the loop it describes -- so these tests check the
+// plan against the same functions the run asks.
+// ---------------------------------------------------------------------------
+
+/// What the hop loop will do, derived rather than restated.
+fn expected_hop_selections(places: &[ProcessorPlace]) -> usize {
+    node_pairs(places)
+        .values()
+        .map(|(producer, consumer)| memory_placements(*producer, *consumer).len())
+        .sum()
+}
+
+#[test]
+fn a_single_node_plan_promises_no_hops() {
+    let places = synthesize(&HostSpec {
+        nodes: 1,
+        cache_domains_per_node: 2,
+        cores_per_cache_domain: 2,
+        threads_per_core: 2,
+    });
+
+    let plan = RunPlan::for_processors(&places);
+
+    assert_eq!(plan.node_hops, 0, "a single-node host promised a crossing");
+    assert_eq!(
+        plan.memory_placements_per_hop, 0,
+        "a host with no hops promised memory placements for them"
+    );
+}
+
+#[test]
+fn the_plan_counts_a_hop_once_per_memory_placement() {
+    // The count that was missed: an edge measured in both directions at both
+    // ring placements is four selections, not one.
+    let places = two_socket_many_cache_domains();
+
+    let plan = RunPlan::for_processors(&places);
+
+    assert_eq!(
+        plan.node_hops, 2,
+        "both directions of the edge were not planned"
+    );
+    assert_eq!(
+        plan.memory_placements_per_hop, 2,
+        "the plan did not expect both ring placements"
+    );
+    assert_eq!(
+        plan.node_hops * plan.memory_placements_per_hop,
+        expected_hop_selections(&places),
+        "the plan's hop selections do not match what the run will perform"
+    );
+}
+
+#[test]
+fn the_plan_counts_every_hop_selection_on_hosts_of_every_size() {
+    // A property rather than a fixture: the machines this tool was written for
+    // are larger than anything available to write a fixture against, and the
+    // plan's error grows with the node count, so the untested sizes are exactly
+    // the ones where being wrong costs the most.
+    for nodes in 1..=8_u32 {
+        let places = synthesize(&HostSpec {
+            nodes,
+            cache_domains_per_node: 1,
+            cores_per_cache_domain: 2,
+            threads_per_core: 1,
+        });
+
+        let plan = RunPlan::for_processors(&places);
+
+        assert_eq!(
+            plan.node_hops * plan.memory_placements_per_hop,
+            expected_hop_selections(&places),
+            "wrong hop selection count for {nodes} nodes"
+        );
+    }
+}
+
+#[test]
+fn every_timed_handoff_the_run_performs_is_in_the_plan() {
+    // Ties the headline number to the loops rather than to a hand-derived
+    // constant. A constant would need editing whenever the run changes, which
+    // is precisely the edit that gets forgotten.
+    let places = two_socket_many_cache_domains();
+
+    let plan = RunPlan::for_processors(&places);
+
+    let selections =
+        representative_pairs(&places).len() + plan.classes + expected_hop_selections(&places);
+    assert_eq!(
+        plan.timed_runs(),
+        selections * plan.strategies * plan.repetitions,
+        "the promised handoff count does not match the run"
+    );
+}
+
+#[test]
+fn memory_placements_names_both_endpoints() {
+    // Both, and in this order: the producer's node first, so the first row of a
+    // hop is the one where the producer writes locally.
+    let places = two_socket_many_cache_domains();
+    let (producer, consumer) = *node_pairs(&places)
+        .get(&(0, 1))
+        .expect("the two-socket fixture has a 0 -> 1 hop");
+
+    assert_eq!(
+        memory_placements(producer, consumer),
+        [producer.numa_node, consumer.numa_node]
+    );
+}
+
+#[test]
+fn a_longer_run_is_never_promised_as_shorter() {
+    // The estimate must not shrink when the machine grows. It is read as a
+    // worst case, and a bigger machine that promises less is the one failure
+    // mode a reader cannot detect from the output.
+    let mut previous = 0.0_f64;
+    for nodes in 1..=6_u32 {
+        let places = synthesize(&HostSpec {
+            nodes,
+            cache_domains_per_node: 1,
+            cores_per_cache_domain: 2,
+            threads_per_core: 1,
+        });
+
+        let seconds = RunPlan::for_processors(&places).estimated_seconds();
+
+        assert!(
+            seconds >= previous,
+            "{nodes} nodes promised {seconds}s, less than the {previous}s promised for fewer"
+        );
+        previous = seconds;
     }
 }

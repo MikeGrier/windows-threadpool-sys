@@ -36,6 +36,7 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
         nanos_per_item: 10.5,
         consumer_batch: 84.9,
         producer_batch: 1.0,
+        memory_node: Some(0),
     };
 
     SubmissionRecord {

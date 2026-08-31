@@ -85,6 +85,15 @@ fn render_placements(out: &mut String, record: &SubmissionRecord) {
         return;
     }
 
+    // Says what the table covers, because the label alone does not. Each row is
+    // one direction on one representative pair, with the ring left wherever the
+    // allocator put it -- not an average over an edge. The hop table below is
+    // where direction and ring placement are varied deliberately.
+    let _ = writeln!(
+        out,
+        "  One direction per row (prod -> cons), ring left where it fell."
+    );
+    let _ = writeln!(out);
     let _ = writeln!(
         out,
         "{:<26} {:<10} {:>12} {:>12}",
@@ -136,19 +145,31 @@ fn render_node_hops(out: &mut String, record: &SubmissionRecord) {
         return;
     }
 
+    // Three positions, three columns. `->` and not `<->`: the row describes a
+    // direction, because the producer writes and the consumer reads, and the
+    // ring sits on one node or the other while they do. A row that named only
+    // the two endpoints would leave the reader unable to tell a remote write
+    // from a remote read -- the two costs this table exists to separate.
     let _ = writeln!(
         out,
-        "{:<14} {:<10} {:>12} {:>12}",
-        "node pair", "strategy", "ns/item", "batch depth"
+        "{:<12} {:<8} {:<10} {:>12} {:>12}",
+        "prod -> cons", "ring on", "strategy", "ns/item", "batch depth"
     );
     for entry in &record.node_hops {
+        let ring_on = match entry.memory_node {
+            Some(node) => format!("node {node}"),
+            // Reported, not hidden. A hop whose ring landed somewhere unknown
+            // is still a measurement, but not of the pair it names.
+            None => "unknown".to_owned(),
+        };
         let _ = writeln!(
             out,
-            "{:<14} {:<10} {:>12.1} {:>12.1}",
+            "{:<12} {:<8} {:<10} {:>12.1} {:>12.1}",
             format!(
-                "{} <-> {}",
+                "{} -> {}",
                 entry.producer_numa_node, entry.consumer_numa_node
             ),
+            ring_on,
             entry.strategy,
             entry.nanos_per_item,
             entry.consumer_batch

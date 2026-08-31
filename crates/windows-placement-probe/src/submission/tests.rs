@@ -181,7 +181,16 @@ fn the_file_name_is_predictable_and_safe_for_a_filesystem() {
     let record = fully_populated();
     let name = file_name(&record);
 
-    assert!(name.starts_with("placement-probe-v1-"), "got {name}");
+    // Asks the constant rather than naming a version. Hardcoding `v1` made this
+    // fail on the bump to v2 as though the name were broken, when the name was
+    // correctly following the schema it describes.
+    assert!(
+        name.starts_with(&format!(
+            "placement-probe-v{}-",
+            crate::record::SCHEMA_VERSION
+        )),
+        "got {name}"
+    );
     assert!(name.ends_with(".json"), "got {name}");
     assert!(
         !name.contains(':'),

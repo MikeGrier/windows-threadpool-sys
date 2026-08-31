@@ -170,3 +170,102 @@ fn a_virtualisation_hint_is_not_rendered_as_a_certainty() {
     );
     assert!(!text.contains("bare metal"), "got {text}");
 }
+
+/// The four rows one NUMA edge produces: two directions, each at two ring
+/// placements.
+///
+/// The shared fixture's "hop" has both endpoints on node 0, which is not a
+/// crossing at all -- it is there to populate the array, not to describe one.
+/// The hop table is the part of the report this workspace's hardware cannot
+/// exercise, so the fixture has to be the thing that is realistic.
+fn one_numa_edge() -> Vec<crate::record::MeasurementRecord> {
+    let mut rows = Vec::new();
+    for (producer_node, consumer_node) in [(0_u32, 1_u32), (1, 0)] {
+        for memory_node in [producer_node, consumer_node] {
+            let mut row = fully_populated().node_hops[0].clone();
+            row.placement = "cross NUMA node".to_owned();
+            row.producer_numa_node = producer_node;
+            row.consumer_numa_node = consumer_node;
+            row.memory_node = Some(memory_node);
+            // Distinct per row, so a report that collapses two rows into one is
+            // visible rather than merely suspected.
+            row.nanos_per_item = 100.0 + f64::from(producer_node) * 10.0 + f64::from(memory_node);
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+#[test]
+fn every_row_of_a_numa_edge_is_separately_identifiable() {
+    // The defect this guards. Four measurements of one edge differ only in
+    // direction and ring placement, so a table that prints neither renders four
+    // rows a reader cannot tell apart -- and the two quantities the table exists
+    // to separate, remote write and remote read, are lost in the middle of it.
+    let mut record = fully_populated();
+    record.node_hops = one_numa_edge();
+
+    let text = render(&record);
+
+    for (from, to, memory) in [(0, 1, 0), (0, 1, 1), (1, 0, 0), (1, 0, 1)] {
+        // Two tokens on one line rather than a formatted row: asserting the
+        // exact spacing would make this a test of the column widths, which are
+        // free to change, instead of a test that the row is identifiable.
+        let matched = text.lines().filter(|line| {
+            line.contains(&format!("{from} -> {to}")) && line.contains(&format!("node {memory}"))
+        });
+        assert_eq!(
+            matched.count(),
+            1,
+            "the report does not distinguish {from} -> {to} with the ring on node {memory}:
+{text}"
+        );
+    }
+}
+
+#[test]
+fn a_hop_reads_as_a_direction_and_not_as_a_link() {
+    // `<->` was the earlier rendering, and it was wrong in a way that read as
+    // correct: it says the row describes a link, when the row describes one
+    // side writing and the other reading across it.
+    let mut record = fully_populated();
+    record.node_hops = one_numa_edge();
+
+    let text = render(&record);
+
+    assert!(
+        !text.contains("<->"),
+        "a hop is still rendered as an undirected link:\n{text}"
+    );
+}
+
+#[test]
+fn a_hop_whose_ring_could_not_be_placed_says_so() {
+    // Not a hidden caveat. A hop measured with the ring on an unknown node is
+    // still a measurement, but not of the pair it names, and the row has to
+    // admit that rather than leave a blank column reading as a zero.
+    let mut record = fully_populated();
+    let mut rows = one_numa_edge();
+    rows[0].memory_node = None;
+    record.node_hops = rows;
+
+    let text = render(&record);
+
+    assert!(
+        text.contains("unknown"),
+        "a hop with no achieved placement did not admit it:\n{text}"
+    );
+}
+
+#[test]
+fn the_placement_table_says_it_covers_one_direction() {
+    // Without this line the placement rows read as though they summarised a
+    // placement, when each is a single direction with the ring wherever the
+    // allocator left it.
+    let text = render(&fully_populated());
+
+    assert!(
+        text.contains("One direction per row"),
+        "the placement table does not say what it covers:\n{text}"
+    );
+}

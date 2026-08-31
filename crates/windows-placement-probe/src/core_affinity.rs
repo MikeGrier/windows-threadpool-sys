@@ -65,7 +65,7 @@
 use std::collections::BTreeMap;
 
 use crate::fingerprint::{ProcessorPlace, Slice, discover_places};
-use crate::peer_index_cache::{ITEMS, Strategy, time_model_on};
+use crate::peer_index_cache::{ITEMS, Strategy, time_model_on, time_model_placed};
 
 /// Repetitions per placement; the median is reported.
 ///
@@ -121,8 +121,14 @@ fn efficiency_classes(places: &[ProcessorPlace]) -> Vec<u8> {
 pub struct RunPlan {
     /// Placements this machine can express.
     pub placements: usize,
-    /// Distinct NUMA node pairs.
+    /// Directed NUMA node pairs: `(a, b)` and `(b, a)` are both counted.
+    ///
+    /// A hop is not symmetric even though the link is. The producer writes and
+    /// the consumer reads, so swapping the endpoints swaps which side pays for
+    /// the crossing.
     pub node_hops: usize,
+    /// Ring placements measured per hop -- see [`memory_placements`].
+    pub memory_placements_per_hop: usize,
     /// Efficiency classes compared like with like.
     pub classes: usize,
     /// Strategies measured per selection.
@@ -135,9 +141,17 @@ impl RunPlan {
     /// Work out what a run on these processors will involve.
     #[must_use]
     pub fn for_processors(places: &[ProcessorPlace]) -> Self {
+        let hops = node_pairs(places);
         Self {
             placements: representative_pairs(places).len(),
-            node_hops: node_pairs(places).len(),
+            node_hops: hops.len(),
+            // Asked, not assumed. Taken from a hop this run will actually
+            // perform, so a change to `memory_placements` moves the promise
+            // with it. Any value on a machine with no hops, since it multiplies
+            // a zero.
+            memory_placements_per_hop: hops.values().next().map_or(0, |(producer, consumer)| {
+                memory_placements(*producer, *consumer).len()
+            }),
             // Exact, not an upper bound: a class is only measured when it has a
             // usable within-class pair, and this asks the same function the run
             // will. Counting classes instead would over-report on any host
@@ -153,9 +167,14 @@ impl RunPlan {
     }
 
     /// How many timed handoffs the run performs.
+    ///
+    /// Hops are counted separately from the rest because they are the only
+    /// selections measured at more than one memory placement.
     #[must_use]
     pub fn timed_runs(self) -> usize {
-        (self.placements + self.node_hops + self.classes) * self.strategies * self.repetitions
+        let selections =
+            self.placements + self.classes + self.node_hops * self.memory_placements_per_hop;
+        selections * self.strategies * self.repetitions
     }
 
     /// How long the run should take at most, in seconds.
@@ -178,6 +197,28 @@ impl RunPlan {
 }
 
 /// How a producer and a consumer are placed relative to each other.
+///
+/// # A label names a relationship, not a direction
+///
+/// These names are deliberately symmetric, and that is not an oversight left
+/// over from before hops became directed. The *relationship* between two
+/// processors genuinely is symmetric -- two processors either are SMT siblings
+/// or are not, share a cache domain or do not -- so there is no honest
+/// `CrossNumaNodeForward` to name. Splitting the labels by direction would
+/// invent a distinction the topology does not have.
+///
+/// The *workload* is what is asymmetric: the producer writes and the consumer
+/// reads, so swapping them swaps which side pays. Direction therefore lives
+/// where it is real, not in the label:
+///
+/// - in the slice, whose participants carry `prod=` and `cons=` roles;
+/// - in the node-pair column of the hop table, printed `a -> b`;
+/// - in the ring's node, recorded per row as [`Measurement::memory_node`].
+///
+/// This matters when reading a table. A `CrossNumaNode` row is **one** direction
+/// at **one** memory placement, never a summary of the four measurements an
+/// edge admits. Taking it for a summary is the failure this note exists to
+/// prevent: right labels over pairs that do not cover what the reader assumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Placement {
     /// Two SMT siblings: the same physical core, sharing L1.
@@ -261,6 +302,12 @@ pub struct Measurement {
     pub consumer_batch: f64,
     /// The same for the producer side.
     pub producer_batch: f64,
+    /// Which NUMA node held the ring's slots, when a placement was arranged.
+    ///
+    /// None on a run that asked for none, and on one whose placement could
+    /// not be achieved -- the two are the same fact here (we do not know where
+    /// the memory is) and neither may be reported as a node.
+    pub memory_node: Option<u32>,
 }
 
 /// Everything one invocation measured.
@@ -396,10 +443,19 @@ fn assert_group_support(processors: &[ProcessorPlace]) {
 /// Choose one representative processor pair for each *distinct pair of NUMA
 /// nodes*.
 ///
-/// Keyed by `(low, high)` node id, so a node pair appears once rather than once
-/// per direction: this measures the link, and `0 -> 1` and `1 -> 0` traverse the
-/// same one. The producer is always on the lower-numbered node, which makes a
-/// run reproducible rather than dependent on enumeration order.
+/// Keyed by `(producer node, consumer node)`, and **both directions are
+/// measured**.
+///
+/// An earlier version keyed on `(low, high)` and kept one direction, reasoning
+/// that the two traverse the same link. That conflates the *link*, which is
+/// symmetric, with the *workload over it*, which is not: the producer **writes**
+/// slots and release-stores `tail` while the consumer **reads** them and
+/// release-stores `head`, and a remote write needs exclusive ownership and
+/// invalidation where a remote read does not. Swapping the ends is a different
+/// measurement rather than a repeat of one.
+///
+/// Combined with the two memory placements in [`measure`], that gives four
+/// configurations per undirected edge and `2*n*(n-1)` hop measurements in all.
 ///
 /// # Why this exists separately from [`representative_pairs`]
 ///
@@ -418,10 +474,9 @@ pub fn node_pairs(
     let mut chosen = BTreeMap::new();
     for producer in places {
         for consumer in places {
-            if producer.numa_node >= consumer.numa_node {
-                // `>=` rather than `!=` collapses the two directions onto the
-                // canonical `(low, high)` key and drops same-node pairs, which
-                // are not a crossing at all.
+            if producer.numa_node == consumer.numa_node {
+                // Same node is not a crossing. Both *directions* are kept: see
+                // the note above on why they are different measurements.
                 continue;
             }
             chosen
@@ -430,6 +485,24 @@ pub fn node_pairs(
         }
     }
     chosen
+}
+
+/// Where the ring is placed for one directed node hop.
+///
+/// **One definition, asked by both the run and the plan.** The hop loop iterates
+/// this to decide what to measure, and [`RunPlan`] asks its length to decide
+/// what to promise. Restating the count in the plan is how the plan came to
+/// under-report once already: an earlier version quoted 18 timed handoffs
+/// against a run that performed 12, because the two counted independently.
+///
+/// The two entries are the two quantities a single row would average away. With
+/// the ring on the producer's node the producer writes locally and the consumer
+/// reads across; on the consumer's node that reverses. Remote-write and
+/// remote-read are not interchangeable, and on some interconnects they are not
+/// even close.
+#[must_use]
+pub fn memory_placements(producer: ProcessorPlace, consumer: ProcessorPlace) -> [u32; 2] {
+    [producer.numa_node, consumer.numa_node]
 }
 
 /// Measure every expressible placement under baseline and cached strategies.
@@ -479,6 +552,9 @@ pub fn measure() -> std::io::Result<Observation> {
                 nanos_per_item: median.nanos / ITEMS as f64,
                 consumer_batch: ITEMS as f64 / median.consumer_refreshes.max(1) as f64,
                 producer_batch: ITEMS as f64 / median.producer_refreshes.max(1) as f64,
+                // Placement rows do not choose a node: they vary where the
+                // threads run, holding everything else as it falls.
+                memory_node: median.memory_node,
             });
         }
     }
@@ -508,6 +584,9 @@ pub fn measure() -> std::io::Result<Observation> {
                 nanos_per_item: median.nanos / ITEMS as f64,
                 consumer_batch: ITEMS as f64 / median.consumer_refreshes.max(1) as f64,
                 producer_batch: ITEMS as f64 / median.producer_refreshes.max(1) as f64,
+                // Placement rows do not choose a node: they vary where the
+                // threads run, holding everything else as it falls.
+                memory_node: median.memory_node,
             });
         }
     }
@@ -515,22 +594,35 @@ pub fn measure() -> std::io::Result<Observation> {
     let mut by_node_pair = Vec::new();
     for ((left, right), (producer, consumer)) in node_pairs(&processors) {
         debug_assert_eq!((producer.numa_node, consumer.numa_node), (left, right));
-        for strategy in [Strategy::Baseline, Strategy::Cached] {
-            let mut samples: Vec<_> = (0..REPETITIONS)
-                .map(|_| time_model_on(strategy, Some(producer.id()), Some(consumer.id())))
-                .collect();
-            samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
-            let median = samples[samples.len() / 2];
-            by_node_pair.push(Measurement {
-                slice: Slice::pair(producer, consumer),
-                producer,
-                consumer,
-                placement: classify(producer, consumer),
-                strategy,
-                nanos_per_item: median.nanos / ITEMS as f64,
-                consumer_batch: ITEMS as f64 / median.consumer_refreshes.max(1) as f64,
-                producer_batch: ITEMS as f64 / median.producer_refreshes.max(1) as f64,
-            });
+        // Both memory placements, as separate rows -- see `memory_placements`,
+        // which is also what the plan counts, so the two cannot disagree.
+        for memory_node in memory_placements(producer, consumer) {
+            for strategy in [Strategy::Baseline, Strategy::Cached] {
+                let mut samples: Vec<_> = (0..REPETITIONS)
+                    .map(|_| {
+                        time_model_placed(
+                            strategy,
+                            Some(producer.id()),
+                            Some(consumer.id()),
+                            Some(memory_node),
+                        )
+                    })
+                    .collect();
+                samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
+                let median = samples[samples.len() / 2];
+                by_node_pair.push(Measurement {
+                    slice: Slice::pair(producer, consumer),
+                    producer,
+                    consumer,
+                    placement: classify(producer, consumer),
+                    strategy,
+                    nanos_per_item: median.nanos / ITEMS as f64,
+                    consumer_batch: ITEMS as f64 / median.consumer_refreshes.max(1) as f64,
+                    producer_batch: ITEMS as f64 / median.producer_refreshes.max(1) as f64,
+                    // What the run *achieved*, not what it asked for.
+                    memory_node: median.memory_node,
+                });
+            }
         }
     }
 
