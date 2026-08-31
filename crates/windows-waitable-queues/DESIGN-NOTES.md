@@ -1,8 +1,9 @@
 # Design notes: windows-waitable-queues (Tier 1)
 
-This crate is a skeleton. This file records the decisions its code will be built against, taken during
-the 2026-08-30 design session and transcribed here so they steer the work rather than sitting in a
-session record nothing is obliged to read. The work itself is tracked in
+This file records the decisions this crate's code is built against. D-1 to D-9 were taken during the
+2026-08-30 design session and transcribed here so they steer the work rather than sitting in a session
+record nothing is obliged to read; D-10 onwards were taken while building the shapes those decisions
+called for, and record what the building settled or corrected. The work itself is tracked in
 [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) at the workspace root, because it spans several
 components.
 
@@ -32,6 +33,11 @@ preferred.
 | <a id="d-6"></a>D-6 | **Overflow fails or reserves, and never overwrites.** For telemetry an overwritten entry is a lost sample; for an I/O submission it is a lost operation, and the two must not share a policy knob. |
 | <a id="d-7"></a>D-7 | **Shapes are plain modules, not Cargo features, until compile time justifies otherwise.** Two features are four configurations to test, against a benefit dead-code elimination already provides. |
 | <a id="d-8"></a>D-8 | **Published, and the obligation is accepted deliberately.** Unlike `windows-guard-alloc`, this is general-purpose and its first consumer is not its only plausible one. |
+| <a id="d-10"></a>D-10 | **The multi-producer shape is Vyukov's bounded array queue: a sequence number per slot, claimed by a compare-and-swap on the tail and published by a release store.** The sequence is what lets the consumer tell a *claimed* slot from a *written* one, which a plain fetch-and-add cannot. Lock-free rather than wait-free, bounded by construction, and no allocation after the constructor. |
+| <a id="d-11"></a>D-11 | **The capability traits shipped with this second shape, and the signatures `spsc` wrote down in advance held unchanged.** That is [D-3](#d-3)'s check actually being run rather than assumed. The load-bearing choice was `push(&self)`: `&mut self` would have been sound for one producer and would have made the trait unimplementable by this one. |
+| <a id="d-12"></a>D-12 | **A shape's *minimum* capacity belongs to the shape, not to the crate, and `mpsc`'s is two.** One slot cannot encode three states when the lap stride is the capacity, so "published at `p`" and "free again at `p + capacity`" collide. Reported through `CapacityError` rather than worked around, because every available workaround puts a load back on the producer's hot path for every queue in order to serve a capacity of one. |
+| <a id="d-13"></a>D-13 | **The arming protocol is written once, in `blocking.rs`, and a shape binds to it by implementing a crate-private `Parked` trait.** The blocking receive loop *is* [D-9](#d-9), not glue around it; a second shape spelling it out again would be a second copy of a rule -- the exact mistake this crate has already paid for once. |
+| <a id="d-14"></a>D-14 | **`mpsc`'s arming asks "would `pop` find something", not "is `len` zero".** The two disagree over a slot a producer has claimed but not published, and only the first answer lets the consumer park on it instead of spinning until that producer is rescheduled. |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -258,3 +264,127 @@ It is accepted because this crate is general-purpose in a way `windows-guard-all
 anything but a test binary. These queues carry no such trap, the first consumer is not the only plausible
 one, and a Windows Rust program that wants to wait on a queue and a kernel object together currently has
 to write this itself.
+
+## D-10: the MPSC shape is Vyukov's bounded array queue
+
+The obvious multi-producer array queue claims an index with a fetch-and-add, writes the slot, and lets the
+consumer read it. It does not work, and the reason is worth stating because it is the whole justification
+for the extra machinery: **the consumer cannot tell a slot that has been claimed from one that has been
+written.** A producer preempted between the two leaves a hole, and a consumer reading through the hole
+reads uninitialized memory.
+
+A sequence number per slot carries both facts at once. Slot `i` starts at `i`; a producer may claim
+position `pos` only when the slot reads `pos`, and publishes by storing `pos + 1`; the consumer takes the
+slot only when it reads exactly `pos + 1`, and frees it by storing `pos + capacity`, the position the next
+lap will claim it at. A claimed-but-unwritten slot is therefore invisible to the consumer, and there is no
+hole to read through.
+
+What this buys, and what it costs:
+
+- **Bounded by construction, so backpressure is free.** A full queue is a slot whose sequence has not come
+  round, which costs one load to discover. There is no separate count to maintain, no allocation to fail,
+  and no policy knob -- the refusal *is* the backpressure, which is [D-6](#d-6) in its cheapest form.
+- **No allocation after the constructor**, which is what makes it usable on an I/O submission path.
+- **Lock-free, not wait-free.** A producer that loses its compare-and-swap retries, with no bound on how
+  many times it may lose. What is guaranteed is that some producer always makes progress, and -- the
+  property that actually matters here -- that a producer suspended by the scheduler blocks no other
+  producer. It blocks only the consumer's view of the items queued behind it, and only until it resumes.
+- **Order is claim order, not publication order.** If producer A claims position 5 and producer B claims
+  6 and publishes first, the consumer must wait for A. This is not a defect to engineer around: it is what
+  makes the queue a FIFO at all. B's signal wakes a parked consumer that then finds nothing, which is a
+  spurious wakeup the protocol already tolerates, and A's own signal follows when it publishes.
+
+The head and the tail are padded onto separate cache lines. The padding is load-bearing and looks like
+waste, which is why it is commented at both fields rather than at one: every successful push writes the
+tail and every successful pop writes the head, so adjacent they would false-share, and each write would
+invalidate the other side's copy of a value it only reads. That cost has no symptom other than being
+slow, which is exactly the kind that survives a code review.
+
+## D-11: the traits shipped here, and the check D-3 demanded was actually run
+
+[D-3](#d-3) said no trait ships until a second implementation exists to validate it, and that the trait
+*shape* would be fixed in advance so the concrete types could not diverge. `spsc` accordingly wrote its
+intended signatures into its module documentation before its types existed. This milestone is where that
+promissory note came due.
+
+**The signatures held unchanged.** `push`, `pop`, `is_disconnected`, `capacity`, `len`, `is_empty` are
+what [`traits.rs`](src/traits.rs) says now and what that comment said then. The check is not rhetorical:
+`mpsc` is a lock-free array queue with a per-slot state machine and no structural resemblance to a
+two-position ring, so a signature fitted to the first shape would have failed here rather than in a
+consumer's code.
+
+**One choice turned out to be the load-bearing one, and it is worth naming.** `push(&self)` rather than
+`push(&mut self)`. `&mut self` would have been perfectly sound for a single producer, is what several SPSC
+crates use, and would have made this trait *unimplementable* by a shape whose whole point is several
+threads pushing at once. It was chosen in advance on the argument that one spelling has to serve every
+shape; this shape is the evidence that the argument was right.
+
+Two smaller decisions recorded so they are not re-litigated:
+
+- **The traits are also the names of the concrete handles.** `Producer` and `Consumer` are both a trait
+  and, in each shape's module, a type. That is deliberate -- the trait is named for the role, the handle
+  is named for the role, and the handle plays the role -- and `std` does the same with `fmt::Write` and
+  `io::Write`. A caller wanting only the methods imports them anonymously (`Consumer as _`).
+- **`Reserving`, `LossReporting` and `Observable` from [D-2](#d-2)'s table are deliberately still absent.**
+  They belong to work that has not happened (M31.2, M31.4), and shipping an empty trait now would be the
+  design-in-a-vacuum D-3 forbids, one level up.
+
+## D-12: the minimum capacity belongs to the shape, and mpsc's is two
+
+`spsc` accepts a capacity of one. `mpsc` cannot, and the reason is arithmetic rather than taste. Its slot
+sequence distinguishes three states by counting -- `pos` is free, `pos + 1` is published, `pos + capacity`
+is free again on the next lap -- and when `capacity == 1` the second and third are the *same number*. A
+producer would read the sequence of the item it had just pushed, conclude the slot was free, and overwrite
+an item the consumer had not read.
+
+**It is reported, not worked around.** The obvious workaround -- allocate two slots and refuse the second
+-- reintroduces a load of the consumer's position on the producer's hot path, which is precisely the cost
+the sequence protocol exists to avoid, and it would impose that cost on *every* queue in order to serve a
+capacity of one. A caller that genuinely wants a one-item handoff wants `spsc`, which represents it
+exactly.
+
+The consequence for the error type is small and was anticipated: `CapacityError` already carried a
+`max_valid` on the argument that a bound "follows from how a shape represents its positions", and it now
+carries a `min_valid` for the same reason. The suggestion methods respect it, so `bounded::<T>(1)` on an
+`mpsc` reports `next_valid() == Some(2)` rather than a correction that would itself be refused.
+
+Each shape names its own minimum as a documented constant next to the code that needs it, rather than
+passing a bare literal, so the number is never separated from the reason for it.
+
+## D-13: the arming protocol is stated once, and shapes bind to it
+
+The blocking receive loop is not glue around [D-9](#d-9) -- it *is* D-9, executed: drain, arm, check for
+disconnection, and wait only if arming blessed it. Every step is load-bearing and the order is the whole
+correctness argument.
+
+So it lives in [`blocking.rs`](src/blocking.rs), and a shape gains `recv` and `recv_timeout` by
+implementing a crate-private `Parked` trait. A second shape spelling the loop out again would be a second
+copy of a rule, free to drift, and -- the failure mode that actually bites -- free to *look* verified while
+only the copy was tested. This crate has already paid for that once: the first lost-wakeup proof exercised
+a hand-written duplicate of `Consumer::arm` and was structurally incapable of noticing the real `arm`
+being reversed. The `ARM_RACE` hook is shared for the same reason.
+
+`Parked` is deliberately *not* one of the public capability traits. The public traits say what a caller may
+ask of a queue; `Parked` says what the blocking loop needs from one, and the difference shows in `finish`,
+whose contract is a precondition no external caller can check.
+
+## D-14: mpsc arms on readiness, not on emptiness
+
+`Consumer::arm` must answer "is it safe to park?", and for `mpsc` that is not the same question as "is the
+queue empty". They disagree over a slot a producer has claimed but not yet published, and the disagreement
+matters in both directions:
+
+- **`len` says non-empty**, because it counts the claim. Arming on that would refuse to bless the wait, and
+  the consumer would spin -- calling `pop`, getting `None`, re-arming, getting `false` -- until the
+  producer was rescheduled. Correct, and a burnt core.
+- **Readiness says nothing is takeable**, so the consumer parks. That is safe precisely because the
+  producer's publishing release store is followed by a signal, so the wakeup is guaranteed to arrive.
+
+Arming therefore asks `Shared::has_ready_item`, which is the exact question `pop` answers: is the slot at
+the head position published? `len` keeps its cheaper definition and its documented over-count, because it
+is a metric rather than a control-flow input.
+
+This also places the `SeqCst` pairing from D-9 correctly for this shape: the producer stores the slot's
+sequence and then loads the doorbell state, while the consumer stores the doorbell state and then loads
+that same sequence. It is the same store-buffer shape, over the same two fences, with a different pair of
+locations.

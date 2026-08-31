@@ -179,10 +179,43 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
 
 ## M31 -- The MPSC shape and the queue's contract
 
-- [ ] **M31.1** -- The bounded array MPSC: Vyukov's sequence protocol, where a producer CASes the tail
+- [x] **M31.1** -- The bounded array MPSC: Vyukov's sequence protocol, where a producer CASes the tail
   forward, writes, then publishes by storing the slot's sequence. Lock-free rather than wait-free, bounded
   by construction so backpressure is free, and no allocation anywhere. Pad the head and tail onto separate
   cache lines and say so in a comment, because the padding is load-bearing and looks like waste.
+  **Done as `src/mpsc.rs`**, with the padding commented at *both* positions rather than once, since a
+  reader arriving at either field is the one who might delete it. Recorded as
+  [D-10](crates/windows-waitable-queues/DESIGN-NOTES.md#d-10).
+  **The traits landed here too, because M30.2 scheduled them here** ("the traits themselves land with
+  M31.1") and [D-3](crates/windows-waitable-queues/DESIGN-NOTES.md#d-3) required a second implementation
+  to validate them against. **The signatures `spsc` wrote down in advance held unchanged**, which is that
+  check actually being run rather than assumed, and the load-bearing one turned out to be `push(&self)`:
+  `&mut self` would have been sound for one producer and would have made the trait *unimplementable* by
+  this shape. Recorded as [D-11](crates/windows-waitable-queues/DESIGN-NOTES.md#d-11). `Reserving`,
+  `LossReporting` and `Observable` are deliberately still absent -- they belong to M31.2 and M31.4, and
+  shipping an empty trait now would be the design-in-a-vacuum D-3 forbids, one level up.
+  **The protocol refused a capacity of one, and that is reported rather than worked around.** With a
+  single slot, "published at `p`" and "free again at `p + capacity`" are the *same number*, so a producer
+  would read the sequence of the item it had just pushed, conclude the slot was free, and overwrite an
+  unread item. `spsc` accepts one, so the minimum is a property of the *shape*, not of the crate --
+  `CapacityError` already carried a `max_valid` on exactly that argument and now carries a `min_valid`
+  too. Every workaround considered puts a load of the consumer's position back on the producer's hot path
+  for every queue, in order to serve a capacity of one that `spsc` already represents exactly.
+  [D-12](crates/windows-waitable-queues/DESIGN-NOTES.md#d-12).
+  **Two things were extracted rather than copied, and one of them is a contract.** The blocking receive
+  loop *is* the arming protocol (D-9), not glue around it, so a second spelling of it would have been a
+  second copy of a rule -- the exact mistake M30.5 already paid for, where a lost-wakeup proof exercised a
+  hand-written duplicate of `arm` and could not have noticed the real `arm` being reversed. It now lives
+  in `blocking.rs` with shapes binding to it, and the `ARM_RACE` hook is shared for the same reason
+  ([D-13](crates/windows-waitable-queues/DESIGN-NOTES.md#d-13)). The capacity rule moved to `capacity.rs`
+  on the weaker version of the same argument.
+  **One question the checklist did not anticipate: what "empty" means for arming.** `len` and "would `pop`
+  find something" disagree over a slot a producer has claimed but not published, and arming on `len` is
+  safe but spins until that producer is rescheduled. Arming asks the readiness question instead, which is
+  also what puts D-9's `SeqCst` pair on the right two locations for this shape
+  ([D-14](crates/windows-waitable-queues/DESIGN-NOTES.md#d-14)).
+  120 unit tests and 4 doctests, the whole suite in 0.31s. Nine new sabotage entries, one of them a
+  control.
 
 - [ ] **M31.2** -- Overflow policy, which is more than "return `Err`". Ship fail-fast plus a `reserve`
   that guarantees a slot for a message that must not be lost, following

@@ -41,23 +41,35 @@
 //! "single producer" is a fact the compiler enforces rather than a sentence in
 //! a doc comment.
 //!
+//! What the shapes have in common is described by the [capability
+//! traits](traits) -- [`Producer`], [`Consumer`], [`Bounded`], [`Waitable`] --
+//! each naming one thing a queue can do, so a caller can be generic over
+//! exactly what it needs and nothing more.
+//!
 //! # Status
 //!
-//! [`spsc`] is implemented, with its doorbell: it can be polled with no kernel
-//! object at all, blocked on directly, or waited on alongside other handles.
-//! The remaining shapes land in the milestones tracked by
-//! `CHECKLIST-io-domains.md` at the workspace root; the decisions they are
+//! [`spsc`] and [`mpsc`] are implemented, both with their doorbell: either can
+//! be polled with no kernel object at all, blocked on directly, or waited on
+//! alongside other handles. The remaining shapes land in the milestones tracked
+//! by `CHECKLIST-io-domains.md` at the workspace root; the decisions they are
 //! built against are recorded in `DESIGN-NOTES.md` beside this file.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 #![warn(unsafe_op_in_unsafe_fn)]
 
+#[cfg(test)]
+mod arm_race;
+mod blocking;
+mod capacity;
 mod doorbell;
 mod error;
+pub mod mpsc;
 pub mod spsc;
+pub mod traits;
 
 pub use error::{CapacityError, PushError, RecvError, RecvTimeoutError};
+pub use traits::{Bounded, Consumer, Drain, Producer, Waitable};
 
 /// Pads and aligns a value onto its own cache line.
 ///

@@ -18,6 +18,13 @@ use std::io;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapacityError {
     requested: usize,
+    /// The smallest capacity the rejecting shape accepts.
+    ///
+    /// Carried for the same reason as [`Self::max_valid`], and it is not always
+    /// one: `mpsc` cannot represent a capacity below two, because its slot
+    /// state machine reuses a sequence number one lap later and a one-slot ring
+    /// would make "published" and "free again" the same value.
+    min_valid: usize,
     /// The largest capacity the rejecting shape accepts.
     ///
     /// Carried on the error rather than assumed to be a crate-wide constant:
@@ -33,32 +40,51 @@ pub struct CapacityError {
 enum CapacityErrorKind {
     Zero,
     NotPowerOfTwo,
+    TooSmall,
     TooLarge,
 }
 
 impl CapacityError {
-    pub(crate) fn zero(max_valid: usize) -> Self {
+    pub(crate) fn zero(min_valid: usize, max_valid: usize) -> Self {
         Self {
             requested: 0,
+            min_valid,
             max_valid,
             kind: CapacityErrorKind::Zero,
         }
     }
 
-    pub(crate) fn not_power_of_two(requested: usize, max_valid: usize) -> Self {
+    pub(crate) fn not_power_of_two(requested: usize, min_valid: usize, max_valid: usize) -> Self {
         Self {
             requested,
+            min_valid,
             max_valid,
             kind: CapacityErrorKind::NotPowerOfTwo,
         }
     }
 
-    pub(crate) fn too_large(requested: usize, max_valid: usize) -> Self {
+    pub(crate) fn too_small(requested: usize, min_valid: usize, max_valid: usize) -> Self {
         Self {
             requested,
+            min_valid,
+            max_valid,
+            kind: CapacityErrorKind::TooSmall,
+        }
+    }
+
+    pub(crate) fn too_large(requested: usize, min_valid: usize, max_valid: usize) -> Self {
+        Self {
+            requested,
+            min_valid,
             max_valid,
             kind: CapacityErrorKind::TooLarge,
         }
+    }
+
+    /// The smallest capacity the shape that rejected this request will accept.
+    #[must_use]
+    pub fn min_valid(&self) -> usize {
+        self.min_valid
     }
 
     /// The largest capacity the shape that rejected this request will accept.
@@ -84,15 +110,19 @@ impl CapacityError {
     /// down to the nearest power of two is not sufficient on its own: the
     /// nearest power of two below `usize::MAX` is 2^63, which exceeds the
     /// largest representable capacity, so the answer is clamped to
-    /// [`Self::max_valid`]. A suggestion that is itself refused would be worse
-    /// than none, because a caller acts on it and gets a second error.
+    /// [`Self::max_valid`], and a result below [`Self::min_valid`] is reported
+    /// as no suggestion at all. A suggestion that is itself refused would be
+    /// worse than none, because a caller acts on it and gets a second error.
     #[must_use]
     pub fn previous_valid(&self) -> Option<usize> {
         match self.kind {
-            CapacityErrorKind::Zero => None,
+            // Nothing valid lies below either of these: a request that was
+            // already too small has only larger answers, and zero has none.
+            CapacityErrorKind::Zero | CapacityErrorKind::TooSmall => None,
             CapacityErrorKind::NotPowerOfTwo | CapacityErrorKind::TooLarge => {
                 let rounded = 1_usize << (usize::BITS - 1 - self.requested.leading_zeros());
-                Some(rounded.min(self.largest_power_of_two_within_bound()))
+                let clamped = rounded.min(self.largest_power_of_two_within_bound());
+                (clamped >= self.min_valid).then_some(clamped)
             }
         }
     }
@@ -123,11 +153,14 @@ impl CapacityError {
     #[must_use]
     pub fn next_valid(&self) -> Option<usize> {
         let rounded = match self.kind {
-            CapacityErrorKind::Zero => Some(1),
+            // The shape's own minimum, not one: a shape whose slot state
+            // machine needs two slots would reject a suggestion of one, and a
+            // suggestion that is itself refused is worse than none.
+            CapacityErrorKind::Zero | CapacityErrorKind::TooSmall => Some(self.min_valid),
             CapacityErrorKind::NotPowerOfTwo => self.requested.checked_next_power_of_two(),
             CapacityErrorKind::TooLarge => None,
         }?;
-        (rounded <= self.max_valid).then_some(rounded)
+        (rounded >= self.min_valid && rounded <= self.max_valid).then_some(rounded)
     }
 }
 
@@ -145,6 +178,11 @@ impl fmt::Display for CapacityError {
                     self.requested, lo, hi
                 )
             }
+            CapacityErrorKind::TooSmall => write!(
+                f,
+                "capacity {} is below the smallest this queue shape can represent, which is {}",
+                self.requested, self.min_valid
+            ),
             CapacityErrorKind::TooLarge => write!(
                 f,
                 "capacity {} is too large; it must not exceed half of usize::MAX, so that the \

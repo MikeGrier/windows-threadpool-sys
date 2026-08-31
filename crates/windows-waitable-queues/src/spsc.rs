@@ -35,8 +35,12 @@
 //! }
 //! ```
 //!
-//! The traits themselves are deliberately absent until a second shape exists to
-//! validate them.
+//! **They have since shipped, and they kept those signatures.**
+//! [`mpsc`](crate::mpsc) was written against this sketch and matched it, which
+//! is the validation [D-3](../../DESIGN-NOTES.md#d-3) demanded before any trait
+//! was allowed to exist. The sketch is left here because it is the artefact
+//! that made the check possible: what [`crate::traits`] says now is what this
+//! comment said before either type existed.
 //!
 //! # Why the operations take `&self`
 //!
@@ -65,24 +69,24 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::io;
-use std::os::windows::io::{AsRawHandle, BorrowedHandle, OwnedHandle};
+use std::os::windows::io::{BorrowedHandle, OwnedHandle};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
-use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
+use std::time::Duration;
 
 use crate::CacheAligned;
+use crate::blocking::{self, Parked};
+use crate::capacity::validate_capacity;
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, PushError, RecvError, RecvTimeoutError};
 
-/// The largest capacity that keeps the producer-minus-consumer difference
-/// unambiguous once the positions wrap.
+/// The smallest capacity this shape can represent.
 ///
-/// Positions are monotonic and wrap with the integer, so the number of items
-/// held is `tail.wrapping_sub(head)`. That is correct across wraparound only
-/// while the true difference cannot exceed half the range.
-const MAX_CAPACITY: usize = usize::MAX / 2;
+/// One, and there is nothing to work around: a single slot is either inside
+/// `[head, tail)` or outside it, and those are the only two states this shape's
+/// positions have to distinguish. [`mpsc`](crate::mpsc) needs two, because its
+/// slots carry a third state, and that difference is why each shape names its
+/// own minimum rather than sharing one.
+const MIN_CAPACITY: usize = 1;
 
 /// Creates a single-producer, single-consumer bounded ring.
 ///
@@ -107,7 +111,7 @@ const MAX_CAPACITY: usize = usize::MAX / 2;
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
-    validate_capacity(capacity)?;
+    validate_capacity(capacity, MIN_CAPACITY)?;
 
     let mut slots = Vec::with_capacity(capacity);
     slots.resize_with(capacity, || UnsafeCell::new(MaybeUninit::uninit()));
@@ -133,26 +137,6 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
             not_sync: PhantomData,
         },
     ))
-}
-
-/// Whether this shape will accept a capacity, and why not if it will not.
-///
-/// Separated from [`bounded`] so the rule can be *asked* rather than restated.
-/// A test that wanted to check a suggested capacity is acceptable would
-/// otherwise have to either re-encode these three conditions -- a second copy
-/// of a rule, free to drift from this one -- or call `bounded`, which for a
-/// capacity near the bound means trying to allocate half the address space.
-fn validate_capacity(capacity: usize) -> Result<(), CapacityError> {
-    if capacity == 0 {
-        return Err(CapacityError::zero(MAX_CAPACITY));
-    }
-    if !capacity.is_power_of_two() {
-        return Err(CapacityError::not_power_of_two(capacity, MAX_CAPACITY));
-    }
-    if capacity > MAX_CAPACITY {
-        return Err(CapacityError::too_large(capacity, MAX_CAPACITY));
-    }
-    Ok(())
 }
 
 struct Shared<T> {
@@ -511,7 +495,7 @@ impl<T> Consumer<T> {
         self.shared.doorbell.handle()?;
         self.shared.doorbell.clear();
         #[cfg(test)]
-        run_arm_race_hook();
+        crate::arm_race::run();
         Ok(self.is_empty())
     }
 
@@ -543,18 +527,7 @@ impl<T> Consumer<T> {
     /// drained -- items pushed before the producer dropped are still delivered.
     /// [`RecvError::Io`] if the doorbell cannot be created or waited on.
     pub fn recv(&self) -> Result<T, RecvError> {
-        loop {
-            if let Some(item) = self.pop() {
-                return Ok(item);
-            }
-            if !self.arm()? {
-                continue;
-            }
-            if self.is_disconnected() {
-                return self.finish().ok_or(RecvError::Disconnected);
-            }
-            wait(self.doorbell()?, INFINITE)?;
-        }
+        blocking::recv(self)
     }
 
     /// Takes the oldest item, blocking until one arrives or the deadline
@@ -568,92 +541,31 @@ impl<T> Consumer<T> {
     /// [`RecvTimeoutError::Timeout`] if the deadline passes with the queue
     /// still empty, which is not a malfunction. Otherwise as [`Self::recv`].
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
-        // `Instant + Duration` panics when the sum is not representable, and
-        // `Duration::MAX` is a perfectly ordinary way to spell "effectively
-        // forever". A library that panics on that is worse than one that
-        // blocks, so an unrepresentable deadline degrades to the untimed wait
-        // it was asking for rather than aborting the caller.
-        let Some(deadline) = Instant::now().checked_add(timeout) else {
-            return self.recv().map_err(|error| match error {
-                RecvError::Disconnected => RecvTimeoutError::Disconnected,
-                RecvError::Io(io) => RecvTimeoutError::Io(io),
-            });
-        };
-        loop {
-            if let Some(item) = self.pop() {
-                return Ok(item);
-            }
-            if !self.arm()? {
-                continue;
-            }
-            if self.is_disconnected() {
-                return self.finish().ok_or(RecvTimeoutError::Disconnected);
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(RecvTimeoutError::Timeout);
-            }
-            // Saturating rather than wrapping: a duration longer than a `u32`
-            // of milliseconds is roughly 49 days, and clamping it to that is a
-            // longer wait than any caller meant, where truncating it would be a
-            // far shorter one. The loop re-arms and waits again, so clamping
-            // costs an extra turn and nothing else.
-            let millis = u32::try_from(remaining.as_millis()).unwrap_or(u32::MAX);
-            wait(self.doorbell()?, millis)?;
-        }
+        blocking::recv_timeout(self, timeout)
     }
 }
 
-/// Test-only: runs inside [`Consumer::arm`], between the clear and the
-/// emptiness check.
-///
-/// This exists so a test can drive the *real* `arm` through the exact race the
-/// clear-then-check order defends against, deterministically and on one thread.
-///
-/// It replaces a hand-written copy of `arm` with the two statements swapped.
-/// That copy could only ever demonstrate that *a* reversed order is wrong; it
-/// could not detect the real `arm` being reversed, because it was not the real
-/// `arm`. Measured: with the copy as the only deterministic test, sabotaging
-/// the real `arm` was caught in one run out of three -- detection relied on two
-/// threads happening to interleave inside a window tens of nanoseconds wide.
-/// A second copy of a rule is a check of the copy, not of the rule.
-#[cfg(test)]
-fn run_arm_race_hook() {
-    ARM_RACE_HOOK.with(|hook| {
-        // Taken out for the call rather than held borrowed across it, so a hook
-        // that touches the queue cannot trip a `RefCell` re-entrancy panic.
-        let taken = hook.borrow_mut().take();
-        if let Some(mut race) = taken {
-            race();
-            *hook.borrow_mut() = Some(race);
-        }
-    });
-}
+impl<T> Parked for Consumer<T> {
+    type Item = T;
 
-#[cfg(test)]
-thread_local! {
-    static ARM_RACE_HOOK: core::cell::RefCell<Option<Box<dyn FnMut()>>> =
-        const { core::cell::RefCell::new(None) };
-}
+    fn pop(&self) -> Option<T> {
+        Self::pop(self)
+    }
 
-/// Test-only: installs a hook for the duration of a closure.
-#[cfg(test)]
-pub(crate) fn with_arm_race<R>(race: impl FnMut() + 'static, body: impl FnOnce() -> R) -> R {
-    ARM_RACE_HOOK.with(|hook| *hook.borrow_mut() = Some(Box::new(race)));
-    let result = body();
-    ARM_RACE_HOOK.with(|hook| *hook.borrow_mut() = None);
-    result
-}
+    fn finish(&self) -> Option<T> {
+        Self::finish(self)
+    }
 
-/// Block on a doorbell handle, translating the Win32 result.
-fn wait(handle: BorrowedHandle<'_>, millis: u32) -> io::Result<()> {
-    // SAFETY: a live event handle borrowed for the duration of the call.
-    let result = unsafe { WaitForSingleObject(handle.as_raw_handle(), millis) };
-    match result {
-        // A timeout is not an error here: the caller's loop re-checks its own
-        // deadline and decides what a timeout means.
-        WAIT_OBJECT_0 | WAIT_TIMEOUT => Ok(()),
-        _ => Err(io::Error::last_os_error()),
+    fn arm(&self) -> io::Result<bool> {
+        Self::arm(self)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        Self::is_disconnected(self)
+    }
+
+    fn doorbell(&self) -> io::Result<BorrowedHandle<'_>> {
+        Self::doorbell(self)
     }
 }
 
@@ -671,6 +583,72 @@ impl<T> fmt::Debug for Consumer<T> {
 impl<T> Drop for Consumer<T> {
     fn drop(&mut self) {
         self.shared.consumer_live.store(false, Ordering::Release);
+    }
+}
+
+impl<T> crate::Producer for Producer<T> {
+    type Item = T;
+
+    fn push(&self, item: T) -> Result<(), PushError<T>> {
+        Self::push(self, item)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        Self::is_disconnected(self)
+    }
+}
+
+impl<T> crate::Consumer for Consumer<T> {
+    type Item = T;
+
+    fn pop(&self) -> Option<T> {
+        Self::pop(self)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        Self::is_disconnected(self)
+    }
+}
+
+impl<T> crate::Bounded for Producer<T> {
+    fn capacity(&self) -> usize {
+        Self::capacity(self)
+    }
+
+    fn len(&self) -> usize {
+        Self::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        Self::is_empty(self)
+    }
+}
+
+impl<T> crate::Bounded for Consumer<T> {
+    fn capacity(&self) -> usize {
+        Self::capacity(self)
+    }
+
+    fn len(&self) -> usize {
+        Self::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        Self::is_empty(self)
+    }
+}
+
+impl<T> crate::Waitable for Consumer<T> {
+    fn doorbell(&self) -> io::Result<BorrowedHandle<'_>> {
+        Self::doorbell(self)
+    }
+
+    fn doorbell_owned(&self) -> io::Result<OwnedHandle> {
+        Self::doorbell_owned(self)
+    }
+
+    fn arm(&self) -> io::Result<bool> {
+        Self::arm(self)
     }
 }
 

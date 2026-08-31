@@ -5,10 +5,17 @@ Bounded producer/consumer queues whose readiness is a waitable Windows `HANDLE`.
 **Windows only.** Every public item is behind `cfg(windows)`; the crate builds to
 an empty shell on other platforms.
 
-**Status: skeleton.** The shapes are not implemented yet. The decisions they will
-be built against are in [DESIGN-NOTES.md](DESIGN-NOTES.md), and the work is
-tracked in [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) at the
-workspace root.
+**Status: two shapes, both waitable.** `spsc` is a bounded ring with no
+compare-and-swap on either side; `mpsc` is a bounded array queue using Vyukov's
+sequence protocol, so any number of producers may push without a lock. Either can
+be polled with no kernel object at all, blocked on directly, or waited on
+alongside other handles. The capability traits over them --
+`Producer`, `Consumer`, `Bounded`, `Waitable` -- ship with the second shape,
+which is what validated them.
+
+The decisions all of this was built against are in
+[DESIGN-NOTES.md](DESIGN-NOTES.md), and the remaining work is tracked in
+[CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) at the workspace root.
 
 ## Why
 
@@ -43,14 +50,20 @@ shape it wants.
 Each shape splits into a **producer handle** and a **consumer handle**, and
 cardinality is carried by whether those handles are `Clone`:
 
-| Shape | Producer | Consumer |
-|---|---|---|
-| SPSC | not `Clone` | not `Clone` |
-| MPSC | `Clone` | not `Clone` |
-| MPMC | `Clone` | `Clone` |
+| Shape | Producer | Consumer | Shipped |
+|---|---|---|---|
+| SPSC | not `Clone` | not `Clone` | yes |
+| MPSC | `Clone` | not `Clone` | yes |
+| MPMC | `Clone` | `Clone` | not yet |
 
 So "single producer" is a fact the compiler enforces, not a sentence in a doc
-comment.
+comment: the handles are also not `Sync`, so a handle that cannot be cloned and
+cannot be shared is held by exactly one thread.
+
+The two shapes also disagree about their smallest usable capacity, and the error
+says so rather than the documentation: `spsc` accepts one slot, and `mpsc` needs
+two, because its per-slot sequence cannot distinguish "just published" from "free
+again next lap" in a one-slot ring.
 
 ## What it will not do
 
@@ -62,6 +75,9 @@ comment.
   construction.
 - **It will not create a kernel object you never use.** The doorbell is created
   lazily, so a consumer that only polls allocates none.
+- **It will not round your capacity.** A capacity that a shape cannot represent
+  is refused, with the nearest valid neighbours on the error, rather than
+  silently turned into one the caller did not choose.
 
 ## Licence
 

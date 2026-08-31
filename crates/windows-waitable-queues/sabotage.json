@@ -1,6 +1,6 @@
 {
   "package": "windows-waitable-queues",
-  "description": "Sabotages for the SPSC ring and its doorbell. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "description": "Sabotages for the SPSC ring, the MPSC array queue, the doorbell they share, and the blocking receive loop they share. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
   "notCoveredHere": "The two SeqCst fences in doorbell.rs are deliberately ABSENT from this manifest, and their absence is not an oversight. Removing either leaves every test green, because the defect they prevent is a store-buffer reordering that no amount of stress testing reliably produces -- it is a fact about the memory model, not about any interleaving a scheduler will hand you. Adding them here with expect:'caught' would fail the sweep; adding them with expect:'survives' would assert they are harmless, which is false and far worse. They are verifiable only under a model checker, and are the named target of checklist item M31.6.",
   "sabotages": [
     {
@@ -43,14 +43,14 @@
       "find": [
         "        self.shared.doorbell.clear();",
         "        #[cfg(test)]",
-        "        run_arm_race_hook();",
+        "        crate::arm_race::run();",
         "        Ok(self.is_empty())"
       ],
       "replace": [
         "        let empty = self.is_empty();",
         "        self.shared.doorbell.clear();",
         "        #[cfg(test)]",
-        "        run_arm_race_hook();",
+        "        crate::arm_race::run();",
         "        Ok(empty)"
       ]
     },
@@ -135,9 +135,9 @@
     },
     {
       "name": "recv_timeout computes its deadline with the panicking add",
-      "file": "src/spsc.rs",
+      "file": "src/blocking.rs",
       "expect": "caught",
-      "why": "`Instant + Duration` panics when the sum is not representable, and Duration::MAX is an ordinary way to spell 'effectively forever'. The rest of the function is careful about exactly this class of problem, which is what made the panicking operator easy to miss.",
+      "why": "`Instant + Duration` panics when the sum is not representable, and Duration::MAX is an ordinary way to spell 'effectively forever'. The rest of the function is careful about exactly this class of problem, which is what made the panicking operator easy to miss. Moved here from src/spsc.rs when the blocking receive loop was extracted so both shapes bind to one copy of the arming protocol; there is now exactly one site, and both shapes' suites indict it.",
       "find": [
         "        let Some(deadline) = Instant::now().checked_add(timeout) else {"
       ],
@@ -180,6 +180,138 @@
       "replace": [
         "        self.signalled.store(true, Ordering::Release);",
         "        if false {"
+      ]
+    },
+    {
+      "name": "mpsc push does not signal the doorbell",
+      "file": "src/mpsc.rs",
+      "expect": "caught",
+      "why": "A producer that never rings the bell leaves a parked consumer asleep on a queue with items in it. Caught as a hang, which is the correct shape for this defect.",
+      "find": [
+        "        self.shared.doorbell.signal();",
+        "        Ok(())"
+      ],
+      "replace": [
+        "        Ok(())"
+      ]
+    },
+    {
+      "name": "mpsc: the last producer's drop does not signal",
+      "file": "src/mpsc.rs",
+      "expect": "caught",
+      "why": "Disconnection is a wakeup, and the only one no other party can deliver. Without it a blocked consumer waits forever for an item that can no longer be sent. NOTE the shape of this patch -- it deletes the live call rather than inserting unreachable code beside it, because a sabotage that does not sabotage retires a question that was never asked.",
+      "find": [
+        "        self.shared.doorbell.signal();",
+        "    }",
+        "}",
+        "",
+        "/// The reading half"
+      ],
+      "replace": [
+        "    }",
+        "}",
+        "",
+        "/// The reading half"
+      ]
+    },
+    {
+      "name": "CONTROL: mpsc signals on every producer's departure, not only the last",
+      "file": "src/mpsc.rs",
+      "expect": "survives",
+      "why": "A control, not a defect. Ringing when a non-final producer leaves is a SPURIOUS wakeup: the consumer wakes, finds nothing, sees producers still alive, and parks again. The contract says a wakeup may be spurious, so the suite MUST stay green. If this is ever reported as caught, a test has started asserting that no extra wakeups occur -- which is asserting the implementation -- and that test is the thing to fix. Note this is NOT the same as the entry above: that one deletes the last producer's signal, which is a lost wakeup and a hang.",
+      "find": [
+        "        if self.shared.producers.fetch_sub(1, Ordering::AcqRel) != 1 {",
+        "            return;",
+        "        }"
+      ],
+      "replace": [
+        "        let _ = self.shared.producers.fetch_sub(1, Ordering::AcqRel);"
+      ]
+    },
+    {
+      "name": "mpsc arm checks readiness before clearing",
+      "file": "src/mpsc.rs",
+      "expect": "caught",
+      "why": "The lost wakeup itself, in the second shape. A push landing between the check and the clear both signals and has its signal erased, so the consumer sleeps on a queue that is not empty and will never be signalled again. Driven deterministically through the REAL arm by the shared ARM_RACE hook rather than through a copy of it, which is what makes this caught every run rather than one in three.",
+      "find": [
+        "        self.shared.doorbell.clear();",
+        "        #[cfg(test)]",
+        "        crate::arm_race::run();",
+        "        // Deliberately not `is_empty`. The question is whether `pop` would find",
+        "        // something, and a slot that a producer has claimed but not published",
+        "        // is not something `pop` can find -- see `Shared::has_ready_item`.",
+        "        Ok(!self.shared.has_ready_item())"
+      ],
+      "replace": [
+        "        let ready = self.shared.has_ready_item();",
+        "        self.shared.doorbell.clear();",
+        "        #[cfg(test)]",
+        "        crate::arm_race::run();",
+        "        Ok(!ready)"
+      ]
+    },
+    {
+      "name": "mpsc arm does not create the doorbell before checking",
+      "file": "src/mpsc.rs",
+      "expect": "caught",
+      "why": "Lazy creation is the same hazard a third time: a producer running while no event exists skips signalling, so the readiness check has to come after the event exists to catch what that skip left behind.",
+      "find": [
+        "        self.shared.doorbell.handle()?;",
+        "        self.shared.doorbell.clear();"
+      ],
+      "replace": [
+        "        self.shared.doorbell.clear();"
+      ]
+    },
+    {
+      "name": "mpsc frees a slot one short of the next lap",
+      "file": "src/mpsc.rs",
+      "expect": "caught",
+      "why": "The sequence protocol's whole arithmetic in one line. A slot freed at `pos + capacity - 1` is never equal to the position that next claims it, so every producer reads a negative difference and reports Full for ever: the queue works for exactly one lap and then wedges. An off-by-one here is invisible to any test that never wraps, which is why the wrap tests run a thousand rounds through four slots.",
+      "find": [
+        "            position.wrapping_add(self.shared.capacity),"
+      ],
+      "replace": [
+        "            position.wrapping_add(self.shared.capacity - 1),"
+      ]
+    },
+    {
+      "name": "mpsc cloning a producer does not count it",
+      "file": "src/mpsc.rs",
+      "expect": "caught",
+      "why": "The count is what makes multi-producer disconnection work, and a clone that does not register makes the FIRST departure look like the last. The consumer then ends the stream while producers are still pushing into it.",
+      "find": [
+        "        self.shared.producers.fetch_add(1, Ordering::Relaxed);"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "mpsc accepts a capacity of one",
+      "file": "src/mpsc.rs",
+      "expect": "caught",
+      "why": "With one slot, 'published at position p' and 'free again at position p + capacity' are the SAME number, so a producer reads the sequence of the item it just pushed, concludes the slot is free, and overwrites an item the consumer has not read. spsc accepts one, which is exactly why the minimum belongs to the shape rather than to the crate -- and why it is asserted rather than assumed.",
+      "find": [
+        "const MIN_CAPACITY: usize = 2;"
+      ],
+      "replace": [
+        "const MIN_CAPACITY: usize = 1;"
+      ]
+    },
+    {
+      "name": "mpsc reports Full for a full queue whose consumer is gone",
+      "file": "src/mpsc.rs",
+      "expect": "caught",
+      "why": "Full invites a retry and Disconnected does not, and a full queue with no consumer will never drain -- so reporting Full here is telling the caller to spin forever. The preference has to be stated at the fullness branch specifically, because that branch returns before the general disconnection check below it is ever reached.",
+      "find": [
+        "                if !self.shared.consumer_live.load(Ordering::Acquire) {",
+        "                    return Err(PushError::Disconnected(item));",
+        "                }",
+        "                return Err(PushError::Full(item));"
+      ],
+      "replace": [
+        "                return Err(PushError::Full(item));"
       ]
     }
   ]

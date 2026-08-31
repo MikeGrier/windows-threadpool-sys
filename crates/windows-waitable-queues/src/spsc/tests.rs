@@ -6,7 +6,8 @@
 //! joined thread rather than a sleep, so they are deterministic: the assertion
 //! runs after the peer has finished, not after a guess about how long it takes.
 
-use super::{Consumer, Producer, bounded, validate_capacity};
+use super::{Consumer, MIN_CAPACITY, Producer, bounded, validate_capacity};
+use crate::arm_race;
 use crate::{PushError, RecvError, RecvTimeoutError};
 use std::os::windows::io::AsRawHandle;
 use std::sync::Arc;
@@ -851,18 +852,18 @@ fn a_suggested_capacity_is_one_the_constructor_would_accept() {
     // queue means asking for half the address space -- the first version of
     // this test aborted the process with a four-exabyte allocation failure.
     for requested in [1_usize, 3, 100, 1000, 0, usize::MAX / 2, usize::MAX] {
-        let Err(error) = validate_capacity(requested) else {
+        let Err(error) = validate_capacity(requested, MIN_CAPACITY) else {
             continue;
         };
         if let Some(previous) = error.previous_valid() {
             assert!(
-                validate_capacity(previous).is_ok(),
+                validate_capacity(previous, MIN_CAPACITY).is_ok(),
                 "previous_valid() for {requested} suggested {previous}, which is itself rejected"
             );
         }
         if let Some(next) = error.next_valid() {
             assert!(
-                validate_capacity(next).is_ok(),
+                validate_capacity(next, MIN_CAPACITY).is_ok(),
                 "next_valid() for {requested} suggested {next}, which is itself rejected"
             );
         }
@@ -874,7 +875,8 @@ fn the_largest_request_is_clamped_rather_than_rounded() {
     // Rounding `usize::MAX` down to the nearest power of two gives 2^63, which
     // is larger than the largest representable capacity. Before this was fixed
     // the suggestion was exactly that unusable value.
-    let error = validate_capacity(usize::MAX).expect_err("usize::MAX is not a valid capacity");
+    let error = validate_capacity(usize::MAX, MIN_CAPACITY)
+        .expect_err("usize::MAX is not a valid capacity");
     let previous = error
         .previous_valid()
         .expect("there is a valid capacity below usize::MAX");
@@ -888,7 +890,10 @@ fn the_largest_request_is_clamped_rather_than_rounded() {
         previous.is_power_of_two(),
         "and it must still be a power of two"
     );
-    assert!(validate_capacity(previous).is_ok(), "and must be accepted");
+    assert!(
+        validate_capacity(previous, MIN_CAPACITY).is_ok(),
+        "and must be accepted"
+    );
 }
 
 #[test]
@@ -908,7 +913,7 @@ fn the_real_arm_finds_an_item_that_lands_inside_its_window() {
     // The hook owns the producer outright. An `Arc` would be pointless here and
     // clippy says so: a `Producer` is deliberately `!Sync`, so sharing one is
     // exactly what the type system is built to prevent.
-    let safe_to_wait = super::with_arm_race(
+    let safe_to_wait = arm_race::with(
         move || {
             tx.push(1).expect("there is room");
         },
@@ -929,7 +934,7 @@ fn the_real_arm_still_blesses_a_wait_when_its_window_stays_empty() {
     rx.doorbell().expect("the doorbell must be creatable");
     drop(tx);
 
-    let safe_to_wait = super::with_arm_race(|| {}, || rx.arm().expect("arming must succeed"));
+    let safe_to_wait = arm_race::with(|| {}, || rx.arm().expect("arming must succeed"));
 
     assert!(
         safe_to_wait,
