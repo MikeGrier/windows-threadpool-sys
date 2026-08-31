@@ -214,8 +214,24 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   safe but spins until that producer is rescheduled. Arming asks the readiness question instead, which is
   also what puts D-9's `SeqCst` pair on the right two locations for this shape
   ([D-14](crates/windows-waitable-queues/DESIGN-NOTES.md#d-14)).
-  120 unit tests and 4 doctests, the whole suite in 0.31s. Nine new sabotage entries, one of them a
-  control.
+  **This shape exposed a lost wakeup in the doorbell that `spsc` could not have found, and it was fixed
+  at the layer that owns it.** `Doorbell::clear` cleared its mirror flag and *then* reset the event; a
+  producer signalling between those two lines set the flag and issued a real `SetEvent`, and the
+  `ResetEvent` that followed erased the signal while leaving the flag set -- so the doorbell was dark
+  while claiming to be lit and every later signal skipped. The order had a written argument behind it
+  ("the caller's re-check sees the racing producer's item") that is **true for `spsc` and false for
+  `mpsc`**, whose re-check asks only whether the *head* slot is published. The fix moves the guarantee
+  from the caller to the type: once `clear` returns the flag is false, so no future shape has to have a
+  re-check strong enough to cover the window. [D-15](crates/windows-waitable-queues/DESIGN-NOTES.md#d-15),
+  which amends D-9 rather than being filed beside it.
+  **It was found by the sabotage harness refusing to sweep against a red baseline** -- the baseline run,
+  whose only job is to prove the suite is green before any defect is injected, hung once in a suite that
+  passed 120 tests in 0.28s six runs running. A single unreproducible hang is the finding it is tempting
+  to blame on a busy machine.
+  122 unit tests and 4 doctests, the whole suite in 0.30s. Twenty-three sabotages, all behaving as
+  declared: ten new ones for this milestone, two of them controls. **One of those controls earned its
+  keep immediately** -- it caught the new doorbell test asserting the signal-skip *optimisation* rather
+  than the contract, which is precisely what a control is for.
 
 - [ ] **M31.2** -- Overflow policy, which is more than "return `Err`". Ship fail-fast plus a `reserve`
   that guarantees a slot for a message that must not be lost, following
