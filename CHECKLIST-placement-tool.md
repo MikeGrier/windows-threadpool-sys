@@ -108,6 +108,35 @@ waiting on numbers only other people's machines can produce.
   becomes an entry point only; measurement *and* rendering live in the library and are called, never
   reimplemented. A binary that formats its own output is the defect, not a binary that exists.
 
+## M1B: processor groups, before a large machine is ever offered
+
+**This is the blocker that would waste the opportunity.** A large multi-socket host -- the kind that is
+the entire point of this tool -- has more than 64 logical processors, so Windows presents it as
+**multiple processor groups**, each numbering from zero.
+
+- [ ] **PT-1B.1** -- **Carry `(group, number)` as a processor's identity.** `ProcessorPlace` keys on a
+  bare `u8` number and `places_from_topology` discards the group outright (`for (_group, number)`), so
+  every group's processor 5 collides on one map key. **The result is not a crash.** Numbers stay below
+  64 within a group, so `assert!(cpu < 64)` never fires: the tool runs, pins to whichever processor
+  won the collision, and prints a confident placement table describing a topology it silently
+  collapsed. That is the same defect class as the omitted SMT row, on the machine we would get one
+  attempt at.
+
+- [ ] **PT-1B.2** -- **Pin with `SetThreadGroupAffinity`.** `SetThreadAffinityMask` takes a mask
+  within the caller's current group and cannot express a processor in another one, so it is not a
+  matter of widening the mask. Keep the existing failure discipline: pinning that does not land must
+  abort the run rather than fall back to an unpinned measurement.
+
+- [ ] **PT-1B.3** -- **Verify against a synthetic multi-group topology**, since no host here has more
+  than one group. `places_from_topology` is a pure conversion and already testable; a fixture with two
+  groups whose numbers overlap must produce distinct processors, and the sabotage is to key on the
+  number alone and watch the count halve.
+
+- [ ] **PT-1B.4** -- **Refuse loudly if groups are present and unsupported.** Whatever remains
+  unimplemented when a large machine is offered, the tool must say so and stop. A refusal costs one
+  message; a collapsed topology costs a wrong answer nobody can detect from the output, on hardware
+  that is not coming back.
+
 ## M2: the move
 
 - [ ] **PT-2.1** -- Move `fingerprint`, `core_affinity` and `peer_index_cache` into the new crate, and

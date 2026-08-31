@@ -194,3 +194,57 @@ release-blocking rather than restating the decision itself.
 - [ ] **SH-5.2** -- Confirm the published `windows-topology-sys` still reports `Provenance::Measured`
   from `discover()` when consumed as a dependency, and that a `Topology::default()` is `Synthetic`.
   The provenance rules are the newest thing in the crate and the least exercised outside it.
+
+## M6: long-running validation
+
+**Placed last so the numbering does not churn, and it gates SH-4.3 all the same.** `windows-waitable-queues`
+0.1.0 does not publish until this milestone is done. The reasoning is in SH-1.2 / D-31: the crate ships
+without machine-checked orderings, and long-running validation is part of what it owes instead.
+
+**What a pass here does not mean, stated once and repeated in the tool's own output.** Hours of green
+stress says nothing about memory orderings. That is measured, not cautious: weakening the producer's
+`Acquire` to `Relaxed` left the whole suite green. A stress tool that omits this becomes false comfort
+-- someone points at a long clean run and concludes the orderings are fine, which is exactly the claim
+D-31 says cannot be supported.
+
+- [ ] **SH-6.1** -- **The wraparound scenario, which is the one reachable correctness gap.**
+  `reserving_mpsc` packs its position into 32 bits, so it wraps after 2^32 pushes -- about two minutes
+  at measured rates, and reachable in production within hours. `spsc` and `slotwise_mpsc` use `usize`
+  positions and cannot be driven there at all, so this gap belongs to the shape whose position is
+  narrow by design.
+  What exists today is *ring* wraparound (positions cycling through slots) and the packing arithmetic
+  checked at the boundary; what does not is the queue actually crossing 2^32 end to end. **Tracking
+  every item is impossible at that count**, so the invariants are the cheap ones: per-producer sequence
+  numbers strictly increasing in consumption order, and an exact total count. O(producers) memory
+  rather than O(items).
+
+- [ ] **SH-6.2** -- **Diagnostic history, merged by position rather than by a clock.** Unseeded is
+  correct here: the scheduler is the source of variation, not the PRNG, so a seed would make the inputs
+  reproducible while the interleaving that caused the failure stays unreproducible -- the appearance of
+  determinism with none of the substance. What is needed is **reconstructability**.
+  Each thread keeps a small lock-free ring of recent records: thread, operation, position, value,
+  outcome. **The merge needs no clock and no global counter**, because the queue under test already
+  carries a total order -- its positions -- so records sort by position after the fact. A global
+  sequence number would give a true order and perturb the hot path it is trying to observe; a
+  timestamp costs a clock read per operation. Both were considered and neither is needed.
+  The one case positions do not order is a *refused* push, which has no position; record the position
+  it attempted and mark it refused.
+
+- [ ] **SH-6.3** -- **Detect the failures worth detecting**, and dump the history on any of them: item
+  loss or duplication, per-producer order violation, a panic in any thread, and **no progress**. The
+  last needs a watchdog thread against a progress counter, and is the case that most needs history and
+  is least served by a seed -- a hang leaves no assertion behind, only a stuck process.
+
+- [ ] **SH-6.4** -- **Cover all three shapes and the doorbell.** The doorbell is the point: SH-1.2
+  established that a model checker *cannot* cover it, because its correctness is an atomic mirror flag
+  interleaving with real `SetEvent`/`ResetEvent` calls. Stress is one of the few instruments that
+  exercises that at all. D-15's lost wakeup surfaced because a baseline run hung **once**; more hours
+  of running is the only lever we have on that class.
+  Include the parking path, not just the polling one -- a consumer that never parks never exercises
+  the doorbell protocol that D-9 and D-15 are about.
+
+- [ ] **SH-6.5** -- **Ship it as a tool, not only as a test.** A binary with duration and concurrency
+  knobs, so a user can stress *their* hardware. That matters concretely: x64 and ARM64 have already
+  disagreed once about this crate's behaviour, and no test we run here covers a machine we do not own.
+  Keep a short in-suite smoke run over the same engine so the code cannot rot, and keep it out of the
+  fast unit suite, which must stay under a second.

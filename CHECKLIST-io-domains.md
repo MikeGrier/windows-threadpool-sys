@@ -793,3 +793,25 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   **What would actually add rows**, if either becomes available: bare metal for `same cache, same
   class` and `same cache, cross class`, or a deliberately large multi-NUMA VM SKU (not a dev box) for
   a genuine node crossing. See the NUMA gap recorded below before spending time on the latter.
+
+  **A two-socket Sapphire Rapids host is expected to become available, and it fills nearly the whole
+  table at once.** Sockets give a genuine node crossing and a real `cross cache, same class` row at the
+  L3 level; SMT gives the sibling row; two cores within a socket give `same cache, same class`. If
+  **Sub-NUMA Clustering** is enabled it subdivides each socket, so the machine may present four or
+  eight nodes -- and that would be the first host on which the node-pair matrix shows *variation*
+  rather than one hop, because an intra-socket SNC hop and a cross-socket hop are not the same
+  distance. That matrix was built for exactly this case and has never met a machine that can populate
+  it.
+  Three things to carry into that run:
+  - **It still cannot produce `same cache, cross class`.** The cores are homogeneous, so that row
+    stays unmeasurable on every host we have access to.
+  - **It is x86-64, so it is TSO.** It will expose weakened memory orderings no better than the EPYC
+    slice did, and a clean run there must not be read as ordering validation. ARM64 remains the more
+    revealing host for that, and per D-31 neither substitutes for a model checker.
+  - **It will present multiple processor groups**, which the tooling does not yet handle and would
+    silently collapse rather than refuse. That is
+    [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) M1B, and it must land before the machine
+    is used.
+  **Ask for `probe-topology` output first**, before any long run. Whether SNC is on, how many groups
+  the host presents, and where its partitioning cache sits decide what everything else means, and none
+  of the three is knowable from the part number.
