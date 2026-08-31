@@ -73,6 +73,9 @@ fn synthetic() -> Topology {
             },
         ],
         distances: None,
+        // Named rather than defaulted, so this fixture states what it is. The
+        // helper is called `synthetic` and now says so in the value too.
+        provenance: Provenance::Synthetic,
     }
 }
 
@@ -168,11 +171,34 @@ mod serde_tests {
     use super::super::*;
 
     #[test]
-    fn a_discovered_topology_round_trips_through_json_unchanged() {
+    fn a_discovered_topology_round_trips_through_json_except_for_its_provenance() {
+        // This test used to assert the round trip was *unchanged*. That is now
+        // deliberately false, and the change is the point rather than a
+        // regression: a discovered topology asserts "this is the machine you
+        // are on", and once written to a file it can no longer assert that.
+        // Reloading yields `Restored`.
+        //
+        // The assertion is deliberately not weakened to "the parts I still
+        // expect to match". Everything except the provenance must survive
+        // verbatim, so this compares against the original with only that field
+        // adjusted -- a second corruption would still fail here.
         let topology = Topology::discover().expect("discover");
+        assert!(
+            topology.provenance.is_measured(),
+            "discover must claim the machine it read"
+        );
+
         let json = serde_json::to_string(&topology).expect("serialize");
         let back: Topology = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(topology, back);
+
+        assert_eq!(back.provenance, Provenance::Restored);
+        assert_eq!(
+            back,
+            Topology {
+                provenance: Provenance::Restored,
+                ..topology
+            }
+        );
     }
 
     #[test]
@@ -248,5 +274,119 @@ mod serde_tests {
             error.to_string().contains("100"),
             "error should name the offending number: {error}"
         );
+    }
+}
+
+#[test]
+fn a_hand_built_topology_is_not_measured() {
+    // The fixture above names `Synthetic` explicitly; this pins down that the
+    // value survives to a reader, so a consumer asking "is this my machine"
+    // gets the right answer from hand-built data.
+    assert_eq!(synthetic().provenance, Provenance::Synthetic);
+    assert!(!synthetic().provenance.is_measured());
+}
+
+#[test]
+fn a_defaulted_topology_is_not_measured() {
+    // `Topology::default()` is the easiest way to obtain one and must be the
+    // safe one. If this ever reports measured, every forgetful construction in
+    // every dependent silently starts asserting it read the machine.
+    let topology = Topology::default();
+
+    assert_eq!(topology.provenance, Provenance::Synthetic);
+    assert!(!topology.provenance.is_measured());
+}
+
+#[test]
+fn struct_update_syntax_from_default_stays_untrusted() {
+    // `..Default::default()` is how a caller builds a topology while naming
+    // only the fields they care about, and provenance is exactly the field
+    // nobody thinks to name.
+    let topology = Topology {
+        distances: None,
+        ..Default::default()
+    };
+
+    assert!(!topology.provenance.is_measured());
+}
+
+#[cfg(feature = "serde")]
+mod serde_provenance {
+    use super::*;
+
+    fn load(provenance_field: &str) -> Topology {
+        let json =
+            format!(r#"{{"processors": [], "domains": [], "distances": null{provenance_field}}}"#);
+        serde_json::from_str(&json).expect("the description must parse")
+    }
+
+    #[test]
+    fn a_description_claiming_measured_is_downgraded_to_restored() {
+        // The core of the rule. A file cannot establish that it is the machine
+        // you are running on, however sincerely it asserts it -- and a
+        // hand-edited description is the obvious way someone would try.
+        let topology = load(r#", "provenance": "measured""#);
+
+        assert_eq!(topology.provenance, Provenance::Restored);
+        assert!(!topology.provenance.is_measured());
+    }
+
+    #[test]
+    fn a_description_claiming_restored_stays_restored() {
+        assert_eq!(
+            load(r#", "provenance": "restored""#).provenance,
+            Provenance::Restored
+        );
+    }
+
+    #[test]
+    fn a_description_claiming_synthetic_is_not_promoted() {
+        // The ceiling is a maximum, not an assignment: passing through a loader
+        // must not launder fabricated data into merely-restored data.
+        assert_eq!(
+            load(r#", "provenance": "synthetic""#).provenance,
+            Provenance::Synthetic
+        );
+    }
+
+    #[test]
+    fn a_description_without_the_field_loads_as_synthetic() {
+        // Every description written before this field existed takes this path,
+        // so the default has to be the safe one here too.
+        assert_eq!(load("").provenance, Provenance::Synthetic);
+    }
+
+    #[test]
+    fn a_measured_topology_does_not_survive_a_round_trip_as_measured() {
+        // The property that makes persistence honest, stated end to end: you
+        // may archive a real topology, and what you reload is explicitly a
+        // description of a machine rather than a claim about this one.
+        let mut measured = synthetic();
+        measured.provenance = Provenance::Measured;
+
+        let json = serde_json::to_string(&measured).expect("must serialize");
+        assert!(
+            json.contains("measured"),
+            "the marker is not visible in the persisted form: {json}"
+        );
+
+        let reloaded: Topology = serde_json::from_str(&json).expect("must parse");
+        assert_eq!(reloaded.provenance, Provenance::Restored);
+        assert!(!reloaded.provenance.is_measured());
+    }
+
+    #[test]
+    fn everything_but_the_provenance_round_trips_unchanged() {
+        // The downgrade must be the *only* thing a round trip changes,
+        // otherwise this would be trading one silent corruption for another.
+        let mut measured = synthetic();
+        measured.provenance = Provenance::Measured;
+
+        let json = serde_json::to_string(&measured).expect("must serialize");
+        let reloaded: Topology = serde_json::from_str(&json).expect("must parse");
+
+        assert_eq!(reloaded.processors, measured.processors);
+        assert_eq!(reloaded.domains, measured.domains);
+        assert_eq!(reloaded.distances, measured.distances);
     }
 }

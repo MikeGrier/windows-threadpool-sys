@@ -31,6 +31,56 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-9"></a>D-9 | **Deliberately excluded, with reasons.** See the detail section below. **No work is scheduled against any of it** -- the absence of checklist items is intentional, not an oversight. |
 | <a id="d-10"></a>D-10 | **The description is platform-neutral; platform constraints live in the planner.** A description sourced from Linux will have one group possibly containing more than 64 processors, which is unrepresentable as a Windows affinity mask. The schema does not enforce the Windows limit. A Windows planner consuming such a description must reject or split it rather than silently emitting an affinity mask that cannot exist. Keeping the constraint in the planner is what allows a description of a machine to be written on, and for, a different platform. |
 | <a id="d-11"></a>D-11 | **A `Memory` domain's `memory_bytes` is `Option<u64>`, not a bare `u64`, because Windows's own enumeration cannot report it.** `GetLogicalProcessorInformationEx`'s NUMA-node relationship carries a processor set and a node number, never a capacity; measuring node memory would mean a different API entirely. A `Topology` this crate discovers therefore always sets `memory_bytes: None` for every memory domain it produces from `RelationNumaNode`/`RelationNumaNodeEx`. Using `Some(0)` as a stand-in would be indistinguishable from "this node genuinely has no memory," which is exactly the CXL-expander case D-5 exists to represent honestly; `None` is the only choice that does not silently invent data. A hand-written or fed-in description may still supply a real value. |
+| <a id="d-12"></a>D-12 | **A topology carries its own provenance, and the untrusted value is the default.** This crate deliberately lets a topology be discovered, built by hand, or deserialized from a description written for a machine you do not have -- and until now the three were indistinguishable once built. [`Provenance`] is `Synthetic` by `Default`, so forgetting is safe and claiming is deliberate; only `discover` yields `Measured`; and deserialization can only ever *downgrade*, so a file cannot assert it is the machine you are on. |
+
+## D-12: provenance, and why the default points at distrust
+
+Three ways to obtain a `Topology` are supported on purpose, and the crate's own front page advertises
+the third: "deserialize one from JSON written for a machine you do not have". That is a feature -- it
+is how a consumer tests against hardware it lacks, and this workspace needs it right now, because
+`probe-core-affinity` must exercise NUMA selection logic on hosts that have exactly one NUMA node.
+
+The hazard is that **the resulting value looked exactly like a discovered one**. There is a passing
+test in this crate that parses a *Linux-shaped* description, complete with an ACPI SLIT-style distance
+matrix, on a Windows-only crate. Nothing downstream could tell that apart from the machine it was
+running on.
+
+Three decisions make the marker hard to lose.
+
+**`Synthetic` is `Default`.** This is the load-bearing one. `Topology::default()`,
+`..Default::default()`, and every construction that simply does not think about provenance come out
+tainted. A caller must do work to claim data is real, rather than work to admit it is not. The reverse
+default would mean every forgetful construction silently asserts it read the machine -- which is
+precisely the accident this exists to catch, and it would be catastrophically quiet.
+
+**The variants are ordered by trust**, `Synthetic < Restored < Measured`, so the derived `Ord` *is* the
+trust order and `min` implements "never upgrade". `downgraded_to` is that one line, which is why there
+is no second, subtly different rule anywhere: a ceiling is a maximum, not an assignment, so passing a
+synthetic description through a loader does not launder it into a restored one.
+
+**Deserialization refuses any claim above `Restored`.** A hand-edited `"provenance": "measured"` is
+ignored. This is the one place forgery rather than accident is refused, and the asymmetry is
+deliberate: a line of code claiming `Measured` had to be written by someone who meant it, whereas a
+JSON file is data that travels, gets copied between machines, and is edited by people who never read
+this note. The marker is still *serialized*, so it is visible in the persisted form -- the goal is that
+a tainted topology is loud, not that it is unwritable.
+
+The consequence to be aware of: **a measured topology cannot be archived and reloaded as measured.**
+That is intended. What you reload is a description of a machine, and the fact that it was once read
+from a real one does not make it a statement about the host doing the reading.
+
+**The threat model is accident, not forgery.** A caller who writes `provenance: Provenance::Measured`
+over data they fabricated has lied deliberately, and no type in a crate with public fields prevents
+that. Adding a private field with a constructor was considered and rejected: it would break the
+hand-construction the crate deliberately supports (D-8's "plain data" property), for a guarantee that
+only holds against an adversary this crate does not have.
+
+`from_relations` stamps `Synthetic` and `discover` overwrites it with `Measured`, rather than the
+transform claiming it. `from_relations` is a pure function of whatever relations it is handed and
+cannot know where they came from; putting the claim in `discover` keeps it attached to the act of
+asking the operating system, so a future second caller of the transform does not silently inherit an
+assertion it has not earned.
+
 ## What was deliberately excluded (D-9)
 
 Recorded because what a design declines is as important as what it adopts, and because each of these was

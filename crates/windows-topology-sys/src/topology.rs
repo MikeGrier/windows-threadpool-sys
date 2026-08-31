@@ -4,6 +4,7 @@
 use std::io;
 
 use crate::domain::{Distances, Domain, DomainKind, Processor, ProcessorId};
+use crate::provenance::Provenance;
 use crate::relation::{self, Relations};
 
 /// A processor, cache, and memory topology: a set of processors and the
@@ -25,6 +26,21 @@ pub struct Topology {
     pub domains: Vec<Domain>,
     /// An optional scalar distance matrix.
     pub distances: Option<Distances>,
+    /// Where this content came from.
+    ///
+    /// **Defaults to [`Provenance::Synthetic`]**, so a topology built by hand
+    /// or by [`Default`] is tainted unless its author says otherwise. Only
+    /// [`Self::discover`] produces [`Provenance::Measured`], and
+    /// deserialization can never produce it -- see
+    /// [`Provenance`] for why the default points this way.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default,
+            deserialize_with = "crate::provenance::deserialize_downgraded"
+        )
+    )]
+    pub provenance: Provenance,
 }
 
 impl Topology {
@@ -36,7 +52,11 @@ impl Topology {
     /// call.
     pub fn discover() -> io::Result<Self> {
         let relations = relation::discover()?;
-        Ok(Self::from_relations(relations))
+        let mut topology = Self::from_relations(relations);
+        // The one place in the crate that may claim this is the machine you are
+        // on, because it is the one place that asked the operating system.
+        topology.provenance = Provenance::Measured;
+        Ok(topology)
     }
 
     fn from_relations(relations: Relations) -> Self {
@@ -106,6 +126,12 @@ impl Topology {
             processors,
             domains,
             distances: None,
+            // Synthetic, not measured: this is a pure transform of whatever
+            // relations it was handed, and cannot know where they came from.
+            // `discover` stamps the claim because `discover` is what read the
+            // machine -- so if this ever gains a second caller, that caller
+            // does not silently inherit an assertion it has not earned.
+            provenance: Provenance::Synthetic,
         }
     }
 

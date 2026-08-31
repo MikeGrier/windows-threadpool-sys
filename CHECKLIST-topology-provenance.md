@@ -28,12 +28,12 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
   Document that the threat model is *accident*, not forgery -- a caller who writes
   `provenance: Measured` over fabricated data has lied deliberately, and no type prevents that.
 
-- [ ] **TP-1.2** -- Add the field to `Topology` and set `Measured` in `discover()`. This is a **breaking
+- [x] **TP-1.2** -- Add the field to `Topology` and set `Measured` in `discover()`. This is a **breaking
   change** for struct-literal construction, and deliberately so: every existing site is forced to state
   which kind of data it holds. Update the crate's own tests and every dependent that constructs a
   `Topology` by hand.
 
-- [ ] **TP-1.3** -- Serde: serialize the marker so it is *visible* in the persisted form, and
+- [x] **TP-1.3** -- Serde: serialize the marker so it is *visible* in the persisted form, and
   **downgrade on load** -- `Measured` becomes `Restored`, everything else is unchanged. The rule is
   **never upgrade**, so a hand-edited `"provenance": "measured"` is ignored rather than honoured. A
   description absent the field loads as `Synthetic`. Test each of the four load cases, including that a
