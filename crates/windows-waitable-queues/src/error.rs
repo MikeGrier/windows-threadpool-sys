@@ -18,6 +18,14 @@ use std::io;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapacityError {
     requested: usize,
+    /// The largest capacity the rejecting shape accepts.
+    ///
+    /// Carried on the error rather than assumed to be a crate-wide constant:
+    /// the bound follows from how a shape represents its positions, and a
+    /// future shape that represents them differently would have a different
+    /// one. A suggestion computed against the wrong bound is worse than no
+    /// suggestion, because a caller will act on it.
+    max_valid: usize,
     kind: CapacityErrorKind,
 }
 
@@ -29,25 +37,34 @@ enum CapacityErrorKind {
 }
 
 impl CapacityError {
-    pub(crate) fn zero() -> Self {
+    pub(crate) fn zero(max_valid: usize) -> Self {
         Self {
             requested: 0,
+            max_valid,
             kind: CapacityErrorKind::Zero,
         }
     }
 
-    pub(crate) fn not_power_of_two(requested: usize) -> Self {
+    pub(crate) fn not_power_of_two(requested: usize, max_valid: usize) -> Self {
         Self {
             requested,
+            max_valid,
             kind: CapacityErrorKind::NotPowerOfTwo,
         }
     }
 
-    pub(crate) fn too_large(requested: usize) -> Self {
+    pub(crate) fn too_large(requested: usize, max_valid: usize) -> Self {
         Self {
             requested,
+            max_valid,
             kind: CapacityErrorKind::TooLarge,
         }
+    }
+
+    /// The largest capacity the shape that rejected this request will accept.
+    #[must_use]
+    pub fn max_valid(&self) -> usize {
+        self.max_valid
     }
 
     /// The capacity that was asked for.
@@ -62,24 +79,55 @@ impl CapacityError {
     /// Offered so a caller can correct the call without working out the
     /// arithmetic: a rejected 100 reports 64 here and 128 from
     /// [`Self::next_valid`].
+    ///
+    /// Never returns a value the shape would itself reject. Rounding a request
+    /// down to the nearest power of two is not sufficient on its own: the
+    /// nearest power of two below `usize::MAX` is 2^63, which exceeds the
+    /// largest representable capacity, so the answer is clamped to
+    /// [`Self::max_valid`]. A suggestion that is itself refused would be worse
+    /// than none, because a caller acts on it and gets a second error.
     #[must_use]
     pub fn previous_valid(&self) -> Option<usize> {
         match self.kind {
             CapacityErrorKind::Zero => None,
             CapacityErrorKind::NotPowerOfTwo | CapacityErrorKind::TooLarge => {
-                Some(1_usize << (usize::BITS - 1 - self.requested.leading_zeros()))
+                let rounded = 1_usize << (usize::BITS - 1 - self.requested.leading_zeros());
+                Some(rounded.min(self.largest_power_of_two_within_bound()))
             }
         }
     }
 
+    /// The largest power of two that does not exceed [`Self::max_valid`].
+    ///
+    /// The clamp target for [`Self::previous_valid`]: `max_valid` is itself not
+    /// necessarily a power of two -- for a ring of monotonic wrapping positions
+    /// it is `usize::MAX / 2`, which is `2^63 - 1` -- so clamping to it
+    /// directly would hand back a capacity that fails the power-of-two test
+    /// instead of the size test.
+    fn largest_power_of_two_within_bound(&self) -> usize {
+        if self.max_valid == 0 {
+            return 0;
+        }
+        1_usize << (usize::BITS - 1 - self.max_valid.leading_zeros())
+    }
+
     /// The smallest valid capacity not less than the request, if there is one.
+    ///
+    /// `None` when rounding up would leave the shape's bound behind, which is
+    /// not only the case for a request that was already too large: one that is
+    /// merely *not a power of two* can still sit between the largest valid
+    /// power of two and the bound, and rounding it up then overshoots. There is
+    /// genuinely no valid capacity at or above such a request, so saying so is
+    /// the honest answer -- [`Self::previous_valid`] is the one that can still
+    /// help.
     #[must_use]
     pub fn next_valid(&self) -> Option<usize> {
-        match self.kind {
+        let rounded = match self.kind {
             CapacityErrorKind::Zero => Some(1),
             CapacityErrorKind::NotPowerOfTwo => self.requested.checked_next_power_of_two(),
             CapacityErrorKind::TooLarge => None,
-        }
+        }?;
+        (rounded <= self.max_valid).then_some(rounded)
     }
 }
 

@@ -23,9 +23,25 @@ suite, restores the source, and records whether the suite noticed.
 It exits 0 only when every sabotage behaved as the manifest declared.
 
 **This is an occasional instrument, not a CI gate.** Every sabotage forces a
-rebuild, and any that is caught *as a hang* costs the full timeout. The
-waitable-queues manifest takes upwards of twenty minutes. Run it when a guard is
+rebuild, and any that is caught *as a hang* costs the full test timeout. The
+waitable-queues manifest takes about three minutes. Run it when a guard is
 written or changed, not on every commit.
+
+**Build and test are timed separately, and the split is what keeps the test
+bound tight.** A hang is what a lost wakeup looks like and it happens during
+test execution, so that phase gets a short bound (60s). A build is merely slow
+sometimes, and a slow build killed by a short bound would be reported as a hang
+-- crediting the tests with a detection that never happened -- so the build gets
+a generous one (300s) and its failure is reported as its own outcome. Under a
+single combined bound the number had to cover the slowest imaginable cold build,
+which made every genuinely-hanging sabotage cost that same large number; the
+split cut this manifest from twenty-five minutes to three.
+
+Measured here: building the crate after a one-file edit takes under a second,
+while test execution takes about twelve, nearly all of it compiling doctests --
+`cargo test --no-run` does not build those, and Cargo offers no `--doc --no-run`
+to pre-pay it. Pass `testArgs` with `--lib` if you want the sweep faster and
+accept that a sabotage caught only by a doctest would then read as survived.
 
 ## Reading a result, which is where the judgement is
 
@@ -46,6 +62,26 @@ Refactoring moved the code out from under the manifest. Fix the manifest; the
 sabotage was not run and proves nothing.
 
 **`MANIFEST INERT`** -- the patch does not change the file at all.
+
+## Beware the test that exercises a copy of the code
+
+If a sabotage is caught only *sometimes*, the usual cause is not a slow machine.
+It is that the test which was supposed to catch it deterministically tests a
+hand-written duplicate of the logic rather than the real thing, leaving the real
+path covered only by whatever races the scheduler happens to produce.
+
+This is worth stating because it is invisible from a green suite and from a
+passing sweep. It was found here only because a sweep was re-run under a tighter
+bound and one result flipped from caught to survived: the guard's deterministic
+test exercised a copy of the sequence with two statements swapped, so it proved
+that *a* reversed order was wrong while being structurally incapable of noticing
+the real one being reversed. Measured detection was one run in three.
+
+**A flaky sabotage is a finding, not noise.** Re-run it a few times before
+accepting either answer, and if it is intermittent, look for a duplicate of the
+logic in the test rather than reaching for a longer timeout. The fix is usually
+a `#[cfg(test)]` hook that lets a test drive the real code through the window in
+question on one thread.
 
 ## Controls matter as much as defects
 

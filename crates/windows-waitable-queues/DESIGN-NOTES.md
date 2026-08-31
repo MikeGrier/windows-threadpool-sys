@@ -28,7 +28,7 @@ preferred.
 | <a id="d-3"></a>D-3 | **No trait ships until a second implementation exists to validate it.** The trait *shape* is fixed now so signatures stay compatible; the traits themselves land with the second shape. |
 | <a id="d-4"></a>D-4 | **Every shape is split into producer and consumer handles, and cardinality is carried by `Clone`.** Single-producer becomes a compile-time guarantee rather than a documented precondition. |
 | <a id="d-5"></a>D-5 | **The doorbell is level state owned by the queue: signalled exactly when the consumer has something to observe.** The **reset** must not be separable from the observation that there is nothing to take; the **signal** may be. Manual-reset, and created lazily. Realized without a lock by [D-9](#d-9). |
-| <a id="d-9"></a>D-9 | **Without a lock, the reset is made inseparable from the observation by ordering: clear first, then re-check, and never wait if the re-check finds anything.** `Consumer::arm` is that step. The natural order -- check, then clear -- is the lost wakeup, and is asserted to hang by a deliberate sabotage rather than argued to be wrong. |
+| <a id="d-9"></a>D-9 | **Without a lock, the reset is made inseparable from the observation by two things: ordering (clear, then re-check, and never wait if the re-check finds anything) and a `SeqCst` fence on each side.** `Consumer::arm` is the ordering step; the fences defeat the store-buffer hazard that ordering alone leaves open. The natural order -- check, then clear -- is asserted to hang by deliberate sabotage; the fences are beyond any test's reach and are M31.6's target. **Amended: this decision originally claimed the ordering alone sufficed.** |
 | <a id="d-6"></a>D-6 | **Overflow fails or reserves, and never overwrites.** For telemetry an overwritten entry is a lost sample; for an I/O submission it is a lost operation, and the two must not share a policy knob. |
 | <a id="d-7"></a>D-7 | **Shapes are plain modules, not Cargo features, until compile time justifies otherwise.** Two features are four configurations to test, against a benefit dead-code elimination already provides. |
 | <a id="d-8"></a>D-8 | **Published, and the obligation is accepted deliberately.** Unlike `windows-guard-alloc`, this is general-purpose and its first consumer is not its only plausible one. |
@@ -170,10 +170,40 @@ not empty and will never be signalled again. Not a stall -- a permanent hang.
 
 **Lazy creation is a third case of the same hazard.** A producer running while no event exists skips
 signalling, because there is nothing to signal. So the doorbell must be created *before* the emptiness
-check that decides to wait, which is why `arm` creates it rather than assuming a caller did. Making the
-initial state agree with the queue at creation time would not fix this and was rejected: doing it
-race-free needs sequential consistency on both the event pointer and the queue position, which is a
-`SeqCst` fence on the producer's hot path to close a hole the re-check already closes for free.
+check that decides to wait, which is why `arm` creates it rather than assuming a caller did.
+
+**The ordering above is necessary and, on its own, was not sufficient -- this decision originally said
+it was.** A code review found the hole. Program order does not relate the producer's decision to skip
+signalling to the consumer's emptiness check, because each side *stores* one location and then *loads*
+another: the producer stores the queue position and loads the doorbell state, while the consumer stores
+the doorbell state and loads the queue position. That is the store-buffer shape from Dekker's
+algorithm, and release/acquire permits both loads to return stale values. When both do, the item is
+queued, no signal was raised, and the consumer parks forever.
+
+The remedy is a `SeqCst` fence on each side -- before the loads in `Doorbell::signal`, after the stores
+in `Doorbell::clear`. Every published eventcount carries the same fence in the same place for the same
+reason, which is the clearest sign that this is a known shape rather than a local quirk.
+
+The original text had actually *identified* the sequential-consistency requirement and then dismissed
+it, on the reasoning that the re-check closed the hole for free and the fence was only needed for a
+different design (signalling at creation time). That reasoning was wrong, and the shape of the error is
+worth keeping: the re-check closes the *program-order* version of the hazard, which is the one that is
+easy to picture, and leaves the *visibility* version, which is not. Reasoning about interleavings in
+terms of "what happens first" silently assumes the sequential consistency that is exactly what is
+missing.
+
+Two temptations recorded as refused, both instances of
+[PLATFORM INTEGRITY](../../.github/copilot-instructions.md) rule 2. The consumer's `ResetEvent` is a
+syscall and is very probably a full barrier; and `stlr`/`ldar` on aarch64 are ordered more strongly
+than the abstract model demands. Either would likely mask this defect on today's toolchain and today's
+processors. Neither is a specified guarantee, and binding correctness to the incidental behaviour of a
+code generator plus a particular processor -- rather than to the ordering primitives -- is the precise
+trap that rule exists to name.
+
+**No test can catch this, and that is a property of the hazard.** Removing either fence leaves the
+whole suite green, and no entry in `sabotage.json` can express it, because the defect is a fact about
+the memory model rather than an interleaving a scheduler can be coaxed into producing. It is the named
+target of the `loom` work in [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) item M31.6.
 
 **This is asserted by sabotage, not by argument.** The suite reverses steps 2 and 3 deliberately and
 requires the result to hang -- a real `WaitForSingleObject` that returns `WAIT_TIMEOUT` while an item

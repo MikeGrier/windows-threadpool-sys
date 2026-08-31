@@ -6,7 +6,7 @@
 //! joined thread rather than a sleep, so they are deterministic: the assertion
 //! runs after the peer has finished, not after a guess about how long it takes.
 
-use super::{Consumer, Producer, bounded};
+use super::{Consumer, Producer, bounded, validate_capacity};
 use crate::{PushError, RecvError, RecvTimeoutError};
 use std::os::windows::io::AsRawHandle;
 use std::sync::Arc;
@@ -425,7 +425,16 @@ fn arm_reports_unsafe_to_wait_while_items_remain() {
 #[test]
 fn arm_reports_safe_to_wait_when_empty() {
     let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    // Created before the push, and that is the whole test. Without it the push
+    // takes `signal`'s "no event yet" path, the doorbell is never lit, and the
+    // assertion below that arming CLEARS it holds trivially -- it passed with
+    // `clear`'s `ResetEvent` deleted, which is how this was found.
+    rx.doorbell().expect("the doorbell must be creatable");
     tx.push(1).expect("there is room");
+    assert!(
+        doorbell_is_lit(&rx),
+        "the doorbell must be lit before a test of clearing it can mean anything"
+    );
     assert_eq!(rx.pop(), Some(1));
 
     assert!(
@@ -441,7 +450,11 @@ fn arm_reports_safe_to_wait_when_empty() {
 #[test]
 fn arm_relights_the_doorbell_for_a_later_push() {
     let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    // As above: the first push must actually SET the mirror flag, or the claim
+    // that `clear` cleared it is a claim about a flag that was never set.
+    rx.doorbell().expect("the doorbell must be creatable");
     tx.push(1).expect("there is room");
+    assert!(doorbell_is_lit(&rx), "the first push must light it");
     assert_eq!(rx.pop(), Some(1));
     assert!(rx.arm().expect("arming must succeed"));
 
@@ -792,5 +805,134 @@ fn the_final_drain_is_empty_when_nothing_was_sent() {
         rx.finish(),
         None,
         "nothing was ever sent, so nothing is owed"
+    );
+}
+
+#[test]
+fn recv_timeout_does_not_panic_on_an_unrepresentable_deadline() {
+    // `Instant + Duration` panics when the sum is not representable, and
+    // `Duration::MAX` is an ordinary way to spell "effectively forever". The
+    // queue is disconnected up front so the call has a reason to return at all;
+    // the assertion is that it returns rather than aborting the process.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    drop(tx);
+
+    assert!(
+        matches!(
+            rx.recv_timeout(Duration::MAX),
+            Err(RecvTimeoutError::Disconnected)
+        ),
+        "an unrepresentable deadline must degrade to the untimed wait it asked for"
+    );
+}
+
+#[test]
+fn recv_timeout_delivers_an_item_under_an_unrepresentable_deadline() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(3).expect("there is room");
+
+    // The degraded path must still be a working receive, not merely one that
+    // does not panic.
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(u64::MAX))
+            .expect("an item is queued"),
+        3
+    );
+}
+
+#[test]
+fn a_suggested_capacity_is_one_the_constructor_would_accept() {
+    // The suggestion exists so a caller can correct the call. One that is
+    // itself refused is worse than none, because the caller acts on it.
+    //
+    // Asks `validate_capacity` rather than `bounded`, and rather than
+    // re-listing the rules here. Calling `bounded` would be a truer test of the
+    // real path, but a suggestion near the bound is 2^62, and constructing that
+    // queue means asking for half the address space -- the first version of
+    // this test aborted the process with a four-exabyte allocation failure.
+    for requested in [1_usize, 3, 100, 1000, 0, usize::MAX / 2, usize::MAX] {
+        let Err(error) = validate_capacity(requested) else {
+            continue;
+        };
+        if let Some(previous) = error.previous_valid() {
+            assert!(
+                validate_capacity(previous).is_ok(),
+                "previous_valid() for {requested} suggested {previous}, which is itself rejected"
+            );
+        }
+        if let Some(next) = error.next_valid() {
+            assert!(
+                validate_capacity(next).is_ok(),
+                "next_valid() for {requested} suggested {next}, which is itself rejected"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_largest_request_is_clamped_rather_than_rounded() {
+    // Rounding `usize::MAX` down to the nearest power of two gives 2^63, which
+    // is larger than the largest representable capacity. Before this was fixed
+    // the suggestion was exactly that unusable value.
+    let error = validate_capacity(usize::MAX).expect_err("usize::MAX is not a valid capacity");
+    let previous = error
+        .previous_valid()
+        .expect("there is a valid capacity below usize::MAX");
+
+    assert!(
+        previous <= error.max_valid(),
+        "the suggestion {previous} must not exceed the shape's own bound {}",
+        error.max_valid()
+    );
+    assert!(
+        previous.is_power_of_two(),
+        "and it must still be a power of two"
+    );
+    assert!(validate_capacity(previous).is_ok(), "and must be accepted");
+}
+
+#[test]
+fn the_real_arm_finds_an_item_that_lands_inside_its_window() {
+    // The deterministic indictment of the reversed order, driven through the
+    // REAL `Consumer::arm` rather than through a copy of it.
+    //
+    // The hook fires between `arm`'s clear and its emptiness check -- precisely
+    // the window a producer must hit for the hazard to bite. With the correct
+    // order the check follows the push and finds it, so arming refuses to bless
+    // a wait. With the two statements swapped the check has already happened,
+    // arming returns "safe to wait", and the consumer parks on a queue holding
+    // an item whose signal the clear erased.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+
+    // The hook owns the producer outright. An `Arc` would be pointless here and
+    // clippy says so: a `Producer` is deliberately `!Sync`, so sharing one is
+    // exactly what the type system is built to prevent.
+    let safe_to_wait = super::with_arm_race(
+        move || {
+            tx.push(1).expect("there is room");
+        },
+        || rx.arm().expect("arming must succeed"),
+    );
+
+    assert!(
+        !safe_to_wait,
+        "an item landing between the clear and the check must be found, not waited past"
+    );
+}
+
+#[test]
+fn the_real_arm_still_blesses_a_wait_when_its_window_stays_empty() {
+    // The complement, so the test above cannot pass by `arm` simply never
+    // blessing a wait -- which would satisfy it while breaking every consumer.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+    drop(tx);
+
+    let safe_to_wait = super::with_arm_race(|| {}, || rx.arm().expect("arming must succeed"));
+
+    assert!(
+        safe_to_wait,
+        "an empty queue must still be safe to wait on, or the wait never happens at all"
     );
 }

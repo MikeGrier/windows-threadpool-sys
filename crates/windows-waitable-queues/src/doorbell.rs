@@ -32,9 +32,15 @@
 //! The cost of that laziness is a race worth stating plainly: a producer that
 //! runs while no event exists yet skips signalling, because there is nothing to
 //! signal. If a consumer could create the doorbell and then immediately wait on
-//! it, an item pushed during that window would never wake anyone. What closes
-//! the hole is the arming protocol below, not the creation itself -- the
-//! doorbell must exist *before* the emptiness check that decides to wait.
+//! it, an item pushed during that window would never wake anyone. Closing that
+//! hole takes **two** things, and an earlier version of this note claimed the
+//! first was enough:
+//!
+//! 1. The doorbell must exist *before* the emptiness check that decides to
+//!    wait, which is what the arming protocol below arranges.
+//! 2. The producer's decision to skip signalling and the consumer's emptiness
+//!    check must be sequentially consistent with respect to each other. Program
+//!    order alone does not give this. See "The store-buffer hazard" below.
 //!
 //! # The arming protocol, which is the whole correctness argument
 //!
@@ -63,6 +69,43 @@
 //! the substitute, and it has to be written down because the compiler will not
 //! ask about it.
 //!
+//! # The store-buffer hazard, which ordering alone does not fix
+//!
+//! The arming protocol says the consumer clears and then re-checks. The
+//! producer pushes and then checks whether to signal. Written out as memory
+//! operations, each side stores one location and then loads another:
+//!
+//! | Producer (`push` then [`Doorbell::signal`]) | Consumer ([`Doorbell::clear`] then re-check) |
+//! |---|---|
+//! | store the queue position (release) | store `signalled` / reset the event |
+//! | load `event` and `signalled` | load the queue position (acquire) |
+//!
+//! This is the store-buffer shape -- the same one Dekker's algorithm runs
+//! into -- and release/acquire does **not** forbid both loads from returning
+//! stale values. When both do, the item is in the queue, the producer decided
+//! no signal was needed, and the consumer decided it was safe to wait. That is
+//! a permanent hang, not a stall.
+//!
+//! The remedy is sequential consistency on both sides, and it is not optional:
+//! a `SeqCst` fence sits before the loads in [`Doorbell::signal`] and after the
+//! stores in [`Doorbell::clear`]. Every published eventcount carries the same
+//! fence in the same place for the same reason.
+//!
+//! Two temptations to record as refused. The consumer's `ResetEvent` is a
+//! syscall and is very probably a full barrier, and `stlr`/`ldar` on aarch64
+//! happen to be ordered more strongly than the abstract model requires -- so on
+//! today's compiler and today's processors this may well never misbehave.
+//! Neither is a specified guarantee, and binding correctness to the incidental
+//! behaviour of a code generator and a particular processor instead of to the
+//! ordering primitives is exactly the trap this workspace has paid for before.
+//!
+//! **This hazard is invisible to the test suite**, which is a property of the
+//! hazard and not a gap to be closed by trying harder: no amount of stress
+//! testing reliably produces the interleaving, and none of the sabotages in
+//! `sabotage.json` can express it. Removing either fence leaves every test
+//! green. It is verifiable only under a model checker, which is what makes it
+//! the named target of the `loom` work in checklist item M31.6.
+//!
 //! # Why a redundant signal is skipped, but a redundant clear is not
 //!
 //! The two directions are not symmetric, and the asymmetry is the reason this
@@ -90,7 +133,7 @@ use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering, fence};
 
 use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, FALSE, TRUE};
 use windows_sys::Win32::System::Threading::{
@@ -175,10 +218,32 @@ impl Doorbell {
     /// handles, which cannot occur for an event this type owns for its whole
     /// lifetime.
     pub(crate) fn signal(&self) {
+        // This fence is load-bearing and is not an abundance of caution.
+        //
+        // The caller has just published an item with a release store, and is
+        // about to LOAD state that decides whether to signal. The consumer does
+        // the mirror image: it stores that same state, then loads the queue's
+        // position. Store-then-load on each side, over two different locations,
+        // is the store-buffer (Dekker) shape, and release/acquire does not
+        // forbid both loads from seeing stale values. If both do, the item is
+        // queued, no signal is raised, and the consumer parks forever.
+        //
+        // Sequential consistency is the documented remedy, and every published
+        // eventcount carries the same fence in the same place for the same
+        // reason. Both skip paths below are loads, so the fence has to precede
+        // them rather than sit between them.
+        //
+        // Deliberately not relying on the fact that a particular compiler and a
+        // particular processor happen not to reorder this today, nor on the
+        // consumer's `ResetEvent` syscall incidentally acting as a barrier: the
+        // memory model permits the reordering, so the ordering must come from a
+        // specified primitive.
+        fence(Ordering::SeqCst);
+
         let Some(event) = self.event.get() else {
-            // Nobody is waiting on a handle that does not exist. A consumer
-            // that creates one later re-checks the queue before waiting, so
-            // this skip cannot strand an item.
+            // Nobody can be waiting on a handle that does not exist yet, and
+            // the fence above guarantees that a consumer which publishes one
+            // after this load will see the item this push just added.
             return;
         };
         if self.signalled.swap(true, Ordering::AcqRel) {
@@ -213,6 +278,16 @@ impl Doorbell {
         unsafe {
             ResetEvent(event.as_raw_handle());
         }
+
+        // The other half of the pair described in `signal`. The caller's
+        // emptiness re-check is a LOAD of the queue's position, and it follows
+        // this store of `signalled`; without a sequentially consistent fence on
+        // both sides, that load and the producer's load of `signalled` may both
+        // observe stale values, which is the lost wakeup. `ResetEvent` above is
+        // very probably a barrier in its own right, but that is an incidental
+        // property of an implementation rather than a documented guarantee, so
+        // it is not what this relies on.
+        fence(Ordering::SeqCst);
     }
 
     /// Whether the event has been created, for tests and for asserting that

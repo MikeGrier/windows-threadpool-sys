@@ -107,15 +107,7 @@ const MAX_CAPACITY: usize = usize::MAX / 2;
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
-    if capacity == 0 {
-        return Err(CapacityError::zero());
-    }
-    if !capacity.is_power_of_two() {
-        return Err(CapacityError::not_power_of_two(capacity));
-    }
-    if capacity > MAX_CAPACITY {
-        return Err(CapacityError::too_large(capacity));
-    }
+    validate_capacity(capacity)?;
 
     let mut slots = Vec::with_capacity(capacity);
     slots.resize_with(capacity, || UnsafeCell::new(MaybeUninit::uninit()));
@@ -141,6 +133,26 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
             not_sync: PhantomData,
         },
     ))
+}
+
+/// Whether this shape will accept a capacity, and why not if it will not.
+///
+/// Separated from [`bounded`] so the rule can be *asked* rather than restated.
+/// A test that wanted to check a suggested capacity is acceptable would
+/// otherwise have to either re-encode these three conditions -- a second copy
+/// of a rule, free to drift from this one -- or call `bounded`, which for a
+/// capacity near the bound means trying to allocate half the address space.
+fn validate_capacity(capacity: usize) -> Result<(), CapacityError> {
+    if capacity == 0 {
+        return Err(CapacityError::zero(MAX_CAPACITY));
+    }
+    if !capacity.is_power_of_two() {
+        return Err(CapacityError::not_power_of_two(capacity, MAX_CAPACITY));
+    }
+    if capacity > MAX_CAPACITY {
+        return Err(CapacityError::too_large(capacity, MAX_CAPACITY));
+    }
+    Ok(())
 }
 
 struct Shared<T> {
@@ -498,6 +510,8 @@ impl<T> Consumer<T> {
         // Before the clear, and so before the check: see above.
         self.shared.doorbell.handle()?;
         self.shared.doorbell.clear();
+        #[cfg(test)]
+        run_arm_race_hook();
         Ok(self.is_empty())
     }
 
@@ -554,7 +568,17 @@ impl<T> Consumer<T> {
     /// [`RecvTimeoutError::Timeout`] if the deadline passes with the queue
     /// still empty, which is not a malfunction. Otherwise as [`Self::recv`].
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
-        let deadline = Instant::now() + timeout;
+        // `Instant + Duration` panics when the sum is not representable, and
+        // `Duration::MAX` is a perfectly ordinary way to spell "effectively
+        // forever". A library that panics on that is worse than one that
+        // blocks, so an unrepresentable deadline degrades to the untimed wait
+        // it was asking for rather than aborting the caller.
+        let Some(deadline) = Instant::now().checked_add(timeout) else {
+            return self.recv().map_err(|error| match error {
+                RecvError::Disconnected => RecvTimeoutError::Disconnected,
+                RecvError::Io(io) => RecvTimeoutError::Io(io),
+            });
+        };
         loop {
             if let Some(item) = self.pop() {
                 return Ok(item);
@@ -578,6 +602,47 @@ impl<T> Consumer<T> {
             wait(self.doorbell()?, millis)?;
         }
     }
+}
+
+/// Test-only: runs inside [`Consumer::arm`], between the clear and the
+/// emptiness check.
+///
+/// This exists so a test can drive the *real* `arm` through the exact race the
+/// clear-then-check order defends against, deterministically and on one thread.
+///
+/// It replaces a hand-written copy of `arm` with the two statements swapped.
+/// That copy could only ever demonstrate that *a* reversed order is wrong; it
+/// could not detect the real `arm` being reversed, because it was not the real
+/// `arm`. Measured: with the copy as the only deterministic test, sabotaging
+/// the real `arm` was caught in one run out of three -- detection relied on two
+/// threads happening to interleave inside a window tens of nanoseconds wide.
+/// A second copy of a rule is a check of the copy, not of the rule.
+#[cfg(test)]
+fn run_arm_race_hook() {
+    ARM_RACE_HOOK.with(|hook| {
+        // Taken out for the call rather than held borrowed across it, so a hook
+        // that touches the queue cannot trip a `RefCell` re-entrancy panic.
+        let taken = hook.borrow_mut().take();
+        if let Some(mut race) = taken {
+            race();
+            *hook.borrow_mut() = Some(race);
+        }
+    });
+}
+
+#[cfg(test)]
+thread_local! {
+    static ARM_RACE_HOOK: core::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        const { core::cell::RefCell::new(None) };
+}
+
+/// Test-only: installs a hook for the duration of a closure.
+#[cfg(test)]
+pub(crate) fn with_arm_race<R>(race: impl FnMut() + 'static, body: impl FnOnce() -> R) -> R {
+    ARM_RACE_HOOK.with(|hook| *hook.borrow_mut() = Some(Box::new(race)));
+    let result = body();
+    ARM_RACE_HOOK.with(|hook| *hook.borrow_mut() = None);
+    result
 }
 
 /// Block on a doorbell handle, translating the Win32 result.

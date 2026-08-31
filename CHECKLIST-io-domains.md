@@ -151,7 +151,17 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   prove a point is not one to leave to the scheduler) and ends in a real bounded `WaitForSingleObject`:
   reversed, it returns `WAIT_TIMEOUT` with an item sitting in the queue -- the lost wakeup, reproduced;
   correct, the check finds the item and never waits at all.
-  **Nine sabotages, eight defects and one control, all behaving as expected.** Caught: push not
+  **Corrected after review: the deterministic test named above tested a *copy* of the wrong order,
+  not the real `arm`.** `arm_reversed_racing` is a hand-written duplicate with the two statements
+  swapped, so it could only ever show that *a* reversed order is wrong -- it could not detect the real
+  `arm` being reversed. Measured: sabotaging the real `arm` was caught in **one run out of three**,
+  because detection then depended on two threads interleaving inside a window tens of nanoseconds wide.
+  This is the anti-pattern CONTRACT INTEGRITY rule 1 names -- a second copy of a rule checks the copy,
+  not the rule -- and it was found only because the sweep was re-run under a tighter bound and the
+  result flipped. `Consumer::arm` now carries a `#[cfg(test)]` hook that fires between the clear and the
+  check, so a test drives the **real** `arm` through that exact window on one thread. Caught every run
+  since.
+  **Thirteen sabotages, twelve defects and one control, all behaving as expected.** Caught: push not
   signalling; producer `Drop` not signalling; `arm` checking before clearing; `arm` not creating the
   doorbell before checking; the final drain returning nothing; `clear` resetting the event but not the
   mirror flag; auto-reset instead of manual-reset; the event created already signalled. Three of those
@@ -213,6 +223,17 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   and the test is decoration.
   Scope it to the orderings, not the logic -- loom explores exponentially, so a loom test that also
   checks FIFO order over a thousand items will not terminate.
+  **A second, sharper target arrived from the M30.4/M30.5 code review, and it is the more important
+  one.** The doorbell carries two `SeqCst` fences -- before the loads in `Doorbell::signal`, after the
+  stores in `Doorbell::clear` -- which defeat a store-buffer (Dekker) reordering between the producer's
+  decision to skip signalling and the consumer's emptiness check. Without them the item is queued, no
+  signal is raised, and the consumer parks forever. **Removing either fence leaves the entire suite
+  green**, and no sabotage can express it, because the defect is a fact about the memory model rather
+  than an interleaving a scheduler can be coaxed into producing. Both fences must therefore be loom's
+  first two subjects, and the test earns its place only if deleting each one makes it fail.
+  Note that loom must model the doorbell's `OnceLock` publication too, since the lazy-creation path is
+  one of the two sides of the hazard; a loom test that only models the steady state will pass with the
+  `signal` fence removed and prove nothing about the case that motivated it.
 
 ## M32 -- Contracts the runtime cannot be written without
 

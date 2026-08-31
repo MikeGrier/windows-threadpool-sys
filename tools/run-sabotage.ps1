@@ -49,16 +49,32 @@
     Optional wildcard filter over sabotage names, to re-run just one.
 
 .PARAMETER TimeoutSeconds
-    Per-sabotage bound covering build and test. Defaults to 300. A run that
-    exceeds it is killed and counted as caught.
+    Bound on TEST EXECUTION only, defaulting to 60. A run that exceeds it is
+    killed and counted as caught, because a lost wakeup hangs rather than
+    fails.
 
-    Err generous rather than tight. Because a timeout counts as caught, a bound
-    shorter than a legitimate build-and-test manufactures a FALSE "caught" --
-    it credits the tests with detecting a defect they never even ran against,
-    which is the dangerous direction to be wrong in. A too-long bound only
-    wastes time on the sabotages that genuinely hang. Lower it deliberately
-    when iterating on one sabotage; leave it alone for a sweep whose result
-    you intend to believe.
+    This is deliberately separate from -BuildTimeoutSeconds, and the split is
+    what makes a tight bound safe here. Because a timeout counts as caught, a
+    bound shorter than legitimate work manufactures a FALSE "caught" -- it
+    credits the tests with detecting a defect they never ran against, which is
+    the dangerous direction to be wrong in. Under a single combined bound the
+    number had to be generous enough for the slowest imaginable cold build,
+    which made every genuinely-hanging sabotage cost that same generous number.
+
+    Measured on this workspace: building the crate after a one-file edit takes
+    under a second, and test execution takes about twelve, nearly all of it
+    compiling doctests -- `cargo test --no-run` does not build those, and Cargo
+    offers no `--doc --no-run` to pre-pay it. The default therefore leaves
+    roughly five times headroom over the measured cost. Raise it for a
+    substantially slower machine or a much larger suite; a sweep whose result
+    you intend to believe should never be run with this tightened for speed.
+
+.PARAMETER BuildTimeoutSeconds
+    Bound on the build phase, defaulting to 300. Generous on purpose: a slow
+    cold build must never be mistaken for a hang, and it costs nothing when
+    builds are fast. A sabotage that fails to build is reported as such rather
+    than as caught -- the compiler rejecting a patch says nothing about whether
+    the tests would have noticed it.
 
 .PARAMETER OutputDirectory
     Where to write per-sabotage transcripts. Defaults to .scratch/sabotage.
@@ -82,7 +98,9 @@ param(
 
     [string] $Name = '*',
 
-    [int] $TimeoutSeconds = 300,
+    [int] $TimeoutSeconds = 60,
+
+    [int] $BuildTimeoutSeconds = 300,
 
     [string] $OutputDirectory,
 
@@ -147,6 +165,37 @@ function Invoke-Bounded {
 
     Stop-Tree -ProcessId $process.Id
     return [pscustomobject]@{ Outcome = 'hung'; Code = $null }
+}
+
+# Builds, then runs, under two separate bounds.
+#
+# The phases are timed apart because they mean different things. A hang is what
+# a lost wakeup looks like, and it happens in test EXECUTION -- so that phase
+# gets a tight bound. A build is merely slow sometimes, and a slow build killed
+# by a tight bound would be reported as a hang, crediting the tests with a
+# detection that never happened. So the build gets a generous one, and its
+# failure is reported as its own outcome rather than folded into "caught":
+# the compiler rejecting a patch tells you nothing about your tests.
+function Invoke-Sabotaged {
+    param(
+        [string[]] $CargoArgs,
+        [string] $WorkingDirectory,
+        [string] $TranscriptPath,
+        [int] $BuildSeconds,
+        [int] $TestSeconds
+    )
+
+    $build = Invoke-Bounded -CargoArgs ($CargoArgs + '--no-run') -WorkingDirectory $WorkingDirectory `
+        -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
+    if ($build.Outcome -eq 'failed') {
+        return [pscustomobject]@{ Outcome = 'build-failed'; Code = $build.Code }
+    }
+    if ($build.Outcome -eq 'hung') {
+        return [pscustomobject]@{ Outcome = 'build-hung'; Code = $null }
+    }
+
+    return Invoke-Bounded -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
+        -TranscriptPath $TranscriptPath -Seconds $TestSeconds
 }
 
 function Format-Patch {
@@ -220,8 +269,8 @@ foreach ($sabotage in $selected) {
 
 Write-Host 'Baseline: running the unmodified suite.' -ForegroundColor Cyan
 $baselinePath = Join-Path $OutputDirectory 'baseline.txt'
-$baseline = Invoke-Bounded -CargoArgs $testArgs -WorkingDirectory $repoRoot `
-    -TranscriptPath $baselinePath -Seconds $TimeoutSeconds
+$baseline = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $repoRoot `
+    -TranscriptPath $baselinePath -BuildSeconds $BuildTimeoutSeconds -TestSeconds $TimeoutSeconds
 
 if ($baseline.Outcome -ne 'passed') {
     Exit-WithMessage (@(
@@ -268,8 +317,8 @@ foreach ($sabotage in $selected) {
     $transcript = Join-Path $OutputDirectory ((($sabotage.name -replace '[^A-Za-z0-9]+', '-')) + '.txt')
     [System.IO.File]::WriteAllText($target, $patched, $utf8NoBom)
     try {
-        $run = Invoke-Bounded -CargoArgs $testArgs -WorkingDirectory $repoRoot `
-            -TranscriptPath $transcript -Seconds $TimeoutSeconds
+        $run = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $repoRoot `
+            -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $TimeoutSeconds
     }
     finally {
         [System.IO.File]::WriteAllText($target, $original, $utf8NoBom)
@@ -278,13 +327,22 @@ foreach ($sabotage in $selected) {
         }
     }
 
-    $caught = $run.Outcome -ne 'passed'
     $actual = switch ($run.Outcome) {
         'passed' { 'survived (NOT caught)' }
         'failed' { "caught (suite failed, exit $($run.Code))" }
-        'hung' { "caught (suite HUNG past ${TimeoutSeconds}s)" }
+        'hung' { "caught (tests HUNG past ${TimeoutSeconds}s)" }
+        # Not "caught": the tests never ran, so this says nothing about them.
+        # It means the patch is not valid Rust -- a manifest problem to fix,
+        # not a result to record.
+        'build-failed' { 'MANIFEST DOES NOT COMPILE (tests never ran)' }
+        'build-hung' { "BUILD HUNG past ${BuildTimeoutSeconds}s (tests never ran)" }
     }
-    $ok = if ($sabotage.expect -eq 'caught') { $caught } else { -not $caught }
+    $ok = switch ($run.Outcome) {
+        'passed' { $sabotage.expect -eq 'survives' }
+        'failed' { $sabotage.expect -eq 'caught' }
+        'hung' { $sabotage.expect -eq 'caught' }
+        default { $false }
+    }
 
     $results += [pscustomobject]@{
         Sabotage = $sabotage.name; Expected = $sabotage.expect

@@ -1,6 +1,7 @@
 {
   "package": "windows-waitable-queues",
   "description": "Sabotages for the SPSC ring and its doorbell. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "The two SeqCst fences in doorbell.rs are deliberately ABSENT from this manifest, and their absence is not an oversight. Removing either leaves every test green, because the defect they prevent is a store-buffer reordering that no amount of stress testing reliably produces -- it is a fact about the memory model, not about any interleaving a scheduler will hand you. Adding them here with expect:'caught' would fail the sweep; adding them with expect:'survives' would assert they are harmless, which is false and far worse. They are verifiable only under a model checker, and are the named target of checklist item M31.6.",
   "sabotages": [
     {
       "name": "push does not signal the doorbell",
@@ -38,16 +39,18 @@
       "name": "arm checks emptiness before clearing",
       "file": "src/spsc.rs",
       "expect": "caught",
-      "why": "The lost wakeup itself, and the whole reason Consumer::arm exists. A push landing between the check and the clear both signals and has its signal erased, so the consumer sleeps on a queue that is not empty and will never be signalled again. This is the order that reads more naturally, which is exactly why it has to be proven wrong rather than assumed to be.",
+      "why": "The lost wakeup itself, and the whole reason Consumer::arm exists. A push landing between the check and the clear both signals and has its signal erased, so the consumer sleeps on a queue that is not empty and will never be signalled again. This is the order that reads more naturally, which is exactly why it has to be proven wrong rather than assumed to be. MEASURED: this entry was caught in only one run of three while the sole deterministic test exercised a hand-written COPY of the reversed order rather than the real `arm` -- detection depended on two threads interleaving inside a window tens of nanoseconds wide. The `ARM_RACE_HOOK` in spsc.rs now drives the real `arm` through that window on one thread, and this is caught every run.",
       "find": [
-        "        self.shared.doorbell.handle()?;",
         "        self.shared.doorbell.clear();",
+        "        #[cfg(test)]",
+        "        run_arm_race_hook();",
         "        Ok(self.is_empty())"
       ],
       "replace": [
-        "        self.shared.doorbell.handle()?;",
         "        let empty = self.is_empty();",
         "        self.shared.doorbell.clear();",
+        "        #[cfg(test)]",
+        "        run_arm_race_hook();",
         "        Ok(empty)"
       ]
     },
@@ -90,6 +93,56 @@
       ],
       "replace": [
         ""
+      ]
+    },
+    {
+      "name": "clear does not reset the event",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "Distinct from the mirror-flag sabotage below it: this leaves the flag correct and the kernel object wrong, so a consumer's wait returns immediately, forever. Added after a code review found that the two tests named for this property both asserted it vacuously -- they pushed before the event existed, so the doorbell was never lit and 'arming clears it' held trivially. Both now light the doorbell first, and this entry is what keeps them honest.",
+      "find": [
+        "        unsafe {",
+        "            ResetEvent(event.as_raw_handle());",
+        "        }"
+      ],
+      "replace": [
+        "        let _ = event;"
+      ]
+    },
+    {
+      "name": "previous_valid is not clamped to the shape's bound",
+      "file": "src/error.rs",
+      "expect": "caught",
+      "why": "Rounding a request down to the nearest power of two gives 2^63 for anything at or above it, which exceeds the largest representable capacity. The suggestion exists so a caller can correct the call, and one that is itself refused is worse than none.",
+      "find": [
+        "                Some(rounded.min(self.largest_power_of_two_within_bound()))"
+      ],
+      "replace": [
+        "                Some(rounded)"
+      ]
+    },
+    {
+      "name": "next_valid is not clamped to the shape's bound",
+      "file": "src/error.rs",
+      "expect": "caught",
+      "why": "A request that is merely not a power of two can still sit between the largest valid power of two and the bound, and rounding it up overshoots. Found by the test written for previous_valid, which the review had not flagged -- the reviewer checked next_valid only on the TooLarge path.",
+      "find": [
+        "        (rounded <= self.max_valid).then_some(rounded)"
+      ],
+      "replace": [
+        "        Some(rounded)"
+      ]
+    },
+    {
+      "name": "recv_timeout computes its deadline with the panicking add",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "`Instant + Duration` panics when the sum is not representable, and Duration::MAX is an ordinary way to spell 'effectively forever'. The rest of the function is careful about exactly this class of problem, which is what made the panicking operator easy to miss.",
+      "find": [
+        "        let Some(deadline) = Instant::now().checked_add(timeout) else {"
+      ],
+      "replace": [
+        "        let Some(deadline) = Some(Instant::now() + timeout) else {"
       ]
     },
     {
