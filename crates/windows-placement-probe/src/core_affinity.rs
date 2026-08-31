@@ -199,7 +199,12 @@ pub struct Observation {
 pub fn classify(producer: ProcessorPlace, consumer: ProcessorPlace) -> Placement {
     // Tested first: two processors on one core share L1, which dominates any
     // statement about the cache domain or the class they also share.
-    if producer.core == consumer.core {
+    //
+    // The group must match as well. A physical core cannot span a processor
+    // group, so two processors reporting the same core id in different groups
+    // are different cores whose ids collide -- and calling them SMT siblings
+    // would attribute a shared L1 that does not exist.
+    if producer.group == consumer.group && producer.core == consumer.core {
         return Placement::SameCoreSiblings;
     }
     // Tested before cache and class for the mirror-image reason: crossing a
@@ -245,6 +250,42 @@ pub fn representative_pairs(
         }
     }
     chosen
+}
+
+/// Stop the run if this machine presents processor groups the tool cannot
+/// honestly handle.
+///
+/// Currently a no-op beyond the check itself, because groups *are* handled --
+/// every identity is a `(group, number)` pair and pinning goes through
+/// `SetThreadGroupAffinity`. It exists as the place a future limitation is
+/// declared, and it is deliberately loud rather than silent.
+///
+/// # Why a refusal rather than a best effort
+///
+/// A tool that quietly measures whatever subset it understands is worse than
+/// one that stops, because its output is indistinguishable from a complete run.
+/// The large multi-socket machines this exists for are borrowed, measured once,
+/// and not available again: a wrong answer there is not a wrong answer we get to
+/// correct. A refusal costs one message.
+///
+/// # Panics
+///
+/// If the discovered processors cannot be measured as they are.
+fn assert_group_support(processors: &[ProcessorPlace]) {
+    assert!(
+        !processors.is_empty(),
+        "no processors were discovered, so there is nothing to measure"
+    );
+    // Every discovered processor must be pinnable. A number at or above the
+    // width of an affinity mask cannot be expressed in one, and measuring the
+    // rest while dropping it would report a machine smaller than the real one.
+    for place in processors {
+        assert!(
+            u32::from(place.number) < usize::BITS,
+            "processor {place} has a number no affinity mask can express; \
+             this machine cannot be measured honestly and the run is stopping"
+        );
+    }
 }
 
 /// Choose one representative processor pair for each *distinct pair of NUMA
@@ -312,13 +353,14 @@ pub fn node_pairs(
 /// Returns whatever [`discover_places`] failed with.
 pub fn measure() -> std::io::Result<Observation> {
     let processors = discover_places()?;
+    assert_group_support(&processors);
     let pairs = representative_pairs(&processors);
     let mut measurements = Vec::new();
 
     for (placement, (producer, consumer)) in pairs {
         for strategy in [Strategy::Baseline, Strategy::Cached] {
             let mut samples: Vec<_> = (0..REPETITIONS)
-                .map(|_| time_model_on(strategy, Some(producer.number), Some(consumer.number)))
+                .map(|_| time_model_on(strategy, Some(producer.id()), Some(consumer.id())))
                 .collect();
             samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
             let median = samples[samples.len() / 2];
@@ -361,7 +403,7 @@ pub fn measure() -> std::io::Result<Observation> {
         };
         for strategy in [Strategy::Baseline, Strategy::Cached] {
             let mut samples: Vec<_> = (0..REPETITIONS)
-                .map(|_| time_model_on(strategy, Some(producer.number), Some(consumer.number)))
+                .map(|_| time_model_on(strategy, Some(producer.id()), Some(consumer.id())))
                 .collect();
             samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
             let median = samples[samples.len() / 2];
@@ -383,7 +425,7 @@ pub fn measure() -> std::io::Result<Observation> {
         debug_assert_eq!((producer.numa_node, consumer.numa_node), (left, right));
         for strategy in [Strategy::Baseline, Strategy::Cached] {
             let mut samples: Vec<_> = (0..REPETITIONS)
-                .map(|_| time_model_on(strategy, Some(producer.number), Some(consumer.number)))
+                .map(|_| time_model_on(strategy, Some(producer.id()), Some(consumer.id())))
                 .collect();
             samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
             let median = samples[samples.len() / 2];

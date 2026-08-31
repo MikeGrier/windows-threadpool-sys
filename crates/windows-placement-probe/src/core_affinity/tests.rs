@@ -16,6 +16,7 @@ use crate::fingerprint::ProcessorPlace;
 /// one onto another NUMA node.
 fn place(number: u8, efficiency_class: u8, cache_domain: Option<u32>) -> ProcessorPlace {
     ProcessorPlace {
+        group: 0,
         number,
         core: u32::from(number),
         efficiency_class,
@@ -29,6 +30,15 @@ fn on_node(place: ProcessorPlace, numa_node: u32) -> ProcessorPlace {
     ProcessorPlace { numa_node, ..place }
 }
 
+/// The same processor, relocated to another processor group.
+///
+/// Its `number` is deliberately unchanged, because that is the configuration
+/// that breaks a number-keyed implementation: two distinct processors sharing
+/// one number across groups.
+fn in_group(place: ProcessorPlace, group: u16) -> ProcessorPlace {
+    ProcessorPlace { group, ..place }
+}
+
 /// Two processors sharing one physical core: SMT siblings.
 fn sibling(
     number: u8,
@@ -37,6 +47,7 @@ fn sibling(
     cache_domain: Option<u32>,
 ) -> ProcessorPlace {
     ProcessorPlace {
+        group: 0,
         number,
         core,
         efficiency_class,
@@ -372,6 +383,7 @@ fn synthesize(spec: &HostSpec) -> Vec<ProcessorPlace> {
             for _ in 0..spec.cores_per_cache_domain {
                 for _ in 0..spec.threads_per_core {
                     places.push(ProcessorPlace {
+                        group: 0,
                         number,
                         core,
                         efficiency_class: 0,
@@ -716,4 +728,133 @@ fn a_node_pair_is_still_selected_when_the_nodes_are_not_numbered_from_zero() {
     assert_eq!(pairs.len(), 1);
     assert!(pairs.contains_key(&(2, 5)));
     assert_node_pairs_are_faithful(&places);
+}
+
+// ---------------------------------------------------------------------------
+// Processor groups.
+//
+// Windows splits a machine with more than 64 logical processors into groups,
+// each numbering from zero, so every group has a processor 5. No host available
+// to this workspace has more than one group, and the machines this tool is
+// written for -- large multi-socket servers -- all do. These fixtures are the
+// only way that path executes before it meets such a machine.
+//
+// The failure being guarded against is silent: numbers stay below 64 within a
+// group, so no bound check fires. A number-keyed implementation simply reports
+// fewer processors than the machine has and prints a confident table describing
+// a topology that does not exist.
+// ---------------------------------------------------------------------------
+
+mod processor_groups {
+    use super::{classify, in_group, node_pairs, place, representative_pairs, sibling};
+    use crate::core_affinity::Placement;
+    use crate::fingerprint::ProcessorPlace;
+
+    /// Two groups of four processors whose numbers deliberately overlap.
+    ///
+    /// Group 0 and group 1 both contain numbers 0..4. A map keyed on the number
+    /// alone keeps four of the eight.
+    ///
+    /// Cache domain ids are distinct per group, matching the real conversion:
+    /// they come from a machine-wide enumeration, so two groups never share
+    /// one. An earlier version of this fixture reused them across groups and
+    /// thereby described a cache shared between processor groups, which no
+    /// machine does.
+    fn two_groups() -> Vec<ProcessorPlace> {
+        let mut places = Vec::new();
+        for group in 0..2_u16 {
+            for number in 0..4_u8 {
+                let domain = u32::from(group) * 2 + u32::from(number) / 2;
+                let base = place(number, 0, Some(domain));
+                places.push(in_group(base, group));
+            }
+        }
+        places
+    }
+
+    #[test]
+    fn processors_sharing_a_number_across_groups_are_distinct() {
+        let places = two_groups();
+
+        let ids: std::collections::BTreeSet<(u16, u8)> = places.iter().map(|p| p.id()).collect();
+
+        assert_eq!(
+            ids.len(),
+            8,
+            "two groups of four collapsed to {} distinct processors",
+            ids.len()
+        );
+    }
+
+    #[test]
+    fn a_group_is_part_of_the_rendered_identity() {
+        // The slice string is how a measurement's provenance travels into a
+        // checklist or a submitted record. If it omits the group, two different
+        // processors render identically and the record cannot be read back.
+        let zero = place(5, 0, Some(0));
+        let one = in_group(zero, 1);
+
+        assert_ne!(zero.to_string(), one.to_string());
+        assert!(zero.to_string().starts_with("g0/cpu5/"), "{zero}");
+        assert!(one.to_string().starts_with("g1/cpu5/"), "{one}");
+    }
+
+    #[test]
+    fn same_number_in_different_groups_is_not_the_same_core() {
+        // `core` is what `SameCoreSiblings` is decided on, so if the fallback
+        // core id were derived from the number alone, two processors in
+        // different groups would be classified as SMT siblings -- physically
+        // impossible, since a core cannot span a group.
+        let zero = sibling(5, 5, 0, Some(0));
+        let one = in_group(zero, 1);
+
+        assert_ne!(
+            classify(zero, one),
+            Placement::SameCoreSiblings,
+            "processors in different groups were classified as siblings of one core"
+        );
+    }
+
+    #[test]
+    fn selection_across_groups_files_every_pair_under_a_placement_it_satisfies() {
+        // Note what is *not* asserted: that a pair is drawn from every group.
+        // `representative_pairs` returns one pair per placement *category*, and
+        // "in a different group" is not one -- a cross-group pair on one node
+        // is an ordinary cross-cache pair. Requiring group coverage would be
+        // asserting a promise the function does not make, and an earlier
+        // revision of this test did exactly that.
+        //
+        // What must hold is that groups do not corrupt the classification: each
+        // chosen pair genuinely satisfies the row it is filed under.
+        let places = two_groups();
+
+        for (placement, (producer, consumer)) in representative_pairs(&places) {
+            assert_eq!(
+                classify(producer, consumer),
+                placement,
+                "pair {producer} / {consumer} filed under {}",
+                placement.label()
+            );
+            if placement == Placement::SameCoreSiblings {
+                assert_eq!(
+                    producer.group, consumer.group,
+                    "siblings were selected across a group boundary"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn groups_do_not_by_themselves_imply_a_numa_crossing() {
+        // A group boundary and a node boundary are different things, and
+        // Windows may split a single node across groups. Classifying by group
+        // would invent node crossings the machine does not have.
+        let places = two_groups();
+        let hops = node_pairs(&places);
+
+        assert!(
+            hops.is_empty(),
+            "a single-node machine with two groups reported a node crossing: {hops:?}"
+        );
+    }
 }

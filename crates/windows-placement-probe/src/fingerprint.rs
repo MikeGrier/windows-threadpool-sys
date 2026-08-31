@@ -70,7 +70,19 @@ use windows_topology_sys::{DomainKind, Provenance, Topology};
 /// and the placement classifier interprets it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessorPlace {
-    /// Its number within the (single) processor group.
+    /// Which processor group it belongs to.
+    ///
+    /// **A processor is identified by `(group, number)`, never by `number`
+    /// alone.** Windows splits a machine with more than 64 logical processors
+    /// into groups, each numbering from zero, so every group has a processor 5.
+    /// Keying on the number alone silently collapses them -- and it fails
+    /// quietly rather than loudly, because numbers stay below 64 within a group,
+    /// so no bound check fires. The run then pins to whichever processor won the
+    /// collision and prints a confident table describing a topology that does
+    /// not exist. That is the exact hazard on the large multi-socket hosts this
+    /// tool is written for.
+    pub group: u16,
+    /// Its number within [`Self::group`].
     pub number: u8,
     /// Which physical core it belongs to.
     ///
@@ -96,12 +108,33 @@ pub struct ProcessorPlace {
     pub numa_node: u32,
 }
 
+impl ProcessorPlace {
+    /// This processor's full identity, as the pinning call needs it.
+    ///
+    /// Exists so no call site is tempted to pass a bare `number`, which is the
+    /// whole defect: a number without its group names a different processor in
+    /// every group, and names the wrong one in all but the first.
+    #[must_use]
+    pub fn id(self) -> (u16, u8) {
+        (self.group, self.number)
+    }
+}
+
 impl fmt::Display for ProcessorPlace {
+    /// Renders the group **always**, including group 0 on a machine that has
+    /// only one.
+    ///
+    /// Printing it only when non-zero would keep single-group output unchanged
+    /// and still distinguish the groups on a large host, so it is tempting. It
+    /// is refused because the failure this guards against is precisely a tool
+    /// that *silently collapsed* the groups: a bare `cpu5` cannot tell a reader
+    /// whether the group was considered and was zero, or never consulted at all.
+    /// Group-awareness is cheap to show and expensive to assume.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "cpu{}/core{}/ec{}",
-            self.number, self.core, self.efficiency_class
+            "g{}/cpu{}/core{}/ec{}",
+            self.group, self.number, self.core, self.efficiency_class
         )?;
         match self.cache_domain {
             Some(id) => write!(f, "/cd{id}")?,
@@ -414,11 +447,16 @@ pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
 /// broken lookup and a correct one both yield node 0.
 #[must_use]
 pub fn places_from_topology(topology: &Topology) -> Vec<ProcessorPlace> {
+    // Every map here is keyed by the full `(group, number)` pair. Keying on the
+    // number alone is the defect this function is written against: on a machine
+    // with more than 64 logical processors each group numbers from zero, so
+    // group 1's processor 5 would overwrite group 0's and the machine would
+    // silently shrink to one group's worth of processors.
     let mut class_of = std::collections::BTreeMap::new();
     let mut core_of = std::collections::BTreeMap::new();
     for core in topology.cores() {
-        for (_group, number) in core.processors.iter() {
-            core_of.insert(number, core.id);
+        for id in core.processors.iter() {
+            core_of.insert(id, core.id);
         }
         let DomainKind::Core {
             efficiency_class, ..
@@ -426,8 +464,8 @@ pub fn places_from_topology(topology: &Topology) -> Vec<ProcessorPlace> {
         else {
             continue;
         };
-        for (_group, number) in core.processors.iter() {
-            class_of.insert(number, efficiency_class);
+        for id in core.processors.iter() {
+            class_of.insert(id, efficiency_class);
         }
     }
 
@@ -439,8 +477,8 @@ pub fn places_from_topology(topology: &Topology) -> Vec<ProcessorPlace> {
         if domains.len() > 1 {
             cache_of.clear();
             for domain in domains {
-                for (_group, number) in domain.processors.iter() {
-                    cache_of.insert(number, domain.id);
+                for id in domain.processors.iter() {
+                    cache_of.insert(id, domain.id);
                 }
             }
         }
@@ -450,19 +488,29 @@ pub fn places_from_topology(topology: &Topology) -> Vec<ProcessorPlace> {
     // NUMA partitioning has exactly one node, and every processor is in it.
     let mut numa_of = std::collections::BTreeMap::new();
     for domain in topology.memory_domains() {
-        for (_group, number) in domain.processors.iter() {
-            numa_of.insert(number, domain.id);
+        for id in domain.processors.iter() {
+            numa_of.insert(id, domain.id);
         }
     }
 
     class_of
         .into_iter()
-        .map(|(number, efficiency_class)| ProcessorPlace {
-            number,
-            core: core_of.get(&number).copied().unwrap_or(u32::from(number)),
-            efficiency_class,
-            cache_domain: cache_of.get(&number).copied(),
-            numa_node: numa_of.get(&number).copied().unwrap_or(0),
+        .map(|(id, efficiency_class)| {
+            let (group, number) = id;
+            ProcessorPlace {
+                group,
+                number,
+                // The fallback keeps distinct processors distinct across groups:
+                // a topology that reports no core for this processor must not
+                // collapse group 1's cpu5 onto group 0's.
+                core: core_of
+                    .get(&id)
+                    .copied()
+                    .unwrap_or_else(|| u32::from(group) << 8 | u32::from(number)),
+                efficiency_class,
+                cache_domain: cache_of.get(&id).copied(),
+                numa_node: numa_of.get(&id).copied().unwrap_or(0),
+            }
         })
         .collect()
 }

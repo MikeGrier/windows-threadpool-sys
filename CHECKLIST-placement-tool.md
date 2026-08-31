@@ -135,7 +135,7 @@ heading is about the *machine*, not about M2.
 the entire point of this tool -- has more than 64 logical processors, so Windows presents it as
 **multiple processor groups**, each numbering from zero.
 
-- [ ] **PT-1B.1** -- **Carry `(group, number)` as a processor's identity.** `ProcessorPlace` keys on a
+- [x] **PT-1B.1** -- **Carry `(group, number)` as a processor's identity.** `ProcessorPlace` keys on a
   bare `u8` number and `places_from_topology` discards the group outright (`for (_group, number)`), so
   every group's processor 5 collides on one map key. **The result is not a crash.** Numbers stay below
   64 within a group, so `assert!(cpu < 64)` never fires: the tool runs, pins to whichever processor
@@ -143,17 +143,30 @@ the entire point of this tool -- has more than 64 logical processors, so Windows
   collapsed. That is the same defect class as the omitted SMT row, on the machine we would get one
   attempt at.
 
-- [ ] **PT-1B.2** -- **Pin with `SetThreadGroupAffinity`.** `SetThreadAffinityMask` takes a mask
+- [x] **PT-1B.2** -- **Pin with `SetThreadGroupAffinity`.** `SetThreadAffinityMask` takes a mask
   within the caller's current group and cannot express a processor in another one, so it is not a
   matter of widening the mask. Keep the existing failure discipline: pinning that does not land must
   abort the run rather than fall back to an unpinned measurement.
 
-- [ ] **PT-1B.3** -- **Verify against a synthetic multi-group topology**, since no host here has more
+- [x] **PT-1B.3** -- **Verify against a synthetic multi-group topology**, since no host here has more
   than one group. `places_from_topology` is a pure conversion and already testable; a fixture with two
   groups whose numbers overlap must produce distinct processors, and the sabotage is to key on the
   number alone and watch the count halve.
+  **Nine tests added, and they found two real defects rather than confirming the change.** `classify`
+  compared `core` without comparing `group`, so two processors in different groups whose core ids
+  collided were reported as **SMT siblings** -- attributing a shared L1 that cannot exist, since a core
+  cannot span a group. And the fallback core id was derived from the number alone, which is what made
+  those collisions possible.
+  **The planned sabotage could not be performed, which is the strongest available result.** Keying the
+  conversion on the number alone no longer *compiles*: the maps are keyed `(u16, u8)`, so the collapse
+  is unrepresentable rather than merely tested against. The sabotage that does compile -- dropping the
+  group comparison from `classify` -- was performed and is caught.
+  **One test asserted a promise the code never made** and was rewritten rather than the code bent to
+  fit: `representative_pairs` returns one pair per placement *category*, and "in a different group" is
+  not a category, so requiring a pair from every group was wrong. Its fixture also gave both groups the
+  same cache-domain ids, describing a cache shared across groups, which no machine does.
 
-- [ ] **PT-1B.4** -- **Refuse loudly if groups are present and unsupported.** Whatever remains
+- [x] **PT-1B.4** -- **Refuse loudly if groups are present and unsupported.** Whatever remains
   unimplemented when a large machine is offered, the tool must say so and stop. A refusal costs one
   message; a collapsed topology costs a wrong answer nobody can detect from the output, on hardware
   that is not coming back.

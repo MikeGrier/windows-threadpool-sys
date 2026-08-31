@@ -55,7 +55,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadAffinityMask};
+use core::ptr;
+
+use windows_sys::Win32::System::SystemInformation::GROUP_AFFINITY;
+use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadGroupAffinity};
 use windows_waitable_queues::spsc;
 
 /// Items handed across the ring in one timed run.
@@ -267,8 +270,8 @@ fn time_model(strategy: Strategy) -> Sample {
 /// processor: an unconstrained thread can migrate mid-run.
 pub fn time_model_on(
     strategy: Strategy,
-    producer_cpu: Option<u8>,
-    consumer_cpu: Option<u8>,
+    producer_cpu: Option<(u16, u8)>,
+    consumer_cpu: Option<(u16, u8)>,
 ) -> Sample {
     let ring = Ring::new(CAPACITY);
     let started = Instant::now();
@@ -290,24 +293,41 @@ pub fn time_model_on(
     }
 }
 
-/// Confine the calling thread to one logical processor.
+/// Confine the calling thread to one logical processor, named by group.
 ///
 /// Panics rather than warns on failure. A silently unpinned thread would turn
 /// a placement experiment into a measurement of the scheduler's preferences,
 /// and the run would still print a confident number -- the same failure mode as
 /// a probe that asserts its conclusion.
-fn pin_current_thread(cpu: Option<u8>) {
-    let Some(cpu) = cpu else {
+///
+/// # Why not `SetThreadAffinityMask`
+///
+/// Its mask is interpreted **within the caller's current group**, so it cannot
+/// name a processor in another one. On a machine with more than 64 logical
+/// processors that is not a matter of widening the mask; the call has no way to
+/// express the target at all. `SetThreadGroupAffinity` takes the group
+/// explicitly, and is the only way to pin across the whole machine.
+fn pin_current_thread(cpu: Option<(u16, u8)>) {
+    let Some((group, number)) = cpu else {
         return;
     };
-    assert!(cpu < 64, "this probe assumes a single processor group");
-    let mask: usize = 1 << cpu;
-    // SAFETY: sets this thread's affinity to a mask with one bit set, for a
-    // processor the caller took from the discovered topology.
-    let previous = unsafe { SetThreadAffinityMask(GetCurrentThread(), mask) };
     assert!(
-        previous != 0,
-        "SetThreadAffinityMask failed for processor {cpu}: {}",
+        u32::from(number) < usize::BITS,
+        "processor number {number} does not fit a group affinity mask"
+    );
+
+    let affinity = GROUP_AFFINITY {
+        Mask: 1_usize << number,
+        Group: group,
+        Reserved: [0; 3],
+    };
+    // SAFETY: `affinity` is a fully initialised `GROUP_AFFINITY` naming one
+    // processor the caller took from the discovered topology, and the previous
+    // affinity is not wanted, so a null pointer is passed for it.
+    let ok = unsafe { SetThreadGroupAffinity(GetCurrentThread(), &affinity, ptr::null_mut()) };
+    assert!(
+        ok != 0,
+        "SetThreadGroupAffinity failed for group {group} processor {number}: {}",
         std::io::Error::last_os_error()
     );
 }

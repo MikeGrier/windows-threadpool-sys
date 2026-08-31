@@ -573,3 +573,130 @@ mod from_topology {
         assert!(hops.contains_key(&(0, 1)));
     }
 }
+
+// ---------------------------------------------------------------------------
+// The conversion, on a machine with more than one processor group.
+//
+// The tests above cover classification and selection once places exist. This
+// covers the step that builds them, which is where the group was previously
+// discarded outright.
+// ---------------------------------------------------------------------------
+
+mod multi_group_conversion {
+    use windows_topology_sys::{
+        Domain, DomainKind, Processor, ProcessorId, ProcessorSet, Topology,
+    };
+
+    use crate::fingerprint::places_from_topology;
+
+    /// One processor per core, four cores per group, two groups -- with the
+    /// numbers overlapping, which is how Windows really presents it.
+    fn two_group_topology() -> Topology {
+        let mut processors = Vec::new();
+        let mut domains = Vec::new();
+        let mut core_id = 0_u32;
+
+        for group in 0..2_u16 {
+            let mut members = Vec::new();
+            for number in 0..4_u8 {
+                processors.push(Processor {
+                    id: ProcessorId { group, number },
+                    online: true,
+                    capacity: 0,
+                });
+                members.push(number);
+
+                domains.push(Domain {
+                    kind: DomainKind::Core {
+                        simultaneous_multithreading: false,
+                        efficiency_class: 0,
+                    },
+                    id: core_id,
+                    processors: ProcessorSet::from_group_mask(group, 1_usize << number),
+                });
+                core_id += 1;
+            }
+
+            let mask = members.iter().fold(0_usize, |mask, n| mask | (1 << n));
+            domains.push(Domain {
+                kind: DomainKind::Group,
+                id: u32::from(group),
+                processors: ProcessorSet::from_group_mask(group, mask),
+            });
+            // A cache domain per group, because a cache is never shared across
+            // one, and a memory domain per group so this stays a two-node
+            // machine rather than accidentally testing NUMA as well.
+            domains.push(Domain {
+                kind: DomainKind::Cache {
+                    level: 3,
+                    associativity: 16,
+                    line_size: 64,
+                    size_bytes: 32 * 1024 * 1024,
+                    cache_type: windows_topology_sys::CacheKind::Unified,
+                },
+                id: 100 + u32::from(group),
+                processors: ProcessorSet::from_group_mask(group, mask),
+            });
+            domains.push(Domain {
+                kind: DomainKind::Memory { memory_bytes: None },
+                id: u32::from(group),
+                processors: ProcessorSet::from_group_mask(group, mask),
+            });
+        }
+
+        Topology {
+            processors,
+            domains,
+            distances: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn every_processor_of_every_group_survives_the_conversion() {
+        // The regression that matters. Keying the conversion's maps on the
+        // processor number alone silently produced four places for an
+        // eight-processor machine, and nothing in the output said so.
+        let places = places_from_topology(&two_group_topology());
+
+        assert_eq!(
+            places.len(),
+            8,
+            "an eight-processor two-group machine converted to {} places",
+            places.len()
+        );
+
+        let ids: std::collections::BTreeSet<(u16, u8)> = places.iter().map(|p| p.id()).collect();
+        assert_eq!(ids.len(), 8, "two places collided on one identity");
+        assert_eq!(places.iter().filter(|p| p.group == 0).count(), 4);
+        assert_eq!(places.iter().filter(|p| p.group == 1).count(), 4);
+    }
+
+    #[test]
+    fn a_cores_identity_does_not_collide_across_groups() {
+        let places = places_from_topology(&two_group_topology());
+
+        let cores: std::collections::BTreeSet<(u16, u32)> =
+            places.iter().map(|p| (p.group, p.core)).collect();
+
+        assert_eq!(cores.len(), 8, "eight single-threaded cores collapsed");
+    }
+
+    #[test]
+    fn per_group_cache_and_node_membership_is_read_correctly() {
+        let places = places_from_topology(&two_group_topology());
+
+        for place in &places {
+            assert_eq!(
+                place.numa_node,
+                u32::from(place.group),
+                "{place} was read onto the wrong node"
+            );
+            assert_eq!(
+                place.cache_domain,
+                Some(100 + u32::from(place.group)),
+                "{place} was read into the wrong cache domain"
+            );
+        }
+    }
+}
