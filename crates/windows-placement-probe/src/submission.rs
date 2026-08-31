@@ -26,6 +26,7 @@
 //! cost of a fabricated placement measurement is a wrong row in a table that
 //! disagrees with every other host, which is visible.
 
+use crate::paste_json;
 use crate::record::SubmissionRecord;
 use crate::report;
 
@@ -62,11 +63,13 @@ pub fn checksum(bytes: &[u8]) -> String {
 ///
 /// Returns whatever serializing the record failed with.
 pub fn render_submission(record: &SubmissionRecord) -> Result<String, serde_json::Error> {
-    // Pretty-printed rather than compact. A collector parses either, but a
-    // *person* is being asked to look at this before sending it, and a single
-    // enormous line is both unreadable and the most likely thing a terminal
-    // will wrap.
-    let json = serde_json::to_string_pretty(record)?;
+    // Laid out for a person rather than for a parser. A collector parses
+    // either, but a *person* is being asked to look at this before sending it,
+    // and both a single enormous line and eight lines saying `2` fail that.
+    // See `paste_json` for the rule; every caller asks it rather than choosing
+    // a layout of their own, so the checksum and the file cannot disagree with
+    // what was printed.
+    let json = paste_json::to_paste_json(record)?;
     let digest = checksum(json.as_bytes());
 
     let mut out = String::new();

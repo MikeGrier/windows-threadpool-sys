@@ -59,6 +59,8 @@ pub mod core_affinity;
 pub mod fingerprint;
 /// What machine this was, beyond its measurable shape.
 pub mod machine;
+/// JSON laid out to be read in a terminal rather than by a machine.
+pub mod paste_json;
 /// The handoff itself, and the strategies the placement experiment compares.
 pub mod peer_index_cache;
 /// The record a run produces and a runner sends back.

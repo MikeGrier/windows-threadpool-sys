@@ -176,7 +176,9 @@ fn print_plan(plan: &RunPlan) {
 /// text on screen, and losing the backup copy costs nothing that matters.
 fn write_backup(record: &SubmissionRecord) {
     let name = submission::file_name(record);
-    match serde_json::to_string_pretty(record) {
+    // The same layout as the printed record, so the backup a runner attaches
+    // and the text they paste are byte-identical.
+    match windows_placement_probe::paste_json::to_paste_json(record) {
         Ok(json) => match std::fs::write(&name, json) {
             Ok(()) => println!("(a copy of the record was also written to {name})"),
             Err(error) => {

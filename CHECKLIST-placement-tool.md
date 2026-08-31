@@ -391,6 +391,18 @@ that carries them is written.
     and no opaque blobs. A file that must be decoded to be checked cannot honestly be described as
     inspectable.
 
+- [x] **PT-4.7** -- **Lay the JSON out for a reader rather than a parser.** `to_string_pretty` gives
+  every array element its own line, so eight cache domains cost eight lines saying `2` and a
+  sixty-four-node host would spend sixty-four lines listing its nodes one integer at a time -- on
+  precisely the machine whose submission matters most. Arrays holding no object now collapse onto one
+  line, or fill lines up to a width budget, while objects still expand one field per line.
+  **Field order is part of the contract, not incidental.** The first draft laid out a
+  `serde_json::Value`, whose object is a `BTreeMap`, and every test still passed while the output
+  quietly sorted `build` above `schema_version` and made each measurement row open with
+  `consumer_batch`. Caught by reading a run, not by the suite. Order is now preserved by walking an
+  order-preserving tree; `serde_json`'s `preserve_order` feature is deliberately **not** used, because
+  cargo unifies features and four other crates in this workspace share `serde_json`.
+
 ## M5: distribution
 
 **The CI-built artifact is the canonical way to get this tool**, not `cargo install`. Two reasons, and

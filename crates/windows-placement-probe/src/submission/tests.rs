@@ -84,7 +84,7 @@ fn the_checksum_is_printed_and_matches_the_json_that_follows_it() {
     let record = fully_populated();
     let text = render_submission(&record).expect("must render");
 
-    let json = serde_json::to_string_pretty(&record).expect("must serialize");
+    let json = crate::paste_json::to_paste_json(&record).expect("must serialize");
     let expected = checksum(json.as_bytes());
 
     assert!(
@@ -105,8 +105,8 @@ fn the_checksum_changes_when_the_record_does() {
     let mut b = fully_populated();
     b.placements[0].nanos_per_item = 42.0;
 
-    let json_a = serde_json::to_string_pretty(&a).expect("must serialize");
-    let json_b = serde_json::to_string_pretty(&b).expect("must serialize");
+    let json_a = crate::paste_json::to_paste_json(&a).expect("must serialize");
+    let json_b = crate::paste_json::to_paste_json(&b).expect("must serialize");
 
     assert_ne!(checksum(json_a.as_bytes()), checksum(json_b.as_bytes()));
 }
@@ -115,7 +115,7 @@ fn the_checksum_changes_when_the_record_does() {
 fn the_checksum_catches_a_truncated_paste() {
     // The failure actually being defended against: a scrollback limit or a
     // half-dragged selection.
-    let json = serde_json::to_string_pretty(&fully_populated()).expect("must serialize");
+    let json = crate::paste_json::to_paste_json(&fully_populated()).expect("must serialize");
     let truncated = &json[..json.len() / 2];
 
     assert_ne!(checksum(json.as_bytes()), checksum(truncated.as_bytes()));
