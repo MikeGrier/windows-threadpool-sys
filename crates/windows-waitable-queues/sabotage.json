@@ -1,0 +1,133 @@
+{
+  "package": "windows-waitable-queues",
+  "description": "Sabotages for the SPSC ring and its doorbell. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "sabotages": [
+    {
+      "name": "push does not signal the doorbell",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "A producer that never rings the bell leaves a parked consumer asleep on a queue with items in it. Caught as a hang, which is the correct shape for this defect.",
+      "find": [
+        "        self.shared.doorbell.signal();",
+        "        Ok(())"
+      ],
+      "replace": [
+        "        Ok(())"
+      ]
+    },
+    {
+      "name": "producer drop does not signal",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "Disconnection is a wakeup, and the only one no other party can deliver. Without it a blocked consumer waits forever for an item that can no longer be sent: the queue stays correct and the program still hangs. NOTE the shape of this patch -- it deletes the live call. An earlier version inserted unreachable code beside it, which changed the file without changing behaviour, and the resulting pass was misread as a hole in the tests.",
+      "find": [
+        "        self.shared.doorbell.signal();",
+        "    }",
+        "}",
+        "",
+        "/// The reading half"
+      ],
+      "replace": [
+        "    }",
+        "}",
+        "",
+        "/// The reading half"
+      ]
+    },
+    {
+      "name": "arm checks emptiness before clearing",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "The lost wakeup itself, and the whole reason Consumer::arm exists. A push landing between the check and the clear both signals and has its signal erased, so the consumer sleeps on a queue that is not empty and will never be signalled again. This is the order that reads more naturally, which is exactly why it has to be proven wrong rather than assumed to be.",
+      "find": [
+        "        self.shared.doorbell.handle()?;",
+        "        self.shared.doorbell.clear();",
+        "        Ok(self.is_empty())"
+      ],
+      "replace": [
+        "        self.shared.doorbell.handle()?;",
+        "        let empty = self.is_empty();",
+        "        self.shared.doorbell.clear();",
+        "        Ok(empty)"
+      ]
+    },
+    {
+      "name": "arm does not create the doorbell before checking",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "Lazy creation is the same hazard a third time: a producer running while no event exists skips signalling, so the emptiness check has to come after the event exists to catch what that skip left behind.",
+      "find": [
+        "        self.shared.doorbell.handle()?;",
+        "        self.shared.doorbell.clear();"
+      ],
+      "replace": [
+        "        self.shared.doorbell.clear();"
+      ]
+    },
+    {
+      "name": "the final drain returns nothing",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "A producer may push and then drop in the window between a receive's first pop and its disconnection check. Reporting the disconnection without one last take silently discards an item that was successfully sent. This guard was originally unreachable from any test, and this sabotage is what found that out.",
+      "find": [
+        "    fn finish(&self) -> Option<T> {",
+        "        self.pop()",
+        "    }"
+      ],
+      "replace": [
+        "    fn finish(&self) -> Option<T> {",
+        "        None",
+        "    }"
+      ]
+    },
+    {
+      "name": "clear resets the event but not the mirror flag",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "The mirror flag lets a redundant signal skip its syscall. If clear leaves it set, the next push believes the doorbell is already lit and skips the one signal that actually mattered.",
+      "find": [
+        "        self.signalled.store(false, Ordering::Release);"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "the event is auto-reset instead of manual-reset",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "An auto-reset event is an edge, not a level, and it does not count signals. A wait that reports one of several signalled handles would consume the queue's only notification while ignoring it. This exact mistake hung the crate's own doorbell probe for four hundred seconds.",
+      "find": [
+        "CreateEventW(ptr::null(), TRUE, FALSE, ptr::null())"
+      ],
+      "replace": [
+        "CreateEventW(ptr::null(), FALSE, FALSE, ptr::null())"
+      ]
+    },
+    {
+      "name": "the event is created already signalled",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "A doorbell must not claim readiness before anything is pushed, or the first wait returns immediately and the consumer spins.",
+      "find": [
+        "CreateEventW(ptr::null(), TRUE, FALSE, ptr::null())"
+      ],
+      "replace": [
+        "CreateEventW(ptr::null(), TRUE, TRUE, ptr::null())"
+      ]
+    },
+    {
+      "name": "CONTROL: signal always syscalls, skipping the flag optimisation",
+      "file": "src/doorbell.rs",
+      "expect": "survives",
+      "why": "A control, not a defect. Skipping a redundant SetEvent is an optimisation: removing it costs ~74ns per redundant push and changes no observable behaviour, so the suite MUST stay green. If this is ever reported as caught, a test has started asserting the implementation instead of the contract, and that test is the thing to fix.",
+      "find": [
+        "        if self.signalled.swap(true, Ordering::AcqRel) {"
+      ],
+      "replace": [
+        "        self.signalled.store(true, Ordering::Release);",
+        "        if false {"
+      ]
+    }
+  ]
+}

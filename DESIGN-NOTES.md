@@ -1282,6 +1282,41 @@ written into the *audit table* while the decision row it contradicted still said
 finding is not discharged by being recorded in the audit. It is discharged when the statement it contradicted
 has changed.
 
+## <a id="sabotage-sweeps"></a>Sabotage verification has an instrument, and three rules that are not obvious
+
+Sabotage verification is already required here in several places -- of a derived-fact binding under
+[restatement drift](#restatement-drift), of the baseline-consistency checker, of the queue crate's
+lost-wakeup guard. What was missing was a way to run one that did not have to be reinvented, badly,
+each time. [tools/run-sabotage.ps1](tools/run-sabotage.ps1) is that instrument, documented in
+[README-sabotage.md](tools/README-sabotage.md), driven by a `sabotage.json` kept beside the code it
+patches.
+
+The principle is stated elsewhere and is not restated here. What belongs here is the three operational
+rules the script encodes, because each was arrived at by getting it wrong and none is guessable:
+
+- **Judge by exit code, never by reading output.** A test process that dies of heap corruption prints
+  no `test result: FAILED` line, so a harness that greps for one reports a hole in the tests where
+  there is none. This cost a real hunt for a nonexistent defect.
+- **A timeout counts as caught.** A missing wakeup does not fail a test, it hangs it. An unbounded
+  harness hangs with it, and a bounded one that treats a timeout as inconclusive throws away the
+  detection it just achieved.
+- **The baseline must be green before anything is patched.** Against an already-red suite every
+  sabotage "fails" and the sweep proves nothing while reading as a clean bill of health.
+
+Two further points that are easy to skip and expensive to skip:
+
+**A survived sabotage is not automatically a hole in the tests.** It may be a defect in the sabotage.
+A patch that inserts unreachable code beside a live call, instead of deleting the call, changes the
+file without changing the behaviour, and the suite then passes for the honest reason that nothing was
+broken. That happened here and was misread as a test hole before anyone read the patch, which is why
+the script now prints the patch for every unexpected result.
+
+**A manifest without a control is only half an instrument.** A control is a change that is *not* a
+defect -- typically removing an optimisation -- and it must leave the suite green. Without one, a
+sweep can tell you the tests are sensitive but not that they are sensitive to the right things; a
+control reported as caught means a test has begun asserting the implementation rather than the
+contract, and that test is the thing to fix.
+
 ## <a id="remoting-synchronous-namespace-operations"></a>Remoting synchronous namespace operations: the measured platform
 
 A planned facility makes synchronous-only Win32 operations available
