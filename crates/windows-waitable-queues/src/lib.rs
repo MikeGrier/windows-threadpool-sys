@@ -42,9 +42,24 @@
 //! a doc comment.
 //!
 //! What the shapes have in common is described by the [capability
-//! traits](traits) -- [`Producer`], [`Consumer`], [`Bounded`], [`Waitable`] --
-//! each naming one thing a queue can do, so a caller can be generic over
-//! exactly what it needs and nothing more.
+//! traits](traits) -- [`Producer`], [`Consumer`], [`Bounded`], [`Waitable`],
+//! [`Reserving`] -- each naming one thing a queue can do, so a caller can be
+//! generic over exactly what it needs and nothing more.
+//!
+//! # Shutting down
+//!
+//! A consumer learns that every producer is gone from
+//! `is_disconnected`, and a producer learns the consumer is gone from a typed
+//! [`PushError::Disconnected`] that hands the item back. The orderly shutdown
+//! is therefore: drain to empty, then check.
+//!
+//! For everything that does not go to plan there is [`disposal`]. A queue torn
+//! down with items still in it must do *something* with them, and by default it
+//! destroys them inside the last handle's drop -- on whichever thread happened
+//! to release it. When an item owns a handle that is a hazard rather than a
+//! detail, because closing a handle can block and the dropping thread may be a
+//! pool callback that must not. Building the queue with a [`Disposal`] sink
+//! hands those items back instead.
 //!
 //! # Status
 //!
@@ -60,6 +75,7 @@
 
 mod blocking;
 mod capacity;
+pub mod disposal;
 mod doorbell;
 mod error;
 pub mod mpsc;
@@ -69,6 +85,7 @@ pub mod reserving_mpsc;
 pub mod spsc;
 pub mod traits;
 
+pub use disposal::Disposal;
 pub use error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
 pub use traits::{Bounded, Consumer, Drain, Producer, Reserving, Waitable};
 

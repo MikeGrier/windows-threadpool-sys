@@ -14,7 +14,8 @@
 //! scheduler rather than the queue -- green today, red on a different machine,
 //! and evidence of nothing either way.
 
-use super::{BOUNDS, Consumer, Producer, bounded, validate_capacity};
+use super::{BOUNDS, Consumer, Producer, bounded, bounded_with_disposal, validate_capacity};
+use crate::Disposal;
 use crate::race_hooks;
 use crate::{PushError, RecvError, RecvTimeoutError};
 use std::collections::BTreeMap;
@@ -974,4 +975,159 @@ fn a_blocking_consumer_receives_every_item_from_every_producer() {
         PRODUCERS * PER_PRODUCER,
         "a parked consumer must miss nothing"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Teardown: what becomes of items nobody drained.
+//
+// The policy itself is covered in `crate::disposal`'s suite. What is asserted
+// here is that THIS shape's walk reaches it -- and this walk is the one that
+// consults each slot's sequence rather than assuming the whole resident range
+// is published, so it has a case the other shapes do not.
+// ---------------------------------------------------------------------------
+
+/// Records that it was destroyed, so a test can tell "handed to the owner" from
+/// "destructor run by whichever thread dropped last".
+#[derive(Debug)]
+struct Tracked {
+    id: u32,
+    destroyed: Arc<AtomicUsize>,
+}
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        self.destroyed.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn undrained_items_reach_the_disposal_sink_instead_of_being_destroyed() {
+    let destroyed = Arc::new(AtomicUsize::new(0));
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+
+    {
+        let (tx, _rx) = bounded_with_disposal::<Tracked>(
+            8,
+            Disposal::new(move |item| {
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("8 is a valid capacity");
+
+        for id in 0..5 {
+            tx.push(Tracked {
+                id,
+                destroyed: Arc::clone(&destroyed),
+            })
+            .expect("room");
+        }
+    }
+
+    assert_eq!(
+        reaper.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4],
+        "every undrained item must reach the sink, in queue order"
+    );
+    assert_eq!(destroyed.load(Ordering::Relaxed), 5);
+}
+
+#[test]
+fn items_from_every_producer_reach_the_sink() {
+    // Multi-producer is what this shape is for, and teardown must not favour
+    // whichever handle happened to be dropped last.
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    {
+        let (tx, _rx) = bounded_with_disposal::<(usize, usize)>(
+            16,
+            Disposal::new(move |item| {
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("16 is a valid capacity");
+
+        let threads: Vec<_> = (0..PRODUCERS)
+            .map(|producer| {
+                let handle = tx.clone();
+                thread::spawn(move || {
+                    for sequence in 0..3 {
+                        push_spinning(&handle, (producer, sequence));
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().expect("no producer may panic");
+        }
+    }
+
+    let mut per_producer = [0_usize; PRODUCERS];
+    for (producer, _) in reaper.iter() {
+        per_producer[producer] += 1;
+    }
+    assert!(
+        per_producer.iter().all(|count| *count == 3),
+        "every producer's abandoned items must be accounted for, not just the last one's"
+    );
+}
+
+#[test]
+fn the_sink_sees_survivors_after_the_ring_has_wrapped() {
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    {
+        let (tx, rx) = bounded_with_disposal::<u32>(
+            4,
+            Disposal::new(move |item| {
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("4 is a valid capacity");
+
+        for round in 0..6 {
+            tx.push(round).expect("room");
+            rx.pop().expect("an item");
+        }
+        for round in 100..103 {
+            tx.push(round).expect("room");
+        }
+    }
+    assert_eq!(
+        reaper.iter().collect::<Vec<_>>(),
+        vec![100, 101, 102],
+        "the survivors are the resident range, not the whole slot array"
+    );
+}
+
+#[test]
+fn a_queue_torn_down_by_the_producer_still_reaches_the_sink() {
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    let (tx, rx) = bounded_with_disposal::<u32>(
+        4,
+        Disposal::new(move |item| {
+            let _ = undelivered.send(item);
+        }),
+    )
+    .expect("4 is a valid capacity");
+
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+    drop(rx);
+    drop(tx);
+
+    assert_eq!(reaper.iter().collect::<Vec<_>>(), vec![1, 2]);
+}
+
+#[test]
+fn without_a_sink_undrained_items_are_destroyed_in_place() {
+    let destroyed = Arc::new(AtomicUsize::new(0));
+    {
+        let (tx, _rx) = bounded::<Tracked>(4).expect("4 is a valid capacity");
+        for id in 0..3 {
+            tx.push(Tracked {
+                id,
+                destroyed: Arc::clone(&destroyed),
+            })
+            .expect("room");
+        }
+    }
+    assert_eq!(destroyed.load(Ordering::Relaxed), 3);
 }

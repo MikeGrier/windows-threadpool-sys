@@ -76,6 +76,7 @@ use std::time::Duration;
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
 use crate::capacity::{Bounds, WRAPPING_MAX_CAPACITY, validate_capacity};
+use crate::disposal::{Disposal, Teardown};
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
 
@@ -117,12 +118,57 @@ const BOUNDS: Bounds = Bounds {
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
+    build(capacity, Teardown::drop_in_place())
+}
+
+/// Creates a ring that hands its undrained items to `disposal` at teardown.
+///
+/// Identical to [`bounded`] except for what becomes of items nobody took. See
+/// [`Disposal`] for why that decision has to be made here rather than at
+/// teardown, and why it matters for items that own a handle.
+///
+/// # Errors
+///
+/// As [`bounded`].
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::mpsc;
+/// use windows_waitable_queues::{Disposal, spsc};
+///
+/// let (undelivered, reaper) = mpsc::channel();
+/// let (tx, rx) = spsc::bounded_with_disposal::<u32>(
+///     4,
+///     Disposal::new(move |item| {
+///         let _ = undelivered.send(item);
+///     }),
+/// )?;
+///
+/// tx.push(1).expect("a fresh queue has room");
+/// drop((tx, rx));
+///
+/// assert_eq!(reaper.into_iter().collect::<Vec<_>>(), vec![1]);
+/// # Ok::<(), windows_waitable_queues::CapacityError>(())
+/// ```
+pub fn bounded_with_disposal<T>(
+    capacity: usize,
+    disposal: Disposal<T>,
+) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
+    build(capacity, Teardown::handing_off(disposal))
+}
+
+fn build<T>(
+    capacity: usize,
+    teardown: Teardown<T>,
+) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
     validate_capacity(capacity, BOUNDS)?;
 
     let mut slots = Vec::with_capacity(capacity);
     slots.resize_with(capacity, || UnsafeCell::new(MaybeUninit::uninit()));
 
     let shared = Arc::new(Shared {
+        teardown,
         slots: slots.into_boxed_slice(),
         mask: capacity - 1,
         capacity,
@@ -150,6 +196,11 @@ struct Shared<T> {
     slots: Box<[UnsafeCell<MaybeUninit<T>>]>,
     mask: usize,
     capacity: usize,
+    /// What becomes of undrained items at teardown.
+    ///
+    /// Read only by [`Shared::drop`], which holds `&mut self`, so it needs no
+    /// synchronization and costs the hot paths nothing but its space.
+    teardown: Teardown<T>,
     /// Where the consumer will next read. Owned by the consumer.
     head: CacheAligned<AtomicUsize>,
     /// Where the producer will next write. Owned by the producer.
@@ -179,7 +230,14 @@ struct Shared<T> {
 // publishes its position with a release store that the other acquires, so the
 // write of an item happens-before the read of that item. `T: Send` is required
 // and sufficient because an item is moved between the threads and never
-// referenced from both.
+// referenced from both.//
+// The 	eardown field is deliberately NOT covered by that argument, because it
+// cannot be: it holds a boxed FnMut, which is Send but not Sync, so this
+// impl is forcing Sync onto a field that does not have it. That is sound for
+// a narrower reason -- the field is unreachable through a shared reference. It
+// is private, no method reads it, and the only access is from Drop, which
+// holds &mut self and runs when the last handle is already gone. So no two
+// threads can reach it at all, concurrently or otherwise.
 unsafe impl<T: Send> Sync for Shared<T> {}
 // SAFETY: as above; sending the shared state is sending the items it holds.
 unsafe impl<T: Send> Send for Shared<T> {}
@@ -237,18 +295,24 @@ impl<T> Drop for Shared<T> {
     fn drop(&mut self) {
         // Both handles are gone, so no synchronization is needed and the
         // positions can be read directly. Every slot in `[head, tail)` still
-        // holds an initialized item that nobody took, and dropping the queue
-        // must drop them rather than leak them.
+        // holds an initialized item that nobody took, and tearing the queue
+        // down must account for them rather than leak them.
+        //
+        // Each is *moved out* and handed to the teardown policy rather than
+        // destroyed where it lies. For the default policy the two are the same
+        // thing; for a queue whose items own handles they are not, and this is
+        // the only place that sees every survivor. See `crate::disposal`.
         let head = *self.head.0.get_mut();
         let tail = *self.tail.0.get_mut();
+        let mask = self.mask;
         let mut pos = head;
         while pos != tail {
             // SAFETY: `pos` is in `[head, tail)`, so this slot was written by
-            // the producer and never read by the consumer. It is dropped
-            // exactly once, because `pos` advances every iteration.
-            unsafe {
-                (*self.slots[pos & self.mask].get()).assume_init_drop();
-            }
+            // the producer and never read by the consumer. It is read exactly
+            // once, because `pos` advances every iteration, and the slot is
+            // never read again afterwards.
+            let item = unsafe { (*self.slots[pos & mask].get()).assume_init_read() };
+            self.teardown.dispose(item);
             pos = pos.wrapping_add(1);
         }
     }

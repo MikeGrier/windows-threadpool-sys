@@ -80,6 +80,7 @@ use std::time::Duration;
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
 use crate::capacity::{Bounds, WRAPPING_MAX_CAPACITY, validate_capacity};
+use crate::disposal::{Disposal, Teardown};
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, PushError, RecvError, RecvTimeoutError};
 
@@ -144,6 +145,29 @@ const BOUNDS: Bounds = Bounds {
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
+    build(capacity, Teardown::drop_in_place())
+}
+
+/// Creates a queue that hands its undrained items to `disposal` at teardown.
+///
+/// Identical to [`bounded`] except for what becomes of items nobody took. See
+/// [`Disposal`] for why that decision has to be made here rather than at
+/// teardown, and why it matters for items that own a handle.
+///
+/// # Errors
+///
+/// As [`bounded`].
+pub fn bounded_with_disposal<T>(
+    capacity: usize,
+    disposal: Disposal<T>,
+) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
+    build(capacity, Teardown::handing_off(disposal))
+}
+
+fn build<T>(
+    capacity: usize,
+    teardown: Teardown<T>,
+) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
     validate_capacity(capacity, BOUNDS)?;
 
     let mut slots = Vec::with_capacity(capacity);
@@ -155,6 +179,7 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
     }
 
     let shared = Arc::new(Shared {
+        teardown,
         slots: slots.into_boxed_slice(),
         mask: capacity - 1,
         capacity,
@@ -194,6 +219,11 @@ struct Slot<T> {
 }
 
 struct Shared<T> {
+    /// What becomes of undrained items at teardown.
+    ///
+    /// Read only by [`Shared::drop`], which holds `&mut self`, so it needs no
+    /// synchronization and costs the hot paths nothing but its space.
+    teardown: Teardown<T>,
     slots: Box<[Slot<T>]>,
     mask: usize,
     capacity: usize,
@@ -233,7 +263,14 @@ struct Shared<T> {
 // publishes it. The write of the item therefore happens-before the read, and no
 // two threads ever touch the same slot's contents at the same time. `T: Send`
 // is required and sufficient because an item is moved between threads and never
-// referenced from both.
+// referenced from both.//
+// The 	eardown field is deliberately NOT covered by that argument, because it
+// cannot be: it holds a boxed FnMut, which is Send but not Sync, so this
+// impl is forcing Sync onto a field that does not have it. That is sound for
+// a narrower reason -- the field is unreachable through a shared reference. It
+// is private, no method reads it, and the only access is from Drop, which
+// holds &mut self and runs when the last handle is already gone. So no two
+// threads can reach it at all, concurrently or otherwise.
 unsafe impl<T: Send> Sync for Shared<T> {}
 // SAFETY: as above; sending the shared state is sending the items it holds.
 unsafe impl<T: Send> Send for Shared<T> {}
@@ -281,8 +318,13 @@ impl<T> Drop for Shared<T> {
     fn drop(&mut self) {
         // Every handle is gone, so no synchronization is needed and the
         // positions can be read directly. A slot between the two positions
-        // still holds an item nobody took, and dropping the queue must drop
-        // those rather than leak them.
+        // still holds an item nobody took, and tearing the queue down must
+        // account for them rather than leak them.
+        //
+        // Each is *moved out* and handed to the teardown policy rather than
+        // destroyed where it lies. For the default policy the two are the same
+        // thing; for a queue whose items own handles they are not, and this is
+        // the only place that sees every survivor. See `crate::disposal`.
         //
         // The sequence is consulted per slot rather than assuming every
         // position in the range holds an item. A producer cannot be mid-push
@@ -299,11 +341,10 @@ impl<T> Drop for Shared<T> {
             if *slot.sequence.get_mut() == published {
                 // SAFETY: the slot's sequence says the producer finished
                 // writing it and the consumer never took it, so it holds an
-                // initialized item. It is dropped exactly once, because
-                // `position` advances every iteration.
-                unsafe {
-                    slot.value.get_mut().assume_init_drop();
-                }
+                // initialized item. It is read exactly once, because `position`
+                // advances every iteration and the slot is never read again.
+                let item = unsafe { slot.value.get_mut().assume_init_read() };
+                self.teardown.dispose(item);
             }
             position = position.wrapping_add(1);
         }

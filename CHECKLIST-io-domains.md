@@ -293,10 +293,43 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   167 unit tests, 5 doctests and 1 `compile_fail` doctest, the whole suite in 0.31s. Thirty-one
   sabotages, all behaving as declared: eight new ones for this milestone.
 
-- [ ] **M31.3** -- Shutdown in both directions: the consumer learns when every producer is gone, and a
+- [x] **M31.3** -- Shutdown in both directions: the consumer learns when every producer is gone, and a
   producer learns when the consumer is gone and fails with a typed error. Descriptors in flight at
   teardown are **accounted, not dropped** -- some own handles, and their disposal must be allowed to
   block, which is the hazard the namespace session flagged for undrained completions.
+  **The first two clauses were already shipped, and this was audited rather than assumed.** Every shape
+  has `is_disconnected` on both ends, `PushError::Disconnected(T)` hands the item back to a producer whose
+  consumer is gone, and M31.2 added `Disconnected<T>` for a reservation redeemed into a dead queue. A
+  reservation also counts as a producer, so an outstanding promise holds the stream open. Nothing was
+  needed there; saying so is the point, since the alternative is checking a box on work done elsewhere.
+  **The third clause was the whole item, and the default was quietly bad.** Undrained items were destroyed
+  *in place*, inside the last `Arc` release -- so `T`'s destructor ran on whichever thread happened to drop
+  last. That thread is not knowable in advance and nobody chose it: it may be a pool callback that must not
+  block, and the namespace session's example is closing a handle to a dead network path, which is exactly
+  the blocking operation the facility exists to keep off a caller's thread.
+  **`Drop` cannot be made to hand them back** -- `&mut self`, no return, cannot fail, and by then every
+  handle is gone so there is nobody to return them *to*. That is why `Disposal` is supplied at
+  construction rather than requested at teardown: the last handle to drop is the only place that sees
+  every survivor, and it is the one place with no way to report
+  ([D-20](crates/windows-waitable-queues/DESIGN-NOTES.md#d-20)). The default is unchanged and still
+  destroys in place, because for items that own nothing that is exactly right -- what changed is that it
+  now has a name and an alternative.
+  **The claim under test is about threads, not counts.** Asserting only that the sink receives the items
+  would test the mechanism rather than the property, so the suite records the `ThreadId` a destructor runs
+  on and asserts it is *not* the thread that released the last handle -- with a control, without a sink,
+  showing that it is. Without that control the first test would look identical if destructors simply never
+  ran anywhere observable.
+  **Two smaller decisions recorded rather than left implicit.** A panicking sink is caught and the walk
+  continues ([D-21](crates/windows-waitable-queues/DESIGN-NOTES.md#d-21)), because a panic escaping a
+  destructor abandons every item behind it and aborts outright during an unwind. And `into_remaining` was
+  considered and refused ([D-22](crates/windows-waitable-queues/DESIGN-NOTES.md#d-22)): producers may push
+  after the consumer is consumed, so it would cover only the orderly path, and `drain` already does what
+  it would do.
+  Routing is asserted once per shape rather than once for the crate, since each walks its own layout --
+  M31.2's sweep taught that lesson about the reservation guarantee, and this applies it before the sweep
+  had to teach it twice.
+  194 unit tests, 7 doctests and 1 `compile_fail` doctest, the whole suite in 0.33s. Thirty-six sabotages,
+  all behaving as declared: five new ones for this milestone.
 
 - [ ] **M31.4** -- Observability (R9): depth, high-water, and **a count of doorbells actually rung**. That
   last one is what makes the skip rule measurable rather than assumed, and sabotage-verifiable -- disabling

@@ -83,6 +83,13 @@ again next lap" in a one-slot ring.
   construction.
 - **It will not create a kernel object you never use.** The doorbell is created
   lazily, so a consumer that only polls allocates none.
+- **It will not destroy your items on a thread you did not choose.** A queue
+  built with a `Disposal` sink hands whatever nobody drained back to you at
+  teardown, rather than running the destructors inside the last handle's drop.
+  That matters when an item owns a handle, because closing one can block --
+  and the thread that happens to release last may be a pool callback that must
+  not. Without a sink the items are destroyed in place, which is the right
+  default for items that own nothing.
 - **It will not round your capacity.** A capacity that a shape cannot represent
   is refused, with the nearest valid neighbours on the error, rather than
   silently turned into one the caller did not choose.

@@ -416,6 +416,69 @@
       ]
     },
     {
+      "name": "teardown ignores the disposal sink and destroys in place",
+      "file": "src/disposal.rs",
+      "expect": "caught",
+      "why": "The whole mechanism in one line. If the policy always takes the default path, every queue silently reverts to running arbitrary destructors on whichever thread released the last handle -- which is the hazard, and it is invisible from any test that only counts survivors rather than observing where they were destroyed.",
+      "find": [
+        "        let Some(disposal) = self.disposal.as_mut() else {"
+      ],
+      "replace": [
+        "        let Some(disposal) = Option::<&mut Disposal<T>>::None else {"
+      ]
+    },
+    {
+      "name": "a panicking sink is not contained",
+      "file": "src/disposal.rs",
+      "expect": "caught",
+      "why": "The sink is caller code running inside a destructor. Letting a panic escape abandons every item not yet disposed -- exactly the handles this mechanism exists to account for -- and during an unwind it aborts the process outright. Caught by the test that panics on the fourth of ten items and requires the other nine to be disposed anyway.",
+      "find": [
+        "        let _ = catch_unwind(AssertUnwindSafe(|| (disposal.sink)(item)));"
+      ],
+      "replace": [
+        "        (disposal.sink)(item);"
+      ]
+    },
+    {
+      "name": "spsc teardown destroys survivors instead of handing them over",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "Each shape walks its own layout to find survivors, so the routing has to be asserted once per shape -- covering one says nothing about the others, which is the same lesson M31.2's sweep taught about the reservation guarantee.",
+      "find": [
+        "            let item = unsafe { (*self.slots[pos & mask].get()).assume_init_read() };",
+        "            self.teardown.dispose(item);"
+      ],
+      "replace": [
+        "            unsafe { (*self.slots[pos & mask].get()).assume_init_drop() };"
+      ]
+    },
+    {
+      "name": "mpsc teardown destroys survivors instead of handing them over",
+      "file": "src/mpsc.rs",
+      "expect": "caught",
+      "why": "As for spsc, and this walk differs: it consults each slot's sequence rather than assuming the whole resident range is published.",
+      "find": [
+        "                let item = unsafe { slot.value.get_mut().assume_init_read() };",
+        "                self.teardown.dispose(item);"
+      ],
+      "replace": [
+        "                unsafe { slot.value.get_mut().assume_init_drop() };"
+      ]
+    },
+    {
+      "name": "reserving_mpsc teardown destroys survivors instead of handing them over",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "The shape where it matters most: a reservation is taken because its message must not be lost, so a redeemed message abandoned at teardown would be lost after all -- just later and more quietly.",
+      "find": [
+        "                let item = unsafe { slot.value.get_mut().assume_init_read() };",
+        "                self.teardown.dispose(item);"
+      ],
+      "replace": [
+        "                unsafe { slot.value.get_mut().assume_init_drop() };"
+      ]
+    },
+    {
       "name": "spsc: a best-effort push may take a reserved slot",
       "file": "src/spsc.rs",
       "expect": "caught",

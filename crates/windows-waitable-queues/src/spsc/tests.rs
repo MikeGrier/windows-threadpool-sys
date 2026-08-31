@@ -6,7 +6,8 @@
 //! joined thread rather than a sleep, so they are deterministic: the assertion
 //! runs after the peer has finished, not after a guess about how long it takes.
 
-use super::{BOUNDS, Consumer, Producer, bounded, validate_capacity};
+use super::{BOUNDS, Consumer, Producer, bounded, bounded_with_disposal, validate_capacity};
+use crate::Disposal;
 use crate::race_hooks;
 use crate::{PushError, RecvError, RecvTimeoutError};
 use std::os::windows::io::AsRawHandle;
@@ -1182,5 +1183,328 @@ fn dropping_the_queue_drops_a_reserved_item_it_still_holds() {
         drops.load(Ordering::Relaxed),
         6,
         "every undrained item must be dropped, including the reserved one"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Teardown: what becomes of items nobody drained.
+//
+// The disposal policy's own behaviour is covered in `crate::disposal`'s suite.
+// What is asserted here is that THIS shape's teardown walk actually reaches it
+// -- each shape finds its survivors by walking its own layout, so covering one
+// says nothing about the others.
+// ---------------------------------------------------------------------------
+
+/// Records that it was destroyed, and where.
+///
+/// The distinction the whole mechanism turns on is "handed to the owner" versus
+/// "destructor run by whichever thread dropped last", so a test needs to be able
+/// to tell those apart rather than merely count survivors.
+#[derive(Debug)]
+struct Tracked {
+    id: u32,
+    destroyed: Arc<AtomicUsize>,
+}
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        self.destroyed.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn undrained_items_reach_the_disposal_sink_instead_of_being_destroyed() {
+    let destroyed = Arc::new(AtomicUsize::new(0));
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+
+    {
+        let (tx, _rx) = bounded_with_disposal::<Tracked>(
+            8,
+            Disposal::new(move |item| {
+                // Moved out of teardown rather than destroyed in it, which is
+                // the entire point: the owner now decides when and where.
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("8 is a valid capacity");
+
+        for id in 0..5 {
+            tx.push(Tracked {
+                id,
+                destroyed: Arc::clone(&destroyed),
+            })
+            .expect("room");
+        }
+    }
+
+    let rescued: Vec<u32> = reaper.iter().map(|item| item.id).collect();
+    assert_eq!(
+        rescued,
+        vec![0, 1, 2, 3, 4],
+        "every undrained item must reach the sink, in queue order"
+    );
+    assert_eq!(
+        destroyed.load(Ordering::Relaxed),
+        5,
+        "and be destroyed only once the owner has finished with them"
+    );
+}
+
+#[test]
+fn only_the_undrained_items_reach_the_sink() {
+    // What the consumer already took is the consumer's, and must not be
+    // reported as abandoned.
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    let destroyed = Arc::new(AtomicUsize::new(0));
+
+    {
+        let (tx, rx) = bounded_with_disposal::<Tracked>(
+            8,
+            Disposal::new(move |item: Tracked| {
+                let _ = undelivered.send(item.id);
+            }),
+        )
+        .expect("8 is a valid capacity");
+
+        for id in 0..5 {
+            tx.push(Tracked {
+                id,
+                destroyed: Arc::clone(&destroyed),
+            })
+            .expect("room");
+        }
+        assert_eq!(rx.pop().expect("an item").id, 0);
+        assert_eq!(rx.pop().expect("an item").id, 1);
+    }
+
+    assert_eq!(
+        reaper.iter().collect::<Vec<_>>(),
+        vec![2, 3, 4],
+        "the two the consumer took are not abandoned items"
+    );
+}
+
+#[test]
+fn an_empty_queue_hands_nothing_to_the_sink() {
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    {
+        let (tx, rx) = bounded_with_disposal::<u32>(
+            4,
+            Disposal::new(move |item| {
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("4 is a valid capacity");
+        tx.push(1).expect("room");
+        assert_eq!(rx.pop(), Some(1));
+    }
+    assert_eq!(
+        reaper.iter().collect::<Vec<_>>(),
+        Vec::<u32>::new(),
+        "a queue drained to empty has nothing to account for"
+    );
+}
+
+#[test]
+fn the_sink_sees_survivors_after_the_ring_has_wrapped() {
+    // The teardown walk is over a wrapped range, which is where an index error
+    // would show up as the wrong items rather than as a crash.
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    {
+        let (tx, rx) = bounded_with_disposal::<u32>(
+            4,
+            Disposal::new(move |item| {
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("4 is a valid capacity");
+
+        for round in 0..6 {
+            tx.push(round).expect("room");
+            rx.pop().expect("an item");
+        }
+        for round in 100..103 {
+            tx.push(round).expect("room");
+        }
+    }
+    assert_eq!(
+        reaper.iter().collect::<Vec<_>>(),
+        vec![100, 101, 102],
+        "the survivors are the resident range, not the whole slot array"
+    );
+}
+
+#[test]
+fn a_queue_torn_down_by_the_producer_still_reaches_the_sink() {
+    // Which handle happens to die last is not knowable in advance, and the
+    // guarantee must not depend on it. Here the consumer goes first, so the
+    // producer's drop is what tears the queue down.
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    let (tx, rx) = bounded_with_disposal::<u32>(
+        4,
+        Disposal::new(move |item| {
+            let _ = undelivered.send(item);
+        }),
+    )
+    .expect("4 is a valid capacity");
+
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+    drop(rx);
+    drop(tx);
+
+    assert_eq!(
+        reaper.iter().collect::<Vec<_>>(),
+        vec![1, 2],
+        "teardown accounts for the survivors whichever handle releases last"
+    );
+}
+
+#[test]
+fn a_queue_torn_down_on_another_thread_still_reaches_the_sink() {
+    // The dropping thread is whichever one happens to release last, which is
+    // exactly why disposal cannot be left to it implicitly.
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    let (tx, rx) = bounded_with_disposal::<u32>(
+        4,
+        Disposal::new(move |item| {
+            let _ = undelivered.send(item);
+        }),
+    )
+    .expect("4 is a valid capacity");
+
+    tx.push(1).expect("room");
+    drop(rx);
+
+    thread::spawn(move || drop(tx))
+        .join()
+        .expect("the dropping thread must not panic");
+
+    assert_eq!(reaper.iter().collect::<Vec<_>>(), vec![1]);
+}
+
+#[test]
+fn without_a_sink_undrained_items_are_destroyed_in_place() {
+    // The default, asserted rather than assumed -- it is the behaviour every
+    // existing caller has, and the reason a queue of `u32` need not think about
+    // any of this.
+    let destroyed = Arc::new(AtomicUsize::new(0));
+    {
+        let (tx, _rx) = bounded::<Tracked>(4).expect("4 is a valid capacity");
+        for id in 0..3 {
+            tx.push(Tracked {
+                id,
+                destroyed: Arc::clone(&destroyed),
+            })
+            .expect("room");
+        }
+    }
+    assert_eq!(
+        destroyed.load(Ordering::Relaxed),
+        3,
+        "with no sink there is nowhere else for them to go"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The hazard itself, stated as a test rather than as a paragraph.
+//
+// The claim disposal exists to make good on is not "the sink receives the
+// items" -- that is the mechanism. The claim is that **a destructor which
+// blocks does not run on whichever thread happened to release the last
+// handle**, because that thread may be a pool callback that must not block. So
+// these two assert where the destructor actually runs, with a control proving
+// the test can tell the difference.
+// ---------------------------------------------------------------------------
+
+/// Records the thread its destructor ran on.
+#[derive(Debug)]
+struct ThreadWitness(Arc<std::sync::Mutex<Vec<std::thread::ThreadId>>>);
+
+impl Drop for ThreadWitness {
+    fn drop(&mut self) {
+        self.0
+            .lock()
+            .expect("no test holds this poisoned")
+            .push(std::thread::current().id());
+    }
+}
+
+#[test]
+fn a_sink_keeps_the_destructor_off_the_thread_that_tore_the_queue_down() {
+    let ran_on = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+
+    let (tx, rx) = bounded_with_disposal::<ThreadWitness>(
+        4,
+        Disposal::new(move |item: ThreadWitness| {
+            // The sink's whole job: move it somewhere a thread that may block
+            // will find it. Nothing here runs the destructor.
+            let _ = undelivered.send(item);
+        }),
+    )
+    .expect("4 is a valid capacity");
+
+    tx.push(ThreadWitness(Arc::clone(&ran_on))).expect("room");
+
+    // Tear the queue down somewhere that is emphatically not this thread,
+    // standing in for the pool callback that must not block.
+    let teardown_thread = thread::spawn(move || {
+        drop(rx);
+        drop(tx);
+        std::thread::current().id()
+    })
+    .join()
+    .expect("the tearing-down thread must not panic");
+
+    assert!(
+        ran_on.lock().expect("not poisoned").is_empty(),
+        "the destructor must not have run yet: the item is the owner's now, and \
+         the thread that dropped the queue has already moved on"
+    );
+
+    // The owner takes delivery here, and *this* is where the destructor runs.
+    let rescued = reaper.recv().expect("the sink was handed the survivor");
+    drop(rescued);
+
+    let ran_on = ran_on.lock().expect("not poisoned");
+    assert_eq!(ran_on.len(), 1);
+    assert_ne!(
+        ran_on[0], teardown_thread,
+        "a blocking destructor must not run on the thread that released the last handle"
+    );
+    assert_eq!(
+        ran_on[0],
+        std::thread::current().id(),
+        "it runs where the owner chose to take delivery"
+    );
+}
+
+#[test]
+fn without_a_sink_the_destructor_does_run_on_the_thread_that_tore_the_queue_down() {
+    // The control. Without it the test above could pass for the wrong reason --
+    // it would look identical if destructors simply never ran anywhere
+    // observable. This is also the honest statement of the default: it is not
+    // that nothing blocks, it is that the blocking lands on a thread nobody
+    // chose.
+    let ran_on = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let (tx, rx) = bounded::<ThreadWitness>(4).expect("4 is a valid capacity");
+    tx.push(ThreadWitness(Arc::clone(&ran_on))).expect("room");
+
+    let teardown_thread = thread::spawn(move || {
+        drop(rx);
+        drop(tx);
+        std::thread::current().id()
+    })
+    .join()
+    .expect("the tearing-down thread must not panic");
+
+    let ran_on = ran_on.lock().expect("not poisoned");
+    assert_eq!(ran_on.len(), 1, "the item was destroyed at teardown");
+    assert_eq!(
+        ran_on[0], teardown_thread,
+        "and with no sink it was destroyed on whichever thread released last, \
+         which is exactly the behaviour a disposal sink exists to replace"
     );
 }

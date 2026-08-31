@@ -43,6 +43,9 @@ preferred.
 | <a id="d-17"></a>D-17 | **The reservation count and the claim position live in one word, because a check-and-claim over both must be a single atomic operation.** Two atomics cannot be made correct with any amount of fencing: the pushing producer is load-then-store and the reserving one store-then-load, so the Dekker argument does not apply and both can miss each other. The 32/32 split is forced by the arithmetic, and caps this shape at 2^31 items. |
 | <a id="d-18"></a>D-18 | **A 128-bit compare-and-swap is refused.** It would lift the 2^31 cap and nothing else -- the consumer's position still has to be read -- at the cost of a dependency, a target-feature floor not in the x86-64 baseline, and a different instruction on the ARM64 machine this workspace measures on. Revisit only for a tagged pointer, which is what [M-inf.1](../../CHECKLIST-io-domains.md)'s linked and sharded shapes would need. |
 | <a id="d-19"></a>D-19 | **The coalesced loss latch is deliberately not generalised from the file watcher.** Coalescing there is sound because a desync is *idempotent* -- two mean the same as one, and the answer to both is a re-scan. A queue of arbitrary `T` has no such property, so what generalises is a loss *count*, which is [M31.4](../../CHECKLIST-io-domains.md)'s observability rather than a policy. |
+| <a id="d-20"></a>D-20 | **Undrained items are handed to a caller-supplied sink at teardown, and the sink is chosen at construction because `Drop` has nowhere to hand them back to.** Without one they are destroyed on whichever thread released the last handle -- which may be a pool callback that must not block, and closing a handle to a dead network path can block for a long time. The default is unchanged; what changes is that it is now a named choice. |
+| <a id="d-21"></a>D-21 | **A panicking disposal sink is caught and the teardown walk continues.** The sink is caller code inside a destructor: a panic escaping it abandons every item behind it -- the exact handles the mechanism exists to account for -- and during an unwind aborts the process. Catching declines to turn a caller's bug into a much larger one. |
+| <a id="d-22"></a>D-22 | **No `into_remaining`, because it would not close the hole and `drain` already covers what it would do.** A consumer can take everything available, but a producer may push afterwards, so an orderly drain covers only the orderly path. The last handle to drop is the only place that sees every survivor. |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -599,3 +602,75 @@ depends on what the payload means.
 `ArrayQueue` usable as a ring buffer, which is right for telemetry where an overwritten entry is a lost
 sample. Here an entry may be an I/O submission, where it is a lost *operation*. The two must not share a
 knob, because a knob invites a caller to pick the wrong one.
+
+## D-20: teardown hands undrained items back, and the decision is made at construction
+
+[R8](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md) asks that
+descriptors in flight at teardown be **accounted, not dropped**, "because some own handles, and their
+disposal must be allowed to block". The 2026-08-27 namespace session states the same hazard concretely:
+an async open's completion carries an owned handle, and closing one to a dead network path is exactly the
+blocking operation the whole facility exists to keep off a caller's thread.
+
+**The default answer to "who destroys the items nobody drained?" was bad in a way that is easy to miss.**
+They were destroyed in place, inside the last `Arc` release -- so `T`'s destructor ran on whichever thread
+happened to drop last. That thread is not knowable in advance and nobody chose it: it may be a thread-pool
+callback that must not block, or a producer with no idea it was holding the last reference. Nothing told
+the owner it had happened.
+
+**`Drop` cannot be made to hand them back.** It takes `&mut self`, returns nothing, and cannot fail; by
+the time it runs every handle is gone, so there is nobody left to return anything *to*. Whatever the queue
+is going to do with those items, it has to have been told beforehand. That is the whole reason [`Disposal`]
+is supplied at construction rather than asked for at teardown -- not ergonomics, but the shape of the only
+place that sees every survivor.
+
+So a queue built with a sink hands each survivor to it. The owner then decides where disposal happens: a
+sink that moves items to a reaper thread keeps the blocking off the dropping thread entirely, while one
+that disposes inline is perfectly fine when the dropping thread is allowed to block. Either way it is a
+decision somebody made.
+
+**The default is unchanged and still destroys in place.** For items that own nothing -- which is most of
+them -- that is exactly right, and a queue of `u32` should not have to think about any of this. What
+changed is that the behaviour now has a name and an alternative.
+
+**The claim under test is about threads, not counts.** It would be easy to assert only that the sink
+receives the items, which is the mechanism rather than the property. The suite instead records the
+`ThreadId` a destructor runs on and asserts it is *not* the thread that released the last handle -- with a
+control, without a sink, showing it *is*. That control matters: without it the first test would look
+identical if destructors simply never ran anywhere observable.
+
+Each shape walks its own layout to find survivors, so the routing is asserted once per shape rather than
+once for the crate. That is the lesson M31.2's sweep taught about the reservation guarantee, applied
+before the sweep had to teach it again.
+
+## D-21: a panicking sink is caught, and the walk continues
+
+The sink is caller-supplied code running inside a destructor, which is the worst place for it to panic.
+A panic escaping there does one of two bad things: during an unwind it aborts the process, and otherwise
+it abandons every item not yet disposed -- precisely the handles the mechanism exists to account for.
+
+So the call is wrapped and the walk continues. This is deliberately **not** "swallowing an error": the
+item has already been moved into the sink, so there is nothing left to report about it, and the item is
+destroyed by the unwind rather than leaked. A sink that panics is a bug in the caller; catching only
+declines to turn it into a much larger one.
+
+`AssertUnwindSafe` is the honest annotation rather than a way past the bound. The only state observable
+after a panic is the caller's own closure, and the queue's invariants do not depend on the sink at all --
+teardown is already past the point where anything could observe them.
+
+## D-22: no `into_remaining`, because it would not close the hole
+
+The obvious API for shutdown is "consume the consumer, get everything that is left". It was considered
+and refused, for two reasons that compound.
+
+**It does not close the hole.** A consumer can take everything *available*, but producers may still push
+afterwards -- so it covers the orderly path and nothing else, and the disorderly path is the one that
+strands handles. The last handle to drop remains the only place that sees every survivor, which is where
+[D-20](#d-20) puts the mechanism.
+
+**And it adds nothing over what exists.** `Consumer::drain` already takes everything available; an
+`into_remaining` would be that plus consuming the handle. Since the sink covers the case `drain` cannot,
+the extra method would be surface without capability.
+
+The orderly shutdown therefore stays what it already was: drain to empty, observe
+`Consumer::is_disconnected`, and take the final item with the receive loop's `finish` step. The sink is
+for everything that does not go to plan.

@@ -13,8 +13,10 @@
 //! slot -- so the interesting cases all put the queue under pressure first.
 
 use super::{
-    BOUNDS_MAX, Consumer, Producer, Reservation, bounded, claim_word, position_of, reserved_of,
+    BOUNDS_MAX, Consumer, Producer, Reservation, bounded, bounded_with_disposal, claim_word,
+    position_of, reserved_of,
 };
+use crate::Disposal;
 use crate::race_hooks;
 // The trait is imported anonymously because this module also names the concrete
 // `Consumer` type, and only its `drain` method is wanted here. That the two can
@@ -755,4 +757,178 @@ fn both_reserving_shapes_satisfy_the_trait() {
         "the claim was dropped"
     );
     assert_eq!(mpsc_tx.outstanding_reservations(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Teardown: what becomes of items nobody drained.
+//
+// The policy itself is covered in `crate::disposal`'s suite. What this shape
+// adds is the interaction with reservations, which is where teardown matters
+// most: a reservation exists because its message must not be lost, so a
+// message redeemed into a queue that is then abandoned would be lost after
+// all -- just later, and more quietly.
+// ---------------------------------------------------------------------------
+
+/// Records that it was destroyed, so a test can tell "handed to the owner" from
+/// "destructor run by whichever thread dropped last".
+#[derive(Debug)]
+struct Tracked {
+    id: u32,
+    destroyed: Arc<AtomicUsize>,
+}
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        self.destroyed.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn undrained_items_reach_the_disposal_sink_instead_of_being_destroyed() {
+    let destroyed = Arc::new(AtomicUsize::new(0));
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+
+    {
+        let (tx, _rx) = bounded_with_disposal::<Tracked>(
+            8,
+            Disposal::new(move |item| {
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("8 is a valid capacity");
+
+        for id in 0..5 {
+            tx.push(Tracked {
+                id,
+                destroyed: Arc::clone(&destroyed),
+            })
+            .expect("room");
+        }
+    }
+
+    assert_eq!(
+        reaper.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4]
+    );
+    assert_eq!(destroyed.load(Ordering::Relaxed), 5);
+}
+
+#[test]
+fn a_reserved_message_abandoned_at_teardown_is_still_accounted_for() {
+    // **The case this shape exists to make safe.** A reservation is taken
+    // precisely because the message must not be lost. Redeeming it into a queue
+    // that is then torn down undrained would lose it after all, so the sink has
+    // to see it like any other survivor.
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    {
+        let (tx, _rx) = bounded_with_disposal::<u32>(
+            4,
+            Disposal::new(move |item| {
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("4 is a valid capacity");
+
+        let slot = tx.reserve().expect("room");
+        tx.push(1).expect("room");
+        slot.send(99).expect("the room was ours");
+    }
+
+    assert_eq!(
+        reaper.iter().collect::<Vec<_>>(),
+        vec![1, 99],
+        "a redeemed reservation is an ordinary queued item, and is accounted for as one"
+    );
+}
+
+#[test]
+fn an_unredeemed_reservation_hands_nothing_to_the_sink() {
+    // A reservation holds *capacity*, not an item. There is nothing to dispose
+    // of, and reporting a phantom would be worse than reporting nothing --
+    // the sink is the owner's accounting, and it must not lie in either
+    // direction.
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    {
+        let (tx, _rx) = bounded_with_disposal::<u32>(
+            4,
+            Disposal::new(move |item| {
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("4 is a valid capacity");
+
+        let _slot = tx.reserve().expect("room");
+        tx.push(1).expect("room");
+    }
+
+    assert_eq!(
+        reaper.iter().collect::<Vec<_>>(),
+        vec![1],
+        "the abandoned reservation was capacity, not a message"
+    );
+}
+
+#[test]
+fn a_queue_torn_down_by_a_reservation_still_reaches_the_sink() {
+    // A reservation counts as a producer, so it can be the last handle
+    // standing -- and then its drop is what tears the queue down.
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    let (tx, rx) = bounded_with_disposal::<u32>(
+        4,
+        Disposal::new(move |item| {
+            let _ = undelivered.send(item);
+        }),
+    )
+    .expect("4 is a valid capacity");
+
+    tx.push(1).expect("room");
+    let slot = tx.reserve().expect("room");
+    drop(tx);
+    drop(rx);
+    drop(slot);
+
+    assert_eq!(
+        reaper.iter().collect::<Vec<_>>(),
+        vec![1],
+        "whichever handle releases last must still account for the survivors"
+    );
+}
+
+#[test]
+fn the_sink_sees_survivors_after_the_ring_has_wrapped() {
+    let (undelivered, reaper) = std::sync::mpsc::channel();
+    {
+        let (tx, rx) = bounded_with_disposal::<u32>(
+            4,
+            Disposal::new(move |item| {
+                let _ = undelivered.send(item);
+            }),
+        )
+        .expect("4 is a valid capacity");
+
+        for round in 0..6 {
+            tx.push(round).expect("room");
+            rx.pop().expect("an item");
+        }
+        for round in 100..103 {
+            tx.push(round).expect("room");
+        }
+    }
+    assert_eq!(reaper.iter().collect::<Vec<_>>(), vec![100, 101, 102]);
+}
+
+#[test]
+fn without_a_sink_undrained_items_are_destroyed_in_place() {
+    let destroyed = Arc::new(AtomicUsize::new(0));
+    {
+        let (tx, _rx) = bounded::<Tracked>(4).expect("4 is a valid capacity");
+        for id in 0..3 {
+            tx.push(Tracked {
+                id,
+                destroyed: Arc::clone(&destroyed),
+            })
+            .expect("room");
+        }
+    }
+    assert_eq!(destroyed.load(Ordering::Relaxed), 3);
 }
