@@ -10,13 +10,30 @@ on:
   push:
     tags:
       - 'placement-probe-v*'
-  # Lets the whole path be exercised before a tag exists. A release process
-  # nobody has walked is a release process that does not work.
+  # **A pull request touching the tool builds and verifies it, without
+  # releasing.** This is what makes the release path exercised rather than
+  # hoped for, and it matters most for the `aarch64` artifact: `ci.yml`
+  # cross-compiles only `thumbv7em` for `wtf-string`, so nothing else in this
+  # repository would ever build the ARM64 target before a tag turned a failure
+  # into a broken release.
   #
-  # Dispatch is inherently build-and-verify-only: the release job below runs
-  # only for a `placement-probe-v*` tag, so there is no dry-run input to get
-  # wrong. An earlier revision declared one and never read it, which would have
-  # been a switch that silently did nothing.
+  # It also covers a trap in the alternative. `workflow_dispatch` is only
+  # offered for workflows that already exist on the **default branch**, so a
+  # dispatch cannot verify a workflow still on a feature branch -- which is
+  # exactly when verification is wanted.
+  #
+  # Path-scoped so an unrelated pull request does not pay for two Windows
+  # builds. The release job below is guarded on the tag ref, so nothing is
+  # published from a pull request no matter what runs here.
+  pull_request:
+    paths:
+      - 'crates/windows-placement-probe/**'
+      - '.github/workflows/release-placement-probe.yml'
+      - 'Cargo.lock'
+  # Kept for a re-run after merge, when the file does live on the default
+  # branch. Inherently build-and-verify-only for the same reason as above: an
+  # earlier revision declared a `dry_run` input and never read it, which would
+  # have been a switch that silently did nothing.
   workflow_dispatch:
 
 permissions:

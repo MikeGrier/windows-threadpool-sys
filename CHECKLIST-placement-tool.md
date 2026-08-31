@@ -361,12 +361,20 @@ build" distinction meaningful rather than decorative.
   attach an `!!UNOFFICIAL!!` binary to an official release.
   A `--version` flag was added for this, printing the whole build identity rather than a version
   number -- CI asserts on it, and a downloader can check the same thing before trusting a binary.
-  **`aarch64-pc-windows-msvc` is in the matrix and is NOT verified here.** The cross-build fails on
-  this machine with `unresolved external symbol __imp_GetProcessHeap`, which is a missing local ARM64
-  MSVC library rather than a code fault -- `std` itself uses that symbol, so a real defect would break
-  every ARM64 Rust program. CI runners do ship those libraries, but that is a reasonable expectation
-  and not a measurement. **Run the workflow once via `workflow_dispatch` before tagging**: dispatch
-  builds and verifies without releasing, which is exactly what that trigger is for.
+  **`aarch64-pc-windows-msvc` is in the matrix and cannot be verified locally.** The cross-build fails
+  on this machine with `unresolved external symbol __imp_GetProcessHeap`, which is a missing local
+  ARM64 MSVC library rather than a code fault -- `std` itself uses that symbol, so a real defect would
+  break every ARM64 Rust program.
+  **The pull request verifies it, which is better than the dispatch this originally called for.** The
+  workflow now also triggers on a pull request touching the tool, building and verifying both targets
+  without releasing. Two things made that the right answer rather than a convenience:
+  - **Nothing else in this repository builds the ARM64 target.** `ci.yml` cross-compiles only
+    `thumbv7em` for `wtf-string`, so without this a tag would be the first time `aarch64` was ever
+    attempted -- turning a build failure into a broken release.
+  - **`workflow_dispatch` could not have done it.** GitHub only offers dispatch for workflows already
+    on the **default branch**, so a workflow still on a feature branch cannot be dispatched at all --
+    which is precisely when it needs verifying. The original instruction here was unusable.
+  The release job stays guarded on the tag ref, so a pull request publishes nothing however it runs.
 
 - [x] **PT-5.2** -- A README written for someone who has never seen this repository: what question the
   tool answers, why their machine is interesting, where to download it, how to run it, what to send
