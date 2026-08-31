@@ -13,5 +13,11 @@ target
 
 # Scratch / diagnostic output (git-ignored per repo instructions)
 .scratch/
+
+# windows-placement-probe writes its backup record into the working directory,
+# so running the tool from inside a checkout leaves one of these behind. Ignored
+# because `git add -A` will otherwise sweep a machine's measurements into a
+# commit, which has already happened once.
+placement-probe-v*.json
 .vs
 .vscode/settings.json
