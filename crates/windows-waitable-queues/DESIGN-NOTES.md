@@ -835,6 +835,10 @@ design note is not scheduled work.
 
 ## D-28: caching the peer's index was measured and rejected
 
+**Amended -- the rejection held on x64 only, and ARM64 reverses it by 17x. The blanket "no shape adopts
+it" no longer follows from the evidence; the open question is queued as
+[CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) item M-inf.4.**
+
 The engineer recalled a technique credited with taking queue throughput from millions to hundreds of
 millions of operations per second: a load on the waiting side of the shared index. That memory is real
 and it names a real optimisation -- **peer-index caching**, the standard trick in a high-performance
@@ -877,7 +881,39 @@ cannot help, because the authoritative load still happens and in a tight handoff
 no time to land before it. **The engineer's "it is just for cache warming" reading is therefore not
 the mechanism** -- the technique works by removing the load, not by warming the line for it.
 
-Two further reasons this stays rejected even if a deeper-batching workload were found:
+### The deeper-batching workload was found, and it is simply the other architecture
+
+The paragraph above says the trade "is free when a genuine backlog exists, because the batch it
+amortises over is deep", and that here the batch is only ~3.6 items. **That mechanism is correct and it
+is the reason the conclusion does not travel.** Re-running the identical release binary on the ARM64
+development host (Snapdragon X2 Elite, 12 cores, no SMT, no L3), median of three:
+
+| strategy | ns/item | consumer reads | producer reads | batch depth |
+|---|---|---|---|---|
+| baseline | 30.4 - 32.4 | ~2.1 M | ~2.1 M | ~1 |
+| peer-index caching | **1.8** | ~9 - 19 K | ~3.4 - 3.6 K | **~150** |
+| warming load only | 27.0 - 29.2 | ~2.0 M | ~2.1 M | ~1 |
+
+**17x faster, not 1.8x slower**, and the producer read count falls by ~580x rather than rising. Every
+observable this decision rested on inverted. What did not change is the *explanation*: batch depth
+decides the outcome, and batch depth is a property of how the two threads interleave -- core count,
+whether siblings share a core, how the scheduler places them -- not of our code. x64 kept them
+lock-step; ARM64 lets them decouple.
+
+Two consequences, and the second is the uncomfortable one:
+
+- The blanket rule **"no shape adopts it"** does not follow from the evidence any more. It is now a
+  choice between hosts, queued as [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) M-inf.4,
+  which asks for a *policy* for a technique whose sign depends on the machine rather than for more
+  measurement. We have the measurement twice and it disagrees with itself.
+- **The probe was printing this decision's conclusion as fixed prose.** It stated "the technique WORKED
+  and still lost", "roughly 3.6x", and "on the producer side the count goes UP" unconditionally, so on
+  ARM64 it contradicted its own table three lines above. Only the speedup ratio was computed. That is
+  fixed -- the interpretation is now derived from the run, including the batch depths, and it says
+  outright that the verdict has inverted by host. An instrument that reports its conclusion regardless
+  of what it measured is worse than no instrument, because it is believed.
+
+The two reasons below still stand, and neither is architecture-dependent:
 
 - **The shared read is a minority of the cost.** The model runs at 18.7-27.7 ns/item while the
   shipping `spsc` runs at 58.6-62.8. This probe deliberately does not attribute that gap (the shipping
@@ -889,10 +925,15 @@ Two further reasons this stays rejected even if a deeper-batching workload were 
   when the producer has already published is a lost wakeup -- the same defect class as
   [D-9](#d-9) and [D-15](#d-15), which this crate has now been bitten by twice.
 
-The technique is not wrong; it is right for a ring with a standing backlog, and this crate's is not
-that ring. If a later workload does show deep batching, the measurement to repeat is this probe with
-the consumer throttled, and the arming path must be exempted from any cache regardless of the result.
+The technique is not wrong; it is right for a ring with a standing backlog. **This crate's ring is that
+ring on one of our two architectures and is not on the other**, which is the whole finding. The
+re-measurement conditions written down here were "if a later workload shows deep batching" -- what
+actually surfaced it was not a later workload but a second machine, and that is the more useful trigger
+to remember. The arming path must be exempted from any cache regardless of the result, for the reason
+below.
 
-**No work is scheduled by this decision.** The finding is a rejection: no shape changes, and there is
-no follow-up item. It is recorded so the technique is not re-proposed without the measurement, and so
-the re-measurement conditions are written down if the workload ever changes.
+**Work is now scheduled by this decision**, where an earlier revision said none was. That sentence was
+accurate when the answer was a flat rejection and is not accurate now: the open question is
+[CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) M-inf.4. It is recorded so the technique is
+neither re-proposed without measurement nor adopted on the strength of whichever host someone happened
+to benchmark on.

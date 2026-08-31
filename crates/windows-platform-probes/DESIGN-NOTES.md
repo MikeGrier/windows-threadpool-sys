@@ -494,20 +494,32 @@ count from the queue's own `Observable` counters precisely so that is visible as
 mistaken for contention: the sixteen- and thirty-two-producer drained rows show millions of refusals and
 should be read as measurements of the consumer.
 
-## `probe-peer-index-cache`: a rejection, kept because the rejection is the value
+## `probe-peer-index-cache`: a result that inverts by host, which is why it is kept
 
 This probe measures peer-index caching -- each side of an SPSC ring keeping a plain copy of the other
 side's position, so the shared line is read once per batch instead of once per item -- against the
-`windows-waitable-queues` `spsc` shape. It found the technique makes our ring **slower**, and the full
-reasoning lives with the queue as
-[DESIGN-NOTES.md](../windows-waitable-queues/DESIGN-NOTES.md) -> `D-28`.
+`windows-waitable-queues` `spsc` shape. **It gives opposite answers on our two architectures**: roughly
+1.8x slower on x64, roughly 17x faster on ARM64, because the batch depth it amortises over is set by how
+the two threads interleave on that host rather than by our code. The full reasoning lives with the queue
+as [DESIGN-NOTES.md](../windows-waitable-queues/DESIGN-NOTES.md) -> `D-28`.
 
-Two things about its construction are deliberate and worth keeping if it is ever edited.
+This section previously described the probe as recording a settled rejection, on x64 evidence alone.
+
+Three things about its construction are deliberate and worth keeping if it is ever edited.
 
 **It counts shared reads, not just time.** A timing-only result would have been unreadable: "caching is
 slower" is indistinguishable from "the caching was implemented wrongly and never engaged". The read
-counters settle that directly -- consumer reads fall 3.6x, so the optimisation demonstrably engaged and
-still lost. Any future variant added here must keep the counters for the same reason.
+counters settle that directly, and they are also what made the two hosts comparable -- the reads reveal
+a batch depth near 1 on x64 against roughly 150 on ARM64, which is the mechanism rather than the
+symptom. Any future variant added here must keep the counters for the same reason.
+
+**Its interpretation is derived from the run, and must never go back to prose.** It used to print the
+x64 conclusion as a fixed paragraph -- "the technique WORKED and still lost", "roughly 3.6x", "the
+producer count goes UP" -- with only the speedup ratio computed. Run on ARM64 it printed all three while
+its own table three lines above showed the opposite, and the contradiction was noticed by a reader
+rather than by the tool. A probe that states its finding regardless of what it measured is worse than no
+probe, because it is believed. The interpretation now computes the batch depths and says outright that
+this verdict is host-dependent.
 
 **It carries a calibration row and a warming control.** The calibration times the real shipping `spsc`
 beside the model, and the probe prints a CAUTION when they diverge by more than 25% -- which they

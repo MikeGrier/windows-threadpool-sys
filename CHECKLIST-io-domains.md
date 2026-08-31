@@ -416,7 +416,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   here: the investigation changed what the decision is *about*, from "is the extra read cheap" to "which
   claim protocol should survive", and that is the engineer's call.
 
-- [ ] **M31.7** -- Re-run `probe-queue-contention` on the ARM64 development machine and record the curve
+- [x] **M31.7** -- Re-run `probe-queue-contention` on the ARM64 development machine and record the curve
   beside the x64 one. **Not a formality.** M31.5's finding is a statement about cache-coherence
   behaviour, and this workspace has already been bitten once by measuring only on ARM64 --
   [windows-platform-probes](crates/windows-platform-probes/DESIGN-NOTES.md) records that case. M31.5
@@ -424,6 +424,33 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   with it, and so does M-inf.1's threshold.
   Run it in **release**: a debug build reports the two shapes as identical, which is why the probe is not
   in CI.
+  **Done. Both of M31.5's claims hold on ARM64, and the reserving advantage is larger, not smaller.**
+  Host: Snapdragon X2 Elite (Qualcomm Oryon), 12 cores, no SMT, no L3, two L2 clusters of six. Release
+  build, median of three runs of the binary, isolated regime, ns/push:
+
+  | producers | mpsc | reserving | atomic floor | mpsc/reserving | x64 ratio for comparison |
+  |---|---|---|---|---|---|
+  | 1 | 6.5 | 6.1 | 2.7 | 1.1x | 1.0x |
+  | 2 | 29.8 | 9.4 | 3.6 | 3.2x | 1.8x |
+  | 4 | 60.6 | 12.9 | 5.2 | 4.7x | 2.5x |
+  | 8 | 167.4 | 29.8 | 8.8 | 5.6x | 3.7x |
+  | 16 | 194.9 | 30.6 | 10.6 | 6.4x | 3.7x |
+  | 32 | 195.0 | 30.6 | 9.9 | 6.4x | 4.2x |
+
+  Claim 1 (throughput falls as producers are added) holds: `mpsc` costs 30x more per push at 32
+  producers than at one. Claim 2 (`reserving_mpsc` is up to 4x faster) holds and is exceeded -- **6.4x
+  here against 4.2x on x64**. So M31.8's merge decision is not weakened by the second architecture; the
+  evidence for the head-based protocol is stronger on ARM64 than it was on x64.
+  Two differences worth having on the record rather than smoothing away. `mpsc` **plateaus at ~195 ns
+  from 16 producers upward** where x64 kept climbing to 239.7 -- expected, since this host has 12 cores
+  and no SMT, so 16 and 32 are oversubscribed and the curve saturates. And **N=4 is by far the noisiest
+  point** (`mpsc` ranged 49.5 to 104.1 across the three runs, against under 2% spread at N=16 and above);
+  with two six-core L2 clusters and no L3, whether four threads land inside one cluster or straddle both
+  changes the answer, and at N>=8 straddling is forced so the variance disappears. Read the N=4 row as a
+  range, not a point.
+
+  > **-> CROSS-COMPONENT NOTE:** this run also contradicted D-28, which is recorded against that decision
+  > and against M31.8's use of it below, not here.
 
 - [ ] **M31.8** -- Decide merge-or-delete for `mpsc` and `reserving_mpsc`, now that M31.5 has measured
   them and M31.7 will have checked the other architecture.
@@ -443,10 +470,20 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
     were, and is the only option that removes the surprise rather than documenting it.
   Whichever is chosen, D-16's and `mpsc`'s own documentation must be corrected in the same change: they
   currently assert a cost relationship the measurement reversed. That sweep is part of this item.
-  **One input that was expected to matter turned out not to.** Peer-index caching is available to the
-  head-based protocol and structurally unavailable to Vyukov's, which looked like it would weigh against
-  `mpsc`. `probe-peer-index-cache` measured it and it makes our ring *slower* (D-28), so it is not a
-  differentiator and must not be argued as one here.
+  **An input that was written off has come back, and this paragraph previously said the opposite.**
+  Peer-index caching is available to the head-based protocol and structurally unavailable to Vyukov's.
+  This item used to record that `probe-peer-index-cache` had measured it as making our ring *slower*
+  (D-28), and instructed that it "must not be argued as" a differentiator. **That instruction was based
+  on x64 evidence alone, and ARM64 reverses it**: the same binary measures caching at **17x faster**
+  there (31.2 -> 1.8 ns/item), with the mechanism D-28 itself names -- batch depth -- coming out at ~150
+  items per shared read instead of the ~3.6 that made it lose on x64. See D-28, now amended.
+  So this **is** live as a differentiator, and it points the same way M31.7's contention curve does: it
+  is an optimisation only the head-based protocol can adopt, and on one of our two architectures it is
+  worth an order of magnitude. Do not resolve M31.8 by reinstating the old "it does not matter" line.
+  What it is *not* is settled. The technique wins on one host and loses on the other, so adopting it
+  unconditionally is as unsupported as rejecting it was. The decision this item owes is about the
+  protocol; whether any shape then *adopts* caching is a separate question that needs a policy for a
+  measurement that inverts by host, and that question is M-inf.4 rather than this item.
 
 - [ ] **M31.6** -- Verify the memory orderings with a model checker, because stress testing demonstrably
   cannot. **Measured, not assumed:** during M30.3's sabotage sweep, weakening the producer's `Acquire`
@@ -566,3 +603,24 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   Bounded before anyone builds it: `prepare` is dominated by `GetFullPathNameW`, a Win32 call no allocator
   removes, and cloning already-prepared units is 95 ns of a 453 ns request. That 95 ns is the ceiling on
   the win, and only for a caller that can reuse a resolved path.
+
+- [ ] **M-inf.4** -- Peer-index caching in the head-based shapes, and more importantly **a policy for an
+  optimisation whose sign depends on the host.** Gated on that policy, not on more measurement -- we
+  already have the measurement, twice, and it disagrees with itself.
+  D-28 rejected the technique on x64, where the producer and consumer stayed lock-step at a batch depth
+  near 1 and caching cost ~1.8x. M31.7 re-ran the same binary on ARM64 and got a batch depth around 150
+  and a **17x speedup**. Both are real; the variable is how the two threads interleave, which is a
+  property of the host (core count, SMT, cluster layout, scheduler placement) rather than of our code.
+  So the question this item owes is not "is it faster" but **what do we ship when a technique is a large
+  win on one supported machine and a loss on another.** The candidates, none of them free:
+  - **Ship it off**, as today. Costs ARM64 an order of magnitude on a shape that could have it.
+  - **Ship it on.** Costs x64 roughly 1.8x on the same shape.
+  - **Adapt at run time** from an observed batch depth, which is the only option that could win on both
+    and is also the only one that puts a heuristic in the push path -- and a mispredicting heuristic is
+    worse than either fixed choice.
+  - **Make it a construction-time option**, pushing the decision to a caller who may know their
+    producer/consumer coupling better than we do, at the cost of a knob nobody can set well without
+    running the probe themselves.
+  Whichever is chosen, it must be stated as a *policy* the crate owns rather than as a fact about a
+  processor -- see PLATFORM INTEGRITY: this is exactly a lower baseline that must not be quietly dropped
+  because the machine on the desk today prefers the other answer.

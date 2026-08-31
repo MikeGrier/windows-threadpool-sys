@@ -85,30 +85,96 @@ fn main() {
         );
     }
 
+    // Everything below is DERIVED from this run's numbers, and none of it may
+    // go back to being prose.
+    //
+    // It used to be a fixed paragraph concluding that the technique "WORKED and
+    // still lost", that consumer reads fell "roughly 3.6x", and that producer
+    // reads "go UP". Those were true of the x64 host it was written on. Run on
+    // an ARM64 host they were all three false -- caching was 17x FASTER, and
+    // producer reads fell by ~580x -- and the probe printed the old conclusion
+    // anyway, contradicting the table directly above it. An instrument that
+    // states its finding regardless of what it measured is worse than no
+    // instrument, because it is believed.
+    let Some(cached) = observation.get(Strategy::Cached) else {
+        return;
+    };
+
+    // The batch depth is the mechanism, so compute it rather than assert it: it
+    // is how many items each shared read is amortised over, and it is what
+    // decides whether trading freshness for fewer reads pays.
+    let consumer_batch = ITEMS as f64 / cached.consumer_refreshes.max(1) as f64;
+    let producer_batch = ITEMS as f64 / cached.producer_refreshes.max(1) as f64;
+    let consumer_reduction =
+        baseline.consumer_refreshes as f64 / cached.consumer_refreshes.max(1) as f64;
+    let producer_reduction =
+        baseline.producer_refreshes as f64 / cached.producer_refreshes.max(1) as f64;
+    let speedup = baseline.nanos_per_item / cached.nanos_per_item;
+
+    println!();
+    println!("  how far each shared read was amortised, with caching on:");
     println!(
-        "
-  The read columns say the technique WORKED and still lost. Caching"
+        "    consumer: {consumer_batch:.1} items per read ({consumer_reduction:.1}x fewer reads than baseline)"
     );
-    println!("  cut the consumer's shared reads by roughly 3.6x -- it is not that");
-    println!("  the optimisation failed to engage. It engaged and cost throughput.");
+    println!(
+        "    producer: {producer_batch:.1} items per read ({producer_reduction:.1}x fewer reads than baseline)"
+    );
     println!();
-    println!("  The reason is in the same columns: the batch it amortises over is");
-    println!("  only about 3.6 items deep, because a spinning consumer keeps the");
-    println!("  ring near empty. And on the producer side the count goes UP, not");
-    println!("  down -- a cached index is only consulted when it says 'no room', so");
-    println!("  a producer that is genuinely blocked refreshes on every spin and");
-    println!("  gains nothing at all.");
+
+    let engaged = consumer_reduction > 1.5;
+    if !engaged {
+        println!("  The technique did NOT engage: the consumer's shared reads barely");
+        println!("  moved. Any throughput difference below is noise about something");
+        println!("  else, and says nothing about peer-index caching.");
+    } else if speedup >= 1.1 {
+        println!("  The technique engaged AND won, by {speedup:.2}x.");
+        println!("  Peer-index caching trades freshness for fewer reads, and that");
+        println!("  trade pays when the batch it amortises over is deep. At the");
+        println!("  depths above it is paying.");
+    } else if speedup <= 0.9 {
+        println!("  The technique engaged and still LOST, at {speedup:.2}x the baseline.");
+        println!("  This is a real result about the shape rather than a failed");
+        println!("  implementation. Caching trades freshness for fewer reads; at the");
+        println!("  batch depths above, each side idles on a stale bound it could");
+        println!("  have refreshed, and that idling costs more than the reads saved.");
+        if producer_reduction < 1.0 {
+            println!("  Note the producer count went UP: a cached index is consulted");
+            println!("  only when it says 'no room', so a blocked producer refreshes on");
+            println!("  every spin and gains nothing.");
+        }
+    } else {
+        println!("  The technique engaged and changed throughput by {speedup:.2}x, which");
+        println!("  is inside the noise of this probe. Treat it as no effect.");
+    }
+
     println!();
-    println!("  That is the trade the technique actually makes: it exchanges");
-    println!("  freshness for fewer reads. When a real backlog exists the exchange");
-    println!("  is free, because a stale index is still far behind the peer. When");
-    println!("  the ring hovers near empty or near full it is not free -- each side");
-    println!("  idles on a stale bound it could have refreshed, and that idling");
-    println!("  costs more than the reads it saved.");
+    println!("  BATCH DEPTH IS THE VARIABLE, AND IT IS NOT A CONSTANT OF THE CODE.");
+    println!("  It depends on how the producer and consumer interleave, which");
+    println!("  depends on the host: core count, whether siblings share a core,");
+    println!("  and how the scheduler places the two threads. The same binary has");
+    println!("  measured a depth near 1 on one machine and in the hundreds on");
+    println!("  another, and the verdict inverted with it. Do not carry a");
+    println!("  conclusion from one host to another -- run it on the host you");
+    println!("  intend to make the decision for.");
+
+    let Some(warmed) = observation.get(Strategy::Warmed) else {
+        return;
+    };
+    let warm_reduction =
+        baseline.consumer_refreshes as f64 / warmed.consumer_refreshes.max(1) as f64;
     println!();
-    println!("  The warming load is the control, and it behaves as a control should:");
-    println!("  it removes no shared read (its count matches the baseline) and it");
-    println!("  changes no throughput. Warming cannot help here because the");
-    println!("  authoritative load still happens, and in a tight handoff loop the");
-    println!("  prefetch has no time to land before it.");
+    println!(
+        "  control (warming load): {:.2}x throughput, {:.2}x fewer consumer reads.",
+        baseline.nanos_per_item / warmed.nanos_per_item,
+        warm_reduction
+    );
+    if warm_reduction < 1.5 {
+        println!("  It removed no shared read, which is what a control should do. A");
+        println!("  discarded load cannot help: the authoritative load still happens,");
+        println!("  and in a tight handoff loop the prefetch has no time to land.");
+        println!("  So the technique works by REMOVING the load, not by warming it.");
+    } else {
+        println!("  UNEXPECTED: the control removed shared reads, so it is not acting");
+        println!("  as a control. Distrust the comparison above until that is explained.");
+    }
 }
