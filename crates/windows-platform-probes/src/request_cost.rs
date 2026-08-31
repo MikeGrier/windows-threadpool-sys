@@ -72,6 +72,8 @@ use std::time::Instant;
 use wtf_string::Wtf16String;
 
 use windows_namespace_request_sys::{CapturedHandle, OpenFile, prepare};
+use windows_sys::Win32::Foundation::GENERIC_READ;
+use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, OPEN_EXISTING};
 
 /// Nanoseconds per operation for one timed loop.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -151,9 +153,9 @@ pub fn measure() -> Observation {
     timings.push(time_loop("build_open_request", ITERATIONS, || {
         let path = prepare(&short).expect("an absolute path prepares");
         OpenFile::new(path)
-            .with_desired_access(0x8000_0000)
-            .with_share_mode(1)
-            .with_creation_disposition(3)
+            .with_desired_access(GENERIC_READ)
+            .with_share_mode(FILE_SHARE_READ)
+            .with_creation_disposition(OPEN_EXISTING)
     }));
 
     // Cloning the prepared path alone, which is what a request-recycling scheme

@@ -15,6 +15,8 @@
 //! `Provenance::Synthetic` being `Default` one layer down: forgetting, or being
 //! unable to tell, must be the safe direction.
 
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// What CI sets so the build does not have to shell out to `git`.
@@ -29,7 +31,7 @@ fn main() {
     // route.
     println!("cargo::rerun-if-env-changed={COMMIT_ENV}");
     println!("cargo::rerun-if-env-changed={SOURCE_ENV}");
-    println!("cargo::rerun-if-changed=../../.git/HEAD");
+    watch_git_head(Path::new("../../.git"));
 
     let (commit, dirty) = match std::env::var(COMMIT_ENV) {
         // CI knows the commit it checked out, and a CI checkout is clean by
@@ -57,6 +59,78 @@ fn main() {
         }
     );
     println!("cargo::rustc-env=PLACEMENT_PROBE_SOURCE_OUT={source}");
+}
+
+/// Ask cargo to re-run this script whenever the checked-out commit changes.
+///
+/// # Watching `HEAD` alone does not work, and the failure is silent
+///
+/// On a branch, `.git/HEAD` holds `ref: refs/heads/<branch>` -- a line that
+/// does not change when you commit. What git rewrites is the *ref* file the
+/// line names. Since a `rerun-if-changed` directive replaces cargo's default of
+/// watching the whole package, watching only `HEAD` meant the script never re-
+/// ran after a commit and the binary kept whatever commit it was first built
+/// with.
+///
+/// Measured on this repository rather than reasoned about: `.git/HEAD` had not
+/// been touched in 21 hours while fourteen commits landed, and a freshly built
+/// binary reported a commit six behind `HEAD`. CI hides this entirely, because
+/// there the commit arrives through `PLACEMENT_PROBE_COMMIT` -- so the stamp
+/// was wrong only on local builds, which are exactly the ones whose commit is
+/// their only traceability.
+///
+/// `HEAD` is still watched, because switching branches or detaching does change
+/// it.
+fn watch_git_head(git_dir: &Path) {
+    // A `.git` *file* rather than a directory means a worktree or submodule,
+    // and names the real directory. Not watched further: the redirect is enough
+    // to find the ref, and a tarball with no `.git` at all is the case this
+    // whole file is built to survive.
+    let git_dir = match fs::read_to_string(git_dir.join("HEAD")) {
+        Ok(_) => git_dir.to_path_buf(),
+        Err(_) => match fs::read_to_string(git_dir) {
+            Ok(redirect) => match redirect.trim().strip_prefix("gitdir:") {
+                Some(path) => PathBuf::from(path.trim()),
+                None => return,
+            },
+            // No repository. The stamp is "unknown", which is the honest answer
+            // and needs no watching.
+            Err(_) => return,
+        },
+    };
+
+    let head = git_dir.join("HEAD");
+    let Ok(contents) = fs::read_to_string(&head) else {
+        return;
+    };
+    watch(&head);
+
+    // A detached HEAD holds the sha itself, so the file already changes with
+    // the commit and there is nothing further to watch.
+    let Some(reference) = contents.trim().strip_prefix("ref:") else {
+        return;
+    };
+
+    // A loose ref is rewritten on every commit. A ref that has been packed does
+    // not exist as a file, and `packed-refs` is what changes instead -- so
+    // whichever of the two is present is the one to watch. Emitting a path that
+    // does not exist would make cargo re-run this script on every single build.
+    let loose = git_dir.join(reference.trim());
+    if loose.exists() {
+        watch(&loose);
+    } else {
+        let packed = git_dir.join("packed-refs");
+        if packed.exists() {
+            watch(&packed);
+        }
+    }
+}
+
+/// Emit one `rerun-if-changed`, if the path can be named.
+fn watch(path: &Path) {
+    if let Some(path) = path.to_str() {
+        println!("cargo::rerun-if-changed={path}");
+    }
 }
 
 /// The first twelve characters, which is unambiguous in practice and short

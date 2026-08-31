@@ -147,6 +147,13 @@ pub(crate) fn recv_timeout<C: Parked>(
 /// that was supposed to re-check the deadline never regains control to do so.
 const MAX_FINITE_WAIT_MILLIS: u32 = INFINITE - 1;
 
+/// The shortest wait worth asking for, in milliseconds.
+///
+/// Zero is a poll, not a wait, and the loop that calls this treats a return as
+/// "check again" -- so a zero would busy-poll the doorbell rather than sleep on
+/// it.
+const MIN_WAIT_MILLIS: u32 = 1;
+
 /// How long to block for, given the time left on the caller's deadline.
 ///
 /// Saturating rather than wrapping: a duration longer than a `u32` of
@@ -168,10 +175,23 @@ const MAX_FINITE_WAIT_MILLIS: u32 = INFINITE - 1;
 /// conversion itself. The two guards cover different inputs -- one the
 /// durations too large to represent, the other the one that is representable
 /// and still means forever.
+/// **And never zero, which is the other end of the same argument.** The caller
+/// has already returned `Timeout` if nothing remains, so every duration
+/// reaching here is non-zero -- but anything under a millisecond truncates to
+/// `0`, and a zero wait returns at once. The loop would then re-arm and re-wait
+/// without sleeping, which is not merely a spin: arming clears the doorbell,
+/// so it is a `ResetEvent` syscall per turn for the last fraction of the
+/// budget.
+///
+/// Waiting a whole millisecond can overshoot the deadline, and that is the
+/// right trade for a blocking call. The timer granularity is coarser than a
+/// millisecond anyway, so a caller needing sub-millisecond precision cannot get
+/// it from a blocking wait at any price -- what they would get instead is a
+/// burning core.
 fn wait_millis(remaining: Duration) -> u32 {
     u32::try_from(remaining.as_millis())
         .unwrap_or(MAX_FINITE_WAIT_MILLIS)
-        .min(MAX_FINITE_WAIT_MILLIS)
+        .clamp(MIN_WAIT_MILLIS, MAX_FINITE_WAIT_MILLIS)
 }
 
 /// Block on a doorbell handle, translating the Win32 result.

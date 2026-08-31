@@ -10,6 +10,9 @@
 //! - **Refusals**, so backpressure is *measured* rather than inferred from a
 //!   caller's error handling.
 //! - **Doorbell rings**, so the skip rule is measurable rather than assumed.
+//!   Counted by [`Doorbell`](crate::doorbell::Doorbell) rather than by
+//!   [`Metrics`], for the reason given below; a reader after the ring count
+//!   will not find it on this type.
 //! - **Peak depth**, so a bound can be chosen from evidence.
 //!
 //! **Depth itself is not here**, and its absence is a decision. `Bounded::len`
@@ -27,7 +30,10 @@
 //!   success path entirely.
 //! - **Rings** increment only when the doorbell actually calls `SetEvent`,
 //!   which is a syscall measured at ~81 ns against ~7 ns for an uncontended
-//!   atomic. The skipped signals -- the hot ones -- are deliberately *not*
+//!   atomic. That increment happens inside the doorbell, so the counter lives
+//!   on [`Doorbell`](crate::doorbell::Doorbell) rather than on [`Metrics`]:
+//!   keeping it here would mean reaching across to a line this type does not
+//!   own. The skipped signals -- the hot ones -- are deliberately *not*
 //!   counted, because that increment would land on exactly the path the skip
 //!   exists to cheapen.
 //! - **Peak depth** cannot be placed that way, because it must observe every

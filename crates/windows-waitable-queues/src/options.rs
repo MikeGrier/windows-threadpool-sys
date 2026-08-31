@@ -44,7 +44,7 @@ use crate::disposal::Disposal;
 /// tx.push(2).expect("a fresh queue has room");
 /// assert_eq!(rx.pop(), Some(1));
 ///
-/// // The peak, not the depth right now.
+/// // `len` is the depth right now; `high_water` is the peak it reached.
 /// assert_eq!(rx.len(), 1);
 /// assert_eq!(rx.high_water(), Some(2));
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())

@@ -11,11 +11,10 @@ use std::time::Duration;
 
 use windows_sys::Win32::System::Threading::INFINITE;
 
-use super::{MAX_FINITE_WAIT_MILLIS, wait_millis};
+use super::{MAX_FINITE_WAIT_MILLIS, MIN_WAIT_MILLIS, wait_millis};
 
 #[test]
 fn an_ordinary_duration_is_passed_through_in_milliseconds() {
-    assert_eq!(wait_millis(Duration::from_millis(0)), 0);
     assert_eq!(wait_millis(Duration::from_millis(1)), 1);
     assert_eq!(wait_millis(Duration::from_millis(250)), 250);
     assert_eq!(wait_millis(Duration::from_secs(1)), 1_000);
@@ -70,4 +69,46 @@ fn the_largest_duration_that_still_fits_is_not_clamped() {
         MAX_FINITE_WAIT_MILLIS,
         "one millisecond past the boundary must clamp, not wrap to zero"
     );
+}
+
+#[test]
+fn a_sub_millisecond_remainder_still_sleeps() {
+    // The busy-wait. Anything under a millisecond truncates to zero, and a zero
+    // wait returns immediately -- so the loop would re-arm and re-wait without
+    // sleeping for the last fraction of the budget. Arming clears the doorbell,
+    // which is a `ResetEvent` syscall, so the spin is a syscall storm rather
+    // than merely a hot loop.
+    for tiny in [
+        Duration::from_nanos(1),
+        Duration::from_micros(1),
+        Duration::from_micros(999),
+    ] {
+        assert_eq!(
+            wait_millis(tiny),
+            MIN_WAIT_MILLIS,
+            "a {tiny:?} remainder would have polled instead of waiting"
+        );
+    }
+}
+
+#[test]
+fn no_duration_ever_produces_a_zero_wait() {
+    // The property behind the case above, stated over the boundary values
+    // rather than over three samples. Zero is a poll; the caller has already
+    // returned `Timeout` when nothing remains, so a poll here is never what was
+    // wanted.
+    for remaining in [
+        Duration::ZERO,
+        Duration::from_nanos(1),
+        Duration::from_micros(500),
+        Duration::from_millis(1),
+        Duration::from_secs(1),
+        Duration::MAX,
+    ] {
+        assert_ne!(
+            wait_millis(remaining),
+            0,
+            "a {remaining:?} remainder produced a poll rather than a wait"
+        );
+    }
 }
