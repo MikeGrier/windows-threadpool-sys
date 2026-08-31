@@ -604,6 +604,20 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   removes, and cloning already-prepared units is 95 ns of a 453 ns request. That 95 ns is the ceiling on
   the win, and only for a caller that can reuse a resolved path.
 
+- [ ] **M-inf.5** -- **Domain-local queue placement**, now that the cost of getting it wrong is measured.
+  `probe-core-affinity` finds an SPSC handoff costs **38.5 ns/item within a domain and 215.3 ns/item
+  across domains on the ARM64 host -- 5.6x for nothing but where the two threads run**. That is far
+  larger than any micro-optimisation this crate has considered, and it is a *placement* decision rather
+  than a code one, which puts it squarely in the runtime's remit rather than the queue's.
+  The design already intends one pinned thread per domain, so the queue between two threads of the same
+  domain is the common case and is fine. What this measurement bounds is the **cross-domain** queue --
+  the one M30's design deferred on the grounds that N=1 does not need it -- and the number to carry into
+  that decision is 5.6x, not zero.
+  Gated on the domain runtime existing (M33+.1), not on more measurement.
+  **Do not read the 5.6x as a cache effect or as a core-speed effect.** On this machine the efficiency
+  classes and cache domains coincide exactly, so the two are perfectly confounded; separating them needs
+  a host whose classes and caches cut differently, which we do not have.
+
 - [ ] **M-inf.4** -- Peer-index caching in the head-based shapes, and more importantly **a policy for an
   optimisation whose sign depends on the host.** Gated on that policy, not on more measurement -- we
   already have the measurement, twice, and it disagrees with itself.
@@ -624,3 +638,10 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   Whichever is chosen, it must be stated as a *policy* the crate owns rather than as a fact about a
   processor -- see PLATFORM INTEGRITY: this is exactly a lower baseline that must not be quietly dropped
   because the machine on the desk today prefers the other answer.
+  **One candidate explanation has already been tested and eliminated.** `probe-core-affinity` was written
+  to check whether the host difference was really a *placement* difference -- whether mismatched core
+  speeds on a heterogeneous machine decouple the two threads and manufacture the deep batch caching
+  needs. It does not: caching wins at **both** placements on the ARM64 host (14.4x within a domain, 3.0x
+  across), and threads placed together batch ~135x *deeper* than threads placed apart, which is the
+  opposite of the prediction. So the x64/ARM64 disagreement is not explained by where the threads run,
+  and this item cannot be closed by appealing to placement.

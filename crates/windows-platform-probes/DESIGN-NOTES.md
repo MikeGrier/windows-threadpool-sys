@@ -494,6 +494,48 @@ count from the queue's own `Observable` counters precisely so that is visible as
 mistaken for contention: the sixteen- and thirty-two-producer drained rows show millions of refusals and
 should be read as measurements of the consumer.
 
+## `probe-core-affinity`: placement costs 5.6x, and it refuted the hypothesis it was written to test
+
+This probe pins an SPSC producer and consumer to chosen logical processors and measures the handoff
+under each placement the machine can express. It exists because
+[`probe-peer-index-cache`](#probe-peer-index-cache-a-result-that-inverts-by-host-which-is-why-it-is-kept)
+gave opposite answers on two hosts, and the obvious suspect was *placement*: a machine with two
+efficiency classes might be decoupling the two threads in a way a homogeneous one does not.
+
+**The plain answer, which is the useful one.** On the ARM64 development host the unoptimised handoff
+costs **38.5 ns/item within a domain and 215.3 ns/item across domains -- 5.6x, for no change but where
+the two threads run.** Within a class, the performance cores (class 1) run the same handoff at 30.4 ns
+against the efficiency cores' 38.7, about 27% apart, which is a real but far smaller effect than
+crossing the boundary. Medians of three, stable across three invocations.
+
+**The hypothesis was refuted, and backwards.** The prediction was that mismatched core speeds would
+decouple the two sides, letting a backlog form and giving peer-index caching the deep batch it needs.
+Measured, threads placed *together* batch **~135x deeper** than threads placed apart (49.6 against 0.4
+items per shared read). A coherent reading is that a cheap handoff lets the producer race ahead and
+build a backlog while an expensive one throttles it into lockstep -- so cost drives depth rather than
+core speed driving it -- but **this run does not test that**, and the probe says so rather than
+recording a replacement conclusion it did not earn. What is established is only that the original
+prediction is wrong.
+
+**It also failed to explain the host disagreement, which was its main purpose.** Caching wins at *both*
+placements here (14.4x together, 3.0x apart), so placement alone does not account for x64 rejecting the
+technique while ARM64 accepts it. That question stays open under `D-28` and M-inf.4.
+
+**A confound this machine cannot escape, stated because it bounds every reading above.** Its efficiency
+classes and its cache domains coincide exactly -- processors 0-5 are class 0 behind one L2, 6-11 are
+class 1 behind the other -- so every cross-class pair is also a cross-cache pair. The 5.6x is
+"across domains", and attributing it to core speed *or* to cache would need a machine whose classes and
+caches cut differently. The probe detects this and prints a CAUTION rather than letting a reader draw
+the finer conclusion; two of its four placement rows come back `n/a`, and reporting a placement as
+inexpressible is deliberately not the same as reporting that it made no difference.
+
+Two construction notes. **Pinning failures panic** rather than warn: a silently unpinned thread turns a
+placement experiment into a measurement of the scheduler's preferences while still printing a confident
+number. And **batch depth is read from the cached runs only** -- the baseline strategy reads the shared
+line on every operation by definition, so its depth is ~1 at every placement and carries no
+information. An earlier revision compared the baseline depths and duly reported 0.8 against 0.4, which
+is noise around a constant being read as a finding.
+
 ## `probe-peer-index-cache`: a result that inverts by host, which is why it is kept
 
 This probe measures peer-index caching -- each side of an SPSC ring keeping a plain copy of the other

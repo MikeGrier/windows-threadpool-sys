@@ -16,6 +16,10 @@ description = "Executable probes for the undocumented Windows behaviour this wor
 path = "src/lib.rs"
 
 [[bin]]
+name = "probe-core-affinity"
+path = "src/bin/core_affinity.rs"
+
+[[bin]]
 name = "probe-error-mode"
 path = "src/bin/error_mode.rs"
 

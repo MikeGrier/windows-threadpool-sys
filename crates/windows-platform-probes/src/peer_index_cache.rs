@@ -55,6 +55,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Instant;
 
+use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadAffinityMask};
 use windows_waitable_queues::spsc;
 
 /// Items handed across the ring in one timed run.
@@ -149,10 +150,13 @@ pub fn measure() -> Observation {
 
 /// One timed pass, with the shared-read counts that pass performed.
 #[derive(Debug, Clone, Copy)]
-struct Sample {
-    nanos: f64,
-    consumer_refreshes: u64,
-    producer_refreshes: u64,
+pub struct Sample {
+    /// Wall-clock nanoseconds for the whole pass.
+    pub nanos: f64,
+    /// How many times the consumer read the producer's shared position.
+    pub consumer_refreshes: u64,
+    /// How many times the producer read the consumer's shared position.
+    pub producer_refreshes: u64,
 }
 
 fn median(label: &'static str, mut timer: impl FnMut() -> Sample) -> Run {
@@ -245,10 +249,36 @@ impl Ring {
 }
 
 fn time_model(strategy: Strategy) -> Sample {
+    time_model_on(strategy, None, None)
+}
+
+/// One run of the model, optionally with each side pinned to a chosen
+/// processor.
+///
+/// The affinity arguments exist so a caller can ask where the two threads run
+/// rather than accept wherever the scheduler puts them. That turned out to
+/// matter: this probe's headline result inverted between two hosts, and the
+/// mechanism -- how deeply the two sides batch -- is a property of how they are
+/// placed relative to each other, which an unpinned run leaves to chance and
+/// cannot report.
+///
+/// `None` leaves a side unconstrained, which is what the unpinned entry points
+/// pass and is deliberately not the same thing as pinning it to every
+/// processor: an unconstrained thread can migrate mid-run.
+pub fn time_model_on(
+    strategy: Strategy,
+    producer_cpu: Option<u8>,
+    consumer_cpu: Option<u8>,
+) -> Sample {
     let ring = Ring::new(CAPACITY);
     let started = Instant::now();
     let (consumer_refreshes, producer_refreshes) = thread::scope(|scope| {
-        let producer = scope.spawn(|| produce(&ring, strategy));
+        let shared = &ring;
+        let producer = scope.spawn(move || {
+            pin_current_thread(producer_cpu);
+            produce(shared, strategy)
+        });
+        pin_current_thread(consumer_cpu);
         let consumer_refreshes = consume(&ring, strategy);
         let producer_refreshes = producer.join().expect("the producer must not panic");
         (consumer_refreshes, producer_refreshes)
@@ -258,6 +288,28 @@ fn time_model(strategy: Strategy) -> Sample {
         consumer_refreshes,
         producer_refreshes,
     }
+}
+
+/// Confine the calling thread to one logical processor.
+///
+/// Panics rather than warns on failure. A silently unpinned thread would turn
+/// a placement experiment into a measurement of the scheduler's preferences,
+/// and the run would still print a confident number -- the same failure mode as
+/// a probe that asserts its conclusion.
+fn pin_current_thread(cpu: Option<u8>) {
+    let Some(cpu) = cpu else {
+        return;
+    };
+    assert!(cpu < 64, "this probe assumes a single processor group");
+    let mask: usize = 1 << cpu;
+    // SAFETY: sets this thread's affinity to a mask with one bit set, for a
+    // processor the caller took from the discovered topology.
+    let previous = unsafe { SetThreadAffinityMask(GetCurrentThread(), mask) };
+    assert!(
+        previous != 0,
+        "SetThreadAffinityMask failed for processor {cpu}: {}",
+        std::io::Error::last_os_error()
+    );
 }
 
 /// Fills the ring, returning how many times it read the consumer's position.
