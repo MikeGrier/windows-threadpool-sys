@@ -288,6 +288,25 @@ pub fn node_pairs(
 
 /// Measure every expressible placement under baseline and cached strategies.
 ///
+/// # Do not add a seam here to inject a processor list
+///
+/// This reads the real machine on purpose, and the classification functions it
+/// calls -- [`classify`], [`representative_pairs`], [`node_pairs`] -- are pure
+/// so that they, and not this, are what synthetic topologies exercise. A
+/// `measure_with(places)` overload would look like an obvious testability
+/// improvement and would be a trap:
+///
+/// [`ProcessorPlace::numa_node`] and [`ProcessorPlace::number`] are independent
+/// fields. Feed a synthetic four-node list to a sixteen-processor single-node
+/// host and every processor number in it is still *valid*, so every pin
+/// succeeds and the run produces genuine timings filed under fabricated node
+/// ids -- a table indistinguishable from a real NUMA measurement that measured
+/// no such thing. The pin assertion does not catch it: it rejects a processor
+/// that does not exist, not a label that is wrong.
+///
+/// Selection is testable offline and is tested there; the timings need real
+/// hardware and are worth nothing without it.
+///
 /// # Errors
 ///
 /// Returns whatever [`discover_places`] failed with.
