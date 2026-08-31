@@ -70,7 +70,112 @@ use crate::peer_index_cache::{ITEMS, Strategy, time_model_on};
 /// Repetitions per placement; the median is reported.
 ///
 /// Odd, so the median is an observation rather than an average of two.
-const REPETITIONS: usize = 3;
+pub const REPETITIONS: usize = 3;
+
+/// The within-class pair a run would measure for one efficiency class, if any.
+///
+/// **Extracted so the plan and the run bind to one definition.** Restating this
+/// predicate in [`RunPlan`] would be a second copy of a rule, and the two would
+/// drift -- the plan would promise a comparison the run then skipped, or the
+/// reverse. Here the plan asks the same function the run uses.
+///
+/// Requires different *cores*, not merely different processors: on an SMT host
+/// one class might otherwise be measured as siblings and another as two cores,
+/// and the comparison between classes would be measuring the placement
+/// difference instead.
+#[must_use]
+fn within_class_pair(
+    places: &[ProcessorPlace],
+    class: u8,
+) -> Option<(ProcessorPlace, ProcessorPlace)> {
+    let members: Vec<&ProcessorPlace> = places
+        .iter()
+        .filter(|place| place.efficiency_class == class)
+        .collect();
+
+    members
+        .iter()
+        .flat_map(|a| members.iter().map(move |b| (**a, **b)))
+        .find(|(a, b)| a.core != b.core && a.cache_domain == b.cache_domain)
+}
+
+/// Every efficiency class this machine has.
+#[must_use]
+fn efficiency_classes(places: &[ProcessorPlace]) -> Vec<u8> {
+    let mut classes: Vec<u8> = places.iter().map(|place| place.efficiency_class).collect();
+    classes.sort_unstable();
+    classes.dedup();
+    classes
+}
+
+/// What a run on this machine will involve, worked out before any of it starts.
+///
+/// # Why this is computed rather than estimated
+///
+/// A person is being asked to give up minutes of their machine as a favour, and
+/// on a large multi-socket host the hop matrix alone grows as `n*(n-1)/2`. The
+/// *counts* here are exact -- they come from the same selection the run will
+/// use -- so only the per-run duration is approximate, and it is presented as a
+/// range rather than a single confident number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RunPlan {
+    /// Placements this machine can express.
+    pub placements: usize,
+    /// Distinct NUMA node pairs.
+    pub node_hops: usize,
+    /// Efficiency classes compared like with like.
+    pub classes: usize,
+    /// Strategies measured per selection.
+    pub strategies: usize,
+    /// Repetitions per strategy.
+    pub repetitions: usize,
+}
+
+impl RunPlan {
+    /// Work out what a run on these processors will involve.
+    #[must_use]
+    pub fn for_processors(places: &[ProcessorPlace]) -> Self {
+        Self {
+            placements: representative_pairs(places).len(),
+            node_hops: node_pairs(places).len(),
+            // Exact, not an upper bound: a class is only measured when it has a
+            // usable within-class pair, and this asks the same function the run
+            // will. Counting classes instead would over-report on any host
+            // whose classes have no such pair -- which is this workspace's own
+            // x64 host, where it inflated the count by half.
+            classes: efficiency_classes(places)
+                .into_iter()
+                .filter(|class| within_class_pair(places, *class).is_some())
+                .count(),
+            strategies: 2,
+            repetitions: REPETITIONS,
+        }
+    }
+
+    /// How many timed handoffs the run performs.
+    #[must_use]
+    pub fn timed_runs(self) -> usize {
+        (self.placements + self.node_hops + self.classes) * self.strategies * self.repetitions
+    }
+
+    /// How long the run should take at most, in seconds.
+    ///
+    /// **An upper bound rather than a range, and that is a correction.** An
+    /// earlier version quoted a low-to-high range, and the first real run
+    /// finished in 0.6 s against a stated "roughly 1-8 seconds" -- under its own
+    /// floor. A floor is the useless half of the promise anyway: someone
+    /// deciding whether to start a favour needs to know the worst case, and
+    /// finishing early is never the failure.
+    ///
+    /// 220 ns/item is the slowest per-item cost measured across the hosts this
+    /// has run on, seen crossing a distant domain. A machine slower than that
+    /// will overrun the estimate, and its result is exactly the one worth
+    /// having.
+    #[must_use]
+    pub fn estimated_seconds(self) -> f64 {
+        (self.timed_runs() * ITEMS) as f64 * 220e-9
+    }
+}
 
 /// How a producer and a consumer are placed relative to each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -382,23 +487,10 @@ pub fn measure() -> std::io::Result<Observation> {
     // cores faster at this" is answerable and not folded into a single
     // same-class row.
     let mut by_class = Vec::new();
-    let mut classes: Vec<u8> = processors.iter().map(|p| p.efficiency_class).collect();
-    classes.sort_unstable();
-    classes.dedup();
-    for class in classes {
-        let members: Vec<_> = processors
-            .iter()
-            .filter(|p| p.efficiency_class == class)
-            .collect();
-        let Some((producer, consumer)) = members
-            .iter()
-            .flat_map(|a| members.iter().map(move |b| (**a, **b)))
-            // Different cores, not merely different processors: on an SMT host
-            // one class might otherwise be measured as siblings and the other
-            // as two cores, and the comparison between classes would be
-            // measuring the placement difference instead.
-            .find(|(a, b)| a.core != b.core && a.cache_domain == b.cache_domain)
-        else {
+    for class in efficiency_classes(&processors) {
+        // The same function `RunPlan` asks, so the estimate a runner is shown
+        // cannot promise a comparison this loop then skips.
+        let Some((producer, consumer)) = within_class_pair(&processors, class) else {
             continue;
         };
         for strategy in [Strategy::Baseline, Strategy::Cached] {

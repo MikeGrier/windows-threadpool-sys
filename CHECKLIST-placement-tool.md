@@ -292,11 +292,11 @@ that carries them is written.
 
 ## M4: the runner's experience, and their trust
 
-- [ ] **PT-4.1** -- **One entry point.** A single binary that runs everything and produces one record.
+- [x] **PT-4.1** -- **One entry point.** A single binary that runs everything and produces one record.
   "Run these three and send me all three outputs" is friction for someone doing a favour, and invites
   partial submissions that cannot be compared.
 
-- [ ] **PT-4.2** -- **State the runtime before doing the work**, from the discovered topology rather
+- [x] **PT-4.2** -- **State the runtime before doing the work**, from the discovered topology rather
   than a guess: the hop matrix alone is `n*(n-1)/2` hops times two strategies times three repetitions
   times two million items, on top of the placements. On a four-node machine that is a materially
   longer run than on this one, and the person deserves to know before it starts.
@@ -307,7 +307,7 @@ that carries them is written.
   instruction. Pin it, and state in the first post what is collected and what a submission is used
   for, so a reader who arrives from a search rather than from the README still sees it.
 
-- [ ] **PT-4.3** -- **Say exactly what is collected and what is not**, in the tool's own output and in
+- [x] **PT-4.3** -- **Say exactly what is collected and what is not**, in the tool's own output and in
   its README, and make it verifiable by reading the record. Collected, per PT-1.2: core/cache/NUMA
   shape, timings, CPU model, OS build, and the virtualisation hint. **Not** collected: hostname, user
   name, file paths, environment variables, serial numbers, or anything about installed software --
@@ -317,13 +317,13 @@ that carries them is written.
   the honest limit from PT-1.2, that the flag does not make confidential hardware safe to submit,
   because the topology describes the part regardless.
 
-- [ ] **PT-4.4** -- Pin the thread-pinning failure behaviour for a stranger's machine. It currently
+- [x] **PT-4.4** -- Pin the thread-pinning failure behaviour for a stranger's machine. It currently
   panics, which is right for us (a silently unpinned thread measures the scheduler, not the placement)
   but reads as a crash to someone doing a favour. It must fail with an explanation of what could not
   be pinned and why the run cannot continue honestly -- **and must not fall back to an unpinned
   measurement**, which would produce a plausible number that means nothing.
 
-- [ ] **PT-4.5** -- **Let the runner see everything before sending it, and decide with the real values
+- [x] **PT-4.5** -- **Let the runner see everything before sending it, and decide with the real values
   rather than a promise.** This is a stronger privacy property than any suppression flag, and cheaper:
   the record is a text file, so the honest instruction is "open it and read it -- if you are not happy
   with something in there, do not send it."

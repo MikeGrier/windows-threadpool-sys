@@ -341,10 +341,32 @@ fn pin_current_thread(cpu: Option<(u16, u8)>) {
     // processor the caller took from the discovered topology, and the previous
     // affinity is not wanted, so a null pointer is passed for it.
     let ok = unsafe { SetThreadGroupAffinity(GetCurrentThread(), &affinity, ptr::null_mut()) };
+    // A raw string rather than an escaped-continuation one: `cargo fmt`
+    // reindents a multi-line string literal and the backslash continuations
+    // then swallow the blank lines, which turns a carefully laid-out message
+    // into one paragraph. This is the message a stranger sees when the tool
+    // gives up, so its shape matters.
     assert!(
         ok != 0,
-        "SetThreadGroupAffinity failed for group {group} processor {number}: {}",
-        std::io::Error::last_os_error()
+        r"
+This run is stopping, and no measurement was taken.
+
+Could not confine a thread to processor {number} in group {group}:
+  {error}
+
+That processor was reported by this machine's own topology, so this is
+unexpected rather than a limit of the tool. A process restricted to a
+subset of processors -- by a job object, a container, or a `start /affinity`
+-- is the usual cause.
+
+The run stops rather than measuring without pinning. An unpinned thread
+measures wherever the scheduler happened to put it, which would produce a
+plausible number that answers a different question, and nothing in the
+output would say so.
+
+Reporting this is genuinely useful: please include this message.
+",
+        error = std::io::Error::last_os_error()
     );
 }
 

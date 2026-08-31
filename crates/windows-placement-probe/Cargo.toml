@@ -21,6 +21,13 @@ description = "Measures what thread placement costs on a Windows machine -- SMT 
 [lib]
 path = "src/lib.rs"
 
+# One binary, deliberately. A stranger doing a favour must not be asked to run
+# three things and collate them; the internal probes in windows-platform-probes
+# stay separate because a development loop wants the opposite.
+[[bin]]
+name = "placement-probe"
+path = "src/bin/placement_probe.rs"
+
 [features]
 # The submission record is the product, so serialization is not optional the way
 # it is in the layers below. The feature exists so the measurement code can be
