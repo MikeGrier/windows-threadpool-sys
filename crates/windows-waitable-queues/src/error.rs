@@ -9,6 +9,8 @@
 use core::fmt;
 use std::io;
 
+use crate::capacity::Bounds;
+
 /// Why a capacity was rejected at construction.
 ///
 /// Constructing a queue is the one place a caller can get this wrong, so it is
@@ -28,10 +30,12 @@ pub struct CapacityError {
     /// The largest capacity the rejecting shape accepts.
     ///
     /// Carried on the error rather than assumed to be a crate-wide constant:
-    /// the bound follows from how a shape represents its positions, and a
-    /// future shape that represents them differently would have a different
-    /// one. A suggestion computed against the wrong bound is worse than no
-    /// suggestion, because a caller will act on it.
+    /// the bound follows from how a shape represents its positions, and the
+    /// shapes differ. Most stop where a wrapping difference between positions
+    /// stops being unambiguous; `reserving_mpsc` stops far lower, because it
+    /// packs its reservation count into the same word as its position so the
+    /// two can be claimed together. A suggestion computed against the wrong
+    /// bound is worse than no suggestion, because a caller will act on it.
     max_valid: usize,
     kind: CapacityErrorKind,
 }
@@ -45,40 +49,29 @@ enum CapacityErrorKind {
 }
 
 impl CapacityError {
-    pub(crate) fn zero(min_valid: usize, max_valid: usize) -> Self {
+    fn new(requested: usize, bounds: Bounds, kind: CapacityErrorKind) -> Self {
         Self {
-            requested: 0,
-            min_valid,
-            max_valid,
-            kind: CapacityErrorKind::Zero,
+            requested,
+            min_valid: bounds.min,
+            max_valid: bounds.max,
+            kind,
         }
     }
 
-    pub(crate) fn not_power_of_two(requested: usize, min_valid: usize, max_valid: usize) -> Self {
-        Self {
-            requested,
-            min_valid,
-            max_valid,
-            kind: CapacityErrorKind::NotPowerOfTwo,
-        }
+    pub(crate) fn zero(bounds: Bounds) -> Self {
+        Self::new(0, bounds, CapacityErrorKind::Zero)
     }
 
-    pub(crate) fn too_small(requested: usize, min_valid: usize, max_valid: usize) -> Self {
-        Self {
-            requested,
-            min_valid,
-            max_valid,
-            kind: CapacityErrorKind::TooSmall,
-        }
+    pub(crate) fn not_power_of_two(requested: usize, bounds: Bounds) -> Self {
+        Self::new(requested, bounds, CapacityErrorKind::NotPowerOfTwo)
     }
 
-    pub(crate) fn too_large(requested: usize, min_valid: usize, max_valid: usize) -> Self {
-        Self {
-            requested,
-            min_valid,
-            max_valid,
-            kind: CapacityErrorKind::TooLarge,
-        }
+    pub(crate) fn too_small(requested: usize, bounds: Bounds) -> Self {
+        Self::new(requested, bounds, CapacityErrorKind::TooSmall)
+    }
+
+    pub(crate) fn too_large(requested: usize, bounds: Bounds) -> Self {
+        Self::new(requested, bounds, CapacityErrorKind::TooLarge)
     }
 
     /// The smallest capacity the shape that rejected this request will accept.
@@ -129,9 +122,9 @@ impl CapacityError {
 
     /// The largest power of two that does not exceed [`Self::max_valid`].
     ///
-    /// The clamp target for [`Self::previous_valid`]: `max_valid` is itself not
-    /// necessarily a power of two -- for a ring of monotonic wrapping positions
-    /// it is `usize::MAX / 2`, which is `2^63 - 1` -- so clamping to it
+    /// The clamp target for [`Self::previous_valid`]: `max_valid` need not be a
+    /// power of two -- for a ring of monotonic wrapping positions it is
+    /// `usize::MAX / 2`, which is `2^63 - 1` -- so clamping to it
     /// directly would hand back a capacity that fails the power-of-two test
     /// instead of the size test.
     fn largest_power_of_two_within_bound(&self) -> usize {
@@ -185,10 +178,8 @@ impl fmt::Display for CapacityError {
             ),
             CapacityErrorKind::TooLarge => write!(
                 f,
-                "capacity {} is too large; it must not exceed half of usize::MAX, so that the \
-                 difference between the producer and consumer positions stays unambiguous across \
-                 wraparound",
-                self.requested
+                "capacity {} is above the largest this queue shape can represent, which is {}",
+                self.requested, self.max_valid
             ),
         }
     }
@@ -243,6 +234,38 @@ impl<T> fmt::Display for PushError<T> {
 }
 
 impl<T: fmt::Debug> core::error::Error for PushError<T> {}
+
+/// The only way delivering into a reserved slot can fail: nobody is left to
+/// take it.
+///
+/// **There is deliberately no `Full` here, and the absence is the contract.** A
+/// reservation's whole purpose is that the room is already the holder's, so a
+/// full queue cannot refuse it. Returning [`PushError`] instead would name a
+/// case that cannot occur and oblige every caller to handle it, which is how a
+/// guarantee decays back into a thing you hope is true.
+///
+/// The item comes back for the same reason it does from a refused push: a queue
+/// that swallows what it cannot deliver leaves the caller no way to account for
+/// it. That matters more here than elsewhere -- an item important enough to
+/// reserve a slot for is exactly the kind whose disposal must not be silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Disconnected<T>(pub T);
+
+impl<T> Disconnected<T> {
+    /// Takes the item back out.
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> fmt::Display for Disconnected<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("every consumer is gone")
+    }
+}
+
+impl<T: fmt::Debug> core::error::Error for Disconnected<T> {}
 
 /// Why a blocking receive gave up.
 ///

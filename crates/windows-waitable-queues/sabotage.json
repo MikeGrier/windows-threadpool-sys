@@ -9,11 +9,17 @@
       "expect": "caught",
       "why": "A producer that never rings the bell leaves a parked consumer asleep on a queue with items in it. Caught as a hang, which is the correct shape for this defect.",
       "find": [
-        "        self.shared.doorbell.signal();",
-        "        Ok(())"
+        "        self.doorbell.signal();",
+        "    }",
+        "}",
+        "",
+        "impl<T> Drop for Shared<T> {"
       ],
       "replace": [
-        "        Ok(())"
+        "    }",
+        "}",
+        "",
+        "impl<T> Drop for Shared<T> {"
       ]
     },
     {
@@ -26,13 +32,13 @@
         "    }",
         "}",
         "",
-        "/// The reading half"
+        "/// A slot claimed in advance"
       ],
       "replace": [
         "    }",
         "}",
         "",
-        "/// The reading half"
+        "/// A slot claimed in advance"
       ]
     },
     {
@@ -316,10 +322,126 @@
       "expect": "caught",
       "why": "With one slot, 'published at position p' and 'free again at position p + capacity' are the SAME number, so a producer reads the sequence of the item it just pushed, concludes the slot is free, and overwrites an item the consumer has not read. spsc accepts one, which is exactly why the minimum belongs to the shape rather than to the crate -- and why it is asserted rather than assumed.",
       "find": [
-        "const MIN_CAPACITY: usize = 2;"
+        "const BOUNDS: Bounds = Bounds {",
+        "    min: 2,",
+        "    max: WRAPPING_MAX_CAPACITY,",
+        "};"
       ],
       "replace": [
-        "const MIN_CAPACITY: usize = 1;"
+        "const BOUNDS: Bounds = Bounds {",
+        "    min: 1,",
+        "    max: WRAPPING_MAX_CAPACITY,",
+        "};"
+      ]
+    },
+    {
+      "name": "reserving_mpsc: a best-effort push may take a reserved slot",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "The reservation guarantee itself. If the best-effort path ignores the outstanding count, the slot a reservation was promised gets taken by an ordinary push and the redemption overwrites a live item. Note this sabotage keeps the room check but drops the reservations from it, which is exactly the mistake an optimiser-minded reader would make: the count looks like bookkeeping until you ask who is holding the slot it accounts for.",
+      "find": [
+        "        occupied < capacity - reserved"
+      ],
+      "replace": [
+        "        let _ = reserved;",
+        "        occupied < capacity"
+      ]
+    },
+    {
+      "name": "reserving_mpsc: reserve does not check for room",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "A reservation handed out over a full queue is a promise that cannot be kept, which is worse than a refusal: the caller has already been told it may proceed. Reserve is the CHEAP place to fail -- no work has started -- and removing the check moves that failure to the one place the design exists to keep it away from.",
+      "find": [
+        "            if !self.shared.has_room_beyond_reservations(position, reserved) {",
+        "                return None;",
+        "            }"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "reserving_mpsc: redeeming does not release the reservation",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "Redeeming must decrement the count as it advances the position, in ONE exchange. Leaving the count up permanently withdraws a slot from the best-effort path on every send, so the queue's usable capacity bleeds away to zero over time. Caught quickly because a capacity-2 queue stops accepting anything after its first reserved send.",
+      "find": [
+        "                claim_word(reserved - 1, position.wrapping_add(1)),"
+      ],
+      "replace": [
+        "                claim_word(reserved, position.wrapping_add(1)),"
+      ]
+    },
+    {
+      "name": "reserving_mpsc: dropping a reservation does not return the slot",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "An abandoned reservation must give its capacity back. Without this the queue leaks a slot per dropped reservation and eventually refuses everything, which is the same bleed as the entry above reached by the other path.",
+      "find": [
+        "                claim_word(reserved - 1, position_of(word)),"
+      ],
+      "replace": [
+        "                claim_word(reserved, position_of(word)),"
+      ]
+    },
+    {
+      "name": "reserving_mpsc: an outstanding reservation does not hold the stream open",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "A reservation is a promise of a message still to come, so it must count as a producer. Without this the consumer is told the stream ended while a reservation is outstanding, and then handed an item afterwards -- losing exactly the message the reservation existed to protect. This is the defect the feature is FOR, so a test suite that missed it would be asserting the mechanism and not the purpose.",
+      "find": [
+        "                    self.shared.producers.fetch_add(1, Ordering::Relaxed);"
+      ],
+      "replace": [
+        ""
+      ]
+    },
+    {
+      "name": "reserving_mpsc: send leaks the shared state via mem::forget",
+      "file": "src/reserving_mpsc.rs",
+      "expect": "caught",
+      "why": "The real defect this shape shipped with for one test run. `mem::forget` suppresses the double-release correctly but also leaks the Arc the reservation holds, so the shared state is never dropped and every item still in the ring leaks with it. Caught by the drop-counting test rather than by review, which is why that test counts drops instead of merely checking the queue still works.",
+      "find": [
+        "        let this = core::mem::ManuallyDrop::new(self);",
+        "        // SAFETY: `this` is a `ManuallyDrop`, so its own destructor never runs",
+        "        // and the field is not read again after this move.",
+        "        let shared = unsafe { core::ptr::read(&this.shared) };",
+        "        shared.release_producer();"
+      ],
+      "replace": [
+        "        let shared = Arc::clone(&self.shared);",
+        "        core::mem::forget(self);",
+        "        shared.release_producer();"
+      ]
+    },
+    {
+      "name": "spsc: a best-effort push may take a reserved slot",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "The same guarantee on the single-producer shape, where the mechanism is a plain counter rather than a packed word. Worth its own entry precisely because the two implementations share nothing: a test that only covered the mpsc path would leave this one unguarded.",
+      "find": [
+        "        if tail.wrapping_sub(head) + reserved >= self.shared.capacity {",
+        "            // Report disconnection in preference to fullness"
+      ],
+      "replace": [
+        "        if tail.wrapping_sub(head) >= self.shared.capacity {",
+        "            // Report disconnection in preference to fullness"
+      ]
+    },
+    {
+      "name": "spsc: dropping a reservation does not return the slot",
+      "file": "src/spsc.rs",
+      "expect": "caught",
+      "why": "As for reserving_mpsc: an abandoned reservation must give its capacity back, or the queue bleeds a slot per drop until it refuses everything.",
+      "find": [
+        "        self.producer",
+        "            .shared",
+        "            .reserved",
+        "            .store(reserved - 1, Ordering::Relaxed);"
+      ],
+      "replace": [
+        "        let _ = reserved;"
       ]
     },
     {

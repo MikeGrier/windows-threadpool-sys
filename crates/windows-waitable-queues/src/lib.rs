@@ -65,11 +65,12 @@ mod error;
 pub mod mpsc;
 #[cfg(test)]
 mod race_hooks;
+pub mod reserving_mpsc;
 pub mod spsc;
 pub mod traits;
 
-pub use error::{CapacityError, PushError, RecvError, RecvTimeoutError};
-pub use traits::{Bounded, Consumer, Drain, Producer, Waitable};
+pub use error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
+pub use traits::{Bounded, Consumer, Drain, Producer, Reserving, Waitable};
 
 /// Pads and aligns a value onto its own cache line.
 ///

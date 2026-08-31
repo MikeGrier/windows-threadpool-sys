@@ -79,13 +79,14 @@ use std::time::Duration;
 
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
-use crate::capacity::validate_capacity;
+use crate::capacity::{Bounds, WRAPPING_MAX_CAPACITY, validate_capacity};
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, PushError, RecvError, RecvTimeoutError};
 
-/// The smallest capacity this shape can represent.
+/// What this shape accepts as a capacity.
 ///
-/// **Two, and it is a property of the sequence protocol rather than a taste.**
+/// **The minimum is two, and it is a property of the sequence protocol rather
+/// than a taste.**
 /// A slot's sequence has to distinguish three states, and it does so by
 /// counting: `pos` means free, `pos + 1` means published, and the consumer
 /// frees it again by storing `pos + capacity`, the position the next lap will
@@ -100,7 +101,15 @@ use crate::error::{CapacityError, PushError, RecvError, RecvTimeoutError};
 /// cost this protocol exists to avoid, and it would do so for every queue in
 /// order to serve a capacity of one. A caller that genuinely wants a one-item
 /// handoff wants [`spsc`](crate::spsc), which represents it exactly.
-const MIN_CAPACITY: usize = 2;
+///
+/// The maximum is the widest any shape may be, because this one's positions are
+/// full-width [`usize`] values with nothing packed beside them --
+/// [`reserving_mpsc`](crate::reserving_mpsc) pays for its reservations with a
+/// far lower ceiling.
+const BOUNDS: Bounds = Bounds {
+    min: 2,
+    max: WRAPPING_MAX_CAPACITY,
+};
 
 /// Creates a multi-producer, single-consumer bounded array queue.
 ///
@@ -135,7 +144,7 @@ const MIN_CAPACITY: usize = 2;
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
-    validate_capacity(capacity, MIN_CAPACITY)?;
+    validate_capacity(capacity, BOUNDS)?;
 
     let mut slots = Vec::with_capacity(capacity);
     for index in 0..capacity {

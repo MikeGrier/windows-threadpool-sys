@@ -233,12 +233,55 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   keep immediately** -- it caught the new doorbell test asserting the signal-skip *optimisation* rather
   than the contract, which is precisely what a control is for.
 
-- [ ] **M31.2** -- Overflow policy, which is more than "return `Err`". Ship fail-fast plus a `reserve`
+- [x] **M31.2** -- Overflow policy, which is more than "return `Err`". Ship fail-fast plus a `reserve`
   that guarantees a slot for a message that must not be lost, following
   [queue.rs](crates/windows-file-watcher/src/queue.rs), which already carries three policies including a
   **coalesced loss latch** the consumer is guaranteed to observe. **Never offer overwrite-oldest**: for
   telemetry that is a lost sample, but for an I/O submission it is a lost operation, and the two must not
   share a policy knob.
+  **Done, and the multi-producer case forced a decision the item did not anticipate.** Honouring a
+  reservation means knowing how many slots remain, which means reading the consumer's position -- one
+  line every thread touches -- on *every* push, including the pushes that never reserve anything.
+  `mpsc`'s producer avoids that read by design: it asks the slot's own sequence "are you free", and those
+  are dispersed across the slot array. So `mpsc` genuinely cannot answer the reservation question, and
+  rather than charge every caller for a capability not every caller wants, **`reserving_mpsc` ships as a
+  peer and `mpsc` is untouched** ([D-16](crates/windows-waitable-queues/DESIGN-NOTES.md#d-16)). The
+  engineer chose this split over the alternatives when it was raised.
+  **The reservation count and the claim position share one 64-bit word, and that is the correctness
+  argument rather than tidiness** ([D-17](crates/windows-waitable-queues/DESIGN-NOTES.md#d-17)). With the
+  count in its own atomic, a pushing producer reads it then writes the position while a reserving one
+  writes it then reads the position, and each can miss the other -- granting a slot that does not exist.
+  **`SeqCst` fences do not close this**, unlike the superficially identical hazard in D-9: the Dekker
+  argument needs store-then-load on both sides and the pusher is load-then-store, so both sides missing
+  each other is consistent with every total order. The 32/32 split is forced by the arithmetic and caps
+  the shape at 2^31 items, reported through the same per-shape bound D-12 introduced for the minimum.
+  Two consequences worth noting: redeeming is a single exchange that moves both halves, so
+  `occupied + reserved` is never momentarily wrong; and the producer stops needing the slot sequence for
+  the "free" direction, so this shape's `pop` is one store *shorter* than `mpsc`'s.
+  **A 128-bit compare-and-swap was raised and refused**
+  ([D-18](crates/windows-waitable-queues/DESIGN-NOTES.md#d-18)): it lifts the cap and nothing else, since
+  the consumer's position still has to be read, and it costs a new dependency, a target-feature floor not
+  in the x86-64 baseline, and a different instruction on the ARM64 machine every measurement here is
+  taken on. Recorded with the case that would revive it -- a tagged pointer, which is what M-inf.1's
+  linked and sharded shapes would need.
+  **`spsc` reserves too, nearly free**, since one producer means `reserve` and `push` are the same
+  thread. Its reservation *borrows* the producer where `reserving_mpsc`'s is owned and `Send`, because
+  there the handle **is** the single-producer guarantee and an owned reservation could outlive it on
+  another thread. That difference is why `Reserving`'s associated type is generic over a lifetime, and it
+  is D-3 working: the trait was shaped by two implementations rather than around one.
+  **The loss latch is deliberately not generalised, and the reason is recorded rather than skipped**
+  ([D-19](crates/windows-waitable-queues/DESIGN-NOTES.md#d-19)). Coalescing works in the file watcher
+  because a desync is *idempotent*; a queue of arbitrary `T` has no such property. What generalises is a
+  loss *count*, which is M31.4's observability rather than an overflow policy.
+  **Two defects surfaced, both caught rather than reasoned about.** `Reservation::send` used
+  `mem::forget` to suppress its double-release, which leaks the `Arc` the reservation holds -- so the
+  shared state was never dropped and every item still in the ring leaked with it; found by the
+  drop-counting test. And the first `const` assertions guarding the packing were **tautological**,
+  asserting that `BOUNDS_MAX` equalled its own definition; widening the position to 40 bits sailed past
+  them while silently narrowing the count's field to 24, which is how the packing actually breaks. Both
+  rewritten, and the assertions verified by sabotage -- a too-wide and a too-narrow split each now fail
+  the build with the right message.
+  155 unit tests and 5 doctests, the whole suite in 0.31s.
 
 - [ ] **M31.3** -- Shutdown in both directions: the consumer learns when every producer is gone, and a
   producer learns when the consumer is gone and fails with a typed error. Descriptors in flight at
@@ -257,6 +300,17 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
 
   Record the result either way -- a measurement that says "the simple thing is fine" is worth as much as
   one that does not, and is the cheaper outcome to lose track of.
+
+  **Also measure `reserving_mpsc` against `mpsc`, and decide their merge-or-delete here.** M31.2 shipped
+  them as two shapes because reservation costs the producer a read of the consumer's position on every
+  push, and *how much* that costs was a judgement rather than a measurement
+  ([D-16](crates/windows-waitable-queues/DESIGN-NOTES.md#d-16)). This benchmark already stands up N
+  producers against a tail, so measuring both under the same harness is nearly free.
+  The decision it forces: if the shared-line read turns out to be cheap at realistic contention, the two
+  shapes **merge** and the non-reserving one goes; if it is expensive, both stay and the split is
+  vindicated. This item exists because a duplicated path silently becoming permanent -- because nobody
+  circled back -- is the failure mode the duplicate-then-decide rule actually warns about, and an
+  intention recorded only in a design note is not scheduled work.
 
 - [ ] **M31.6** -- Verify the memory orderings with a model checker, because stress testing demonstrably
   cannot. **Measured, not assumed:** during M30.3's sabotage sweep, weakening the producer's `Acquire`

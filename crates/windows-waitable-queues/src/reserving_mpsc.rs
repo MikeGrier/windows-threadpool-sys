@@ -1,0 +1,1084 @@
+// Copyright (c) Mike Grier.
+
+//! The multi-producer, single-consumer bounded array queue **that can reserve**.
+//!
+//! Everything [`mpsc`](crate::mpsc) is, plus [`Producer::reserve`]: a slot
+//! claimed in advance, so that a later delivery cannot be refused for want of
+//! room. *Reserved is guaranteed, unreserved is best-effort.*
+//!
+//! # Why this is a separate shape rather than a method on `mpsc`
+//!
+//! Because honouring a reservation costs the producer something on **every**
+//! push, including the pushes that never reserve anything.
+//!
+//! `mpsc`'s producer never reads the consumer's position. It asks a different
+//! question -- "is the slot I am about to claim free?" -- and reads that from
+//! the slot's own sequence number, which is spread across the slot array, so
+//! producers working at different positions touch different cache lines.
+//! Avoiding a single shared position is not incidental to that design; it is
+//! most of the point of it.
+//!
+//! A reservation cannot be honoured from that question. "Is this slot free" does
+//! not tell you **how many** slots remain, and holding one back for a reserver
+//! requires exactly that count -- which requires the consumer's position, on one
+//! line every thread in the system touches.
+//!
+//! So the two ship as peers ([D-16](../../DESIGN-NOTES.md#d-16)): `mpsc` for a
+//! caller who wants the cheapest possible push and can treat a refusal as
+//! backpressure, this shape for a caller with a message it must not lose. That
+//! is the narrow-trait argument from [D-2](../../DESIGN-NOTES.md#d-2) reaching
+//! its sharpest case -- `mpsc` does not implement
+//! [`Reserving`](crate::Reserving) because it genuinely cannot, not because
+//! nobody got round to it.
+//!
+//! # The claim word, which is why reservation is sound here
+//!
+//! The reservation count and the claim position live in **one** [`AtomicU64`]:
+//! the low 32 bits are the position, the high 32 the number of outstanding
+//! reservations. Every operation that changes either changes both together, with
+//! one compare-and-swap.
+//!
+//! That is not tidiness, it is the correctness argument, and the obvious
+//! alternative is broken in a way worth recording. With the count in its own
+//! atomic:
+//!
+//! 1. A pushing producer reads the count, sees room, and claims the position.
+//! 2. A reserving producer increments the count, reads the position, sees room,
+//!    and hands out the reservation.
+//!
+//! Each read before the other's write, and the queue now owes a slot that does
+//! not exist. **Sequentially consistent fences do not close this**, unlike the
+//! superficially similar hazard in [`Doorbell`](crate::doorbell::Doorbell): the
+//! Dekker argument needs store-then-load on both sides, and the pushing producer
+//! is load-then-store -- it *reads* the count and then *writes* the position. In
+//! a total order over the four operations, both sides missing each other is
+//! consistent, so no fence forbids it. Two independent claimants on one resource
+//! must synchronise on one location, so the count and the position become one
+//! location.
+//!
+//! With that, redeeming a reservation is a single compare-and-swap that
+//! decrements the count and advances the position at once -- so the quantity the
+//! invariant is about, `occupied + reserved`, is never momentarily wrong.
+//!
+//! # What the packing costs, and what it does not
+//!
+//! Splitting a 64-bit word 32/32 caps this shape at
+//! [`BOUNDS`]`.max` = 2^31 items, and that split is forced rather than chosen:
+//! a position of `b` bits keeps a wrapping difference unambiguous only up to
+//! `2^(b-1)`, and the count needs `b` bits because it can reach the capacity, so
+//! `b + b = 64` gives `b = 32`. There is no cleverer division of the word.
+//!
+//! **A 128-bit compare-and-swap would lift that cap and is deliberately not
+//! used** ([D-18](../../DESIGN-NOTES.md#d-18)). It would not remove the cost that
+//! matters -- the consumer's position still has to be read -- and 2^31 slots is
+//! a ring this shape allocates in full at construction.
+
+use core::cell::{Cell, UnsafeCell};
+use core::fmt;
+use core::marker::PhantomData;
+use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::io;
+use std::os::windows::io::{BorrowedHandle, OwnedHandle};
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::CacheAligned;
+use crate::blocking::{self, Parked};
+use crate::capacity::{Bounds, WRAPPING_MAX_CAPACITY, validate_capacity};
+use crate::doorbell::Doorbell;
+use crate::error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
+
+/// How many of the claim word's bits carry the position.
+///
+/// The other half carries the outstanding-reservation count. Changing this
+/// changes [`BOUNDS`] and is a breaking change to the capacities this shape
+/// accepts; see the [module documentation](self) for why an even split is the
+/// only sensible one.
+const POSITION_BITS: u32 = 32;
+
+/// Isolates the position half of the claim word.
+const POSITION_MASK: u64 = (1 << POSITION_BITS) - 1;
+
+/// What this shape accepts as a capacity.
+///
+/// The minimum is two for the same reason [`mpsc`](crate::mpsc)'s is: with a
+/// single slot, "published at `p`" and "free again on the next lap" would be the
+/// same sequence number.
+///
+/// The maximum is 2^31 rather than the crate-wide bound, because a position is
+/// half of the packed claim word rather than a whole [`usize`]. A wrapping
+/// 32-bit difference is unambiguous only up to 2^31, and that is exactly the
+/// most items this shape can hold.
+pub const BOUNDS_MAX: usize = 1 << (POSITION_BITS - 1);
+
+/// The capacities this shape accepts. See [`BOUNDS_MAX`].
+const BOUNDS: Bounds = Bounds {
+    min: 2,
+    max: BOUNDS_MAX,
+};
+
+/// The largest reservation count the word's other half can hold.
+const MAX_RESERVED: u64 = u64::MAX >> POSITION_BITS;
+
+// The relationships the packing depends on, checked by the compiler rather than
+// by a test. They are facts about constants, so a test could only ever report
+// after the fact, on a build somebody chose to run; here, moving the split
+// without re-deriving what depends on it does not compile.
+//
+// **Note what is deliberately NOT asserted.** That `BOUNDS_MAX` equals
+// `1 << (POSITION_BITS - 1)` is tautological -- it is the definition -- and an
+// earlier version of this block asserted exactly that, which is to say nothing.
+// Widening the position to 40 bits sailed past it while silently narrowing the
+// reservation field to 24, which is the real breakage. The assertions below are
+// the ones that catch it.
+const _: () = {
+    assert!(
+        POSITION_BITS >= 32,
+        "the reservation count is read out as a u32, so a field wider than 32 bits would be \
+         truncated on the way out"
+    );
+    assert!(
+        BOUNDS_MAX as u64 <= MAX_RESERVED,
+        "every slot may be reserved at once, so the count's half of the word must be able to hold \
+         the whole capacity -- widening the position narrows this and is the way the packing \
+         actually breaks"
+    );
+    assert!(
+        BOUNDS.max <= WRAPPING_MAX_CAPACITY,
+        "a shape may be narrower than the crate-wide bound but never wider"
+    );
+    assert!(
+        BOUNDS.min <= BOUNDS.max,
+        "a shape that accepts nothing would reject every capacity with a suggestion it would also \
+         reject"
+    );
+};
+
+/// Reads the position out of a claim word.
+const fn position_of(word: u64) -> u32 {
+    (word & POSITION_MASK) as u32
+}
+
+/// Reads the outstanding-reservation count out of a claim word.
+const fn reserved_of(word: u64) -> u32 {
+    (word >> POSITION_BITS) as u32
+}
+
+/// Builds a claim word from its two halves.
+const fn claim_word(reserved: u32, position: u32) -> u64 {
+    ((reserved as u64) << POSITION_BITS) | position as u64
+}
+
+/// Creates a reserving multi-producer, single-consumer bounded array queue.
+///
+/// One producer handle is returned; further producers are made by cloning it,
+/// and the queue is disconnected when the last of them -- and the last
+/// outstanding [`Reservation`] -- is gone.
+///
+/// `capacity` must be a power of two between two and [`BOUNDS_MAX`], and is the
+/// exact number of items the queue holds -- not a hint, and not rounded.
+///
+/// # Errors
+///
+/// Returns [`CapacityError`] if `capacity` is zero, is not a power of two, is
+/// less than two, or exceeds [`BOUNDS_MAX`].
+///
+/// # Examples
+///
+/// A slot taken before the work that will fill it, so the delivery cannot fail
+/// for want of room:
+///
+/// ```
+/// use windows_waitable_queues::reserving_mpsc;
+///
+/// let (tx, rx) = reserving_mpsc::bounded::<u32>(2)?;
+///
+/// // Claimed up front, while failing is still cheap.
+/// let slot = tx.reserve().expect("a fresh queue has room");
+///
+/// // The rest of the queue fills. Best-effort pushes cannot take the
+/// // reserved slot, so one of these is refused.
+/// tx.push(1).expect("one slot remains unreserved");
+/// assert!(tx.push(2).is_err(), "the other belongs to the reservation");
+///
+/// // And the reservation is still honoured, on a queue that is otherwise full.
+/// slot.send(99).expect("the room was already ours");
+///
+/// assert_eq!(rx.pop(), Some(1));
+/// assert_eq!(rx.pop(), Some(99));
+/// # Ok::<(), windows_waitable_queues::CapacityError>(())
+/// ```
+pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
+    validate_capacity(capacity, BOUNDS)?;
+
+    let mut slots = Vec::with_capacity(capacity);
+    for index in 0..capacity {
+        slots.push(Slot {
+            // Anything that is not `position + 1` for the position this slot
+            // first serves, so the consumer sees it as unpublished. The
+            // position's own value is the natural choice and matches the state
+            // the slot returns to on every later lap.
+            sequence: AtomicU32::new(index as u32),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+        });
+    }
+
+    let shared = Arc::new(Shared {
+        slots: slots.into_boxed_slice(),
+        mask: capacity - 1,
+        capacity,
+        head: CacheAligned(AtomicU32::new(0)),
+        claim: CacheAligned(AtomicU64::new(claim_word(0, 0))),
+        producers: AtomicUsize::new(1),
+        consumer_live: AtomicBool::new(true),
+        doorbell: Doorbell::new(),
+    });
+
+    Ok((
+        Producer {
+            shared: Arc::clone(&shared),
+            not_sync: PhantomData,
+        },
+        Consumer {
+            shared,
+            not_sync: PhantomData,
+        },
+    ))
+}
+
+/// One cell of the ring: an item, and a sequence number saying whether it has
+/// been published.
+struct Slot<T> {
+    /// `position + 1` once the producer that claimed `position` has finished
+    /// writing, and anything else before that.
+    ///
+    /// **This shape uses the sequence for one direction only.** In
+    /// [`mpsc`](crate::mpsc) it answers both "has this been published?" for the
+    /// consumer and "is this slot free?" for the producer. Here the producer
+    /// answers the second from the consumer's position instead -- it has to read
+    /// that position anyway, to count free slots for the reservations -- so
+    /// nothing ever stores a "free again" value and the consumer's `pop` is one
+    /// store shorter than `mpsc`'s.
+    sequence: AtomicU32,
+    value: UnsafeCell<MaybeUninit<T>>,
+}
+
+struct Shared<T> {
+    slots: Box<[Slot<T>]>,
+    mask: usize,
+    capacity: usize,
+    /// Where the consumer will next read. Written only by the consumer.
+    ///
+    /// Padded onto its own cache line, and here the padding earns its place
+    /// twice over: unlike `mpsc`, *every* producer reads this on *every* push,
+    /// so letting the claim word share the line would put the consumer's writes
+    /// directly in their path.
+    head: CacheAligned<AtomicU32>,
+    /// The outstanding-reservation count and the claim position, packed.
+    ///
+    /// One word because they must be claimed together; see the [module
+    /// documentation](self) for why two atomics cannot be made correct with any
+    /// amount of fencing.
+    claim: CacheAligned<AtomicU64>,
+    /// How many producer handles and outstanding reservations are alive.
+    ///
+    /// **A reservation counts as a producer**, which is not bookkeeping
+    /// pedantry: a reservation is a promise of a message still to come, so a
+    /// consumer that saw the stream end while one was outstanding would be told
+    /// the queue was finished and then handed an item. That would lose exactly
+    /// the message the reservation existed to protect.
+    producers: AtomicUsize,
+    consumer_live: AtomicBool,
+    /// Readiness as a waitable `HANDLE`. Costs nothing until somebody asks for
+    /// the handle, so a polling consumer never allocates a kernel object.
+    doorbell: Doorbell,
+}
+
+// SAFETY: a slot is written by exactly one producer -- the one whose
+// compare-and-swap claimed that position -- and read by exactly one consumer,
+// which reads it only after observing the release store of `position + 1` that
+// publishes it. The write of the item therefore happens-before the read, and no
+// two threads ever touch the same slot's contents at the same time. `T: Send` is
+// required and sufficient because an item is moved between threads and never
+// referenced from both.
+unsafe impl<T: Send> Sync for Shared<T> {}
+// SAFETY: as above; sending the shared state is sending the items it holds.
+unsafe impl<T: Send> Send for Shared<T> {}
+
+impl<T> Shared<T> {
+    /// The capacity as the width the positions are counted in.
+    ///
+    /// Lossless by construction: [`BOUNDS`] caps the capacity at 2^31.
+    fn capacity_u32(&self) -> u32 {
+        debug_assert!(self.capacity <= BOUNDS_MAX);
+        self.capacity as u32
+    }
+
+    /// Whether a *best-effort* claim may take the slot at `position`, given the
+    /// reservations currently outstanding.
+    ///
+    /// Written as a subtraction from the capacity rather than as
+    /// `occupied + reserved >= capacity`, because both terms can reach 2^31 and
+    /// their sum would overflow the width the positions are counted in. The
+    /// invariant guarantees `reserved <= capacity`, so this cannot underflow.
+    fn has_room_beyond_reservations(&self, position: u32, reserved: u32) -> bool {
+        let capacity = self.capacity_u32();
+        debug_assert!(
+            reserved <= capacity,
+            "reservations may never exceed the capacity they are claimed from"
+        );
+        let occupied = position.wrapping_sub(self.head.0.load(Ordering::Acquire));
+        occupied < capacity - reserved
+    }
+
+    /// Items currently held, as a snapshot.
+    ///
+    /// Counts slots a producer has claimed but not yet finished writing, for the
+    /// reason `mpsc`'s does: counting only published items would need a walk of
+    /// the ring, and this number is a metric rather than a control-flow input.
+    fn len(&self) -> usize {
+        let position = position_of(self.claim.0.load(Ordering::Acquire));
+        let head = self.head.0.load(Ordering::Acquire);
+        position.wrapping_sub(head) as usize
+    }
+
+    /// Whether the consumer would find an item right now.
+    ///
+    /// Asks precisely what [`Consumer::pop`] asks -- is the slot at the head
+    /// position published? A claimed-but-unpublished slot answers `false`, which
+    /// is the right answer: the consumer may safely park on it, because the
+    /// producer's publishing store is followed by a signal.
+    fn has_ready_item(&self) -> bool {
+        let position = self.head.0.load(Ordering::Relaxed);
+        let slot = &self.slots[position as usize & self.mask];
+        slot.sequence.load(Ordering::Acquire) == position.wrapping_add(1)
+    }
+
+    /// Give up one unit of the producer count, signalling if it was the last.
+    ///
+    /// Shared by [`Producer`] and [`Reservation`] because they are the same
+    /// obligation: both represent a message that may still arrive, and the last
+    /// of either to leave is the one that ends the stream.
+    fn release_producer(&self) {
+        // `AcqRel` carries both halves. The release half publishes everything
+        // this producer pushed to whichever thread observes the count reaching
+        // zero, so a consumer that sees the disconnection can trust that
+        // draining to empty really has drained everything. The acquire half
+        // makes *this* thread -- when it is the one that drives the count to
+        // zero -- see the other producers' pushes, which is what makes the
+        // signal below meaningful.
+        if self.producers.fetch_sub(1, Ordering::AcqRel) != 1 {
+            return;
+        }
+
+        // Disconnection is a wakeup like any other, and the only one nobody else
+        // can deliver. A consumer blocked on the doorbell would otherwise wait
+        // forever for an item that can no longer be sent.
+        //
+        // Only the *last* departure rings: an earlier one changes nothing a
+        // consumer could act on, and waking it to discover that would be a
+        // spurious wakeup per departing thread.
+        self.doorbell.signal();
+    }
+
+    /// Write an item into a claimed position and publish it.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have claimed `position` by advancing the claim word, and
+    /// must not have published it already. A position is claimed by exactly one
+    /// producer, so this is the only writer of the slot.
+    unsafe fn publish(&self, position: u32, item: T) {
+        let slot = &self.slots[position as usize & self.mask];
+        // SAFETY: the caller's claim makes this thread the only writer, and the
+        // room check that permitted the claim means the consumer has finished
+        // with whatever the slot held a lap ago.
+        unsafe {
+            (*slot.value.get()).write(item);
+        }
+
+        // Release, and this is the publication: it must come after the write,
+        // and this is what forbids the compiler and the processor from moving it
+        // earlier. Until it lands, the consumer sees the slot as
+        // claimed-but-empty and skips it.
+        slot.sequence
+            .store(position.wrapping_add(1), Ordering::Release);
+
+        // After the publication, never before: the doorbell says "there is
+        // something to take", and that must not become true before the item is
+        // actually takeable. A consumer woken early would find nothing, clear
+        // the doorbell, and go back to sleep on an item that is about to exist.
+        //
+        // A producer may signal while an *earlier* position is still
+        // unpublished, so the consumer wakes and finds nothing. That is a
+        // spurious wakeup, which the protocol tolerates by construction: the
+        // producer holding the earlier slot signals in its turn.
+        self.doorbell.signal();
+    }
+}
+
+impl<T> Drop for Shared<T> {
+    fn drop(&mut self) {
+        // Every handle is gone, so no synchronization is needed and the
+        // positions can be read directly. A slot between the two positions still
+        // holds an item nobody took, and dropping the queue must drop those
+        // rather than leak them.
+        //
+        // The sequence is consulted per slot rather than assuming every position
+        // in the range holds an item. A producer cannot be mid-push here -- it
+        // would have to hold a handle, and there are none -- so in practice
+        // every one does; the check states the invariant the read depends on
+        // instead of leaving it to that argument.
+        let mask = self.mask;
+        let head = *self.head.0.get_mut();
+        let tail = position_of(*self.claim.0.get_mut());
+        let mut position = head;
+        while position != tail {
+            let published = position.wrapping_add(1);
+            let slot = &mut self.slots[position as usize & mask];
+            if *slot.sequence.get_mut() == published {
+                // SAFETY: the slot's sequence says the producer finished writing
+                // it and the consumer never took it, so it holds an initialized
+                // item. It is dropped exactly once, because `position` advances
+                // every iteration.
+                unsafe {
+                    slot.value.get_mut().assume_init_drop();
+                }
+            }
+            position = position.wrapping_add(1);
+        }
+    }
+}
+
+/// A writing half of a [`reserving_mpsc`](self) queue.
+///
+/// [`Clone`], so producers multiply by cloning rather than by sharing: each
+/// thread owns its own handle. Not [`Sync`], so a handle is used by one thread
+/// at a time.
+pub struct Producer<T> {
+    shared: Arc<Shared<T>>,
+    /// Removes [`Sync`] without removing [`Send`]. A [`Cell`] is exactly that
+    /// shape, and no value of it is ever created.
+    not_sync: PhantomData<Cell<()>>,
+}
+
+impl<T> Producer<T> {
+    /// Appends an item, best-effort.
+    ///
+    /// **Cannot take a reserved slot.** A queue with one free slot and one
+    /// outstanding reservation refuses this, which is the reservation doing its
+    /// job rather than a malfunction.
+    ///
+    /// # Errors
+    ///
+    /// [`PushError::Full`] when no unreserved room remains, which is the
+    /// backpressure signal, and [`PushError::Disconnected`] when the consumer is
+    /// gone. Either way the item comes back.
+    pub fn push(&self, item: T) -> Result<(), PushError<T>> {
+        // Relaxed: this load only proposes a claim. The compare-and-swap below
+        // is what makes it, and fails if the proposal was stale, so a stale read
+        // costs a retry rather than correctness.
+        let mut word = self.shared.claim.0.load(Ordering::Relaxed);
+        let position = loop {
+            let position = position_of(word);
+            let reserved = reserved_of(word);
+
+            if !self.shared.has_room_beyond_reservations(position, reserved) {
+                // Report disconnection in preference to fullness: a full queue
+                // whose consumer is gone will never drain, and telling the
+                // caller to retry would be telling it to spin forever.
+                if !self.shared.consumer_live.load(Ordering::Acquire) {
+                    return Err(PushError::Disconnected(item));
+                }
+                return Err(PushError::Full(item));
+            }
+            if !self.shared.consumer_live.load(Ordering::Acquire) {
+                return Err(PushError::Disconnected(item));
+            }
+
+            // Relaxed on both sides is sufficient: this exchange orders nothing
+            // but the claim itself. The item's visibility comes from the release
+            // store that publishes the slot, and the freedom to write the slot
+            // comes from the acquire load of `head` inside the room check.
+            //
+            // The reservation count is carried through unchanged, which is what
+            // makes a racing `reserve` fail its own exchange and re-read rather
+            // than have its increment silently overwritten.
+            match self.shared.claim.0.compare_exchange_weak(
+                word,
+                claim_word(reserved, position.wrapping_add(1)),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break position,
+                Err(actual) => word = actual,
+            }
+        };
+
+        // SAFETY: this thread's compare-and-swap claimed `position`, which no
+        // other producer can also have claimed, and it has not been published.
+        unsafe {
+            self.shared.publish(position, item);
+        }
+        Ok(())
+    }
+
+    /// Claims one slot for a message that must not be lost.
+    ///
+    /// See [`Reserving::reserve`](crate::Reserving::reserve) for what a
+    /// reservation is for. The short form: failing here is cheap, because no
+    /// work has been started yet, whereas failing at delivery means blocking or
+    /// losing the message.
+    ///
+    /// The queue stays connected while a reservation is outstanding, so a
+    /// consumer will not be told the stream ended and then handed the item.
+    #[must_use = "a reservation withholds capacity from every other producer until it is used or dropped"]
+    pub fn reserve(&self) -> Option<Reservation<T>> {
+        let mut word = self.shared.claim.0.load(Ordering::Relaxed);
+        loop {
+            let position = position_of(word);
+            let reserved = reserved_of(word);
+
+            if !self.shared.has_room_beyond_reservations(position, reserved) {
+                return None;
+            }
+
+            // The position is carried through unchanged: a reservation claims
+            // capacity, not an order. Where the item lands is decided when the
+            // reservation is redeemed, so a slot held for a long time does not
+            // stall everything queued behind it.
+            match self.shared.claim.0.compare_exchange_weak(
+                word,
+                claim_word(reserved + 1, position),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    // Relaxed: this thread already holds a live producer handle,
+                    // so the count cannot reach zero during this call and no
+                    // other thread's decision depends on when the increment
+                    // becomes visible. The pairing that matters is in
+                    // `release_producer`.
+                    self.shared.producers.fetch_add(1, Ordering::Relaxed);
+                    return Some(Reservation {
+                        shared: Arc::clone(&self.shared),
+                        not_sync: PhantomData,
+                    });
+                }
+                Err(actual) => word = actual,
+            }
+        }
+    }
+
+    /// The exact number of items this queue holds when full.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.shared.capacity
+    }
+
+    /// Items currently held, as a snapshot.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.shared.len()
+    }
+
+    /// Whether the queue holds nothing, as a snapshot.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Slots currently claimed by a reservation and not yet redeemed, as a
+    /// snapshot.
+    #[must_use]
+    pub fn outstanding_reservations(&self) -> usize {
+        reserved_of(self.shared.claim.0.load(Ordering::Acquire)) as usize
+    }
+
+    /// Whether the next best-effort push would be refused, as a snapshot.
+    ///
+    /// True when the queue is full *or* every remaining slot is reserved, since
+    /// those are indistinguishable to a best-effort caller. Advisory only:
+    /// another producer may take the last slot between this call and the push.
+    #[must_use]
+    pub fn is_full(&self) -> bool {
+        self.len() + self.outstanding_reservations() >= self.shared.capacity
+    }
+
+    /// Whether the consumer has been dropped.
+    #[must_use]
+    pub fn is_disconnected(&self) -> bool {
+        !self.shared.consumer_live.load(Ordering::Acquire)
+    }
+}
+
+impl<T> Clone for Producer<T> {
+    fn clone(&self) -> Self {
+        // Relaxed, for the reason given in `reserve`.
+        self.shared.producers.fetch_add(1, Ordering::Relaxed);
+        Self {
+            shared: Arc::clone(&self.shared),
+            not_sync: PhantomData,
+        }
+    }
+}
+
+// Hand-written rather than derived: deriving would demand `T: Debug`, which
+// would make a handle to a queue of non-`Debug` items un-printable for no
+// reason. The item type is not the handle's business, so the handle reports the
+// queue's state instead.
+impl<T> fmt::Debug for Producer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("reserving_mpsc::Producer")
+            .field("capacity", &self.capacity())
+            .field("len", &self.len())
+            .field("reserved", &self.outstanding_reservations())
+            .field("producers", &self.shared.producers.load(Ordering::Relaxed))
+            .field("disconnected", &self.is_disconnected())
+            .finish()
+    }
+}
+
+impl<T> Drop for Producer<T> {
+    fn drop(&mut self) {
+        self.shared.release_producer();
+    }
+}
+
+/// A slot claimed in advance, which [`Reservation::send`] redeems.
+///
+/// Owned rather than borrowed from the [`Producer`], and [`Send`], because that
+/// is the shape the use case has: an operation reserves its completion slot when
+/// it is submitted and redeems it from whichever thread the completion arrives
+/// on. ([`spsc`](crate::spsc)'s reservation borrows instead, because there the
+/// producer handle *is* the single-producer guarantee and letting a reservation
+/// outlive it would create a second one.)
+///
+/// Dropping it returns the slot to the queue.
+#[must_use = "a reservation withholds capacity from every other producer until it is used or dropped"]
+pub struct Reservation<T> {
+    shared: Arc<Shared<T>>,
+    /// See [`Producer::not_sync`]. A reservation may be *moved* between threads
+    /// but is used by one at a time, exactly like the handle that made it.
+    not_sync: PhantomData<Cell<()>>,
+}
+
+impl<T> Reservation<T> {
+    /// Delivers into the reserved slot.
+    ///
+    /// **This cannot fail for want of room**, which is the entire purpose: the
+    /// slot was withheld from every other producer from the moment the
+    /// reservation was taken. See [`Disconnected`] for why that is the only
+    /// error and why the type says so.
+    ///
+    /// # Errors
+    ///
+    /// [`Disconnected`] if the consumer is gone, carrying the item back so it
+    /// can be accounted for rather than silently dropped.
+    pub fn send(self, item: T) -> Result<(), Disconnected<T>> {
+        if !self.shared.consumer_live.load(Ordering::Acquire) {
+            // Dropping `self` on the way out releases the slot and the producer
+            // count, which is what should happen: this message is never coming.
+            return Err(Disconnected(item));
+        }
+
+        // Redeem and claim in ONE exchange: the count falls by one as the
+        // position rises by one, so `occupied + reserved` -- the quantity the
+        // whole invariant is about -- is never momentarily wrong, and no
+        // concurrent producer can observe a state in which this slot looks
+        // available.
+        //
+        // There is no room check here, and its absence is the guarantee. The
+        // invariant `occupied + reserved <= capacity` with `reserved >= 1` means
+        // `occupied < capacity`, so the slot at this position is one the
+        // consumer has already finished with.
+        let mut word = self.shared.claim.0.load(Ordering::Relaxed);
+        let position = loop {
+            let position = position_of(word);
+            let reserved = reserved_of(word);
+            debug_assert!(
+                reserved >= 1,
+                "this reservation is outstanding, so the count cannot be zero"
+            );
+
+            match self.shared.claim.0.compare_exchange_weak(
+                word,
+                claim_word(reserved - 1, position.wrapping_add(1)),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break position,
+                Err(actual) => word = actual,
+            }
+        };
+
+        // SAFETY: the exchange above claimed `position` for this thread alone,
+        // and the invariant argued for in the comment means the slot is free.
+        unsafe {
+            self.shared.publish(position, item);
+        }
+
+        // The slot has been given up as part of the exchange above, so the
+        // `Drop` that would give it up again must not run. The producer count,
+        // however, still has to be released -- this reservation's promise is now
+        // fulfilled, and if it was the last outstanding one the stream ends
+        // here.
+        //
+        // **`mem::forget` would be wrong here, and was wrong here**: this type
+        // owns an `Arc`, and forgetting it leaks that strong reference, so the
+        // shared state is never dropped and every item still in the ring leaks
+        // with it. `ManuallyDrop` plus a move-out suppresses only *this type's*
+        // `Drop` while leaving the `Arc`'s own to run exactly once.
+        let this = core::mem::ManuallyDrop::new(self);
+        // SAFETY: `this` is a `ManuallyDrop`, so its own destructor never runs
+        // and the field is not read again after this move.
+        let shared = unsafe { core::ptr::read(&this.shared) };
+        shared.release_producer();
+        // `shared` falls out of scope here, releasing the reference this
+        // reservation held.
+        Ok(())
+    }
+
+    /// Whether the consumer has been dropped, so redeeming would fail.
+    #[must_use]
+    pub fn is_disconnected(&self) -> bool {
+        !self.shared.consumer_live.load(Ordering::Acquire)
+    }
+}
+
+impl<T> fmt::Debug for Reservation<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("reserving_mpsc::Reservation")
+            .field("disconnected", &self.is_disconnected())
+            .finish()
+    }
+}
+
+impl<T> Drop for Reservation<T> {
+    fn drop(&mut self) {
+        // Give the slot back. Only the count moves: the position is untouched,
+        // because an unredeemed reservation never occupied a position.
+        let mut word = self.shared.claim.0.load(Ordering::Relaxed);
+        loop {
+            let reserved = reserved_of(word);
+            debug_assert!(
+                reserved >= 1,
+                "this reservation is outstanding, so the count cannot be zero"
+            );
+            match self.shared.claim.0.compare_exchange_weak(
+                word,
+                claim_word(reserved - 1, position_of(word)),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => word = actual,
+            }
+        }
+        self.shared.release_producer();
+    }
+}
+
+/// The reading half of a [`reserving_mpsc`](self) queue.
+///
+/// Neither [`Clone`] nor [`Sync`], which is what makes "single consumer" a fact
+/// the compiler checks rather than a rule to remember.
+pub struct Consumer<T> {
+    shared: Arc<Shared<T>>,
+    /// See [`Producer::not_sync`].
+    not_sync: PhantomData<Cell<()>>,
+}
+
+impl<T> Consumer<T> {
+    /// Takes the oldest item, or `None` if there is none right now.
+    ///
+    /// `None` does not mean the queue is finished, and here it does not even
+    /// mean the queue is empty: a producer may have claimed the next position
+    /// and not yet published it. Order is claim order, so waiting is the only
+    /// correct answer -- and the producer signals when it publishes, so waiting
+    /// is not a gamble.
+    pub fn pop(&self) -> Option<T> {
+        // Relaxed: this thread is the only writer of `head`.
+        let position = self.shared.head.0.load(Ordering::Relaxed);
+        let slot = &self.shared.slots[position as usize & self.shared.mask];
+        // Acquire: pairs with the producer's release store, so an item it
+        // published is visible here.
+        if slot.sequence.load(Ordering::Acquire) != position.wrapping_add(1) {
+            return None;
+        }
+
+        // SAFETY: the sequence says the producer that claimed this position
+        // finished writing it, and the release/acquire pair above makes that
+        // write visible here. This is the only consumer, and the position is
+        // given up below, so the item is read exactly once.
+        let item = unsafe { (*slot.value.get()).assume_init_read() };
+
+        // Release, and this is what frees the slot: a producer reads `head` with
+        // an acquire load to count free slots, so this store must not become
+        // visible before the read above completes, or that producer could claim
+        // the position and overwrite an item this thread had not finished
+        // taking.
+        //
+        // Note that nothing stores a "free again" sequence here, unlike `mpsc`.
+        // Advancing `head` *is* the release, because this shape's producers
+        // decide freedom from `head` rather than from the sequence.
+        self.shared
+            .head
+            .0
+            .store(position.wrapping_add(1), Ordering::Release);
+        Some(item)
+    }
+
+    /// The exact number of items this queue holds when full.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.shared.capacity
+    }
+
+    /// Items currently held, as a snapshot.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.shared.len()
+    }
+
+    /// Whether the queue holds nothing, as a snapshot.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Slots currently claimed by a reservation and not yet redeemed, as a
+    /// snapshot.
+    ///
+    /// Offered on the consumer as well as the producer because it is the
+    /// difference between "nothing is coming" and "something was promised":
+    /// a drained queue with an outstanding reservation is not an idle one.
+    #[must_use]
+    pub fn outstanding_reservations(&self) -> usize {
+        reserved_of(self.shared.claim.0.load(Ordering::Acquire)) as usize
+    }
+
+    /// Whether every producer and every outstanding reservation is gone.
+    ///
+    /// **Check this only after [`Self::pop`] has returned `None`.** A producer
+    /// may push and then drop, so a queue can be disconnected and still hold
+    /// items; testing this first would discard them.
+    #[must_use]
+    pub fn is_disconnected(&self) -> bool {
+        self.shared.producers.load(Ordering::Acquire) == 0
+    }
+
+    /// Borrows the queue's readiness as a waitable `HANDLE`.
+    ///
+    /// The event is created on the first call, so a consumer that only ever
+    /// polls with [`Self::pop`] is charged for no kernel object.
+    ///
+    /// # Waiting on it correctly
+    ///
+    /// **Do not simply wait and then drain.** Use [`Self::arm`] to decide
+    /// whether waiting is safe, or the wait can miss an item and block forever;
+    /// [`spsc::Consumer::doorbell`](crate::spsc::Consumer::doorbell) carries the
+    /// worked example, and the protocol is identical here.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` on the first call.
+    pub fn doorbell(&self) -> io::Result<BorrowedHandle<'_>> {
+        self.shared.doorbell.handle()
+    }
+
+    /// A duplicate of [`Self::doorbell`] that the caller owns.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` or `DuplicateHandle`.
+    pub fn doorbell_owned(&self) -> io::Result<OwnedHandle> {
+        self.shared.doorbell.owned()
+    }
+
+    /// Clears the doorbell and reports whether it is safe to wait on it.
+    ///
+    /// `true` means the queue had nothing takeable after the doorbell was
+    /// cleared, so any later push is guaranteed to signal and a wait cannot be
+    /// missed. `false` means something arrived in the meantime.
+    ///
+    /// Clearing must come before the check, which is the reverse of the order
+    /// that reads naturally; see [D-9](../../DESIGN-NOTES.md#d-9).
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` on the first call.
+    pub fn arm(&self) -> io::Result<bool> {
+        // Before the clear, and so before the check: a producer running while no
+        // event exists skips signalling, so the check has to come after the
+        // event exists to catch what that skip left behind.
+        self.shared.doorbell.handle()?;
+        self.shared.doorbell.clear();
+        #[cfg(test)]
+        crate::race_hooks::ARM.run();
+        // Deliberately not `is_empty`: the question is whether `pop` would find
+        // something, and a claimed-but-unpublished slot is not something `pop`
+        // can find.
+        Ok(!self.shared.has_ready_item())
+    }
+
+    /// The last take before reporting the end of the stream.
+    ///
+    /// Called only after [`Self::is_disconnected`] has returned `true`, which
+    /// makes the answer final rather than a snapshot. It guards a race that is
+    /// real and narrow: a producer may push *and then* drop in the window
+    /// between a receive's first `pop` and its disconnection check.
+    fn finish(&self) -> Option<T> {
+        self.pop()
+    }
+
+    /// Takes the oldest item, blocking until one arrives.
+    ///
+    /// # Errors
+    ///
+    /// [`RecvError::Disconnected`] once every producer *and every outstanding
+    /// reservation* is gone and the queue is drained. [`RecvError::Io`] if the
+    /// doorbell cannot be created or waited on.
+    pub fn recv(&self) -> Result<T, RecvError> {
+        blocking::recv(self)
+    }
+
+    /// Takes the oldest item, blocking until one arrives or the deadline passes.
+    ///
+    /// # Errors
+    ///
+    /// [`RecvTimeoutError::Timeout`] if the deadline passes with the queue still
+    /// empty, which is not a malfunction. Otherwise as [`Self::recv`].
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
+        blocking::recv_timeout(self, timeout)
+    }
+}
+
+impl<T> Parked for Consumer<T> {
+    type Item = T;
+
+    fn pop(&self) -> Option<T> {
+        Self::pop(self)
+    }
+
+    fn finish(&self) -> Option<T> {
+        Self::finish(self)
+    }
+
+    fn arm(&self) -> io::Result<bool> {
+        Self::arm(self)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        Self::is_disconnected(self)
+    }
+
+    fn doorbell(&self) -> io::Result<BorrowedHandle<'_>> {
+        Self::doorbell(self)
+    }
+}
+
+/// See [`Producer`]'s impl for why this is hand-written.
+impl<T> fmt::Debug for Consumer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("reserving_mpsc::Consumer")
+            .field("capacity", &self.capacity())
+            .field("len", &self.len())
+            .field("reserved", &self.outstanding_reservations())
+            .field("producers", &self.shared.producers.load(Ordering::Relaxed))
+            .field("disconnected", &self.is_disconnected())
+            .finish()
+    }
+}
+
+impl<T> Drop for Consumer<T> {
+    fn drop(&mut self) {
+        self.shared.consumer_live.store(false, Ordering::Release);
+    }
+}
+
+impl<T> crate::Producer for Producer<T> {
+    type Item = T;
+
+    fn push(&self, item: T) -> Result<(), PushError<T>> {
+        Self::push(self, item)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        Self::is_disconnected(self)
+    }
+}
+
+impl<T> crate::Reserving for Producer<T> {
+    type Item = T;
+    type Reservation<'a>
+        = Reservation<T>
+    where
+        Self: 'a;
+
+    fn reserve(&self) -> Option<Reservation<T>> {
+        Self::reserve(self)
+    }
+
+    fn outstanding_reservations(&self) -> usize {
+        Self::outstanding_reservations(self)
+    }
+}
+
+impl<T> crate::Consumer for Consumer<T> {
+    type Item = T;
+
+    fn pop(&self) -> Option<T> {
+        Self::pop(self)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        Self::is_disconnected(self)
+    }
+}
+
+impl<T> crate::Bounded for Producer<T> {
+    fn capacity(&self) -> usize {
+        Self::capacity(self)
+    }
+
+    fn len(&self) -> usize {
+        Self::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        Self::is_empty(self)
+    }
+}
+
+impl<T> crate::Bounded for Consumer<T> {
+    fn capacity(&self) -> usize {
+        Self::capacity(self)
+    }
+
+    fn len(&self) -> usize {
+        Self::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        Self::is_empty(self)
+    }
+}
+
+impl<T> crate::Waitable for Consumer<T> {
+    fn doorbell(&self) -> io::Result<BorrowedHandle<'_>> {
+        Self::doorbell(self)
+    }
+
+    fn doorbell_owned(&self) -> io::Result<OwnedHandle> {
+        Self::doorbell_owned(self)
+    }
+
+    fn arm(&self) -> io::Result<bool> {
+        Self::arm(self)
+    }
+}
+
+#[cfg(test)]
+mod tests;

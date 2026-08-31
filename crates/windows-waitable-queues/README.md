@@ -5,13 +5,14 @@ Bounded producer/consumer queues whose readiness is a waitable Windows `HANDLE`.
 **Windows only.** Every public item is behind `cfg(windows)`; the crate builds to
 an empty shell on other platforms.
 
-**Status: two shapes, both waitable.** `spsc` is a bounded ring with no
+**Status: three shapes, all waitable.** `spsc` is a bounded ring with no
 compare-and-swap on either side; `mpsc` is a bounded array queue using Vyukov's
-sequence protocol, so any number of producers may push without a lock. Either can
-be polled with no kernel object at all, blocked on directly, or waited on
-alongside other handles. The capability traits over them --
-`Producer`, `Consumer`, `Bounded`, `Waitable` -- ship with the second shape,
-which is what validated them.
+sequence protocol, so any number of producers may push without a lock; and
+`reserving_mpsc` is that queue plus the ability to claim a slot in advance. Any
+of them can be polled with no kernel object at all, blocked on directly, or
+waited on alongside other handles. The capability traits over them --
+`Producer`, `Consumer`, `Bounded`, `Waitable`, `Reserving` -- each ship with the
+second implementation that validated them.
 
 The decisions all of this was built against are in
 [DESIGN-NOTES.md](DESIGN-NOTES.md), and the remaining work is tracked in
@@ -50,11 +51,12 @@ shape it wants.
 Each shape splits into a **producer handle** and a **consumer handle**, and
 cardinality is carried by whether those handles are `Clone`:
 
-| Shape | Producer | Consumer | Shipped |
-|---|---|---|---|
-| SPSC | not `Clone` | not `Clone` | yes |
-| MPSC | `Clone` | not `Clone` | yes |
-| MPMC | `Clone` | `Clone` | not yet |
+| Shape | Producer | Consumer | Reserves | Shipped |
+|---|---|---|---|---|
+| `spsc` | not `Clone` | not `Clone` | yes | yes |
+| `mpsc` | `Clone` | not `Clone` | **no** | yes |
+| `reserving_mpsc` | `Clone` | not `Clone` | yes | yes |
+| MPMC | `Clone` | `Clone` | -- | not yet |
 
 So "single producer" is a fact the compiler enforces, not a sentence in a doc
 comment: the handles are also not `Sync`, so a handle that cannot be cloned and
@@ -71,6 +73,12 @@ again next lap" in a one-slot ring.
   slot. Overwrite-oldest is right for telemetry, where a lost entry is a lost
   sample; here an entry may be an I/O submission, where a lost entry is a lost
   operation.
+- **It will not make you pay for reservation if you do not want it.** Honouring
+  a reservation means counting free slots, which costs a producer a read of the
+  consumer's position on every push. `mpsc` does not offer reservation and does
+  not pay; `reserving_mpsc` offers it and does. That is why `mpsc` does not
+  implement the `Reserving` trait -- it genuinely cannot, which is the whole
+  reason the traits are narrow.
 - **It will not allocate on push.** Bounded shapes allocate once, at
   construction.
 - **It will not create a kernel object you never use.** The doorbell is created

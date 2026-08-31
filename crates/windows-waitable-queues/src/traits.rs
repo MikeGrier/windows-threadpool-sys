@@ -149,6 +149,83 @@ pub trait Bounded {
     }
 }
 
+/// A producer that can claim a slot in advance, so that a later delivery cannot
+/// be refused for want of room.
+///
+/// # What a reservation is for
+///
+/// A bounded queue refuses when it is full, and that refusal is the
+/// backpressure it exists to provide. But not everything travelling a queue can
+/// survive being refused the same way. A telemetry sample lost to a full queue
+/// is a gap in a chart; an I/O completion lost to a full queue is a caller
+/// waiting forever for something that already happened.
+///
+/// Rather than sort that out per message at the point of delivery -- where the
+/// queue is already full and the decision is already too late -- reliability
+/// becomes a property of **capacity claimed in advance**. The slot is taken
+/// before the work that will fill it is allowed to start, so by the time there
+/// is something to deliver, the room is already the holder's. One line covers
+/// it: *reserved is guaranteed, unreserved is best-effort.*
+///
+/// The same discipline, reached independently, is what
+/// `windows-file-watcher`'s notification queue runs on.
+///
+/// # Why this is a trait a shape may lack
+///
+/// [`mpsc`](crate::mpsc) deliberately does **not** implement this, and that is
+/// the clearest illustration of why the capability traits are narrow
+/// ([D-2](../../DESIGN-NOTES.md#d-2)). Honouring a reservation means knowing how
+/// many slots remain, which costs a producer a read of the consumer's position
+/// on every push -- a single line every thread touches. `mpsc`'s push avoids
+/// that read by design, so it cannot answer the question, and
+/// [`reserving_mpsc`](crate::reserving_mpsc) exists beside it for callers who
+/// would rather pay than lose a message.
+///
+/// A fat trait would have forced that cost on both, or excluded the reservation
+/// from the contract entirely. Narrow traits let the two ship as peers.
+pub trait Reserving {
+    /// What this queue carries.
+    type Item;
+
+    /// The claim, which is redeemed or released but never ignored.
+    ///
+    /// **Generic over a lifetime because the two shapes genuinely differ**, and
+    /// that difference is the trait being validated by two implementations
+    /// rather than shaped around one ([D-3](../../DESIGN-NOTES.md#d-3)).
+    /// [`reserving_mpsc`](crate::reserving_mpsc) hands out an owned, [`Send`]
+    /// reservation, because its use case is to claim a slot when an operation is
+    /// submitted and redeem it from whichever thread the completion arrives on.
+    /// [`spsc`](crate::spsc) hands out one that borrows the producer, because
+    /// there the producer handle *is* the single-producer guarantee: an owned
+    /// reservation could outlive it on another thread, and then two threads
+    /// would be writing the ring.
+    type Reservation<'a>
+    where
+        Self: 'a;
+
+    /// Claims one slot, or reports that none is available.
+    ///
+    /// **This is the fallible half, and deliberately so.** Failing here is
+    /// cheap: no work has been started and nothing needs delivering, so a
+    /// caller can wait, shed load, or refuse the request upstream. That is the
+    /// whole trade -- the failure is moved from the moment of delivery, when
+    /// the only remaining options are to block or to lose the message, to the
+    /// moment of admission, when there are still good ones.
+    ///
+    /// A claim held is capacity withdrawn from every other producer, so hold it
+    /// for as long as correctness needs and no longer. Dropping it returns the
+    /// slot.
+    #[must_use = "a reservation withholds capacity from every other producer until it is used or dropped"]
+    fn reserve(&self) -> Option<Self::Reservation<'_>>;
+
+    /// How many slots are currently claimed and not yet redeemed.
+    ///
+    /// A snapshot, and offered for metrics rather than for control flow:
+    /// [`Reserving::reserve`] answers "can I have one" without the window that
+    /// testing this first would open.
+    fn outstanding_reservations(&self) -> usize;
+}
+
 /// A queue whose readiness can be waited on as a Windows `HANDLE`.
 ///
 /// This is the capability the crate is named for, and the reason it exists

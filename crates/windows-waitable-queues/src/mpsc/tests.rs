@@ -14,7 +14,7 @@
 //! scheduler rather than the queue -- green today, red on a different machine,
 //! and evidence of nothing either way.
 
-use super::{Consumer, MIN_CAPACITY, Producer, bounded, validate_capacity};
+use super::{BOUNDS, Consumer, Producer, bounded, validate_capacity};
 use crate::race_hooks;
 use crate::{PushError, RecvError, RecvTimeoutError};
 use std::collections::BTreeMap;
@@ -107,7 +107,7 @@ fn the_smallest_capacity_holds_exactly_two() {
     // Two is this shape's floor rather than one, so the two-slot ring is the
     // edge case that `spsc`'s one-slot ring is: every push after the first two
     // is a refusal, and every pop frees exactly one slot.
-    let (tx, rx) = bounded::<u32>(MIN_CAPACITY).expect("the shape's own minimum must be accepted");
+    let (tx, rx) = bounded::<u32>(BOUNDS.min).expect("the shape's own minimum must be accepted");
     tx.push(1).expect("room for two");
     tx.push(2).expect("room for two");
     assert!(matches!(tx.push(3), Err(PushError::Full(3))));
@@ -236,7 +236,7 @@ fn a_zero_capacity_is_refused_because_it_could_never_accept_anything() {
     assert_eq!(error.requested(), 0);
     assert_eq!(
         error.next_valid(),
-        Some(MIN_CAPACITY),
+        Some(BOUNDS.min),
         "the suggestion must be this shape's own floor, not a crate-wide one"
     );
 }
@@ -311,18 +311,18 @@ fn a_suggested_capacity_is_one_the_constructor_would_accept() {
     // real path, but a suggestion near the bound is 2^62, and constructing that
     // queue means asking for half the address space.
     for requested in [0_usize, 1, 3, 100, 1000, usize::MAX / 2, usize::MAX] {
-        let Err(error) = validate_capacity(requested, MIN_CAPACITY) else {
+        let Err(error) = validate_capacity(requested, BOUNDS) else {
             continue;
         };
         if let Some(previous) = error.previous_valid() {
             assert!(
-                validate_capacity(previous, MIN_CAPACITY).is_ok(),
+                validate_capacity(previous, BOUNDS).is_ok(),
                 "previous_valid() for {requested} suggested {previous}, which is itself rejected"
             );
         }
         if let Some(next) = error.next_valid() {
             assert!(
-                validate_capacity(next, MIN_CAPACITY).is_ok(),
+                validate_capacity(next, BOUNDS).is_ok(),
                 "next_valid() for {requested} suggested {next}, which is itself rejected"
             );
         }
@@ -529,7 +529,7 @@ fn many_producers_against_the_smallest_queue_still_deliver_everything() {
     // least once and the tail's compare-and-swap is contended continuously.
     // This is where a mis-ordered claim or a slot freed at the wrong sequence
     // stops being theoretical.
-    let received = run_producers(MIN_CAPACITY);
+    let received = run_producers(BOUNDS.min);
 
     assert_eq!(received.len(), PRODUCERS * PER_PRODUCER);
     let mut per_producer = [0_usize; PRODUCERS];

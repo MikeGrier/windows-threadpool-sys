@@ -1,0 +1,758 @@
+// Copyright (c) Mike Grier.
+
+//! Tests for the reserving MPSC bounded array queue.
+//!
+//! The shape's queueing behaviour is `mpsc`'s and is covered there; what is
+//! tested here is the part that is different -- the reservation, the packed
+//! claim word, and the ways the two interact with everything else.
+//!
+//! The load-bearing property is stated once and asserted from several angles:
+//! **a granted reservation is always redeemable.** A test that only checked
+//! "reserve then send works on an idle queue" would assert nothing, because the
+//! failure mode is a reservation granted while a racing producer takes the last
+//! slot -- so the interesting cases all put the queue under pressure first.
+
+use super::{
+    BOUNDS_MAX, Consumer, Producer, Reservation, bounded, claim_word, position_of, reserved_of,
+};
+use crate::race_hooks;
+// The trait is imported anonymously because this module also names the concrete
+// `Consumer` type, and only its `drain` method is wanted here. That the two can
+// coexist is the point made in `traits`: the trait is named for the role and the
+// handle is named for the role, and a caller who wants only the methods says so.
+use crate::Consumer as _;
+use crate::{Bounded, PushError, RecvError, Reserving};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+use std::time::Duration;
+
+/// Counts its own drops, so a test can prove an item was destroyed rather than
+/// leaked. `Arc<AtomicUsize>` rather than a `static`, so tests that run
+/// concurrently in one process cannot see each other's counts.
+#[derive(Debug)]
+struct DropCounter(Arc<AtomicUsize>);
+
+impl Drop for DropCounter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Fills every slot a best-effort producer is allowed to take.
+///
+/// Returns how many went in, which is the capacity less whatever is reserved.
+fn fill<T: Clone>(producer: &Producer<T>, item: T) -> usize {
+    let mut pushed = 0;
+    while producer.push(item.clone()).is_ok() {
+        pushed += 1;
+    }
+    pushed
+}
+
+// ---------------------------------------------------------------------------
+// The packed claim word.
+//
+// Tested directly as well as through the queue: the packing is arithmetic, and
+// arithmetic is worth checking at its edges rather than only through the six
+// layers of queue that happen to use it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_claim_word_round_trips_both_halves() {
+    for &reserved in &[0_u32, 1, 2, 1000, u32::MAX - 1, u32::MAX] {
+        for &position in &[0_u32, 1, 2, 1000, u32::MAX - 1, u32::MAX] {
+            let word = claim_word(reserved, position);
+            assert_eq!(
+                (reserved_of(word), position_of(word)),
+                (reserved, position),
+                "packing must be lossless in both halves, including at their extremes"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_two_halves_do_not_bleed_into_each_other() {
+    // The mistake packing invites: a position that wraps must not carry into
+    // the reservation count, and a count must not appear as a position.
+    let word = claim_word(0, u32::MAX);
+    assert_eq!(
+        reserved_of(word),
+        0,
+        "a maximal position leaves the count at zero"
+    );
+
+    let word = claim_word(u32::MAX, 0);
+    assert_eq!(
+        position_of(word),
+        0,
+        "a maximal count leaves the position at zero"
+    );
+
+    // And an increment of the position at its maximum wraps within its own half
+    // rather than incrementing the count, which is what the queue relies on
+    // every time a position laps.
+    let wrapped = claim_word(7, u32::MAX.wrapping_add(1));
+    assert_eq!((reserved_of(wrapped), position_of(wrapped)), (7, 0));
+}
+
+// The relationship between the split and the ceiling is deliberately NOT tested
+// here. It is a fact about constants, so it lives as a `const` assertion beside
+// `BOUNDS` in the parent module, where changing the split without changing the
+// ceiling fails to compile. A test would have been the weaker instrument: it can
+// only report after the fact, and only on a build somebody chose to run.
+
+#[test]
+fn a_capacity_above_this_shapes_ceiling_is_refused_even_though_others_accept_it() {
+    // The bound is a property of the shape, which is exactly what D-12 argued
+    // and what this shape is the second instance of. `mpsc` takes this capacity
+    // happily; the packing means this one cannot.
+    let error = bounded::<u8>(BOUNDS_MAX * 2).expect_err("beyond the packed position's range");
+    assert_eq!(error.max_valid(), BOUNDS_MAX);
+    assert_eq!(
+        error.previous_valid(),
+        Some(BOUNDS_MAX),
+        "and the correction offered is this shape's own ceiling"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The reservation guarantee.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_reserved_slot_is_delivered_into_a_queue_that_is_otherwise_full() {
+    // The whole contract in one test: reserve, let the best-effort path fill
+    // everything it is allowed to, and redeem anyway.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("a fresh queue has room");
+
+    let pushed = fill(&tx, 1);
+    assert_eq!(pushed, 3, "the reservation withheld exactly one slot");
+    assert!(tx.is_full(), "and now nothing more may be pushed");
+
+    slot.send(99).expect("the room was already ours");
+
+    let drained: Vec<u32> = rx.drain().collect();
+    assert_eq!(
+        drained,
+        vec![1, 1, 1, 99],
+        "the reserved item lands where it was redeemed, not where it was claimed"
+    );
+}
+
+#[test]
+fn a_reservation_withholds_a_slot_from_the_best_effort_path() {
+    let (tx, _rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    assert_eq!(
+        fill(&tx, 0),
+        8,
+        "with nothing reserved, every slot is available"
+    );
+
+    let (tx, _rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    let reservations: Vec<_> = (0..3).map(|_| tx.reserve().expect("room")).collect();
+    assert_eq!(tx.outstanding_reservations(), 3);
+    assert_eq!(
+        fill(&tx, 0),
+        5,
+        "three reserved leaves five for the best-effort path"
+    );
+    drop(reservations);
+}
+
+#[test]
+fn dropping_a_reservation_returns_the_slot() {
+    let (tx, _rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    assert_eq!(tx.outstanding_reservations(), 1);
+
+    drop(slot);
+    assert_eq!(tx.outstanding_reservations(), 0);
+    assert_eq!(
+        fill(&tx, 0),
+        4,
+        "a released reservation is capacity given back, not capacity lost"
+    );
+}
+
+#[test]
+fn a_redeemed_reservation_does_not_also_release_its_slot() {
+    // The double-release bug this shape's `send` avoids by consuming `self` and
+    // suppressing the drop. If both ran, the count would underflow and the
+    // queue would over-admit for ever afterwards.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    for round in 0..10 {
+        let slot = tx.reserve().expect("room");
+        assert_eq!(tx.outstanding_reservations(), 1);
+        slot.send(round).expect("the room was ours");
+        assert_eq!(
+            tx.outstanding_reservations(),
+            0,
+            "redeeming releases the claim exactly once"
+        );
+        assert_eq!(rx.pop(), Some(round));
+    }
+    assert_eq!(
+        fill(&tx, 0),
+        4,
+        "and the capacity is intact after ten cycles"
+    );
+}
+
+#[test]
+fn reserving_fails_when_every_slot_is_spoken_for() {
+    let (tx, _rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    let _first = tx.reserve().expect("room");
+    let _second = tx.reserve().expect("room");
+    assert!(
+        tx.reserve().is_none(),
+        "reservations are drawn from the same capacity as everything else"
+    );
+
+    let (tx, _rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    fill(&tx, 0);
+    assert!(
+        tx.reserve().is_none(),
+        "and a full queue has nothing left to promise"
+    );
+}
+
+#[test]
+fn a_full_queue_refuses_a_best_effort_push_and_hands_the_item_back() {
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+
+    match tx.push(3) {
+        Err(PushError::Full(returned)) => assert_eq!(returned, 3),
+        other => panic!("expected Full, got {other:?}"),
+    }
+    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(rx.pop(), Some(2));
+}
+
+#[test]
+fn a_push_refused_for_a_reservation_is_still_reported_as_full() {
+    // A best-effort caller cannot tell "no slots" from "the only slot is
+    // reserved", and should not have to: both mean "no room for you", both are
+    // backpressure, and both clear when the queue drains.
+    let (tx, _rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    let _slot = tx.reserve().expect("room");
+    tx.push(1).expect("one slot is unreserved");
+
+    assert!(
+        matches!(tx.push(2), Err(PushError::Full(2))),
+        "the reserved slot is not available to the best-effort path"
+    );
+    assert!(!tx.is_empty(), "yet the queue is demonstrably not empty");
+}
+
+// ---------------------------------------------------------------------------
+// The guarantee under contention, which is the reason the claim word is packed.
+// ---------------------------------------------------------------------------
+
+/// How many producer threads the concurrent tests use.
+///
+/// Fixed rather than derived from the machine's core count, so a failure
+/// reproduces on the machine that reported it.
+const PRODUCERS: usize = 4;
+
+#[test]
+fn every_granted_reservation_is_redeemable_under_contention() {
+    // **The test the packed claim word exists to pass.** With the count in its
+    // own atomic, a pushing producer and a reserving one can each read before
+    // the other's write, and the queue grants a slot that does not exist. That
+    // shows up here as a `send` finding no room -- which, because the invariant
+    // it violates is checked by a debug assertion in `send`, aborts the test
+    // rather than quietly corrupting the ring.
+    //
+    // A small capacity and many threads, because the race needs the queue to be
+    // near-full continuously for the two paths to collide at the boundary.
+    const ROUNDS: usize = 2_000;
+    let (tx, rx) = bounded::<usize>(4).expect("4 is a valid capacity");
+
+    let threads: Vec<_> = (0..PRODUCERS)
+        .map(|producer| {
+            let handle = tx.clone();
+            thread::spawn(move || {
+                let mut granted = 0_usize;
+                for round in 0..ROUNDS {
+                    // Alternate the two paths so both are contending for the
+                    // same last slot rather than taking turns.
+                    if round % 2 == 0 {
+                        let _ = handle.push(producer);
+                    } else if let Some(slot) = handle.reserve() {
+                        granted += 1;
+                        slot.send(producer).expect("a granted slot is guaranteed");
+                    }
+                }
+                granted
+            })
+        })
+        .collect();
+    drop(tx);
+
+    // Drain continuously, so the queue keeps returning to the near-full
+    // boundary instead of simply staying full.
+    let mut received = 0_usize;
+    while let Ok(item) = rx.recv() {
+        assert!(item < PRODUCERS, "items must not be torn or invented");
+        received += 1;
+    }
+
+    let granted: usize = threads
+        .into_iter()
+        .map(|thread| thread.join().expect("no producer may panic"))
+        .sum();
+
+    assert!(
+        granted > 0,
+        "the run must actually have exercised reservations"
+    );
+    assert!(
+        received >= granted,
+        "every reservation that was granted must have been delivered: \
+         {granted} granted, only {received} items arrived in total"
+    );
+}
+
+#[test]
+fn a_reservation_holds_capacity_against_every_other_producer() {
+    // Not just against the thread that took it. Reserve on one thread, fill
+    // from others, and redeem: the slot must have survived their contention.
+    let (tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+
+    let threads: Vec<_> = (0..PRODUCERS)
+        .map(|_| {
+            let handle = tx.clone();
+            thread::spawn(move || while handle.push(0).is_ok() {})
+        })
+        .collect();
+    for thread in threads {
+        thread.join().expect("no producer may panic");
+    }
+
+    assert_eq!(tx.len(), 7, "seven taken, one withheld");
+    slot.send(99).expect("the withheld slot is still ours");
+    assert_eq!(rx.len(), 8);
+}
+
+#[test]
+fn a_reservation_can_be_redeemed_from_another_thread() {
+    // The shape of the real use case, and the reason this shape's reservation
+    // is owned rather than borrowed: claim the slot where the work is
+    // submitted, redeem it wherever the completion lands.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    fill(&tx, 1);
+
+    thread::spawn(move || {
+        slot.send(99).expect("the room was claimed before the move");
+    })
+    .join()
+    .expect("the redeeming thread must not panic");
+
+    let drained: Vec<u32> = rx.drain().collect();
+    assert_eq!(drained.last(), Some(&99));
+}
+
+#[test]
+fn a_reservation_is_send_but_not_sync() {
+    fn assert_send<T: Send>() {}
+    assert_send::<Reservation<u32>>();
+    assert_send::<Producer<u32>>();
+    assert_send::<Consumer<u32>>();
+
+    // `!Sync` is asserted by the absence of any test that shares one across
+    // threads: the compiler refuses to write it.
+}
+
+// ---------------------------------------------------------------------------
+// Disconnection, which a reservation participates in.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_outstanding_reservation_keeps_the_stream_open() {
+    // **A reservation is a promise of a message still to come.** If dropping
+    // the last producer ended the stream while one was outstanding, the
+    // consumer would be told the queue was finished and then handed an item --
+    // losing exactly the message the reservation existed to protect.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    drop(tx);
+
+    assert!(
+        !rx.is_disconnected(),
+        "a promise outstanding is a producer outstanding"
+    );
+
+    slot.send(7).expect("the consumer is alive");
+    assert!(
+        rx.is_disconnected(),
+        "and redeeming the last one does end the stream"
+    );
+    assert_eq!(rx.pop(), Some(7), "with the promised item still owed");
+}
+
+#[test]
+fn dropping_an_outstanding_reservation_also_ends_the_stream() {
+    // The other half: a promise abandoned is still a promise resolved, so the
+    // consumer must not be left waiting on it for ever.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    drop(tx);
+    assert!(!rx.is_disconnected());
+
+    drop(slot);
+    assert!(
+        rx.is_disconnected(),
+        "an abandoned promise resolves the stream"
+    );
+}
+
+#[test]
+fn a_blocked_consumer_is_woken_by_the_last_reservation_being_redeemed() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    drop(tx);
+
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        slot.send(7).expect("the consumer is alive");
+    });
+
+    assert_eq!(
+        rx.recv().expect("the reservation is redeemed"),
+        7,
+        "a parked consumer must be woken by a reserved delivery like any other"
+    );
+    assert!(matches!(rx.recv(), Err(RecvError::Disconnected)));
+    sender.join().expect("the sender must not panic");
+}
+
+#[test]
+fn a_blocked_consumer_is_woken_by_the_last_reservation_being_dropped() {
+    // Caught as a hang if the drop path forgets to release the producer count
+    // or to ring the doorbell.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    drop(tx);
+
+    let abandoner = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        drop(slot);
+    });
+
+    assert!(
+        matches!(rx.recv(), Err(RecvError::Disconnected)),
+        "abandoning the last promise must wake a parked consumer"
+    );
+    abandoner
+        .join()
+        .expect("the abandoning thread must not panic");
+}
+
+#[test]
+fn redeeming_into_a_departed_consumer_hands_the_item_back() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    drop(rx);
+
+    assert!(slot.is_disconnected());
+    let error = slot.send(7).expect_err("nobody is left to take it");
+    assert_eq!(
+        error.into_inner(),
+        7,
+        "an item important enough to reserve for must not be dropped silently"
+    );
+}
+
+#[test]
+fn an_abandoned_reservation_leaves_the_queue_usable() {
+    // A reservation that fails to be redeemed must not poison the capacity.
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    for _ in 0..50 {
+        let slot = tx.reserve().expect("room");
+        drop(slot);
+    }
+    assert_eq!(tx.outstanding_reservations(), 0);
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+    assert!(tx.push(3).is_err());
+    assert_eq!(rx.pop(), Some(1));
+}
+
+// ---------------------------------------------------------------------------
+// Queue behaviour, kept honest against the shape it is a variant of.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn items_come_out_in_the_order_they_went_in() {
+    let (tx, rx) = bounded::<u32>(8).expect("a power-of-two capacity");
+    for value in 0..8 {
+        tx.push(value).expect("room for eight");
+    }
+    let drained: Vec<u32> = rx.drain().collect();
+    assert_eq!(drained, (0..8).collect::<Vec<_>>());
+}
+
+#[test]
+fn the_ring_wraps_many_times_without_losing_order() {
+    // The test that indicts the position arithmetic, and it matters more here
+    // than in `mpsc`: this shape decides a slot is free from the consumer's
+    // position rather than from the slot's own sequence, so an error in the
+    // wrapping subtraction is a use-after-free rather than a wrong answer.
+    let (tx, rx) = bounded::<usize>(4).expect("a power-of-two capacity");
+    for round in 0..2000 {
+        tx.push(round).expect("the previous item was taken");
+        assert_eq!(rx.pop(), Some(round));
+    }
+    assert!(rx.is_empty());
+}
+
+#[test]
+fn a_partly_full_ring_wraps_correctly_with_a_reservation_held_throughout() {
+    // Keeps a reservation outstanding across hundreds of laps, so the count
+    // must survive every position wrap in the packed word.
+    let (tx, rx) = bounded::<usize>(4).expect("a power-of-two capacity");
+    let slot = tx.reserve().expect("room");
+
+    for round in 0..500 {
+        tx.push(round).expect("three slots remain unreserved");
+        assert_eq!(rx.pop(), Some(round));
+        assert_eq!(tx.outstanding_reservations(), 1, "round {round}");
+    }
+
+    slot.send(99).expect("still ours after five hundred laps");
+    assert_eq!(rx.pop(), Some(99));
+}
+
+#[test]
+fn zero_sized_items_round_trip() {
+    let (tx, rx) = bounded::<()>(2).expect("a power-of-two capacity");
+    let slot = tx.reserve().expect("room");
+    tx.push(()).expect("room");
+    assert!(matches!(tx.push(()), Err(PushError::Full(()))));
+    slot.send(()).expect("the room was ours");
+    assert_eq!(rx.pop(), Some(()));
+    assert_eq!(rx.pop(), Some(()));
+    assert_eq!(rx.pop(), None);
+}
+
+#[test]
+fn dropping_the_queue_drops_the_items_it_still_holds() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    {
+        let (tx, _rx) = bounded::<DropCounter>(8).expect("a power-of-two capacity");
+        let slot = tx.reserve().expect("room");
+        for _ in 0..5 {
+            tx.push(DropCounter(Arc::clone(&drops))).expect("room");
+        }
+        slot.send(DropCounter(Arc::clone(&drops)))
+            .expect("the room was ours");
+        assert_eq!(drops.load(Ordering::Relaxed), 0, "nothing dropped yet");
+    }
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        6,
+        "every undrained item must be dropped, not leaked -- including the reserved one"
+    );
+}
+
+#[test]
+fn dropping_the_queue_after_a_wrap_drops_only_what_is_resident() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    {
+        let (tx, rx) = bounded::<DropCounter>(4).expect("a power-of-two capacity");
+        for _ in 0..6 {
+            tx.push(DropCounter(Arc::clone(&drops))).expect("room");
+            rx.pop().expect("an item");
+        }
+        assert_eq!(drops.load(Ordering::Relaxed), 6);
+        for _ in 0..3 {
+            tx.push(DropCounter(Arc::clone(&drops))).expect("room");
+        }
+    }
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        9,
+        "the three still resident must also be dropped"
+    );
+}
+
+#[test]
+fn many_producers_deliver_every_item_exactly_once() {
+    const PER_PRODUCER: usize = 500;
+    let (tx, rx) = bounded::<(usize, usize)>(16).expect("a valid capacity");
+
+    let threads: Vec<_> = (0..PRODUCERS)
+        .map(|producer| {
+            let handle = tx.clone();
+            thread::spawn(move || {
+                for sequence in 0..PER_PRODUCER {
+                    let mut item = (producer, sequence);
+                    while let Err(PushError::Full(returned)) = handle.push(item) {
+                        item = returned;
+                        std::hint::spin_loop();
+                    }
+                }
+            })
+        })
+        .collect();
+    drop(tx);
+
+    let mut per_producer = [0_usize; PRODUCERS];
+    while let Ok((producer, sequence)) = rx.recv() {
+        assert_eq!(
+            sequence, per_producer[producer],
+            "a producer's own items must arrive in that producer's order"
+        );
+        per_producer[producer] += 1;
+    }
+    for thread in threads {
+        thread.join().expect("no producer may panic");
+    }
+    assert!(per_producer.iter().all(|count| *count == PER_PRODUCER));
+}
+
+// ---------------------------------------------------------------------------
+// The doorbell, which behaves as it does everywhere else.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn polling_never_creates_a_kernel_object() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    slot.send(1).expect("the room was ours");
+    while rx.pop().is_some() {}
+    drop(tx);
+    while rx.pop().is_some() {}
+
+    assert!(
+        !rx.shared.doorbell.is_armed(),
+        "a poll-only consumer must allocate no kernel object, reservations included"
+    );
+}
+
+#[test]
+fn a_reserved_delivery_lights_the_doorbell() {
+    // A reserved send is a delivery like any other, so it must ring. If it did
+    // not, a consumer parked on the doorbell would sleep through precisely the
+    // message that was important enough to reserve a slot for.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+    let slot = tx.reserve().expect("room");
+    assert!(rx.arm().expect("arming must succeed"), "nothing yet");
+
+    slot.send(1).expect("the room was ours");
+    assert!(
+        !rx.arm().expect("arming must succeed"),
+        "a reserved delivery must be visible to the arming protocol"
+    );
+}
+
+#[test]
+fn the_real_arm_finds_an_item_that_lands_inside_its_window() {
+    // The same deterministic indictment of the reversed order used by the other
+    // shapes, driven through this one's `arm`.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+
+    let safe_to_wait = race_hooks::ARM.with(
+        move || {
+            tx.push(1).expect("there is room");
+        },
+        || rx.arm().expect("arming must succeed"),
+    );
+
+    assert!(
+        !safe_to_wait,
+        "an item landing between the clear and the check must be found, not waited past"
+    );
+}
+
+#[test]
+fn the_real_arm_still_blesses_a_wait_when_its_window_stays_empty() {
+    let (_tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+    let safe_to_wait = race_hooks::ARM.with(|| {}, || rx.arm().expect("arming must succeed"));
+    assert!(safe_to_wait, "nothing arrived, so waiting is right");
+}
+
+// ---------------------------------------------------------------------------
+// Through the traits, which is where this shape and `mpsc` visibly differ.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_shape_is_usable_through_the_reserving_trait() {
+    fn reserve_and_send<P>(producer: &P, item: P::Item) -> bool
+    where
+        P: Reserving + Bounded,
+        P::Item: Copy,
+        for<'a> P::Reservation<'a>: ReservationLike<P::Item>,
+    {
+        let before = producer.outstanding_reservations();
+        let Some(slot) = producer.reserve() else {
+            return false;
+        };
+        assert_eq!(producer.outstanding_reservations(), before + 1);
+        slot.deliver(item).is_ok()
+    }
+
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    assert!(reserve_and_send(&tx, 7));
+    assert_eq!(rx.pop(), Some(7));
+}
+
+/// The one operation the [`Reserving`] trait deliberately does not name.
+///
+/// Redeeming consumes the reservation and hands back a shape-specific error, so
+/// putting it on the trait would have meant an associated error type carried for
+/// the sake of one method. The trait names how a claim is *obtained*, which is
+/// the part a generic caller needs; a caller generic over redeeming as well can
+/// say so itself, as this does.
+trait ReservationLike<T> {
+    type Error;
+    fn deliver(self, item: T) -> Result<(), Self::Error>;
+}
+
+impl<T> ReservationLike<T> for Reservation<T> {
+    type Error = crate::Disconnected<T>;
+
+    fn deliver(self, item: T) -> Result<(), Self::Error> {
+        self.send(item)
+    }
+}
+
+impl<T> ReservationLike<T> for crate::spsc::Reservation<'_, T> {
+    type Error = crate::Disconnected<T>;
+
+    fn deliver(self, item: T) -> Result<(), Self::Error> {
+        self.send(item)
+    }
+}
+
+#[test]
+fn both_reserving_shapes_satisfy_the_trait() {
+    // The D-3 check, run for the `Reserving` trait: two implementations that do
+    // not resemble each other internally, one handing out a borrowed
+    // reservation and one an owned one, reached through the same generic code.
+    fn claim_one<P: Reserving>(producer: &P) -> Option<P::Reservation<'_>> {
+        producer.reserve()
+    }
+
+    let (spsc_tx, _spsc_rx) = crate::spsc::bounded::<u32>(4).expect("4 is valid for both");
+    let (mpsc_tx, _mpsc_rx) = bounded::<u32>(4).expect("4 is valid for both");
+
+    assert!(claim_one(&spsc_tx).is_some());
+    assert!(claim_one(&mpsc_tx).is_some());
+    assert_eq!(
+        spsc_tx.outstanding_reservations(),
+        0,
+        "the claim was dropped"
+    );
+    assert_eq!(mpsc_tx.outstanding_reservations(), 0);
+}

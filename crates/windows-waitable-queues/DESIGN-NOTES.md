@@ -39,6 +39,10 @@ preferred.
 | <a id="d-13"></a>D-13 | **The arming protocol is written once, in `blocking.rs`, and a shape binds to it by implementing a crate-private `Parked` trait.** The blocking receive loop *is* [D-9](#d-9), not glue around it; a second shape spelling it out again would be a second copy of a rule -- the exact mistake this crate has already paid for once. |
 | <a id="d-14"></a>D-14 | **`mpsc`'s arming asks "would `pop` find something", not "is `len` zero".** The two disagree over a slot a producer has claimed but not published, and only the first answer lets the consumer park on it instead of spinning until that producer is rescheduled. |
 | <a id="d-15"></a>D-15 | **`Doorbell::clear` resets the event *before* clearing the flag that mirrors it, and the original order was a lost wakeup.** A producer signalling between the two lines set the flag and issued a real `SetEvent`; the `ResetEvent` that followed erased the signal and left the flag set, wedging the doorbell dark while it claimed to be lit. **Amends [D-9](#d-9)**, whose "there is no third case" holds only for a queue whose emptiness is one position comparison. |
+| <a id="d-16"></a>D-16 | **Reservation is a capability a shape may lack, so the reserving multi-producer queue ships as a peer of `mpsc` rather than replacing it.** Honouring a reservation requires counting free slots, which requires the consumer's position -- a single shared line `mpsc`'s push deliberately never reads. Rather than charge every caller for a capability not every caller wants, both ship. **Amends [D-6](#d-6)**, which assumed one queue would carry every policy. || <a id="d-17"></a>D-17 | **The reservation count and the claim position live in one word, because a check-and-claim over both must be a single atomic operation.** Two atomics cannot be made correct with any amount of fencing: the pushing producer is load-then-store and the reserving one store-then-load, so the Dekker argument does not apply and both can miss each other. The 32/32 split is forced by the arithmetic, and caps this shape at 2^31 items. |
+| <a id="d-17"></a>D-17 | **The reservation count and the claim position live in one word, because a check-and-claim over both must be a single atomic operation.** Two atomics cannot be made correct with any amount of fencing: the pushing producer is load-then-store and the reserving one store-then-load, so the Dekker argument does not apply and both can miss each other. The 32/32 split is forced by the arithmetic, and caps this shape at 2^31 items. |
+| <a id="d-18"></a>D-18 | **A 128-bit compare-and-swap is refused.** It would lift the 2^31 cap and nothing else -- the consumer's position still has to be read -- at the cost of a dependency, a target-feature floor not in the x86-64 baseline, and a different instruction on the ARM64 machine this workspace measures on. Revisit only for a tagged pointer, which is what [M-inf.1](../../CHECKLIST-io-domains.md)'s linked and sharded shapes would need. |
+| <a id="d-19"></a>D-19 | **The coalesced loss latch is deliberately not generalised from the file watcher.** Coalescing there is sound because a desync is *idempotent* -- two mean the same as one, and the answer to both is a re-scan. A queue of arbitrary `T` has no such property, so what generalises is a loss *count*, which is [M31.4](../../CHECKLIST-io-domains.md)'s observability rather than a policy. |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -449,3 +453,149 @@ by restoring the property that any push makes the re-check find something -- but
 doorbell able to reach the inconsistent state, waiting for the next shape, and it would have cost the
 consumer a spin whenever a claim was in flight. Adding a lock around the two lines would have fixed it
 and thrown away the reason the flag exists.
+
+## D-16: reservation is a capability, so the reserving queue is a peer and not a replacement
+
+[D-6](#d-6) said overflow "fails or reserves, and never overwrites", and quietly assumed one queue would
+carry both policies. Building the second one showed that assumption was wrong, and why.
+
+**Honouring a reservation costs the producer something on every push, including the pushes that never
+reserve anything.** `mpsc`'s producer never reads the consumer's position: it asks the slot's own
+sequence number "are you free?", and those are spread across the slot array, so producers working at
+different positions touch different cache lines. Avoiding a single shared position is not incidental to
+Vyukov's design; it is most of the point of it.
+
+A reservation cannot be answered from that question. "Is this slot free" does not say **how many** slots
+remain, and withholding one from the best-effort path requires exactly that count -- which requires the
+consumer's position, on one line every thread in the system touches.
+
+So the choice was: pay that on every `mpsc` push, or ship two shapes. Two shapes, for three reasons:
+
+- **The cost falls on the shape [M31.5](../../CHECKLIST-io-domains.md) exists to measure.** Degrading
+  `mpsc`'s push before the contention benchmark runs would corrupt the measurement that decides whether
+  the deferred shapes are needed at all.
+- **The crate is built for this.** It is named in the plural, [D-7](#d-7) makes shapes plain modules, and
+  [D-4](#d-4) already has shapes differing in what they can do. A third one is the pattern working, not
+  an exception to it.
+- **It is [D-2](#d-2)'s argument reaching its sharpest case.** `mpsc` does not implement `Reserving`
+  because it genuinely *cannot*, not because nobody got round to it -- which is exactly the situation
+  narrow traits were chosen for. A fat trait would have forced the cost on both shapes or excluded
+  reservation from the contract entirely.
+
+**The alternative shape considered and refused was a permit counter** -- one atomic that both producers
+and the consumer read-modify-write, acquiring on push and releasing on pop. It is correct and simpler to
+read, and it was rejected because it puts a second contended read-modify-write on the push path where the
+packed word puts one shared *load*. Its only advantage is preserving the crate-wide capacity ceiling, and
+[D-17](#d-17) explains why that ceiling is unreachable anyway.
+
+**The merge-or-delete decision is deferred to M31.5, deliberately and with a trigger.** If the benchmark
+shows the shared-line read costs little at realistic contention, `mpsc` and `reserving_mpsc` should merge
+and the plain one should go. If it shows the read is expensive, both stay. What must not happen is the
+duplicated path becoming permanent because nobody circled back, so the decision is recorded as an item on
+M31.5 rather than as an intention here.
+
+## D-17: the reservation count and the claim position share one word
+
+**The obvious implementation is broken, and it is worth writing down why, because the brokenness is not
+visible from reading either side on its own.** With the count in its own atomic:
+
+1. A pushing producer reads the count, sees room, and claims the position.
+2. A reserving producer increments the count, reads the position, sees room, and grants.
+
+Each read before the other's write. The queue now owes a slot that does not exist, and the guarantee the
+whole feature rests on is gone.
+
+**Sequentially consistent fences do not close this**, which is the part that surprises -- they *do* close
+the superficially identical hazard in [D-9](#d-9). The Dekker argument needs store-then-load on both
+sides. Here the pushing producer is **load**-then-store: it reads the count and then writes the position.
+Writing the four operations into a single total order, `L_push < S_reserve < L_reserve < S_push` is
+consistent with every side's program order, so both sides missing each other is permitted and no fence
+forbids it.
+
+Two independent claimants on one resource must synchronise on **one location**. So the count and the
+position become one location: a single `AtomicU64`, low 32 bits the position, high 32 the count. Every
+operation that changes either changes both, with one compare-and-swap.
+
+Three consequences fall out, and all three are improvements:
+
+- **Redeeming is one exchange** that decrements the count as it advances the position, so
+  `occupied + reserved` -- the quantity the invariant is about -- is never momentarily wrong.
+- **A racing `reserve` and `push` cannot both win.** The loser's exchange fails and it re-reads, which is
+  the ordinary lock-free retry rather than a special case.
+- **The producer stops needing the slot sequence for the "free" direction**, because it now reads the
+  consumer's position anyway. So `reserving_mpsc`'s `pop` is one store shorter than `mpsc`'s: nothing
+  writes a "free again" sequence.
+
+**The 32/32 split is forced, not chosen.** A position of `b` bits keeps a wrapping difference unambiguous
+only up to `2^(b-1)`; the count can reach the capacity, so it needs `b` bits too; `b + b = 64` gives
+`b = 32`. There is no cleverer division of the word, and the resulting ceiling is 2^31 items -- a ring
+this shape allocates in full at construction, so at eight bytes an item it is already 17 GB.
+
+That ceiling is reported through `CapacityError`'s `max_valid`, which [D-12](#d-12) had already made a
+property of the shape rather than of the crate. D-12 introduced that for the *minimum* and argued the
+maximum worked the same way; this is that argument being cashed.
+
+**The invariants the packing depends on are `const` assertions, not tests**, because they are facts about
+constants: a test can only report after the fact, on a build somebody chose to run. Worth recording that
+the first version of those assertions was *tautological* -- it asserted that `BOUNDS_MAX` equalled its own
+definition -- and widening the position to 40 bits sailed straight past it while silently narrowing the
+count's field to 24 bits, which is the way the packing actually breaks. The assertions now name the
+constraint that binds: the count's half must be wide enough to hold the whole capacity.
+
+## D-18: a 128-bit compare-and-swap is refused
+
+The natural question about [D-17](#d-17)'s packing is why not use `cmpxchg16b` (or `CASP` on aarch64) and
+keep both halves full width. The answer has one decisive part and three supporting ones.
+
+**It does not remove the cost that matters.** The expense in this shape is the shared read of the
+consumer's position, and free space is `capacity - (position - head) - reserved`. `head` belongs to the
+consumer; no width of *producer-side* compare-and-swap makes it appear in the producer's word. So a
+double-width exchange buys exactly one thing: lifting the ceiling from 2^31 to 2^63, on a ring that is
+allocated in full at construction.
+
+The supporting reasons:
+
+- **It is not reachable from stable Rust without a new dependency.** There is no usable `AtomicU128`, and
+  `core::arch::x86_64::cmpxchg16b` is an unstable intrinsic; the toolchain is pinned to 1.98.0 stable. It
+  would mean adding `portable-atomic` to a workspace whose only third-party dependency is `windows-sys`,
+  on a crate that is [published](#d-8).
+- **It is not in the x86-64 baseline.** `x86_64-pc-windows-msvc` does not enable the target feature by
+  default. Windows 8.1 and later require the instruction in hardware, so it is *present*, but the
+  compiler still will not emit it unless told -- so it is either raise the target-feature floor, which
+  narrows the platform, or pay runtime detection on the push path.
+- **It is not even the same instruction on the machine this workspace measures on.** The reference machine
+  is `aarch64-pc-windows-msvc`; CI is x86-64. The measuring platform and the CI platform would exercise
+  different instructions with different cost profiles, and
+  [windows-platform-probes](../windows-platform-probes/DESIGN-NOTES.md) records what ARM64-only
+  measurement has already cost once.
+
+**Where it would genuinely earn its place is a tagged pointer**, which is what the linked and sharded
+shapes parked in `M-inf.1` would need. Recorded there so the question does not have to be re-derived.
+
+## D-19: the coalesced loss latch does not generalise
+
+[windows-file-watcher's queue](../windows-file-watcher/src/queue.rs) carries a third policy beside
+fail-fast and reserve: a failed enqueue latches the affected `WatchId` in a set held *outside* the bounded
+queue, where it coalesces, and is drained back in at the next successful enqueue. It is a good design and
+this crate deliberately does not copy it.
+
+**Coalescing is sound there because a desync is idempotent.** Two lost notifications for one subscription
+mean the same thing as one -- the client must re-scan -- so collapsing them loses nothing, and that is
+what makes the latch lossless despite being bounded by the number of subscriptions rather than by the
+number of losses.
+
+A queue of arbitrary `T` has no such property. There is no general way to collapse two lost `T`s into
+one, and no general way to say what a client should do about them. What *does* generalise is the part
+that does not depend on the payload: **a count of what was refused**, so loss is measured rather than
+silent. That is observability, and it belongs to [M31.4](../../CHECKLIST-io-domains.md) rather than to the
+overflow policy.
+
+So this crate's answer to a full queue is: refuse and hand the item back, or hold a reservation so the
+refusal cannot happen to the messages that cannot survive it. A caller whose payload *is* idempotent can
+build the watcher's latch on top of the typed refusal, which is the right layer for a decision that
+depends on what the payload means.
+
+**Overwrite-oldest remains refused outright**, as [D-6](#d-6) said. `crossbeam`'s `force_push` makes an
+`ArrayQueue` usable as a ring buffer, which is right for telemetry where an overwritten entry is a lost
+sample. Here an entry may be an I/O submission, where it is a lost *operation*. The two must not share a
+knob, because a knob invites a caller to pick the wrong one.
