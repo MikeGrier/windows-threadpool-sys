@@ -71,6 +71,19 @@ waiting on numbers only other people's machines can produce.
   public -- and because "here is what I collect, and you may turn this off" is a materially stronger
   thing to say to someone doing a favour than "trust me". The field is optional in the record, so a
   suppressed submission stays valid rather than becoming unparseable.
+  **Suppression is recorded, not merely absent.** A field that is missing because the runner withheld
+  it and a field that is missing because the host would not answer are different facts, and a
+  collector that cannot tell them apart will eventually read one as the other -- the same reason an
+  inexpressible placement is reported rather than skipped.
+
+  **And the flag must not be oversold, which is the more important half.** For the engineering-sample
+  case it addresses the *smaller* leak. A pre-release part is identified at least as well by its
+  **topology** -- an unusual core count, a novel cache arrangement, an unreleased NUMA layout -- and
+  the topology is the entire point of the submission, so it cannot be suppressed without making the
+  record worthless. **The tool therefore cannot make an NDA-covered machine safe to submit from, and
+  must not imply that it can.** Say so plainly in the README: if the hardware is confidential, the
+  whole output describes it, and the right answer is not to send it. That is worth more to the
+  audience most likely to own a multi-socket machine than any reassurance would be.
 
 - [x] **PT-1.3** -- **Decide the fate of the three existing probe binaries** (`probe-topology`,
   `probe-core-affinity`, `probe-peer-index-cache`) once their modules move. Keeping them as thin
@@ -194,13 +207,28 @@ that carries them is written.
   name, file paths, environment variables, serial numbers, or anything about installed software --
   and that list is a commitment, not a description of the current implementation. **The tool makes no
   network connections**; the person sends the file themselves, deliberately. Mention the model
-  suppression flag here, where someone deciding whether to run it will actually see it.
+  suppression flag here, where someone deciding whether to run it will actually see it -- alongside
+  the honest limit from PT-1.2, that the flag does not make confidential hardware safe to submit,
+  because the topology describes the part regardless.
 
 - [ ] **PT-4.4** -- Pin the thread-pinning failure behaviour for a stranger's machine. It currently
   panics, which is right for us (a silently unpinned thread measures the scheduler, not the placement)
   but reads as a crash to someone doing a favour. It must fail with an explanation of what could not
   be pinned and why the run cannot continue honestly -- **and must not fall back to an unpinned
   measurement**, which would produce a plausible number that means nothing.
+
+- [ ] **PT-4.5** -- **Let the runner see everything before sending it, and decide with the real values
+  rather than a promise.** This is a stronger privacy property than any suppression flag, and cheaper:
+  the record is a text file, so the honest instruction is "open it and read it -- if you are not happy
+  with something in there, do not send it."
+  Two things make that instruction usable rather than theatre:
+  - **A fast preview of the machine-description fields**, available without running the measurement.
+    The full run takes minutes and grows with node count; nobody should have to spend that to discover
+    what the tool would learn about their machine. Someone can then look, decide, and only then commit
+    to the run.
+  - **A record a human can actually read** -- field names that mean something without a schema in hand,
+    and no opaque blobs. A file that must be decoded to be checked cannot honestly be described as
+    inspectable.
 
 ## M5: distribution
 
