@@ -32,11 +32,9 @@ serde = ["dep:serde", "windows-topology-sys/serde"]
 windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
 windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues" }
 serde = { version = "1.0", features = ["derive"], optional = true }
-
-[dev-dependencies]
-# Only the tests need a serializer: the schema golden is derived by serializing
-# a record and walking the result, rather than by restating its key paths in a
-# list somebody has to remember to update.
+# The tool emits the record itself, so a serializer is not a test-only concern.
+# It is also what derives the schema golden: the archived shape comes from
+# serializing a record and walking the result, never from a hand-kept list.
 serde_json = "1.0"
 
 [dependencies.windows-sys]

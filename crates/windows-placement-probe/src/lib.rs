@@ -65,3 +65,5 @@ pub mod peer_index_cache;
 pub mod record;
 /// The human-readable report, rendered from the record.
 pub mod report;
+/// Turning a run into something a person can paste into a discussion thread.
+pub mod submission;

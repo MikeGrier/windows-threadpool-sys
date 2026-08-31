@@ -99,8 +99,21 @@ fn render_placements(out: &mut String, record: &SubmissionRecord) {
     }
     let _ = writeln!(out);
     let _ = writeln!(out, "the slice each row was measured on:");
+    // One entry per *placement*, not per row. Every strategy of a placement runs
+    // on the same processors, so listing them per row repeats each slice as many
+    // times as there are strategies and says nothing new.
+    let mut shown: Vec<&str> = Vec::new();
     for entry in &record.placements {
-        let _ = writeln!(out, "  {:<26} {}", entry.placement, entry.slice);
+        if shown.contains(&entry.placement.as_str()) {
+            continue;
+        }
+        shown.push(&entry.placement);
+        // The slice goes on its own line rather than beside the label: a real
+        // slice names two processors with five fields each, and a single line
+        // carrying both a label and that reaches about 120 characters, which
+        // wraps on a normal terminal and risks being reflowed on paste.
+        let _ = writeln!(out, "  {}", entry.placement);
+        let _ = writeln!(out, "      {}", entry.slice);
     }
 }
 

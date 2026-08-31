@@ -252,9 +252,29 @@ that carries them is written.
   values so they cannot disagree. The reader running the tool should be able to see, in prose, the
   same conclusion the record encodes -- otherwise nobody notices when a run is nonsense.
 
-- [ ] **PT-3.5** -- Write the record to a **file** by default, named predictably, and tell the user
-  exactly where it is and what to do with it. Asking someone to copy terminal output invites truncated
-  and reflowed submissions.
+- [x] **PT-3.5** -- **The terminal output is the submission.** Collection happens by asking people to
+  paste a run into a GitHub Discussions thread on this repository, so the paste is the channel and the
+  whole record must survive it.
+  **This reverses this item's original reasoning, and the reversal is the point.** It previously said
+  to write a file *because* copying terminal output invites truncated and reflowed submissions. That
+  risk is real and does not go away by choosing a different channel -- it has to be *mitigated* rather
+  than avoided:
+  - **Everything needed is on screen.** The record prints to stdout, not only to a file. A submission
+    that requires the sender to find and attach a file will sometimes arrive without it.
+  - **A self-check the reader can run.** A short checksum over the record, printed beside it, so a
+    truncated or reflowed paste is *detectable* rather than silently half-ingested. This is the same
+    principle as the schema golden: detect corruption instead of trusting the channel.
+  - **Paste-safe formatting.** GitHub renders Discussions as markdown, so the output must survive a
+    fenced code block and must not depend on colour, cursor control, or overlong lines that wrap.
+  - **Tell the runner exactly what to do**, in the output itself: which thread, and to paste inside a
+    fenced block. An instruction that lives only in a README is an instruction half of them will not
+    have read.
+  **The target is select-all, copy, paste, done.** Every extra step is a submission that does not
+  arrive, so the tool emits its own markdown fences: a runner who has never thought about markdown
+  pastes the whole thing and it renders as a code block anyway. Instructions caught inside the fence
+  are trivial noise next to a paste that renders as mangled prose.
+  A file is still written, because it costs nothing and someone will prefer to attach one -- but it is
+  a backup, never a required step, and the run must be complete and submittable without it.
 
 - [x] **PT-3.6** -- Read the three machine-description fields PT-1.2 settled, each of which needs a
   source this crate does not currently use. **Every one of them is optional in the record**, so a host
@@ -280,6 +300,12 @@ that carries them is written.
   than a guess: the hop matrix alone is `n*(n-1)/2` hops times two strategies times three repetitions
   times two million items, on top of the placements. On a four-node machine that is a materially
   longer run than on this one, and the person deserves to know before it starts.
+
+- [ ] **PT-4.6** -- **Set up the Discussions thread people paste into, and link it from the tool.**
+  The tool's output names where to send a result, so that destination has to exist before the tool
+  ships, not after -- an instruction pointing at a thread that is not there is worse than no
+  instruction. Pin it, and state in the first post what is collected and what a submission is used
+  for, so a reader who arrives from a search rather than from the README still sees it.
 
 - [ ] **PT-4.3** -- **Say exactly what is collected and what is not**, in the tool's own output and in
   its README, and make it verifiable by reading the record. Collected, per PT-1.2: core/cache/NUMA

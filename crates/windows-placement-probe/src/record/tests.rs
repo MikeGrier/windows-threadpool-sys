@@ -22,7 +22,11 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
     let measurement = MeasurementRecord {
         placement: "SMT siblings (one core)".to_owned(),
         strategy: "baseline".to_owned(),
-        slice: "pinned prod=g0/cpu0/core0/ec0/cd2/n0 cons=g0/cpu1/core0/ec0/cd2/n0".to_owned(),
+        // A real slice, copied verbatim from a run. An earlier fixture used a
+        // shortened one, which let a line-width test pass while the tool emitted
+        // lines half again as long.
+        slice: "pinned prod=g0/cpu0/core0/ec0/cd2/n0 cons=g0/cpu1/core0/ec0/cd2/n0 [same-cache,same-class]"
+            .to_owned(),
         producer_group: 0,
         producer_number: 0,
         producer_numa_node: 0,
