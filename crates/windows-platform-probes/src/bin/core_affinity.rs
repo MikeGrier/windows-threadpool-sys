@@ -2,11 +2,11 @@
 
 //! Prints whether it matters where the two ends of a queue run.
 
-use windows_platform_probes::core_affinity::{Observation, Placement, measure};
-use windows_platform_probes::peer_index_cache::Strategy;
+use windows_placement_probe::core_affinity::{Observation, Placement, measure};
+use windows_placement_probe::peer_index_cache::Strategy;
 
 fn main() -> std::io::Result<()> {
-    windows_platform_probes::fingerprint::print_banner();
+    windows_placement_probe::fingerprint::print_banner();
     println!("== does it matter where the two ends of a queue run? ==\n");
 
     let observation = measure()?;
@@ -220,11 +220,11 @@ interpretation:
     if let (Some(same), Some(cross)) = (
         mean(
             &same_class,
-            |m: &windows_platform_probes::core_affinity::Measurement| m.consumer_batch,
+            |m: &windows_placement_probe::core_affinity::Measurement| m.consumer_batch,
         ),
         mean(
             &cross_class,
-            |m: &windows_platform_probes::core_affinity::Measurement| m.consumer_batch,
+            |m: &windows_placement_probe::core_affinity::Measurement| m.consumer_batch,
         ),
     ) {
         let within = if confounded {

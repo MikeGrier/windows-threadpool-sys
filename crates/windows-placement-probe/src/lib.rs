@@ -50,3 +50,10 @@
 //! nothing here is tuned for use in a running system.
 
 #![cfg(windows)]
+
+/// What a handoff costs, by where the two threads run.
+pub mod core_affinity;
+/// What shape the machine is, and which slice a measurement ran on.
+pub mod fingerprint;
+/// The handoff itself, and the strategies the placement experiment compares.
+pub mod peer_index_cache;

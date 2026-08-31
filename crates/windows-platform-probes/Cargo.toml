@@ -80,6 +80,11 @@ windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys"
 # a second parse written here, which would only measure itself. The raw Win32
 # counters it cross-checks against are read independently through windows-sys.
 windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
+# The placement measurement moved out to its own crate so it could be shared
+# with people running it on hardware this workspace does not own. The probes
+# here call into it rather than keeping a second copy: two renderings of one
+# measurement disagreeing is a defect this investigation has already hit.
+windows-placement-probe = { version = "0.1.0", path = "../windows-placement-probe" }
 # The request-cost probe measures the real request types the design would put on
 # a queue, not a stand-in, for the same reason.
 windows-namespace-request-sys = { version = "0.2.0", path = "../windows-namespace-request-sys" }

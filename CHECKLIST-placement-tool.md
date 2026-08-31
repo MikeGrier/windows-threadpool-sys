@@ -160,21 +160,32 @@ the entire point of this tool -- has more than 64 logical processors, so Windows
 
 ## M2: the move
 
-- [ ] **PT-2.1** -- Move `fingerprint`, `core_affinity` and `peer_index_cache` into the new crate, and
+- [x] **PT-2.1** -- Move `fingerprint`, `core_affinity` and `peer_index_cache` into the new crate, and
   make `windows-platform-probes` depend on it. This inverts today's direction deliberately: the
   published crate owns the measurement, the internal grab-bag borrows it. A **pure relocation** with
   the provenance trail the repository requires for a split -- commit trailers and per-file headers --
   because these modules carry a session's worth of hard-won reasoning in their comments and blame must
   survive.
 
-- [ ] **PT-2.2** -- Keep `queue_contention` and every unrelated probe where they are. The new crate is
+- [x] **PT-2.2** -- Keep `queue_contention` and every unrelated probe where they are. The new crate is
   not a home for "measurement code in general"; it is one tool with one question, and admitting a
   second unrelated probe is how it becomes the grab-bag it was extracted from.
 
-- [ ] **PT-2.3** -- Verify the move changed no behaviour: the three probe binaries (or their
+- [x] **PT-2.3** -- Verify the move changed no behaviour: the three probe binaries (or their
   replacements per PT-1.3) produce the same numbers on this host as recorded in
   [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, and the full sabotage set still fails
   where it should.
+  **Verified three ways.** Git recorded all five files as **100% renames**, so this was a pure
+  relocation and `--follow` and blame both carry through without the provenance headers a *split*
+  would need -- a split copies and leaves the source behind, a move does not. Test counts add up
+  exactly: 58 in the new crate plus 25 in the old is the 83 that existed before. And
+  `probe-core-affinity` reproduces its pre-move results (siblings 1.8x WINS at batch depth ~85,
+  cross-cache 0.54x LOSES at ~1.9), which is the check that matters, because compiling proves the
+  names resolved and nothing more.
+  **One defect surfaced, unrelated to the move and pre-existing:** `queue_contention` still imported
+  `windows_waitable_queues::mpsc`, stale since the `slotwise_mpsc` rename. It went unnoticed because
+  nothing had rebuilt that crate since, and the move is what forced the rebuild. Fixed here rather
+  than left for the release.
 
 ## M3: the submission record
 

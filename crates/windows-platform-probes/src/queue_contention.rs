@@ -15,7 +15,7 @@
 //! only MPSC the queue crate ever needs, and two speculative shapes never get
 //! written.
 //!
-//! **2. Should `mpsc` and `reserving_mpsc` merge?** They ship as peers because
+//! **2. Should `slotwise_mpsc` and `reserving_mpsc` merge?** They ship as peers because
 //! honouring a reservation costs the producer a read of the consumer's
 //! position -- one line every thread touches -- and *how much* that costs was a
 //! judgement rather than a measurement. If it is cheap, the two shapes merge and
@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use windows_waitable_queues::{Options, mpsc, reserving_mpsc};
+use windows_waitable_queues::{Options, reserving_mpsc, slotwise_mpsc};
 
 /// How many pushes each producer thread performs in one timed run.
 const PUSHES_PER_PRODUCER: usize = 50_000;
@@ -133,14 +133,14 @@ pub fn measure() -> Observation {
         isolated.push(median_run("baseline_fetch_add", producers, |count| {
             time_contended_atomic(count)
         }));
-        isolated.push(median_run("mpsc", producers, |count| {
+        isolated.push(median_run("slotwise_mpsc", producers, |count| {
             time_isolated_mpsc(count)
         }));
         isolated.push(median_run("reserving_mpsc", producers, |count| {
             time_isolated_reserving(count)
         }));
 
-        drained.push(median_run("mpsc", producers, |count| {
+        drained.push(median_run("slotwise_mpsc", producers, |count| {
             time_drained_mpsc(count)
         }));
         drained.push(median_run("reserving_mpsc", producers, |count| {
@@ -214,7 +214,8 @@ fn capacity_for(producers: usize) -> usize {
 }
 
 fn time_isolated_mpsc(producers: usize) -> Repetition {
-    let (tx, rx) = mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
+    let (tx, rx) =
+        slotwise_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
     let started = Instant::now();
     thread::scope(|scope| {
         for producer in 0..producers {
@@ -261,7 +262,7 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
 const DRAINED_CAPACITY: usize = 1024;
 
 fn time_drained_mpsc(producers: usize) -> Repetition {
-    let (tx, rx) = mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
+    let (tx, rx) = slotwise_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
 

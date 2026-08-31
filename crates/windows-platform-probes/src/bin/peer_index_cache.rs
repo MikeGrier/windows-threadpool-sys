@@ -6,10 +6,10 @@
 //! and are not for production use. Do not call them from production code, and
 //! do not lift a technique out of here. See this crate's DESIGN-NOTES.md.
 
-use windows_platform_probes::peer_index_cache::{CAPACITY, ITEMS, Strategy, measure};
+use windows_placement_probe::peer_index_cache::{CAPACITY, ITEMS, Strategy, measure};
 
 fn main() {
-    windows_platform_probes::fingerprint::print_banner();
+    windows_placement_probe::fingerprint::print_banner();
     println!("== what does caching the peer's index buy an SPSC ring? ==\n");
 
     let observation = measure();

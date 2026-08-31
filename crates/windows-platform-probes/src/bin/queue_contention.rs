@@ -13,7 +13,7 @@
 use windows_platform_probes::queue_contention::{PRODUCER_COUNTS, Run, measure};
 
 fn main() {
-    windows_platform_probes::fingerprint::print_banner();
+    windows_placement_probe::fingerprint::print_banner();
     println!("== does the array queue's tail claim contend? ==\n");
 
     let observation = measure();

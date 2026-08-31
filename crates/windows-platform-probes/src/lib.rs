@@ -111,14 +111,11 @@
 
 pub mod cancel_io;
 pub mod completion_port;
-pub mod core_affinity;
 pub mod device_map;
 pub mod doorbell_cost;
 pub mod error_mode;
-pub mod fingerprint;
 pub mod handle_state;
 pub mod ioring;
-pub mod peer_index_cache;
 pub mod pool_growth;
 pub mod queue_contention;
 pub mod request_cost;
