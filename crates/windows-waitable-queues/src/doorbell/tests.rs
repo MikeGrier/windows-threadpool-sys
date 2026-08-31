@@ -347,10 +347,15 @@ fn a_signal_racing_a_clear_leaves_the_next_one_able_to_ring() {
     let racing = Arc::clone(&doorbell);
     race_hooks::CLEAR.with(move || racing.signal(), || doorbell.clear());
 
-    assert!(
-        !is_signalled(&doorbell),
-        "clearing must darken the event even when a signal raced it"
-    );
+    // Nothing is asserted about the event's state right here, and the omission
+    // is deliberate. Whether the racing signal survived the clear depends on
+    // whether it was skipped, which depends on the flag optimisation -- and a
+    // signal that races a clear is entitled to leave the event lit, because
+    // that is a spurious wakeup and consumers tolerate those by contract. An
+    // earlier version of this test did assert it, and the sabotage sweep's
+    // control -- "signal always syscalls, skipping the flag optimisation" --
+    // caught it, which is exactly what that control exists to do: it reported
+    // this test as asserting the implementation instead of the contract.
 
     // The assertion that matters, and the one the wrong order fails: whatever
     // happened during the window, `clear` must leave the doorbell able to ring

@@ -115,7 +115,8 @@
       "expect": "caught",
       "why": "Rounding a request down to the nearest power of two gives 2^63 for anything at or above it, which exceeds the largest representable capacity. The suggestion exists so a caller can correct the call, and one that is itself refused is worse than none.",
       "find": [
-        "                Some(rounded.min(self.largest_power_of_two_within_bound()))"
+        "                let clamped = rounded.min(self.largest_power_of_two_within_bound());",
+        "                (clamped >= self.min_valid).then_some(clamped)"
       ],
       "replace": [
         "                Some(rounded)"
@@ -127,7 +128,7 @@
       "expect": "caught",
       "why": "A request that is merely not a power of two can still sit between the largest valid power of two and the bound, and rounding it up overshoots. Found by the test written for previous_valid, which the review had not flagged -- the reviewer checked next_valid only on the TooLarge path.",
       "find": [
-        "        (rounded <= self.max_valid).then_some(rounded)"
+        "        (rounded >= self.min_valid && rounded <= self.max_valid).then_some(rounded)"
       ],
       "replace": [
         "        Some(rounded)"
@@ -139,10 +140,10 @@
       "expect": "caught",
       "why": "`Instant + Duration` panics when the sum is not representable, and Duration::MAX is an ordinary way to spell 'effectively forever'. The rest of the function is careful about exactly this class of problem, which is what made the panicking operator easy to miss. Moved here from src/spsc.rs when the blocking receive loop was extracted so both shapes bind to one copy of the arming protocol; there is now exactly one site, and both shapes' suites indict it.",
       "find": [
-        "        let Some(deadline) = Instant::now().checked_add(timeout) else {"
+        "    let Some(deadline) = Instant::now().checked_add(timeout) else {"
       ],
       "replace": [
-        "        let Some(deadline) = Some(Instant::now() + timeout) else {"
+        "    let Some(deadline) = Some(Instant::now() + timeout) else {"
       ]
     },
     {
