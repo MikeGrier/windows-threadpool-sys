@@ -20,7 +20,7 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
 
 ## M1: the marker, and its invariants
 
-- [ ] **TP-1.1** -- Add `Provenance` to `windows-topology-sys` with three states ordered by trust:
+- [x] **TP-1.1** -- Add `Provenance` to `windows-topology-sys` with three states ordered by trust:
   `Measured` (read from the running system), `Restored` (deserialized from a description of some
   machine), `Synthetic` (constructed by hand). **`Synthetic` is `Default`.** That is the load-bearing
   choice: `Topology::default()`, `..Default::default()`, and any construction that omits the field all

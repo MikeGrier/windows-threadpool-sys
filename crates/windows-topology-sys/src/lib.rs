@@ -64,6 +64,8 @@
 mod domain;
 #[cfg(windows)]
 mod processor_set;
+/// Where a topology's content came from.
+mod provenance;
 #[cfg(windows)]
 mod relation;
 #[cfg(windows)]
@@ -75,6 +77,7 @@ mod walk;
 pub use domain::{AttributeValue, Distances, Domain, DomainKind, Processor, ProcessorId};
 #[cfg(windows)]
 pub use processor_set::ProcessorSet;
+pub use provenance::Provenance;
 #[cfg(windows)]
 pub use relation::{
     CacheKind, CacheRelation, CoreRelation, GroupRelation, NumaNodeRelation, PackageRelation,
