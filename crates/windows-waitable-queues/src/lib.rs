@@ -46,6 +46,36 @@
 //! [`Reserving`] -- each naming one thing a queue can do, so a caller can be
 //! generic over exactly what it needs and nothing more.
 //!
+//! # How far the memory orderings are verified, and how far they are not
+//!
+//! Stated plainly because a lock-free queue that is vague about this is asking
+//! to be trusted rather than evaluated.
+//!
+//! **What is verified.** Every ordering was reasoned about when written and the
+//! reasoning is recorded in `DESIGN-NOTES.md` beside the code it justifies. The
+//! shapes are covered by an extensive unit suite and by a sabotage suite that
+//! injects deliberate defects and requires each to be caught -- which is how the
+//! one real ordering bug this crate has had was found: a lost wakeup where the
+//! doorbell cleared its mirror flag before resetting the event.
+//!
+//! **What is not.** Stress testing cannot catch a *weakened memory ordering*
+//! here, and that is measured rather than assumed: changing the producer's
+//! `Acquire` load of the consumer's position to `Relaxed` left the entire suite
+//! green, while every logic defect injected beside it was caught. A test can
+//! only observe the interleavings the hardware and scheduler happen to produce,
+//! and neither x86-64 nor ARM64 obliged.
+//!
+//! **So the orderings are not machine-checked.** Verification with a model
+//! checker is planned before 1.0. Until then the `0.x` version is meant
+//! literally, and an adopter for whom that matters now has the same information
+//! we have rather than an assurance we cannot support.
+//!
+//! One limit worth knowing even after that work lands: a model checker covers
+//! the queue shapes' positions and sequence numbers, and **cannot** cover the
+//! doorbell, whose correctness is the interleaving of an atomic flag with real
+//! `SetEvent` and `ResetEvent` calls. Modelling those would verify a model of
+//! them rather than the calls themselves.
+//!
 //! # Where these algorithms come from
 //!
 //! **None of the queue algorithms here are novel, and that is deliberate.** A

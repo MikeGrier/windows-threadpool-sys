@@ -492,8 +492,20 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
 
 - [ ] **M31.6** -- **GOVERNED BY [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md)
   SH-1.2, which decides only whether this blocks the 0.1.0 release. SH-1.2 completing does NOT complete
-  this item**; it records an answer here. Once that answer exists, note it on this line so the reader
-  knows whether the crate shipped with this open deliberately.
+  this item**; it records an answer here.
+  **The answer, recorded 2026-08-31: this does NOT gate `windows-waitable-queues` 0.1.0. It gates
+  1.0**, and the crate ships 0.1.0 disclosing the gap in its own documentation rather than leaving an
+  adopter to find it. See D-31. This item stays open, and the disclosure is a promise it now carries.
+
+  **Its scope is corrected by the same decision, and this is the part worth reading before starting.**
+  Loom models atomics; it cannot model `SetEvent`/`ResetEvent`. So it covers the three queue shapes'
+  head/tail/sequence orderings -- which *is* where the demonstrated blind spot lives -- and it does
+  **not** cover the doorbell, whose correctness is precisely the interleaving of an `AtomicBool` mirror
+  with those syscalls. Stubbing them would verify a model of `SetEvent` rather than `SetEvent`, which
+  is the "measures the model, not the thing" trap this workspace has already been caught by once.
+  **D-15's lost wakeup, the only ordering bug this crate has actually had, was found by sabotage and
+  loom would not have found it.** Do not let completing this item be read as "the orderings are now
+  verified": the doorbell needs a separate answer, and this item does not supply it.
   Verify the memory orderings with a model checker, because stress testing demonstrably
   cannot. **Measured, not assumed:** during M30.3's sabotage sweep, weakening the producer's `Acquire`
   load of `head` to `Relaxed` left all twenty tests green, while every *logic* defect injected alongside

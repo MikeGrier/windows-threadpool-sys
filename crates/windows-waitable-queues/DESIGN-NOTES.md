@@ -54,6 +54,7 @@ preferred.
 | <a id="d-28"></a>D-28 | **Amended -- the blanket rejection is withdrawn; the verdict depends on thread placement, and the open question is queued as [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) M-inf.4.** Caching the peer's index was measured, and it engaged as designed. It cost ~1.8x on x64 with the threads across cores, and *won* 17x on ARM64 and 1.8x on x64 SMT siblings. Batch depth decides the sign, and batch depth is set by where the two threads are scheduled -- not by the architecture and not by our code. A prefetch-only "warming" control changed nothing on any host. |
 | <a id="d-29"></a>D-29 | **Both multi-producer shapes ship. The crate publishes what it measured and declines to choose for the caller.** [D-26](#d-26) falsified [D-16](#d-16)'s cost premise, which reopened merge-or-delete; the answer is neither. Vyukov's sequence protocol and the head-based one are independently researched designs, both in production use, and our own workload having settled which *we* want is not evidence about anyone else's. Deleting a shape because no visible consumer wants it is what PLATFORM INTEGRITY forbids. What the crate owes instead is the data and, through `probe-core-affinity`, the means to gather it on the caller's own hardware. |
 | <a id="d-30"></a>D-30 | **Both MPSC shapes are qualified by name; neither is `mpsc`.** A bare `mpsc` beside `reserving_mpsc` makes one canonical by implication, which contradicts this crate's own "no shape is the canonical one" and, after [D-29](#d-29), is simply false. `slotwise_mpsc` names its claim protocol -- it claims slot by slot, with no shared counter -- and avoids the reading `sequence_mpsc` invites, that it alone preserves FIFO order when both shapes do. Renamed before first publish, where it is free. |
+| <a id="d-31"></a>D-31 | **0.1.0 ships without machine-checked memory orderings, and says so in its own documentation.** Model-checking gates 1.0, not 0.1.0. It would close the *demonstrated* gap -- a weakened `Acquire` survives the whole suite -- but not the dangerous one: it cannot model `SetEvent`/`ResetEvent`, so it cannot cover the doorbell, and [D-15](#d-15)'s lost wakeup, the only ordering bug this crate has had, was found by sabotage instead. The risk it addresses is mostly regression risk, which is lowest before there are consumers. The disclosure, not the deferral, is the decision. |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -1015,6 +1016,45 @@ than its measurement nearly produced a wrong conclusion (the first was the fixed
 noted above). The fix also makes the "near vs far" summary fall back to the sibling pair on hosts
 where `same cache, same class` is not expressible, which would otherwise have printed nothing here.
 
+
+## D-31: 0.1.0 ships without machine-checked orderings, and says so
+
+Model-checker verification of the memory orderings ([M31.6](../../CHECKLIST-io-domains.md)) does **not**
+gate `windows-waitable-queues` 0.1.0. It gates 1.0. The gap is disclosed in the crate documentation and
+the README rather than left for an adopter to discover.
+
+The case for gating was strong and is worth stating before the case against. This is a lock-free
+concurrency primitive whose whole value is correctness, and the suite's blindness to ordering defects is
+**measured, not assumed**: weakening the producer's `Acquire` load of the consumer's position to
+`Relaxed` left all twenty tests of the day green, while every logic defect injected beside it was
+caught. Publishing with a known blind spot is a real decision.
+
+Three things decided it the other way.
+
+**A model checker would close the demonstrated gap but not the dangerous one.** It models atomics; it
+cannot model `SetEvent` and `ResetEvent`. So it covers the queue shapes' positions and sequence numbers
+-- which is where the weakened-acquire defect lives -- and it cannot cover the doorbell, whose entire
+correctness argument ([D-9](#d-9), [D-15](#d-15)) is how an atomic mirror flag interleaves with those
+two syscalls. Stubbing them verifies a model of `SetEvent` rather than `SetEvent`, which is the
+"measures the model, not the thing" trap this workspace was already caught by once, in
+[D-28](#d-28)'s probe. **The only ordering bug this crate has actually had was D-15's lost wakeup, it
+was found by sabotage, and a model checker would not have found it.** Treating that work as "the
+orderings are now verified" would therefore overstate it in exactly the direction that matters.
+
+**The risk it addresses is mostly regression risk, and that is lowest now.** The orderings are believed
+correct and were argued at the time; the sabotage sweep *introduced* the weakening to prove the suite
+was blind to it, rather than discovering one. Regression risk grows with contributors, changes and
+consumers, all of which begin after publication.
+
+**Gating has a cost that is not paid by this crate.** It blocks 0.1.0, and through it the placement
+tool and the measurements from other people's machines that the whole release sequence exists to
+obtain -- see [CHECKLIST-placement-tool.md](../../CHECKLIST-placement-tool.md). Every host available
+here has one NUMA node; that is not fixable locally at any price.
+
+**The disclosure is what makes this a decision rather than a deferral.** The crate says what is
+verified, says that stress testing here is known not to catch ordering defects, cites the measurement
+that shows it, and says a model checker is planned before 1.0. An adopter then decides with the
+information we have. A `0.x` version number carries the rest, and is meant literally.
 
 ## D-29: both multi-producer shapes ship, and the caller is given the data instead of a verdict
 

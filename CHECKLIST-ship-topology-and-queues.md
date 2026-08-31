@@ -52,13 +52,41 @@ release-blocking rather than restating the decision itself.
   The measurement is already done and agrees across both architectures -- see M31.5 and M31.7 in
   [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) -- so this needs a decision, not more work.
 
-- [ ] **SH-1.2** -- **GOVERNS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M31.6 -- this is not
+- [x] **SH-1.2** -- **GOVERNS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M31.6 -- this is not
   that item and does not complete it.** It decides only whether M31.6 blocks SH-4.3. If the answer is
   "it gates", record that on M31.6 and SH-4.3 cannot proceed until M31.6 is done; if "it does not",
   record that too, so a later reader does not mistake a considered choice for an oversight. **Checking
   this off never checks off M31.6.**
   **Decide explicitly whether M31.6 (loom verification) gates 0.1.0**, and record the
   answer either way rather than letting it drift into "not yet".
+
+  **Decided: it does not gate 0.1.0. It gates 1.0, and the gap is disclosed in the crate's own
+  documentation rather than left for an adopter to discover.** Recorded as D-31.
+
+  Three findings drove it, and the second was not expected:
+
+  - **Loom would close the demonstrated gap.** The sabotage sweep showed a weakened `Acquire` on the
+    producer's load of `head` survives the whole suite. That defect lives in queue code, which is
+    exactly what loom models well.
+  - **Loom would *not* close the gap where a real bug actually occurred.** The doorbell's correctness
+    is the interleaving of an `AtomicBool` mirror with real `SetEvent`/`ResetEvent` syscalls. Loom
+    models the atomics and cannot model the syscalls; stubbing them tests a *model* of `SetEvent`
+    rather than `SetEvent`. D-15's lost wakeup -- the only ordering bug this crate has actually had --
+    was found by sabotage, and loom would not have found it. So loom is valuable and is **not** the
+    thing standing between this crate and confidence about its hardest part.
+  - **The risk loom addresses is mostly regression risk**, and that risk is lowest now. The orderings
+    are believed correct and were reasoned about at the time; sabotage *introduced* the weakening to
+    prove the suite was blind to it. Regression risk rises with contributors, changes, and consumers
+    -- all of which start after publication, not before.
+
+  Against that, gating would block 0.1.0, and through it the placement tool and the NUMA measurements
+  from other people's machines that this whole sequence exists to obtain. Loom is invasive work: every
+  atomic in the crate goes behind a `cfg` shim across four modules.
+
+  **The disclosure is what makes this a decision rather than a punt**, and it is not optional: the
+  crate documentation states what is verified, states that stress testing here is *known* not to catch
+  ordering defects and cites the measurement showing it, and says loom is planned before 1.0. An
+  adopter then makes their own call with the same information we have. `0.x` carries the rest.
   The reason it deserves a deliberate answer rather than a default: the sabotage sweep demonstrated
   that weakening the producer's `Acquire` load of `head` to `Relaxed` left **all twenty tests green**,
   while every logic defect injected beside it was caught. So this is not an untested-by-omission gap,
