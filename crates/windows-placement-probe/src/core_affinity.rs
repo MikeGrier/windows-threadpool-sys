@@ -40,6 +40,20 @@
 //! the hypothesis is wrong and the host difference needs another explanation;
 //! the numbers below say so either way.
 //!
+//! # It did refute it, and that is the finding
+//!
+//! Read the above as the question, not the answer. The x64 host has answered
+//! it, and the equal-speed half of the hypothesis is **wrong in the direction
+//! nobody predicted**: SMT siblings -- as evenly matched as two threads can be,
+//! sharing L1 -- produce the *deepest* batches on that host, not the shallowest,
+//! and caching wins on them by 1.8x. The shallow batches are between cores.
+//!
+//! What survives is the part that matters: batch depth is set by **placement**,
+//! the verdict on caching flips inside a single machine, and no rule keyed to
+//! the instruction set can be right. The mechanism proposed for it did not
+//! survive. See
+//! [DESIGN-NOTES.md](../../windows-waitable-queues/DESIGN-NOTES.md) `D-28`.
+//!
 //! # What it controls for
 //!
 //! Cross-class pairs differ in two ways at once -- the cores run at different
@@ -227,10 +241,22 @@ pub enum Placement {
     /// and kept distinct from `SameCacheSameClass` for a measured reason: on an
     /// SMT host a sibling pair and a two-core pair behind one cache would
     /// otherwise land in the same bucket, and the probe would report whichever
-    /// it happened to select. That is precisely the distinction needed to
-    /// explain why peer-index caching loses on an SMT x64 host and wins on a
-    /// non-SMT ARM64 one -- siblings sharing L1 have every reason to stay in
-    /// lockstep, which is the shallow-batch condition that makes caching lose.
+    /// it happened to select.
+    ///
+    /// **That distinction refuted the hypothesis it was built to test, and this
+    /// comment used to state the refuted version.** The prediction was that
+    /// siblings sharing L1 stay in lockstep, giving shallow batches, and that
+    /// this was the condition making peer-index caching lose. Measurement says
+    /// the opposite: siblings produce by far the *deepest* batches on an x64
+    /// host and caching wins there by 1.8x, while the shallow batches -- and the
+    /// loss -- are on the cross-core row. Sharing a cache decouples the two
+    /// sides rather than locking them together.
+    ///
+    /// The verdict therefore flips *inside* one machine, which is why no rule
+    /// keyed to the instruction set can be right. See
+    /// [DESIGN-NOTES.md](../../windows-waitable-queues/DESIGN-NOTES.md)
+    /// `D-28`, and note that this probe reproduces those numbers on the host it
+    /// was written on -- which is the point of shipping it.
     ///
     /// Absent on a machine without SMT, where it is reported inexpressible
     /// rather than merged into another category.
