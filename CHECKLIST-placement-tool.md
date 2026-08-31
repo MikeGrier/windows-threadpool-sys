@@ -171,6 +171,39 @@ the entire point of this tool -- has more than 64 logical processors, so Windows
   message; a collapsed topology costs a wrong answer nobody can detect from the output, on hardware
   that is not coming back.
 
+## M1C: direction and memory placement, before a NUMA machine is spent
+
+**Raised by the engineer asking why the hop count was the edge count rather than twice it.** It should
+be twice it, and answering that exposed a second defect underneath.
+
+- [ ] **M1C.1** -- **Measure both directions of a node pair.** `node_pairs` is undirected, with the
+  reasoning that `0 -> 1` and `1 -> 0` "traverse the same link". That conflates the *link*, which is
+  symmetric, with the *workload over it*, which is not: the producer **writes** slots and
+  release-stores `tail`, the consumer **reads** slots and release-stores `head`, and a remote write
+  needs exclusive ownership and invalidation where a remote read does not. Swapping the ends is a
+  different measurement, not a repeat.
+  Doubles the hop count, so state the cost plainly: `n*(n-1)` rather than `n*(n-1)/2`. On a four-node
+  host that is 12 hops instead of 6, and the runtime estimate must follow.
+  **Keep the two directions distinguishable in the record.** Reporting a mean of them would destroy
+  exactly the asymmetry this item exists to measure.
+
+- [ ] **M1C.2** -- **Control and record which node the ring's memory is on.** `Ring::new` runs on the
+  calling thread, which is never pinned, so under first-touch the ring lands on whatever node the
+  *orchestrating* thread happened to occupy -- possibly neither the producer's nor the consumer's.
+  **On a multi-socket machine there are three positions, not two**, and the third is currently
+  uncontrolled and unrecorded. Two runs could differ solely because the main thread migrated, with
+  nothing in the output to say so.
+  This is not a refinement; it is what makes a NUMA number mean anything. A hop measured with the
+  memory on an unknown third node is not a measurement of that hop.
+  Decide and record the policy rather than inheriting one: allocating from the producer's node is the
+  realistic default for a queue, and whichever is chosen, **the memory node belongs in the record**
+  beside the two processor nodes.
+
+- [ ] **M1C.3** -- **Say what the placement label means once direction exists.** A row currently reads
+  as a pair of positions; it must read as producer-here, consumer-there, memory-somewhere. The
+  existing `Placement` names are direction-free and will quietly under-describe a directed run, which
+  is the "table with right labels and wrong pairs" failure in a new place.
+
 ## M2: the move
 
 - [x] **PT-2.1** -- Move `fingerprint`, `core_affinity` and `peer_index_cache` into the new crate, and
