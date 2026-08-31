@@ -117,6 +117,7 @@ pub mod error_mode;
 pub mod handle_state;
 pub mod ioring;
 pub mod pool_growth;
+pub mod queue_contention;
 pub mod request_cost;
 pub mod topology;
 pub mod worker_context;

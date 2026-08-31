@@ -369,7 +369,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   221 unit tests, 9 doctests and 1 `compile_fail` doctest, the whole suite in 0.30s. Thirty-nine
   sabotages: three new, one converted from control to defect, and one new control replacing it.
 
-- [ ] **M31.5** -- The contention benchmark that decides whether the deferred shapes are needed: N producer
+- [x] **M31.5** -- The contention benchmark that decides whether the deferred shapes are needed: N producer
   threads pushing, throughput against N. **This is the item that either justifies or kills the linked and
   sharded MPSC shapes**, and it is deliberately a measurement rather than a judgement, for the same reason
   C-1 was. If the tail CAS does not contend at realistic producer counts, the array queue is the only MPSC
@@ -388,6 +388,61 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   vindicated. This item exists because a duplicated path silently becoming permanent -- because nobody
   circled back -- is the failure mode the duplicate-then-decide rule actually warns about, and an
   intention recorded only in a design note is not scheduled work.
+  **Done, and both answers were surprises.** The probe is
+  [queue_contention.rs](crates/windows-platform-probes/src/queue_contention.rs), run by hand in release on
+  an AMD EPYC 7763 (8C/16T, x64), median of five with a discarded warm-up; three invocations agreed.
+  **Note the architecture -- every previous measurement in this workspace was ARM64**, so this fills the
+  x64 gap rather than extending the record, and M31.7 exists to close the other half.
+  **The tail claim contends, so the licence to close M-inf.1 was not granted** -- but the gate there is
+  now a number rather than a judgement, because contending and being the bottleneck are different things.
+  See M-inf.1 for the quantified trigger.
+  **`reserving_mpsc` is up to 4x FASTER than `mpsc` under contention, which inverts D-16's premise**
+  ([D-26](crates/windows-waitable-queues/DESIGN-NOTES.md#d-26)). The split shipped on the reasoning that
+  reading the consumer's position made the reserving shape the expensive one; it is the cheaper one at
+  every producer count from two upward, and the premise survives only at a single producer against a live
+  consumer -- where `spsc` is the right answer anyway.
+  **Investigated before concluding, at the engineer's direction, and the gap is intrinsic rather than a
+  fixable flaw** ([D-27](crates/windows-waitable-queues/DESIGN-NOTES.md#d-27)). Both protocols do one CAS
+  plus one load per attempt; the difference is *which* load. `mpsc` must read the slot's own sequence
+  before claiming -- an address that marches through memory as the tail advances, written by the producers
+  it is racing -- where `reserving_mpsc` reads one fixed `head`. The false-sharing hypothesis was tested
+  and rejected: padding each slot onto its own cache line recovers about a fifth at eight producers for
+  four times the memory, and leaves the shape 2.8x slower. The padding was reverted.
+  **A methodological trap worth keeping: a debug build reports the two shapes as identical** (249.7 vs
+  254.0 ns at sixteen producers, against 193.5 vs 52.2 in release). That is why this probe is deliberately
+  *not* in the CI probe job, which runs debug -- it would produce a confident wrong answer rather than a
+  noisy one.
+  **The merge-or-delete decision is now live with data behind it and is queued as M31.8**, not taken
+  here: the investigation changed what the decision is *about*, from "is the extra read cheap" to "which
+  claim protocol should survive", and that is the engineer's call.
+
+- [ ] **M31.7** -- Re-run `probe-queue-contention` on the ARM64 development machine and record the curve
+  beside the x64 one. **Not a formality.** M31.5's finding is a statement about cache-coherence
+  behaviour, and this workspace has already been bitten once by measuring only on ARM64 --
+  [windows-platform-probes](crates/windows-platform-probes/DESIGN-NOTES.md) records that case. M31.5
+  inverted a design premise on x64 evidence alone; if ARM64 disagrees, the merge decision in M31.8 changes
+  with it, and so does M-inf.1's threshold.
+  Run it in **release**: a debug build reports the two shapes as identical, which is why the probe is not
+  in CI.
+
+- [ ] **M31.8** -- Decide merge-or-delete for `mpsc` and `reserving_mpsc`, now that M31.5 has measured
+  them and M31.7 will have checked the other architecture.
+  **The decision changed shape once the investigation ran.** M31.2 framed it as "if the shared-line read
+  is cheap, the two merge and the non-reserving one goes". The read is not merely cheap -- it is cheaper
+  than the read it replaces -- so the real question is **which claim protocol survives**: Vyukov's
+  sequence, which reads a marching slot, or the head-based one, which reads a fixed line.
+  The candidates, with what each costs:
+  - **Delete `mpsc`, keep `reserving_mpsc`.** Simplest surface, and the faster shape under contention.
+    Loses the 2x advantage `mpsc` holds at one producer with a live consumer, and lowers the maximum
+    capacity from 2^63 to 2^31 for every caller.
+  - **Keep both**, and correct their documentation, which currently states D-16's falsified premise as
+    the reason the split exists. The split would then be justified by *profile* -- one shape for few
+    producers, one for many -- which is a real distinction but a harder one to explain.
+  - **Change `mpsc`'s protocol** to decide freedom from `head`, closing the gap. This makes the two
+    shapes genuinely "one queue with and without reservations", which is what D-16 assumed they already
+    were, and is the only option that removes the surprise rather than documenting it.
+  Whichever is chosen, D-16's and `mpsc`'s own documentation must be corrected in the same change: they
+  currently assert a cost relationship the measurement reversed. That sweep is part of this item.
 
 - [ ] **M31.6** -- Verify the memory orderings with a model checker, because stress testing demonstrably
   cannot. **Measured, not assumed:** during M30.3's sabotage sweep, weakening the producer's `Acquire`
@@ -484,6 +539,20 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
 
 - [ ] **M-inf.1** -- The linked and sharded MPSC shapes, if and only if M31.5 shows the array queue's tail
   CAS contends at realistic producer counts.
+  **M31.5 has run, and the gate is now quantified rather than open.** The tail claim *does* contend, on
+  x64: aggregate throughput falls with every producer added, `mpsc` from 111M to 4.2M pushes/sec and
+  `reserving_mpsc` from 116M to 17.6M, against a bare contended atomic that falls only to a third. So the
+  licence M31.5 offered to close this item outright -- "if the tail CAS does not contend, the array queue
+  is the only MPSC this crate ever needs" -- was **not** granted.
+  **But contending is not the same as being the bottleneck, and this stays parked on that distinction.**
+  At eight producers `reserving_mpsc` still sustains ~26M pushes/sec, or ~39 ns per push. A sharded queue
+  is worth building only for a consumer whose per-item work is *smaller* than the contention it would
+  remove, and the I/O domain this crate was written for is nowhere near that: C-1 already established
+  that a real request dwarfs the queue's mechanics.
+  So the trigger is now a number rather than a judgement: **build these when a consumer appears whose
+  per-item cost is on the order of the ~39 ns/push (8 producers) or ~57 ns/push (32 producers) that the
+  array queue's claim costs under contention.** Until then a sharded queue would optimise the small half.
+  Re-measuring on ARM64 is the cheap way to find out whether that threshold moves; see M31.7.
 
 - [ ] **M-inf.2** -- The eventcount, if and only if a measurement against real I/O shows the doorbell
   costs enough to be worth its lost-wakeup risk. C-1 showed batching alone drives it below the atomic push

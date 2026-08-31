@@ -232,6 +232,7 @@ dependencies = [
  "windows-sys",
  "windows-threadpool-sys",
  "windows-topology-sys",
+ "windows-waitable-queues",
  "wtf-string",
 ]
 

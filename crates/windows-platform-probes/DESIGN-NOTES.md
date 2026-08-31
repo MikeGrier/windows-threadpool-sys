@@ -457,3 +457,39 @@ characters, so no mangling occurred -- an accident of environment, not of
 architecture. It would fail on any host with a longer user name, on either
 architecture. Recorded here because it is exactly the kind of result this
 comparison exists to classify correctly: a red build that is **not** a finding.
+
+## The queue-contention probe, and why it must not run in the CI probe job
+
+`probe-queue-contention` measures what M31.5 of
+[CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) exists to decide: whether the bounded array
+queue's tail claim contends badly enough to justify the linked and sharded MPSC shapes, and what
+`reserving_mpsc`'s extra read of the consumer's position actually costs.
+
+**It is deliberately absent from the `platform-probes` CI job, unlike every other probe, and the reason is
+a measurement rather than a preference.** That job runs `cargo run` without `--release`. Measured in a
+debug build, `mpsc` and `reserving_mpsc` come out at 249.7 and 254.0 ns/push at sixteen producers --
+indistinguishable. In release, on the same machine in the same minute, they are 193.5 and 52.2. The
+un-inlined overhead of a debug build swamps the cache-coherence effects that *are* the finding, so a debug
+run of this probe does not merely lose precision: it reports the two shapes as equivalent, which is a
+confident wrong answer of exactly the kind this crate's `doorbell_cost` notes warn about.
+
+Two further reasons it stays out. A contention curve needs more cores than a hosted runner has, and the
+32-producer rows on a four-core runner would measure the scheduler. And the run costs about two minutes in
+release, against a job whose other probes are seconds.
+
+So this one is run by hand, on a known machine, and its numbers are recorded with the machine attached.
+
+### Reading it
+
+Two regimes, and the pair is the point.
+
+**Isolated** gives producers a capacity large enough that nothing is ever refused and runs no consumer, so
+whatever curve appears against N is the claim and nothing else. **Drained** runs a consumer popping
+continuously, which is the only regime that can price `reserving_mpsc`'s read of `head` -- that read is
+cheap until a consumer is *writing* the line, and measuring it in isolation would report it as free.
+
+The drained regime has a **single** consumer, because that is what MPSC means, so at high producer counts
+it becomes consumer-bound and a plateau there says nothing about the claim. Each row carries the refusal
+count from the queue's own `Observable` counters precisely so that is visible as a fact rather than
+mistaken for contention: the sixteen- and thirty-two-producer drained rows show millions of refusals and
+should be read as measurements of the consumer.

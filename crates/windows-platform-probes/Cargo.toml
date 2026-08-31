@@ -59,6 +59,10 @@ path = "src/bin/request_cost.rs"
 name = "probe-topology"
 path = "src/bin/topology.rs"
 
+[[bin]]
+name = "probe-queue-contention"
+path = "src/bin/queue_contention.rs"
+
 [dependencies]
 # The pool-growth probe measures the shipping API rather than a
 # reimplementation of the SDK's inline environment helpers, so it depends on the
@@ -71,6 +75,10 @@ windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
 # The request-cost probe measures the real request types the design would put on
 # a queue, not a stand-in, for the same reason.
 windows-namespace-request-sys = { version = "0.2.0", path = "../windows-namespace-request-sys" }
+# The contention probe measures the shipping queue shapes rather than a
+# reimplementation, for the same reason: a stand-in would only measure itself,
+# and the whole question is what the real tail claim costs.
+windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues" }
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
 [dependencies.windows-sys]
