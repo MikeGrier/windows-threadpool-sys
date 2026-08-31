@@ -195,9 +195,25 @@ be twice it, and answering that exposed a second defect underneath.
   nothing in the output to say so.
   This is not a refinement; it is what makes a NUMA number mean anything. A hop measured with the
   memory on an unknown third node is not a measurement of that hop.
-  Decide and record the policy rather than inheriting one: allocating from the producer's node is the
-  realistic default for a queue, and whichever is chosen, **the memory node belongs in the record**
-  beside the two processor nodes.
+  **Decided: measure both endpoints as separate rows.** The memory goes on the producer's node in one
+  row and the consumer's in another, and **the memory node is recorded beside the two processor
+  nodes** in every row.
+  This measures remote-write and remote-read cost independently, which is the pair of quantities the
+  asymmetry in M1C.1 is actually about: with memory on the producer's node the producer writes locally
+  and the consumer reads remotely, and swapping the memory reverses exactly that.
+
+  **The cost, stated plainly.** Four configurations per undirected edge -- two directions times two
+  memory placements -- so `2*n*(n-1)` hop measurements rather than today's `n*(n-1)/2`. On a four-node
+  host that is 24 rather than 6, and at two strategies and three repetitions it is 144 timed handoffs
+  for the hops alone. Under two minutes at the worst per-item cost measured so far, which is
+  affordable for hardware this scarce. **PT-4.2's estimate must be updated with it**, or the tool will
+  under-promise the wait on precisely the machines that take longest.
+
+  **The design carries its own consistency check, which is worth keeping rather than optimising
+  away.** Of the four configurations per edge, two are "producer-local" and two are "consumer-local",
+  differing only in which physical node each role sits on. On a symmetric interconnect each pair
+  should agree; **if they disagree, the interconnect is asymmetric, and that is a finding** rather
+  than noise. Averaging the pairs, or measuring only one of each, would discard it.
 
 - [ ] **M1C.3** -- **Say what the placement label means once direction exists.** A row currently reads
   as a pair of positions; it must read as producer-here, consumer-there, memory-somewhere. The
