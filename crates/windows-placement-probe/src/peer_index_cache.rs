@@ -94,6 +94,22 @@ impl Strategy {
             Self::Warmed => "model: warming load",
         }
     }
+
+    /// A stable identifier for a record.
+    ///
+    /// Separate from [`Self::label`] on purpose, and not a duplicate of it.
+    /// The label is prose for a terminal table and may be reworded whenever the
+    /// table reads better a different way; this is a token a stored record is
+    /// keyed on, so rewording it would silently break every collector that ever
+    /// grouped by it. Keeping them apart is what lets the prose stay free.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::Cached => "cached",
+            Self::Warmed => "warmed",
+        }
+    }
 }
 
 /// One configuration's result.

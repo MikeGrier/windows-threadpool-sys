@@ -205,7 +205,7 @@ the entire point of this tool -- has more than 64 logical processors, so Windows
 Ordered so each item's prerequisites land first: the two identity fields are decided before the record
 that carries them is written.
 
-- [ ] **PT-3.1** -- **A linearly increasing integer schema version that cannot silently drift, guarded
+- [x] **PT-3.1** -- **A linearly increasing integer schema version that cannot silently drift, guarded
   by an archived schema rather than a hash.** The counter itself is easy for a consumer to compare
   (`schema >= 2`); the hazard is forgetting to bump it when the record's shape changes, which no amount
   of care reliably prevents. So derive rather than restate, per this repository's own rule -- but
@@ -240,7 +240,7 @@ that carries them is written.
   when there is a repository, and records *unknown* otherwise -- which is exactly what a `cargo
   install` from a crates.io tarball will produce, and is the honest answer there.
 
-- [ ] **PT-3.3** -- Emit **one** machine-readable record per run, carrying: the schema version
+- [x] **PT-3.3** -- Emit **one** machine-readable record per run, carrying: the schema version
   (PT-3.1), the build identity (PT-3.2), the topology **provenance**, a UTC timestamp, the host
   fingerprint, every placement measurement, and every node-hop measurement.
   **Build identity is the load-bearing field.** Results will arrive over months from different builds,

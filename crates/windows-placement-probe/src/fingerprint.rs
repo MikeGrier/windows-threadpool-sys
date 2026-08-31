@@ -245,6 +245,7 @@ impl fmt::Display for Slice {
 
 /// A machine's shape, in the terms that decide which placements exist.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Fingerprint {
     /// Target architecture, as `std::env::consts::ARCH` reports it.
     pub arch: &'static str,

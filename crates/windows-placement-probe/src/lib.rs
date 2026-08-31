@@ -61,3 +61,5 @@ pub mod fingerprint;
 pub mod machine;
 /// The handoff itself, and the strategies the placement experiment compares.
 pub mod peer_index_cache;
+/// The record a run produces and a runner sends back.
+pub mod record;
