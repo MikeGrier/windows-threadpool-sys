@@ -35,6 +35,13 @@ waiting on numbers only other people's machines can produce.
   follow-up questions about. Likely answer is that the canonical string stays clean and the submission
   record carries the model *separately*, but that is a decision with a privacy dimension and is made
   here, once, explicitly. Whatever is decided, the tool must be able to state plainly what it collects.
+  **This must be settled before the first submission arrives, because the asymmetry is brutal.** A
+  record cannot be regenerated: whatever a field the tool did not collect, every result gathered before
+  the omission was noticed lacks it *permanently*, and the machines are other people's. Under-collecting
+  is unrecoverable; over-collecting is a privacy cost that can at least be corrected going forward by
+  collecting less. That asymmetry argues for erring towards more context in the record -- but it is an
+  argument to weigh against what a stranger will consent to, not a licence, and the two must be
+  answered together rather than by defaulting to whichever is easier to implement.
 
 - [x] **PT-1.3** -- **Decide the fate of the three existing probe binaries** (`probe-topology`,
   `probe-core-affinity`, `probe-peer-index-cache`) once their modules move. Keeping them as thin
@@ -76,17 +83,28 @@ waiting on numbers only other people's machines can produce.
 Ordered so each item's prerequisites land first: the two identity fields are decided before the record
 that carries them is written.
 
-- [ ] **PT-3.1** -- **A linearly increasing integer schema version that cannot silently drift.** The
-  counter itself is easy for a consumer to compare (`schema >= 2`); the hazard is forgetting to bump it
-  when the record's shape changes, which no amount of care reliably prevents. So derive rather than
-  restate, per this repository's own rule: compute a hash over the record's **actual serialized shape**
-  (every key path, sorted, recursively) and assert in a test that it matches the hash recorded for the
-  current `SCHEMA_VERSION`.
-  Change the shape without bumping and the test fails, naming the new hash. Bumping then means adding a
-  row, deliberately. **The version stays a plain integer in the record** -- the hash is a development-
-  time guard, not something a consumer parses -- so nothing downstream has to understand this
-  mechanism. Verify by sabotage: add a field, confirm the test fails; bump and re-record, confirm it
-  passes.
+- [ ] **PT-3.1** -- **A linearly increasing integer schema version that cannot silently drift, guarded
+  by an archived schema rather than a hash.** The counter itself is easy for a consumer to compare
+  (`schema >= 2`); the hazard is forgetting to bump it when the record's shape changes, which no amount
+  of care reliably prevents. So derive rather than restate, per this repository's own rule -- but
+  derive into something that survives.
+  **A hash was considered first and rejected, because it does not survive its own history.** With a
+  table of `version -> hash`, only the *current* version's hash can ever be recomputed; every earlier
+  row is a frozen constant nobody can verify. The hash function then becomes an unversioned contract --
+  change the traversal, the digest, or how key paths are canonicalised, and every historical row
+  silently becomes wrong, with nothing to detect it. A digest is also opaque: it reports *that* the
+  shape moved and never *what* moved, so a review cannot see whether a change was additive or breaking.
+  **Archive the shape itself.** One golden file per schema version, listing the record's key paths
+  (sorted, recursively) as text. A test generates the current shape and asserts it equals the golden
+  for the current `SCHEMA_VERSION`; a change fails the test and the diff *shows what changed*. Bumping
+  means adding the next golden, deliberately.
+  This buys three things a hash cannot: a stored submission can be **validated against the schema it
+  declares**, years later; the version-to-version diff is **reviewable**; and there is **no hash
+  function to keep stable**, so no way for history to rot.
+  **Golden files are append-only and a published version is never redefined** -- the same discipline as
+  [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Once a record exists in the wild claiming schema N,
+  N's meaning is fixed, because the record cannot be regenerated. Verify by sabotage: add a field,
+  confirm the test fails and names the difference; bump, add the golden, confirm it passes.
 
 - [ ] **PT-3.2** -- **Stamp the exact build, and say loudly when it is not an official one.** The
   record carries the git commit, whether the working tree was dirty when it was built, the crate
