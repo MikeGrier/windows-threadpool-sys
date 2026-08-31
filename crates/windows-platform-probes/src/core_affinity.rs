@@ -179,6 +179,19 @@ pub struct Observation {
     /// rather than silently skipped, because "this host cannot test that" and
     /// "that made no difference" are opposite findings.
     pub measurements: Vec<Measurement>,
+    /// One measurement per *distinct pair of NUMA nodes*.
+    ///
+    /// Separate from [`Self::measurements`] for the same reason [`Self::by_class`]
+    /// is: the placement categories collapse every node crossing into a single
+    /// `CrossNumaNode` row, which answers "does leaving the node cost" while
+    /// silently assuming every node is equidistant. On real multi-node hardware
+    /// they are not -- two nodes on one package are far closer than two across a
+    /// socket link -- so a single row would report whichever hop the enumeration
+    /// happened to reach first.
+    ///
+    /// Empty on a single-node machine, and a single entry on a two-node one,
+    /// where it restates the `CrossNumaNode` row rather than adding to it.
+    pub by_node_pair: Vec<Measurement>,
 }
 
 /// Classify a pair.
@@ -228,6 +241,45 @@ pub fn representative_pairs(
             }
             chosen
                 .entry(classify(*producer, *consumer))
+                .or_insert((*producer, *consumer));
+        }
+    }
+    chosen
+}
+
+/// Choose one representative processor pair for each *distinct pair of NUMA
+/// nodes*.
+///
+/// Keyed by `(low, high)` node id, so a node pair appears once rather than once
+/// per direction: this measures the link, and `0 -> 1` and `1 -> 0` traverse the
+/// same one. The producer is always on the lower-numbered node, which makes a
+/// run reproducible rather than dependent on enumeration order.
+///
+/// # Why this exists separately from [`representative_pairs`]
+///
+/// Windows exposes no NUMA distance table -- there is no Win32 equivalent of
+/// reading ACPI SLIT -- so the only way to learn that two nodes are further
+/// apart than another two is to measure the handoff between them. A single
+/// `CrossNumaNode` row cannot express that, because it reports one hop and
+/// implies every hop is like it.
+///
+/// Empty on a single-node machine: there is no node crossing to represent, and
+/// an empty result says so more honestly than a fabricated self-pair.
+#[must_use]
+pub fn node_pairs(
+    places: &[ProcessorPlace],
+) -> BTreeMap<(u32, u32), (ProcessorPlace, ProcessorPlace)> {
+    let mut chosen = BTreeMap::new();
+    for producer in places {
+        for consumer in places {
+            if producer.numa_node >= consumer.numa_node {
+                // `>=` rather than `!=` collapses the two directions onto the
+                // canonical `(low, high)` key and drops same-node pairs, which
+                // are not a crossing at all.
+                continue;
+            }
+            chosen
+                .entry((producer.numa_node, consumer.numa_node))
                 .or_insert((*producer, *consumer));
         }
     }
@@ -307,10 +359,33 @@ pub fn measure() -> std::io::Result<Observation> {
         }
     }
 
+    let mut by_node_pair = Vec::new();
+    for ((left, right), (producer, consumer)) in node_pairs(&processors) {
+        debug_assert_eq!((producer.numa_node, consumer.numa_node), (left, right));
+        for strategy in [Strategy::Baseline, Strategy::Cached] {
+            let mut samples: Vec<_> = (0..REPETITIONS)
+                .map(|_| time_model_on(strategy, Some(producer.number), Some(consumer.number)))
+                .collect();
+            samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
+            let median = samples[samples.len() / 2];
+            by_node_pair.push(Measurement {
+                slice: Slice::pair(producer, consumer),
+                producer,
+                consumer,
+                placement: classify(producer, consumer),
+                strategy,
+                nanos_per_item: median.nanos / ITEMS as f64,
+                consumer_batch: ITEMS as f64 / median.consumer_refreshes.max(1) as f64,
+                producer_batch: ITEMS as f64 / median.producer_refreshes.max(1) as f64,
+            });
+        }
+    }
+
     Ok(Observation {
         processors,
         by_class,
         measurements,
+        by_node_pair,
     })
 }
 
@@ -321,6 +396,30 @@ impl Observation {
         self.measurements
             .iter()
             .find(|m| m.placement == placement && m.strategy == strategy)
+            .cloned()
+    }
+
+    /// Every node pair measured, in canonical `(low, high)` order.
+    #[must_use]
+    pub fn node_pairs_measured(&self) -> Vec<(u32, u32)> {
+        let mut seen: Vec<(u32, u32)> = self
+            .by_node_pair
+            .iter()
+            .map(|m| (m.producer.numa_node, m.consumer.numa_node))
+            .collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen
+    }
+
+    /// The measurement for one node pair and strategy, if it was taken.
+    #[must_use]
+    pub fn node_pair(&self, pair: (u32, u32), strategy: Strategy) -> Option<Measurement> {
+        self.by_node_pair
+            .iter()
+            .find(|m| {
+                (m.producer.numa_node, m.consumer.numa_node) == pair && m.strategy == strategy
+            })
             .cloned()
     }
 

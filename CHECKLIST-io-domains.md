@@ -711,6 +711,23 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   removed. The *timings* are deliberately not mocked and cannot be: `measure` pins to real
   processors, and pinning to one that does not exist fails loudly rather than fabricating a number.
 
+  **Inter-node distance is measured per hop, not collapsed into one row.** `CrossNumaNode` is a single
+  placement however many nodes exist, so on a host with three or more it would report one hop and
+  imply the rest were like it -- and which hop you got would depend on enumeration order. Real
+  multi-node hardware is not equidistant: two nodes on one package are far closer than two across a
+  socket link. `node_pairs` therefore selects one representative processor pair per *distinct* node
+  pair, keyed `(low, high)` so a link is measured once rather than once per direction, and `measure`
+  reports each hop separately in `by_node_pair`. The probe prints the resulting table, names the
+  cheapest and dearest hop, and says outright whether the spread is small enough for the single
+  `cross NUMA node` row to be a fair summary.
+  **These are measured hops, not a firmware distance matrix.** Windows exposes no NUMA distance table
+  -- there is no Win32 equivalent of reading ACPI SLIT -- so measuring the handoff is the only way to
+  learn that two nodes are further apart than another two. Seven tests cover the selection on
+  synthetic 1-, 2-, 3-, 4- and 8-node hosts, including that the hop count is the triangular number of
+  the node count, that selection is stable across calls, and that non-zero-based node ids still work;
+  all five relevant ones fail when the canonical-ordering guard is broken. On the single-node hosts we
+  have, the section prints nothing rather than an empty table.
+
   **A prediction that will otherwise look like a bug on the real run: on a multi-socket host,
   `cross cache, same class` may be absent entirely.** `cache_domain` is defined as the outermost cache
   level that *partitions the machine*, so its meaning moves with the host. On the single-socket EPYC

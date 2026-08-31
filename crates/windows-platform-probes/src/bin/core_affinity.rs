@@ -2,7 +2,7 @@
 
 //! Prints whether it matters where the two ends of a queue run.
 
-use windows_platform_probes::core_affinity::{Placement, measure};
+use windows_platform_probes::core_affinity::{Observation, Placement, measure};
 use windows_platform_probes::peer_index_cache::Strategy;
 
 fn main() -> std::io::Result<()> {
@@ -149,7 +149,13 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    println!("\ninterpretation:\n");
+    print_node_distances(&observation);
+
+    println!(
+        "
+interpretation:
+"
+    );
 
     let expressible = observation.placements();
     if expressible.len() < 2 {
@@ -324,4 +330,92 @@ fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+/// Print the per-node-pair handoff cost, when the host has nodes to cross.
+///
+/// Silent on a single-node machine: there is nothing to say, and a header over
+/// an empty table invites the reader to wonder what went wrong.
+fn print_node_distances(observation: &Observation) {
+    let pairs = observation.node_pairs_measured();
+    if pairs.is_empty() {
+        return;
+    }
+
+    println!("\n-- the handoff, by NUMA node pair --");
+    println!(
+        "{:<14} {:>4} {:>4} {:>12} {:>12} {:>10}",
+        "node pair", "prod", "cons", "base ns/it", "cached ns/it", "cach depth"
+    );
+
+    let mut slowest: Option<(f64, (u32, u32))> = None;
+    let mut fastest: Option<(f64, (u32, u32))> = None;
+
+    for pair in &pairs {
+        let (Some(base), Some(cached)) = (
+            observation.node_pair(*pair, Strategy::Baseline),
+            observation.node_pair(*pair, Strategy::Cached),
+        ) else {
+            continue;
+        };
+        println!(
+            "{:<14} {:>4} {:>4} {:>12.1} {:>12.1} {:>10.1}",
+            format!("{} <-> {}", pair.0, pair.1),
+            base.producer.number,
+            base.consumer.number,
+            base.nanos_per_item,
+            cached.nanos_per_item,
+            cached.consumer_batch
+        );
+        let seen = (base.nanos_per_item, *pair);
+        if slowest.is_none_or(|(worst, _)| seen.0 > worst) {
+            slowest = Some(seen);
+        }
+        if fastest.is_none_or(|(best, _)| seen.0 < best) {
+            fastest = Some(seen);
+        }
+    }
+
+    if pairs.len() == 1 {
+        println!(
+            "\n  One node pair, so this restates the `cross NUMA node` row above\n  \
+             rather than adding to it. The table earns its place from three\n  \
+             nodes upward, where the hops stop being interchangeable."
+        );
+        return;
+    }
+
+    let (Some((worst, worst_pair)), Some((best, best_pair))) = (slowest, fastest) else {
+        return;
+    };
+    println!(
+        "\n  {} node pairs. Cheapest hop {} <-> {} at {:.1} ns/item; dearest\n  \
+         {} <-> {} at {:.1} ns/item -- a spread of {:.1}x.",
+        pairs.len(),
+        best_pair.0,
+        best_pair.1,
+        best,
+        worst_pair.0,
+        worst_pair.1,
+        worst,
+        worst / best
+    );
+    if worst / best < 1.2 {
+        println!(
+            "  That spread is small enough that this host's nodes are close to\n  \
+             equidistant, so the single `cross NUMA node` row above is a fair\n  \
+             summary of it."
+        );
+    } else {
+        println!(
+            "  The hops are NOT interchangeable, so the single `cross NUMA node`\n  \
+             row above reports whichever one was enumerated first and should not\n  \
+             be read as 'the' cost of leaving a node."
+        );
+    }
+    println!(
+        "  This measures the handoff between two nodes; it is not a distance\n  \
+         matrix read from firmware. Windows exposes no NUMA distance table, so\n  \
+         these numbers are the observable rather than a restatement of ACPI."
+    );
 }

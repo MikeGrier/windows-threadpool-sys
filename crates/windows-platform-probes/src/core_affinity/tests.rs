@@ -7,7 +7,7 @@
 //! seconds. What is worth testing here is that the probe cannot silently
 //! mislabel a pair, because every conclusion it prints is keyed on that label.
 
-use super::{Placement, classify, representative_pairs};
+use super::{Placement, classify, node_pairs, representative_pairs};
 use crate::fingerprint::ProcessorPlace;
 
 /// A processor on its own physical core, which is the non-SMT case.
@@ -558,4 +558,162 @@ fn a_four_node_host_still_reports_exactly_one_node_crossing_row() {
         1
     );
     assert_pairs_are_faithful(&places);
+}
+
+// ---------------------------------------------------------------------------
+// Inter-node distance selection.
+//
+// `CrossNumaNode` is one category however many nodes exist, so on a host with
+// three or more it reports one hop and implies the rest are like it. Real
+// multi-node hardware does not work that way. These cover the selection that
+// measures each hop separately; as above, only selection is testable offline.
+// ---------------------------------------------------------------------------
+
+/// Every chosen pair must genuinely span the two nodes it is filed under, in
+/// canonical order.
+fn assert_node_pairs_are_faithful(places: &[ProcessorPlace]) {
+    for ((low, high), (producer, consumer)) in node_pairs(places) {
+        assert!(low < high, "key ({low}, {high}) is not in canonical order");
+        assert_eq!(
+            producer.numa_node, low,
+            "producer {producer} is not on node {low}"
+        );
+        assert_eq!(
+            consumer.numa_node, high,
+            "consumer {consumer} is not on node {high}"
+        );
+        assert_eq!(
+            classify(producer, consumer),
+            Placement::CrossNumaNode,
+            "a node pair did not classify as a node crossing"
+        );
+    }
+}
+
+#[test]
+fn a_single_node_host_has_no_node_pairs() {
+    let places = synthesize(&HostSpec {
+        nodes: 1,
+        cache_domains_per_node: 2,
+        cores_per_cache_domain: 2,
+        threads_per_core: 2,
+    });
+
+    assert!(
+        node_pairs(&places).is_empty(),
+        "a single-node host produced a node pair"
+    );
+}
+
+#[test]
+fn a_two_node_host_has_exactly_one_node_pair() {
+    let places = two_socket_many_cache_domains();
+    let pairs = node_pairs(&places);
+
+    assert_eq!(pairs.len(), 1);
+    assert!(pairs.contains_key(&(0, 1)));
+    assert_node_pairs_are_faithful(&places);
+}
+
+#[test]
+fn a_four_node_host_measures_every_hop_exactly_once() {
+    // The whole reason this exists: six distinct hops, not one row standing in
+    // for all of them.
+    let places = synthesize(&HostSpec {
+        nodes: 4,
+        cache_domains_per_node: 1,
+        cores_per_cache_domain: 2,
+        threads_per_core: 1,
+    });
+    let pairs = node_pairs(&places);
+
+    let mut keys: Vec<_> = pairs.keys().copied().collect();
+    keys.sort_unstable();
+    assert_eq!(keys, vec![(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]);
+    assert_node_pairs_are_faithful(&places);
+}
+
+#[test]
+fn node_pairs_are_undirected_so_a_hop_is_never_measured_twice() {
+    // `0 -> 1` and `1 -> 0` traverse the same link, so measuring both would
+    // double the cost of the table and invite a reader to treat the difference
+    // between them as signal when it is noise.
+    let places = synthesize(&HostSpec {
+        nodes: 3,
+        cache_domains_per_node: 1,
+        cores_per_cache_domain: 2,
+        threads_per_core: 1,
+    });
+    let pairs = node_pairs(&places);
+
+    assert_eq!(pairs.len(), 3);
+    for (low, high) in pairs.keys() {
+        assert!(low < high);
+        assert!(
+            !pairs.contains_key(&(*high, *low)),
+            "both directions of ({low}, {high}) were selected"
+        );
+    }
+}
+
+#[test]
+fn the_hop_count_is_the_triangular_number_of_the_node_count() {
+    // A property rather than a fixture, so a host size nobody wrote a test for
+    // is still covered.
+    for nodes in 1..=8_u32 {
+        let places = synthesize(&HostSpec {
+            nodes,
+            cache_domains_per_node: 1,
+            cores_per_cache_domain: 1,
+            threads_per_core: 1,
+        });
+        let expected = (nodes * nodes.saturating_sub(1) / 2) as usize;
+
+        assert_eq!(
+            node_pairs(&places).len(),
+            expected,
+            "wrong hop count for {nodes} nodes"
+        );
+        assert_node_pairs_are_faithful(&places);
+    }
+}
+
+#[test]
+fn node_pair_selection_is_stable_across_calls() {
+    // The producer is always on the lower-numbered node, so a run is
+    // reproducible rather than dependent on enumeration order. Without this a
+    // re-run could silently measure a different pair and the difference would
+    // read as drift in the hardware.
+    let places = synthesize(&HostSpec {
+        nodes: 3,
+        cache_domains_per_node: 2,
+        cores_per_cache_domain: 2,
+        threads_per_core: 2,
+    });
+
+    let first = node_pairs(&places);
+    let second = node_pairs(&places);
+
+    assert_eq!(first, second);
+}
+
+#[test]
+fn a_node_pair_is_still_selected_when_the_nodes_are_not_numbered_from_zero() {
+    // Node ids are opaque identifiers from the topology, not indices. A host
+    // that reports nodes 2 and 5 must still produce the hop between them.
+    let mut places = synthesize(&HostSpec {
+        nodes: 2,
+        cache_domains_per_node: 1,
+        cores_per_cache_domain: 2,
+        threads_per_core: 1,
+    });
+    for place in &mut places {
+        place.numa_node = if place.numa_node == 0 { 2 } else { 5 };
+    }
+
+    let pairs = node_pairs(&places);
+
+    assert_eq!(pairs.len(), 1);
+    assert!(pairs.contains_key(&(2, 5)));
+    assert_node_pairs_are_faithful(&places);
 }
