@@ -38,10 +38,17 @@ waiting on numbers only other people's machines can produce.
 
 ## M1: decisions that shape everything after
 
-- [ ] **PT-1.1** -- **Name the crate**, and record the reasoning. It measures what a producer/consumer
+- [x] **PT-1.1** -- **Name the crate**, and record the reasoning. It measures what a producer/consumer
   handoff costs as a function of where the two threads run, which is broader than queues and narrower
   than "topology". Candidates to weigh rather than a foregone answer: `windows-placement-probe`,
   `windows-handoff-cost`, `windows-locality-report`. Check availability on crates.io before settling.
+  **Named `windows-placement-probe`.** It says what the thing is (a probe, not a library to build on)
+  and what it measures (placement), and it matches the `probe-` binary naming already in this
+  workspace. `windows-handoff-cost` was rejected as too narrow -- the tool already reports topology and
+  NUMA hops, which are not handoffs -- and `windows-locality-report` as understating that it *measures*
+  rather than summarises. All five candidates were confirmed free on crates.io before choosing.
+  Created as a workspace member with `publish = false`, because PT-5.3 has not decided crates.io yet
+  and `false` is the setting that cannot publish something by accident.
 
 - [x] **PT-1.2** -- **Decide what the submission record carries about the machine beyond the
   fingerprint**, specifically the CPU model name. The fingerprint deliberately omits model names
@@ -118,6 +125,11 @@ waiting on numbers only other people's machines can produce.
   reimplemented. A binary that formats its own output is the defect, not a binary that exists.
 
 ## M1B: processor groups, before a large machine is ever offered
+
+**Executes after M2, despite the number.** The code it changes lives in
+[crates/windows-platform-probes](crates/windows-platform-probes) until the move, and doing this work in
+its final home keeps the move a pure relocation with its provenance trail intact. The "before" in the
+heading is about the *machine*, not about M2.
 
 **This is the blocker that would waste the opportunity.** A large multi-socket host -- the kind that is
 the entire point of this tool -- has more than 64 logical processors, so Windows presents it as

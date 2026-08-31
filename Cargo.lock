@@ -225,6 +225,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-placement-probe"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+ "windows-topology-sys",
+ "windows-waitable-queues",
+]
+
+[[package]]
 name = "windows-platform-probes"
 version = "0.0.0"
 dependencies = [

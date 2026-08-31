@@ -1,0 +1,40 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-placement-probe"
+version = "0.1.0"
+# Publication to crates.io is an open decision -- see PT-5.3 in
+# CHECKLIST-placement-tool.md. The distribution that matters is the CI-built
+# binary attached to a GitHub release, because the download is the provenance:
+# a binary built here is traceable to the commit that produced it in a way a
+# local build of identical source is not. `false` until that decision is made,
+# so the crate cannot be published by accident before it is meant to be.
+publish = false
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Measures what thread placement costs on a Windows machine -- SMT siblings, cache domains, efficiency classes and NUMA hops -- and produces one structured record to send back."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
+windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues" }
+
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+    "Win32_Foundation",
+    # Thread affinity: this crate pins both ends of a handoff to chosen
+    # processors, and a run whose pinning silently failed would measure the
+    # scheduler's preferences instead of the placement it claims to.
+    "Win32_System_Threading",
+    # The machine-description fields that travel with a submission, so a
+    # result can be read months later without asking its sender anything.
+    "Win32_System_SystemInformation",
+]
