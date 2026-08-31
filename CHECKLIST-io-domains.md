@@ -281,7 +281,17 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   them while silently narrowing the count's field to 24, which is how the packing actually breaks. Both
   rewritten, and the assertions verified by sabotage -- a too-wide and a too-narrow split each now fail
   the build with the right message.
-  155 unit tests and 5 doctests, the whole suite in 0.31s.
+  **And the sweep found a third, which is the one it exists to find: `spsc`'s reservation guarantee was
+  entirely untested.** Every reservation test had been written against `reserving_mpsc`, and because the
+  two implementations share *nothing* -- a plain counter against a packed compare-and-swap word --
+  covering one left the other completely unguarded. A green suite cannot show that; only asking "would
+  these tests fail if the code were wrong" can. Writing the missing wakeup test then surfaced something
+  worth keeping: **the compiler refuses to move an `spsc` reservation to another thread at all**, because
+  it borrows a `!Sync` producer. That is the borrow doing its job, so it is now a `compile_fail` doctest
+  rather than a sentence -- itself verified by removing the attribute and confirming the error is the
+  `Send`/`Sync` one and not a typo.
+  167 unit tests, 5 doctests and 1 `compile_fail` doctest, the whole suite in 0.31s. Thirty-one
+  sabotages, all behaving as declared: eight new ones for this milestone.
 
 - [ ] **M31.3** -- Shutdown in both directions: the consumer learns when every producer is gone, and a
   producer learns when the consumer is gone and fails with a typed error. Descriptors in flight at
