@@ -461,13 +461,6 @@ impl<T> Producer<T> {
             (*slot.value.get()).write(item);
         }
 
-        // Release, and this is the publication: it must come after the write,
-        // and this is what forbids the compiler and the processor from moving
-        // it earlier. Until it lands, the consumer sees the slot as
-        // claimed-but-empty and skips it.
-        slot.sequence
-            .store(position.wrapping_add(1), Ordering::Release);
-
         // **Guarded, and this branch is the whole reason high-water is a
         // switch.** This shape's producer never reads `head`, which is what
         // keeps its push off the one line every thread touches. Depth cannot be
@@ -482,12 +475,46 @@ impl<T> Producer<T> {
         //
         // Off, the cost is one predictable branch on a field written once at
         // construction, so the line is shared but read-only -- the cheap kind.
+        //
+        // **Before the publication below, and that placement is load-bearing.**
+        // The subtraction is only non-negative while the consumer cannot have
+        // passed `position`, and what holds it back is precisely that
+        // `position` is not published yet. Taken afterwards, the consumer is
+        // free to drain past it between the two statements, `position - head`
+        // goes negative, and the wrapping turns it into a vast unsigned number
+        // that `fetch_max` then keeps forever -- a peak the queue never reached
+        // and could not reach. Measured before this moved: about one run in
+        // thirty reported a high-water mark of `usize::MAX`.
+        //
+        // A stale `head` is harmless in the other direction: it can only be
+        // older, which over-reports the depth by the number of items drained
+        // since, and that is still bounded by the capacity.
         if self.shared.metrics.tracks_high_water() {
             let head = self.shared.head.0.load(Ordering::Acquire);
-            self.shared
-                .metrics
-                .record_depth(position.wrapping_sub(head).wrapping_add(1));
+            let depth = position.wrapping_sub(head).wrapping_add(1);
+            // States the invariant that the placement above buys, and states it
+            // where it can fail rather than only in prose. A depth cannot
+            // exceed the capacity, so anything larger is the wrapped
+            // subtraction -- and without this the only witness is a
+            // `high_water` assertion at the end of one test, which caught the
+            // real defect about once in sixty runs. Here it fires in whichever
+            // push raced, in every test that tracks high water, with the
+            // offending value in hand.
+            debug_assert!(
+                depth <= self.shared.capacity,
+                "depth {depth} exceeds capacity {}: the head was read after the \
+                 publication and the consumer drained past this position",
+                self.shared.capacity
+            );
+            self.shared.metrics.record_depth(depth);
         }
+
+        // Release, and this is the publication: it must come after the write,
+        // and this is what forbids the compiler and the processor from moving
+        // it earlier. Until it lands, the consumer sees the slot as
+        // claimed-but-empty and skips it.
+        slot.sequence
+            .store(position.wrapping_add(1), Ordering::Release);
 
         // After the publication, never before: the doorbell says "there is
         // something to take", and that must not become true before the item is
