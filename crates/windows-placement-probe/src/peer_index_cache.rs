@@ -298,16 +298,67 @@ impl Ring {
 /// Bit layout of `PSAPI_WORKING_SET_EX_BLOCK`, which `windows-sys` exposes as
 /// an opaque `usize` because the SDK declares it as bitfields.
 ///
-/// Changing any value here is a breaking change: they describe an operating
+/// Changing any value here is a breaking change: these describe an operating
 /// system structure, not a choice this crate is free to make.
+///
+/// # Widths are declared, offsets are derived
+///
+/// Every offset is computed from the widths of the fields before it, rather
+/// than written down. That is what makes the layout testable at all. `Node`
+/// reads zero on every host available to this workspace whether or not its
+/// offset is right, so a wrong `NODE_SHIFT` is invisible here and would first
+/// show up as nonsense node numbers on a multi-socket machine -- the one
+/// machine whose answer this tool exists to collect, and the one place nobody
+/// can check the result against anything.
+///
+/// `Win32Protection` sits in the same run of bits and holds a value the caller
+/// chose, so a test can decode it and know whether it is right. Deriving
+/// `NODE_SHIFT` from the same widths makes that check carry: any error in the
+/// run of fields moves both, and the test sees it.
 mod working_set {
+    /// `Valid`, which is set when the page is resident.
+    const VALID_BITS: u32 = 1;
+    /// `ShareCount`.
+    const SHARE_COUNT_BITS: u32 = 3;
+    /// `Win32Protection`.
+    const PROTECTION_BITS: u32 = 11;
+    /// `Shared`, which sits between the protection and the node.
+    const SHARED_BITS: u32 = 1;
+    /// `Node`.
+    const NODE_BITS: u32 = 6;
+
     /// Set when the page is resident, and so when the rest is meaningful.
-    pub const VALID: usize = 1;
-    /// Offset of the six-bit `Node` field: past `Valid`, `ShareCount`,
-    /// `Win32Protection` and `Shared` (1 + 3 + 11 + 1 bits).
-    pub const NODE_SHIFT: u32 = 16;
+    pub const VALID: usize = (1 << VALID_BITS) - 1;
+    /// Offset of the `Win32Protection` field.
+    pub const PROTECTION_SHIFT: u32 = VALID_BITS + SHARE_COUNT_BITS;
+    /// Width of the `Win32Protection` field, as a mask.
+    ///
+    /// Only the tests decode a protection -- the crate already knows what it
+    /// asked for -- so this exists solely to make the layout falsifiable.
+    #[cfg(test)]
+    pub const PROTECTION_MASK: usize = (1 << PROTECTION_BITS) - 1;
+    /// Offset of the `Shared` field, which is the bit immediately below
+    /// `Node` and so the thing that pins `Node`'s position.
+    pub const SHARED_SHIFT: u32 = PROTECTION_SHIFT + PROTECTION_BITS;
+    /// Offset of the `Node` field.
+    pub const NODE_SHIFT: u32 = SHARED_SHIFT + SHARED_BITS;
     /// Width of the `Node` field, as a mask.
-    pub const NODE_MASK: usize = 0x3F;
+    pub const NODE_MASK: usize = (1 << NODE_BITS) - 1;
+
+    /// Where the SDK says `Node` begins.
+    ///
+    /// A tripwire, and deliberately not presented as verification. The tests
+    /// pin every width below `Node` against values the operating system
+    /// reports, but `SHARED_BITS` is invisible to them: widening it moves
+    /// `Node` alone, and detecting that needs a page on a **non-zero node**,
+    /// which no machine available to this workspace can produce. Sabotage
+    /// confirms the gap rather than assuming it.
+    ///
+    /// So this restates the documented total and fails the build if the derived
+    /// offset drifts from it. It cannot tell anyone whether the SDK is being
+    /// read correctly -- only that nobody has changed the reading by accident.
+    const DOCUMENTED_NODE_SHIFT: u32 = 16;
+    const _: () = assert!(NODE_SHIFT == DOCUMENTED_NODE_SHIFT);
 }
 
 /// The ring's slot storage, and the NUMA node its pages turned out to be on.
@@ -479,6 +530,21 @@ impl core::ops::Deref for Slots {
 /// that reports a *request*. The page must already be resident, which is why
 /// the caller faults it in first.
 fn observed_node(address: *mut c_void) -> Option<u32> {
+    let flags = working_set_flags(address)?;
+    if flags & working_set::VALID == 0 {
+        // Not resident, so the node field means nothing. Unknown, not zero.
+        return None;
+    }
+    u32::try_from((flags >> working_set::NODE_SHIFT) & working_set::NODE_MASK).ok()
+}
+
+/// The raw `PSAPI_WORKING_SET_EX_BLOCK` bits for the page at `address`.
+///
+/// Separate from [`observed_node`] so a test can check the layout against a
+/// field whose value it already knows, rather than against the node field,
+/// which reads zero on this workspace's hardware whether or not the offsets are
+/// right.
+fn working_set_flags(address: *mut c_void) -> Option<usize> {
     let mut info = PSAPI_WORKING_SET_EX_INFORMATION {
         VirtualAddress: address,
         // SAFETY: an all-zero block is the documented input state; the call
@@ -501,12 +567,7 @@ fn observed_node(address: *mut c_void) -> Option<u32> {
     }
 
     // SAFETY: `Flags` is the union's integer view of the same bits.
-    let flags = unsafe { info.VirtualAttributes.Flags };
-    if flags & working_set::VALID == 0 {
-        // Not resident, so the node field means nothing. Unknown, not zero.
-        return None;
-    }
-    u32::try_from((flags >> working_set::NODE_SHIFT) & working_set::NODE_MASK).ok()
+    Some(unsafe { info.VirtualAttributes.Flags })
 }
 
 fn time_model(strategy: Strategy) -> Sample {

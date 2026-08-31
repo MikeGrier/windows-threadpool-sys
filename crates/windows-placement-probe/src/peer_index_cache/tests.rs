@@ -19,7 +19,11 @@
 //! available to this workspace is. Node 0 exists everywhere Windows runs, and a
 //! node that cannot exist is the other half of the pair.
 
-use super::{CAPACITY, Ring, Slots, observed_node};
+use core::ffi::c_void;
+
+use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READ, PAGE_READWRITE};
+
+use super::{CAPACITY, Ring, Slots, observed_node, working_set, working_set_flags};
 
 /// A node id no machine will have.
 ///
@@ -177,4 +181,77 @@ fn dropping_a_placed_ring_releases_its_pages() {
     for _ in 0..256 {
         drop(Ring::new_on(CAPACITY, None));
     }
+}
+
+#[test]
+fn the_working_set_bit_layout_is_read_correctly() {
+    // **The one assumption on this path that no other test can falsify.**
+    // Every page on a single-node host is on node 0, so a wrong `NODE_SHIFT`
+    // still reads zero and every other test here passes. The error would first
+    // appear as nonsense node numbers on a multi-socket machine -- which is the
+    // only machine whose answer this tool exists to collect, and the one place
+    // nobody can check the result against anything.
+    //
+    // So this checks the offsets against a neighbouring field whose value the
+    // caller chose. `Win32Protection` occupies the eleven bits immediately
+    // before `Node`, and these pages were committed `PAGE_READWRITE`. Decoding
+    // that correctly pins every offset up to where `Node` begins; getting it
+    // wrong means the shift is wrong by exactly the amount that matters.
+    let slots = Slots::on_node(CAPACITY, Some(0));
+    let flags = working_set_flags(slots.ptr.cast()).expect("the page must be queryable");
+
+    assert_ne!(
+        flags & working_set::VALID,
+        0,
+        "a page that was just written is not marked resident, so the layout is wrong"
+    );
+    assert_eq!(
+        (flags >> working_set::PROTECTION_SHIFT) & working_set::PROTECTION_MASK,
+        PAGE_READWRITE as usize,
+        "Win32Protection did not decode to what the allocation asked for, \
+         so the field offsets -- including Node's -- are wrong: flags {flags:#x}"
+    );
+    assert_eq!(
+        (flags >> working_set::SHARED_SHIFT) & 1,
+        0,
+        "a privately allocated page reported itself shared: flags {flags:#x}"
+    );
+}
+
+#[test]
+fn the_node_offset_is_pinned_by_a_page_whose_upper_fields_are_not_zero() {
+    // The gap the private page above cannot close, found by sabotage: widening
+    // `PROTECTION_BITS` from 11 to 12 moves `Node` by a bit, and a private
+    // read-write page still decodes as `PAGE_READWRITE` because the bit swept
+    // in -- `Shared` -- is zero there. Every field above the protection is zero
+    // on a private page on a single-node host, and no arithmetic on zeros can
+    // detect a shift.
+    //
+    // A code page is the counter-example, and it costs nothing to obtain: it is
+    // mapped from the image, so it is shared, executable and read-only. Its
+    // `Shared` bit is set, which means a wrong protection width swallows that
+    // bit and decodes to a value that is not a protection constant at all.
+    // Together with the private case this pins `Valid`, `ShareCount`,
+    // `Win32Protection` and `Shared` -- and therefore where `Node` begins.
+    let code_page =
+        the_node_offset_is_pinned_by_a_page_whose_upper_fields_are_not_zero as *mut c_void;
+    let flags = working_set_flags(code_page).expect("the running code must be queryable");
+
+    assert_ne!(
+        flags & working_set::VALID,
+        0,
+        "the page currently executing is not resident: flags {flags:#x}"
+    );
+    assert_eq!(
+        (flags >> working_set::SHARED_SHIFT) & 1,
+        1,
+        "an image-backed code page did not report itself shared, so the bit \
+         below Node is not where it is thought to be: flags {flags:#x}"
+    );
+    assert_eq!(
+        (flags >> working_set::PROTECTION_SHIFT) & working_set::PROTECTION_MASK,
+        PAGE_EXECUTE_READ as usize,
+        "a code page's protection did not decode to PAGE_EXECUTE_READ, so the \
+         protection field's width is wrong and Node's offset with it: flags {flags:#x}"
+    );
 }
