@@ -138,14 +138,27 @@ release-blocking rather than restating the decision itself.
   - `windows-platform-probes` -- never published, so its pin is inert. Update it with the others
     anyway rather than leaving a manifest that misstates what it was built against.
 
-- [ ] **SH-2.4** -- Clear the **eight rustdoc warnings** in `windows-waitable-queues` before it is
-  published. They pre-date this branch and were found while doing SH-1.1: an unresolved link to
-  `MIN_CAPACITY`, six links from public documentation to private items (`Shared::len`,
-  `Doorbell::clear`, `Doorbell`, `BOUNDS`), and one redundant explicit link target.
+- [x] **SH-2.4** -- Clear the **eight rustdoc warnings** in `windows-waitable-queues` before it is
+  published: an unresolved link to `MIN_CAPACITY`, six links from public documentation to private
+  items (`Shared::len`, `Doorbell::clear`, `Doorbell`, `BOUNDS`), and one redundant explicit link
+  target.
   Ordinarily out of scope for the item that found them, and in scope here for one reason: **docs.rs is
   the face of a first release.** A link that silently resolves to nothing in a workspace build renders
   as a dead or missing reference to the first person who ever reads these docs, and a link to a private
   item points at a page they cannot open.
+  **Correction: they did not pre-date this branch, and they were not warnings.** This item said so, on
+  the reasonable assumption that documentation nobody had touched could not have broken. `main` is
+  green and the branch is red, so the branch broke them -- most likely the `mpsc` -> `slotwise_mpsc`
+  rename, which moved every item these links named. And CI denies `broken_intra_doc_links` and
+  `private_intra_doc_links`, so they were **errors failing every run on the pull request**, not
+  warnings deferred until publication. Nothing here was blocked on the release; the release was
+  blocked on this.
+  **Done.** `MIN_CAPACITY` never existed anywhere -- the prose promised a constant that was never
+  written -- so that sentence now states the rule itself. The private-item links are delinked rather
+  than repointed, because a public page cannot link to a page that is not generated. Fixed alongside
+  five more in `windows-placement-probe` and one in `windows-thread-ambient-sys` that the same job was
+  failing on; the whole workspace now passes `cargo doc --workspace --all-features` under CI's exact
+  `RUSTDOCFLAGS`.
 
 - [ ] **SH-2.3** -- Dry-run both publishes (`cargo publish --dry-run`) from the merge commit, and read
   the packaged file list rather than only the exit code. A crate that builds in a workspace can still

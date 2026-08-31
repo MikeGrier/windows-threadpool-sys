@@ -33,7 +33,8 @@
 //! there to warm the cache line -- that its value cannot be used, and the
 //! authoritative load still has to happen. That is a different mechanism with a
 //! different ceiling, so it is measured rather than argued about:
-//! [`Strategy::Warmed`] issues a discarded relaxed load of the peer index and
+//! [`Strategy::Warmed`](crate::peer_index_cache::Strategy::Warmed) issues a
+//! discarded relaxed load of the peer index and
 //! then does exactly the work the baseline does.
 //!
 //! # Why this measures a model rather than the shipping queue
@@ -109,7 +110,7 @@ impl Strategy {
 
     /// A stable identifier for a record.
     ///
-    /// Separate from [`Self::label`] on purpose, and not a duplicate of it.
+    /// Separate from the private `label` on purpose, and not a duplicate of it.
     /// The label is prose for a terminal table and may be reworded whenever the
     /// table reads better a different way; this is a token a stored record is
     /// keyed on, so rewording it would silently break every collector that ever

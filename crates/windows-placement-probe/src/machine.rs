@@ -56,7 +56,8 @@ pub enum VirtualisationHint {
     /// as having ruled out.
     #[default]
     NotDetected,
-    /// A firmware string names a known hypervisor. [`Self::name`] says which.
+    /// A firmware string names a known hypervisor.
+    /// [`MachineDescription::virtualisation_name`] says which.
     Detected,
     /// The question could not be asked -- the firmware strings were unreadable.
     Unknown,

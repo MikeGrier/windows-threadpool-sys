@@ -95,7 +95,7 @@ pub struct SubmissionRecord {
 /// One measurement, flattened into the shape a record carries.
 ///
 /// Flattened rather than nested because the nesting in
-/// [`Measurement`](crate::core_affinity::Measurement) serves the code, and a
+/// [`Measurement`] serves the code, and a
 /// record is read by someone who does not have the code.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]

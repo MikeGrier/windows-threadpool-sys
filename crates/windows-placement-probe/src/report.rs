@@ -10,7 +10,8 @@
 //! its own table, a table that omitted the row its interpretation quoted, and a
 //! classification that silently merged two placements.
 //!
-//! So the report is a function of the [`SubmissionRecord`], full stop. If the
+//! So the report is a function of the
+//! [`SubmissionRecord`](crate::record::SubmissionRecord), full stop. If the
 //! record is wrong the report is wrong in the same way, which is what makes the
 //! printed text worth reading before deciding whether to send the file.
 

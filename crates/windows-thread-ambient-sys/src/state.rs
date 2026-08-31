@@ -330,7 +330,7 @@ impl AmbientState {
     ///
     /// Panics if the impersonation context cannot be restored. That semantics is
     /// inherited from
-    /// [`windows_impersonation_token_sys`](windows_impersonation_token_sys),
+    /// [`windows_impersonation_token_sys`],
     /// not chosen here: returning a shared worker to a pool under an unknown
     /// identity is a process-wide security failure, which is a different order
     /// of hazard from the other aspects.

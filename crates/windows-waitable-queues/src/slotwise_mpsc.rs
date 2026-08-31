@@ -126,9 +126,11 @@ const BOUNDS: Bounds = Bounds {
 ///
 /// `capacity` must be a power of two of at least two, and is the exact number
 /// of items the queue holds -- not a hint, and not rounded. See
-/// [`CapacityError`] for why a rejection is preferred to rounding, and
-/// [`MIN_CAPACITY`] for why one slot is not enough for this shape when it is
-/// enough for [`spsc`](crate::spsc).
+/// [`CapacityError`] for why a rejection is preferred to rounding. One slot is
+/// not enough for this shape because its sequence protocol distinguishes
+/// "published" from "free" by counting, and at `capacity == 1` those two states
+/// are the same number; [`spsc`](crate::spsc) represents a one-item handoff
+/// exactly.
 ///
 /// # Errors
 ///
@@ -510,7 +512,7 @@ impl<T> Producer<T> {
     /// Items currently held, as a snapshot.
     ///
     /// Includes slots claimed by a producer that has not finished writing, so
-    /// it never under-reports. See [`Shared::len`].
+    /// it never under-reports. Implemented by the internal `Shared::len`.
     #[must_use]
     pub fn len(&self) -> usize {
         self.shared.len()
@@ -672,7 +674,7 @@ impl<T> Consumer<T> {
     /// Items currently held, as a snapshot.
     ///
     /// Includes slots claimed by a producer that has not finished writing, so
-    /// it never under-reports. See [`Shared::len`].
+    /// it never under-reports. Implemented by the internal `Shared::len`.
     #[must_use]
     pub fn len(&self) -> usize {
         self.shared.len()
@@ -770,7 +772,7 @@ impl<T> Consumer<T> {
     ///
     /// Clearing first splits every push into two cases, and this shape's
     /// division is **not** the one `spsc` uses -- the difference is why
-    /// [`Doorbell::clear`](crate::doorbell::Doorbell::clear) had to be
+    /// the internal `Doorbell::clear` had to be
     /// corrected before this shape was sound:
     ///
     /// - **A push that publishes at the head before the clear** is found by the

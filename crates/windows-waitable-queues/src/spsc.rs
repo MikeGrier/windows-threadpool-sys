@@ -755,7 +755,7 @@ impl<T> Consumer<T> {
     /// checking emptiness *second* is what makes a lost wakeup impossible: an
     /// item that arrives before the clear is found by the check, and an item
     /// that arrives after the clear signals a doorbell that
-    /// [`clear`](crate::doorbell::Doorbell::clear) has left able to ring.
+    /// the internal `clear` has left able to ring.
     /// Checking first would leave a window in which a push both signals and has
     /// its signal erased, and the consumer would sleep on a queue that is not
     /// empty and will never be signalled again.

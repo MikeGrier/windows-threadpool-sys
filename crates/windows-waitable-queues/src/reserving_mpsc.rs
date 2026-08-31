@@ -59,7 +59,7 @@
 //!
 //! Each read before the other's write, and the queue now owes a slot that does
 //! not exist. **Sequentially consistent fences do not close this**, unlike the
-//! superficially similar hazard in [`Doorbell`](crate::doorbell::Doorbell): the
+//! superficially similar hazard in the internal `Doorbell`: the
 //! Dekker argument needs store-then-load on both sides, and the pushing producer
 //! is load-then-store -- it *reads* the count and then *writes* the position. In
 //! a total order over the four operations, both sides missing each other is
@@ -74,7 +74,7 @@
 //! # What the packing costs, and what it does not
 //!
 //! Splitting a 64-bit word 32/32 caps this shape at
-//! [`BOUNDS`]`.max` = 2^31 items, and that split is forced rather than chosen:
+//! a maximum of 2^31 items, and that split is forced rather than chosen:
 //! a position of `b` bits keeps a wrapping difference unambiguous only up to
 //! `2^(b-1)`, and the count needs `b` bits because it can reach the capacity, so
 //! `b + b = 64` gives `b = 32`. There is no cleverer division of the word.
