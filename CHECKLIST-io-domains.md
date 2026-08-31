@@ -701,6 +701,26 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   investigation that an instrument's *classification or presentation*, rather than its measurement,
   was the thing about to produce a wrong answer.
 
+  **The node-crossing path is validated against synthetic multi-socket topologies, offline.**
+  `classify` and `representative_pairs` are pure functions of a processor list, so a mocked list
+  exercises them exactly as real hardware would; five fixtures cover a two-socket host with several
+  cache domains per node, one with a single cache domain per node, a no-SMT server, and a four-node
+  host. Each asserts not merely that the expected rows appear but that **the pair chosen for each row
+  actually satisfies that row's predicate** -- a table with right labels and wrong pairs behind them
+  is worse than a missing row. All nine node-related tests fail when the classifier's node check is
+  removed. The *timings* are deliberately not mocked and cannot be: `measure` pins to real
+  processors, and pinning to one that does not exist fails loudly rather than fabricating a number.
+
+  **A prediction that will otherwise look like a bug on the real run: on a multi-socket host,
+  `cross cache, same class` may be absent entirely.** `cache_domain` is defined as the outermost cache
+  level that *partitions the machine*, so its meaning moves with the host. On the single-socket EPYC
+  slice that level is L2, and the row measures an L2 crossing inside one L3. On a two-socket box whose
+  last-level cache is per-socket, that level becomes the socket -- so two cores either share the cache
+  domain (same node) or sit on different nodes, the node check claims the pair first, and the
+  cross-cache row has no members. A synthetic fixture pins this down. **Read that absence as the
+  topology speaking, not as a defect**, and note the corollary: the EPYC slice's isolated 1.8x - 2.0x
+  cache-crossing number may have no counterpart on a multi-socket host at all.
+
   **A third host is planned -- an Intel cloud dev box -- and it should be expected to add no new rows.**
   An earlier revision of this item predicted it would express four placements at once, on the
   assumption of a *hybrid client* part (P-cores with SMT, E-cores without). That assumption is wrong

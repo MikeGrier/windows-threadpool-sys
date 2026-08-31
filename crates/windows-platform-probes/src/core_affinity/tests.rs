@@ -331,3 +331,231 @@ fn a_two_node_machine_expresses_the_node_crossing() {
         "the pair chosen for a node crossing is on one node"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Synthetic multi-node hosts.
+//
+// No machine available to this workspace has more than one NUMA node, so the
+// classification and *selection* logic for a node crossing would otherwise
+// first execute on scarce hardware, where a mis-selection reads as a surprising
+// measurement rather than as a bug. These fixtures exercise that logic offline.
+//
+// What they can and cannot establish, stated plainly: `classify` and
+// `representative_pairs` are pure functions of a processor list, so feeding
+// them a synthetic list tests them exactly as the real thing would. The
+// *timings* are not testable this way and are not attempted -- `measure` pins
+// threads to real processors, and pinning to a processor that does not exist
+// fails loudly rather than returning a fabricated number.
+// ---------------------------------------------------------------------------
+
+/// The shape of a machine, in the terms the classifier actually uses.
+struct HostSpec {
+    nodes: u32,
+    /// Cache domains per node, at the outermost level that partitions the host.
+    cache_domains_per_node: u32,
+    cores_per_cache_domain: u32,
+    threads_per_core: u32,
+}
+
+/// Build the processor list such a machine would present.
+///
+/// Deliberately small. The shape is what the classifier reads; a 128-processor
+/// version would exercise the identical code paths and would not fit in `u8`.
+fn synthesize(spec: &HostSpec) -> Vec<ProcessorPlace> {
+    let mut places = Vec::new();
+    let mut number = 0_u8;
+    let mut core = 0_u32;
+    let mut cache_domain = 0_u32;
+
+    for node in 0..spec.nodes {
+        for _ in 0..spec.cache_domains_per_node {
+            for _ in 0..spec.cores_per_cache_domain {
+                for _ in 0..spec.threads_per_core {
+                    places.push(ProcessorPlace {
+                        number,
+                        core,
+                        efficiency_class: 0,
+                        cache_domain: Some(cache_domain),
+                        numa_node: node,
+                    });
+                    number += 1;
+                }
+                core += 1;
+            }
+            cache_domain += 1;
+        }
+    }
+    places
+}
+
+/// Assert that every chosen pair genuinely satisfies the placement it is filed
+/// under.
+///
+/// This is the check that matters. A table with the right *row labels* and the
+/// wrong *pairs* behind them is worse than a missing row, because it reports a
+/// number for a placement that was never measured.
+fn assert_pairs_are_faithful(places: &[ProcessorPlace]) {
+    for (placement, (producer, consumer)) in representative_pairs(places) {
+        assert_eq!(
+            classify(producer, consumer),
+            placement,
+            "pair {producer} / {consumer} filed under {}",
+            placement.label()
+        );
+        assert_ne!(
+            producer.number, consumer.number,
+            "a placement was measured against a single processor"
+        );
+        match placement {
+            Placement::SameCoreSiblings => {
+                assert_eq!(producer.core, consumer.core);
+                assert_eq!(producer.numa_node, consumer.numa_node);
+            }
+            Placement::CrossNumaNode => {
+                assert_ne!(producer.numa_node, consumer.numa_node);
+            }
+            // Every non-NUMA placement must stay inside one node, or it would
+            // have classified as a node crossing instead.
+            _ => assert_eq!(
+                producer.numa_node,
+                consumer.numa_node,
+                "{} spans two NUMA nodes",
+                placement.label()
+            ),
+        }
+    }
+}
+
+/// A two-socket machine whose outermost partitioning cache sits *inside* each
+/// node -- several cache domains per node, as an EPYC's CCX layout gives.
+fn two_socket_many_cache_domains() -> Vec<ProcessorPlace> {
+    synthesize(&HostSpec {
+        nodes: 2,
+        cache_domains_per_node: 2,
+        cores_per_cache_domain: 2,
+        threads_per_core: 2,
+    })
+}
+
+/// A two-socket machine with a single cache domain per node, which is what a
+/// classic server presents when its last-level cache is per-socket.
+fn two_socket_one_cache_domain_per_node() -> Vec<ProcessorPlace> {
+    synthesize(&HostSpec {
+        nodes: 2,
+        cache_domains_per_node: 1,
+        cores_per_cache_domain: 4,
+        threads_per_core: 2,
+    })
+}
+
+#[test]
+fn a_two_socket_host_expresses_siblings_both_cache_rows_and_the_node_crossing() {
+    let places = two_socket_many_cache_domains();
+    let pairs = representative_pairs(&places);
+    let mut found: Vec<_> = pairs.keys().copied().collect();
+    found.sort_unstable();
+
+    assert_eq!(
+        found,
+        vec![
+            Placement::SameCoreSiblings,
+            Placement::SameCacheSameClass,
+            Placement::CrossCacheSameClass,
+            Placement::CrossNumaNode,
+        ],
+        "unexpected placement set for a two-socket host"
+    );
+    assert_pairs_are_faithful(&places);
+}
+
+#[test]
+fn adding_a_second_node_does_not_cannibalise_the_cross_cache_row() {
+    // The subtle regression the NUMA variant could have introduced: classifying
+    // the node first must not swallow same-node cache crossings, which are a
+    // different and still-interesting measurement.
+    let one_node = synthesize(&HostSpec {
+        nodes: 1,
+        cache_domains_per_node: 2,
+        cores_per_cache_domain: 2,
+        threads_per_core: 2,
+    });
+    let two_nodes = two_socket_many_cache_domains();
+
+    let single = representative_pairs(&one_node);
+    let dual = representative_pairs(&two_nodes);
+
+    assert!(single.contains_key(&Placement::CrossCacheSameClass));
+    assert!(
+        dual.contains_key(&Placement::CrossCacheSameClass),
+        "the cross-cache row vanished once a second node existed"
+    );
+    assert!(!single.contains_key(&Placement::CrossNumaNode));
+    assert!(dual.contains_key(&Placement::CrossNumaNode));
+}
+
+#[test]
+fn one_cache_domain_per_node_has_no_cross_cache_row_at_all() {
+    // Not a defect, and worth pinning down before a real multi-socket run makes
+    // it look like one. When the outermost partitioning cache *is* the socket,
+    // two cores either share it (same node) or are on different nodes -- so
+    // "cross cache, same class" has no members and the node crossing is the
+    // only way out of a cache domain. A future run on such a host will show
+    // that row as inexpressible, and that is the correct reading.
+    let places = two_socket_one_cache_domain_per_node();
+    let pairs = representative_pairs(&places);
+    let mut found: Vec<_> = pairs.keys().copied().collect();
+    found.sort_unstable();
+
+    assert_eq!(
+        found,
+        vec![
+            Placement::SameCoreSiblings,
+            Placement::SameCacheSameClass,
+            Placement::CrossNumaNode,
+        ]
+    );
+    assert_pairs_are_faithful(&places);
+}
+
+#[test]
+fn a_node_crossing_is_expressible_without_smt() {
+    // A multi-socket host with hyper-threading disabled, which is a common
+    // server configuration and the one where a sibling-shaped assumption would
+    // break.
+    let places = synthesize(&HostSpec {
+        nodes: 2,
+        cache_domains_per_node: 1,
+        cores_per_cache_domain: 4,
+        threads_per_core: 1,
+    });
+    let pairs = representative_pairs(&places);
+
+    assert!(!pairs.contains_key(&Placement::SameCoreSiblings));
+    assert!(pairs.contains_key(&Placement::CrossNumaNode));
+    assert_pairs_are_faithful(&places);
+}
+
+#[test]
+fn a_four_node_host_still_reports_exactly_one_node_crossing_row() {
+    // More than two nodes must not multiply the row: the probe measures one
+    // representative pair per placement, and "cross NUMA" is one placement
+    // however many nodes exist. Distance between specific nodes is a real
+    // effect this deliberately does not model, and saying so here stops the
+    // single row being over-read later.
+    let places = synthesize(&HostSpec {
+        nodes: 4,
+        cache_domains_per_node: 1,
+        cores_per_cache_domain: 2,
+        threads_per_core: 1,
+    });
+    let pairs = representative_pairs(&places);
+
+    assert_eq!(
+        pairs
+            .keys()
+            .filter(|p| **p == Placement::CrossNumaNode)
+            .count(),
+        1
+    );
+    assert_pairs_are_faithful(&places);
+}
