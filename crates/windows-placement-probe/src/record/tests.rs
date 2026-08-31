@@ -18,7 +18,7 @@ use crate::machine::{MachineDescription, VirtualisationHint};
 /// and would silently vanish from the archived shape. A schema that describes
 /// less than the record can emit is worse than no schema, because it would
 /// pass.
-fn fully_populated() -> SubmissionRecord {
+pub(crate) fn fully_populated() -> SubmissionRecord {
     let measurement = MeasurementRecord {
         placement: "SMT siblings (one core)".to_owned(),
         strategy: "baseline".to_owned(),

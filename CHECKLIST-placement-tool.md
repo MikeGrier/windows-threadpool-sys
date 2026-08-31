@@ -248,7 +248,7 @@ that carries them is written.
   failure this workspace spent [crates/windows-topology-sys/DESIGN-NOTES.md](crates/windows-topology-sys/DESIGN-NOTES.md)
   `D-12` fixing one layer down. There is currently **no** version stamped in any probe output.
 
-- [ ] **PT-3.4** -- Keep the human-readable report as well, and derive both from the same measured
+- [x] **PT-3.4** -- Keep the human-readable report as well, and derive both from the same measured
   values so they cannot disagree. The reader running the tool should be able to see, in prose, the
   same conclusion the record encodes -- otherwise nobody notices when a run is nonsense.
 

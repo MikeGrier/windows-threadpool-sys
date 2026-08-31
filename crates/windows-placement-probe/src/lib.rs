@@ -63,3 +63,5 @@ pub mod machine;
 pub mod peer_index_cache;
 /// The record a run produces and a runner sends back.
 pub mod record;
+/// The human-readable report, rendered from the record.
+pub mod report;
