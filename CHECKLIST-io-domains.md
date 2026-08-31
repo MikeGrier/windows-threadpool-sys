@@ -666,3 +666,40 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   `same cache, same class` at all, because its outermost partitioning cache is L2 and is shared by
   exactly the two siblings of one core. The two hosts are complementary; neither alone produces the
   full table, and M-inf.3's "we do not have such a host" caution should be read against that.
+
+  **Coverage, stated explicitly, because the two hosts turn out to be disjoint rather than
+  overlapping.** Not one placement is measured by both machines, so no row is a cross-check of another
+  and every row rests on a single host:
+
+  | placement | ARM64 (Snapdragon X2) | x64 (EPYC 7763 slice) | measured by |
+  |---|---|---|---|
+  | SMT siblings (one core) | not expressible (no SMT) | **yes** | x64 only |
+  | same cache, same class | **yes** | not expressible (L2 is per-core-pair) | ARM64 only |
+  | same cache, cross class | not expressible (confounded) | not expressible (one class) | **neither** |
+  | cross cache, same class | not expressible (confounded) | **yes** | x64 only |
+  | cross cache, cross class | **yes** | not expressible (one class) | ARM64 only |
+
+  A machine cannot express a placement when its topology makes the pair impossible: ARM64 confounds
+  cache domain with efficiency class (crossing one crosses the other), and the x64 slice has exactly
+  one efficiency class and one L3 with L2 shared only by SMT siblings.
+
+  `same cache, cross class` -- two *different* cores sharing a cache domain but differing in class --
+  **is unmeasurable on either host, and no re-run of either will produce it.** It needs heterogeneous
+  cores inside one cache domain.
+
+  **A third host is expected and is worth a run: an Intel hybrid dev box (P-cores with SMT, E-cores
+  without, clustered).** Its value is not "another architecture" -- that framing is the one this
+  investigation already falsified -- but that it should express **four** rows at once, and would be the
+  first machine to hold both `SMT siblings` and `same cache, same class` at the same time. That matters
+  because those two rows currently sit on different machines, so the claim that sharing a cache
+  produces deep batches is confounded with the host it was measured on. One machine expressing both
+  decouples them.
+  Predictions to falsify rather than confirm, since a hybrid's outermost *partitioning* cache is
+  probably still L2 (per-core on P, per-cluster on E):
+  - `SMT siblings` from a P-core pair, and `same cache, same class` from two E-cores in one L2 cluster.
+  - `cross cache, same class` from two P-cores, and `cross cache, cross class` from a P/E pair.
+  - `same cache, cross class` **probably still absent**, because P and E cores are unlikely to share
+    the outermost partitioning cache. If it does appear, that is the missing row and should be called
+    out loudly.
+  Run `probe-topology` first: whether that host's outermost partitioning cache is L2 or L3 determines
+  which rows exist at all, and it is not predictable from the part number.

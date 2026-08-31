@@ -994,6 +994,11 @@ partitioning cache is L2, shared by exactly the two siblings of one core, so any
 sharing a cache domain are siblings. The two hosts are complementary rather than redundant, and
 neither alone can produce the full table.
 
+The two hosts are in fact **disjoint** -- no placement is measured by both -- so every row rests on a
+single machine and none cross-checks another. The per-placement coverage matrix, including the one row
+(`same cache, cross class`) that neither host can express, is kept with the open question in
+[CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) M-inf.4 rather than duplicated here.
+
 **A probe defect found while doing this, now fixed.** `probe-core-affinity` printed its placement
 table from a hard-coded list of four variants that omitted `SameCoreSiblings`, while the
 interpretation beneath it iterated over the placements actually measured. On an SMT host the table
