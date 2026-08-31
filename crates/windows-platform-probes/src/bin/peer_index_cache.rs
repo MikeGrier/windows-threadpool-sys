@@ -9,6 +9,7 @@
 use windows_platform_probes::peer_index_cache::{CAPACITY, ITEMS, Strategy, measure};
 
 fn main() {
+    windows_platform_probes::fingerprint::print_banner();
     println!("== what does caching the peer's index buy an SPSC ring? ==\n");
 
     let observation = measure();

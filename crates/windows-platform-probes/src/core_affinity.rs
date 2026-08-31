@@ -64,8 +64,7 @@
 
 use std::collections::BTreeMap;
 
-use windows_topology_sys::{DomainKind, Topology};
-
+use crate::fingerprint::{ProcessorPlace, Slice, discover_places};
 use crate::peer_index_cache::{ITEMS, Strategy, time_model_on};
 
 /// Repetitions per placement; the median is reported.
@@ -73,26 +72,24 @@ use crate::peer_index_cache::{ITEMS, Strategy, time_model_on};
 /// Odd, so the median is an observation rather than an average of two.
 const REPETITIONS: usize = 3;
 
-/// One cache domain: its id, and the processors behind it.
-type CacheDomain = (u32, Vec<u8>);
-
-/// One logical processor's position in the machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProcessorPlace {
-    /// Its number within the (single) processor group.
-    pub number: u8,
-    /// Windows's efficiency class. Higher is faster; the values themselves are
-    /// only meaningful relative to each other on the same machine.
-    pub efficiency_class: u8,
-    /// Which last-level-that-partitions cache domain it sits behind, or `None`
-    /// if the machine reports no cache level that divides it.
-    pub cache_domain: Option<u32>,
-}
-
 /// How a producer and a consumer are placed relative to each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Placement {
-    /// Same cache domain, same efficiency class.
+    /// Two SMT siblings: the same physical core, sharing L1.
+    ///
+    /// Listed first because it is the tightest coupling a machine can offer,
+    /// and kept distinct from `SameCacheSameClass` for a measured reason: on an
+    /// SMT host a sibling pair and a two-core pair behind one cache would
+    /// otherwise land in the same bucket, and the probe would report whichever
+    /// it happened to select. That is precisely the distinction needed to
+    /// explain why peer-index caching loses on an SMT x64 host and wins on a
+    /// non-SMT ARM64 one -- siblings sharing L1 have every reason to stay in
+    /// lockstep, which is the shallow-batch condition that makes caching lose.
+    ///
+    /// Absent on a machine without SMT, where it is reported inexpressible
+    /// rather than merged into another category.
+    SameCoreSiblings,
+    /// Same cache domain, same efficiency class, but different physical cores.
     SameCacheSameClass,
     /// Same cache domain, different efficiency class.
     SameCacheCrossClass,
@@ -107,6 +104,7 @@ impl Placement {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
+            Self::SameCoreSiblings => "SMT siblings (one core)",
             Self::SameCacheSameClass => "same cache, same class",
             Self::SameCacheCrossClass => "same cache, cross class",
             Self::CrossCacheSameClass => "cross cache, same class",
@@ -116,8 +114,14 @@ impl Placement {
 }
 
 /// One placement measured under one strategy.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Measurement {
+    /// Exactly which processors this number came from.
+    ///
+    /// Carried on the measurement rather than printed once in a banner: a
+    /// table of numbers from different slices is the thing that misleads, and
+    /// the only defence is for each row to know its own provenance.
+    pub slice: Slice,
     /// Which processor produced.
     pub producer: ProcessorPlace,
     /// Which processor consumed.
@@ -161,68 +165,14 @@ pub struct Observation {
     pub measurements: Vec<Measurement>,
 }
 
-/// Discover where each logical processor sits.
-///
-/// # Errors
-///
-/// Returns whatever [`Topology::discover`] failed with.
-pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
-    let topology = Topology::discover()?;
-
-    let mut class_of: BTreeMap<u8, u8> = BTreeMap::new();
-    for core in topology.cores() {
-        let DomainKind::Core {
-            efficiency_class, ..
-        } = core.kind
-        else {
-            continue;
-        };
-        for (_group, number) in core.processors.iter() {
-            class_of.insert(number, efficiency_class);
-        }
-    }
-
-    // The outermost cache level that actually divides the machine. Keyed on
-    // "the level that partitions" rather than literally on L3, because this
-    // machine reports no L3 at all and a rule naming L3 would find nothing.
-    let mut best: Option<Vec<CacheDomain>> = None;
-    for level in 1..=4_u8 {
-        let domains: Vec<CacheDomain> = topology
-            .caches_at_level(level)
-            .map(|domain| {
-                (
-                    domain.id,
-                    domain.processors.iter().map(|(_, number)| number).collect(),
-                )
-            })
-            .collect();
-        if domains.len() > 1 {
-            best = Some(domains);
-        }
-    }
-
-    let mut cache_of: BTreeMap<u8, u32> = BTreeMap::new();
-    if let Some(domains) = &best {
-        for (id, processors) in domains {
-            for number in processors {
-                cache_of.insert(*number, *id);
-            }
-        }
-    }
-
-    Ok(class_of
-        .into_iter()
-        .map(|(number, efficiency_class)| ProcessorPlace {
-            number,
-            efficiency_class,
-            cache_domain: cache_of.get(&number).copied(),
-        })
-        .collect())
-}
-
 /// Classify a pair.
 #[must_use]
 pub fn classify(producer: ProcessorPlace, consumer: ProcessorPlace) -> Placement {
+    // Tested first: two processors on one core share L1, which dominates any
+    // statement about the cache domain or the class they also share.
+    if producer.core == consumer.core {
+        return Placement::SameCoreSiblings;
+    }
     let same_cache = producer.cache_domain == consumer.cache_domain;
     let same_class = producer.efficiency_class == consumer.efficiency_class;
     match (same_cache, same_class) {
@@ -247,8 +197,10 @@ pub fn representative_pairs(
     for producer in places {
         for consumer in places {
             if producer.number == consumer.number {
-                // No SMT here, and in any case a queue whose two ends share one
-                // core measures scheduling, not coherence.
+                // One processor cannot be both ends: that measures the
+                // scheduler time-slicing a thread against itself. Two
+                // processors on one *core* are a different matter entirely and
+                // are measured, as `Placement::SameCoreSiblings`.
                 continue;
             }
             chosen
@@ -278,6 +230,7 @@ pub fn measure() -> std::io::Result<Observation> {
             let median = samples[samples.len() / 2];
 
             measurements.push(Measurement {
+                slice: Slice::pair(producer, consumer),
                 producer,
                 consumer,
                 placement,
@@ -304,7 +257,11 @@ pub fn measure() -> std::io::Result<Observation> {
         let Some((producer, consumer)) = members
             .iter()
             .flat_map(|a| members.iter().map(move |b| (**a, **b)))
-            .find(|(a, b)| a.number != b.number && a.cache_domain == b.cache_domain)
+            // Different cores, not merely different processors: on an SMT host
+            // one class might otherwise be measured as siblings and the other
+            // as two cores, and the comparison between classes would be
+            // measuring the placement difference instead.
+            .find(|(a, b)| a.core != b.core && a.cache_domain == b.cache_domain)
         else {
             continue;
         };
@@ -315,6 +272,7 @@ pub fn measure() -> std::io::Result<Observation> {
             samples.sort_by(|a, b| a.nanos.total_cmp(&b.nanos));
             let median = samples[samples.len() / 2];
             by_class.push(Measurement {
+                slice: Slice::pair(producer, consumer),
                 producer,
                 consumer,
                 placement: classify(producer, consumer),
@@ -340,7 +298,7 @@ impl Observation {
         self.measurements
             .iter()
             .find(|m| m.placement == placement && m.strategy == strategy)
-            .copied()
+            .cloned()
     }
 
     /// Which placements this machine could express.

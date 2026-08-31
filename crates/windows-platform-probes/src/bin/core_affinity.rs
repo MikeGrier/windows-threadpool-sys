@@ -6,6 +6,7 @@ use windows_platform_probes::core_affinity::{Placement, measure};
 use windows_platform_probes::peer_index_cache::Strategy;
 
 fn main() -> std::io::Result<()> {
+    windows_platform_probes::fingerprint::print_banner();
     println!("== does it matter where the two ends of a queue run? ==\n");
 
     let observation = measure()?;
@@ -133,6 +134,13 @@ fn main() -> std::io::Result<()> {
             base.consumer_batch,
             cached.consumer_batch
         );
+    }
+
+    println!("\nthe slice each row was measured on:");
+    for placement in all {
+        if let Some(base) = observation.get(placement, Strategy::Baseline) {
+            println!("  {:<26} {}", placement.label(), base.slice);
+        }
     }
 
     println!("\ninterpretation:\n");

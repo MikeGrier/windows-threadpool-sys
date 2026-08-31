@@ -115,6 +115,7 @@ pub mod core_affinity;
 pub mod device_map;
 pub mod doorbell_cost;
 pub mod error_mode;
+pub mod fingerprint;
 pub mod handle_state;
 pub mod ioring;
 pub mod peer_index_cache;

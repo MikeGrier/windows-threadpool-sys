@@ -7,11 +7,29 @@
 //! seconds. What is worth testing here is that the probe cannot silently
 //! mislabel a pair, because every conclusion it prints is keyed on that label.
 
-use super::{Placement, ProcessorPlace, classify, representative_pairs};
+use super::{Placement, classify, representative_pairs};
+use crate::fingerprint::ProcessorPlace;
 
+/// A processor on its own physical core, which is the non-SMT case.
 fn place(number: u8, efficiency_class: u8, cache_domain: Option<u32>) -> ProcessorPlace {
     ProcessorPlace {
         number,
+        core: u32::from(number),
+        efficiency_class,
+        cache_domain,
+    }
+}
+
+/// Two processors sharing one physical core: SMT siblings.
+fn sibling(
+    number: u8,
+    core: u32,
+    efficiency_class: u8,
+    cache_domain: Option<u32>,
+) -> ProcessorPlace {
+    ProcessorPlace {
+        number,
+        core,
         efficiency_class,
         cache_domain,
     }
@@ -157,4 +175,63 @@ fn every_expressible_placement_is_chosen_exactly_once() {
     let before = labels.len();
     labels.dedup();
     assert_eq!(before, labels.len(), "no placement may be measured twice");
+}
+
+#[test]
+fn smt_siblings_are_their_own_placement() {
+    // Two processors on one core share L1, which is a tighter coupling than
+    // any cache domain expresses. Before this was distinguished, a sibling pair
+    // and a two-core pair behind one cache landed in the same bucket, and the
+    // probe reported whichever it happened to select first -- on an SMT host,
+    // which is exactly where the distinction matters.
+    let a = sibling(0, 0, 0, Some(0));
+    let b = sibling(1, 0, 0, Some(0));
+    assert_eq!(classify(a, b), Placement::SameCoreSiblings);
+}
+
+#[test]
+fn siblings_outrank_the_cache_and_class_they_also_share() {
+    let a = sibling(0, 0, 1, Some(3));
+    let b = sibling(1, 0, 1, Some(3));
+    assert_ne!(
+        classify(a, b),
+        Placement::SameCacheSameClass,
+        "sharing a core must not be reported as merely sharing a cache"
+    );
+}
+
+#[test]
+fn an_smt_host_expresses_a_placement_a_non_smt_host_cannot() {
+    // The 8C/16T homogeneous shape: two processors per core, one cache domain,
+    // one efficiency class. It can express exactly two placements, and one of
+    // them is unavailable on the non-SMT development host -- which is why the
+    // two machines' results are not directly comparable.
+    let mut places = Vec::new();
+    for core in 0..8_u32 {
+        for lane in 0..2_u8 {
+            places.push(sibling(core as u8 * 2 + lane, core, 0, Some(0)));
+        }
+    }
+    let pairs = representative_pairs(&places);
+
+    let mut found: Vec<_> = pairs.keys().copied().collect();
+    found.sort_unstable();
+    assert_eq!(
+        found,
+        vec![Placement::SameCoreSiblings, Placement::SameCacheSameClass],
+        "an SMT host must offer the sibling placement alongside the two-core one"
+    );
+}
+
+#[test]
+fn a_non_smt_host_cannot_express_the_sibling_placement() {
+    let places: Vec<_> = (0..12)
+        .map(|n| place(n, u8::from(n >= 6), Some(u32::from(n) / 6)))
+        .collect();
+    let pairs = representative_pairs(&places);
+
+    assert!(
+        !pairs.contains_key(&Placement::SameCoreSiblings),
+        "a machine with one processor per core has no siblings to measure"
+    );
 }
