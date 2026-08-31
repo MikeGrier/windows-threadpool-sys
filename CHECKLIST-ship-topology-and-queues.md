@@ -127,6 +127,16 @@ release-blocking rather than restating the decision itself.
   releasing `windows-ioring-sys` too. Decide the order and whether ioring's release is part of this
   push or follows it -- but decide it, because a workspace that builds locally via `path` dependencies
   will not reveal this and the first symptom is a consumer unable to resolve the two together.
+  **Three crates pin `"0.1.0"`, not one**, and they carry different obligations. Swept the workspace's
+  manifests rather than trusting the one that prompted this:
+  - `windows-ioring-sys` -- published, so the pin obliges a release, as above.
+  - `windows-placement-probe` -- to be published later
+    ([CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) -> `PT-5.6`). Its pin obliges no
+    release now, but must be corrected before that publication or it would ship depending on a
+    topology version it was never developed against. This is the nastiest of the three: the `path`
+    entry means it keeps building perfectly all the way to the moment of publish.
+  - `windows-platform-probes` -- never published, so its pin is inert. Update it with the others
+    anyway rather than leaving a manifest that misstates what it was built against.
 
 - [ ] **SH-2.4** -- Clear the **eight rustdoc warnings** in `windows-waitable-queues` before it is
   published. They pre-date this branch and were found while doing SH-1.1: an unresolved link to

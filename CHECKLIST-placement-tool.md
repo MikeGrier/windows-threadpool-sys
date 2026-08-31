@@ -442,11 +442,21 @@ build" distinction meaningful rather than decorative.
   back, and what it collects. Assume no context and no obligation. Lead with the download, not with
   `cargo install`.
 
-- [ ] **PT-5.3** -- Decide whether to publish to crates.io **as well**, and record the reasoning. It
+- [x] **PT-5.3** -- Decide whether to publish to crates.io **as well**, and record the reasoning. It
   costs a semver obligation and yields records whose commit is *unknown* by construction (a crates.io
   tarball carries no repository), which is a strictly weaker submission. The case for it is reach; the
   case against is that the weaker path is also the more discoverable one, and submissions will drift
   towards it.
+  **Decided: yes, publish -- but not yet.** Timing is what answers the objection. Publishing *after*
+  the download path exists, is documented, and has been walked end to end means the strong path is the
+  one a runner meets first, and crates.io becomes the fallback it should be rather than the default.
+  Reasoning recorded in
+  [DESIGN-NOTES.md](crates/windows-placement-probe/DESIGN-NOTES.md), including the rejected
+  alternative of baking the commit into the packaged source -- which would let a crates.io build name
+  a commit while still not showing that CI built it, and so would have the record's trust section
+  claim something it cannot support.
+  The publication itself is **PT-5.6** below; it is not part of this item, which was only ever a
+  decision.
 
 - [x] **PT-5.4** -- Package metadata and a statement of what is and is not covered by semver. The
   **record's schema is a compatibility surface** the moment anyone stores one; the internal measurement
@@ -460,6 +470,39 @@ build" distinction meaningful rather than decorative.
   from and a machine without this checkout, and doing it against a local build would test something
   else while looking like it had passed. The ARM64 development machine is the obvious first walker,
   and it doubles as the check that the unverified `aarch64` artifact from PT-5.1 actually runs.
+
+## M5+: crates.io, once the strong path is established
+
+Gated on M5, and named `M5+` rather than given a number because the gate is a
+deliverable in another checklist rather than a milestone here. Nothing in this section is an open
+obligation of M5: M5 is complete when the GitHub release path works, and this section is pulled in
+and numbered when that has happened.
+
+- [ ] **PT-5.6** -- **Publish `windows-placement-probe` to crates.io**, per PT-5.3's decision.
+
+  > **-> CROSS-COMPONENT PREREQUISITE:** blocked on
+  > [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) -> `M4` ->
+  > `SH-4.3` (release `windows-waitable-queues` 0.1.0), and on `SH-4.1` if
+  > `windows-topology-sys` reaches 0.2.0 first. This is a hard blocker, not a preference: a published
+  > crate cannot depend on a `path`, and `windows-waitable-queues` is not on crates.io today.
+
+  Also blocked on **PT-5.5** -- the whole point of the decision is that the download path is
+  established *first*, so publishing before someone has walked it would defeat the reasoning that
+  chose to publish at all.
+
+  Three things this must not skip, each of which is invisible until it is too late:
+  - **Update the dependency pins to what is actually published.** During local development cargo uses
+    the `path` entry and never exercises the `version` entry, so a stale pin costs nothing until the
+    moment of publication, and then decides which version a downstream user compiles against. The
+    crate currently pins `windows-topology-sys = "0.1.0"`.
+  - **Say in the README what a crates.io build costs the data** -- that it produces records marked
+    unofficial with an unknown commit, and that the release download does not. A runner choosing the
+    convenient path should know what they are giving up, rather than discovering it in their own
+    output.
+  - **Run the tool from a `cargo install`ed copy and read the record**, confirming it marks itself
+    unofficial and names no commit. This is the negative case for the path being added, and PT-5.1's
+    lesson applies unchanged: a distinction nobody has watched fail is a distinction that does not
+    work.
 
 ## M6: is a set of "equivalent" processors actually equivalent?
 
