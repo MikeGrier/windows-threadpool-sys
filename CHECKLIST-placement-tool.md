@@ -350,12 +350,25 @@ provenance**. A binary attached to a release in this repository is traceable to 
 it, in a way a locally built copy of the same source is not -- which is what makes PT-3.5's "official
 build" distinction meaningful rather than decorative.
 
-- [ ] **PT-5.1** -- CI builds the tool on tag and attaches the binary to a GitHub release, injecting
+- [x] **PT-5.1** -- CI builds the tool on tag and attaches the binary to a GitHub release, injecting
   the commit into the environment variable PT-3.5 reads. **Verify the negative case**: a locally built
   binary must produce a record marked as an unofficial build, and a CI-built one must not. A
   distinction nobody has watched fail is a distinction that does not work.
+  **Done, and both directions are checked inside the workflow itself rather than trusted.** It builds
+  with the stamps and asserts the artifact reports itself official *and names this commit*; then
+  rebuilds **without** them and asserts that binary marks itself unofficial; then rebuilds with the
+  stamps for release, because the negative check overwrote the artifact and shipping that file would
+  attach an `!!UNOFFICIAL!!` binary to an official release.
+  A `--version` flag was added for this, printing the whole build identity rather than a version
+  number -- CI asserts on it, and a downloader can check the same thing before trusting a binary.
+  **`aarch64-pc-windows-msvc` is in the matrix and is NOT verified here.** The cross-build fails on
+  this machine with `unresolved external symbol __imp_GetProcessHeap`, which is a missing local ARM64
+  MSVC library rather than a code fault -- `std` itself uses that symbol, so a real defect would break
+  every ARM64 Rust program. CI runners do ship those libraries, but that is a reasonable expectation
+  and not a measurement. **Run the workflow once via `workflow_dispatch` before tagging**: dispatch
+  builds and verifies without releasing, which is exactly what that trigger is for.
 
-- [ ] **PT-5.2** -- A README written for someone who has never seen this repository: what question the
+- [x] **PT-5.2** -- A README written for someone who has never seen this repository: what question the
   tool answers, why their machine is interesting, where to download it, how to run it, what to send
   back, and what it collects. Assume no context and no obligation. Lead with the download, not with
   `cargo install`.
@@ -366,7 +379,7 @@ build" distinction meaningful rather than decorative.
   case against is that the weaker path is also the more discoverable one, and submissions will drift
   towards it.
 
-- [ ] **PT-5.4** -- Package metadata and a statement of what is and is not covered by semver. The
+- [x] **PT-5.4** -- Package metadata and a statement of what is and is not covered by semver. The
   **record's schema is a compatibility surface** the moment anyone stores one; the internal measurement
   code is not.
 
@@ -374,6 +387,10 @@ build" distinction meaningful rather than decorative.
   download, run, find the record, read the README's instructions for sending it. A path nobody has
   walked is a path that does not work, and the person walking it will be doing a favour rather than
   debugging.
+  **Deliberately left open: this cannot be completed from here.** It needs a real release to download
+  from and a machine without this checkout, and doing it against a local build would test something
+  else while looking like it had passed. The ARM64 development machine is the obvious first walker,
+  and it doubles as the check that the unverified `aarch64` artifact from PT-5.1 actually runs.
 
 ## M6: is a set of "equivalent" processors actually equivalent?
 

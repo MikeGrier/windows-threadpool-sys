@@ -1,0 +1,187 @@
+# Copyright (c) 2026 Mike Grier
+name: release-placement-probe
+
+# The tool is distributed as a downloadable binary rather than through
+# crates.io, because **the download is the provenance**: an artifact attached to
+# a release here is traceable to the commit that built it, in a way a local
+# build of byte-identical source is not. That is what makes the "official build"
+# distinction in the submission record mean something rather than decorate it.
+on:
+  push:
+    tags:
+      - 'placement-probe-v*'
+  # Lets the whole path be exercised before a tag exists. A release process
+  # nobody has walked is a release process that does not work.
+  #
+  # Dispatch is inherently build-and-verify-only: the release job below runs
+  # only for a `placement-probe-v*` tag, so there is no dry-run input to get
+  # wrong. An earlier revision declared one and never read it, which would have
+  # been a switch that silently did nothing.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: windows-latest
+    # Build under the floating stable toolchain rather than the repository's
+    # rust-toolchain.toml MSRV pin: rustup resolves a directory override ahead
+    # of `rustup default`, so without this every cargo call below would silently
+    # use the pinned MSRV. The MSRV floor is guarded by ci.yml's own job.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both Windows architectures this workspace has ever measured on. The
+        # aarch64 artifact matters specifically: the two hosts measured so far
+        # disagreed about a queue result, and the ARM64 one is the more
+        # revealing of the two for anything ordering-related.
+        target:
+          - x86_64-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build the tool
+        shell: bash
+        env:
+          # What stamps the artifact as official. `build.rs` reads these, and
+          # without them a binary honestly reports itself as a local build --
+          # which is the behaviour the verify step below depends on.
+          PLACEMENT_PROBE_COMMIT: ${{ github.sha }}
+          PLACEMENT_PROBE_SOURCE: ci
+        run: |
+          cargo build --release --locked \
+            --target "${{ matrix.target }}" \
+            -p windows-placement-probe --bin placement-probe
+
+      - name: Verify the artifact reports itself official
+        # Only the native artifact can be executed on this runner; the aarch64
+        # binary is cross-compiled and cannot run here. Verifying the one that
+        # can is what makes the claim testable at all, and a distinction nobody
+        # has watched hold is a distinction that does not work.
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          identity="$(./target/${{ matrix.target }}/release/placement-probe.exe --version)"
+          echo "build identity: ${identity}"
+          case "${identity}" in
+            *'!!UNOFFICIAL!!'*)
+              echo "::error::a CI build reported itself unofficial: ${identity}" >&2
+              echo "::error::the commit and source stamps did not reach build.rs" >&2
+              exit 1
+              ;;
+          esac
+          # The stamps must carry the *right* commit, not merely some commit: a
+          # stale one would make every submission traceable to the wrong code.
+          case "${identity}" in
+            *"$(echo "${GITHUB_SHA}" | cut -c1-12)"*) ;;
+            *)
+              echo "::error::identity does not name this commit: ${identity}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify an unstamped build reports itself unofficial
+        # The negative case, and the one that would otherwise never be watched.
+        # If a build claimed to be official without the stamps, the whole
+        # distinction would be decorative and nothing would say so.
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          cargo build --release --locked \
+            --target "${{ matrix.target }}" \
+            -p windows-placement-probe --bin placement-probe
+          identity="$(./target/${{ matrix.target }}/release/placement-probe.exe --version)"
+          echo "unstamped identity: ${identity}"
+          case "${identity}" in
+            *'!!UNOFFICIAL!!'*) ;;
+            *)
+              echo "::error::an unstamped build claimed to be official: ${identity}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Rebuild with the stamps for release
+        # The negative check above overwrote the artifact with an unstamped one.
+        # Rebuilding is not a formality: shipping that binary would attach a
+        # file marked UNOFFICIAL to an official release.
+        shell: bash
+        env:
+          PLACEMENT_PROBE_COMMIT: ${{ github.sha }}
+          PLACEMENT_PROBE_SOURCE: ci
+        run: |
+          cargo build --release --locked \
+            --target "${{ matrix.target }}" \
+            -p windows-placement-probe --bin placement-probe
+
+      - name: Name the artifact for its architecture
+        shell: bash
+        run: |
+          arch="${{ matrix.target }}"
+          arch="${arch%%-*}"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/placement-probe.exe" \
+             "dist/placement-probe-${arch}.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: placement-probe-${{ matrix.target }}
+          path: dist/placement-probe-*.exe
+          if-no-files-found: error
+
+  release:
+    name: attach to the release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/placement-probe-v')
+    permissions:
+      # The only job that needs it, and only for the tag path.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Write the release notes
+        # A file rather than an inline `--notes` string. The notes mention
+        # `--preview` in backticks, and a backtick inside a double-quoted bash
+        # string is command substitution: the shell would try to execute it.
+        # Quoting the heredoc delimiter also stops any `$` being expanded.
+        run: |
+          cat > notes.md <<'NOTES'
+          Measures what thread placement costs on a Windows machine, and prints a
+          result you can paste back.
+
+          Download the binary for your architecture and run it. Pass `--preview`
+          first if you would like to see exactly what it collects before it
+          measures anything, and `--no-cpu-model` to withhold the processor name.
+
+          It makes **no network connections**. Sending the result is your
+          decision and your action:
+          https://github.com/MikeGrier/windows-threadpool-sys/discussions/55
+
+          Machines with more than one NUMA node are the ones we most need, since
+          every host measured so far has exactly one.
+          NOTES
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "windows-placement-probe ${GITHUB_REF_NAME##*-v}" \
+            --notes-file notes.md \
+            artifacts/placement-probe-*.exe

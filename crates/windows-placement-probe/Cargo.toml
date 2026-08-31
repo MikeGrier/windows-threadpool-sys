@@ -17,6 +17,20 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Measures what thread placement costs on a Windows machine -- SMT siblings, cache domains, efficiency classes and NUMA hops -- and produces one structured record to send back."
+readme = "README.md"
+
+# What semver covers here, stated because the two halves differ sharply.
+#
+# **The record's schema is a compatibility surface** the moment anyone stores a
+# result, and it has its own versioning that does not move with the crate's:
+# `SCHEMA_VERSION` plus an append-only golden per version in `schema/`. A stored
+# record can be validated against the version it declares years later, which is
+# the property that matters when the records live in a discussion thread and
+# cannot be regenerated.
+#
+# **The measurement code is not a compatibility surface.** It is an instrument,
+# not a library to build on, and its types will change whenever a better
+# measurement needs them to. Nothing should depend on this crate as a library.
 
 [lib]
 path = "src/lib.rs"

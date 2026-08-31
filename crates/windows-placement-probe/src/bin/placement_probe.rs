@@ -7,6 +7,7 @@
 
 use std::process::ExitCode;
 
+use windows_placement_probe::build_identity::BuildIdentity;
 use windows_placement_probe::core_affinity::{self, RunPlan};
 use windows_placement_probe::fingerprint::{Fingerprint, discover_places};
 use windows_placement_probe::machine::MachineDescription;
@@ -21,6 +22,8 @@ struct Options {
     suppress_model: bool,
     /// Skip writing the backup file.
     no_file: bool,
+    /// Print the build identity and exit.
+    version: bool,
 }
 
 fn main() -> ExitCode {
@@ -31,6 +34,15 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if options.version {
+        // Deliberately the whole identity rather than just a version number.
+        // CI asserts on this line that a released artifact reports itself
+        // official, and a runner can check the same thing before trusting a
+        // download -- both need the commit and the source, not just "0.1.0".
+        println!("{}", BuildIdentity::current());
+        return ExitCode::SUCCESS;
+    }
 
     let machine = MachineDescription::read(options.suppress_model);
 
@@ -180,6 +192,7 @@ fn parse_arguments() -> Result<Options, String> {
         preview: false,
         suppress_model: false,
         no_file: false,
+        version: false,
     };
 
     for argument in std::env::args().skip(1) {
@@ -187,6 +200,7 @@ fn parse_arguments() -> Result<Options, String> {
             "--preview" => options.preview = true,
             "--no-cpu-model" => options.suppress_model = true,
             "--no-file" => options.no_file = true,
+            "--version" | "-V" => options.version = true,
             "--help" | "-h" => return Err(help()),
             other => {
                 return Err(format!("unrecognised argument {other:?}\n\n{}", help()));
@@ -208,6 +222,7 @@ fn help() -> String {
          \x20   --preview        Show what would be collected and measure nothing.\n\
          \x20   --no-cpu-model   Withhold the CPU model from the record.\n\
          \x20   --no-file        Do not write the backup copy of the record.\n\
+         \x20   -V, --version    Print this build's identity and exit.\n\
          \x20   -h, --help       Print this message.\n\
          \n\
          Results are collected at:\n\
