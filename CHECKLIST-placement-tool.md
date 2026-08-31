@@ -262,3 +262,67 @@ build" distinction meaningful rather than decorative.
   download, run, find the record, read the README's instructions for sending it. A path nobody has
   walked is a path that does not work, and the person walking it will be doing a favour rather than
   debugging.
+
+## M6: is a set of "equivalent" processors actually equivalent?
+
+**Not gated on the release, unlike the rest of this file.** The work is an extension of the affinity
+measurement, which today lives in [crates/windows-platform-probes](crates/windows-platform-probes) and
+moves wholesale under PT-2.1. Build it there now; it travels with everything else.
+
+**The assumption under test.** Several designs in this workspace treat a *set* of processors as
+interchangeable -- any processor in this cache domain, any processor in this NUMA node -- and place
+threads by domain rather than by processor. [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.5
+rests on exactly that. **Every measurement taken so far pins to a single processor** (`mask = 1 << cpu`),
+so the assumption has never been tested; it has only been assumed while being carefully avoided.
+
+**There is a structural reason to doubt it, before any scheduling subtlety.** A set mask permits
+placements a single-processor mask forbids -- including **both threads on one logical processor**,
+which turns an SPSC handoff from concurrency into time-slicing, with the spin-wait burning its quantum
+before the peer can run. On an SMT host the `same cache domain` set *is* the two siblings of one core,
+so this is not a corner case there, it is the common one.
+
+- [ ] **M6.1** -- Derive each processor's **equivalence set** from the topology -- SMT siblings, cache
+  domain, NUMA node, efficiency class -- and pin down which sets a given host can express, the same way
+  placements already are. A set with one member is not a test of anything and must be reported as
+  inexpressible rather than measured.
+
+- [ ] **M6.2** -- Add **affinity mode** as a dimension beside placement and strategy: `Pinned` (today's
+  single bit) and `SetWide` (each thread masked to *its own* equivalence set, which preserves the
+  placement relation while relaxing the choice within it). For `CrossCacheSameClass` that means the
+  producer may use any processor of its cache domain and the consumer any of its own; for
+  `SameCacheSameClass` both threads share one set, which is where co-residency becomes possible.
+  **In `SetWide` the placement label states intent, not outcome** -- the scheduler may do something
+  else entirely, and saying otherwise would be the "asserts its conclusion" defect again.
+
+- [ ] **M6.3** -- Measure the **mechanism**, not only the elapsed time, or the result cannot be read.
+  Sample `GetCurrentProcessorNumber` in both loops and report **migration count** (did the thread move
+  at all?) and **co-residency fraction** (how often were producer and consumer on the same processor?).
+  Co-residency is the killer observable and can only be non-zero in `SetWide`.
+  Without these, "the two modes matched" is indistinguishable from "the scheduler never moved
+  anything", which is precisely the false-equivalence this milestone exists to rule out -- and is the
+  same trap the peer-index probe's read counters were added to escape.
+
+- [ ] **M6.4** -- Run **long enough for the scheduler to act**. The present 2M items is roughly 40 ms
+  on an idle host, over which nothing migrates and both modes will look identical for want of any
+  reason to differ. Choose the duration from measured migration counts -- long enough that migrations
+  are actually observed under load -- rather than from a round number, and record the reasoning.
+
+- [ ] **M6.5** -- **Interference pass one: competing spinners confined to the same equivalence set.**
+  Adversarial and controlled: it forces the scheduler to choose *within* the class, which is the
+  precise claim under test. Vary the number of competitors relative to set size, since one spinner in a
+  four-processor set is a different question from four. Keep it reproducible -- an interference model
+  that varies run to run turns every comparison into noise.
+
+- [ ] **M6.6** -- **Interference pass two: a concurrent copy of the real workload.** A second
+  producer/consumer pair on the same set, which is what a domain runtime actually looks like when more
+  than one queue is live. Pass one establishes whether the scheduler *can* break the equivalence; this
+  establishes whether it *does* under load anyone would really generate. **Report both**: a difference
+  that appears only under adversarial spinners is a real finding with a narrower consequence, and
+  collapsing the two would lose exactly that distinction.
+
+- [ ] **M6.7** -- Report per set kind whether the equivalence holds, in the tool's own words, derived
+  from the measurement rather than asserted. Feed the answer back into
+  [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.5, whose premise this is. **A null result is
+  a real result here** -- "the sets behaved equivalently under both interference models, and here are
+  the migration counts showing the scheduler was genuinely exercised" retires a long-standing doubt,
+  and is worth as much as a difference would be.

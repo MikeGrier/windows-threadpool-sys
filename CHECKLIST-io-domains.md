@@ -609,6 +609,17 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   across domains on the ARM64 host -- 5.6x for nothing but where the two threads run**. That is far
   larger than any micro-optimisation this crate has considered, and it is a *placement* decision rather
   than a code one, which puts it squarely in the runtime's remit rather than the queue's.
+  **This item's premise -- that a domain is a set of interchangeable processors -- is itself untested,
+  and is now queued.** Every measurement behind the 5.6x pins to a *single* processor (`mask = 1 <<
+  cpu`), so "place the thread in the domain" has only ever been evaluated as "place the thread on one
+  chosen member of the domain". A set mask permits placements a single-processor mask forbids,
+  including both ends of a queue on one logical processor, which on an SMT host is the *common* case
+  for a same-cache set rather than a corner one. See
+  [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) M6, which measures set-wide against pinned
+  affinity under two interference models and reports migration and co-residency counts so a null result
+  can be distinguished from a scheduler that never moved anything. **If the sets are not equivalent,
+  the 5.6x is a number about pinned threads and this item needs restating**, not merely re-measuring.
+
   The design already intends one pinned thread per domain, so the queue between two threads of the same
   domain is the common case and is fine. What this measurement bounds is the **cross-domain** queue --
   the one M30's design deferred on the grounds that N=1 does not need it -- and the number to carry into
