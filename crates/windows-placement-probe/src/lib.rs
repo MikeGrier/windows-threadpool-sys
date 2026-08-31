@@ -51,6 +51,8 @@
 
 #![cfg(windows)]
 
+/// Which build produced a measurement.
+pub mod build_identity;
 /// What a handoff costs, by where the two threads run.
 pub mod core_affinity;
 /// What shape the machine is, and which slice a measurement ran on.

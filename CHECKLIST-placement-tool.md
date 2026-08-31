@@ -228,7 +228,7 @@ that carries them is written.
   N's meaning is fixed, because the record cannot be regenerated. Verify by sabotage: add a field,
   confirm the test fails and names the difference; bump, add the golden, confirm it passes.
 
-- [ ] **PT-3.2** -- **Stamp the exact build, and say loudly when it is not an official one.** The
+- [x] **PT-3.2** -- **Stamp the exact build, and say loudly when it is not an official one.** The
   record carries the git commit, whether the working tree was dirty when it was built, the crate
   version, and whether it came from CI or a local build.
   **This is the same problem as `Provenance` one layer up, and takes the same shape**: an official

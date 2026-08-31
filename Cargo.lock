@@ -228,6 +228,8 @@ dependencies = [
 name = "windows-placement-probe"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "windows-sys",
  "windows-topology-sys",
  "windows-waitable-queues",
