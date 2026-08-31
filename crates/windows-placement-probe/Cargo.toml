@@ -51,4 +51,9 @@ features = [
     # The machine-description fields that travel with a submission, so a
     # result can be read months later without asking its sender anything.
     "Win32_System_SystemInformation",
+    # Those fields are read from the registry rather than from the version and
+    # CPUID APIs: `GetVersionEx` is shimmed and lies to an unmanifested process
+    # about the major version, and CPUID's brand string does not exist on
+    # ARM64. The registry is truthful on both counts and on both architectures.
+    "Win32_System_Registry",
 ]

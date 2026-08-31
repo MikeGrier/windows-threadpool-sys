@@ -256,7 +256,7 @@ that carries them is written.
   exactly where it is and what to do with it. Asking someone to copy terminal output invites truncated
   and reflowed submissions.
 
-- [ ] **PT-3.6** -- Read the three machine-description fields PT-1.2 settled, each of which needs a
+- [x] **PT-3.6** -- Read the three machine-description fields PT-1.2 settled, each of which needs a
   source this crate does not currently use. **Every one of them is optional in the record**, so a host
   that will not answer produces a record missing a field rather than a failed run or a fabricated
   value.

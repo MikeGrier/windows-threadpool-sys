@@ -57,5 +57,7 @@ pub mod build_identity;
 pub mod core_affinity;
 /// What shape the machine is, and which slice a measurement ran on.
 pub mod fingerprint;
+/// What machine this was, beyond its measurable shape.
+pub mod machine;
 /// The handoff itself, and the strategies the placement experiment compares.
 pub mod peer_index_cache;
