@@ -43,14 +43,14 @@
       "find": [
         "        self.shared.doorbell.clear();",
         "        #[cfg(test)]",
-        "        crate::arm_race::run();",
+        "        crate::race_hooks::ARM.run();",
         "        Ok(self.is_empty())"
       ],
       "replace": [
         "        let empty = self.is_empty();",
         "        self.shared.doorbell.clear();",
         "        #[cfg(test)]",
-        "        crate::arm_race::run();",
+        "        crate::race_hooks::ARM.run();",
         "        Ok(empty)"
       ]
     },
@@ -183,6 +183,28 @@
       ]
     },
     {
+      "name": "clear clears the mirror flag before resetting the event",
+      "file": "src/doorbell.rs",
+      "expect": "caught",
+      "why": "The historical order, and a lost wakeup. A producer signalling between the two lines finds a clear flag, sets it, and issues a real SetEvent; the ResetEvent that follows erases that signal and leaves the flag set, so the doorbell is dark while claiming to be lit and every later signal skips its syscall. It survived review and a whole sabotage sweep because the argument for it -- 'the caller's re-check sees the racing producer's item' -- is true for spsc and false for mpsc, whose re-check asks only whether the HEAD slot is published. Found by a sabotage BASELINE hanging once in a run that was otherwise green six times over. The race_hooks::CLEAR hook drives the real clear through its own window on one thread, so this is caught every run rather than occasionally.",
+      "find": [
+        "        unsafe {",
+        "            ResetEvent(event.as_raw_handle());",
+        "        }",
+        "        #[cfg(test)]",
+        "        crate::race_hooks::CLEAR.run();",
+        "        self.signalled.store(false, Ordering::Release);"
+      ],
+      "replace": [
+        "        self.signalled.store(false, Ordering::Release);",
+        "        #[cfg(test)]",
+        "        crate::race_hooks::CLEAR.run();",
+        "        unsafe {",
+        "            ResetEvent(event.as_raw_handle());",
+        "        }"
+      ]
+    },
+    {
       "name": "mpsc push does not signal the doorbell",
       "file": "src/mpsc.rs",
       "expect": "caught",
@@ -236,7 +258,7 @@
       "find": [
         "        self.shared.doorbell.clear();",
         "        #[cfg(test)]",
-        "        crate::arm_race::run();",
+        "        crate::race_hooks::ARM.run();",
         "        // Deliberately not `is_empty`. The question is whether `pop` would find",
         "        // something, and a slot that a producer has claimed but not published",
         "        // is not something `pop` can find -- see `Shared::has_ready_item`.",
@@ -246,7 +268,7 @@
         "        let ready = self.shared.has_ready_item();",
         "        self.shared.doorbell.clear();",
         "        #[cfg(test)]",
-        "        crate::arm_race::run();",
+        "        crate::race_hooks::ARM.run();",
         "        Ok(!ready)"
       ]
     },

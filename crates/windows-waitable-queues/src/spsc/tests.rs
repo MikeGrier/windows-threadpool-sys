@@ -7,7 +7,7 @@
 //! runs after the peer has finished, not after a guess about how long it takes.
 
 use super::{Consumer, MIN_CAPACITY, Producer, bounded, validate_capacity};
-use crate::arm_race;
+use crate::race_hooks;
 use crate::{PushError, RecvError, RecvTimeoutError};
 use std::os::windows::io::AsRawHandle;
 use std::sync::Arc;
@@ -913,7 +913,7 @@ fn the_real_arm_finds_an_item_that_lands_inside_its_window() {
     // The hook owns the producer outright. An `Arc` would be pointless here and
     // clippy says so: a `Producer` is deliberately `!Sync`, so sharing one is
     // exactly what the type system is built to prevent.
-    let safe_to_wait = arm_race::with(
+    let safe_to_wait = race_hooks::ARM.with(
         move || {
             tx.push(1).expect("there is room");
         },
@@ -934,7 +934,7 @@ fn the_real_arm_still_blesses_a_wait_when_its_window_stays_empty() {
     rx.doorbell().expect("the doorbell must be creatable");
     drop(tx);
 
-    let safe_to_wait = arm_race::with(|| {}, || rx.arm().expect("arming must succeed"));
+    let safe_to_wait = race_hooks::ARM.with(|| {}, || rx.arm().expect("arming must succeed"));
 
     assert!(
         safe_to_wait,

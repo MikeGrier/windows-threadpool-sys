@@ -38,6 +38,7 @@ preferred.
 | <a id="d-12"></a>D-12 | **A shape's *minimum* capacity belongs to the shape, not to the crate, and `mpsc`'s is two.** One slot cannot encode three states when the lap stride is the capacity, so "published at `p`" and "free again at `p + capacity`" collide. Reported through `CapacityError` rather than worked around, because every available workaround puts a load back on the producer's hot path for every queue in order to serve a capacity of one. |
 | <a id="d-13"></a>D-13 | **The arming protocol is written once, in `blocking.rs`, and a shape binds to it by implementing a crate-private `Parked` trait.** The blocking receive loop *is* [D-9](#d-9), not glue around it; a second shape spelling it out again would be a second copy of a rule -- the exact mistake this crate has already paid for once. |
 | <a id="d-14"></a>D-14 | **`mpsc`'s arming asks "would `pop` find something", not "is `len` zero".** The two disagree over a slot a producer has claimed but not published, and only the first answer lets the consumer park on it instead of spinning until that producer is rescheduled. |
+| <a id="d-15"></a>D-15 | **`Doorbell::clear` resets the event *before* clearing the flag that mirrors it, and the original order was a lost wakeup.** A producer signalling between the two lines set the flag and issued a real `SetEvent`; the `ResetEvent` that followed erased the signal and left the flag set, wedging the doorbell dark while it claimed to be lit. **Amends [D-9](#d-9)**, whose "there is no third case" holds only for a queue whose emptiness is one position comparison. |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -168,7 +169,14 @@ naturally:
 
 `Consumer::arm` is steps 2 and 3, and returns whether step 4 is safe. Step 3 is what carries the
 guarantee: an item arriving before the clear is found by the check, and an item arriving after the clear
-signals a doorbell that is no longer about to be reset. There is no third case.
+signals a doorbell that is no longer about to be reset.
+
+**"There is no third case" is what this decision originally said next, and it was wrong** -- see
+[D-15](#d-15). It holds for `spsc`, where one producer and one position mean that *any* push before the
+clear makes the check find something. It fails for `mpsc`, where the check asks whether the *head* slot
+is published: a producer publishing at a later position before the clear is the third case, invisible to
+the check. The remedy is in `Doorbell::clear` rather than here, because what that case needs is not a
+better check but a doorbell that is guaranteed able to ring again once the clear returns.
 
 **Check-then-clear is the lost wakeup**, and it is the easier code to write: a push landing between the
 check and the clear both signals and has its signal erased, so the consumer sleeps on a queue that is
@@ -388,3 +396,56 @@ This also places the `SeqCst` pairing from D-9 correctly for this shape: the pro
 sequence and then loads the doorbell state, while the consumer stores the doorbell state and then loads
 that same sequence. It is the same store-buffer shape, over the same two fences, with a different pair of
 locations.
+
+## D-15: the clear order, and the assumption that hid a lost wakeup
+
+`Doorbell::clear` has two lines: reset the kernel event, and clear the `AtomicBool` that mirrors it so a
+redundant `signal` can skip its syscall. **They originally ran flag-first, and that order is a permanent
+hang.** A producer signalling between them finds a clear flag, sets it, and issues a real `SetEvent`; the
+`ResetEvent` that follows erases that signal and leaves the flag set. The doorbell is then dark while
+claiming to be lit, so every later `signal` skips, and a consumer parked on it never wakes.
+
+The flag is allowed to lie in exactly one direction -- claiming lit while the `SetEvent` has not landed
+yet, which costs a skipped *redundant* signal. The order above produced the opposite lie, which costs the
+one signal that mattered.
+
+**Why it survived review and a sabotage sweep.** The original argument was explicit and looks airtight:
+the racing producer publishes *before* it signals, so the caller's re-check sees the item and does not
+wait. It is sound -- for a queue whose re-check is guaranteed to see anything any producer published.
+`spsc` is such a queue: one producer, one tail, and `is_empty` covers every push. So the argument was
+tested against the only shape that could not falsify it, and it was written down as a general rule.
+
+`mpsc` falsifies it. Its re-check asks whether the **head** slot is published ([D-14](#d-14)), so a
+producer publishing at a later position is invisible to it. The consumer parks in exactly the wedged
+state, the producer holding the head publishes, its `signal` is skipped, and the queue hangs with an item
+sitting in it.
+
+**How it was found, which is the part worth keeping.** Not by review, and not by the test suite: the
+suite passed 120 tests in 0.28 s, six runs in a row. It was found because the sabotage harness refuses to
+sweep against a red baseline, and its *baseline* run -- the one that exists only to prove the suite is
+green before any defect is injected -- hung once in
+`mpsc::tests::many_producers_deliver_every_item_exactly_once`. A single unreproducible hang is exactly
+the finding it is tempting to dismiss as a slow machine, and the crate's own sabotage documentation
+already says not to: "a flaky sabotage is a finding, not noise". The same applies to a flaky baseline.
+
+**The fix moves the guarantee from the caller to the type.** With the event reset first, the invariant is
+a property of the doorbell rather than an obligation on whoever calls it: *once `clear` returns, the flag
+is false, so the next `signal` cannot be skipped.* A producer signalling inside the window may still be
+skipped, but it published before it signalled and therefore before the flag store, so the caller's
+re-check observes whatever that publication made observable; and any producer that publishes after the
+re-check finds the flag already false and rings for real. No caller has to reason about it, which is the
+point -- the previous arrangement required every future shape to have a re-check strong enough to cover
+the window, and no signature said so.
+
+**It is asserted deterministically, at the layer that owns it.** `race_hooks::CLEAR` fires inside the
+real `clear`, between its two lines, and a test signals from there on one thread. The assertion is not
+about the state immediately afterwards -- both orders leave the event dark -- but about what a consumer
+depends on next: `signal` must still be able to ring. Reversed, the test fails every run; a sabotage
+entry keeps it that way. A control with an empty window sits beside it, so the test cannot pass by
+`clear` simply never leaving the doorbell ringable.
+
+**Two temptations refused.** Making `mpsc` arm on `len` instead of readiness would also have masked this,
+by restoring the property that any push makes the re-check find something -- but it would have left the
+doorbell able to reach the inconsistent state, waiting for the next shape, and it would have cost the
+consumer a spin whenever a claim was in flight. Adding a lock around the two lines would have fixed it
+and thrown away the reason the flag exists.

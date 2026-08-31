@@ -122,12 +122,42 @@
 //! 7.2 ns for an uncontended atomic, so a backlogged producer that would
 //! otherwise pay a syscall per push pays roughly a tenth of one.
 //!
+//! # The flag must never outlive the signal it mirrors
+//!
 //! The flag is allowed to disagree with the event briefly, and that is sound in
-//! exactly one direction: it may claim signalled while the `SetEvent` has not
-//! landed yet, which costs a skipped redundant signal, never a skipped
-//! necessary one. It is never permitted to claim clear while the event is
-//! signalled in a way that matters, because [`Doorbell::clear`] writes the flag
-//! before touching the event.
+//! exactly one direction: it may claim **signalled while the `SetEvent` has not
+//! landed yet**, which costs a skipped redundant signal, never a skipped
+//! necessary one. The opposite disagreement -- the flag claiming signalled over
+//! an event that is *dark* -- is fatal, because every later [`Doorbell::signal`]
+//! then skips its syscall and the doorbell can never be lit again.
+//!
+//! **[`Doorbell::clear`] therefore resets the event first and clears the flag
+//! second, and that order is load-bearing.** Written the other way round -- flag
+//! first, `ResetEvent` second, which is how this shipped originally -- a
+//! producer signalling between the two lines finds a clear flag, sets it, and
+//! issues a real `SetEvent`; the `ResetEvent` that follows then erases that
+//! signal while leaving the flag set. The doorbell is wedged dark with the flag
+//! claiming otherwise, and the next producer to publish skips the one signal
+//! that mattered.
+//!
+//! The original argument for the other order was that the caller's re-check
+//! covers it: a producer racing the clear publishes *before* it signals, so the
+//! re-check sees the item and the caller does not wait. **That argument is
+//! sound only when the re-check is guaranteed to see anything that producer
+//! published**, and it silently assumed a queue whose emptiness is a single
+//! position comparison. `mpsc` broke the assumption -- its re-check asks whether
+//! the *head* slot is published, so a producer publishing at a later position
+//! is invisible to it, and the consumer parks in exactly the wedged state above.
+//! The failure was a rare permanent hang, reproduced once in a sabotage
+//! baseline and then not again in six runs.
+//!
+//! With the reset first, the invariant is a property of this type rather than a
+//! property of its callers: **once `clear` returns, the flag is false, so the
+//! next `signal` cannot be skipped.** A producer signalling inside the window
+//! may still be skipped, but it published before it signalled and therefore
+//! before the flag store, so the caller's re-check -- which follows -- observes
+//! whatever that publication made observable, and any producer that publishes
+//! *after* the re-check finds the flag already false and rings for real.
 
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
@@ -268,23 +298,27 @@ impl Doorbell {
         let Some(event) = self.event.get() else {
             return;
         };
-        // Written before the event is reset, so a producer racing this call
-        // sees a clear flag and issues a real `SetEvent`. That signal may then
-        // be erased by the `ResetEvent` below -- which is precisely why the
-        // caller's re-check, and not this ordering, is what carries the
-        // guarantee.
-        self.signalled.store(false, Ordering::Release);
+
+        // **The event is reset first and the flag second, and swapping these
+        // two lines is a permanent hang.** See "the flag must never outlive the
+        // signal it mirrors" in the module documentation; the short form is
+        // that a producer signalling between them must never be able to leave
+        // the flag claiming "lit" over an event this call is about to darken.
+        //
         // SAFETY: as in `signal`.
         unsafe {
             ResetEvent(event.as_raw_handle());
         }
+        #[cfg(test)]
+        crate::race_hooks::CLEAR.run();
+        self.signalled.store(false, Ordering::Release);
 
         // The other half of the pair described in `signal`. The caller's
-        // emptiness re-check is a LOAD of the queue's position, and it follows
-        // this store of `signalled`; without a sequentially consistent fence on
-        // both sides, that load and the producer's load of `signalled` may both
-        // observe stale values, which is the lost wakeup. `ResetEvent` above is
-        // very probably a barrier in its own right, but that is an incidental
+        // re-check is a LOAD of the queue's state, and it follows this store of
+        // `signalled`; without a sequentially consistent fence on both sides,
+        // that load and the producer's load of `signalled` may both observe
+        // stale values, which is the lost wakeup. `ResetEvent` above is very
+        // probably a barrier in its own right, but that is an incidental
         // property of an implementation rather than a documented guarantee, so
         // it is not what this relies on.
         fence(Ordering::SeqCst);

@@ -58,13 +58,13 @@
 #![warn(missing_docs)]
 #![warn(unsafe_op_in_unsafe_fn)]
 
-#[cfg(test)]
-mod arm_race;
 mod blocking;
 mod capacity;
 mod doorbell;
 mod error;
 pub mod mpsc;
+#[cfg(test)]
+mod race_hooks;
 pub mod spsc;
 pub mod traits;
 

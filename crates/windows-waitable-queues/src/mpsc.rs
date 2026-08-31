@@ -671,13 +671,28 @@ impl<T> Consumer<T> {
     /// of waiting.
     ///
     /// The order inside this method is the whole correctness argument, and it
-    /// is the reverse of the one that reads naturally. Clearing *first* and
-    /// checking *second* is what makes a lost wakeup impossible: an item that
-    /// arrives before the clear is found by the check, and an item that arrives
-    /// after the clear signals a doorbell that is no longer about to be reset.
-    /// Checking first would leave a window in which a push both signals and has
-    /// its signal erased, and the consumer would sleep on a queue that is not
-    /// empty and will never be signalled again.
+    /// is the reverse of the one that reads naturally. Checking first would
+    /// leave a window in which a push both signals and has its signal erased,
+    /// and the consumer would sleep on a queue that is not empty and will never
+    /// be signalled again.
+    ///
+    /// Clearing first splits every push into two cases, and this shape's
+    /// division is **not** the one `spsc` uses -- the difference is why
+    /// [`Doorbell::clear`](crate::doorbell::Doorbell::clear) had to be
+    /// corrected before this shape was sound:
+    ///
+    /// - **A push that publishes at the head before the clear** is found by the
+    ///   check, so the caller does not wait.
+    /// - **Every other push** -- one that publishes after the clear, and one
+    ///   that publishes at a *later position* before it -- leaves the check
+    ///   finding nothing, and the caller waits. That is safe because the head
+    ///   position is then still owed a publication, and `clear` guarantees the
+    ///   doorbell can ring again when it comes.
+    ///
+    /// The second case is the one that has no counterpart in `spsc`, where any
+    /// push at all makes the check find something. It is why `clear` must reset
+    /// the event *before* clearing the flag that mirrors it, rather than
+    /// relying on this check to cover the window.
     ///
     /// This also creates the doorbell if it does not exist, which must happen
     /// before the check for the same reason: a producer running while there is
@@ -692,7 +707,7 @@ impl<T> Consumer<T> {
         self.shared.doorbell.handle()?;
         self.shared.doorbell.clear();
         #[cfg(test)]
-        crate::arm_race::run();
+        crate::race_hooks::ARM.run();
         // Deliberately not `is_empty`. The question is whether `pop` would find
         // something, and a slot that a producer has claimed but not published
         // is not something `pop` can find -- see `Shared::has_ready_item`.

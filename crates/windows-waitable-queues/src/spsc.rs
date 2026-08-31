@@ -477,10 +477,17 @@ impl<T> Consumer<T> {
     /// is the reverse of the one that reads naturally. Clearing *first* and
     /// checking emptiness *second* is what makes a lost wakeup impossible: an
     /// item that arrives before the clear is found by the check, and an item
-    /// that arrives after the clear signals a doorbell that is no longer about
-    /// to be reset. Checking first would leave a window in which a push both
-    /// signals and has its signal erased, and the consumer would sleep on a
-    /// queue that is not empty and will never be signalled again.
+    /// that arrives after the clear signals a doorbell that
+    /// [`clear`](crate::doorbell::Doorbell::clear) has left able to ring.
+    /// Checking first would leave a window in which a push both signals and has
+    /// its signal erased, and the consumer would sleep on a queue that is not
+    /// empty and will never be signalled again.
+    ///
+    /// The first of those two cases is stronger here than it is for
+    /// [`mpsc`](crate::mpsc): there is one producer and one position, so *any*
+    /// push before the clear makes this check find something. That is why this
+    /// shape never exhibited the doorbell defect `mpsc` exposed, and why the
+    /// fix for it belongs to the doorbell rather than to either caller.
     ///
     /// This also creates the doorbell if it does not exist, which must happen
     /// before the emptiness check for the same reason: a producer running while
@@ -495,7 +502,7 @@ impl<T> Consumer<T> {
         self.shared.doorbell.handle()?;
         self.shared.doorbell.clear();
         #[cfg(test)]
-        crate::arm_race::run();
+        crate::race_hooks::ARM.run();
         Ok(self.is_empty())
     }
 

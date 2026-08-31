@@ -15,7 +15,7 @@
 //! and evidence of nothing either way.
 
 use super::{Consumer, MIN_CAPACITY, Producer, bounded, validate_capacity};
-use crate::arm_race;
+use crate::race_hooks;
 use crate::{PushError, RecvError, RecvTimeoutError};
 use std::collections::BTreeMap;
 use std::os::windows::io::AsRawHandle;
@@ -768,7 +768,7 @@ fn the_real_arm_finds_an_item_that_lands_inside_its_window() {
 
     // The hook owns the producer outright. Sharing one behind an `Arc` would be
     // pointless: a `Producer` is deliberately `!Sync`.
-    let safe_to_wait = arm_race::with(
+    let safe_to_wait = race_hooks::ARM.with(
         move || {
             tx.push(1).expect("there is room");
         },
@@ -788,7 +788,7 @@ fn the_real_arm_still_blesses_a_wait_when_its_window_stays_empty() {
     let (_tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
     rx.doorbell().expect("the doorbell must be creatable");
 
-    let safe_to_wait = arm_race::with(|| {}, || rx.arm().expect("arming must succeed"));
+    let safe_to_wait = race_hooks::ARM.with(|| {}, || rx.arm().expect("arming must succeed"));
     assert!(
         safe_to_wait,
         "nothing arrived, so waiting is exactly what the consumer should do"

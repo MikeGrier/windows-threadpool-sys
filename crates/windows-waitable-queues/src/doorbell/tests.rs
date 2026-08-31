@@ -8,11 +8,13 @@
 //! statement about a queue this type cannot see; that is `spsc`'s job.
 
 use std::os::windows::io::AsRawHandle;
+use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use super::Doorbell;
+use crate::race_hooks;
 
 /// Whether the doorbell is signalled right now, by asking the kernel rather
 /// than by reading the mirror flag.
@@ -312,4 +314,68 @@ fn a_waiting_thread_is_released_by_a_signal() {
         result, WAIT_OBJECT_0,
         "a blocked waiter must be released by a signal, not by the timeout"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The flag must never outlive the signal it mirrors.
+//
+// `clear` resets the event and *then* clears the flag. Written the other way
+// round -- which is how this shipped originally -- a producer signalling
+// between the two lines finds a clear flag, sets it, and issues a real
+// `SetEvent`; the `ResetEvent` that follows erases that signal and leaves the
+// flag set. The doorbell is then wedged dark while claiming to be lit, and
+// every later `signal` skips its syscall.
+//
+// The window is two instructions wide, so the race is driven through the real
+// `clear` by a hook rather than raced for on two threads: an interleaving that
+// must be hit to prove a point is not one to leave to the scheduler.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_signal_racing_a_clear_leaves_the_next_one_able_to_ring() {
+    // Shared rather than borrowed because the hook must be `'static`. One
+    // thread throughout -- the `Arc` is a lifetime device, not concurrency.
+    let doorbell = Arc::new(Doorbell::new());
+    doorbell.handle().expect("the doorbell must be creatable");
+
+    // Start from the state that makes the wrong order fatal: already lit, so a
+    // producer racing the clear can find the flag either way depending on the
+    // order of the two lines.
+    doorbell.signal();
+    assert!(is_signalled(&doorbell), "the setup must actually light it");
+
+    let racing = Arc::clone(&doorbell);
+    race_hooks::CLEAR.with(move || racing.signal(), || doorbell.clear());
+
+    assert!(
+        !is_signalled(&doorbell),
+        "clearing must darken the event even when a signal raced it"
+    );
+
+    // The assertion that matters, and the one the wrong order fails: whatever
+    // happened during the window, `clear` must leave the doorbell able to ring
+    // again. A queue's consumer parks immediately after this returns, and its
+    // wakeup is the next producer's `signal`.
+    doorbell.signal();
+    assert!(
+        is_signalled(&doorbell),
+        "a signal racing a clear must not wedge the doorbell dark; the flag \
+         would be claiming 'already lit' over an event nothing will ever set"
+    );
+}
+
+#[test]
+fn a_clear_with_nothing_racing_it_still_re_arms() {
+    // The control for the test above: it must not pass merely because `clear`
+    // never leaves the doorbell ringable, so the same sequence is checked with
+    // an empty window.
+    let doorbell = Arc::new(Doorbell::new());
+    doorbell.handle().expect("the doorbell must be creatable");
+    doorbell.signal();
+
+    race_hooks::CLEAR.with(|| {}, || doorbell.clear());
+    assert!(!is_signalled(&doorbell), "nothing raced it, so it is dark");
+
+    doorbell.signal();
+    assert!(is_signalled(&doorbell), "and the next signal rings");
 }
