@@ -94,6 +94,24 @@ again next lap" in a one-slot ring.
   is refused, with the nearest valid neighbours on the error, rather than
   silently turned into one the caller did not choose.
 
+## What it will tell you about itself
+
+Three numbers, through the `Observable` trait on either handle:
+
+- **`refused()`** -- pushes turned away for want of room. This is the loss count,
+  and it counts room only: a push refused because the consumer is gone is the end
+  of the stream, not backpressure.
+- **`doorbell_rings()`** -- `SetEvent` calls, not signal attempts. The difference
+  between the two *is* the skip optimisation, which is what makes this the number
+  worth reporting.
+- **`high_water()`** -- the deepest the queue got, or `None` if nobody asked for
+  it to be tracked. It is the one metric that cannot be made free, so it is
+  opt-in via `Options::tracking_high_water`; `None` rather than `0` so you cannot
+  mistake "nobody was counting" for "it never filled".
+
+Depth is not on that list because `len()` already reports it, from positions the
+queue keeps anyway.
+
 ## Licence
 
 Copyright (c) Mike Grier.

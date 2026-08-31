@@ -28,7 +28,7 @@ impl Drop for DropCounter {
 #[test]
 fn the_default_policy_destroys_the_item() {
     let drops = Arc::new(AtomicUsize::new(0));
-    let mut teardown = Teardown::drop_in_place();
+    let mut teardown = Teardown::new(None);
 
     teardown.dispose(DropCounter(Arc::clone(&drops)));
     assert_eq!(
@@ -44,12 +44,12 @@ fn a_sink_receives_the_item_instead_of_it_being_destroyed() {
     let collected = Arc::new(AtomicUsize::new(0));
 
     let seen = Arc::clone(&collected);
-    let mut teardown = Teardown::handing_off(Disposal::new(move |item: DropCounter| {
+    let mut teardown = Teardown::new(Some(Disposal::new(move |item: DropCounter| {
         seen.fetch_add(1, Ordering::Relaxed);
         // Deliberately kept alive past the sink call, which is the whole point:
         // the owner decides when -- and on which thread -- the destructor runs.
         std::mem::forget(item);
-    }));
+    })));
 
     teardown.dispose(DropCounter(Arc::clone(&drops)));
 
@@ -65,9 +65,9 @@ fn a_sink_receives_the_item_instead_of_it_being_destroyed() {
 fn every_item_reaches_the_sink_in_order() {
     let order = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen = Arc::clone(&order);
-    let mut teardown = Teardown::handing_off(Disposal::new(move |item: u32| {
+    let mut teardown = Teardown::new(Some(Disposal::new(move |item: u32| {
         seen.lock().expect("no test holds this poisoned").push(item);
-    }));
+    })));
 
     for value in 0..10 {
         teardown.dispose(value);
@@ -89,10 +89,10 @@ fn a_panicking_sink_does_not_strand_the_items_behind_it() {
     let disposed = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&disposed);
 
-    let mut teardown = Teardown::handing_off(Disposal::new(move |item: u32| {
+    let mut teardown = Teardown::new(Some(Disposal::new(move |item: u32| {
         seen.fetch_add(1, Ordering::Relaxed);
         assert_ne!(item, 3, "deliberate panic from a caller-supplied sink");
-    }));
+    })));
 
     for value in 0..10 {
         teardown.dispose(value);
@@ -111,9 +111,9 @@ fn a_panicking_sink_still_consumes_the_item_it_panicked_on() {
     // by the unwind rather than leaked. Asserted so that "the panic is caught"
     // is not mistaken for "the item is still somewhere".
     let drops = Arc::new(AtomicUsize::new(0));
-    let mut teardown = Teardown::handing_off(Disposal::new(|_item: DropCounter| {
+    let mut teardown = Teardown::new(Some(Disposal::new(|_item: DropCounter| {
         panic!("deliberate panic from a caller-supplied sink");
-    }));
+    })));
 
     teardown.dispose(DropCounter(Arc::clone(&drops)));
     assert_eq!(
@@ -131,10 +131,10 @@ fn a_sink_may_be_stateful_across_items() {
     let sum = Arc::new(AtomicUsize::new(0));
     let report = Arc::clone(&sum);
 
-    let mut teardown = Teardown::handing_off(Disposal::new(move |item: u32| {
+    let mut teardown = Teardown::new(Some(Disposal::new(move |item: u32| {
         total += item;
         report.store(total as usize, Ordering::Relaxed);
-    }));
+    })));
 
     for value in 1..=4 {
         teardown.dispose(value);
@@ -146,9 +146,9 @@ fn a_sink_may_be_stateful_across_items() {
 fn the_debug_form_says_which_policy_is_in_force() {
     // Teardown is invisible until something goes wrong, so the one place it can
     // be observed should say which of the two it is.
-    let plain: Teardown<u32> = Teardown::drop_in_place();
+    let plain: Teardown<u32> = Teardown::new(None);
     assert!(format!("{plain:?}").contains("hands_off: false"));
 
-    let handing: Teardown<u32> = Teardown::handing_off(Disposal::new(|_| {}));
+    let handing: Teardown<u32> = Teardown::new(Some(Disposal::new(|_| {})));
     assert!(format!("{handing:?}").contains("hands_off: true"));
 }

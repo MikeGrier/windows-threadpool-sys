@@ -46,7 +46,9 @@ preferred.
 | <a id="d-20"></a>D-20 | **Undrained items are handed to a caller-supplied sink at teardown, and the sink is chosen at construction because `Drop` has nowhere to hand them back to.** Without one they are destroyed on whichever thread released the last handle -- which may be a pool callback that must not block, and closing a handle to a dead network path can block for a long time. The default is unchanged; what changes is that it is now a named choice. |
 | <a id="d-21"></a>D-21 | **A panicking disposal sink is caught and the teardown walk continues.** The sink is caller code inside a destructor: a panic escaping it abandons every item behind it -- the exact handles the mechanism exists to account for -- and during an unwind aborts the process. Catching declines to turn a caller's bug into a much larger one. |
 | <a id="d-22"></a>D-22 | **No `into_remaining`, because it would not close the hole and `drain` already covers what it would do.** A consumer can take everything available, but a producer may push afterwards, so an orderly drain covers only the orderly path. The last handle to drop is the only place that sees every survivor. |
-
+| <a id="d-23"></a>D-23 | **High-water tracking is opt-in at construction; refusals and doorbell rings are always on.** The difference is where each can be paid for: refusals sit on the failure path and rings on a path that already costs a syscall, but a peak has to observe *every* change -- and on `mpsc` that means the producer reading the consumer's position, the shared line [D-16](#d-16) built a separate shape to avoid. Untracked reports `None`, not `0`. |
+| <a id="d-24"></a>D-24 | **Counting the doorbell's rings turns the skip optimisation into part of the observable contract, and that is the point rather than a side effect.** R9 asks for the count precisely so "disabling the skip must change the number" -- so the sabotage entry for removing the skip changed from a control expecting `survives` to a defect expecting `caught`. An optimisation nobody can measure is an assumption. |
+| <a id="d-25"></a>D-25 | **`Observable` deliberately does not restate depth.** [D-2](#d-2)'s sketch listed it, but `Bounded::len` already reports it from positions the queue keeps anyway. Naming it twice would give one number two spellings and two places to drift. What belongs on `Observable` is only what must be *accumulated*. |
 ## D-2: capabilities are sliced, not gathered
 
 The first sketch of this crate had one `WaitableQueue` trait carrying push, pop, the doorbell, capacity,
@@ -674,3 +676,84 @@ the extra method would be surface without capability.
 The orderly shutdown therefore stays what it already was: drain to empty, observe
 `Consumer::is_disconnected`, and take the final item with the receive loop's `finish` step. The sink is
 for everything that does not go to plan.
+
+## D-23: high-water is opt-in; refusals and rings are not
+
+R9 asks for three numbers, and the interesting thing about them is that they do not cost the same.
+
+**A counter on a hot path is a shared line every thread writes** -- the same false-sharing cost the
+positions are carefully padded apart to avoid. So each was placed where it is already paid for, and the
+one that could not be placed that way became a switch:
+
+| Metric | Where it increments | Cost |
+|---|---|---|
+| Refusals | only when a push is refused | off the success path entirely |
+| Doorbell rings | only when `SetEvent` is actually called | ~7 ns against a syscall measured at ~81 ns |
+| Peak depth | must observe **every** change | see below -- and it varies by shape |
+
+Peak depth is the awkward one, and the awkwardness is not uniform:
+
+- **`spsc`** -- free. The producer already loads `head` to decide there is room and owns `tail`, so the
+  depth is a subtraction of two values in hand, and the counter's line is producer-owned.
+- **`reserving_mpsc`** -- near-free, for the same reason: its producer reads `head` for the room check
+  that honours reservations. Only the counter's line is shared, and it is written rarely.
+- **`mpsc`** -- *not* free. Its producer never reads `head`; that is the whole property
+  [D-16](#d-16) built a separate shape to preserve, because `head` is the one line every thread touches.
+  Tracking makes it read that line on every push.
+
+Making it always-on would have imposed D-16's refused cost on every `mpsc` user to serve a metric most of
+them will never read -- and would have done it just before [M31.5](../../CHECKLIST-io-domains.md) measures
+exactly that path. Omitting it from `mpsc` would have narrowed the shape. So it is a switch, off by
+default, and the cost lands only on queues that asked. Off, `mpsc` pays one predictable branch on a field
+written once at construction: the line is shared but read-only, which is the cheap kind.
+
+**Untracked reports `None`, not `0`.** They are different answers -- "nobody was counting" versus "it
+never filled" -- and a caller sizing a queue from the second when the first was true would be reading a
+number nobody recorded.
+
+**Two independent switches across three shapes is why `Options` is a builder.** As constructors that is
+four functions per shape and twelve in the crate, and every future switch doubles it. The plain `bounded`
+stays, because the default is the common case and should not have to say so.
+
+`record_depth` loads before it modifies. An unconditional `fetch_max` would be a read-modify-write on a
+shared line for every push; a new maximum is rare after a queue warms up, so the common case becomes a
+plain load of a rarely-written line and the read-modify-write is reached only when the value is actually
+about to change. The load may be stale, and the `fetch_max` behind it is what keeps the result correct
+regardless -- which is asserted by a concurrent test rather than argued.
+
+## D-24: counting the rings makes the skip part of the contract
+
+R9 asks for the ring count so that "disabling the skip must change the number". Following that literally
+has a consequence worth naming, because it inverts something this crate had already written down.
+
+`sabotage.json` carried an entry that removed the skip optimisation, expecting **`survives`**. It was a
+*control*: skipping a redundant `SetEvent` changed no observable behaviour, so a suite that went red on
+its removal would have been asserting the implementation instead of the contract -- and
+[D-9](#d-9) records that the control earned its place by proving exactly that.
+
+Once the rings are counted, that stops being true. The count is observable, so the skip is observable, and
+the same patch that had to survive now has to be **caught**. The entry changed sides in M31.4.
+
+**This is the requirement working, not a regression.** An optimisation nobody can measure is an
+assumption, and R9's whole point is to stop this one being one. What it costs is that the skip is now part
+of what the queue promises rather than a private cleverness -- so removing it later would be a behaviour
+change, not a refactor. That is the right trade for a queue whose entire reason to exist is a wakeup
+protocol, but it is a trade, and it should be made knowingly.
+
+The control it vacated is replaced rather than dropped: `mpsc`'s guard around the `head` load is an
+optimisation and not a correctness device, so removing *that* must still leave the suite green. A sweep
+with no controls left is a sweep that has stopped asking whether its tests describe the contract.
+
+## D-25: `Observable` does not restate depth
+
+[D-2](#d-2)'s sketch of this trait read "depth, high-water, doorbells actually rung". Depth was dropped on
+the way to shipping it.
+
+`Bounded::len` already reports depth, computed on demand from positions the queue keeps anyway. Naming it
+again on `Observable` would give one number two spellings, two doc comments, and two places to drift --
+which is the restatement problem this workspace has already paid for, recorded in the root
+[DESIGN-NOTES.md](../../DESIGN-NOTES.md). The trait carries only what must be **accumulated**: facts about
+the past that the queue's present state cannot reconstruct.
+
+Both handles implement it, because both ends have a question. A producer wants to know how often it was
+refused; a consumer wants to know how deep the backlog got and how often it was actually woken.

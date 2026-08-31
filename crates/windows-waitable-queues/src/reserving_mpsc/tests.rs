@@ -13,11 +13,11 @@
 //! slot -- so the interesting cases all put the queue under pressure first.
 
 use super::{
-    BOUNDS_MAX, Consumer, Producer, Reservation, bounded, bounded_with_disposal, claim_word,
-    position_of, reserved_of,
+    BOUNDS_MAX, Consumer, Producer, Reservation, bounded, bounded_with, claim_word, position_of,
+    reserved_of,
 };
-use crate::Disposal;
 use crate::race_hooks;
+use crate::{Disposal, Options};
 // The trait is imported anonymously because this module also names the concrete
 // `Consumer` type, and only its `drain` method is wanted here. That the two can
 // coexist is the point made in `traits`: the trait is named for the role and the
@@ -789,11 +789,11 @@ fn undrained_items_reach_the_disposal_sink_instead_of_being_destroyed() {
     let (undelivered, reaper) = std::sync::mpsc::channel();
 
     {
-        let (tx, _rx) = bounded_with_disposal::<Tracked>(
+        let (tx, _rx) = bounded_with::<Tracked>(
             8,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("8 is a valid capacity");
 
@@ -821,11 +821,11 @@ fn a_reserved_message_abandoned_at_teardown_is_still_accounted_for() {
     // to see it like any other survivor.
     let (undelivered, reaper) = std::sync::mpsc::channel();
     {
-        let (tx, _rx) = bounded_with_disposal::<u32>(
+        let (tx, _rx) = bounded_with::<u32>(
             4,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("4 is a valid capacity");
 
@@ -849,11 +849,11 @@ fn an_unredeemed_reservation_hands_nothing_to_the_sink() {
     // direction.
     let (undelivered, reaper) = std::sync::mpsc::channel();
     {
-        let (tx, _rx) = bounded_with_disposal::<u32>(
+        let (tx, _rx) = bounded_with::<u32>(
             4,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("4 is a valid capacity");
 
@@ -873,11 +873,11 @@ fn a_queue_torn_down_by_a_reservation_still_reaches_the_sink() {
     // A reservation counts as a producer, so it can be the last handle
     // standing -- and then its drop is what tears the queue down.
     let (undelivered, reaper) = std::sync::mpsc::channel();
-    let (tx, rx) = bounded_with_disposal::<u32>(
+    let (tx, rx) = bounded_with::<u32>(
         4,
-        Disposal::new(move |item| {
+        Options::new().disposal(Disposal::new(move |item| {
             let _ = undelivered.send(item);
-        }),
+        })),
     )
     .expect("4 is a valid capacity");
 
@@ -898,11 +898,11 @@ fn a_queue_torn_down_by_a_reservation_still_reaches_the_sink() {
 fn the_sink_sees_survivors_after_the_ring_has_wrapped() {
     let (undelivered, reaper) = std::sync::mpsc::channel();
     {
-        let (tx, rx) = bounded_with_disposal::<u32>(
+        let (tx, rx) = bounded_with::<u32>(
             4,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("4 is a valid capacity");
 
@@ -931,4 +931,111 @@ fn without_a_sink_undrained_items_are_destroyed_in_place() {
         }
     }
     assert_eq!(destroyed.load(Ordering::Relaxed), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Observability.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn refusals_are_counted_but_disconnections_are_not() {
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+    assert!(tx.push(3).is_err());
+    assert_eq!(tx.refused(), 1);
+    assert_eq!(rx.refused(), 1, "both handles report the same queue");
+
+    drop(rx);
+    assert!(matches!(tx.push(4), Err(PushError::Disconnected(4))));
+    assert_eq!(
+        tx.refused(),
+        1,
+        "the end of the stream is not backpressure and must not be counted as it"
+    );
+}
+
+#[test]
+fn a_push_refused_because_a_slot_is_reserved_counts_as_a_refusal() {
+    // It is backpressure like any other from the caller's side: the queue had
+    // no room for *this* push, and the reason is the queue's business rather
+    // than the refused producer's.
+    let (tx, _rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    let _slot = tx.reserve().expect("room");
+    tx.push(1).expect("one slot is unreserved");
+
+    assert!(tx.push(2).is_err());
+    assert_eq!(tx.refused(), 1);
+}
+
+#[test]
+fn high_water_is_untracked_by_default() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+    assert_eq!(tx.high_water(), None);
+    assert_eq!(rx.high_water(), None);
+}
+
+#[test]
+fn high_water_records_the_peak_when_asked_for() {
+    let (tx, rx) = bounded_with::<u32>(8, Options::new().tracking_high_water())
+        .expect("8 is a valid capacity");
+    assert_eq!(tx.high_water(), Some(0));
+
+    for value in 0..5 {
+        tx.push(value).expect("room");
+    }
+    assert_eq!(tx.high_water(), Some(5));
+
+    while rx.pop().is_some() {}
+    assert_eq!(rx.high_water(), Some(5));
+}
+
+#[test]
+fn an_unredeemed_reservation_does_not_count_towards_the_peak() {
+    // A reservation holds capacity, not an item. Counting it as depth would
+    // report a backlog that does not exist, and the whole point of the mark is
+    // to size a queue from evidence.
+    let (tx, _rx) = bounded_with::<u32>(8, Options::new().tracking_high_water())
+        .expect("8 is a valid capacity");
+
+    let _slot = tx.reserve().expect("room");
+    tx.push(1).expect("room");
+
+    assert_eq!(
+        tx.high_water(),
+        Some(1),
+        "one item is one item, whatever else is promised"
+    );
+}
+
+#[test]
+fn the_ring_count_reports_syscalls_rather_than_signal_attempts() {
+    let (tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+
+    for value in 0..4 {
+        tx.push(value).expect("room");
+    }
+
+    assert_eq!(
+        rx.doorbell_rings(),
+        1,
+        "the first push lit it; the other three had nothing to do"
+    );
+}
+
+#[test]
+fn a_reserved_delivery_rings_like_any_other() {
+    let (tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+
+    let slot = tx.reserve().expect("room");
+    slot.send(1).expect("the room was ours");
+
+    assert_eq!(
+        rx.doorbell_rings(),
+        1,
+        "the message a reservation exists to protect must wake a parked consumer"
+    );
 }

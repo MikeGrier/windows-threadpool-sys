@@ -331,9 +331,43 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   194 unit tests, 7 doctests and 1 `compile_fail` doctest, the whole suite in 0.33s. Thirty-six sabotages,
   all behaving as declared: five new ones for this milestone.
 
-- [ ] **M31.4** -- Observability (R9): depth, high-water, and **a count of doorbells actually rung**. That
+- [x] **M31.4** -- Observability (R9): depth, high-water, and **a count of doorbells actually rung**. That
   last one is what makes the skip rule measurable rather than assumed, and sabotage-verifiable -- disabling
   the skip must move the number.
+  **The interesting thing about the three numbers is that they do not cost the same**, and each was placed
+  where it is already paid for. Refusals increment only on the failure path. Rings increment only when
+  `SetEvent` is actually called -- ~7 ns against a syscall measured at ~81 ns -- and the *skipped* signals
+  are deliberately not counted, because that increment would land on exactly the path the skip exists to
+  cheapen. Depth needed nothing new at all: `Bounded::len` already computes it from positions the queue
+  keeps anyway.
+  **High-water is the one that cannot be placed that way, and the cost is uneven in a way that lands on
+  D-16.** A peak must observe every change. On `spsc` that is free (the producer already reads `head` and
+  owns `tail`) and on `reserving_mpsc` near-free (its producer reads `head` for the room check), but
+  `mpsc`'s producer **never reads `head`** -- that is the property D-16 built a separate shape to
+  preserve. Always-on would have imposed D-16's refused cost on every `mpsc` user, to serve a metric most
+  will never read, immediately before M31.5 measures that exact path. Omitting it would have narrowed the
+  shape. So it is **opt-in at construction**, off by default, and `mpsc` pays one predictable branch on a
+  read-only field when it is off ([D-23](crates/windows-waitable-queues/DESIGN-NOTES.md#d-23)). The
+  engineer chose this over the narrow-trait and always-on alternatives when it was raised.
+  Untracked reports `None` rather than `0`, because "nobody was counting" and "it never filled" are
+  different answers and only one of them should make a caller shrink a queue.
+  **Two independent switches across three shapes is why `Options` is now a builder**, replacing M31.3's
+  `bounded_with_disposal`. As constructors that is four per shape and twelve in the crate, with every
+  future switch doubling it. The crate is unreleased, so the replacement cost nothing.
+  **One consequence is worth naming because it inverts something already written down**
+  ([D-24](crates/windows-waitable-queues/DESIGN-NOTES.md#d-24)). `sabotage.json` carried a *control* that
+  removed the skip optimisation expecting `survives` -- and it had earned its place, by proving the suite
+  asserted the contract rather than the implementation. Counting the rings makes the skip observable, so
+  the same patch now has to be **caught**, and the entry changed sides. That is R9 working rather than a
+  regression: an optimisation nobody can measure is an assumption. What it costs is that the skip is now
+  part of what the queue promises, which is the right trade for a queue whose reason to exist is a wakeup
+  protocol -- but it is a trade. The vacated control is replaced rather than dropped, by `mpsc`'s
+  tracking guard, which is genuinely an optimisation and must still survive removal.
+  **`Observable` deliberately does not restate depth**
+  ([D-25](crates/windows-waitable-queues/DESIGN-NOTES.md#d-25)), though D-2's sketch listed it: `len`
+  already reports it, and one number with two spellings is two places to drift.
+  221 unit tests, 9 doctests and 1 `compile_fail` doctest, the whole suite in 0.30s. Thirty-nine
+  sabotages: three new, one converted from control to defect, and one new control replacing it.
 
 - [ ] **M31.5** -- The contention benchmark that decides whether the deferred shapes are needed: N producer
   threads pushing, throughput against N. **This is the item that either justifies or kills the linked and

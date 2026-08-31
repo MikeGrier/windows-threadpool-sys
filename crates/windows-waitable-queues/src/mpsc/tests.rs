@@ -14,9 +14,9 @@
 //! scheduler rather than the queue -- green today, red on a different machine,
 //! and evidence of nothing either way.
 
-use super::{BOUNDS, Consumer, Producer, bounded, bounded_with_disposal, validate_capacity};
-use crate::Disposal;
+use super::{BOUNDS, Consumer, Producer, bounded, bounded_with, validate_capacity};
 use crate::race_hooks;
+use crate::{Disposal, Options};
 use crate::{PushError, RecvError, RecvTimeoutError};
 use std::collections::BTreeMap;
 use std::os::windows::io::AsRawHandle;
@@ -1006,11 +1006,11 @@ fn undrained_items_reach_the_disposal_sink_instead_of_being_destroyed() {
     let (undelivered, reaper) = std::sync::mpsc::channel();
 
     {
-        let (tx, _rx) = bounded_with_disposal::<Tracked>(
+        let (tx, _rx) = bounded_with::<Tracked>(
             8,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("8 is a valid capacity");
 
@@ -1037,11 +1037,11 @@ fn items_from_every_producer_reach_the_sink() {
     // whichever handle happened to be dropped last.
     let (undelivered, reaper) = std::sync::mpsc::channel();
     {
-        let (tx, _rx) = bounded_with_disposal::<(usize, usize)>(
+        let (tx, _rx) = bounded_with::<(usize, usize)>(
             16,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("16 is a valid capacity");
 
@@ -1074,11 +1074,11 @@ fn items_from_every_producer_reach_the_sink() {
 fn the_sink_sees_survivors_after_the_ring_has_wrapped() {
     let (undelivered, reaper) = std::sync::mpsc::channel();
     {
-        let (tx, rx) = bounded_with_disposal::<u32>(
+        let (tx, rx) = bounded_with::<u32>(
             4,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("4 is a valid capacity");
 
@@ -1100,11 +1100,11 @@ fn the_sink_sees_survivors_after_the_ring_has_wrapped() {
 #[test]
 fn a_queue_torn_down_by_the_producer_still_reaches_the_sink() {
     let (undelivered, reaper) = std::sync::mpsc::channel();
-    let (tx, rx) = bounded_with_disposal::<u32>(
+    let (tx, rx) = bounded_with::<u32>(
         4,
-        Disposal::new(move |item| {
+        Options::new().disposal(Disposal::new(move |item| {
             let _ = undelivered.send(item);
-        }),
+        })),
     )
     .expect("4 is a valid capacity");
 
@@ -1130,4 +1130,143 @@ fn without_a_sink_undrained_items_are_destroyed_in_place() {
         }
     }
     assert_eq!(destroyed.load(Ordering::Relaxed), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Observability.
+//
+// This shape's high-water is the one that costs something, so what matters
+// here is that it is genuinely off unless asked for and genuinely right when
+// it is.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn refusals_are_counted_but_disconnections_are_not() {
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+    assert!(tx.push(3).is_err());
+    assert_eq!(tx.refused(), 1);
+    assert_eq!(rx.refused(), 1, "both handles report the same queue");
+
+    drop(rx);
+    assert!(matches!(tx.push(4), Err(PushError::Disconnected(4))));
+    assert_eq!(
+        tx.refused(),
+        1,
+        "the end of the stream is not backpressure and must not be counted as it"
+    );
+}
+
+#[test]
+fn every_producer_counts_into_the_same_refusal_total() {
+    let (tx, _rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    let second = tx.clone();
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+
+    assert!(tx.push(3).is_err());
+    assert!(second.push(4).is_err());
+    assert_eq!(
+        tx.refused(),
+        2,
+        "refusals are a property of the queue, not of whichever handle saw them"
+    );
+}
+
+#[test]
+fn high_water_is_untracked_by_default() {
+    // **This shape's default matters most**, because tracking makes its
+    // producer read the consumer's position on every push -- the single shared
+    // line the design avoids, and the reason `reserving_mpsc` exists.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+
+    assert_eq!(tx.high_water(), None);
+    assert_eq!(rx.high_water(), None);
+}
+
+#[test]
+fn high_water_records_the_peak_when_asked_for() {
+    let (tx, rx) = bounded_with::<u32>(8, Options::new().tracking_high_water())
+        .expect("8 is a valid capacity");
+    assert_eq!(tx.high_water(), Some(0));
+
+    for value in 0..5 {
+        tx.push(value).expect("room");
+    }
+    assert_eq!(tx.high_water(), Some(5));
+
+    while rx.pop().is_some() {}
+    assert_eq!(
+        rx.high_water(),
+        Some(5),
+        "the mark is the deepest it got, not the depth right now"
+    );
+}
+
+#[test]
+fn high_water_survives_contention_from_many_producers() {
+    // The peak has to be the real one, not whichever producer happened to
+    // write last. `record_depth` loads before it modifies, so this is the test
+    // that says the `fetch_max` behind that shortcut is doing its job.
+    const PER_PRODUCER: usize = 200;
+    let (tx, rx) = bounded_with::<usize>(64, Options::new().tracking_high_water())
+        .expect("64 is a valid capacity");
+
+    let threads: Vec<_> = (0..PRODUCERS)
+        .map(|_| {
+            let handle = tx.clone();
+            thread::spawn(move || {
+                for value in 0..PER_PRODUCER {
+                    push_spinning(&handle, value);
+                }
+            })
+        })
+        .collect();
+    drop(tx);
+
+    let mut received = 0;
+    while rx.recv().is_ok() {
+        received += 1;
+    }
+    for thread in threads {
+        thread.join().expect("no producer may panic");
+    }
+
+    assert_eq!(received, PRODUCERS * PER_PRODUCER);
+    let peak = rx.high_water().expect("tracking was asked for");
+    assert!(
+        (1..=64).contains(&peak),
+        "the peak must be a depth the queue could actually reach, got {peak}"
+    );
+}
+
+#[test]
+fn the_ring_count_reports_syscalls_rather_than_signal_attempts() {
+    // The number the skip rule is measured by; see the same test on
+    // `reserving_mpsc` for the full argument.
+    let (tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+
+    for value in 0..4 {
+        tx.push(value).expect("room");
+    }
+
+    assert_eq!(
+        rx.doorbell_rings(),
+        1,
+        "the first push lit it; the other three had nothing to do"
+    );
+}
+
+#[test]
+fn a_poll_only_consumer_rings_no_doorbells() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    for value in 0..4 {
+        tx.push(value).expect("room");
+    }
+    while rx.pop().is_some() {}
+    assert_eq!(rx.doorbell_rings(), 0);
 }

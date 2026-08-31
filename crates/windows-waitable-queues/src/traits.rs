@@ -226,6 +226,60 @@ pub trait Reserving {
     fn outstanding_reservations(&self) -> usize;
 }
 
+/// What a queue can report about its own history.
+///
+/// # Why depth is not here
+///
+/// [D-2](../../DESIGN-NOTES.md#d-2)'s sketch of this trait listed "depth,
+/// high-water, doorbells actually rung", and depth has been left off
+/// deliberately. [`Bounded::len`] already reports it, computed on demand from
+/// positions the queue keeps anyway. Naming it again here would give one number
+/// two spellings and two places to drift apart, which is the restatement
+/// problem this workspace has paid for before. What belongs here is only what
+/// has to be **accumulated** -- facts about the past that the queue's current
+/// state cannot reconstruct.
+///
+/// # Implemented by both ends
+///
+/// A producer wants to know how often it was refused; a consumer wants to know
+/// how deep the backlog got and how often it was actually woken. Both are
+/// asking about the same queue, so both handles answer.
+pub trait Observable {
+    /// How many pushes have been refused for want of room.
+    ///
+    /// **This is the loss count**, and it is the part of the file watcher's
+    /// coalesced loss latch that generalises: a latch can only coalesce losses
+    /// that are *idempotent*, which is a property of the payload rather than of
+    /// the queue, but counting them needs nothing of the payload at all. See
+    /// [D-19](../../DESIGN-NOTES.md#d-19).
+    ///
+    /// Counts refusals for **room** only. A push refused because every consumer
+    /// is gone is the end of the stream rather than a loss, and folding the two
+    /// together would make a shutting-down queue look like an overloaded one.
+    fn refused(&self) -> u64;
+
+    /// How many times the doorbell has actually rung.
+    ///
+    /// Counts `SetEvent` calls rather than signal attempts, and the difference
+    /// between the two *is* the skip optimisation. That is what makes this the
+    /// number worth reporting: the skip rule becomes measurable rather than
+    /// assumed, and turning the skip off has to move it.
+    ///
+    /// A queue whose consumer only ever polls never creates its doorbell, so
+    /// this stays zero -- which is the laziness being visible rather than a
+    /// gap.
+    fn doorbell_rings(&self) -> u64;
+
+    /// The deepest the queue has been, if it is being tracked.
+    ///
+    /// `None` means nobody was counting, which is **not** the same answer as
+    /// `Some(0)`. Tracking is off unless
+    /// [`Options::tracking_high_water`](crate::Options::tracking_high_water)
+    /// asked for it, because a peak has to observe every change and that is the
+    /// one metric here which cannot be made free.
+    fn high_water(&self) -> Option<usize>;
+}
+
 /// A queue whose readiness can be waited on as a Windows `HANDLE`.
 ///
 /// This is the capability the crate is named for, and the reason it exists

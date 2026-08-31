@@ -177,10 +177,10 @@
       ]
     },
     {
-      "name": "CONTROL: signal always syscalls, skipping the flag optimisation",
+      "name": "signal always syscalls, skipping the flag optimisation",
       "file": "src/doorbell.rs",
-      "expect": "survives",
-      "why": "A control, not a defect. Skipping a redundant SetEvent is an optimisation: removing it costs ~74ns per redundant push and changes no observable behaviour, so the suite MUST stay green. If this is ever reported as caught, a test has started asserting the implementation instead of the contract, and that test is the thing to fix.",
+      "expect": "caught",
+      "why": "**This entry changed sides in M31.4, and the reason is the point of the milestone.** It was a CONTROL expecting 'survives': skipping a redundant SetEvent is an optimisation, so removing it changed no observable behaviour and the suite had to stay green. R9 asks for a count of doorbells actually rung precisely so that the skip rule becomes MEASURABLE rather than assumed -- and once the ring count is observable, disabling the skip is observable too, which is what 'disabling the skip must change the number' means. So the same patch that had to survive now has to be caught, by the tests asserting one ring for four pushes. If this is ever reported as survived again, the ring count has stopped counting syscalls.",
       "find": [
         "        if self.signalled.swap(true, Ordering::AcqRel) {"
       ],
@@ -416,6 +416,44 @@
       ]
     },
     {
+      "name": "high-water records the latest depth rather than the peak",
+      "file": "src/metrics.rs",
+      "expect": "caught",
+      "why": "A high-water mark that follows the depth down is not a high-water mark; it is `len` with extra steps, and a caller sizing a queue from it would read whatever the depth happened to be when they looked. Caught deterministically rather than by a race, because the sabotage removes the comparison as well as the fetch_max.",
+      "find": [
+        "        if depth > high_water.load(Ordering::Relaxed) {",
+        "            high_water.fetch_max(depth, Ordering::Relaxed);",
+        "        }"
+      ],
+      "replace": [
+        "        high_water.store(depth, Ordering::Relaxed);"
+      ]
+    },
+    {
+      "name": "high-water is tracked even when nobody asked",
+      "file": "src/metrics.rs",
+      "expect": "caught",
+      "why": "Tracking must be genuinely off by default, because it is the one metric that costs the push path something -- on mpsc it makes the producer read the consumer's position, which is the shared line that shape exists to avoid. If the default silently tracked, every mpsc user would be paying for an answer they never asked for, and the only visible symptom would be a number appearing where None belongs.",
+      "find": [
+        "            high_water: if track_high_water {"
+      ],
+      "replace": [
+        "            high_water: if true {"
+      ]
+    },
+    {
+      "name": "CONTROL: mpsc reads head unconditionally, skipping the tracking guard",
+      "file": "src/mpsc.rs",
+      "expect": "survives",
+      "why": "A control, and the replacement for the one M31.4 converted into a defect. The guard around mpsc's `head` load is an OPTIMISATION, not a correctness device -- `record_depth` already returns early when tracking is off, so reading head regardless changes no observable behaviour and the suite MUST stay green. What it changes is the cost, which is the whole reason the guard is there. If this is ever reported as caught, a test has started asserting the implementation rather than the contract.",
+      "find": [
+        "        if self.shared.metrics.tracks_high_water() {"
+      ],
+      "replace": [
+        "        if true {"
+      ]
+    },
+    {
       "name": "teardown ignores the disposal sink and destroys in place",
       "file": "src/disposal.rs",
       "expect": "caught",
@@ -514,11 +552,15 @@
       "why": "Full invites a retry and Disconnected does not, and a full queue with no consumer will never drain -- so reporting Full here is telling the caller to spin forever. The preference has to be stated at the fullness branch specifically, because that branch returns before the general disconnection check below it is ever reached.",
       "find": [
         "                if !self.shared.consumer_live.load(Ordering::Acquire) {",
+        "                    // Not counted as a refusal: this is the end of the stream,",
+        "                    // not backpressure.",
         "                    return Err(PushError::Disconnected(item));",
         "                }",
+        "                self.shared.metrics.record_refusal();",
         "                return Err(PushError::Full(item));"
       ],
       "replace": [
+        "                self.shared.metrics.record_refusal();",
         "                return Err(PushError::Full(item));"
       ]
     }

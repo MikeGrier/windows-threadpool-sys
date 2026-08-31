@@ -6,9 +6,9 @@
 //! joined thread rather than a sleep, so they are deterministic: the assertion
 //! runs after the peer has finished, not after a guess about how long it takes.
 
-use super::{BOUNDS, Consumer, Producer, bounded, bounded_with_disposal, validate_capacity};
-use crate::Disposal;
+use super::{BOUNDS, Consumer, Producer, bounded, bounded_with, validate_capacity};
 use crate::race_hooks;
+use crate::{Disposal, Options};
 use crate::{PushError, RecvError, RecvTimeoutError};
 use std::os::windows::io::AsRawHandle;
 use std::sync::Arc;
@@ -1218,13 +1218,13 @@ fn undrained_items_reach_the_disposal_sink_instead_of_being_destroyed() {
     let (undelivered, reaper) = std::sync::mpsc::channel();
 
     {
-        let (tx, _rx) = bounded_with_disposal::<Tracked>(
+        let (tx, _rx) = bounded_with::<Tracked>(
             8,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 // Moved out of teardown rather than destroyed in it, which is
                 // the entire point: the owner now decides when and where.
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("8 is a valid capacity");
 
@@ -1258,11 +1258,11 @@ fn only_the_undrained_items_reach_the_sink() {
     let destroyed = Arc::new(AtomicUsize::new(0));
 
     {
-        let (tx, rx) = bounded_with_disposal::<Tracked>(
+        let (tx, rx) = bounded_with::<Tracked>(
             8,
-            Disposal::new(move |item: Tracked| {
+            Options::new().disposal(Disposal::new(move |item: Tracked| {
                 let _ = undelivered.send(item.id);
-            }),
+            })),
         )
         .expect("8 is a valid capacity");
 
@@ -1288,11 +1288,11 @@ fn only_the_undrained_items_reach_the_sink() {
 fn an_empty_queue_hands_nothing_to_the_sink() {
     let (undelivered, reaper) = std::sync::mpsc::channel();
     {
-        let (tx, rx) = bounded_with_disposal::<u32>(
+        let (tx, rx) = bounded_with::<u32>(
             4,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("4 is a valid capacity");
         tx.push(1).expect("room");
@@ -1311,11 +1311,11 @@ fn the_sink_sees_survivors_after_the_ring_has_wrapped() {
     // would show up as the wrong items rather than as a crash.
     let (undelivered, reaper) = std::sync::mpsc::channel();
     {
-        let (tx, rx) = bounded_with_disposal::<u32>(
+        let (tx, rx) = bounded_with::<u32>(
             4,
-            Disposal::new(move |item| {
+            Options::new().disposal(Disposal::new(move |item| {
                 let _ = undelivered.send(item);
-            }),
+            })),
         )
         .expect("4 is a valid capacity");
 
@@ -1340,11 +1340,11 @@ fn a_queue_torn_down_by_the_producer_still_reaches_the_sink() {
     // guarantee must not depend on it. Here the consumer goes first, so the
     // producer's drop is what tears the queue down.
     let (undelivered, reaper) = std::sync::mpsc::channel();
-    let (tx, rx) = bounded_with_disposal::<u32>(
+    let (tx, rx) = bounded_with::<u32>(
         4,
-        Disposal::new(move |item| {
+        Options::new().disposal(Disposal::new(move |item| {
             let _ = undelivered.send(item);
-        }),
+        })),
     )
     .expect("4 is a valid capacity");
 
@@ -1365,11 +1365,11 @@ fn a_queue_torn_down_on_another_thread_still_reaches_the_sink() {
     // The dropping thread is whichever one happens to release last, which is
     // exactly why disposal cannot be left to it implicitly.
     let (undelivered, reaper) = std::sync::mpsc::channel();
-    let (tx, rx) = bounded_with_disposal::<u32>(
+    let (tx, rx) = bounded_with::<u32>(
         4,
-        Disposal::new(move |item| {
+        Options::new().disposal(Disposal::new(move |item| {
             let _ = undelivered.send(item);
-        }),
+        })),
     )
     .expect("4 is a valid capacity");
 
@@ -1435,13 +1435,13 @@ fn a_sink_keeps_the_destructor_off_the_thread_that_tore_the_queue_down() {
     let ran_on = Arc::new(std::sync::Mutex::new(Vec::new()));
     let (undelivered, reaper) = std::sync::mpsc::channel();
 
-    let (tx, rx) = bounded_with_disposal::<ThreadWitness>(
+    let (tx, rx) = bounded_with::<ThreadWitness>(
         4,
-        Disposal::new(move |item: ThreadWitness| {
+        Options::new().disposal(Disposal::new(move |item: ThreadWitness| {
             // The sink's whole job: move it somewhere a thread that may block
             // will find it. Nothing here runs the destructor.
             let _ = undelivered.send(item);
-        }),
+        })),
     )
     .expect("4 is a valid capacity");
 
@@ -1507,4 +1507,153 @@ fn without_a_sink_the_destructor_does_run_on_the_thread_that_tore_the_queue_down
         "and with no sink it was destroyed on whichever thread released last, \
          which is exactly the behaviour a disposal sink exists to replace"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Observability.
+//
+// The counters' arithmetic is covered in `crate::metrics`. What is asserted
+// here is that this shape *feeds* them from the right places -- and, for the
+// doorbell, that the number reports syscalls rather than signal attempts,
+// which is what makes the skip rule measurable rather than assumed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn refusals_are_counted_but_disconnections_are_not() {
+    // The two are different facts and must not be summed. A full queue is
+    // backpressure; a departed consumer is the end of the stream, and a queue
+    // shutting down should not read as an overloaded one.
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    assert_eq!(tx.refused(), 0);
+
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+    assert!(tx.push(3).is_err());
+    assert!(tx.push(4).is_err());
+    assert_eq!(tx.refused(), 2, "two pushes were refused for want of room");
+    assert_eq!(rx.refused(), 2, "and both handles report the same queue");
+
+    drop(rx);
+    assert!(matches!(tx.push(5), Err(PushError::Disconnected(5))));
+    assert_eq!(
+        tx.refused(),
+        2,
+        "a push refused because the consumer is gone is not a loss to backpressure"
+    );
+}
+
+#[test]
+fn high_water_is_untracked_by_default() {
+    // Off unless asked for, because it is the one metric that cannot be made
+    // free. `None` rather than `Some(0)` so a caller cannot mistake "nobody was
+    // counting" for "it never filled".
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+
+    assert_eq!(tx.high_water(), None);
+    assert_eq!(rx.high_water(), None);
+}
+
+#[test]
+fn high_water_records_the_peak_when_asked_for() {
+    let (tx, rx) = bounded_with::<u32>(8, Options::new().tracking_high_water())
+        .expect("8 is a valid capacity");
+    assert_eq!(tx.high_water(), Some(0), "counting, and nothing seen yet");
+
+    for value in 0..5 {
+        tx.push(value).expect("room");
+    }
+    assert_eq!(tx.high_water(), Some(5));
+
+    // Draining does not lower it: the peak is a fact about the past.
+    while rx.pop().is_some() {}
+    assert_eq!(rx.len(), 0);
+    assert_eq!(
+        rx.high_water(),
+        Some(5),
+        "the mark is the deepest it got, not the depth right now"
+    );
+
+    // And a smaller later burst does not replace it.
+    tx.push(0).expect("room");
+    tx.push(1).expect("room");
+    assert_eq!(tx.high_water(), Some(5));
+}
+
+#[test]
+fn high_water_counts_reserved_deliveries_like_any_other() {
+    let (tx, rx) = bounded_with::<u32>(4, Options::new().tracking_high_water())
+        .expect("4 is a valid capacity");
+
+    let slot = tx.reserve().expect("room");
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+    slot.send(3).expect("the room was ours");
+
+    assert_eq!(
+        tx.high_water(),
+        Some(3),
+        "a redeemed reservation is an ordinary queued item, and counts as depth like one"
+    );
+    assert_eq!(rx.len(), 3);
+}
+
+#[test]
+fn a_poll_only_consumer_rings_no_doorbells() {
+    // The laziness being visible rather than a gap: a consumer that never asks
+    // for the handle never creates the event, so there is nothing to ring.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    for value in 0..4 {
+        tx.push(value).expect("room");
+    }
+    while rx.pop().is_some() {}
+
+    assert_eq!(
+        rx.doorbell_rings(),
+        0,
+        "no kernel object was created, so no signal was ever issued"
+    );
+}
+
+#[test]
+fn the_ring_count_reports_syscalls_rather_than_signal_attempts() {
+    // **The number the skip rule is measured by.** Four pushes against a
+    // doorbell nobody clears is one real `SetEvent` and three skips, because a
+    // manual-reset event does not count and setting an already-set one changes
+    // nothing. If this ever reported four, the skip would have stopped
+    // happening -- which is exactly what the sabotage entry for it asserts.
+    let (tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+
+    for value in 0..4 {
+        tx.push(value).expect("room");
+    }
+
+    assert_eq!(
+        rx.doorbell_rings(),
+        1,
+        "the first push lit it; the other three had nothing to do"
+    );
+}
+
+#[test]
+fn clearing_the_doorbell_makes_the_next_push_ring_again() {
+    // The complement: the count must not be stuck at one. Each drain-and-arm
+    // cycle costs exactly one more ring, which is the shape a parked consumer
+    // actually produces.
+    let (tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+
+    for round in 1..=3 {
+        tx.push(round).expect("room");
+        tx.push(round).expect("room");
+        assert_eq!(
+            rx.doorbell_rings(),
+            round as u64,
+            "round {round}: one ring per cycle, not one per push"
+        );
+        while rx.pop().is_some() {}
+        assert!(rx.arm().expect("arming must succeed"));
+    }
 }

@@ -80,9 +80,11 @@ use std::time::Duration;
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
 use crate::capacity::{Bounds, WRAPPING_MAX_CAPACITY, validate_capacity};
-use crate::disposal::{Disposal, Teardown};
+use crate::disposal::Teardown;
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, PushError, RecvError, RecvTimeoutError};
+use crate::metrics::Metrics;
+use crate::options::Options;
 
 /// What this shape accepts as a capacity.
 ///
@@ -145,28 +147,33 @@ const BOUNDS: Bounds = Bounds {
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
-    build(capacity, Teardown::drop_in_place())
+    build(capacity, Options::new())
 }
 
-/// Creates a queue that hands its undrained items to `disposal` at teardown.
+/// Creates a queue with something other than the default behaviour.
 ///
-/// Identical to [`bounded`] except for what becomes of items nobody took. See
-/// [`Disposal`] for why that decision has to be made here rather than at
-/// teardown, and why it matters for items that own a handle.
+/// Identical to [`bounded`] except for what [`Options`] asks for.
+///
+/// **Note which switch costs this shape something.**
+/// [`Options::tracking_high_water`] makes the producer read the consumer's
+/// position on every push -- the single shared line this shape's push is built
+/// to avoid touching, and the reason
+/// [`reserving_mpsc`](crate::reserving_mpsc) exists as a separate shape at all.
+/// Off, which is the default, it costs one predictable branch on a field that
+/// is written once at construction.
 ///
 /// # Errors
 ///
 /// As [`bounded`].
-pub fn bounded_with_disposal<T>(
+pub fn bounded_with<T>(
     capacity: usize,
-    disposal: Disposal<T>,
+    options: Options<T>,
 ) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
-    build(capacity, Teardown::handing_off(disposal))
+    build(capacity, options)
 }
-
 fn build<T>(
     capacity: usize,
-    teardown: Teardown<T>,
+    options: Options<T>,
 ) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
     validate_capacity(capacity, BOUNDS)?;
 
@@ -179,7 +186,8 @@ fn build<T>(
     }
 
     let shared = Arc::new(Shared {
-        teardown,
+        teardown: Teardown::new(options.disposal),
+        metrics: Metrics::new(options.track_high_water),
         slots: slots.into_boxed_slice(),
         mask: capacity - 1,
         capacity,
@@ -224,6 +232,8 @@ struct Shared<T> {
     /// Read only by [`Shared::drop`], which holds `&mut self`, so it needs no
     /// synchronization and costs the hot paths nothing but its space.
     teardown: Teardown<T>,
+    /// The counters this queue keeps about itself. See [`crate::metrics`].
+    metrics: Metrics,
     slots: Box<[Slot<T>]>,
     mask: usize,
     capacity: usize,
@@ -398,8 +408,11 @@ impl<T> Producer<T> {
                 // whose consumer is gone will never drain, and telling the
                 // caller to retry would be telling it to spin forever.
                 if !self.shared.consumer_live.load(Ordering::Acquire) {
+                    // Not counted as a refusal: this is the end of the stream,
+                    // not backpressure.
                     return Err(PushError::Disconnected(item));
                 }
+                self.shared.metrics.record_refusal();
                 return Err(PushError::Full(item));
             }
             if difference > 0 {
@@ -444,6 +457,22 @@ impl<T> Producer<T> {
         // claimed-but-empty and skips it.
         slot.sequence
             .store(position.wrapping_add(1), Ordering::Release);
+
+        // **Guarded, and this branch is the whole reason high-water is a
+        // switch.** This shape's producer never reads `head` -- that property
+        // is what keeps its push off the one line every thread touches, and it
+        // is why `reserving_mpsc` is a separate shape rather than a method
+        // here. Depth cannot be known without that read, so the read is taken
+        // only when somebody asked for the answer.
+        //
+        // Off, the cost is one predictable branch on a field written once at
+        // construction, so the line is shared but read-only -- the cheap kind.
+        if self.shared.metrics.tracks_high_water() {
+            let head = self.shared.head.0.load(Ordering::Acquire);
+            self.shared
+                .metrics
+                .record_depth(position.wrapping_sub(head).wrapping_add(1));
+        }
 
         // After the publication, never before: the doorbell says "there is
         // something to take", and that must not become true before the item is
@@ -902,6 +931,90 @@ impl<T> crate::Bounded for Consumer<T> {
 
     fn is_empty(&self) -> bool {
         Self::is_empty(self)
+    }
+}
+
+impl<T> Shared<T> {
+    /// The counters, as the [`Observable`](crate::Observable) trait reports
+    /// them. Written once so the two handles cannot drift apart.
+    fn refused(&self) -> u64 {
+        self.metrics.refused()
+    }
+
+    fn doorbell_rings(&self) -> u64 {
+        self.doorbell.rings()
+    }
+
+    fn high_water(&self) -> Option<usize> {
+        self.metrics.high_water()
+    }
+}
+
+impl<T> Producer<T> {
+    /// How many pushes have been refused for want of room.
+    #[must_use]
+    pub fn refused(&self) -> u64 {
+        self.shared.refused()
+    }
+
+    /// How many times the doorbell has actually rung.
+    #[must_use]
+    pub fn doorbell_rings(&self) -> u64 {
+        self.shared.doorbell_rings()
+    }
+
+    /// The deepest this queue has been, if tracking was asked for.
+    #[must_use]
+    pub fn high_water(&self) -> Option<usize> {
+        self.shared.high_water()
+    }
+}
+
+impl<T> Consumer<T> {
+    /// How many pushes have been refused for want of room.
+    #[must_use]
+    pub fn refused(&self) -> u64 {
+        self.shared.refused()
+    }
+
+    /// How many times the doorbell has actually rung.
+    #[must_use]
+    pub fn doorbell_rings(&self) -> u64 {
+        self.shared.doorbell_rings()
+    }
+
+    /// The deepest this queue has been, if tracking was asked for.
+    #[must_use]
+    pub fn high_water(&self) -> Option<usize> {
+        self.shared.high_water()
+    }
+}
+
+impl<T> crate::Observable for Producer<T> {
+    fn refused(&self) -> u64 {
+        Self::refused(self)
+    }
+
+    fn doorbell_rings(&self) -> u64 {
+        Self::doorbell_rings(self)
+    }
+
+    fn high_water(&self) -> Option<usize> {
+        Self::high_water(self)
+    }
+}
+
+impl<T> crate::Observable for Consumer<T> {
+    fn refused(&self) -> u64 {
+        Self::refused(self)
+    }
+
+    fn doorbell_rings(&self) -> u64 {
+        Self::doorbell_rings(self)
+    }
+
+    fn high_water(&self) -> Option<usize> {
+        Self::high_water(self)
     }
 }
 

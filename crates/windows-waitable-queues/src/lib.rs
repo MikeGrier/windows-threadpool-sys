@@ -78,7 +78,9 @@ mod capacity;
 pub mod disposal;
 mod doorbell;
 mod error;
+mod metrics;
 pub mod mpsc;
+mod options;
 #[cfg(test)]
 mod race_hooks;
 pub mod reserving_mpsc;
@@ -87,7 +89,8 @@ pub mod traits;
 
 pub use disposal::Disposal;
 pub use error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
-pub use traits::{Bounded, Consumer, Drain, Producer, Reserving, Waitable};
+pub use options::Options;
+pub use traits::{Bounded, Consumer, Drain, Observable, Producer, Reserving, Waitable};
 
 /// Pads and aligns a value onto its own cache line.
 ///

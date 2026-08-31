@@ -61,15 +61,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 ///
 /// ```
 /// use std::sync::mpsc;
-/// use windows_waitable_queues::{Disposal, spsc};
+/// use windows_waitable_queues::{Disposal, Options, spsc};
 ///
 /// let (undelivered, reaper) = mpsc::channel();
-/// let (tx, rx) = spsc::bounded_with_disposal::<u32>(
+/// let (tx, rx) = spsc::bounded_with::<u32>(
 ///     4,
-///     Disposal::new(move |item| {
+///     Options::new().disposal(Disposal::new(move |item| {
 ///         // Cheap and non-blocking: the reaper thread does the real work.
 ///         let _ = undelivered.send(item);
-///     }),
+///     })),
 /// )?;
 ///
 /// tx.push(1).expect("a fresh queue has room");
@@ -119,16 +119,10 @@ pub(crate) struct Teardown<T> {
 }
 
 impl<T> Teardown<T> {
-    /// The default: destroy each surviving item where it lies.
-    pub(crate) const fn drop_in_place() -> Self {
-        Self { disposal: None }
-    }
-
-    /// Hand each surviving item to `disposal` instead.
-    pub(crate) const fn handing_off(disposal: Disposal<T>) -> Self {
-        Self {
-            disposal: Some(disposal),
-        }
+    /// Hand each surviving item to `disposal`, or destroy it where it lies if
+    /// there is none.
+    pub(crate) const fn new(disposal: Option<Disposal<T>>) -> Self {
+        Self { disposal }
     }
 
     /// Dispose of one surviving item.

@@ -86,9 +86,11 @@ use std::time::Duration;
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
 use crate::capacity::{Bounds, WRAPPING_MAX_CAPACITY, validate_capacity};
-use crate::disposal::{Disposal, Teardown};
+use crate::disposal::Teardown;
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
+use crate::metrics::Metrics;
+use crate::options::Options;
 
 /// How many of the claim word's bits carry the position.
 ///
@@ -211,33 +213,35 @@ const fn claim_word(reserved: u32, position: u32) -> u64 {
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
 pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
-    build(capacity, Teardown::drop_in_place())
+    build(capacity, Options::new())
 }
 
-/// Creates a queue that hands its undrained items to `disposal` at teardown.
+/// Creates a queue with something other than the default behaviour.
 ///
-/// Identical to [`bounded`] except for what becomes of items nobody took. See
-/// [`Disposal`] for why that decision has to be made here rather than at
-/// teardown, and why it matters for items that own a handle.
+/// Identical to [`bounded`] except for what [`Options`] asks for.
 ///
-/// **This is the shape where it matters most.** A reservation exists because
-/// its message must not be lost; a message redeemed into a queue that is then
-/// torn down undrained would be lost after all, just later and more quietly.
-/// Pairing a reservation with a disposal sink is what closes that.
+/// **This is the shape where disposal matters most.** A reservation exists
+/// because its message must not be lost; a message redeemed into a queue that
+/// is then torn down undrained would be lost after all, just later and more
+/// quietly. Pairing a reservation with a disposal sink is what closes that.
+///
+/// [`Options::tracking_high_water`] costs this shape almost nothing, unlike
+/// [`mpsc`](crate::mpsc): the producer already reads the consumer's position
+/// to decide whether there is room beyond the reservations, so the depth is a
+/// subtraction of two numbers it is already holding.
 ///
 /// # Errors
 ///
 /// As [`bounded`].
-pub fn bounded_with_disposal<T>(
+pub fn bounded_with<T>(
     capacity: usize,
-    disposal: Disposal<T>,
+    options: Options<T>,
 ) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
-    build(capacity, Teardown::handing_off(disposal))
+    build(capacity, options)
 }
-
 fn build<T>(
     capacity: usize,
-    teardown: Teardown<T>,
+    options: Options<T>,
 ) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
     validate_capacity(capacity, BOUNDS)?;
 
@@ -254,7 +258,8 @@ fn build<T>(
     }
 
     let shared = Arc::new(Shared {
-        teardown,
+        teardown: Teardown::new(options.disposal),
+        metrics: Metrics::new(options.track_high_water),
         slots: slots.into_boxed_slice(),
         mask: capacity - 1,
         capacity,
@@ -300,6 +305,8 @@ struct Shared<T> {
     /// Read only by [`Shared::drop`], which holds `&mut self`, so it needs no
     /// synchronization and costs the hot paths nothing but its space.
     teardown: Teardown<T>,
+    /// The counters this queue keeps about itself. See [`crate::metrics`].
+    metrics: Metrics,
     slots: Box<[Slot<T>]>,
     mask: usize,
     capacity: usize,
@@ -432,6 +439,15 @@ impl<T> Shared<T> {
     /// must not have published it already. A position is claimed by exactly one
     /// producer, so this is the only writer of the slot.
     unsafe fn publish(&self, position: u32, item: T) {
+        // Near-free on this shape, unlike `mpsc`: the producer has already
+        // read `head` to decide there was room beyond the reservations, so the
+        // depth is a subtraction of two numbers it is holding. Only the
+        // counter's line is shared, and it is written rarely -- see
+        // `Metrics::record_depth` for why the load comes before the modify.
+        let head = self.head.0.load(Ordering::Relaxed);
+        self.metrics
+            .record_depth(position.wrapping_sub(head).wrapping_add(1) as usize);
+
         let slot = &self.slots[position as usize & self.mask];
         // SAFETY: the caller's claim makes this thread the only writer, and the
         // room check that permitted the claim means the consumer has finished
@@ -530,8 +546,11 @@ impl<T> Producer<T> {
                 // whose consumer is gone will never drain, and telling the
                 // caller to retry would be telling it to spin forever.
                 if !self.shared.consumer_live.load(Ordering::Acquire) {
+                    // Not counted as a refusal: this is the end of the stream,
+                    // not backpressure.
                     return Err(PushError::Disconnected(item));
                 }
+                self.shared.metrics.record_refusal();
                 return Err(PushError::Full(item));
             }
             if !self.shared.consumer_live.load(Ordering::Acquire) {
@@ -1104,6 +1123,90 @@ impl<T> crate::Bounded for Consumer<T> {
 
     fn is_empty(&self) -> bool {
         Self::is_empty(self)
+    }
+}
+
+impl<T> Shared<T> {
+    /// The counters, as the [`Observable`](crate::Observable) trait reports
+    /// them. Written once so the two handles cannot drift apart.
+    fn refused(&self) -> u64 {
+        self.metrics.refused()
+    }
+
+    fn doorbell_rings(&self) -> u64 {
+        self.doorbell.rings()
+    }
+
+    fn high_water(&self) -> Option<usize> {
+        self.metrics.high_water()
+    }
+}
+
+impl<T> Producer<T> {
+    /// How many pushes have been refused for want of room.
+    #[must_use]
+    pub fn refused(&self) -> u64 {
+        self.shared.refused()
+    }
+
+    /// How many times the doorbell has actually rung.
+    #[must_use]
+    pub fn doorbell_rings(&self) -> u64 {
+        self.shared.doorbell_rings()
+    }
+
+    /// The deepest this queue has been, if tracking was asked for.
+    #[must_use]
+    pub fn high_water(&self) -> Option<usize> {
+        self.shared.high_water()
+    }
+}
+
+impl<T> Consumer<T> {
+    /// How many pushes have been refused for want of room.
+    #[must_use]
+    pub fn refused(&self) -> u64 {
+        self.shared.refused()
+    }
+
+    /// How many times the doorbell has actually rung.
+    #[must_use]
+    pub fn doorbell_rings(&self) -> u64 {
+        self.shared.doorbell_rings()
+    }
+
+    /// The deepest this queue has been, if tracking was asked for.
+    #[must_use]
+    pub fn high_water(&self) -> Option<usize> {
+        self.shared.high_water()
+    }
+}
+
+impl<T> crate::Observable for Producer<T> {
+    fn refused(&self) -> u64 {
+        Self::refused(self)
+    }
+
+    fn doorbell_rings(&self) -> u64 {
+        Self::doorbell_rings(self)
+    }
+
+    fn high_water(&self) -> Option<usize> {
+        Self::high_water(self)
+    }
+}
+
+impl<T> crate::Observable for Consumer<T> {
+    fn refused(&self) -> u64 {
+        Self::refused(self)
+    }
+
+    fn doorbell_rings(&self) -> u64 {
+        Self::doorbell_rings(self)
+    }
+
+    fn high_water(&self) -> Option<usize> {
+        Self::high_water(self)
     }
 }
 
