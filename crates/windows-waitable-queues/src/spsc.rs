@@ -366,6 +366,23 @@ impl<T> Producer<T> {
     /// reservation is outstanding, so the compiler enforces what the shape
     /// requires. [`reserving_mpsc`](crate::reserving_mpsc), which has no such
     /// constraint, hands out an owned reservation instead.
+    ///
+    /// **The refusal is asserted, not merely described.** A reservation cannot
+    /// be moved to another thread, because it borrows a producer that is not
+    /// [`Sync`], so `&Producer` is not [`Send`]:
+    ///
+    /// ```compile_fail
+    /// # use windows_waitable_queues::spsc;
+    /// let (tx, _rx) = spsc::bounded::<u32>(4).unwrap();
+    /// let slot = tx.reserve().expect("room");
+    /// // Rejected: moving this would put a second writer on the ring.
+    /// std::thread::spawn(move || {
+    ///     slot.send(1).ok();
+    /// });
+    /// ```
+    ///
+    /// The consumer handle *is* [`Send`], so a blocked receiver can still live
+    /// on another thread -- it is only the writing side that is pinned.
     #[must_use = "a reservation withholds capacity from the best-effort path until it is used or dropped"]
     pub fn reserve(&self) -> Option<Reservation<'_, T>> {
         let tail = self.shared.tail.0.load(Ordering::Relaxed);

@@ -941,3 +941,246 @@ fn the_real_arm_still_blesses_a_wait_when_its_window_stays_empty() {
         "an empty queue must still be safe to wait on, or the wait never happens at all"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Reservation.
+//
+// The mechanism here is a plain counter written only by the producer's thread,
+// where `reserving_mpsc` needs a compare-and-swap against a packed word. The
+// two implementations share nothing, so the guarantee has to be asserted
+// separately on each -- a point made empirically rather than by argument: the
+// sabotage sweep found this whole section missing, because the reserving_mpsc
+// tests covered the mpsc path and left this one unguarded.
+// ---------------------------------------------------------------------------
+
+/// Fills every slot the best-effort path is allowed to take, and reports how
+/// many went in.
+fn fill(producer: &Producer<u32>) -> usize {
+    let mut pushed = 0;
+    while producer.push(0).is_ok() {
+        pushed += 1;
+    }
+    pushed
+}
+
+#[test]
+fn a_reservation_withholds_a_slot_from_the_best_effort_path() {
+    let (tx, _rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    assert_eq!(
+        fill(&tx),
+        8,
+        "with nothing reserved, every slot is available"
+    );
+
+    let (tx, _rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    let reservations: Vec<_> = (0..3).map(|_| tx.reserve().expect("room")).collect();
+    assert_eq!(tx.outstanding_reservations(), 3);
+    assert_eq!(
+        fill(&tx),
+        5,
+        "three reserved leaves five for the best-effort path"
+    );
+    drop(reservations);
+}
+
+#[test]
+fn a_reserved_slot_is_delivered_into_a_queue_that_is_otherwise_full() {
+    // The contract in one test: reserve, let the best-effort path take
+    // everything it is allowed to, and redeem anyway.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("a fresh queue has room");
+
+    assert_eq!(fill(&tx), 3, "the reservation withheld exactly one slot");
+    assert!(tx.is_full(), "and now nothing more may be pushed");
+
+    slot.send(99).expect("the room was already ours");
+
+    let drained: Vec<u32> = std::iter::from_fn(|| rx.pop()).collect();
+    assert_eq!(
+        drained,
+        vec![0, 0, 0, 99],
+        "the reserved item lands where it was redeemed, not where it was claimed"
+    );
+}
+
+#[test]
+fn a_push_refused_for_a_reservation_is_still_reported_as_full() {
+    // A best-effort caller cannot tell "no slots" from "the only slot is
+    // reserved", and should not have to: both mean "no room for you".
+    let (tx, _rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    let _slot = tx.reserve().expect("room");
+    tx.push(1).expect("one slot is unreserved");
+
+    assert!(
+        matches!(tx.push(2), Err(PushError::Full(2))),
+        "the reserved slot is not available to the best-effort path"
+    );
+}
+
+#[test]
+fn dropping_a_reservation_returns_the_slot() {
+    let (tx, _rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    assert_eq!(tx.outstanding_reservations(), 1);
+
+    drop(slot);
+    assert_eq!(tx.outstanding_reservations(), 0);
+    assert_eq!(
+        fill(&tx),
+        4,
+        "a released reservation is capacity given back, not capacity lost"
+    );
+}
+
+#[test]
+fn a_redeemed_reservation_does_not_also_release_its_slot() {
+    // The double-release bug `send` avoids by consuming `self` and suppressing
+    // the drop. If both ran, the count would underflow and the queue would
+    // over-admit for ever afterwards.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    for round in 0..10 {
+        let slot = tx.reserve().expect("room");
+        assert_eq!(tx.outstanding_reservations(), 1);
+        slot.send(round).expect("the room was ours");
+        assert_eq!(
+            tx.outstanding_reservations(),
+            0,
+            "redeeming releases the claim exactly once"
+        );
+        assert_eq!(rx.pop(), Some(round));
+    }
+    assert_eq!(fill(&tx), 4, "and the capacity is intact after ten cycles");
+}
+
+#[test]
+fn reserving_fails_when_every_slot_is_spoken_for() {
+    let (tx, _rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    let _first = tx.reserve().expect("room");
+    let _second = tx.reserve().expect("room");
+    assert!(
+        tx.reserve().is_none(),
+        "reservations are drawn from the same capacity as everything else"
+    );
+
+    let (tx, _rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    fill(&tx);
+    assert!(
+        tx.reserve().is_none(),
+        "and a full queue has nothing left to promise"
+    );
+}
+
+#[test]
+fn a_reservation_survives_many_wraps_of_the_ring() {
+    // The counter must be independent of the positions, so hundreds of laps
+    // beneath a held reservation must not disturb it.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+
+    for round in 0..500 {
+        tx.push(round).expect("three slots remain unreserved");
+        assert_eq!(rx.pop(), Some(round));
+        assert_eq!(tx.outstanding_reservations(), 1, "round {round}");
+    }
+
+    slot.send(99).expect("still ours after five hundred laps");
+    assert_eq!(rx.pop(), Some(99));
+}
+
+#[test]
+fn redeeming_into_a_departed_consumer_hands_the_item_back() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+    drop(rx);
+
+    assert!(slot.is_disconnected());
+    let error = slot.send(7).expect_err("nobody is left to take it");
+    assert_eq!(
+        error.into_inner(),
+        7,
+        "an item important enough to reserve for must not be dropped silently"
+    );
+}
+
+#[test]
+fn a_reserved_delivery_lights_the_doorbell() {
+    // A reserved send is a delivery like any other, so it must ring. If it did
+    // not, a consumer parked on the doorbell would sleep through precisely the
+    // message that was important enough to reserve a slot for.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+    let slot = tx.reserve().expect("room");
+    assert!(rx.arm().expect("arming must succeed"), "nothing yet");
+
+    slot.send(1).expect("the room was ours");
+    assert!(
+        doorbell_is_lit(&rx),
+        "a reserved delivery must ring like any other"
+    );
+    assert!(
+        !rx.arm().expect("arming must succeed"),
+        "and must be visible to the arming protocol"
+    );
+}
+
+#[test]
+fn a_blocked_consumer_is_woken_by_a_reserved_delivery() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("room");
+
+    // **The reservation cannot cross a thread boundary, and the compiler says
+    // so**: it borrows a producer that is not `Sync`, so `&Producer` is not
+    // `Send` and even a scoped thread is refused. That is the borrow doing its
+    // job rather than an inconvenience -- see the `compile_fail` doctest on
+    // `Producer::reserve`, which asserts the refusal directly.
+    //
+    // So the *consumer* goes across instead. It is a separate handle and is
+    // `Send`, which is what makes this test expressible at all.
+    let receiver = thread::spawn(move || rx.recv());
+    thread::sleep(Duration::from_millis(50));
+    slot.send(7).expect("the consumer is alive");
+
+    assert_eq!(
+        receiver
+            .join()
+            .expect("the consumer must not panic")
+            .expect("the reservation is redeemed"),
+        7,
+        "a parked consumer must be woken by a reserved delivery"
+    );
+}
+
+#[test]
+fn an_abandoned_reservation_leaves_the_queue_usable() {
+    // A reservation that fails to be redeemed must not poison the capacity.
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    for _ in 0..50 {
+        let slot = tx.reserve().expect("room");
+        drop(slot);
+    }
+    assert_eq!(tx.outstanding_reservations(), 0);
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+    assert!(tx.push(3).is_err());
+    assert_eq!(rx.pop(), Some(1));
+}
+
+#[test]
+fn dropping_the_queue_drops_a_reserved_item_it_still_holds() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    {
+        let (tx, _rx) = bounded::<DropCounter>(8).expect("a power-of-two capacity");
+        let slot = tx.reserve().expect("room");
+        for _ in 0..5 {
+            tx.push(DropCounter(Arc::clone(&drops))).expect("room");
+        }
+        slot.send(DropCounter(Arc::clone(&drops)))
+            .expect("the room was ours");
+        assert_eq!(drops.load(Ordering::Relaxed), 0, "nothing dropped yet");
+    }
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        6,
+        "every undrained item must be dropped, including the reserved one"
+    );
+}
