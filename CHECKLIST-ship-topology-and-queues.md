@@ -169,19 +169,22 @@ release-blocking rather than restating the decision itself.
 - [ ] **SH-4.1** -- Release `windows-topology-sys` 0.2.0 and confirm it appears on crates.io and builds
   on docs.rs. Docs.rs builds under its own configuration, so a crate that documents locally can still
   fail there.
-  **UNBLOCKS half of [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md), which is gated on both
-  releases. On completing this, update that file's gate note to record that topology has shipped** --
-  the gate lifts only when SH-4.3 lands too, and a half-lifted gate that reads as lifted is how work
-  starts against a dependency that is not there yet.
+  **UNBLOCKS half of [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) PT-5.3 -- publishing
+  the tool to crates.io -- which needs both releases. On completing this, update that file's gate
+  bullet to record that topology has shipped**; the gate lifts only when SH-4.3 lands too, and a
+  half-lifted gate that reads as lifted is how work starts against a dependency that is not there yet.
+  **It does not gate the GitHub binaries**, which CI builds from this repository through `path`
+  dependencies.
 
 - [ ] **SH-4.2** -- Update `windows-ioring-sys` to depend on the published 0.2.0 and release it, per
   the order settled in SH-2.2.
 
 - [ ] **SH-4.3** -- Release `windows-waitable-queues` 0.1.0, with SH-2.1's fix in place. Confirm the
   tag triggered a publish rather than assuming it did.
-  **LIFTS THE GATE ON [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md). On completing this,
-  edit that file's opening gate paragraph to say the gate is lifted and name the two published
+  **LIFTS THE GATE ON [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) PT-5.3 only. On
+  completing this, edit that file's gate bullet to say the gate is lifted and name the two published
   versions**, so a reader arriving there later does not have to reconstruct whether it still applies.
+  The tool's GitHub binaries never waited on this.
   Blocked by SH-1.1, and by M31.6 as well if SH-1.2 decided that it gates.
 
 ## M5: verify from outside the workspace

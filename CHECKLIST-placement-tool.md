@@ -6,11 +6,20 @@ from hardware it does not own. **The motivating gap is concrete: every host avai
 one NUMA node**, so the entire `cross NUMA node` row and the whole inter-node hop matrix are
 unmeasured, and no amount of local work will change that.
 
-**GATED BY [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) SH-4.1
-(topology 0.2.0) and SH-4.3 (queues 0.1.0). This paragraph is the gate of record: when those land,
-edit it to say the gate is lifted and name the two published versions.** Leaving it as-is after the
-releases is the failure mode -- a reader arriving here should never have to reconstruct whether the
-gate still applies. M6 below is deliberately *outside* this gate and says so.
+**The gate applies to crates.io publication only, and not to the GitHub binaries.** An earlier revision
+of this paragraph gated the whole file on SH-4.1 and SH-4.3, which was wrong and would have delayed the
+tool by the length of the entire release sequence -- including M6's stress work -- for no reason.
+
+- **CI-built binaries are compiled from this repository**, so the tool's dependencies resolve through
+  `path` and nothing has to exist on crates.io. **PT-5.1 is therefore not gated at all**, and it is the
+  distribution that matters: the download is the provenance, per PT-3.2.
+- **GATED BY [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) SH-4.1
+  (topology 0.2.0) and SH-4.3 (queues 0.1.0): PT-5.3 only**, publishing the tool to crates.io, where a
+  path dependency needs a real published version behind it. **This bullet is the gate of record; when
+  those land, edit it to say so and name the two versions.** A gate that has silently lifted is as
+  harmful as one that has not.
+
+M1B and M6 are outside all of this and say so where they are defined.
 
 **Gated on shipping [crates/windows-topology-sys](crates/windows-topology-sys) and
 [crates/windows-waitable-queues](crates/windows-waitable-queues) first.** Not a preference: the tool
