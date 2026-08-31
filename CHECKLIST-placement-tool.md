@@ -36,12 +36,22 @@ waiting on numbers only other people's machines can produce.
   record carries the model *separately*, but that is a decision with a privacy dimension and is made
   here, once, explicitly. Whatever is decided, the tool must be able to state plainly what it collects.
 
-- [ ] **PT-1.3** -- **Decide the fate of the three existing probe binaries** (`probe-topology`,
+- [x] **PT-1.3** -- **Decide the fate of the three existing probe binaries** (`probe-topology`,
   `probe-core-affinity`, `probe-peer-index-cache`) once their modules move. Keeping them as thin
   wrappers preserves the internal workflow; deleting them removes a second way to run the same
   measurement and a second place for output to drift. **Do not decide by taste -- the risk being
   weighed is two renderings of one measurement disagreeing**, which this investigation has already hit
   three times.
+  **Decided: keep them, and move the *rendering* into the library so there is only one of it.** The
+  two stated worries turn out not to be in tension, because they are about different things. The
+  engineer's -- that a combined binary accretes flags and modes until it is the grab-bag this crate was
+  extracted from -- is about **entry points**. The drift worry is about **renderings**. Sharing the
+  render code kills the drift risk outright, after which extra entry points cost nothing.
+  So: the shared tool is **one binary, one run, one record**, because a stranger doing a favour must
+  not be asked to run three things and collate them. The internal probes stay **separate and thin**,
+  because running one measurement in isolation is the whole point of a development loop. Every binary
+  becomes an entry point only; measurement *and* rendering live in the library and are called, never
+  reimplemented. A binary that formats its own output is the defect, not a binary that exists.
 
 ## M2: the move
 
@@ -63,20 +73,46 @@ waiting on numbers only other people's machines can produce.
 
 ## M3: the submission record
 
-- [ ] **PT-3.1** -- Emit **one** machine-readable record per run, carrying: a **schema version**
-  (separate from the tool version -- a collector needs to know whether it can parse the file at all),
-  the **tool version**, the topology **provenance**, a UTC timestamp, the host fingerprint, every
-  placement measurement, and every node-hop measurement.
-  **The tool version is the load-bearing field.** Results will arrive over months from different
-  builds, and a measurement that does not say which build produced it is an unlabelled number -- the
-  exact failure this workspace spent [crates/windows-topology-sys/DESIGN-NOTES.md](crates/windows-topology-sys/DESIGN-NOTES.md)
+Ordered so each item's prerequisites land first: the two identity fields are decided before the record
+that carries them is written.
+
+- [ ] **PT-3.1** -- **A linearly increasing integer schema version that cannot silently drift.** The
+  counter itself is easy for a consumer to compare (`schema >= 2`); the hazard is forgetting to bump it
+  when the record's shape changes, which no amount of care reliably prevents. So derive rather than
+  restate, per this repository's own rule: compute a hash over the record's **actual serialized shape**
+  (every key path, sorted, recursively) and assert in a test that it matches the hash recorded for the
+  current `SCHEMA_VERSION`.
+  Change the shape without bumping and the test fails, naming the new hash. Bumping then means adding a
+  row, deliberately. **The version stays a plain integer in the record** -- the hash is a development-
+  time guard, not something a consumer parses -- so nothing downstream has to understand this
+  mechanism. Verify by sabotage: add a field, confirm the test fails; bump and re-record, confirm it
+  passes.
+
+- [ ] **PT-3.2** -- **Stamp the exact build, and say loudly when it is not an official one.** The
+  record carries the git commit, whether the working tree was dirty when it was built, the crate
+  version, and whether it came from CI or a local build.
+  **This is the same problem as `Provenance` one layer up, and takes the same shape**: an official
+  CI-built binary from a clean tree is the trusted case, and everything else -- a local build, a dirty
+  tree, an unknown commit -- must be visibly marked so a result that arrives from one is not silently
+  pooled with the rest. Default to the untrusted reading when the answer cannot be established, for
+  the same reason `Provenance::Synthetic` is `Default`: forgetting must be safe.
+  A `build.rs` reads the commit from an environment variable when CI sets one, falls back to `git`
+  when there is a repository, and records *unknown* otherwise -- which is exactly what a `cargo
+  install` from a crates.io tarball will produce, and is the honest answer there.
+
+- [ ] **PT-3.3** -- Emit **one** machine-readable record per run, carrying: the schema version
+  (PT-3.1), the build identity (PT-3.2), the topology **provenance**, a UTC timestamp, the host
+  fingerprint, every placement measurement, and every node-hop measurement.
+  **Build identity is the load-bearing field.** Results will arrive over months from different builds,
+  and a measurement that does not say which build produced it is an unlabelled number -- the exact
+  failure this workspace spent [crates/windows-topology-sys/DESIGN-NOTES.md](crates/windows-topology-sys/DESIGN-NOTES.md)
   `D-12` fixing one layer down. There is currently **no** version stamped in any probe output.
 
-- [ ] **PT-3.2** -- Keep the human-readable report as well, and derive both from the same measured
+- [ ] **PT-3.4** -- Keep the human-readable report as well, and derive both from the same measured
   values so they cannot disagree. The reader running the tool should be able to see, in prose, the
   same conclusion the record encodes -- otherwise nobody notices when a run is nonsense.
 
-- [ ] **PT-3.3** -- Write the record to a **file** by default, named predictably, and tell the user
+- [ ] **PT-3.5** -- Write the record to a **file** by default, named predictably, and tell the user
   exactly where it is and what to do with it. Asking someone to copy terminal output invites truncated
   and reflowed submissions.
 
@@ -102,15 +138,35 @@ waiting on numbers only other people's machines can produce.
   be pinned and why the run cannot continue honestly -- **and must not fall back to an unpinned
   measurement**, which would produce a plausible number that means nothing.
 
-## M5: publishing
+## M5: distribution
 
-- [ ] **PT-5.1** -- A README written for someone who has never seen this repository: what question the
-  tool answers, why their machine is interesting, how to install and run it, what to send back, and
-  what it collects. Assume no context and no obligation.
+**The CI-built artifact is the canonical way to get this tool**, not `cargo install`. Two reasons, and
+the second is the real one: a downloader needs no Rust toolchain, and **the download itself is the
+provenance**. A binary attached to a release in this repository is traceable to the commit that built
+it, in a way a locally built copy of the same source is not -- which is what makes PT-3.5's "official
+build" distinction meaningful rather than decorative.
 
-- [ ] **PT-5.2** -- Package metadata, and a statement of what is and is not covered by semver. The
-  **record's schema is a compatibility surface** the moment anyone stores one; the internal
-  measurement code is not.
+- [ ] **PT-5.1** -- CI builds the tool on tag and attaches the binary to a GitHub release, injecting
+  the commit into the environment variable PT-3.5 reads. **Verify the negative case**: a locally built
+  binary must produce a record marked as an unofficial build, and a CI-built one must not. A
+  distinction nobody has watched fail is a distinction that does not work.
 
-- [ ] **PT-5.3** -- Release, and confirm a clean `cargo install` from crates.io on a machine without
-  this repository checked out. An install path nobody has walked is an install path that does not work.
+- [ ] **PT-5.2** -- A README written for someone who has never seen this repository: what question the
+  tool answers, why their machine is interesting, where to download it, how to run it, what to send
+  back, and what it collects. Assume no context and no obligation. Lead with the download, not with
+  `cargo install`.
+
+- [ ] **PT-5.3** -- Decide whether to publish to crates.io **as well**, and record the reasoning. It
+  costs a semver obligation and yields records whose commit is *unknown* by construction (a crates.io
+  tarball carries no repository), which is a strictly weaker submission. The case for it is reach; the
+  case against is that the weaker path is also the more discoverable one, and submissions will drift
+  towards it.
+
+- [ ] **PT-5.4** -- Package metadata and a statement of what is and is not covered by semver. The
+  **record's schema is a compatibility surface** the moment anyone stores one; the internal measurement
+  code is not.
+
+- [ ] **PT-5.5** -- Walk the whole path end to end on a machine without this repository checked out:
+  download, run, find the record, read the README's instructions for sending it. A path nobody has
+  walked is a path that does not work, and the person walking it will be doing a favour rather than
+  debugging.
