@@ -42,7 +42,7 @@ release-blocking rather than restating the decision itself.
 
 ## M1: settle the public surface before it is public
 
-- [ ] **SH-1.1** -- **MIRRORS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M31.8 -- one piece of
+- [x] **SH-1.1** -- **MIRRORS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M31.8 -- one piece of
   work seen from two plans. Check both off in the same commit; neither is done alone.**
   **Decide M31.8 (merge-or-delete for `mpsc` and `reserving_mpsc`) before the first
   publish, not after.** This is the highest-leverage item in the file and it is release-blocking for a
@@ -79,6 +79,15 @@ release-blocking rather than restating the decision itself.
   releasing `windows-ioring-sys` too. Decide the order and whether ioring's release is part of this
   push or follows it -- but decide it, because a workspace that builds locally via `path` dependencies
   will not reveal this and the first symptom is a consumer unable to resolve the two together.
+
+- [ ] **SH-2.4** -- Clear the **eight rustdoc warnings** in `windows-waitable-queues` before it is
+  published. They pre-date this branch and were found while doing SH-1.1: an unresolved link to
+  `MIN_CAPACITY`, six links from public documentation to private items (`Shared::len`,
+  `Doorbell::clear`, `Doorbell`, `BOUNDS`), and one redundant explicit link target.
+  Ordinarily out of scope for the item that found them, and in scope here for one reason: **docs.rs is
+  the face of a first release.** A link that silently resolves to nothing in a workspace build renders
+  as a dead or missing reference to the first person who ever reads these docs, and a link to a private
+  item points at a page they cannot open.
 
 - [ ] **SH-2.3** -- Dry-run both publishes (`cargo publish --dry-run`) from the merge commit, and read
   the packaged file list rather than only the exit code. A crate that builds in a workspace can still

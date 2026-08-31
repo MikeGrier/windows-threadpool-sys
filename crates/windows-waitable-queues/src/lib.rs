@@ -46,6 +46,47 @@
 //! [`Reserving`] -- each naming one thing a queue can do, so a caller can be
 //! generic over exactly what it needs and nothing more.
 //!
+//! # Choosing between `mpsc` and `reserving_mpsc`
+//!
+//! They are **two different claim protocols, not one queue with a switch**.
+//! [`mpsc`] is Vyukov's bounded array queue, where a producer asks a slot's own
+//! sequence number whether it is free. [`reserving_mpsc`] counts free slots
+//! against the consumer's position, which is the only way a reservation can be
+//! answered at all. Both are well-studied designs in production use elsewhere,
+//! which is why this crate ships both instead of picking one for you.
+//!
+//! - Need [`Reserving`]? Only [`reserving_mpsc`] has it; [`mpsc`] structurally
+//!   cannot.
+//! - Otherwise **start with [`reserving_mpsc`]**: it was the faster of the two
+//!   at every producer count above one that we measured.
+//! - One producer *and* one consumer? Use [`spsc`], which beats both.
+//!
+//! Measured ns per push, isolated regime, median of three. An AMD EPYC 7763
+//! slice (8 cores, 16 threads) and a Snapdragon X2 Elite (12 cores, no SMT):
+//!
+//! | producers | `mpsc` x64 | `reserving` x64 | `mpsc` ARM64 | `reserving` ARM64 |
+//! |---|---|---|---|---|
+//! | 1 | 9.0 | 8.6 | 6.5 | 6.1 |
+//! | 2 | 49.0 | 28.0 | 29.8 | 9.4 |
+//! | 4 | 84.4 | 33.3 | 60.6 | 12.9 |
+//! | 8 | 140.8 | 38.5 | 167.4 | 29.8 |
+//! | 16 | 193.5 | 52.2 | 194.9 | 30.6 |
+//! | 32 | 239.7 | 56.9 | 195.0 | 30.6 |
+//!
+//! **Read these as two data points, not as a law**, and measure your own
+//! workload before treating them as settled. This comparison has already
+//! inverted once: the split was designed on the assumption that `mpsc` would be
+//! the cheaper shape, and measurement disagreed on both machines. Producer
+//! count, how hard the consumer drains, and where the threads are scheduled all
+//! move the answer -- placement alone moved an SPSC handoff by 5.6x on one of
+//! these hosts.
+//!
+//! Two things that look like reasons to choose and are not. **Capacity**:
+//! `mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, but that counts slots
+//! allocated up front rather than items ever pushed, and 2^31 slots is tens of
+//! gigabytes before the ring holds anything useful. **`mpsc` winning at one
+//! producer**: true in one regime, and at one producer you want [`spsc`].
+//!
 //! # Shutting down
 //!
 //! A consumer learns that every producer is gone from

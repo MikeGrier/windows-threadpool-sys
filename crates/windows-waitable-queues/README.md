@@ -67,18 +67,70 @@ says so rather than the documentation: `spsc` accepts one slot, and `mpsc` needs
 two, because its per-slot sequence cannot distinguish "just published" from "free
 again next lap" in a one-slot ring.
 
+## Choosing between `mpsc` and `reserving_mpsc`
+
+They are **two different claim protocols**, not one queue with a switch. `mpsc`
+is Vyukov's bounded array queue: a producer asks a slot's own sequence number
+whether it is free. `reserving_mpsc` counts free slots against the consumer's
+position, which is the only way a reservation can be answered at all. Both are
+well-studied designs in production use elsewhere, which is why this crate ships
+both rather than picking one for you.
+
+**Start here:**
+
+- Need `reserve`? Only `reserving_mpsc` has it, and `mpsc` structurally cannot.
+- Otherwise, **start with `reserving_mpsc`.** It was the faster of the two at
+  every producer count we measured above one.
+- Only one producer *and* one consumer? Use `spsc`, which beats both.
+
+**What we measured**, in ns per push, isolated regime, median of three runs.
+Higher producer counts oversubscribe both hosts:
+
+| producers | `mpsc` (x64) | `reserving` (x64) | `mpsc` (ARM64) | `reserving` (ARM64) |
+|---|---|---|---|---|
+| 1 | 9.0 | 8.6 | 6.5 | 6.1 |
+| 2 | 49.0 | 28.0 | 29.8 | 9.4 |
+| 4 | 84.4 | 33.3 | 60.6 | 12.9 |
+| 8 | 140.8 | 38.5 | 167.4 | 29.8 |
+| 16 | 193.5 | 52.2 | 194.9 | 30.6 |
+| 32 | 239.7 | 56.9 | 195.0 | 30.6 |
+
+x64 is an AMD EPYC 7763 slice (8 cores, 16 threads); ARM64 is a Snapdragon X2
+Elite (12 cores, no SMT). **Read these as two data points, not as a law.** This
+comparison has already inverted once: it was designed on the assumption that
+`mpsc` would be the cheaper shape, and measurement said otherwise on both
+machines.
+
+**Measure your own workload before treating any of this as settled.** Producer
+count, how hard the consumer drains, and where the threads are scheduled all
+move the answer -- thread placement alone moved an SPSC handoff by 5.6x on one
+of these hosts. The `probe-core-affinity` tool in this repository exists so you
+can run that measurement on your hardware instead of inheriting ours.
+
+Two things that look like reasons to choose and are not:
+
+- **Capacity.** `mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, but that
+  counts slots allocated up front, not items ever pushed. A ring of 2^31 slots
+  is tens of gigabytes before it holds anything useful.
+- **`mpsc` winning at one producer.** True in one regime, and at one producer
+  you want `spsc` anyway.
+
 ## What it will not do
 
 - **It will not overwrite.** A full queue fails, or a reservation guarantees a
   slot. Overwrite-oldest is right for telemetry, where a lost entry is a lost
   sample; here an entry may be an I/O submission, where a lost entry is a lost
   operation.
-- **It will not make you pay for reservation if you do not want it.** Honouring
-  a reservation means counting free slots, which costs a producer a read of the
-  consumer's position on every push. `mpsc` does not offer reservation and does
-  not pay; `reserving_mpsc` offers it and does. That is why `mpsc` does not
-  implement the `Reserving` trait -- it genuinely cannot, which is the whole
-  reason the traits are narrow.
+- **It will not decide between two real queue designs on your behalf.** `mpsc`
+  and `reserving_mpsc` are different claim protocols, both well studied and both
+  used in production and in research. `mpsc` asks each slot's own sequence
+  number "are you free?"; `reserving_mpsc` counts free slots against the
+  consumer's position, which is what makes a reservation answerable at all --
+  and why `mpsc` does not implement the `Reserving` trait. It genuinely cannot,
+  which is the whole reason the traits are narrow.
+  **Which is faster is a property of your workload, not of the designs**, and we
+  publish what we measured rather than choosing for you -- see "Choosing between
+  them" below.
 - **It will not allocate on push.** Bounded shapes allocate once, at
   construction.
 - **It will not create a kernel object you never use.** The doorbell is created

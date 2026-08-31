@@ -39,7 +39,7 @@ preferred.
 | <a id="d-13"></a>D-13 | **The arming protocol is written once, in `blocking.rs`, and a shape binds to it by implementing a crate-private `Parked` trait.** The blocking receive loop *is* [D-9](#d-9), not glue around it; a second shape spelling it out again would be a second copy of a rule -- the exact mistake this crate has already paid for once. |
 | <a id="d-14"></a>D-14 | **`mpsc`'s arming asks "would `pop` find something", not "is `len` zero".** The two disagree over a slot a producer has claimed but not published, and only the first answer lets the consumer park on it instead of spinning until that producer is rescheduled. |
 | <a id="d-15"></a>D-15 | **`Doorbell::clear` resets the event *before* clearing the flag that mirrors it, and the original order was a lost wakeup.** A producer signalling between the two lines set the flag and issued a real `SetEvent`; the `ResetEvent` that followed erased the signal and left the flag set, wedging the doorbell dark while it claimed to be lit. **Amends [D-9](#d-9)**, whose "there is no third case" holds only for a queue whose emptiness is one position comparison. |
-| <a id="d-16"></a>D-16 | **Reservation is a capability a shape may lack, so the reserving multi-producer queue ships as a peer of `mpsc` rather than replacing it.** Honouring a reservation requires counting free slots, which requires the consumer's position -- a single shared line `mpsc`'s push deliberately never reads. Rather than charge every caller for a capability not every caller wants, both ship. **Amends [D-6](#d-6)**, which assumed one queue would carry every policy. |
+| <a id="d-16"></a>D-16 | **Its cost premise is falsified by [D-26](#d-26); the conclusion stands on capability instead -- see [D-29](#d-29).** Reservation is a capability a shape may lack, so the reserving multi-producer queue ships as a peer of `mpsc` rather than replacing it. Honouring a reservation requires counting free slots, which requires the consumer's position -- a single shared line `mpsc`'s push deliberately never reads. The original rationale added that this made reserving the *more expensive* shape and that both should ship rather than charge every caller for it; measurement reversed that, and the split is now justified by the capability alone. **Amends [D-6](#d-6)**, which assumed one queue would carry every policy. |
 | <a id="d-17"></a>D-17 | **The reservation count and the claim position live in one word, because a check-and-claim over both must be a single atomic operation.** Two atomics cannot be made correct with any amount of fencing: the pushing producer is load-then-store and the reserving one store-then-load, so the Dekker argument does not apply and both can miss each other. The 32/32 split is forced by the arithmetic, and caps this shape at 2^31 items. |
 | <a id="d-18"></a>D-18 | **A 128-bit compare-and-swap is refused.** It would lift the 2^31 cap and nothing else -- the consumer's position still has to be read -- at the cost of a dependency, a target-feature floor not in the x86-64 baseline, and a different instruction on the ARM64 machine this workspace measures on. Revisit only for a tagged pointer, which is what [M-inf.1](../../CHECKLIST-io-domains.md)'s linked and sharded shapes would need. |
 | <a id="d-19"></a>D-19 | **The coalesced loss latch is deliberately not generalised from the file watcher.** Coalescing there is sound because a desync is *idempotent* -- two mean the same as one, and the answer to both is a re-scan. A queue of arbitrary `T` has no such property, so what generalises is a loss *count*, which is [M31.4](../../CHECKLIST-io-domains.md)'s observability rather than a policy. |
@@ -52,6 +52,7 @@ preferred.
 | <a id="d-26"></a>D-26 | **Measured: the tail claim contends badly, and `reserving_mpsc` is up to 4x FASTER than `mpsc` under contention -- the opposite of what [D-16](#d-16) assumed.** Aggregate throughput *falls* as producers are added, for both shapes and far more than a bare contended atomic explains. D-16's premise, that reading the consumer's position makes the reserving shape the expensive one, is falsified everywhere except a single producer with a live consumer. |
 | <a id="d-27"></a>D-27 | **The gap is intrinsic to Vyukov's sequence protocol, not a fixable flaw in `mpsc`'s retry loop.** Its producer must read a slot's sequence *before* claiming, and that slot marches through memory as the tail advances while other producers write it. Padding slots onto their own cache lines was tested and rejected: it recovers about a fifth at eight producers, for four times the memory, and leaves the shape still 2.8x slower. |
 | <a id="d-28"></a>D-28 | **Amended -- the blanket rejection is withdrawn; the verdict depends on thread placement, and the open question is queued as [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) M-inf.4.** Caching the peer's index was measured, and it engaged as designed. It cost ~1.8x on x64 with the threads across cores, and *won* 17x on ARM64 and 1.8x on x64 SMT siblings. Batch depth decides the sign, and batch depth is set by where the two threads are scheduled -- not by the architecture and not by our code. A prefetch-only "warming" control changed nothing on any host. |
+| <a id="d-29"></a>D-29 | **Both multi-producer shapes ship. The crate publishes what it measured and declines to choose for the caller.** [D-26](#d-26) falsified [D-16](#d-16)'s cost premise, which reopened merge-or-delete; the answer is neither. Vyukov's sequence protocol and the head-based one are independently researched designs, both in production use, and our own workload having settled which *we* want is not evidence about anyone else's. Deleting a shape because no visible consumer wants it is what PLATFORM INTEGRITY forbids. What the crate owes instead is the data and, through `probe-core-affinity`, the means to gather it on the caller's own hardware. |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -467,6 +468,10 @@ and thrown away the reason the flag exists.
 
 [D-6](#d-6) said overflow "fails or reserves, and never overwrites", and quietly assumed one queue would
 carry both policies. Building the second one showed that assumption was wrong, and why.
+
+**The cost claim in this section is falsified; the structural claim is not.** Read what follows as an
+account of *why the two shapes differ*, which remains correct, and not as an account of which is
+cheaper, which [D-26](#d-26) reversed. [D-29](#d-29) records what the split rests on now.
 
 **Honouring a reservation costs the producer something on every push, including the pushes that never
 reserve anything.** `mpsc`'s producer never reads the consumer's position: it asks the slot's own
@@ -1008,3 +1013,55 @@ report it. This is the second time in this investigation that an instrument's *p
 than its measurement nearly produced a wrong conclusion (the first was the fixed-prose interpretation
 noted above). The fix also makes the "near vs far" summary fall back to the sibling pair on hosts
 where `same cache, same class` is not expressible, which would otherwise have printed nothing here.
+
+
+## D-29: both multi-producer shapes ship, and the caller is given the data instead of a verdict
+
+[D-26](#d-26) falsified [D-16](#d-16)'s premise -- reading the consumer's position was supposed to make
+`reserving_mpsc` the expensive shape, and it is instead the faster one under contention, by up to 4x on
+x64 and 6.4x on ARM64. That reopened a question D-16 had treated as settled: if the split does not buy
+what it claimed, should the shapes merge, or should one be deleted?
+
+**Neither. Both ship, and the crate declines to choose between them on the caller's behalf.**
+
+The two are not one queue with a feature flag. `mpsc` implements Vyukov's bounded array protocol, where
+a producer asks a slot's own sequence number whether it is free; `reserving_mpsc` counts free slots
+against the consumer's position, which is the only way a reservation can be answered at all. Both are
+independently studied designs with production track records, chosen by different systems for different
+reasons. **Our own workload having settled which we want is a fact about our workload**, and treating it
+as a fact about queueing would be exactly the narrowing PLATFORM INTEGRITY forbids: the absence of a
+visible consumer for a design is not evidence that none exists.
+
+What the crate owes a caller instead is honesty and equipment:
+
+- **The measurements, stated plainly**, including the regimes where each wins and the fact that the
+  answer inverted once already when a second architecture was tried.
+- **The means to measure their own domain.** `probe-core-affinity` and the placement tool exist so a
+  caller can settle this on their own hardware and workload rather than inheriting ours. A queue
+  library that publishes one benchmark and calls it a recommendation is asserting a conclusion about
+  machines it has never seen.
+
+### What the split does *not* rest on
+
+Two justifications are available and both are refused, because a rationale that evaporates on
+inspection is worse than none:
+
+- **Not capacity.** `mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, and that difference is
+  unreachable: it counts slots allocated at construction, not items ever pushed, and 2^31 slots is tens
+  of gigabytes before the ring holds anything useful. See [D-17](#d-17) for why the packing forces it.
+- **Not `mpsc` being faster somewhere.** Its one measured advantage is a single producer with a live
+  consumer -- and at one producer the right shape is [`spsc`](#d-1), which is faster still and which
+  this crate also ships. A shape kept for a regime already better served elsewhere is kept on
+  sentiment.
+
+The split rests on **capability**: `reserving_mpsc` implements `Reserving` and `mpsc` cannot, for the
+structural reason D-16's surviving half explains. Everything else is profile, and profile is the
+caller's to measure.
+
+### The obligation this creates
+
+Keeping both doubles the surface that every later decision must cover, and that is accepted knowingly
+rather than discovered later. `M31.6`'s loom verification covers both shapes or neither is verified;
+`M-inf.4`'s peer-index policy is decided for both or the crate ships two different answers to one
+question. **A shape kept for others' benefit is still a shape this crate maintains**, and the moment
+that maintenance is skipped for one of them, the argument above stops being true.

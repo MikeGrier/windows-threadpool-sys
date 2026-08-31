@@ -8,8 +8,19 @@
 //!
 //! # Why this is a separate shape rather than a method on `mpsc`
 //!
-//! Because honouring a reservation costs the producer something on **every**
-//! push, including the pushes that never reserve anything.
+//! Because the two ask different questions to claim a slot, and only this one's
+//! question can answer a reservation. They are two claim protocols, not one
+//! queue with a switch.
+//!
+//! Honouring a reservation costs the producer a read of the consumer's position
+//! on **every** push, including the pushes that never reserve anything -- which
+//! is what `mpsc` avoids and why it cannot offer reservation at all.
+//!
+//! **That cost is not what makes either shape slower.** This one measured
+//! *faster* than `mpsc` under contention on both architectures tried, by up to
+//! 6.4x, because the slot sequence `mpsc` reads instead marches through memory
+//! while other producers write it. See the crate documentation for the numbers
+//! and for how to choose.
 //!
 //! `mpsc`'s producer never reads the consumer's position. It asks a different
 //! question -- "is the slot I am about to claim free?" -- and reads that from

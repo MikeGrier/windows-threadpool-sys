@@ -452,7 +452,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   > **-> CROSS-COMPONENT NOTE:** this run also contradicted D-28, which is recorded against that decision
   > and against M31.8's use of it below, not here.
 
-- [ ] **M31.8** -- **MIRRORED BY [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md)
+- [x] **M31.8** -- **MIRRORED BY [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md)
   SH-1.1 -- one piece of work seen from two plans. Check both off in the same commit; neither is done
   alone.** That file also records why this is *release*-blocking rather than merely design-blocking:
   the decision may delete a public type, which is free before `windows-waitable-queues` 0.1.0 and a

@@ -108,7 +108,12 @@ use crate::options::Options;
 /// The maximum is the widest any shape may be, because this one's positions are
 /// full-width [`usize`] values with nothing packed beside them --
 /// [`reserving_mpsc`](crate::reserving_mpsc) pays for its reservations with a
-/// far lower ceiling.
+/// far lower ceiling of 2^31.
+///
+/// **Do not choose between the shapes on this.** That ceiling counts *slots
+/// allocated at construction*, not items ever pushed, and a ring of 2^31 slots
+/// is tens of gigabytes before it holds anything useful. The difference is real
+/// and practically unreachable.
 const BOUNDS: Bounds = Bounds {
     min: 2,
     max: WRAPPING_MAX_CAPACITY,
@@ -157,10 +162,13 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
 /// **Note which switch costs this shape something.**
 /// [`Options::tracking_high_water`] makes the producer read the consumer's
 /// position on every push -- the single shared line this shape's push is built
-/// to avoid touching, and the reason
-/// [`reserving_mpsc`](crate::reserving_mpsc) exists as a separate shape at all.
-/// Off, which is the default, it costs one predictable branch on a field that
-/// is written once at construction.
+/// to avoid touching. Off, which is the default, it costs one predictable
+/// branch on a field that is written once at construction.
+///
+/// That avoidance is what distinguishes the two multi-producer shapes, but
+/// **it is not what makes either one faster**: measurement found this shape the
+/// slower of the two under contention, by up to 6.4x. See the crate
+/// documentation for the numbers and for how to choose.
 ///
 /// # Errors
 ///
@@ -459,11 +467,16 @@ impl<T> Producer<T> {
             .store(position.wrapping_add(1), Ordering::Release);
 
         // **Guarded, and this branch is the whole reason high-water is a
-        // switch.** This shape's producer never reads `head` -- that property
-        // is what keeps its push off the one line every thread touches, and it
-        // is why `reserving_mpsc` is a separate shape rather than a method
-        // here. Depth cannot be known without that read, so the read is taken
-        // only when somebody asked for the answer.
+        // switch.** This shape's producer never reads `head`, which is what
+        // keeps its push off the one line every thread touches. Depth cannot be
+        // known without that read, so the read is taken only when somebody
+        // asked for the answer.
+        //
+        // Note what this property does *not* buy: measurement found this shape
+        // slower than `reserving_mpsc` under contention despite it, because the
+        // slot sequence a producer must read instead marches through memory
+        // while other producers write it. Staying off the shared line is why
+        // the two shapes are different, not why either is quick.
         //
         // Off, the cost is one predictable branch on a field written once at
         // construction, so the line is shared but read-only -- the cheap kind.
