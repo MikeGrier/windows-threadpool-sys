@@ -98,7 +98,12 @@ fn main() -> std::io::Result<()> {
         "placement", "prod", "cons", "base ns/it", "cached ns/it", "base depth", "cach depth"
     );
 
+    // Every variant, tightest coupling first. `SameCoreSiblings` MUST be here:
+    // it is the placement the caching hypothesis is about, and on an SMT host it
+    // is where the interesting result lives. Omitting it once already produced a
+    // table that disagreed with the interpretation printed directly beneath it.
     let all = [
+        Placement::SameCoreSiblings,
         Placement::SameCacheSameClass,
         Placement::SameCacheCrossClass,
         Placement::CrossCacheSameClass,
@@ -259,8 +264,13 @@ fn main() -> std::io::Result<()> {
     }
 
     // The plainest answer to "does placement matter", independent of caching.
+    // "Near" falls back to SMT siblings, because a host whose outermost
+    // partitioning cache is per-core has no same-cache-different-core pair at
+    // all -- its nearest expressible placement IS the sibling pair.
     if let (Some(near), Some(far)) = (
-        observation.get(Placement::SameCacheSameClass, Strategy::Baseline),
+        observation
+            .get(Placement::SameCacheSameClass, Strategy::Baseline)
+            .or_else(|| observation.get(Placement::SameCoreSiblings, Strategy::Baseline)),
         observation
             .get(Placement::CrossCacheCrossClass, Strategy::Baseline)
             .or_else(|| observation.get(Placement::CrossCacheSameClass, Strategy::Baseline)),

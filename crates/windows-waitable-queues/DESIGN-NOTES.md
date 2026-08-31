@@ -51,7 +51,7 @@ preferred.
 | <a id="d-25"></a>D-25 | **`Observable` deliberately does not restate depth.** [D-2](#d-2)'s sketch listed it, but `Bounded::len` already reports it from positions the queue keeps anyway. Naming it twice would give one number two spellings and two places to drift. What belongs on `Observable` is only what must be *accumulated*. |
 | <a id="d-26"></a>D-26 | **Measured: the tail claim contends badly, and `reserving_mpsc` is up to 4x FASTER than `mpsc` under contention -- the opposite of what [D-16](#d-16) assumed.** Aggregate throughput *falls* as producers are added, for both shapes and far more than a bare contended atomic explains. D-16's premise, that reading the consumer's position makes the reserving shape the expensive one, is falsified everywhere except a single producer with a live consumer. |
 | <a id="d-27"></a>D-27 | **The gap is intrinsic to Vyukov's sequence protocol, not a fixable flaw in `mpsc`'s retry loop.** Its producer must read a slot's sequence *before* claiming, and that slot marches through memory as the tail advances while other producers write it. Padding slots onto their own cache lines was tested and rejected: it recovers about a fifth at eight producers, for four times the memory, and leaves the shape still 2.8x slower. |
-| <a id="d-28"></a>D-28 | **Measured and rejected: caching the peer's index makes our SPSC ring slower, so no shape adopts it.** The technique is real and well documented, and it engaged as designed -- it cut the consumer's shared reads by 3.6x. It still cost about 1.8x throughput, because it trades freshness for fewer reads and our ring hovers near empty, where a stale bound makes each side idle on information it could have refreshed. A prefetch-only "warming" variant was measured as a control and changed nothing. |
+| <a id="d-28"></a>D-28 | **Amended -- the blanket rejection is withdrawn; the verdict depends on thread placement, and the open question is queued as [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) M-inf.4.** Caching the peer's index was measured, and it engaged as designed. It cost ~1.8x on x64 with the threads across cores, and *won* 17x on ARM64 and 1.8x on x64 SMT siblings. Batch depth decides the sign, and batch depth is set by where the two threads are scheduled -- not by the architecture and not by our code. A prefetch-only "warming" control changed nothing on any host. |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -900,6 +900,10 @@ decides the outcome, and batch depth is a property of how the two threads interl
 whether siblings share a core, how the scheduler places them -- not of our code. x64 kept them
 lock-step; ARM64 lets them decouple.
 
+**That last sentence was itself too coarse, and the x64 host disproved it.** See
+"[the flip is placement, not architecture](#d-28-placement)" below: pinned to SMT siblings, the same
+x64 machine that produced the rejection reverses it. The variable is placement, not instruction set.
+
 Two consequences, and the second is the uncomfortable one:
 
 - The blanket rule **"no shape adopts it"** does not follow from the evidence any more. It is now a
@@ -937,3 +941,65 @@ accurate when the answer was a flat rejection and is not accurate now: the open 
 [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) M-inf.4. It is recorded so the technique is
 neither re-proposed without measurement nor adopted on the strength of whichever host someone happened
 to benchmark on.
+
+### <a id="d-28-placement"></a>The flip is placement, not architecture -- and the sibling hypothesis was refuted backwards
+
+The ARM64 host asked the x64 host to test a specific prediction: **that SMT siblings sharing L1 would
+stay in lockstep, giving shallow batches, and that this was the condition making caching lose.** ARM64
+has no SMT and physically cannot express that placement, so only the x64 host could answer it.
+
+`probe-core-affinity`, x64, medians of three runs (all three agreed to within 3%):
+
+| placement | base ns/item | cached ns/item | cached batch depth | verdict |
+|---|---|---|---|---|
+| SMT siblings (one core) | 10.7 | 5.9 - 6.0 | **116 - 163** | caching **WINS** 1.8x |
+| same cache, same class | *not expressible* | | | |
+| cross cache, same class | 19.3 - 21.8 | 38.7 - 42.1 | **1.7 - 1.8** | caching **LOSES** 2.0x |
+
+**The hypothesis is refuted, and refuted backwards.** Siblings do not stay in lockstep -- they produce
+by far the *deepest* batches measured on this host, and caching wins there. The shallow batches are on
+the *cross-core* row, which is where caching loses. Sharing a cache causes decoupling, not lockstep.
+
+This is the more important half of the finding: **the verdict flips inside a single machine.** The
+earlier framing that "x64 keeps the threads lock-step and ARM64 lets them decouple" attributed to the
+instruction set something that is a property of *placement*. The same x64 binary on the same x64 host
+both wins and loses depending only on which two processors the threads land on. No decision keyed to
+architecture can be correct, which is why the amended rule is placement-scoped.
+
+It also explains the original rejection without contradicting it. Unpinned threads land on separate
+cores, which is exactly the losing row; re-running `probe-peer-index-cache` unpinned reproduces it
+(baseline 18.4 - 23.8 ns, cached 35.0 - 38.8 ns). The first measurement was never wrong -- it was one
+placement reported as though it were the machine.
+
+**Why the sign changes, unified across both hosts.** Caching wins when
+`(cost of the shared read) x (reads saved)` exceeds the cost of idling on a stale bound. Both terms
+move with placement:
+
+- *Siblings* share L1, so the handoff is cheap (10.7 vs 19.3 ns even with no caching). The two threads
+  interleave on one core's execution resources rather than running truly concurrently, so the producer
+  bursts ahead and the consumer drains deep batches. Deep batch, caching wins.
+- *Across cores* the ring ping-pongs one item at a time (depth ~1.7) and, on this host, the read being
+  saved is cheap anyway -- crossing L2 while staying inside a shared L3, same package, same NUMA node,
+  same efficiency class. Little saved, staleness paid. Caching loses.
+- *ARM64 across domains* saves a genuinely expensive read (215 ns baseline), so it wins 3.5x even at a
+  batch depth below 1. Cost per read, not just depth, is part of the trade.
+
+**The x64 host isolates the cache effect, which ARM64 could not.** ARM64's cache domains and core
+classes are confounded -- crossing one crosses the other -- so it cannot separate "cache domain cost"
+from "core speed cost". This host has a single L3 domain, a single efficiency class, and eight L2
+domains, so its `cross cache, same class` row varies *only* the cache domain, with class, package,
+L3 and NUMA all held constant. That isolated crossing costs **1.8x - 2.0x** on the unoptimised
+handoff. Conversely this host cannot express `same cache, same class` at all: its outermost
+partitioning cache is L2, shared by exactly the two siblings of one core, so any two processors
+sharing a cache domain are siblings. The two hosts are complementary rather than redundant, and
+neither alone can produce the full table.
+
+**A probe defect found while doing this, now fixed.** `probe-core-affinity` printed its placement
+table from a hard-coded list of four variants that omitted `SameCoreSiblings`, while the
+interpretation beneath it iterated over the placements actually measured. On an SMT host the table
+therefore showed the sibling row as absent while the interpretation quoted a number for it -- the
+single most important row on this machine, silently missing from the table that was supposed to
+report it. This is the second time in this investigation that an instrument's *presentation* rather
+than its measurement nearly produced a wrong conclusion (the first was the fixed-prose interpretation
+noted above). The fix also makes the "near vs far" summary fall back to the sibling pair on hosts
+where `same cache, same class` is not expressible, which would otherwise have printed nothing here.

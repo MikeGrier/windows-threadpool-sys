@@ -614,9 +614,14 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   the one M30's design deferred on the grounds that N=1 does not need it -- and the number to carry into
   that decision is 5.6x, not zero.
   Gated on the domain runtime existing (M33+.1), not on more measurement.
-  **Do not read the 5.6x as a cache effect or as a core-speed effect.** On this machine the efficiency
-  classes and cache domains coincide exactly, so the two are perfectly confounded; separating them needs
-  a host whose classes and caches cut differently, which we do not have.
+  **Do not read the 5.6x as a cache effect or as a core-speed effect.** On the ARM64 machine the
+  efficiency classes and cache domains coincide exactly, so the two are perfectly confounded.
+  **We now do have a host that separates them.** The x64 host has one L3 domain and one efficiency
+  class across eight L2 domains, so its `cross cache, same class` row varies the cache domain alone,
+  with class, package, L3 and NUMA held constant: the isolated cache-crossing cost there is
+  **1.8x - 2.0x** on the unoptimised handoff. That is not the same 5.6x boundary -- it is a shallower
+  crossing (L2 inside a shared L3, not a cluster-to-cluster hop) -- so it bounds rather than
+  decomposes the ARM64 number. Do not subtract one from the other.
 
 - [ ] **M-inf.4** -- Peer-index caching in the head-based shapes, and more importantly **a policy for an
   optimisation whose sign depends on the host.** Gated on that policy, not on more measurement -- we
@@ -638,10 +643,26 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   Whichever is chosen, it must be stated as a *policy* the crate owns rather than as a fact about a
   processor -- see PLATFORM INTEGRITY: this is exactly a lower baseline that must not be quietly dropped
   because the machine on the desk today prefers the other answer.
-  **One candidate explanation has already been tested and eliminated.** `probe-core-affinity` was written
-  to check whether the host difference was really a *placement* difference -- whether mismatched core
-  speeds on a heterogeneous machine decouple the two threads and manufacture the deep batch caching
-  needs. It does not: caching wins at **both** placements on the ARM64 host (14.4x within a domain, 3.0x
-  across), and threads placed together batch ~135x *deeper* than threads placed apart, which is the
-  opposite of the prediction. So the x64/ARM64 disagreement is not explained by where the threads run,
-  and this item cannot be closed by appealing to placement.
+  **Placement was tested on both hosts, and the picture is now complete.** `probe-core-affinity` was
+  written to check whether the host difference was really a *placement* difference. On ARM64 alone it
+  looked eliminated: caching wins at **both** placements there (14.4x within a domain, 3.0x across), and
+  threads placed together batch ~135x *deeper* than threads placed apart. Running it on x64 changed the
+  answer -- **the verdict flips inside that single machine**: pinned to SMT siblings, caching WINS 1.8x
+  at a batch depth of 116-163; pinned across cores it LOSES 2.0x at a depth of 1.7. Unpinned threads
+  land across cores, which is precisely the losing row, so D-28's original result was one placement
+  reported as though it were the machine.
+  The unified rule both hosts obey: caching wins when `(cost of the shared read) x (reads saved)`
+  exceeds the cost of idling on a stale bound. **Both terms are placement-dependent, which is why one
+  term alone never explained it.** ARM64 wins even at depth ~0.4 because the read it saves is genuinely
+  expensive (215 ns baseline); x64 loses at a similar depth because its cross-core read is cheap
+  (19-21 ns -- crossing L2 while staying inside one L3, one package, one NUMA node, one efficiency
+  class). So the sign is predictable from the two terms, and this item's policy question is unchanged
+  but now better posed: **the knob is placement, not architecture**, and any policy keyed to the
+  instruction set would be keyed to the wrong variable.
+  **What the x64 host contributed that ARM64 could not.** ARM64's cache domains and efficiency classes
+  are perfectly confounded (see M-inf.3's caution at the top of this section). The x64 host has one L3
+  domain, one efficiency class, and eight L2 domains, so its `cross cache, same class` row varies only
+  the cache domain -- the isolated cache-crossing cost is **1.8x - 2.0x**. It cannot express
+  `same cache, same class` at all, because its outermost partitioning cache is L2 and is shared by
+  exactly the two siblings of one core. The two hosts are complementary; neither alone produces the
+  full table, and M-inf.3's "we do not have such a host" caution should be read against that.
