@@ -28,20 +28,49 @@ waiting on numbers only other people's machines can produce.
   than "topology". Candidates to weigh rather than a foregone answer: `windows-placement-probe`,
   `windows-handoff-cost`, `windows-locality-report`. Check availability on crates.io before settling.
 
-- [ ] **PT-1.2** -- **Decide what the submission record carries about the machine beyond the
+- [x] **PT-1.2** -- **Decide what the submission record carries about the machine beyond the
   fingerprint**, specifically the CPU model name. The fingerprint deliberately omits model names
   because "a fingerprint that changes when the answer does not is a fingerprint nobody can compare" --
   correct for comparing placements, and a real loss when a stranger sends a result you cannot ask
-  follow-up questions about. Likely answer is that the canonical string stays clean and the submission
-  record carries the model *separately*, but that is a decision with a privacy dimension and is made
-  here, once, explicitly. Whatever is decided, the tool must be able to state plainly what it collects.
-  **This must be settled before the first submission arrives, because the asymmetry is brutal.** A
-  record cannot be regenerated: whatever a field the tool did not collect, every result gathered before
-  the omission was noticed lacks it *permanently*, and the machines are other people's. Under-collecting
-  is unrecoverable; over-collecting is a privacy cost that can at least be corrected going forward by
-  collecting less. That asymmetry argues for erring towards more context in the record -- but it is an
-  argument to weigh against what a stranger will consent to, not a licence, and the two must be
-  answered together rather than by defaulting to whichever is easier to implement.
+  follow-up questions about.
+  **This had to be settled before the first submission arrives, because the asymmetry is brutal.** A
+  record cannot be regenerated: a field the tool did not collect is missing *permanently* from every
+  result gathered before the omission was noticed, and the machines are other people's.
+  Under-collecting is unrecoverable; over-collecting is a privacy cost that can at least be corrected
+  going forward by collecting less.
+
+  **Decided: collect the CPU model, the OS build, and a virtualisation hint. The canonical fingerprint
+  string stays clean; all three live in the record beside it.**
+
+  The reasoning, in the order it actually holds:
+  - **A CPU model is not personal data.** It is a hardware characteristic shared by millions of
+    machines. The things that would be sensitive -- hostname, user name, file paths, domain membership,
+    serial numbers, installed software -- are not collected and must not be. That is the primary
+    argument; it stands whether or not the model could be inferred.
+  - **Withholding it gains nothing anyway**, because a detailed topology plus cache geometry narrows
+    the field to a small class of parts. This is the supporting argument, and it is deliberately *not*
+    treated as a principle: "it could be inferred, so collect it" would justify almost anything, and
+    the test remains whether the field is sensitive on its own merits.
+
+  **Two fields ride along by the same reasoning, and both are more explanatory for this dataset than
+  the model is:**
+  - **The OS build.** Placement cost is a scheduler behaviour, and the scheduler changes between
+    Windows builds. Two results that disagree are otherwise indistinguishable from two builds
+    disagreeing, and that is unrecoverable after the fact.
+  - **A virtualisation hint.** This workspace has already established that **VM slices flatten
+    topology** -- the EPYC slice reports one L3 domain and one NUMA node for silicon that has eight and
+    two -- which is precisely why the interesting rows are unmeasured here. Being able to separate bare
+    metal from VM submissions is therefore not incidental: it is the distinction that decides whether a
+    submission can supply the missing rows at all. **Record it as a hint and label it as one**;
+    hypervisor detection is not reliably decidable from user mode, and a field that overstates its
+    confidence is worse than an absent one.
+
+  **The runner can suppress the model**, with a flag, and the tool says so where it lists what it
+  collects. Not because the field is sensitive in general, but because the one case where it might be
+  is real and narrow -- an engineering sample or unreleased part would leak a name that is not yet
+  public -- and because "here is what I collect, and you may turn this off" is a materially stronger
+  thing to say to someone doing a favour than "trust me". The field is optional in the record, so a
+  suppressed submission stays valid rather than becoming unparseable.
 
 - [x] **PT-1.3** -- **Decide the fate of the three existing probe binaries** (`probe-topology`,
   `probe-core-affinity`, `probe-peer-index-cache`) once their modules move. Keeping them as thin
@@ -134,6 +163,20 @@ that carries them is written.
   exactly where it is and what to do with it. Asking someone to copy terminal output invites truncated
   and reflowed submissions.
 
+- [ ] **PT-3.6** -- Read the three machine-description fields PT-1.2 settled, each of which needs a
+  source this crate does not currently use. **Every one of them is optional in the record**, so a host
+  that will not answer produces a record missing a field rather than a failed run or a fabricated
+  value.
+  - **CPU model** -- the registry's `ProcessorNameString` under
+    `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0` is the pragmatic source and works on both
+    x64 and ARM64, unlike the CPUID brand string.
+  - **OS build** -- the reported version must be the real one. The Win32 compatibility shims lie to
+    unmanifested processes about the major version, so verify against a known build rather than
+    trusting the first API that returns a number.
+  - **Virtualisation hint** -- record confidence honestly. There is no user-mode call that decides
+    this, so whatever signal is used, the field says "hint" and a negative means *not detected* rather
+    than *bare metal*.
+
 ## M4: the runner's experience, and their trust
 
 - [ ] **PT-4.1** -- **One entry point.** A single binary that runs everything and produces one record.
@@ -146,9 +189,12 @@ that carries them is written.
   longer run than on this one, and the person deserves to know before it starts.
 
 - [ ] **PT-4.3** -- **Say exactly what is collected and what is not**, in the tool's own output and in
-  its README, and make it verifiable by reading the record: core/cache/NUMA shape, timings, and
-  whatever PT-1.2 decides -- **not** hostname, username, paths, or environment. **The tool makes no
-  network connections**; the person sends the file themselves, deliberately.
+  its README, and make it verifiable by reading the record. Collected, per PT-1.2: core/cache/NUMA
+  shape, timings, CPU model, OS build, and the virtualisation hint. **Not** collected: hostname, user
+  name, file paths, environment variables, serial numbers, or anything about installed software --
+  and that list is a commitment, not a description of the current implementation. **The tool makes no
+  network connections**; the person sends the file themselves, deliberately. Mention the model
+  suppression flag here, where someone deciding whether to run it will actually see it.
 
 - [ ] **PT-4.4** -- Pin the thread-pinning failure behaviour for a stranger's machine. It currently
   panics, which is right for us (a silently unpinned thread measures the scheduler, not the placement)
