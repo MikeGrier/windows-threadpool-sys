@@ -125,17 +125,47 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   actual exit 101) that CI would have caught. Fixed in the preceding commit. Redirect with `*>` and read
   `$LASTEXITCODE` before any pipe.
 
-- [ ] **M30.4** -- The doorbell, as its own reviewable unit: a queue-owned **manual-reset** event created
+- [x] **M30.4** -- The doorbell, as its own reviewable unit: a queue-owned **manual-reset** event created
   **lazily**, so a polling-only consumer allocates no kernel object. Level semantics -- signalled exactly
   when the consumer has something to observe. **The reset must be atomic with the observation that there
   is nothing to take; the signal need not be** (C-1b measured why: a late signal is a spurious wakeup, a
   stale reset is a lost one). Hand it out as a borrowed handle plus an owned duplicate, per the
   file-watcher's precedent.
+  **Landed together with M30.5 in one commit, because these two items are not independent and the
+  checklist was wrong to split them.** A `Doorbell` that no queue calls is dead code, and this workspace
+  builds with `-D warnings`, so M30.4 cannot compile on its own. Recorded as an acknowledged
+  structuring defect rather than worked around by widening the type's visibility to silence the lint --
+  making an API public to dodge a warning is a real design decision taken for a fake reason.
+  Delivered as `src/doorbell.rs`: lazily created (a poll-only consumer allocates no kernel object,
+  asserted, not assumed), manual-reset, with `handle` / `owned` / `signal` / `clear`. The redundant
+  signal is skipped through an `AtomicBool` mirroring the event, which is sound in exactly one
+  direction -- see the done-note on M30.5 for the asymmetry that permits it.
 
-- [ ] **M30.5** -- Join the two, and **sabotage-verify the lost-wakeup guard**: a test that reverses the
+- [x] **M30.5** -- Join the two, and **sabotage-verify the lost-wakeup guard**: a test that reverses the
   reset and the emptiness check must deadlock, and must stop deadlocking when the order is restored. A
   wakeup invariant asserted only by a passing test is a test of nothing -- this is the same discipline
   the ioring crate's `wait_then_drain` and the M17.4 calibration established.
+  **Done. The guard is `Consumer::arm`, which clears the doorbell and *then* checks emptiness** -- the
+  reverse of the order that reads naturally, which is why it needed proving rather than asserting. The
+  sabotage test drives the race deterministically on one thread (an interleaving that must be hit to
+  prove a point is not one to leave to the scheduler) and ends in a real bounded `WaitForSingleObject`:
+  reversed, it returns `WAIT_TIMEOUT` with an item sitting in the queue -- the lost wakeup, reproduced;
+  correct, the check finds the item and never waits at all.
+  **Nine sabotages, eight defects and one control, all behaving as expected.** Caught: push not
+  signalling; producer `Drop` not signalling; `arm` checking before clearing; `arm` not creating the
+  doorbell before checking; the final drain returning nothing; `clear` resetting the event but not the
+  mirror flag; auto-reset instead of manual-reset; the event created already signalled. Three of those
+  are caught **as hangs rather than failures**, which is the correct shape for a lost-wakeup defect.
+  **The control matters as much as the defects:** removing the skip-redundant-signal optimisation must
+  *not* fail, and does not -- so the suite is asserting the contract rather than the implementation.
+  **The sweep paid for itself twice, and neither finding came from reading the code.**
+  (1) A test gap: the drain-after-disconnect guard sat in a race window no test could reach, so
+  breaking it changed nothing. Fixed by extracting it as `Consumer::finish`, a named step a test can
+  call directly instead of hoping to schedule the window.
+  (2) A harness defect: one sabotage inserted `if false { signal(); }` beside the live call instead of
+  deleting it, so it sabotaged nothing and the resulting pass read as a hole in the tests. A sabotage
+  that does not sabotage is worse than none, because it retires a question that was never asked --
+  always confirm the injected defect actually changes behaviour before believing a "not caught".
 
 ## M31 -- The MPSC shape and the queue's contract
 

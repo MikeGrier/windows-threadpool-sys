@@ -43,9 +43,9 @@
 //!
 //! # Status
 //!
-//! [`spsc`] is implemented and has no doorbell yet -- it is a plain concurrent
-//! ring, and the `HANDLE` the crate is named for arrives with the milestone
-//! after it. The remaining shapes land in the milestones tracked by
+//! [`spsc`] is implemented, with its doorbell: it can be polled with no kernel
+//! object at all, blocked on directly, or waited on alongside other handles.
+//! The remaining shapes land in the milestones tracked by
 //! `CHECKLIST-io-domains.md` at the workspace root; the decisions they are
 //! built against are recorded in `DESIGN-NOTES.md` beside this file.
 
@@ -53,10 +53,11 @@
 #![warn(missing_docs)]
 #![warn(unsafe_op_in_unsafe_fn)]
 
+mod doorbell;
 mod error;
 pub mod spsc;
 
-pub use error::{CapacityError, PushError};
+pub use error::{CapacityError, PushError, RecvError, RecvTimeoutError};
 
 /// Pads and aligns a value onto its own cache line.
 ///

@@ -27,7 +27,8 @@ preferred.
 | <a id="d-2"></a>D-2 | **Capabilities are sliced into narrow traits, not gathered into one.** The `std::io` shape -- `Read`, `Write`, `Seek`, `BufRead` -- rather than a single fat `WaitableQueue`. Forced by the shapes themselves: a poll-only queue cannot implement a trait containing `doorbell()`, and an unbounded one cannot implement `capacity()` meaningfully. |
 | <a id="d-3"></a>D-3 | **No trait ships until a second implementation exists to validate it.** The trait *shape* is fixed now so signatures stay compatible; the traits themselves land with the second shape. |
 | <a id="d-4"></a>D-4 | **Every shape is split into producer and consumer handles, and cardinality is carried by `Clone`.** Single-producer becomes a compile-time guarantee rather than a documented precondition. |
-| <a id="d-5"></a>D-5 | **The doorbell is level state owned by the queue: signalled exactly when the consumer has something to observe.** The **reset** must be atomic with the observation that there is nothing to take; the **signal** need not be. Manual-reset, and created lazily. |
+| <a id="d-5"></a>D-5 | **The doorbell is level state owned by the queue: signalled exactly when the consumer has something to observe.** The **reset** must not be separable from the observation that there is nothing to take; the **signal** may be. Manual-reset, and created lazily. Realized without a lock by [D-9](#d-9). |
+| <a id="d-9"></a>D-9 | **Without a lock, the reset is made inseparable from the observation by ordering: clear first, then re-check, and never wait if the re-check finds anything.** `Consumer::arm` is that step. The natural order -- check, then clear -- is the lost wakeup, and is asserted to hang by a deliberate sabotage rather than argued to be wrong. |
 | <a id="d-6"></a>D-6 | **Overflow fails or reserves, and never overwrites.** For telemetry an overwritten entry is a lost sample; for an I/O submission it is a lost operation, and the two must not share a policy knob. |
 | <a id="d-7"></a>D-7 | **Shapes are plain modules, not Cargo features, until compile time justifies otherwise.** Two features are four configurations to test, against a benefit dead-code elimination already provides. |
 | <a id="d-8"></a>D-8 | **Published, and the obligation is accepted deliberately.** Unlike `windows-guard-alloc`, this is general-purpose and its first consumer is not its only plausible one. |
@@ -114,9 +115,13 @@ The asymmetry is the part that is easy to get wrong, and it was worked out by wa
 - **The signal may be given outside any lock.** A late `SetEvent` can at worst arrive after the consumer
   already drained that item and parked, which produces a spurious wakeup: the consumer wakes, finds
   nothing, parks again. Harmless, and consumers must tolerate it regardless.
-- **The reset must be atomic with the observation that there is nothing to take.** Otherwise: consumer
-  drains to empty, producer pushes and signals, consumer resets -- clearing the signal for an item that
-  is still there -- and parks. That wakeup is lost and the item is stranded.
+- **The reset must not be separable from the observation that there is nothing to take.** Otherwise:
+  consumer drains to empty, producer pushes and signals, consumer resets -- clearing the signal for an
+  item that is still there -- and parks. That wakeup is lost and the item is stranded.
+  An earlier wording of this said the two must be *atomic*, which is how a lock achieves it but not the
+  only way, and taken literally it would have condemned the lock-free implementation this crate actually
+  ships. What is required is that no push can fall between them unnoticed; [D-9](#d-9) gets that from
+  ordering plus a re-check instead of from mutual exclusion.
 
 So a redundant signal is free and a stale reset is fatal, which is the whole reason the queue owns its
 doorbell rather than accepting one. The same invariant, reached independently, is stated in
@@ -138,6 +143,50 @@ twenty-three the doorbell already costs less per operation than the push it acco
 (the queue was already non-empty) needs no knowledge of the consumer and can be taken immediately; the
 one requiring the consumer to publish whether it is parked is deferred until a measurement against real
 work justifies its lost-wakeup risk.
+
+## D-9: the arming protocol, which is how a lock-free queue keeps D-5
+
+[D-5](#d-5) says the reset must not be separable from the observation that there is nothing to take. A
+lock-based queue gets that by doing both under the lock it already holds, which is what
+[windows-file-watcher's queue](../windows-file-watcher/src/queue.rs) does. This crate's shapes are
+lock-free by construction -- a producer-side lock serializes exactly what multi-producer exists to
+parallelize -- so the property has to come from somewhere else.
+
+It comes from **ordering plus a re-check**, and the order is the reverse of the one that reads
+naturally:
+
+1. Take everything available.
+2. Clear the doorbell.
+3. **Check emptiness again.** If anything is there, do not wait.
+4. Wait.
+
+`Consumer::arm` is steps 2 and 3, and returns whether step 4 is safe. Step 3 is what carries the
+guarantee: an item arriving before the clear is found by the check, and an item arriving after the clear
+signals a doorbell that is no longer about to be reset. There is no third case.
+
+**Check-then-clear is the lost wakeup**, and it is the easier code to write: a push landing between the
+check and the clear both signals and has its signal erased, so the consumer sleeps on a queue that is
+not empty and will never be signalled again. Not a stall -- a permanent hang.
+
+**Lazy creation is a third case of the same hazard.** A producer running while no event exists skips
+signalling, because there is nothing to signal. So the doorbell must be created *before* the emptiness
+check that decides to wait, which is why `arm` creates it rather than assuming a caller did. Making the
+initial state agree with the queue at creation time would not fix this and was rejected: doing it
+race-free needs sequential consistency on both the event pointer and the queue position, which is a
+`SeqCst` fence on the producer's hot path to close a hole the re-check already closes for free.
+
+**This is asserted by sabotage, not by argument.** The suite reverses steps 2 and 3 deliberately and
+requires the result to hang -- a real `WaitForSingleObject` that returns `WAIT_TIMEOUT` while an item
+sits in the queue. The race is driven deterministically from one thread, because an interleaving that
+must be hit to prove a point is not one to leave to the scheduler. Three further sabotages (push not
+signalling, producer `Drop` not signalling, `clear` not resetting the mirror flag) are likewise caught
+*as hangs*, which is the correct shape for this class of defect and the reason the sabotage harness
+judges by exit code with a timeout rather than by reading output.
+
+**The signal side is cheapened, and a control proves that is all it is.** An `AtomicBool` mirrors the
+event so a redundant `SetEvent` costs ~7 ns instead of ~81. Removing that optimization must leave the
+suite green -- and does. Had it failed, the tests would have been asserting the implementation instead
+of the contract.
 
 ## D-6: overflow fails or reserves, and never overwrites
 

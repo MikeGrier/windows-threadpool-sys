@@ -7,6 +7,7 @@
 //! returns a differently-named error meaning the same thing.
 
 use core::fmt;
+use std::io;
 
 /// Why a capacity was rejected at construction.
 ///
@@ -156,3 +157,108 @@ impl<T> fmt::Display for PushError<T> {
 }
 
 impl<T: fmt::Debug> core::error::Error for PushError<T> {}
+
+/// Why a blocking receive gave up.
+///
+/// There is no `Empty` variant, because a blocking receive does not return on
+/// an empty queue -- it waits. Emptiness is only ever terminal when the
+/// producer is gone as well, and that is [`RecvError::Disconnected`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RecvError {
+    /// Every producer has been dropped and the queue has been drained.
+    ///
+    /// Reported only after the queue is genuinely empty, never merely because
+    /// the producer went away: a producer may push and then drop, and those
+    /// items are still owed to the consumer.
+    Disconnected,
+    /// A Windows call failed while creating or waiting on the doorbell.
+    ///
+    /// Kept distinct from [`RecvError::Disconnected`] because the two demand
+    /// opposite reactions: disconnection is the orderly end of a stream, while
+    /// this means the wait itself is broken and retrying will not help.
+    Io(io::Error),
+}
+
+impl From<io::Error> for RecvError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl fmt::Display for RecvError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Disconnected => {
+                f.write_str("the queue is empty and every producer has been dropped")
+            }
+            Self::Io(error) => write!(f, "waiting on the queue's doorbell failed: {error}"),
+        }
+    }
+}
+
+impl core::error::Error for RecvError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Disconnected => None,
+            Self::Io(error) => Some(error),
+        }
+    }
+}
+
+/// Why a blocking receive with a deadline gave up.
+///
+/// Distinct from [`RecvError`] rather than a variant of it, so a caller that
+/// cannot time out is not obliged to handle a case that cannot happen.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RecvTimeoutError {
+    /// The deadline passed with the queue still empty.
+    ///
+    /// The queue is still live, and this is not a malfunction: a caller polling
+    /// with a short deadline will see it constantly and should simply ask
+    /// again.
+    Timeout,
+    /// Every producer has been dropped and the queue has been drained.
+    Disconnected,
+    /// A Windows call failed while creating or waiting on the doorbell.
+    Io(io::Error),
+}
+
+impl RecvTimeoutError {
+    /// Whether asking again could succeed.
+    ///
+    /// True only for [`RecvTimeoutError::Timeout`]. Both other variants are
+    /// terminal -- no further item will ever arrive, so retrying is a spin.
+    #[must_use]
+    pub const fn is_retryable(&self) -> bool {
+        matches!(self, Self::Timeout)
+    }
+}
+
+impl From<io::Error> for RecvTimeoutError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl fmt::Display for RecvTimeoutError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Timeout => f.write_str("the queue was still empty when the deadline passed"),
+            Self::Disconnected => {
+                f.write_str("the queue is empty and every producer has been dropped")
+            }
+            Self::Io(error) => write!(f, "waiting on the queue's doorbell failed: {error}"),
+        }
+    }
+}
+
+impl core::error::Error for RecvTimeoutError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Timeout | Self::Disconnected => None,
+            Self::Io(error) => Some(error),
+        }
+    }
+}

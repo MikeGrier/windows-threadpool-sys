@@ -64,10 +64,17 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::io;
+use std::os::windows::io::{AsRawHandle, BorrowedHandle, OwnedHandle};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
 
 use crate::CacheAligned;
-use crate::error::{CapacityError, PushError};
+use crate::doorbell::Doorbell;
+use crate::error::{CapacityError, PushError, RecvError, RecvTimeoutError};
 
 /// The largest capacity that keeps the producer-minus-consumer difference
 /// unambiguous once the positions wrap.
@@ -121,6 +128,7 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
         tail: CacheAligned(AtomicUsize::new(0)),
         producer_live: AtomicBool::new(true),
         consumer_live: AtomicBool::new(true),
+        doorbell: Doorbell::new(),
     });
 
     Ok((
@@ -145,6 +153,9 @@ struct Shared<T> {
     tail: CacheAligned<AtomicUsize>,
     producer_live: AtomicBool,
     consumer_live: AtomicBool,
+    /// Readiness as a waitable `HANDLE`. Costs nothing until somebody asks for
+    /// the handle, so a polling consumer never allocates a kernel object.
+    doorbell: Doorbell,
 }
 
 // SAFETY: the two positions partition the slot array between the threads. A
@@ -248,6 +259,17 @@ impl<T> Producer<T> {
             .tail
             .0
             .store(tail.wrapping_add(1), Ordering::Release);
+
+        // After the release store, never before: the doorbell says "there is
+        // something to take", and that must not become true before the item is
+        // actually takeable. A consumer woken early would find the queue empty,
+        // clear the doorbell, and go back to sleep on an item that is about to
+        // exist -- a lost wakeup manufactured by signalling too eagerly.
+        //
+        // Cheap when it is redundant: `signal` returns without a syscall if the
+        // doorbell is already lit, so a producer running ahead of its consumer
+        // pays one atomic per push rather than one `SetEvent`.
+        self.shared.doorbell.signal();
         Ok(())
     }
 
@@ -306,6 +328,12 @@ impl<T> Drop for Producer<T> {
         // observing the disconnection, so a consumer that sees it can trust
         // that draining to empty really has drained everything.
         self.shared.producer_live.store(false, Ordering::Release);
+
+        // Disconnection is a wakeup like any other, and the only one nobody
+        // else can deliver. A consumer blocked on the doorbell would otherwise
+        // wait forever for an item that can no longer be sent -- the queue
+        // would be correct and the program would still hang.
+        self.shared.doorbell.signal();
     }
 }
 
@@ -382,6 +410,185 @@ impl<T> Consumer<T> {
     #[must_use]
     pub fn is_disconnected(&self) -> bool {
         !self.shared.producer_live.load(Ordering::Acquire)
+    }
+
+    /// Borrows the queue's readiness as a waitable `HANDLE`.
+    ///
+    /// This is the point of the crate. The handle is a manual-reset event that
+    /// is signalled exactly while the queue has something to take, so it can go
+    /// into `WaitForMultipleObjects` beside an I/O completion, a shutdown
+    /// event, or a timer -- a wait that no queue with a private parking
+    /// primitive can join.
+    ///
+    /// The event is created on the first call, so a consumer that only ever
+    /// polls with [`Self::pop`] is charged for no kernel object.
+    ///
+    /// The borrow is deliberate: the event belongs to the queue and must not be
+    /// closed. Use [`Self::doorbell_owned`] where ownership is required.
+    ///
+    /// # Waiting on it correctly
+    ///
+    /// **Do not simply wait and then drain.** Use [`Self::arm`] to decide
+    /// whether waiting is safe, or the wait can miss an item and block forever:
+    ///
+    /// ```no_run
+    /// # use windows_waitable_queues::spsc;
+    /// # use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+    /// # use std::os::windows::io::AsRawHandle;
+    /// # fn demo(rx: &spsc::Consumer<u32>) -> std::io::Result<()> {
+    /// loop {
+    ///     while let Some(item) = rx.pop() {
+    ///         let _ = item;
+    ///     }
+    ///     if !rx.arm()? {
+    ///         continue; // Something arrived; waiting now would be wrong.
+    ///     }
+    ///     let handle = rx.doorbell()?;
+    ///     // SAFETY: a live event handle borrowed for the call.
+    ///     unsafe { WaitForSingleObject(handle.as_raw_handle(), INFINITE) };
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` on the first call.
+    pub fn doorbell(&self) -> io::Result<BorrowedHandle<'_>> {
+        self.shared.doorbell.handle()
+    }
+
+    /// A duplicate of [`Self::doorbell`] that the caller owns.
+    ///
+    /// The duplicate names the same event, so signalling reaches both, and the
+    /// caller may close its copy whenever it likes. This is the form a
+    /// `ThreadpoolWait` needs, since arming one takes ownership of its target.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` or `DuplicateHandle`.
+    pub fn doorbell_owned(&self) -> io::Result<OwnedHandle> {
+        self.shared.doorbell.owned()
+    }
+
+    /// Clears the doorbell and reports whether it is safe to wait on it.
+    ///
+    /// `true` means the queue was still empty after the doorbell was cleared,
+    /// so any later push is guaranteed to signal and a wait cannot be missed.
+    /// `false` means something arrived in the meantime: take it instead of
+    /// waiting.
+    ///
+    /// The order inside this method is the whole correctness argument, and it
+    /// is the reverse of the one that reads naturally. Clearing *first* and
+    /// checking emptiness *second* is what makes a lost wakeup impossible: an
+    /// item that arrives before the clear is found by the check, and an item
+    /// that arrives after the clear signals a doorbell that is no longer about
+    /// to be reset. Checking first would leave a window in which a push both
+    /// signals and has its signal erased, and the consumer would sleep on a
+    /// queue that is not empty and will never be signalled again.
+    ///
+    /// This also creates the doorbell if it does not exist, which must happen
+    /// before the emptiness check for the same reason: a producer running while
+    /// there is no event skips signalling, so the check has to come after the
+    /// event exists to catch what that skip left behind.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `CreateEventW` on the first call.
+    pub fn arm(&self) -> io::Result<bool> {
+        // Before the clear, and so before the check: see above.
+        self.shared.doorbell.handle()?;
+        self.shared.doorbell.clear();
+        Ok(self.is_empty())
+    }
+
+    /// The last take before reporting the end of the stream.
+    ///
+    /// Called only after [`Self::is_disconnected`] has returned `true`, which
+    /// makes the answer final rather than a snapshot: no producer remains to
+    /// add anything, so `None` here means empty forever.
+    ///
+    /// This exists as a named step, rather than as a bare `pop` inlined into
+    /// each caller, because it guards a race that is real and narrow: a
+    /// producer may push *and then* drop in the window between a receive's
+    /// first `pop` and its disconnection check. Reporting the disconnection
+    /// without this final take would silently discard an item that was
+    /// successfully sent. Being a separate function is what lets a test reach
+    /// it directly instead of hoping to schedule that window.
+    fn finish(&self) -> Option<T> {
+        self.pop()
+    }
+
+    /// Takes the oldest item, blocking until one arrives.
+    ///
+    /// Parks on the doorbell rather than spinning, so a consumer with nothing
+    /// to do costs nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`RecvError::Disconnected`] once the producer is gone *and* the queue is
+    /// drained -- items pushed before the producer dropped are still delivered.
+    /// [`RecvError::Io`] if the doorbell cannot be created or waited on.
+    pub fn recv(&self) -> Result<T, RecvError> {
+        loop {
+            if let Some(item) = self.pop() {
+                return Ok(item);
+            }
+            if !self.arm()? {
+                continue;
+            }
+            if self.is_disconnected() {
+                return self.finish().ok_or(RecvError::Disconnected);
+            }
+            wait(self.doorbell()?, INFINITE)?;
+        }
+    }
+
+    /// Takes the oldest item, blocking until one arrives or the deadline
+    /// passes.
+    ///
+    /// The timeout bounds the whole call, not each individual wait: a consumer
+    /// woken spuriously does not get a fresh budget.
+    ///
+    /// # Errors
+    ///
+    /// [`RecvTimeoutError::Timeout`] if the deadline passes with the queue
+    /// still empty, which is not a malfunction. Otherwise as [`Self::recv`].
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(item) = self.pop() {
+                return Ok(item);
+            }
+            if !self.arm()? {
+                continue;
+            }
+            if self.is_disconnected() {
+                return self.finish().ok_or(RecvTimeoutError::Disconnected);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(RecvTimeoutError::Timeout);
+            }
+            // Saturating rather than wrapping: a duration longer than a `u32`
+            // of milliseconds is roughly 49 days, and clamping it to that is a
+            // longer wait than any caller meant, where truncating it would be a
+            // far shorter one. The loop re-arms and waits again, so clamping
+            // costs an extra turn and nothing else.
+            let millis = u32::try_from(remaining.as_millis()).unwrap_or(u32::MAX);
+            wait(self.doorbell()?, millis)?;
+        }
+    }
+}
+
+/// Block on a doorbell handle, translating the Win32 result.
+fn wait(handle: BorrowedHandle<'_>, millis: u32) -> io::Result<()> {
+    // SAFETY: a live event handle borrowed for the duration of the call.
+    let result = unsafe { WaitForSingleObject(handle.as_raw_handle(), millis) };
+    match result {
+        // A timeout is not an error here: the caller's loop re-checks its own
+        // deadline and decides what a timeout means.
+        WAIT_OBJECT_0 | WAIT_TIMEOUT => Ok(()),
+        _ => Err(io::Error::last_os_error()),
     }
 }
 
