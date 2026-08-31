@@ -116,6 +116,7 @@ pub mod doorbell_cost;
 pub mod error_mode;
 pub mod handle_state;
 pub mod ioring;
+pub mod peer_index_cache;
 pub mod pool_growth;
 pub mod queue_contention;
 pub mod request_cost;

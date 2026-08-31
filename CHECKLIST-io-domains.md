@@ -443,6 +443,10 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
     were, and is the only option that removes the surprise rather than documenting it.
   Whichever is chosen, D-16's and `mpsc`'s own documentation must be corrected in the same change: they
   currently assert a cost relationship the measurement reversed. That sweep is part of this item.
+  **One input that was expected to matter turned out not to.** Peer-index caching is available to the
+  head-based protocol and structurally unavailable to Vyukov's, which looked like it would weigh against
+  `mpsc`. `probe-peer-index-cache` measured it and it makes our ring *slower* (D-28), so it is not a
+  differentiator and must not be argued as one here.
 
 - [ ] **M31.6** -- Verify the memory orderings with a model checker, because stress testing demonstrably
   cannot. **Measured, not assumed:** during M30.3's sabotage sweep, weakening the producer's `Acquire`

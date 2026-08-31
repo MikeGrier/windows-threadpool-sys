@@ -50,7 +50,10 @@ preferred.
 | <a id="d-24"></a>D-24 | **Counting the doorbell's rings turns the skip optimisation into part of the observable contract, and that is the point rather than a side effect.** R9 asks for the count precisely so "disabling the skip must change the number" -- so the sabotage entry for removing the skip changed from a control expecting `survives` to a defect expecting `caught`. An optimisation nobody can measure is an assumption. |
 | <a id="d-25"></a>D-25 | **`Observable` deliberately does not restate depth.** [D-2](#d-2)'s sketch listed it, but `Bounded::len` already reports it from positions the queue keeps anyway. Naming it twice would give one number two spellings and two places to drift. What belongs on `Observable` is only what must be *accumulated*. |
 | <a id="d-26"></a>D-26 | **Measured: the tail claim contends badly, and `reserving_mpsc` is up to 4x FASTER than `mpsc` under contention -- the opposite of what [D-16](#d-16) assumed.** Aggregate throughput *falls* as producers are added, for both shapes and far more than a bare contended atomic explains. D-16's premise, that reading the consumer's position makes the reserving shape the expensive one, is falsified everywhere except a single producer with a live consumer. |
-| <a id="d-27"></a>D-27 | **The gap is intrinsic to Vyukov's sequence protocol, not a fixable flaw in `mpsc`'s retry loop.** Its producer must read a slot's sequence *before* claiming, and that slot marches through memory as the tail advances while other producers write it. Padding slots onto their own cache lines was tested and rejected: it recovers about a fifth at eight producers, for four times the memory, and leaves the shape still 2.8x slower. |## D-2: capabilities are sliced, not gathered
+| <a id="d-27"></a>D-27 | **The gap is intrinsic to Vyukov's sequence protocol, not a fixable flaw in `mpsc`'s retry loop.** Its producer must read a slot's sequence *before* claiming, and that slot marches through memory as the tail advances while other producers write it. Padding slots onto their own cache lines was tested and rejected: it recovers about a fifth at eight producers, for four times the memory, and leaves the shape still 2.8x slower. |
+| <a id="d-28"></a>D-28 | **Measured and rejected: caching the peer's index makes our SPSC ring slower, so no shape adopts it.** The technique is real and well documented, and it engaged as designed -- it cut the consumer's shared reads by 3.6x. It still cost about 1.8x throughput, because it trades freshness for fewer reads and our ring hovers near empty, where a stale bound makes each side idle on information it could have refreshed. A prefetch-only "warming" variant was measured as a control and changed nothing. |
+
+## D-2: capabilities are sliced, not gathered
 
 The first sketch of this crate had one `WaitableQueue` trait carrying push, pop, the doorbell, capacity,
 and the loss latch. The engineer's observation that the shapes would be "sliced and diced by various
@@ -828,3 +831,68 @@ protocols, and this measurement is the comparison between them.
 **The merge-or-delete decision is therefore live and is the engineer's**, with the data above as its
 basis. It is tracked as a checklist item rather than left here, because a decision recorded only in a
 design note is not scheduled work.
+
+
+## D-28: caching the peer's index was measured and rejected
+
+The engineer recalled a technique credited with taking queue throughput from millions to hundreds of
+millions of operations per second: a load on the waiting side of the shared index. That memory is real
+and it names a real optimisation -- **peer-index caching**, the standard trick in a high-performance
+SPSC ring (Rigtorp). Each side keeps a plain, non-atomic copy of the *other* side's position. A
+consumer whose cached `tail` says items are available drains them without touching the shared line at
+all, and refreshes only when the cached copy says the ring is empty. One acquire load is amortised
+over a whole batch, and the producer's release store stops invalidating a line the consumer reads
+every iteration.
+
+None of the three shapes did this. `spsc::push` acquire-loads `head` on every push, `spsc::pop`
+acquire-loads `tail` on every pop, and `reserving_mpsc::push` acquire-loads `head` on every push.
+
+**It was measured rather than adopted, and the measurement says do not adopt it.**
+`probe-peer-index-cache` builds a minimal SPSC ring structurally identical to `spsc`'s and runs it
+under three strategies -- baseline, peer-index caching, and a prefetch-only "warming" load kept as a
+control -- while counting how many times each side actually reads the peer's position. Four release
+runs on the x64 host agree:
+
+| strategy | ns/item | consumer reads | producer reads |
+|---|---|---|---|
+| baseline | 18.7 - 27.7 | ~2.03 M | ~2.03 M |
+| peer-index caching | 36.6 - 39.0 | ~0.56 M | ~2.2 - 2.6 M |
+| warming load only | 20.0 - 24.0 | ~2.03 M | ~2.04 M |
+
+The read counts are what make this conclusive, and they are the reason the probe counts them. **The
+optimisation engaged**: consumer reads fell 3.6x. It engaged and still lost about 1.8x of throughput,
+so this is not a failed implementation of the technique but a real result about our shape.
+
+The mechanism is visible in the same columns. Peer-index caching trades *freshness* for fewer reads.
+That trade is free when a genuine backlog exists, because a stale index is still far behind the peer
+and the batch it amortises over is deep. Here the batch is only about 3.6 items deep -- a spinning
+consumer keeps the ring near empty -- so each side repeatedly idles on a stale bound it could have
+refreshed, and the idling costs more than the reads saved. On the producer side the count goes *up*:
+a cached index is consulted only when it says "no room", so a producer that is genuinely blocked
+refreshes on every spin iteration and gains nothing whatsoever.
+
+The warming variant behaved exactly as a control should, which is what makes it worth having kept: it
+removed no shared read (its counts match the baseline) and it moved no throughput. A discarded load
+cannot help, because the authoritative load still happens and in a tight handoff loop the prefetch has
+no time to land before it. **The engineer's "it is just for cache warming" reading is therefore not
+the mechanism** -- the technique works by removing the load, not by warming the line for it.
+
+Two further reasons this stays rejected even if a deeper-batching workload were found:
+
+- **The shared read is a minority of the cost.** The model runs at 18.7-27.7 ns/item while the
+  shipping `spsc` runs at 58.6-62.8. This probe deliberately does not attribute that gap (the shipping
+  push also consults the reservation count, updates the depth metric and rings the doorbell), but it
+  does put a floor under the argument: whatever the shared read costs, removing it cannot be the large
+  win.
+- **It would be a correctness hazard at the arming boundary.** `Consumer::arm` decides whether to
+  park, and that decision must be made against a fresh acquire load. A cached `tail` that says "empty"
+  when the producer has already published is a lost wakeup -- the same defect class as
+  [D-9](#d-9) and [D-15](#d-15), which this crate has now been bitten by twice.
+
+The technique is not wrong; it is right for a ring with a standing backlog, and this crate's is not
+that ring. If a later workload does show deep batching, the measurement to repeat is this probe with
+the consumer throttled, and the arming path must be exempted from any cache regardless of the result.
+
+**No work is scheduled by this decision.** The finding is a rejection: no shape changes, and there is
+no follow-up item. It is recorded so the technique is not re-proposed without the measurement, and so
+the re-measurement conditions are written down if the workload ever changes.

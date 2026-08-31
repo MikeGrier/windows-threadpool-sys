@@ -63,6 +63,10 @@ path = "src/bin/topology.rs"
 name = "probe-queue-contention"
 path = "src/bin/queue_contention.rs"
 
+[[bin]]
+name = "probe-peer-index-cache"
+path = "src/bin/peer_index_cache.rs"
+
 [dependencies]
 # The pool-growth probe measures the shipping API rather than a
 # reimplementation of the SDK's inline environment helpers, so it depends on the

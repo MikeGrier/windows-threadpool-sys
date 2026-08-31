@@ -493,3 +493,29 @@ it becomes consumer-bound and a plateau there says nothing about the claim. Each
 count from the queue's own `Observable` counters precisely so that is visible as a fact rather than
 mistaken for contention: the sixteen- and thirty-two-producer drained rows show millions of refusals and
 should be read as measurements of the consumer.
+
+## `probe-peer-index-cache`: a rejection, kept because the rejection is the value
+
+This probe measures peer-index caching -- each side of an SPSC ring keeping a plain copy of the other
+side's position, so the shared line is read once per batch instead of once per item -- against the
+`windows-waitable-queues` `spsc` shape. It found the technique makes our ring **slower**, and the full
+reasoning lives with the queue as
+[DESIGN-NOTES.md](../windows-waitable-queues/DESIGN-NOTES.md) -> `D-28`.
+
+Two things about its construction are deliberate and worth keeping if it is ever edited.
+
+**It counts shared reads, not just time.** A timing-only result would have been unreadable: "caching is
+slower" is indistinguishable from "the caching was implemented wrongly and never engaged". The read
+counters settle that directly -- consumer reads fall 3.6x, so the optimisation demonstrably engaged and
+still lost. Any future variant added here must keep the counters for the same reason.
+
+**It carries a calibration row and a warming control.** The calibration times the real shipping `spsc`
+beside the model, and the probe prints a CAUTION when they diverge by more than 25% -- which they
+currently do, so the probe says out loud that its rows describe the model rather than the shipped
+queue. That guard earned its place immediately: the first run's 3x gap would otherwise have been read
+straight past. The warming variant is a control for the hypothesis that a discarded prefetch could
+substitute for the real thing; it removes no read and moves no time, which is exactly what a control
+that confirms the null should do.
+
+Like `probe-queue-contention`, this probe is **absent from the CI probe job**, and for the same
+measured reason: the effects it studies are coherence effects that a debug build's overhead buries.
