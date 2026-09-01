@@ -152,6 +152,32 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
   not legitimate is adding a test that reaches it artificially -- that would manufacture coverage for code
   nothing calls.
 
+- [ ] **M15.2** -- Explain, then either fix or document, why a handle from `reopen_by_id` **rejects the
+  very read the watcher exists to issue**. Found while chasing a surviving mutant; the mutant is the
+  symptom and this is the disease.
+  **The measurement.** Open a temp directory with `DirectoryHandle::open`, reopen it with
+  `DirectoryHandle::reopen_by_id`, and issue the same overlapped `ReadDirectoryChangesW` on each
+  (DWORD-aligned buffer, `FILE_NOTIFY_CHANGE_FILE_NAME`, null `lpBytesReturned`, an `OVERLAPPED`, no
+  completion routine). The **original** handle accepts it -- returning TRUE with the operation pending,
+  which the call site in `watcher.rs` documents as normal. The **reopened** handle fails it with
+  `ERROR_INVALID_PARAMETER` (87).
+  **Why it matters.** `reopen_by_id` requests `FILE_LIST_DIRECTORY` and
+  `FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED` through `OpenFileById`, which reads as a handle
+  fit for watching. If it is not, the reopen path either cannot serve a watch at all, or serves it only
+  because some later step re-derives a usable handle -- and which of those is true is not visible from
+  the code.
+  **Three readings, and the engineer can tell them apart faster than a probe can.** (a) A real defect in
+  the reopen path. (b) A legitimate difference in what `OpenFileById` returns (an access right such as
+  `SYNCHRONIZE`, or volume-hint semantics) that the reopen path compensates for elsewhere. (c) A defect
+  in the measurement above, though it was run as a control against the original handle in the same
+  process and the original passed.
+  **What this explains.** `directory.rs:457`'s `|` -> `&` mutant survives -- the one that zeroes both
+  flags -- because every `reopen_by_id` test asserts only *which* directory came back, never that the
+  handle is usable afterwards. No test can close that gap until the behaviour above is understood, so
+  writing one now would encode whichever answer happened to be true.
+  A test asserting handle usability was written and then **removed rather than committed red**; it is
+  reconstructible from the measurement recorded here.
+
 ## M-inf -- Horizon (ungated, post-v1)
 
 Parked, not pending. These are the deferred seams recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-19,
