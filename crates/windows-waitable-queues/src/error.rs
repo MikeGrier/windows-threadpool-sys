@@ -395,3 +395,6 @@ impl core::error::Error for RecvTimeoutError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
