@@ -108,3 +108,6 @@ impl<T> fmt::Debug for Options<T> {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests;

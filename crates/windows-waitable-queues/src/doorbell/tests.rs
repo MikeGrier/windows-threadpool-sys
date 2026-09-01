@@ -384,3 +384,42 @@ fn a_clear_with_nothing_racing_it_still_re_arms() {
     doorbell.signal();
     assert!(is_signalled(&doorbell), "and the next signal rings");
 }
+
+#[test]
+fn the_debug_rendering_shows_whether_the_event_exists_and_its_state() {
+    // Both fields, and both values of the one that moves. This rendering is how
+    // a reader tells "the doorbell was never created" from "it was created and
+    // is unsignalled" -- the laziness being visible, per D-5 -- so an empty
+    // rendering loses exactly the distinction it exists to show.
+    let doorbell = Doorbell::new();
+    let before = format!("{doorbell:?}");
+    assert!(before.contains("Doorbell"), "got {before}");
+    assert!(
+        before.contains("false"),
+        "an untouched doorbell is neither created nor signalled: {before}"
+    );
+
+    // Signalling one nobody has asked a handle for is a no-op by design -- the
+    // laziness D-5 describes -- so the rendering must still read false. This is
+    // the distinction the rendering exists to show, and it is why the test
+    // cannot simply signal and look for "true".
+    doorbell.signal();
+    let unheard = format!("{doorbell:?}");
+    assert!(
+        !unheard.contains("true"),
+        "a doorbell nobody is listening to was not created or signalled: {unheard}"
+    );
+
+    // Asking for the handle is what creates it; only then does a signal land.
+    doorbell.handle().expect("the doorbell must be creatable");
+    doorbell.signal();
+    let after = format!("{doorbell:?}");
+    assert!(
+        after.contains("created: true"),
+        "the event now exists: {after}"
+    );
+    assert!(
+        after.contains("signalled: true"),
+        "and has been rung: {after}"
+    );
+}

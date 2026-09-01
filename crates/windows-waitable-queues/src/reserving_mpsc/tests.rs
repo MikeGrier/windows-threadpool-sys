@@ -1048,3 +1048,30 @@ fn a_reserved_delivery_rings_like_any_other() {
         "the message a reservation exists to protect must wake a parked consumer"
     );
 }
+
+#[test]
+fn the_debug_renderings_name_the_type_and_its_state() {
+    // See the same test in the other shapes.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+
+    let producer = format!("{tx:?}");
+    assert!(
+        producer.contains("reserving_mpsc::Producer"),
+        "got {producer}"
+    );
+    assert!(producer.contains('4'), "the capacity must show: {producer}");
+
+    let consumer = format!("{rx:?}");
+    assert!(
+        consumer.contains("reserving_mpsc::Consumer"),
+        "got {consumer}"
+    );
+
+    let reservation = tx.reserve().expect("there is room");
+    let rendered = format!("{reservation:?}");
+    assert!(
+        rendered.contains("reserving_mpsc::Reservation"),
+        "got {rendered}"
+    );
+}

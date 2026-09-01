@@ -212,3 +212,13 @@ fn a_panicking_destructor_still_destroys_the_item_it_panicked_on() {
 
     assert_eq!(dropped.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn the_debug_rendering_names_the_type() {
+    // `Disposal` holds a boxed closure, so its rendering is deliberately opaque
+    // -- but opaque is not the same as empty. A `Debug` returning `Ok(default)`
+    // writes nothing at all and passes any test that only checks it does not
+    // panic, which is what a mutation run found here.
+    let rendered = format!("{:?}", Disposal::new(|_: u32| {}));
+    assert!(rendered.contains("Disposal"), "got {rendered}");
+}

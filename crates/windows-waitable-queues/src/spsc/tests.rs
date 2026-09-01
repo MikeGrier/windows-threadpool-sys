@@ -1663,3 +1663,25 @@ fn clearing_the_doorbell_makes_the_next_push_ring_again() {
         assert!(rx.arm().expect("arming must succeed"));
     }
 }
+
+#[test]
+fn the_debug_renderings_name_the_type_and_its_state() {
+    // A `Debug` that writes nothing satisfies any test which only checks that
+    // formatting does not panic, and a mutation run found exactly that constant
+    // alive on every handle in this crate. These are the diagnostic surface a
+    // reader reaches for when a queue is stuck, so an empty rendering is the
+    // moment it is least affordable.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+
+    let producer = format!("{tx:?}");
+    assert!(producer.contains("spsc::Producer"), "got {producer}");
+    assert!(producer.contains('4'), "the capacity must show: {producer}");
+
+    let consumer = format!("{rx:?}");
+    assert!(consumer.contains("spsc::Consumer"), "got {consumer}");
+
+    let reservation = tx.reserve().expect("there is room");
+    let rendered = format!("{reservation:?}");
+    assert!(rendered.contains("spsc::Reservation"), "got {rendered}");
+}

@@ -1274,3 +1274,24 @@ fn a_poll_only_consumer_rings_no_doorbells() {
     while rx.pop().is_some() {}
     assert_eq!(rx.doorbell_rings(), 0);
 }
+
+#[test]
+fn the_debug_renderings_name_the_type_and_its_state() {
+    // See the same test in the other shapes: a `Debug` returning `Ok(default)`
+    // renders nothing and passes any test that only checks it does not panic.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+
+    let producer = format!("{tx:?}");
+    assert!(
+        producer.contains("slotwise_mpsc::Producer"),
+        "got {producer}"
+    );
+    assert!(producer.contains('4'), "the capacity must show: {producer}");
+
+    let consumer = format!("{rx:?}");
+    assert!(
+        consumer.contains("slotwise_mpsc::Consumer"),
+        "got {consumer}"
+    );
+}
