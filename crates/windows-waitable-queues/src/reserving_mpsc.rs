@@ -153,6 +153,12 @@ const _: () = {
          truncated on the way out"
     );
     assert!(
+        MAX_RESERVED <= u32::MAX as u64,
+        "the count is read back out through `reserved_of`'s cast to `u32`, so a field the word \
+         could hold but the cast could not would make this constant's name a lie -- and the \
+         assertion below would then be satisfied by a ceiling that truncates on the way out"
+    );
+    assert!(
         BOUNDS_MAX as u64 <= MAX_RESERVED,
         "every slot may be reserved at once, so the count's half of the word must be able to hold \
          the whole capacity -- widening the position narrows this and is the way the packing \
@@ -180,6 +186,13 @@ const fn reserved_of(word: u64) -> u32 {
 }
 
 /// Builds a claim word from its two halves.
+///
+/// The `|` could equally be `^`, or `+`, and a mutation run will report as much.
+/// The halves are disjoint by construction -- the shift clears every bit the
+/// position occupies -- so all three agree on every input, and no test can tell
+/// them apart. `|` is kept because it says "these are separate fields" where the
+/// others say "these are numbers"; the equivalence is recorded here so it is not
+/// investigated again.
 const fn claim_word(reserved: u32, position: u32) -> u64 {
     ((reserved as u64) << POSITION_BITS) | position as u64
 }

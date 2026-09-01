@@ -246,3 +246,85 @@ fn every_shape_reports_disconnection_and_pops_through_parked() {
     assert!(pop_and_disconnection(&slot_rx, None));
     assert!(pop_and_disconnection(&res_rx, None));
 }
+
+// That the wait actually waits.
+//
+// # Why a fake shape and a count, rather than a real queue and a clock
+//
+// `wait` is the one step in the loop whose removal changes no answer. A `wait`
+// that returned immediately still delivers every item, still reports every
+// disconnection, and still honours every deadline -- because the loop re-checks
+// all three itself. What it stops doing is *sleeping*: the loop becomes a spin
+// that re-arms the doorbell, which is a `ResetEvent` syscall per turn, for the
+// whole of the caller's timeout. A mutation run found exactly this, with the
+// suite green.
+//
+// Measuring CPU time would be the direct reading and the wrong instrument: the
+// answer would then depend on how loaded the machine is, and a spin on an
+// oversubscribed box can look like a sleep. Counting the loop's turns is the
+// same evidence without the dependency -- a real wait comes round about twice
+// however busy the host is, and a spin comes round thousands of times.
+
+/// A shape that is permanently empty and permanently connected.
+///
+/// It never has an item and never disconnects, so the receive loop can only
+/// leave by its deadline -- which makes the turn count a reading of the wait
+/// and nothing else.
+struct NeverReady {
+    /// A real event, never signalled, so the wait is a real kernel wait.
+    doorbell: crate::doorbell::Doorbell,
+    /// How many times the loop came round.
+    turns: std::sync::atomic::AtomicUsize,
+}
+
+impl Parked for NeverReady {
+    type Item = u32;
+
+    fn pop(&self) -> Option<u32> {
+        self.turns
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        None
+    }
+
+    fn finish(&self) -> Option<u32> {
+        None
+    }
+
+    fn arm(&self) -> std::io::Result<bool> {
+        Ok(true)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        false
+    }
+
+    fn doorbell(&self) -> std::io::Result<std::os::windows::io::BorrowedHandle<'_>> {
+        self.doorbell.handle()
+    }
+}
+
+#[test]
+fn a_timed_receive_sleeps_out_its_budget_instead_of_spinning_through_it() {
+    let consumer = NeverReady {
+        doorbell: crate::doorbell::Doorbell::new(),
+        turns: std::sync::atomic::AtomicUsize::new(0),
+    };
+
+    let timeout = Duration::from_millis(150);
+    let outcome = super::recv_timeout(&consumer, timeout);
+    assert!(
+        matches!(outcome, Err(crate::RecvTimeoutError::Timeout)),
+        "nothing was ever pushed, so the only way out is the deadline"
+    );
+
+    // Two turns is the honest count -- pop, arm, wait the whole budget, then
+    // pop, arm, and find nothing left to wait for. The ceiling is loose enough
+    // that a wait returning a little early cannot fail it, and tight enough
+    // that a wait returning *immediately* cannot pass it: at a hundred and
+    // fifty milliseconds of spinning, the count runs to five figures.
+    let turns = consumer.turns.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        turns <= 16,
+        "the loop came round {turns} times in {timeout:?}, which is a spin rather than a wait"
+    );
+}

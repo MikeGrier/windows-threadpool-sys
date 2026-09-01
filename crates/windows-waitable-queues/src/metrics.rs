@@ -101,6 +101,14 @@ impl Metrics {
         let Some(high_water) = self.high_water.as_ref() else {
             return;
         };
+        // `>` rather than `>=`, and a mutation run will report the two as
+        // indistinguishable -- correctly. `fetch_max(depth)` when `depth`
+        // already equals the maximum stores the value it read, so the weaker
+        // test only buys an extra read-modify-write on the shared line in the
+        // one case it admits. That is the cost this guard exists to avoid, so
+        // the difference is real; it is just not a difference in any answer,
+        // and no test can be written for it. Left documented rather than
+        // chased.
         if depth > high_water.load(Ordering::Relaxed) {
             high_water.fetch_max(depth, Ordering::Relaxed);
         }
