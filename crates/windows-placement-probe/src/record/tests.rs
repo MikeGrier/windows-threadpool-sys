@@ -41,6 +41,10 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
         consumer_batch: 84.9,
         producer_batch: 1.0,
         memory_node: Some(0),
+        // Populated, like every other field here, so the golden describes the
+        // full shape. Equal to `memory_node` because this fixture stands for a
+        // row that got what it asked for.
+        requested_memory_node: Some(0),
     };
 
     SubmissionRecord {

@@ -1,0 +1,101 @@
+# Schema v4 for windows-placement-probe submission records.
+#
+# Every key path the record serializes to, sorted. Derived by serializing a
+# fully populated record and walking the result -- never written by hand, so it
+# cannot drift from the type it describes.
+#
+# APPEND-ONLY. Never edit a published version: records already in the wild
+# claim this number, and they cannot be regenerated. To change the shape, raise
+# SCHEMA_VERSION and add the next file beside this one.
+#
+# Changed from v3: every measurement row gains "requested_memory_node", the
+# node the run asked for, beside "memory_node", the node it got. Windows may
+# satisfy an allocation on a different node, so keyed on the achieved node
+# alone the two "node_hops" rows for a directed pair can be identical; the
+# requested node is what tells them apart. A row whose two nodes disagree did
+# not measure the placement it names. A v3 row does not carry the request, so
+# its ring placement cannot be recovered.
+
+build
+build.commit
+build.crate_version
+build.dirty
+build.source
+by_class
+by_class[]
+by_class[].consumer_batch
+by_class[].consumer_efficiency_class
+by_class[].consumer_group
+by_class[].consumer_numa_node
+by_class[].consumer_number
+by_class[].memory_node
+by_class[].nanos_per_item
+by_class[].placement
+by_class[].producer_batch
+by_class[].producer_efficiency_class
+by_class[].producer_group
+by_class[].producer_numa_node
+by_class[].producer_number
+by_class[].requested_memory_node
+by_class[].slice
+by_class[].strategy
+host
+host.arch
+host.cache_domain_sizes
+host.cache_domain_sizes[]
+host.cores
+host.efficiency_classes
+host.efficiency_classes[]
+host.efficiency_classes[][]
+host.numa_node_sizes
+host.numa_node_sizes[]
+host.partitioning_cache_level
+host.processors
+host.provenance
+host.smt
+machine
+machine.cpu_model
+machine.model_suppressed
+machine.os_build
+machine.virtualisation
+machine.virtualisation_name
+node_hops
+node_hops[]
+node_hops[].consumer_batch
+node_hops[].consumer_efficiency_class
+node_hops[].consumer_group
+node_hops[].consumer_numa_node
+node_hops[].consumer_number
+node_hops[].memory_node
+node_hops[].nanos_per_item
+node_hops[].placement
+node_hops[].producer_batch
+node_hops[].producer_efficiency_class
+node_hops[].producer_group
+node_hops[].producer_numa_node
+node_hops[].producer_number
+node_hops[].requested_memory_node
+node_hops[].slice
+node_hops[].strategy
+placements
+placements[]
+placements[].consumer_batch
+placements[].consumer_efficiency_class
+placements[].consumer_group
+placements[].consumer_numa_node
+placements[].consumer_number
+placements[].memory_node
+placements[].nanos_per_item
+placements[].placement
+placements[].producer_batch
+placements[].producer_efficiency_class
+placements[].producer_group
+placements[].producer_numa_node
+placements[].producer_number
+placements[].requested_memory_node
+placements[].slice
+placements[].strategy
+recorded_at
+recorded_at_epoch_seconds
+schema_version
+topology_provenance

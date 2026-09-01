@@ -186,7 +186,11 @@ fn one_numa_edge() -> Vec<crate::record::MeasurementRecord> {
             row.placement = "cross NUMA node".to_owned();
             row.producer_numa_node = producer_node;
             row.consumer_numa_node = consumer_node;
+            // Both, and equal: this fixture stands for rows that got the
+            // placement they asked for. The redirect case, where they differ,
+            // has its own test below.
             row.memory_node = Some(memory_node);
+            row.requested_memory_node = Some(memory_node);
             // Distinct per row, so a report that collapses two rows into one is
             // visible rather than merely suspected.
             row.nanos_per_item = 100.0 + f64::from(producer_node) * 10.0 + f64::from(memory_node);
@@ -242,8 +246,8 @@ fn a_hop_reads_as_a_direction_and_not_as_a_link() {
 #[test]
 fn a_hop_whose_ring_could_not_be_placed_says_so() {
     // Not a hidden caveat. A hop measured with the ring on an unknown node is
-    // still a measurement, but not of the pair it names, and the row has to
-    // admit that rather than leave a blank column reading as a zero.
+    // still a measurement, but not of the pair it names, and the report has to
+    // admit that rather than leave a column reading as though it succeeded.
     let mut record = fully_populated();
     let mut rows = one_numa_edge();
     rows[0].memory_node = None;
@@ -252,8 +256,56 @@ fn a_hop_whose_ring_could_not_be_placed_says_so() {
     let text = render(&record);
 
     assert!(
-        text.contains("unknown"),
-        "a hop with no achieved placement did not admit it:\n{text}"
+        text.contains("did not get the memory they asked for"),
+        "a hop with no achieved placement did not admit it:
+{text}"
+    );
+    assert!(
+        text.contains("could not determine"),
+        "an unachievable placement must read differently from a redirected one:
+{text}"
+    );
+}
+
+#[test]
+fn two_hops_redirected_to_one_node_stay_distinguishable() {
+    // **The defect this guards.** Windows may satisfy a NUMA allocation on a
+    // node other than the one requested, and the probe tolerates that rather
+    // than failing. Keyed on the achieved node, the producer-local and
+    // consumer-local rows for a pair then serialise and print identically, and
+    // a reader sees two duplicate rows instead of the two placements the table
+    // exists to separate.
+    let mut record = fully_populated();
+    let mut rows = one_numa_edge();
+    // Both rows of the 0 -> 1 edge asked for different nodes; both landed on 0.
+    rows[0].requested_memory_node = Some(0);
+    rows[1].requested_memory_node = Some(1);
+    rows[0].memory_node = Some(0);
+    rows[1].memory_node = Some(0);
+    record.node_hops = rows;
+
+    let text = render(&record);
+
+    for requested in [0, 1] {
+        // Anchored at the start of the line so this counts *table rows* only.
+        // The caveat below the table names the same pair and also mentions the
+        // node it landed on, so a substring search matches it too -- which is
+        // how the first draft of this test reported two rows for node 0.
+        let matched = text.lines().filter(|line| {
+            line.starts_with("0 -> 1") && line.contains(&format!("node {requested}"))
+        });
+        assert_eq!(
+            matched.count(),
+            1,
+            "the row that asked for node {requested} is not identifiable:
+{text}"
+        );
+    }
+    // And the one that did not get what it asked for is called out.
+    assert!(
+        text.contains("did not get the memory they asked for"),
+        "a redirected allocation was reported as though it succeeded:
+{text}"
     );
 }
 

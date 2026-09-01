@@ -51,7 +51,7 @@ use crate::machine::MachineDescription;
 /// **The golden files are append-only and a published version is never
 /// redefined.** Once a record exists in the wild claiming schema N, N's meaning
 /// is fixed, because that record cannot be regenerated.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// One run's complete output.
 #[derive(Clone, Debug)]
@@ -180,6 +180,21 @@ pub struct MeasurementRecord {
     /// In `placements` and `by_class` none is ever arranged, so `null` is the
     /// normal case and means the ring was left wherever the allocator put it.
     pub memory_node: Option<u32>,
+    /// Which NUMA node the run *asked* for, independent of what it got.
+    ///
+    /// **This, not `memory_node`, is what tells two `node_hops` rows apart.**
+    /// Each directed hop is measured once per ring placement, so its two rows
+    /// agree on every other field -- and Windows may satisfy an allocation on
+    /// a node other than the one requested. Keyed on the achieved node alone,
+    /// the producer-local and consumer-local rows can serialise identically,
+    /// and a collector would reasonably read them as duplicates.
+    ///
+    /// A row whose requested and observed nodes disagree **did not measure the
+    /// placement it names**, and is a caveat rather than a result for that hop.
+    ///
+    /// `null` means nothing was requested, which is the normal case in
+    /// `placements` and `by_class`.
+    pub requested_memory_node: Option<u32>,
 }
 
 impl From<&Measurement> for MeasurementRecord {
@@ -200,6 +215,7 @@ impl From<&Measurement> for MeasurementRecord {
             consumer_batch: measurement.consumer_batch,
             producer_batch: measurement.producer_batch,
             memory_node: measurement.memory_node,
+            requested_memory_node: measurement.requested_memory_node,
         }
     }
 }

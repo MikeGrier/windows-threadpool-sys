@@ -338,6 +338,24 @@ pub struct Measurement {
     /// not be achieved -- the two are the same fact here (we do not know where
     /// the memory is) and neither may be reported as a node.
     pub memory_node: Option<u32>,
+    /// Which NUMA node this run *asked* for, independent of what it got.
+    ///
+    /// **The request is what identifies the row; the result is what it
+    /// measured, and they are not the same fact.** A directed hop is measured
+    /// once per ring placement, so the two rows for a pair differ only in what
+    /// they requested -- and Windows may redirect an allocation, which
+    /// `Slots::new_on` deliberately tolerates rather than failing. Recording
+    /// only the achieved node therefore lets both rows serialise identically,
+    /// collapsing the very dimension measuring both placements exists to
+    /// expose.
+    ///
+    /// It also makes a redirect visible instead of silent: a row whose
+    /// requested and observed nodes disagree did not measure the placement it
+    /// names, and a reader can now see that rather than infer it.
+    ///
+    /// None means nothing was requested, which is the normal case for the
+    /// placement and efficiency-class rows.
+    pub requested_memory_node: Option<u32>,
 }
 
 /// Everything one invocation measured.
@@ -610,6 +628,7 @@ pub fn measure() -> std::io::Result<Observation> {
                 // Placement rows do not choose a node: they vary where the
                 // threads run, holding everything else as it falls.
                 memory_node: median.memory_node,
+                requested_memory_node: None,
             });
         }
     }
@@ -642,6 +661,7 @@ pub fn measure() -> std::io::Result<Observation> {
                 // Placement rows do not choose a node: they vary where the
                 // threads run, holding everything else as it falls.
                 memory_node: median.memory_node,
+                requested_memory_node: None,
             });
         }
     }
@@ -674,8 +694,12 @@ pub fn measure() -> std::io::Result<Observation> {
                     nanos_per_item: median.nanos / ITEMS as f64,
                     consumer_batch: ITEMS as f64 / median.consumer_refreshes.max(1) as f64,
                     producer_batch: ITEMS as f64 / median.producer_refreshes.max(1) as f64,
-                    // What the run *achieved*, not what it asked for.
+                    // What the run *achieved*, and separately what it asked
+                    // for. Both are needed: the request identifies the row,
+                    // the result is the measurement, and a disagreement
+                    // between them is itself the finding.
                     memory_node: median.memory_node,
+                    requested_memory_node: Some(memory_node),
                 });
             }
         }

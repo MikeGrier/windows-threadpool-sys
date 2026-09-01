@@ -208,11 +208,14 @@ fn render_node_hops(out: &mut String, record: &SubmissionRecord) {
         "prod -> cons", "ring on", "strategy", "ns/item", "batch depth"
     );
     for entry in &record.node_hops {
-        let ring_on = match entry.memory_node {
+        // **The requested node, because that is what identifies the row.** Two
+        // rows for one directed pair differ only in where the ring was asked to
+        // go; printing where it actually landed made them identical whenever
+        // Windows redirected an allocation, which is exactly the case a reader
+        // most needs to see. Any disagreement is called out under the table.
+        let ring_on = match entry.requested_memory_node {
             Some(node) => format!("node {node}"),
-            // Reported, not hidden. A hop whose ring landed somewhere unknown
-            // is still a measurement, but not of the pair it names.
-            None => "unknown".to_owned(),
+            None => "unspecified".to_owned(),
         };
         let _ = writeln!(
             out,
@@ -225,6 +228,42 @@ fn render_node_hops(out: &mut String, record: &SubmissionRecord) {
             entry.strategy,
             entry.nanos_per_item,
             entry.consumer_batch
+        );
+    }
+
+    // A redirected allocation is a caveat on the row, not a footnote: the row
+    // is labelled with the placement it asked for, and if the memory went
+    // somewhere else then it did not measure that placement at all. Windows is
+    // permitted to satisfy the request elsewhere, so this is an expected
+    // outcome to disclose rather than an error to hide.
+    let redirected = record
+        .node_hops
+        .iter()
+        .filter(|entry| entry.memory_node != entry.requested_memory_node);
+    let mut said_anything = false;
+    for entry in redirected {
+        if !said_anything {
+            let _ = writeln!(out);
+            let _ = writeln!(
+                out,
+                "  Some rows did not get the memory they asked for, so they do not"
+            );
+            let _ = writeln!(out, "  measure the placement they name:");
+            said_anything = true;
+        }
+        let landed = match entry.memory_node {
+            Some(node) => format!("node {node}"),
+            None => "somewhere this run could not determine".to_owned(),
+        };
+        let _ = writeln!(
+            out,
+            "  - {} -> {} ({}) asked for node {} and got {landed}",
+            entry.producer_numa_node,
+            entry.consumer_numa_node,
+            entry.strategy,
+            entry
+                .requested_memory_node
+                .map_or_else(|| "?".to_owned(), |node| node.to_string()),
         );
     }
 }
