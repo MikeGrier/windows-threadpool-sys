@@ -666,3 +666,36 @@ checklist entries all described the fast path as live or as pending root-cause; 
 
 **Spawned M15.8:** `WatcherInner::canonical_path` is now write-only, and no warning will ever surface it
 because `lock(&self.canonical_path)` counts as a read of the field.
+## Moved 2026-09-01 -- M15.8: the write-only tail of M15.2's removal
+
+### <a id="m158"></a>M15.8 -- Decide whether `WatcherInner::canonical_path` and `DirectoryHandle::canonical_path` survive M15.2's removal. *(completed 2026-09-01 19:20:00 -04:00)*
+
+**The finding that reframed the question.** M15.8 was written as remove-both or keep-both, because the
+field and the method looked like one unit. They are not: the only reader worth having reads the **new
+handle**, not stored state. So the field and the method were settled separately, and the answer is
+different for each.
+
+**The field is gone.** `WatcherInner::canonical_path` was written on every install and read by nothing --
+its one reader was the by-reference fast reopen D-80 removed. No compiler warning would ever have surfaced
+it, because `lock(&self.canonical_path)` counts as a read of the field: the same invisible-dead-code shape
+as M15.1's unreachable `Drop`.
+
+**The method stayed, and gained a caller that uses its result.** The "reopened on a different volume than
+before" warning printed `self.path` -- the client-supplied string that `WatcherInner`'s own doc comment
+calls "possibly not even fully resolved". That is the one moment that string is least worth printing,
+because changed resolution is exactly what happened. It now names the path the handle *resolves to*, with
+`None` itself informative (the new handle would not report a path at all).
+
+**It had no tests at all.** The four `reopen_by_id_*` tests were `canonical_path`'s only coverage and went
+with M15.2, so keeping it meant keeping an untested Win32 helper. Two tests added: that it reports where
+the handle actually is (compared against the OS's own answer, not against the opening string), and that a
+fresh query follows a rename -- being fresh rather than cached is the entire reason it exists, and a
+cached implementation would pass a weaker test.
+
+**Verified by injection, and the boundary with M15.3 confirmed.** `buffer.truncate(written)` ->
+`truncate(written + 1)` is now **caught**; `written < buffer.len()` -> `<=` still **survives**, which is
+M15.3's mutant exactly -- it needs a 512+ unit canonical path to reach. So M15.3 is left standing and
+unanswered rather than dissolved, which is what this item had to determine.
+
+**The transferable rule:** a diagnostic wants the live handle, not a cached copy. Needing the *value* is
+not a reason to keep the *field*.

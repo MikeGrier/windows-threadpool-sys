@@ -411,6 +411,17 @@ natural place to look -- access mask, sync/async mode, resolved path -- shows th
 two handles as identical; only a control that varied *how the object was
 resolved* while holding all of that fixed could isolate it.
 
+**The tail of the removal (M15.8).** Deleting the fast path left
+`WatcherInner::canonical_path` written on every install and read by nothing, and
+no compiler warning would ever have said so, because `lock(&self.canonical_path)`
+counts as a read of the field. The stored copy is gone;
+`DirectoryHandle::canonical_path` stayed, and now has a caller that uses its
+result -- the "reopened on a different volume" warning names the path the handle
+*resolves to* rather than echoing back the client's own string, which is the one
+moment that string is least worth printing, because changed resolution is exactly
+what happened. The rule that decided it: a diagnostic wants the live handle, not
+a cached copy, so needing the *value* is not a reason to keep the *field*.
+
 ### Failure detail on every fault report
 
 Before D-79, `Notification::RetryQuestion` carried only

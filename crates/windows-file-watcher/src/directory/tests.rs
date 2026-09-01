@@ -264,6 +264,63 @@ fn every_failure_class_agrees_with_its_retry_policy() {
     assert!(!OpenFailure::InvalidPath.is_retryable());
 }
 
+// --- `canonical_path`: where the handle actually is, not what opened it ---
+
+#[test]
+fn canonical_path_reports_where_the_handle_actually_is() {
+    // The point of this call is that it does *not* echo back the string that
+    // opened the handle, so the test compares against the OS's own answer for
+    // the same directory rather than against that string.
+    let dir = TempDir::new("canonical-basic");
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+
+    let reported = handle.canonical_path().expect("canonical path");
+    let expected = std::fs::canonicalize(dir.path()).expect("std canonicalize");
+    assert_eq!(
+        reported, expected,
+        "the reported path must name the same object the OS resolves this \
+         directory to"
+    );
+
+    drop(handle);
+    dir.cleanup();
+}
+
+#[test]
+fn canonical_path_follows_a_rename_rather_than_reporting_the_opening_string() {
+    // A handle keeps naming its object across a rename, so the path a client
+    // opened with can go stale while the handle stays perfectly valid. Being
+    // fresh rather than cached is the whole reason this exists -- a diagnostic
+    // that printed the opening string here would name a directory that is no
+    // longer there.
+    let dir = TempDir::new("canonical-rename");
+    let handle = DirectoryHandle::open(dir.path()).expect("open");
+    let before = handle.canonical_path().expect("canonical path before");
+
+    let renamed = dir.path().with_file_name(format!(
+        "windows-file-watcher-canonical-renamed-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&renamed);
+    std::fs::rename(dir.path(), &renamed).expect("rename the open directory");
+
+    let after = handle.canonical_path().expect("canonical path after");
+    assert_ne!(
+        before, after,
+        "a fresh query must notice the rename; an equal answer would mean the \
+         path had been cached at open"
+    );
+    assert_eq!(
+        after,
+        std::fs::canonicalize(&renamed).expect("std canonicalize"),
+        "and it must name where the object went, not merely differ"
+    );
+
+    drop(handle);
+    let _ = std::fs::remove_dir_all(&renamed);
+    dir.cleanup();
+}
+
 #[test]
 fn volume_identity_equality_is_on_the_serial_alone() {
     // PR #20 review response: the filesystem name and volume label are both

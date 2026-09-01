@@ -137,20 +137,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 
 - [x] **M15.2** -- Explained why a `reopen_by_id` handle rejects the watcher's own read: Windows refuses a directory-change read on any by-id open, holding access, mode, create options and resolved path identical. The fast path is removed, not disabled. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m152)
 
-- [ ] **M15.8** -- Decide whether `WatcherInner::canonical_path` and `DirectoryHandle::canonical_path`
-  survive M15.2's removal. **Spawned by M15.2, and it changes M15.3's scope, so decide this first.**
-  **The state.** `WatcherInner::canonical_path` is now written on every install
-  ([src/watcher.rs](src/watcher.rs)) and **never read**. Its only reader was
-  `reopen_via_existing_handle`, which compared it against the reopened object's current path to catch
-  `OpenFileById` following a rename; D-80 removed that. The compiler does not flag it, because
-  `lock(&self.canonical_path)` counts as a read of the field -- so this is dead weight that no warning
-  will ever surface, which is exactly the shape M15.1 was.
-  **Why it is not just deleted.** Removing the field strands `DirectoryHandle::canonical_path`, which
-  strands the free `canonical_path` and its `GetFinalPathNameByHandleW` call -- and that call's 512-unit
-  retry is the entire subject of **M15.3**. Deleting it dissolves M15.3 rather than answering it.
-  **Two coherent outcomes.** Remove both (and close M15.3 as moot), or keep them for diagnostics and give
-  the field a reader that justifies it. What is not legitimate is leaving a write-only field with a doc
-  comment describing a reader that no longer exists.
+- [x] **M15.8** -- Settled the write-only tail of M15.2's removal: the stored `canonical_path` field is gone, `DirectoryHandle::canonical_path` stayed and now has a caller that uses its result plus the tests it never had. M15.3 stands, confirmed by injection. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m158)
 
 - [ ] **M15.3** -- Decide whether this crate should open paths longer than `MAX_PATH`, and note the
   consequence for `canonical_path`'s retry either way.

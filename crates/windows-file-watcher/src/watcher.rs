@@ -283,20 +283,6 @@ struct WatcherInner {
     /// `GetVolumeInformationByHandleW` itself failed when this watcher was
     /// last installed.
     volume_identity: Mutex<Option<VolumeIdentity>>,
-    /// This watcher's own canonical path (M11.2), recorded from the handle
-    /// installed each time, via `GetFinalPathNameByHandleW` rather than
-    /// `self.path` (a client-supplied string, possibly not even fully
-    /// resolved). `None` only if the query itself failed when this watcher was
-    /// last installed.
-    ///
-    /// **Currently written and never read.** Its one reader was the
-    /// by-reference fast reopen, which used it to notice that `OpenFileById`
-    /// had followed the object somewhere else and refuse to trust it; D-80
-    /// removed that path, and nothing has consulted this since. Kept rather
-    /// than deleted only because removing it cascades into
-    /// `DirectoryHandle::canonical_path` and the retry M15.3 is about -- see
-    /// M15.8, which owns the decision.
-    canonical_path: Mutex<Option<PathBuf>>,
     /// The resident-state map this watcher's directory entry lives in, bound
     /// once by [`DirectoryWatcher::bind_resident`] immediately after
     /// construction (M11.4) -- unset for a watcher built directly by a unit
@@ -785,9 +771,17 @@ impl WatcherInner {
             .collect();
         if awaiting.is_empty() {
             drop(routes);
+            // The path the handle *resolves to*, not `self.path`: a volume
+            // change is precisely the case where the client's own string names
+            // something that no longer leads where it used to, so echoing that
+            // string back says nothing about what actually happened. `None`
+            // here is itself informative -- the new handle would not report a
+            // path at all.
             log::warn!(
-                "windows-file-watcher: {:?} reopened on a different volume than before",
-                self.path
+                "windows-file-watcher: {:?} reopened on a different volume than before, and now \
+                 resolves to {:?}",
+                self.path,
+                handle.canonical_path().ok()
             );
             self.finish_reopen(handle);
             return;
@@ -1093,7 +1087,6 @@ impl WatcherInner {
             if let Ok(identity) = handle.volume_identity() {
                 *lock(&self.volume_identity) = Some(identity);
             }
-            *lock(&self.canonical_path) = handle.canonical_path().ok();
             self.case_sensitive
                 .store(handle.is_case_sensitive(), Ordering::Relaxed);
             self.establish_detailed(handle)?;
@@ -1248,7 +1241,6 @@ impl DirectoryWatcher {
             force_coarse: AtomicBool::new(force_coarse),
             directory_id: Mutex::new(initial_id),
             volume_identity: Mutex::new(None),
-            canonical_path: Mutex::new(None),
             resident: OnceLock::new(),
             volume_change: Mutex::new(None),
             // Overwritten by `install` below, from the real handle, before

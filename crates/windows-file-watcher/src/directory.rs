@@ -440,12 +440,11 @@ impl DirectoryHandle {
     /// queried fresh via `GetFinalPathNameByHandleW` rather than cached from
     /// whatever string originally opened it (M11.2/D-78).
     ///
-    /// Introduced to guard the by-reference fast reopen: `OpenFileById` is
-    /// path-independent, so it keeps finding the same object after a move or
-    /// rename, and a client subscribed to a path expects to watch *that path*
-    /// rather than wherever the object ends up. D-80 removed that reopen path,
-    /// so the only remaining caller records the result without reading it back
-    /// -- see M15.8, which owns whether this stays.
+    /// The distinction is the point: the string a client passed may be
+    /// relative, unnormalised, or routed through a junction or mapped drive
+    /// that no longer leads where it did. This reports where the handle
+    /// actually is, which is what a diagnostic about a *changed* resolution has
+    /// to say to be worth printing.
     ///
     /// # Errors
     ///
