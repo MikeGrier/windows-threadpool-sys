@@ -692,13 +692,44 @@ impl Observation {
         seen
     }
 
-    /// The measurement for one node pair and strategy, if it was taken.
+    /// Every measurement for one directed node pair and strategy.
+    ///
+    /// **Plural, and that is a correction rather than a preference.** A pair and
+    /// a strategy no longer identify one measurement: each hop is measured once
+    /// per ring placement, so there are two. The singular version of this
+    /// returned the first match, which silently discarded half the rows and
+    /// handed back whichever placement happened to be pushed first -- so a
+    /// caller comparing baseline against cached could unknowingly compare a
+    /// producer-local run with a consumer-local one.
+    ///
+    /// Ordered as measured, which is the producer's node first.
     #[must_use]
-    pub fn node_pair(&self, pair: (u32, u32), strategy: Strategy) -> Option<Measurement> {
+    pub fn node_pair_rows(&self, pair: (u32, u32), strategy: Strategy) -> Vec<Measurement> {
+        self.by_node_pair
+            .iter()
+            .filter(|m| {
+                (m.producer.numa_node, m.consumer.numa_node) == pair && m.strategy == strategy
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The measurement for one node pair, strategy and ring placement.
+    ///
+    /// The full key. `memory_node` is what the singular lookup used to omit.
+    #[must_use]
+    pub fn node_pair(
+        &self,
+        pair: (u32, u32),
+        strategy: Strategy,
+        memory_node: Option<u32>,
+    ) -> Option<Measurement> {
         self.by_node_pair
             .iter()
             .find(|m| {
-                (m.producer.numa_node, m.consumer.numa_node) == pair && m.strategy == strategy
+                (m.producer.numa_node, m.consumer.numa_node) == pair
+                    && m.strategy == strategy
+                    && m.memory_node == memory_node
             })
             .cloned()
     }

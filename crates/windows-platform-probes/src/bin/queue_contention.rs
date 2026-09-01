@@ -10,7 +10,7 @@
 //! linked and sharded MPSC shapes are ever needed, and whether `mpsc` and
 //! `reserving_mpsc` should merge. See `queue_contention`'s module docs.
 
-use windows_platform_probes::queue_contention::{PRODUCER_COUNTS, Run, measure};
+use windows_platform_probes::queue_contention::{PRODUCER_COUNTS, Run, measure, shapes};
 
 fn main() {
     windows_placement_probe::fingerprint::print_banner();
@@ -34,12 +34,14 @@ fn main() {
     println!("  1. tail-claim contention (isolated regime)\n");
     println!(
         "     {:<18} {:>12} {:>12} {:>14}",
-        "producers", "mpsc x1thr", "reserving", "atomic floor"
+        "producers", "slotwise x1thr", "reserving", "atomic floor"
     );
     for &producers in PRODUCER_COUNTS {
-        let mpsc = observation.scaling(&observation.isolated, "mpsc", producers);
-        let reserving = observation.scaling(&observation.isolated, "reserving_mpsc", producers);
-        let floor = observation.scaling(&observation.isolated, "baseline_fetch_add", producers);
+        let mpsc = observation.scaling(&observation.isolated, shapes::SLOTWISE_MPSC, producers);
+        let reserving =
+            observation.scaling(&observation.isolated, shapes::RESERVING_MPSC, producers);
+        let floor =
+            observation.scaling(&observation.isolated, shapes::BASELINE_FETCH_ADD, producers);
         println!(
             "     {producers:<18} {:>12} {:>12} {:>14}",
             format_scaling(mpsc),
@@ -57,11 +59,11 @@ fn main() {
     println!("\n  2. the price of reservation (drained regime, where `head` is written)\n");
     println!(
         "     {:<18} {:>14} {:>14} {:>10}",
-        "producers", "mpsc ns/push", "reserving", "ratio"
+        "producers", "slotwise ns/pu", "reserving", "ratio"
     );
     for &producers in PRODUCER_COUNTS {
-        let plain = observation.find(&observation.drained, "mpsc", producers);
-        let reserving = observation.find(&observation.drained, "reserving_mpsc", producers);
+        let plain = observation.find(&observation.drained, shapes::SLOTWISE_MPSC, producers);
+        let reserving = observation.find(&observation.drained, shapes::RESERVING_MPSC, producers);
         let ratio = match (plain, reserving) {
             (Some(plain), Some(reserving)) if plain.nanos_per_push > 0.0 => {
                 format!("{:.2}x", reserving.nanos_per_push / plain.nanos_per_push)

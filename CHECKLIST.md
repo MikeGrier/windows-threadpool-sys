@@ -114,6 +114,18 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
 
 - [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. -> [completed 2026-08-31](COMPLETED-CHECKLIST.md#m341)
 
+- [ ] **M34.3** -- **Archive the completed bodies in
+  [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md)**, which holds twelve checked items still
+  carrying their full write-ups. The completed-item rule moves a large one to
+  [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) immediately and leaves a one-line anchored stub, so
+  the active file stays a list of what is *left*. Raised in review 5072735803 on pull request #56,
+  where it was noted that the problem recurs throughout that file rather than at the one line cited.
+  [M34.1](COMPLETED-CHECKLIST.md#m341) is the worked example of the shape: `### <a id="..."></a>` in
+  the archive under a dated group, a stub with a completion link in its place.
+  Bookkeeping with no bearing on correctness, which is why it is queued rather than folded into a
+  branch already under review -- but it is 757 lines of checklist that a reader currently has to scan
+  past to find the open work, so it is not cosmetic either.
+
 - [ ] **M34.2** -- **Route every tool's output through one sink, per the repository's own rule**: never
   call `println!`/`eprintln!` from more than one site in a tool; introduce a writer trait, sink or
   formatter at the first occurrence and route everything through it. Seven binaries violate this today

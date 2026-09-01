@@ -22,6 +22,13 @@ struct Options {
     suppress_model: bool,
     /// Skip writing the backup file.
     no_file: bool,
+    /// Print the usage message and exit successfully.
+    ///
+    /// A separate field from a parse error on purpose: asking for help is a
+    /// request the tool can satisfy, not a mistake. Returned as Err it went
+    /// to stderr and exited non-zero, so placement-probe --help | less showed
+    /// nothing and any script running it reported failure.
+    help: bool,
     /// Print the build identity and exit.
     version: bool,
 }
@@ -34,6 +41,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if options.help {
+        // stdout and success: help was asked for and was given.
+        println!("{}", help());
+        return ExitCode::SUCCESS;
+    }
 
     if options.version {
         // Deliberately the whole identity rather than just a version number.
@@ -195,6 +208,7 @@ fn parse_arguments() -> Result<Options, String> {
         suppress_model: false,
         no_file: false,
         version: false,
+        help: false,
     };
 
     for argument in std::env::args().skip(1) {
@@ -203,7 +217,7 @@ fn parse_arguments() -> Result<Options, String> {
             "--no-cpu-model" => options.suppress_model = true,
             "--no-file" => options.no_file = true,
             "--version" | "-V" => options.version = true,
-            "--help" | "-h" => return Err(help()),
+            "--help" | "-h" => options.help = true,
             other => {
                 return Err(format!("unrecognised argument {other:?}\n\n{}", help()));
             }

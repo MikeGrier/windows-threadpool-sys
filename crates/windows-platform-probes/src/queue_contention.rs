@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use windows_waitable_queues::{Options, reserving_mpsc, slotwise_mpsc};
+use windows_waitable_queues::{reserving_mpsc, slotwise_mpsc};
 
 /// How many pushes each producer thread performs in one timed run.
 const PUSHES_PER_PRODUCER: usize = 50_000;
@@ -70,6 +70,23 @@ const REPETITIONS: usize = 5;
 /// alongside, since the interesting region is around and beyond it.
 pub const PRODUCER_COUNTS: &[usize] = &[1, 2, 4, 8, 16, 32];
 
+/// The names a run is filed under.
+///
+/// **Named once because a lookup by string literal is a rename waiting to
+/// fail, and this one already did.** The `mpsc` -> `slotwise_mpsc` rename
+/// updated the recording side and not the reporting binary, which went on
+/// asking for `"mpsc"`; every lookup returned `None` and two entire columns of
+/// the report rendered as `--` without anything erroring. A wrong shape name is
+/// not a compile error, so the only defence is that both sides read the same
+/// definition.
+pub mod shapes {
+    /// The bounded-array MPSC.
+    pub const SLOTWISE_MPSC: &str = "slotwise_mpsc";
+    /// The reservation-based MPSC.
+    pub const RESERVING_MPSC: &str = "reserving_mpsc";
+    /// The uncontended-atomic floor the queues are measured against.
+    pub const BASELINE_FETCH_ADD: &str = "baseline_fetch_add";
+}
 /// One configuration's result.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Run {
@@ -130,20 +147,20 @@ pub fn measure() -> Observation {
     let mut drained = Vec::new();
 
     for &producers in PRODUCER_COUNTS {
-        isolated.push(median_run("baseline_fetch_add", producers, |count| {
+        isolated.push(median_run(shapes::BASELINE_FETCH_ADD, producers, |count| {
             time_contended_atomic(count)
         }));
-        isolated.push(median_run("slotwise_mpsc", producers, |count| {
+        isolated.push(median_run(shapes::SLOTWISE_MPSC, producers, |count| {
             time_isolated_mpsc(count)
         }));
-        isolated.push(median_run("reserving_mpsc", producers, |count| {
+        isolated.push(median_run(shapes::RESERVING_MPSC, producers, |count| {
             time_isolated_reserving(count)
         }));
 
-        drained.push(median_run("slotwise_mpsc", producers, |count| {
+        drained.push(median_run(shapes::SLOTWISE_MPSC, producers, |count| {
             time_drained_mpsc(count)
         }));
-        drained.push(median_run("reserving_mpsc", producers, |count| {
+        drained.push(median_run(shapes::RESERVING_MPSC, producers, |count| {
             time_drained_reserving(count)
         }));
     }
@@ -303,12 +320,20 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
 }
 
 fn time_drained_reserving(producers: usize) -> Repetition {
-    let (tx, rx) = reserving_mpsc::bounded_with::<u64>(
-        DRAINED_CAPACITY,
-        // Tracking on, so this row also prices the switch M31.4 made opt-in.
-        Options::new().tracking_high_water(),
-    )
-    .expect("a valid capacity");
+    // **Defaults on both sides, and that is a correction.** This row previously
+    // enabled high-water tracking here and nowhere else, to "also price the
+    // switch M31.4 made opt-in". But the number it feeds is presented as the
+    // cost of *reservation*, and tracking adds an unrelated operation to this
+    // shape's push path alone -- a load of the consumer's position, which is
+    // exactly the shared line the other shape's push is built to avoid
+    // touching. The ratio therefore measured reservation plus a handicap, with
+    // no way for a reader to separate them.
+    //
+    // Nothing consumes the high-water figure here either, so the tracking was
+    // paying a cost to produce a number nobody read. Pricing that switch is a
+    // worthwhile measurement and needs its own row, with both shapes tracking,
+    // rather than being folded into this comparison.
+    let (tx, rx) = reserving_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
 

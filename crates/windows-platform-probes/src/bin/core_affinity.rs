@@ -346,40 +346,50 @@ fn print_node_distances(observation: &Observation) {
     }
 
     println!("\n-- the handoff, by NUMA node pair --");
+    // A ring-placement column, because a pair and a strategy no longer identify
+    // one row: every hop is measured once with the ring on the producer's node
+    // and once on the consumer's. Rendering one of them would drop half the
+    // measurements and, worse, could pair a baseline taken at one placement
+    // against a cached run taken at the other.
     println!(
-        "{:<14} {:>8} {:>8} {:>12} {:>12} {:>10}",
-        "prod -> cons", "prod", "cons", "base ns/it", "cached ns/it", "cach depth"
+        "{:<14} {:>8} {:>8} {:>8} {:>12} {:>12} {:>10}",
+        "prod -> cons", "ring on", "prod", "cons", "base ns/it", "cached ns/it", "cach depth"
     );
 
     let mut slowest: Option<(f64, (u32, u32))> = None;
     let mut fastest: Option<(f64, (u32, u32))> = None;
 
     for pair in &pairs {
-        let (Some(base), Some(cached)) = (
-            observation.node_pair(*pair, Strategy::Baseline),
-            observation.node_pair(*pair, Strategy::Cached),
-        ) else {
-            continue;
-        };
-        println!(
-            "{:<14} {:>8} {:>8} {:>12.1} {:>12.1} {:>10.1}",
-            // `->`, not `<->`: hops are directed, because the producer writes
-            // and the consumer reads. The probe crate's own report was
-            // corrected for this and this second renderer of the same data was
-            // not, which is how two views of one measurement drift apart.
-            format!("{} -> {}", pair.0, pair.1),
-            format!("g{}/cpu{}", base.producer.group, base.producer.number),
-            format!("g{}/cpu{}", base.consumer.group, base.consumer.number),
-            base.nanos_per_item,
-            cached.nanos_per_item,
-            cached.consumer_batch
-        );
-        let seen = (base.nanos_per_item, *pair);
-        if slowest.is_none_or(|(worst, _)| seen.0 > worst) {
-            slowest = Some(seen);
-        }
-        if fastest.is_none_or(|(best, _)| seen.0 < best) {
-            fastest = Some(seen);
+        for base in observation.node_pair_rows(*pair, Strategy::Baseline) {
+            // Matched on the ring placement as well, so the two columns
+            // describe the same configuration.
+            let Some(cached) = observation.node_pair(*pair, Strategy::Cached, base.memory_node)
+            else {
+                continue;
+            };
+            println!(
+                "{:<14} {:>8} {:>8} {:>8} {:>12.1} {:>12.1} {:>10.1}",
+                // `->`, not `<->`: hops are directed, because the producer
+                // writes and the consumer reads. The probe crate's own report
+                // was corrected for this and this second renderer of the same
+                // data was not, which is how two views of one measurement drift
+                // apart.
+                format!("{} -> {}", pair.0, pair.1),
+                base.memory_node
+                    .map_or_else(|| "unknown".to_owned(), |node| format!("node {node}")),
+                format!("g{}/cpu{}", base.producer.group, base.producer.number),
+                format!("g{}/cpu{}", base.consumer.group, base.consumer.number),
+                base.nanos_per_item,
+                cached.nanos_per_item,
+                cached.consumer_batch
+            );
+            let seen = (base.nanos_per_item, *pair);
+            if slowest.is_none_or(|(worst, _)| seen.0 > worst) {
+                slowest = Some(seen);
+            }
+            if fastest.is_none_or(|(best, _)| seen.0 < best) {
+                fastest = Some(seen);
+            }
         }
     }
 

@@ -108,6 +108,27 @@ jobs:
               exit 1
               ;;
           esac
+          # And the *right version*. Any `placement-probe-v*` tag triggers this
+          # workflow, and nothing else compares the tag against the crate
+          # version the binary reports. A mistyped or stale tag would otherwise
+          # publish a release titled one version containing a binary that calls
+          # itself another -- and since the record embeds the crate version,
+          # every submission from it would disagree with the release it came
+          # from.
+          #
+          # Only on a tag: a pull request run has no version to check against.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME##*-v}"
+            case "${identity}" in
+              *"v${tag_version} "*) ;;
+              *)
+                echo "::error::tag ${GITHUB_REF_NAME} claims version ${tag_version}," >&2
+                echo "::error::but the binary reports: ${identity}" >&2
+                exit 1
+                ;;
+            esac
+            echo "tag version ${tag_version} matches the binary"
+          fi
 
       - name: Verify an unstamped build reports itself unofficial
         # The negative case, and the one that would otherwise never be watched.

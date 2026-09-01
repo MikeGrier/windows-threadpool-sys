@@ -65,7 +65,7 @@ use windows_sys::Win32::System::Memory::{
 use windows_sys::Win32::System::ProcessStatus::{
     PSAPI_WORKING_SET_EX_INFORMATION, QueryWorkingSetEx,
 };
-use windows_sys::Win32::System::SystemInformation::GROUP_AFFINITY;
+use windows_sys::Win32::System::SystemInformation::{GROUP_AFFINITY, GetSystemInfo, SYSTEM_INFO};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThread, SetThreadGroupAffinity,
 };
@@ -492,7 +492,7 @@ impl Slots {
             ptr: slots,
             len: capacity,
             origin: Origin::Numa,
-            node: observed_node(base),
+            node: observed_node_of_region(base, bytes),
         })
     }
 }
@@ -522,6 +522,51 @@ impl core::ops::Deref for Slots {
         // SAFETY: `ptr` and `len` describe one live allocation owned by `self`,
         // initialised by whichever constructor produced it.
         unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+/// Which NUMA node an entire region is on, or `None` if it is not on one node.
+///
+/// **A region is not a page, and this is the difference.** `VirtualAllocExNuma`
+/// expresses a *preference*, and physical pages are drawn one at a time as they
+/// fault; the ring is 8 KiB at the default capacity, so it spans several pages
+/// and the node is only guaranteed uniform if it is checked to be. Asking about
+/// the base address alone would describe the first page and label the whole
+/// measurement with it.
+///
+/// A region whose pages disagree has no single node, so it reports `None`
+/// rather than picking one. That is the same rule the rest of this field
+/// follows: unknown is a real answer, and a guess dressed as a measurement is
+/// not.
+fn observed_node_of_region(base: *mut c_void, bytes: usize) -> Option<u32> {
+    let page = page_size();
+    let mut node = None;
+    let mut offset = 0;
+    while offset < bytes {
+        // SAFETY: `offset < bytes`, and the region spans `bytes` from `base`.
+        let page_node = observed_node(unsafe { base.byte_add(offset) })?;
+        match node {
+            None => node = Some(page_node),
+            Some(first) if first == page_node => {}
+            // Split across nodes. Not an error -- the ring works -- but it is
+            // not a measurement of a hop to any one node either.
+            Some(_) => return None,
+        }
+        offset += page;
+    }
+    node
+}
+
+/// The system's page granularity, which is what a NUMA node is assigned by.
+fn page_size() -> usize {
+    // SAFETY: writes a fully owned `SYSTEM_INFO`, which is plain data.
+    let mut info = unsafe { core::mem::zeroed::<SYSTEM_INFO>() };
+    unsafe { GetSystemInfo(&raw mut info) };
+    // Zero would loop forever below; the call cannot return it, but the loop
+    // must not depend on that.
+    match usize::try_from(info.dwPageSize) {
+        Ok(size) if size > 0 => size,
+        _ => 4096,
     }
 }
 
