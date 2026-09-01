@@ -128,29 +128,9 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-25----
 
 Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----m14-audit-the-delivery-contract-against-the-ten-specification-gap-categories-d-84).
 
-## M15 -- Resolve the unreachable half of `StandingHold::drop`
+## M15 -- Findings from the mutation-testing sweep
 
-- [ ] **M15.1** -- Decide whether `StandingHold::drop`'s release path is dead code, and act on the
-  answer. **Found by mutation testing, and it is a reachability question rather than a test gap** --
-  which is why it is queued for a decision instead of being closed with a test.
-  Three mutants in that `Drop` survive: `state.reserved += 1` changed to `-=` and to `*=`, and the `!`
-  deleted from `if !standing.slot_alive`. Each was re-injected on its own line and confirmed to leave the
-  suite green, so this is not an artifact of the run's feature flags.
-  **No test can catch them as the code stands.** The only pop from `state.queue` is in `take` (one call
-  site), and `take` performs the release inline and sets `resolved = true`, so `Drop` returns at its first
-  line for every drained entry. An *undrained* entry's hold is only dropped when `Shared` itself is torn
-  down -- and then `self.shared.upgrade()` returns `None` and `Drop` returns at its second line. Nothing
-  reaches the body in between.
-  The doc comment says `Drop` "remains the fallback for every other discard", so either a discard path was
-  intended and never built, or one existed and was removed when `take` took over the release (a PR #20
-  review response, per the comment beside it). Both readings are plausible from the code alone; the
-  engineer who made that change can tell them apart, and an assistant deleting live-looking accounting on
-  a hunch is exactly the wrong move.
-  Three outcomes are legitimate: **remove** the unreachable body if the discard path is genuinely gone;
-  **keep it and say why** if it guards a path that is coming (recording that here, so the next mutation
-  run does not re-litigate it); or **build the missing path** if its absence is itself the defect. What is
-  not legitimate is adding a test that reaches it artificially -- that would manufacture coverage for code
-  nothing calls.
+- [x] **M15.1** -- Resolved the unreachable half of `StandingHold::drop`: it was the drain path until `take` took the release over, and it could not have run safely -- reaching it deadlocks on the `items` lock its caller already holds. Replaced by an exercised tripwire. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m151)
 
 - [ ] **M15.2** -- Explain, then either fix or document, why a handle from `reopen_by_id` **rejects the
   very read the watcher exists to issue**. Found while chasing a surviving mutant; the mutant is the

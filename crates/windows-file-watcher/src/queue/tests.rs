@@ -949,6 +949,31 @@ fn dropping_an_unused_standing_slot_returns_its_capacity() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "must release the reservation under the `items` lock")]
+fn a_hold_that_outlives_its_entry_while_the_queue_is_alive_trips_the_tripwire() {
+    // `StandingHold::drop` is not a release path. Reaching its body means an
+    // entry was discarded without settling its reservation, and the accounting
+    // that used to live there could not have run anyway: every way to remove an
+    // entry from the queue holds the `items` lock, and re-taking it deadlocks.
+    // That was measured, not assumed -- a forced unwind out of `take` hung past
+    // 90s with the old body, and the same unwind with this `Drop`
+    // short-circuited failed immediately.
+    //
+    // The body is now an assertion, and an assertion nothing exercises is worth
+    // no more than the comment beside it. Building a hold by hand is the only
+    // way to reach it, which is itself the point: no path in the crate can.
+    let (sender, _receiver) = bounded(2);
+    let slot = sender.reserve_standing().expect("a slot");
+    let hold = super::StandingHold {
+        shared: Arc::downgrade(&sender.shared),
+        state: Arc::clone(&slot.state),
+        resolved: false,
+    };
+    drop(hold);
+}
+
+#[test]
 fn a_second_standing_send_while_the_first_is_still_queued_coalesces_in_place() {
     // PR #20 review response: reachable when an interactive watch is answered
     // before its queued question is drained and the retry fails again. Before
@@ -1585,9 +1610,10 @@ fn draining_a_standing_send_returns_the_carve_out_to_the_slot_not_to_the_pool() 
     // inline with the pop -- was covered only incidentally, by tests asserting
     // that sends succeed rather than that capacity is conserved.
     //
-    // (The copy of that accounting in `StandingHold::drop` is a different
-    // matter: it is not reachable in the current design, and no test here can
-    // cover it. See the note on that impl.)
+    // (`StandingHold::drop` no longer carries a copy of this accounting. It
+    // could not be reached, and if it ever were it would deadlock on the
+    // `items` lock its caller already holds; it is now a tripwire, exercised by
+    // `a_hold_that_outlives_its_entry_while_the_queue_is_alive_trips_the_tripwire`.)
     //
     // `unreserved() == capacity - queue.len() - reserved`, so getting this
     // wrong does not merely lose the slot's guarantee: decrementing inflates

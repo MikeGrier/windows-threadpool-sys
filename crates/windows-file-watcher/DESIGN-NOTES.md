@@ -770,3 +770,58 @@ The corrected test also asserts that a coarse `QueueFull` is actually *generated
 not merely permitted -- without that, the test would pass just as well against a
 generator that still excluded it, which is the same weakness the wake-edge
 regression test had in its first form.
+
+### <a id="dead-code-that-could-not-have-run"></a>Dead code that could not have run: `StandingHold::drop`
+
+Mutation testing left four survivors in `StandingHold::drop`, and the interesting
+part was not the survivors but why they survived.
+
+The reachability question settles from the source alone. Every `StandingHold` is
+built in one place (`StandingSlot::send`) and moved straight into `state.queue`.
+The only site anywhere in the crate that removes an entry from that queue is
+`take`, which settles the reservation inline with the pop and sets `resolved`, so
+`Drop` returns at its first line. The only other way a hold dies is `Shared` being
+torn down, where the hold's `Weak` fails to upgrade and it returns at its second.
+Nothing reaches the body in between -- confirmed by replacing it with
+`unreachable!()` and passing the full suite.
+
+The history says it was not always so. In `4198aa8` this `Drop` *was* the drain
+path: it "unconditionally restored `reserved` on drain." `07d4b75` then found that
+popping exposed the queue slot before the deferred `Drop` restored the
+reservation, so `queue.len() + reserved` could exceed capacity; the fix moved the
+release into `take`, inline with the pop, and left `Drop` as "the fallback for
+every other discard." The body was live code whose only caller moved out from
+under it.
+
+**The finding that decided what to do about it: the body could not have run
+safely.** `take` takes `&mut State`, so its caller holds the `items` guard -- and
+any other way to remove an entry from `state.queue` needs that same guard. A hold
+discarded on such a path is therefore dropped *inside* the lock, and the body's
+first act was `lock(&shared.items)`, a plain non-reentrant `Mutex::lock`. So the
+"fallback for every other discard" would have deadlocked in precisely the
+situation it was written for. Measured, not reasoned: with a forced unwind out of
+`take`, the body hung past 90s; the identical unwind with `Drop` short-circuited
+failed immediately.
+
+Building the missing discard path was never an option either, and the tests
+already said so: `dropping_a_standing_slot_while_its_message_is_still_queued_releases_capacity_once`
+asserts that a cancelled slot's queued question **still arrives**. There is no
+discard to fall back from.
+
+So the body is gone and an assertion stands in its place, phrased as
+`debug_assert!(std::thread::panicking(), ...)` -- which is the true statement
+rather than a bare `false`. The only way to reach it today is an unwind out of
+`take` between the pop and `resolved` being set, and there the original panic is
+the real diagnostic and must be left to propagate rather than turned into an abort
+by a second one. Any *other* arrival is a new discard path that has not settled
+its reservation, and it fires. **The contract it encodes: a discard must release
+the reservation under the `items` lock it already holds, exactly as `take` does --
+never by delegating to a hold's `Drop`.**
+
+Two transferable points. First, "unreachable" and "harmless" are different
+claims, and the second does not follow from the first: this body was unreachable
+*and* was a deadlock waiting for its first caller. Second, the survivors were the
+symptom of a doc that had gone false by vacuity -- `Entry`, `StandingHold`,
+`StandingState`, and `take` all described this `Drop` as the live release
+mechanism, so a reader would have trusted a fallback that could not work. Four
+restatements of one fact, none of which moved when the fact did.

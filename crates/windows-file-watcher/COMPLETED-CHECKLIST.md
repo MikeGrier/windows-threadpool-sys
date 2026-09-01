@@ -554,3 +554,50 @@ a red suite, never by reasoning):
 
 The remaining 4 missed mutants are all in `StandingHold::drop`, whose body is unreachable; that is M15.1
 and is an engineer decision, not a test gap.
+## Moved 2026-09-01 -- M15.1: the unreachable half of `StandingHold::drop`
+
+### <a id="m151"></a>M15.1 -- Decide whether `StandingHold::drop`'s release path is dead code, and act on the answer. *(completed 2026-09-01 18:29:36 -04:00)*
+
+**The reachability question, settled from the source.** Every `StandingHold` is built in one place
+(`StandingSlot::send`) and moved straight into `state.queue`; `Entry::plain` never carries one. The only
+site anywhere in the crate that removes an entry from that queue is `take` (grepped for
+pop/drain/retain/clear/remove/truncate -- one hit), and it settles the reservation inline with the pop and
+sets `resolved`, so `Drop` returns at its first line. The only other way a hold dies is `Shared` being torn
+down, where the `Weak` fails to upgrade and it returns at its second. Confirmed empirically by replacing the
+body with `unreachable!()` and passing the full `--all-features` suite (372 tests, lib + 8 integration
+targets + doctests).
+
+**The history question, settled from git.** The checklist offered two readings; the first is disproved.
+`4198aa8` says this `Drop` "unconditionally restored `reserved` **on drain**" -- it *was* the drain path.
+`07d4b75` (PR #20 review 5000746684) then found that popping exposed the queue slot before the deferred
+`Drop` restored the reservation, so `queue.len() + reserved` could exceed capacity; the fix moved the
+release into `take` and left `Drop` as "the fallback for every other discard." It was live code whose only
+caller moved out from under it, not scaffolding that was never wired up.
+
+**The finding that decided the outcome: the body could not have run safely.** `take` takes `&mut State`, so
+its caller holds the `items` guard -- and any other way to remove an entry from `state.queue` needs that
+same guard, so a hold discarded on such a path is dropped *inside* the lock. The body's first act was
+`lock(&shared.items)`, a plain non-reentrant `Mutex::lock`. Differential measurement, identical forced
+unwind out of `take`: body live -> **hung past 90s**; `Drop` short-circuited -> **exit 101, immediate**. The
+"fallback for every other discard" would have deadlocked in exactly the situation it was written for.
+
+**Building the discard path was never an option.** It would contradict a tested decision:
+`dropping_a_standing_slot_while_its_message_is_still_queued_releases_capacity_once` asserts that a cancelled
+slot's queued question **still arrives**.
+
+**What landed.** The body is replaced by `debug_assert!(std::thread::panicking(), ...)` -- the true
+statement rather than a bare `false`, so the one way to arrive today (an unwind out of `take` between the
+pop and `resolved`) lets the original panic propagate instead of becoming an abort from a second one, while
+any other arrival fires. It encodes the contract the deadlock taught: a discard must release the reservation
+under the `items` lock it already holds, exactly as `take` does. `a_hold_that_outlives_its_entry_while_the_queue_is_alive_trips_the_tripwire`
+exercises it, because an assertion nothing exercises is worth no more than the comment beside it.
+
+**Mutation result.** All four survivors are gone -- three by deletion, and the whole-impl mutant
+(`replace drop with ()`) is now caught by the tripwire test. Every branch the new `Drop` admits was injected
+and confirmed caught: `resolved` -> `true`/`false`, `upgrade().is_none()` -> `true`/`false`, and the empty
+body. `queue.rs` now has **4 missed mutants, none in this impl**.
+
+**Blast-radius sweep.** The survivors were the symptom of a doc gone false by vacuity: `Entry`,
+`StandingHold`, `StandingState`, and `take` all described this `Drop` as the live release mechanism. Four
+restatements of one fact, none of which moved when the fact did; all four corrected here, plus the note in
+`queue/tests.rs`. Recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `Dead code that could not have run`.
