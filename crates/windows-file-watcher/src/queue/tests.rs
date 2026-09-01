@@ -1448,3 +1448,90 @@ fn draining_only_latched_reports_still_reaches_the_resume_edge() {
         "the edge must be reachable by draining latched reports alone"
     );
 }
+
+#[test]
+fn draining_a_standing_send_returns_the_carve_out_to_the_slot_not_to_the_pool() {
+    // A `cargo mutants` run flagged the reservation accounting, and chasing it
+    // showed the carve-out's *reachable* release -- the one `take` performs
+    // inline with the pop -- was covered only incidentally, by tests asserting
+    // that sends succeed rather than that capacity is conserved.
+    //
+    // (The copy of that accounting in `StandingHold::drop` is a different
+    // matter: it is not reachable in the current design, and no test here can
+    // cover it. See the note on that impl.)
+    //
+    // `unreserved() == capacity - queue.len() - reserved`, so getting this
+    // wrong does not merely lose the slot's guarantee: decrementing inflates
+    // the best-effort pool, handing out capacity that is supposed to be carved
+    // out. The assertion below is therefore about what the *general* path can
+    // take, which is what a wrong sign actually corrupts.
+    let (sender, receiver) = bounded(2);
+    let slot = sender.reserve_standing().expect("a slot");
+    let watch = WatchId::from_raw(1);
+
+    // One unit is carved out for the slot, so exactly one is best-effort.
+    let held = sender.reserve().expect("one unreserved unit exists");
+    assert!(
+        sender.reserve().is_none(),
+        "the standing slot's carve-out is not available to the best-effort path"
+    );
+    drop(held);
+
+    // Send through the slot and drain it: the queued entry stands in for the
+    // reservation while it is queued, and dropping the hold on drain must give
+    // the carve-out back to the slot.
+    slot.send(Notification::RetryQuestion {
+        watch,
+        operation: crate::retry::FaultOperation::Open,
+        detail: test_detail(),
+    });
+    assert!(receiver.try_recv().is_some(), "the standing send arrives");
+
+    // The state must be exactly what it was before the send.
+    let held = sender.reserve().expect("the one best-effort unit is back");
+    assert!(
+        sender.reserve().is_none(),
+        "the carve-out must return to the slot, not to the best-effort pool -- \
+         a second unit here means the reservation was released twice"
+    );
+    drop(held);
+
+    // And the slot must still be able to use it.
+    slot.send(Notification::RetryQuestion {
+        watch,
+        operation: crate::retry::FaultOperation::Open,
+        detail: test_detail(),
+    });
+    assert!(
+        receiver.try_recv().is_some(),
+        "the slot can send again, which is what the carve-out is for"
+    );
+}
+
+#[test]
+fn a_standing_slot_keeps_its_carve_out_across_many_send_drain_cycles() {
+    // The accounting must be stable rather than merely correct once: a sign
+    // error that happened to cancel out over one cycle would still drift here.
+    let (sender, receiver) = bounded(2);
+    let slot = sender.reserve_standing().expect("a slot");
+    let watch = WatchId::from_raw(1);
+
+    for cycle in 0..8 {
+        slot.send(Notification::RetryQuestion {
+            watch,
+            operation: crate::retry::FaultOperation::Open,
+            detail: test_detail(),
+        });
+        assert!(
+            receiver.try_recv().is_some(),
+            "cycle {cycle}: the standing send arrives"
+        );
+
+        let held = sender.reserve().expect("one best-effort unit, every cycle");
+        assert!(
+            sender.reserve().is_none(),
+            "cycle {cycle}: the carve-out must still be carved out"
+        );
+        drop(held);
+    }
+}
