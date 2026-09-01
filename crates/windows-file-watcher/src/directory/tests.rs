@@ -579,3 +579,46 @@ fn volume_identity_accepts_empty_descriptive_fields() {
     assert_eq!(identity.filesystem_name(), "");
     assert_eq!(identity.volume_label(), "");
 }
+
+#[test]
+fn case_sensitivity_is_read_from_the_directory_rather_than_assumed() {
+    // `is_case_sensitive_dir` and the `is_case_sensitive` accessor both survived
+    // being replaced with a constant, and every operator in the flag test
+    // survived too. All of it was covered only by directories that happen to be
+    // case-insensitive, where a hard-coded `false` is indistinguishable from a
+    // real read.
+    //
+    // The fix is a directory of each kind. `fsutil file setCaseSensitiveInfo`
+    // needs no elevation on NTFS, and if it is unavailable this test says so
+    // rather than passing quietly on half the evidence.
+    let insensitive = TempDir::new("case-insensitive");
+    let handle = DirectoryHandle::open(insensitive.path()).expect("opens");
+    assert!(
+        !handle.is_case_sensitive(),
+        "a directory with the flag clear must report insensitive"
+    );
+
+    let sensitive = TempDir::new("case-sensitive");
+    let marked = std::process::Command::new("fsutil.exe")
+        .args([
+            "file",
+            "setCaseSensitiveInfo",
+            &sensitive.path().display().to_string(),
+            "enable",
+        ])
+        .output();
+
+    let enabled = matches!(&marked, Ok(output) if output.status.success());
+    assert!(
+        enabled,
+        "could not mark a directory case-sensitive, so the positive half of \
+         this contract went untested: {marked:?}"
+    );
+
+    let handle = DirectoryHandle::open(sensitive.path()).expect("opens");
+    assert!(
+        handle.is_case_sensitive(),
+        "a directory with FILE_CS_FLAG_CASE_SENSITIVE_DIR set must report \
+         sensitive -- this is the half a hard-coded `false` passes"
+    );
+}

@@ -178,6 +178,25 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
   A test asserting handle usability was written and then **removed rather than committed red**; it is
   reconstructible from the measurement recorded here.
 
+- [ ] **M15.3** -- Decide whether this crate should open paths longer than `MAX_PATH`, and note the
+  consequence for `canonical_path`'s retry either way.
+  **`wide_path` passes the caller's path to `CreateFileW` verbatim, with no `\\?\` prefix**, so a
+  directory deeper than `MAX_PATH` fails to open with `ERROR_PATH_NOT_FOUND` even though
+  `std::fs::create_dir_all` will happily create it (Rust prefixes internally). Measured while building a
+  fixture for the item below: the directory existed on disk and `DirectoryHandle::open` refused it.
+  **The knock-on.** `canonical_path` sizes a 512-unit buffer and retries when
+  `GetFinalPathNameByHandleW` says the path did not fit. Reaching that retry needs a canonical path of
+  512+ units, and the only way in through `open` is a path longer than `MAX_PATH` -- which cannot be
+  opened. So the retry is unreachable via the crate's own API, which is why its `<` survives being
+  changed to `>` and `<=` (the `>` case loops forever and shows up as a timeout rather than a failure).
+  There *is* a back door -- a short junction pointing at a deep target, since
+  `GetFinalPathNameByHandleW` returns the resolved target -- so the code is not dead, merely unreachable
+  by the obvious route. That is the fixture to build if the retry is worth testing as it stands.
+  **Two coherent outcomes.** Support long paths (prefix `\\?\` in `wide_path`, which also makes the
+  retry reachable and testable), or state the `MAX_PATH` limit as deliberate and note that the retry
+  covers only the junction case. Silence is the one option that leaves a caller to discover the limit
+  from a `NotFound` that names nothing.
+
 ## M-inf -- Horizon (ungated, post-v1)
 
 Parked, not pending. These are the deferred seams recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-19,
