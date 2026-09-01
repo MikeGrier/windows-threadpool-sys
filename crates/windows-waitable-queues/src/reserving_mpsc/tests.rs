@@ -24,6 +24,7 @@ use crate::{Disposal, Options};
 // handle is named for the role, and a caller who wants only the methods says so.
 use crate::Consumer as _;
 use crate::{Bounded, PushError, RecvError, Reserving};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -749,6 +750,96 @@ fn the_real_arm_still_blesses_a_wait_when_its_window_stays_empty() {
     assert!(safe_to_wait, "nothing arrived, so waiting is right");
 }
 
+// ---------------------------------------------------------------------------
+// The claim word going stale under the room test, which is the one window where
+// "full" can be computed from two readings that never coexisted.
+// ---------------------------------------------------------------------------
+
+/// Drains the queue after filling it, so `head` overtakes a claim position read
+/// before any of it happened.
+///
+/// Returned as a closure that fires **once**: the hook sits inside the claim
+/// loop, so a closure that acted on every call would move the queue forward
+/// again on each retry and the loop could never catch up with it.
+fn advance_past(tx: Producer<u32>, rx: Rc<Consumer<u32>>, items: u32) -> impl FnMut() {
+    let mut fired = false;
+    move || {
+        if fired {
+            return;
+        }
+        fired = true;
+        for i in 0..items {
+            tx.push(i).expect("the queue starts empty, so this fits");
+        }
+        for _ in 0..items {
+            rx.pop().expect("what was just pushed is takeable");
+        }
+    }
+}
+
+#[test]
+fn a_push_whose_claim_goes_stale_retries_instead_of_reporting_full() {
+    // The defect this guards. `push` reads the claim word, and the room test
+    // then reads `head`. If the queue fills and drains in between, `head`
+    // passes the position that word carried and `position.wrapping_sub(head)`
+    // wraps to near `u32::MAX` -- so an EMPTY queue reports `Full`, and records
+    // a refusal for it. The compare-and-swap that would have caught the
+    // staleness is never reached, because the room test returns first.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let rx = Rc::new(rx);
+    let racing = advance_past(tx.clone(), Rc::clone(&rx), 4);
+
+    let outcome = race_hooks::CLAIM.with(racing, || tx.push(99));
+
+    assert!(
+        outcome.is_ok(),
+        "the queue is empty when the claim is made, so the push must land: {outcome:?}"
+    );
+    assert_eq!(
+        rx.pop(),
+        Some(99),
+        "the item the retry claimed must actually be in the queue"
+    );
+    assert_eq!(
+        tx.refused(),
+        0,
+        "a retried claim is not backpressure and must not be counted as one"
+    );
+}
+
+#[test]
+fn a_reservation_whose_claim_goes_stale_retries_instead_of_failing() {
+    // `reserve` shares the room test, so it shares the window: the same stale
+    // pair made an empty queue refuse a reservation.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let rx = Rc::new(rx);
+    let racing = advance_past(tx.clone(), Rc::clone(&rx), 4);
+
+    let reservation = race_hooks::CLAIM.with(racing, || tx.reserve());
+
+    let reservation = reservation.expect("the queue is empty when the claim is made");
+    reservation.send(7).expect("the consumer is still here");
+    assert_eq!(rx.pop(), Some(7));
+}
+
+#[test]
+fn a_genuinely_full_queue_still_reports_full_through_the_window() {
+    // The other direction, so the retry cannot pass by never refusing. Nothing
+    // races here, so the claim word the room test rejected is still current and
+    // the refusal is authoritative.
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    tx.push(1).expect("there is room");
+    tx.push(2).expect("there is room");
+
+    let outcome = race_hooks::CLAIM.with(|| {}, || tx.push(3));
+
+    assert!(
+        matches!(outcome, Err(PushError::Full(3))),
+        "a full queue must still refuse, and hand the item back: {outcome:?}"
+    );
+    assert_eq!(tx.refused(), 1, "a real refusal is still counted");
+    assert_eq!(rx.pop(), Some(1));
+}
 // ---------------------------------------------------------------------------
 // Through the traits, which is where this shape and `slotwise_mpsc` visibly differ.
 // ---------------------------------------------------------------------------

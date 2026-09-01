@@ -327,3 +327,70 @@ D-31 says cannot be supported.
   disagreed once about this crate's behaviour, and no test we run here covers a machine we do not own.
   Keep a short in-suite smoke run over the same engine so the code cannot rot, and keep it out of the
   fast unit suite, which must stay under a second.
+
+## M7: PR #56 automated-review round
+
+The findings an automated review raised against the pull request that lands this work, verified against
+the source before being accepted. Each item names what was checked, so a later reader can tell a real
+repair from a reviewer's guess that was taken on trust.
+
+- [x] **SH-7.1** -- **`reserving_mpsc` reports `Full` from a claim word that was never current.**
+  `push` and `reserve` load the claim word relaxed, then test room with
+  `has_room_beyond_reservations(position, reserved)`, which computes
+  `position.wrapping_sub(head)`. If other producers claim and publish past `position` and the consumer
+  drains them while this thread is between the load and the room check, `head` passes the stale
+  `position` and the subtraction wraps to near `u32::MAX` -- so the queue reports `Full` (and records a
+  refusal) at the moment it is empty, and `reserve` returns `None` for the same reason. The compare-and-
+  swap that would have caught the staleness is never reached, because both paths return before it.
+  Re-read the claim and retry when it moved; report no room only from a word still current.
+
+- [x] **SH-7.2** -- **The NUMA cross-check compares a count against a highest identifier.**
+  `windows-platform-probes`'s `Observation::cross_check` compares `numa_domains` (a count of memory
+  domains) with `GetNumaHighestNodeNumber() + 1`. Windows documents that value as the highest node
+  *number*, and does not guarantee node numbers are dense -- nodes 0 and 2 give a count of 2 and a
+  highest of 2, and the probe then reports a parsing regression on correct hardware. Memory domains
+  already carry the node number in `Domain::id`, so compare highest against highest.
+
+- [x] **SH-7.3** -- **A cache level is called a partition without checking that it is one.**
+  `cache_partitions_at_level` deduplicates by equal processor set, which is exactly right for the
+  measured case it was written for (L1i and L1d over identical sets). It does not establish a
+  *partition*: `Topology` is deliberately constructible by hand and by deserialization (D-12), so
+  distinct-but-overlapping sets reach `outermost_partitioning_cache`, which returns them as domains a
+  consumer then double-counts. Require the distinct sets to be pairwise disjoint before a level
+  qualifies as partitioning.
+
+- [x] **SH-7.4** -- **`windows-waitable-queues` cannot build its documentation on docs.rs.** The crate
+  is Windows-only and imports `std::os::windows::io` unconditionally, but its manifest omits the
+  `[package.metadata.docs.rs]` target block that every other published Windows-only crate here carries,
+  so docs.rs would build it for its default Linux target and fail. Add the same block.
+
+- [x] **SH-7.5** -- **The mutant injector replaces every occurrence on the line, not the first.**
+  `tools/inject-mutant.ps1` calls the *static* `[regex]::Replace(input, pattern, replacement, 1)`, whose
+  fourth parameter is `RegexOptions` -- `1` is `IgnoreCase`, not a replacement count, and no static
+  overload takes a count at all. The tool therefore does precisely what its own header comment says it
+  exists to avoid. Fix the replacement, refuse a line whose pattern occurs more than once unless a
+  column disambiguates it, verify the baseline is green before trusting a "caught", run with all
+  features so a feature-gated mutation is not reported as surviving, perform the mutating write inside
+  the guarded region so a failed write still restores, and route its output through one sink.
+
+- [x] **SH-7.6** -- **A spike that fails to run is reported as a finding about the machine.**
+  `tools/run-numa-spikes.ps1` checks the exit code of `cargo build` but not of `cargo run`, then decides
+  vacuity by searching the output for `VACUOUS`. A crashed spike prints no such line, so the summary
+  says "**NOT vacuous -- this runner has more than one NUMA node**" and the script exits 0. That is the
+  instrument breaking while claiming a result, which the script's own documentation says is the one
+  thing worth failing over.
+
+- [x] **SH-7.7** -- **Two tools write output from several sites, and two hazards remain in the
+  sabotage/mutation harness.** `tools/check-publishable.ps1` and `tools/inject-mutant.ps1` each call
+  `Write-Host` from several places, against the repository's one-output-sink rule.
+  `tools/run-sabotage.ps1` performs its patching write before entering the `try` whose `finally`
+  restores the file, so a write that throws part-way leaves the clean source damaged.
+  `tools/run-mutants.ps1` derives a deterministic output directory per package or file, so a second run
+  of the same scope overwrites the analysis the parameter documentation promises to preserve.
+  The placement probe's tests name scratch directories without the process id, so two concurrent test
+  processes -- which the documented `-j 2` mutation workflow creates -- delete each other's fixtures.
+
+- [ ] **SH-7.8** -- **Reply to every thread and resolve the ones that are addressed**, including the one
+  finding that was checked and found not to hold: `GetSystemDirectoryW` returning exactly the buffer
+  length is unreachable (success excludes the terminator, failure includes it and so exceeds the
+  buffer), though the guard is widened anyway so the next reader need not redo the analysis.

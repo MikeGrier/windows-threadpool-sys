@@ -315,8 +315,12 @@ foreach ($sabotage in $selected) {
     }
 
     $transcript = Join-Path $OutputDirectory ((($sabotage.name -replace '[^A-Za-z0-9]+', '-')) + '.txt')
-    [System.IO.File]::WriteAllText($target, $patched, $utf8NoBom)
     try {
+        # Inside the guarded region, not before it. A write that throws part-way
+        # through -- having already truncated the file -- would otherwise never
+        # reach the `finally` that restores it, and the tool's whole promise is
+        # that it leaves the tree as it found it.
+        [System.IO.File]::WriteAllText($target, $patched, $utf8NoBom)
         $run = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $repoRoot `
             -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $TimeoutSeconds
     }

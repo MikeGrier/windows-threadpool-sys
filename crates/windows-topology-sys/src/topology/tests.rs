@@ -686,3 +686,64 @@ fn a_single_core_split_l1_partitions_nothing() {
 fn a_machine_with_no_cache_at_all_has_no_partitioning_cache() {
     assert!(synthetic().outermost_partitioning_cache().is_none());
 }
+
+#[test]
+fn a_level_whose_domains_overlap_is_not_a_partition() {
+    // `Topology` is deliberately constructible by hand and by deserialization,
+    // so `outermost_partitioning_cache` cannot assume hardware produced its
+    // input. Two L2 domains that share processor 1 are distinct sets, so
+    // deduplication keeps both -- and a caller told they are partitions places
+    // work on processor 1 twice and overwrites its domain assignment.
+    let mut topo = split_l1_machine(1, 3);
+    topo.domains.pop(); // the shared last level, which divides nothing
+    for (id, mask) in [(200u32, 0b011usize), (201, 0b110)] {
+        topo.domains.push(Domain {
+            kind: DomainKind::Cache {
+                level: 2,
+                associativity: 8,
+                line_size: 64,
+                size_bytes: 1024 * 1024,
+                cache_type: CacheKind::Unified,
+            },
+            id,
+            processors: ProcessorSet::from_group_mask(0, mask),
+        });
+    }
+
+    // Both survive deduplication, which only removes *equal* sets...
+    assert_eq!(topo.cache_partitions_at_level(2).len(), 2);
+    // ...but overlapping domains are not a partition, so no level qualifies.
+    assert!(
+        topo.outermost_partitioning_cache().is_none(),
+        "overlapping cache domains must not be reported as partitions"
+    );
+}
+
+#[test]
+fn a_level_whose_domains_are_disjoint_but_incomplete_still_partitions() {
+    // The deliberate limit of the disjointness rule. A processor with no cache
+    // reported at this level is a gap in what the firmware said; the domains
+    // that *were* reported still divide the processors they cover, so
+    // discarding the level over the gap would throw away a true boundary.
+    let mut topo = split_l1_machine(1, 3);
+    topo.domains.pop();
+    for (id, mask) in [(300u32, 0b0001usize), (301, 0b0010)] {
+        topo.domains.push(Domain {
+            kind: DomainKind::Cache {
+                level: 2,
+                associativity: 8,
+                line_size: 64,
+                size_bytes: 1024 * 1024,
+                cache_type: CacheKind::Unified,
+            },
+            id,
+            processors: ProcessorSet::from_group_mask(0, mask),
+        });
+    }
+
+    let (level, partitions) = topo
+        .outermost_partitioning_cache()
+        .expect("two disjoint L2 domains divide what they cover");
+    assert_eq!(level, 2);
+    assert_eq!(partitions.len(), 2);
+}

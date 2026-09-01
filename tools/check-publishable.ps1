@@ -26,6 +26,22 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# The single output sink. Every message this tool emits goes through here, so
+# the destination and the formatting stay separable from the call sites that
+# produce the content -- the repository's one-output-sink rule.
+function Write-Report {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Message,
+        [ValidateSet('info', 'good', 'bad')][string] $Level = 'info'
+    )
+    $colour = switch ($Level) {
+        'good' { 'Green' }
+        'bad' { 'Red' }
+        default { 'Gray' }
+    }
+    Write-Host $Message -ForegroundColor $colour
+}
+
 $configPath = Join-Path $RepositoryRoot 'release-please-config.json'
 $workflowPath = Join-Path $RepositoryRoot '.github/workflows/publish-crate.yml'
 
@@ -72,13 +88,13 @@ foreach ($crate in $managed) {
 }
 
 if ($missing.Count -gt 0) {
-    Write-Host "Release-managed crates that cannot be published:" -ForegroundColor Red
-    $missing | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-    Write-Host ''
-    Write-Host "Add them to .github/workflows/publish-crate.yml: the tag list, the dispatch choices,"
-    Write-Host "and the workspace_crates registry the sibling-dependency wait reads."
+    Write-Report 'Release-managed crates that cannot be published:' -Level bad
+    $missing | ForEach-Object { Write-Report "  $_" -Level bad }
+    Write-Report ''
+    Write-Report 'Add them to .github/workflows/publish-crate.yml: the tag list, the dispatch choices,'
+    Write-Report 'and the workspace_crates registry the sibling-dependency wait reads.'
     exit 1
 }
 
-Write-Host "All $($managed.Count) release-managed crates have a publish trigger." -ForegroundColor Green
+Write-Report "All $($managed.Count) release-managed crates have a publish trigger." -Level good
 exit 0

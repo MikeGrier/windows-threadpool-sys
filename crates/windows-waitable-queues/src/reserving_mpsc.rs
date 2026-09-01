@@ -395,6 +395,15 @@ impl<T> Shared<T> {
     /// `occupied + reserved >= capacity`, because both terms can reach 2^31 and
     /// their sum would overflow the width the positions are counted in. The
     /// invariant guarantees `reserved <= capacity`, so this cannot underflow.
+    ///
+    /// **The answer is only meaningful for a claim word that is still current.**
+    /// `position` comes from a claim word and `head` is read here, so the two
+    /// need not describe the same instant: if other producers claim and publish
+    /// past a stale `position` and the consumer drains them, `head` overtakes it
+    /// and the subtraction wraps to near [`u32::MAX`] -- "full" computed from a
+    /// pair of readings that never coexisted. Callers therefore treat a `false`
+    /// as provisional and re-read the claim before reporting it (see
+    /// [`Producer::push`]).
     fn has_room_beyond_reservations(&self, position: u32, reserved: u32) -> bool {
         let capacity = self.capacity_u32();
         debug_assert!(
@@ -564,8 +573,22 @@ impl<T> Producer<T> {
         let position = loop {
             let position = position_of(word);
             let reserved = reserved_of(word);
+            #[cfg(test)]
+            crate::race_hooks::CLAIM.run();
 
             if !self.shared.has_room_beyond_reservations(position, reserved) {
+                // Provisional, not authoritative. `position` came from `word`
+                // and `head` was read inside the check, so a `word` that has
+                // since moved makes the two readings describe different
+                // instants -- and once `head` passes a stale `position` the
+                // subtraction wraps, so an *empty* queue reports full. Re-read
+                // the claim: if it moved, this answer was computed from a
+                // snapshot that never existed, so retry rather than refuse.
+                let current = self.shared.claim.0.load(Ordering::Relaxed);
+                if current != word {
+                    word = current;
+                    continue;
+                }
                 // Report disconnection in preference to fullness: a full queue
                 // whose consumer is gone will never drain, and telling the
                 // caller to retry would be telling it to spin forever.
@@ -623,8 +646,19 @@ impl<T> Producer<T> {
         loop {
             let position = position_of(word);
             let reserved = reserved_of(word);
+            #[cfg(test)]
+            crate::race_hooks::CLAIM.run();
 
             if !self.shared.has_room_beyond_reservations(position, reserved) {
+                // Provisional for the reason `push`'s matching check is: a
+                // stale `word` and a freshly-read `head` need not describe the
+                // same instant, and once `head` passes a stale `position` the
+                // subtraction wraps and an empty queue refuses a reservation.
+                let current = self.shared.claim.0.load(Ordering::Relaxed);
+                if current != word {
+                    word = current;
+                    continue;
+                }
                 return None;
             }
 

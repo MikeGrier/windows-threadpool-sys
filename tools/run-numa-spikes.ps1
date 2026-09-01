@@ -20,8 +20,11 @@
     cost is a minute; the payoff is that if a multi-node runner ever appears,
     the answer is already in that build's log.
 
-    This script never fails on a spike's result. It exits non-zero only if a
-    spike fails to BUILD, which is a real defect in the instrument.
+    This script never fails on a spike's *result*. It exits non-zero when a
+    spike fails to BUILD or fails to RUN, both of which are defects in the
+    instrument rather than findings about the machine. The job that runs it
+    carries `continue-on-error`, so a red step here reports the rot without
+    blocking the workflow.
 
 .PARAMETER Summary
     Optional path to append a rendered summary to, for $env:GITHUB_STEP_SUMMARY.
@@ -36,6 +39,21 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The single output sink. Every message this tool emits goes through here, so
+# the destination and the formatting stay separable from the call sites that
+# produce the content -- the repository's one-output-sink rule.
+function Write-Report {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Message,
+        [ValidateSet('info', 'warning', 'error')][string] $Level = 'info'
+    )
+    switch ($Level) {
+        'warning' { Write-Host "::warning::$Message" }
+        'error' { Write-Host "::error::$Message" }
+        default { Write-Host $Message }
+    }
+}
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $spikeDir = Join-Path $repoRoot 'crates\windows-ioring-sys\design-sessions\spikes'
@@ -63,14 +81,14 @@ $spikes = @(
 )
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-$buildFailures = 0
+$instrumentFailures = 0
 $sections = New-Object System.Collections.Generic.List[string]
 
 foreach ($spike in $spikes) {
     $source = Join-Path $spikeDir $spike.File
     if (-not (Test-Path $source)) {
-        Write-Host "::warning::spike source missing: $source"
-        $buildFailures++
+        Write-Report "spike source missing: $source" -Level warning
+        $instrumentFailures++
         continue
     }
 
@@ -92,24 +110,25 @@ windows-sys = { version = "0.61.2", default-features = false, features = [$featu
     Set-Content -Path (Join-Path $work 'Cargo.toml') -Value $manifest -Encoding utf8
     Copy-Item $source (Join-Path $work 'src\main.rs') -Force
 
-    Write-Host "=== building $($spike.Name) ==="
+    Write-Report "=== building $($spike.Name) ==="
     Push-Location $work
     try {
         $build = & cargo build --quiet 2>&1
         $buildExit = $LASTEXITCODE
         if ($buildExit -ne 0) {
-            # A build failure is a defect in the instrument, and is the one
-            # thing here worth failing over.
-            Write-Host "::error::spike $($spike.Name) failed to build"
-            $build | ForEach-Object { Write-Host $_ }
-            $buildFailures++
+            # A build failure is a defect in the instrument, and is one of the
+            # two things here worth failing over.
+            Write-Report "spike $($spike.Name) failed to build" -Level error
+            $build | ForEach-Object { Write-Report $_ }
+            $instrumentFailures++
             $sections.Add("### $($spike.Name)`n`n**FAILED TO BUILD** -- the instrument is broken, not the machine.`n")
             continue
         }
 
-        Write-Host "=== running $($spike.Name) ==="
+        Write-Report "=== running $($spike.Name) ==="
         $output = & cargo run --quiet 2>&1 | Out-String
-        Write-Host $output
+        $runExit = $LASTEXITCODE
+        Write-Report $output
     }
     finally {
         Pop-Location
@@ -119,12 +138,22 @@ windows-sys = { version = "0.61.2", default-features = false, features = [$featu
     $transcript = Join-Path $OutputDirectory "$($spike.Name).txt"
     Set-Content -Path $transcript -Value $output -Encoding utf8
 
-    $vacuous = $output -match 'VACUOUS'
-    $verdict = if ($vacuous) {
-        'vacuous on this runner (single NUMA node) -- expected, and the spike said so itself'
+    if ($runExit -ne 0) {
+        # The other one. Vacuity is decided by searching the output for
+        # `VACUOUS`, and a spike that crashed printed no such line -- so
+        # without this the summary would announce "**NOT vacuous -- this runner
+        # has more than one NUMA node**" on the strength of a stack trace, and
+        # the script would still exit 0. That is the instrument breaking while
+        # claiming a result about the machine.
+        Write-Report "spike $($spike.Name) failed to run (exit $runExit)" -Level error
+        $instrumentFailures++
+        $verdict = "**FAILED TO RUN (exit $runExit)** -- the instrument is broken, so this says nothing about the machine."
+    }
+    elseif ($output -match 'VACUOUS') {
+        $verdict = 'vacuous on this runner (single NUMA node) -- expected, and the spike said so itself'
     }
     else {
-        '**NOT vacuous -- this runner has more than one NUMA node. Read the output.**'
+        $verdict = '**NOT vacuous -- this runner has more than one NUMA node. Read the output.**'
     }
 
     $sections.Add(@"
@@ -144,17 +173,17 @@ if ($Summary) {
     $header = @"
 ## NUMA spike results
 
-Observational. These never fail the build; a red step here means a spike failed
-to **build**, which is a defect in the instrument rather than a finding about
-the machine.
+Observational. A spike's *result* never fails the build; a red step here means a
+spike failed to **build** or to **run**, which is a defect in the instrument
+rather than a finding about the machine.
 
 "@
     Add-Content -Path $Summary -Value ($header + ($sections -join "`n"))
 }
 
-if ($buildFailures -gt 0) {
-    Write-Host "::error::$buildFailures spike(s) failed to build"
+if ($instrumentFailures -gt 0) {
+    Write-Report "$instrumentFailures spike(s) failed to build or run" -Level error
     exit 1
 }
-Write-Host "all spikes built and ran"
+Write-Report 'all spikes built and ran'
 exit 0

@@ -98,9 +98,10 @@
     `-TimeoutSeconds` is non-zero.
 
 .PARAMETER OutputDirectory
-    Where to write `mutants.out`. Defaults under `.scratch/`, so a run never
-    overwrites a previous run's results in the repository root -- which has
-    already lost one analysis.
+    Where to write `mutants.out`. Defaults under `.scratch/`, and carries a
+    per-run timestamp, so a run never overwrites a previous run's results --
+    neither the repository root's `mutants.out`, which has already lost one
+    analysis, nor an earlier sweep of the same scope.
 
 .EXAMPLE
     .\tools\run-mutants.ps1 -File crates/windows-file-watcher/src/watcher.rs
@@ -122,7 +123,13 @@ $ErrorActionPreference = 'Stop'
 $repo = (git rev-parse --show-toplevel).Replace('/', '\')
 if (-not $OutputDirectory) {
     $leaf = if ($File) { [System.IO.Path]::GetFileNameWithoutExtension($File) } else { $Package }
-    $OutputDirectory = Join-Path $repo ".scratch\mutants-$leaf"
+    # Stamped per run, not merely per scope. A path derived from the package or
+    # file alone is the same path every time, so a second run of the same scope
+    # overwrites the analysis this parameter promises to preserve -- and two
+    # concurrent runs write into one directory. The stamp sorts chronologically,
+    # so the most recent run is the last one listed.
+    $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $OutputDirectory = Join-Path $repo ".scratch\mutants-$leaf-$stamp"
 }
 
 $werKey = 'HKCU:\Software\Microsoft\Windows\Windows Error Reporting'

@@ -252,6 +252,11 @@ impl Topology {
     /// Deduplication is by processor set, which is the thing a caller
     /// partitioning work actually cares about; the first domain covering each
     /// distinct set is kept, so the returned ids are stable for a topology.
+    ///
+    /// **Distinct is not disjoint.** Two sets that overlap without being equal
+    /// both survive this, so the result is a set of domains rather than a
+    /// proven partition. [`Self::outermost_partitioning_cache`] is where that
+    /// stronger property is required and checked.
     pub fn cache_partitions_at_level(&self, level: u8) -> Vec<&Domain> {
         let mut partitions: Vec<&Domain> = Vec::new();
         for domain in self.caches_at_level(level) {
@@ -278,13 +283,46 @@ impl Topology {
     /// during the 2026-08-30 session reports **no L3 at all**, with two L2
     /// domains of six processors forming the real cluster boundary.
     ///
+    /// # A level must be a partition, not merely a set of domains
+    ///
+    /// [`Self::cache_partitions_at_level`] deduplicates by equal processor set,
+    /// which is what the measured case needs (L1i and L1d cover identical
+    /// sets). That alone does **not** make the result a partition: two distinct
+    /// sets can still overlap. Real hardware does not do this, but a
+    /// `Topology` is deliberately constructible by hand and by deserialization
+    /// (see [`Provenance`](crate::Provenance)), so this method cannot assume
+    /// hardware produced it -- and a caller splitting work across overlapping
+    /// "partitions" double-counts the processors in the intersection and
+    /// overwrites their domain assignment, silently.
+    ///
+    /// So a level qualifies only when its distinct sets are **pairwise
+    /// disjoint**. Full coverage of the online processors is deliberately *not*
+    /// required: a processor with no cache reported at a level is a gap in what
+    /// the firmware said, not evidence that the domains which *were* reported
+    /// overlap, and rejecting the level would discard a true boundary over it.
+    ///
     /// Defined here, in the crate that owns the topology, so that every
     /// consumer asks the same question rather than restating the rule and
     /// drifting from it.
     pub fn outermost_partitioning_cache(&self) -> Option<(u8, Vec<&Domain>)> {
         self.cache_levels().into_iter().rev().find_map(|level| {
             let partitions = self.cache_partitions_at_level(level);
-            (partitions.len() > 1).then_some((level, partitions))
+            (partitions.len() > 1 && Self::are_pairwise_disjoint(&partitions))
+                .then_some((level, partitions))
+        })
+    }
+
+    /// Whether no two of these domains claim the same processor.
+    ///
+    /// Quadratic on purpose: the input is one cache level's distinct domains,
+    /// which is a handful even on a large machine, and pairwise intersection
+    /// asks the question directly rather than through a set type this crate
+    /// would otherwise not need.
+    fn are_pairwise_disjoint(domains: &[&Domain]) -> bool {
+        domains.iter().enumerate().all(|(i, left)| {
+            domains[i + 1..]
+                .iter()
+                .all(|right| left.processors.is_disjoint(&right.processors))
         })
     }
 

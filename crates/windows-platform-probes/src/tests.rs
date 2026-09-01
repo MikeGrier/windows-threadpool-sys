@@ -740,6 +740,69 @@ fn the_shipping_parse_agrees_with_the_raw_win32_counters() {
     );
 }
 
+/// An observation with nothing to complain about, for a test to perturb one
+/// field of. Every host reachable here has a single NUMA node, so the sparse
+/// case below cannot be measured and has to be constructed.
+fn agreeing_observation() -> crate::topology::Observation {
+    crate::topology::Observation {
+        online_processors: 4,
+        groups: 1,
+        numa_domains: 1,
+        memoryless_numa_domains: 0,
+        highest_numa_node: Some(0),
+        packages: 1,
+        cores: Vec::new(),
+        caches: Vec::new(),
+        raw_active_processors: 4,
+        raw_group_count: 1,
+        raw_highest_numa_node: Some(0),
+    }
+}
+
+#[test]
+fn sparse_numa_node_numbers_are_not_reported_as_a_parsing_regression() {
+    // `GetNumaHighestNodeNumber` reports the highest node *number*, which
+    // Windows does not promise equals the node count. Nodes 0 and 2 are a valid
+    // sparse topology: two domains, highest number two. Comparing the count
+    // against `highest + 1` called that a disagreement, so the probe's asserted
+    // test would fail on hardware that is reporting itself correctly.
+    let mut observation = agreeing_observation();
+    observation.numa_domains = 2;
+    observation.highest_numa_node = Some(2);
+    observation.raw_highest_numa_node = Some(2);
+
+    assert!(
+        observation.cross_check().is_empty(),
+        "a sparse node numbering is a valid machine, not a parse error"
+    );
+}
+
+#[test]
+fn a_numa_node_the_topology_crate_never_saw_is_still_reported() {
+    // The other direction, so the sparse tolerance cannot pass by never
+    // complaining: Windows names a node the crate's parse did not produce, and
+    // that is the disagreement this cross-check exists to surface.
+    let mut observation = agreeing_observation();
+    observation.raw_highest_numa_node = Some(3);
+
+    let complaints = observation.cross_check();
+    assert_eq!(complaints.len(), 1, "{complaints:?}");
+    assert!(complaints[0].contains("NUMA nodes"), "{complaints:?}");
+}
+
+#[test]
+fn a_topology_reporting_no_numa_node_at_all_disagrees_with_a_raw_one() {
+    // The `None` arm, which the count form could not express: Windows names a
+    // node and the crate's parse produced no memory domain whatsoever.
+    let mut observation = agreeing_observation();
+    observation.numa_domains = 0;
+    observation.highest_numa_node = None;
+
+    let complaints = observation.cross_check();
+    assert_eq!(complaints.len(), 1, "{complaints:?}");
+    assert!(complaints[0].contains("none"), "{complaints:?}");
+}
+
 #[test]
 fn every_core_reports_processors_and_smt_agrees_with_the_count() {
     let observation = crate::topology::measure().expect("topology discovery");

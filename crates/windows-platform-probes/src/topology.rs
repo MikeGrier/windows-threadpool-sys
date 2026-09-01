@@ -86,6 +86,15 @@ pub struct Observation {
     /// with CXL expanders or HBM tiers, and the reason a domain count cannot be
     /// used as a thread count.
     pub memoryless_numa_domains: usize,
+    /// The largest NUMA node number the topology crate reported, or `None` when
+    /// it reported no memory domain at all.
+    ///
+    /// Kept beside the count because the two answer different questions and
+    /// Windows only promises the second one: node numbers are not guaranteed
+    /// dense, so a machine with nodes 0 and 2 has a count of two and a highest
+    /// of two. Comparing the count against `GetNumaHighestNodeNumber` would
+    /// call that correct machine a parsing regression.
+    pub highest_numa_node: Option<u32>,
     /// Physical packages (sockets).
     pub packages: usize,
     /// Every physical core.
@@ -172,12 +181,19 @@ impl Observation {
             ));
         }
         if let Some(highest) = self.raw_highest_numa_node
-            && self.numa_domains != highest as usize + 1
+            && self.highest_numa_node != Some(highest)
         {
+            // Highest against highest, deliberately, and not a count against
+            // `highest + 1`. `GetNumaHighestNodeNumber` reports the largest node
+            // *number*, which Windows does not promise equals the node count --
+            // nodes 0 and 2 are a valid sparse topology, and the count form
+            // would report a regression on hardware that is reporting itself
+            // correctly.
             complaints.push(format!(
-                "NUMA domains: topology crate says {}, GetNumaHighestNodeNumber implies {}",
-                self.numa_domains,
-                highest + 1
+                "NUMA nodes: topology crate's highest node is {}, GetNumaHighestNodeNumber says {}",
+                self.highest_numa_node
+                    .map_or_else(|| "none".to_string(), |n| n.to_string()),
+                highest
             ));
         }
         complaints
@@ -197,6 +213,7 @@ pub fn measure() -> io::Result<Observation> {
     let mut groups = 0usize;
     let mut numa_domains = 0usize;
     let mut memoryless_numa_domains = 0usize;
+    let mut highest_numa_node: Option<u32> = None;
     let mut packages = 0usize;
     let mut cores = Vec::new();
     let mut by_level: Vec<(u8, Vec<usize>)> = Vec::new();
@@ -207,6 +224,8 @@ pub fn measure() -> io::Result<Observation> {
             DomainKind::Package => packages += 1,
             DomainKind::Memory { .. } => {
                 numa_domains += 1;
+                highest_numa_node =
+                    Some(highest_numa_node.map_or(domain.id, |seen: u32| seen.max(domain.id)));
                 if domain.processors.is_empty() {
                     memoryless_numa_domains += 1;
                 }
@@ -268,6 +287,7 @@ pub fn measure() -> io::Result<Observation> {
         groups,
         numa_domains,
         memoryless_numa_domains,
+        highest_numa_node,
         packages,
         cores,
         caches,

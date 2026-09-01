@@ -198,7 +198,13 @@ fn system_directory() -> std::path::PathBuf {
     // SAFETY: writes at most `buffer.len()` units into a buffer of that size.
     let written = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
     let written = written as usize;
-    if written == 0 || written > buffer.len() {
+    // `>=`, not `>`. On success the count excludes the terminator, so it can
+    // reach at most `buffer.len() - 1`; on failure it is the required size
+    // *including* the terminator, so it is at least `buffer.len() + 1`. Exactly
+    // `buffer.len()` is therefore unreachable from either branch -- and treating
+    // it as a failure costs nothing while removing the need for the next reader
+    // to redo that analysis before trusting a possibly-unterminated buffer.
+    if written == 0 || written >= buffer.len() {
         return std::path::PathBuf::from(r"C:\Windows\System32");
     }
     std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..written]))

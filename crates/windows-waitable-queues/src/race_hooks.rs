@@ -5,12 +5,13 @@
 //!
 //! # Why these exist at all
 //!
-//! Two places in this crate consist of two statements whose *order* is the
-//! whole correctness argument, and whose wrong order is a permanent hang rather
-//! than an occasional stall: `Consumer::arm` and [`Doorbell::clear`]. Proving
-//! such an order is load-bearing means placing a racing operation strictly
-//! between the two statements, and that is not an interleaving a scheduler can
-//! be asked for -- the window is tens of nanoseconds wide.
+//! Three places in this crate consist of statements whose *order* -- or whose
+//! freshness -- is the whole correctness argument, and whose wrong form is a
+//! permanent hang or a wrong answer rather than an occasional stall:
+//! `Consumer::arm`, [`Doorbell::clear`], and the reserving queue's claim loop.
+//! Proving such an order is load-bearing means placing a racing operation
+//! strictly between the statements, and that is not an interleaving a scheduler
+//! can be asked for -- the window is tens of nanoseconds wide.
 //!
 //! # Why a hook rather than a hand-written copy of the code
 //!
@@ -43,6 +44,7 @@ type Slot = RefCell<Option<Box<dyn FnMut()>>>;
 thread_local! {
     static ARM_HOOK: Slot = const { RefCell::new(None) };
     static CLEAR_HOOK: Slot = const { RefCell::new(None) };
+    static CLAIM_HOOK: Slot = const { RefCell::new(None) };
 }
 
 /// One named race window.
@@ -55,6 +57,16 @@ pub(crate) const ARM: Hook = Hook(&ARM_HOOK);
 /// Fires inside [`Doorbell::clear`](crate::doorbell::Doorbell::clear), between
 /// resetting the event and clearing the flag that mirrors it.
 pub(crate) const CLEAR: Hook = Hook(&CLEAR_HOOK);
+
+/// Fires inside the reserving queue's claim loop, between reading the claim
+/// word and testing whether that claim leaves room.
+///
+/// The window this opens is not an ordering one: the two readings the room test
+/// combines -- a position from the claim word, and `head` -- are taken at
+/// different instants, so a claim that goes stale here makes the test answer
+/// about a state that never existed. Firing a racing producer and consumer in
+/// this window is what makes that reachable on one thread.
+pub(crate) const CLAIM: Hook = Hook(&CLAIM_HOOK);
 
 impl Hook {
     /// Runs the installed hook, if any. Called from the code under test.

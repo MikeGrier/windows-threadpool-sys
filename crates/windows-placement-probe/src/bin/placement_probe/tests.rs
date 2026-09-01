@@ -13,8 +13,17 @@ use super::write_backup_to_new_file;
 
 /// A directory of this test's own, so a failure cannot be caused by, or blamed
 /// on, another test's files.
+///
+/// Keyed by process id as well as by name. The names are unique within one test
+/// binary, but the documented mutation workflow runs two `cargo test` processes
+/// at once (`-j 2`), and both would otherwise resolve to the same path under the
+/// system temp directory -- so one would delete the other's fixture mid-test and
+/// the failure would look like a defect in the code under test.
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("placement-probe-backup-{name}"));
+    let dir = std::env::temp_dir().join(format!(
+        "placement-probe-backup-{}-{name}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a scratch directory");
     dir
