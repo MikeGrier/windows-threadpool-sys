@@ -141,30 +141,97 @@ struct Storage {
     disk_extents: Option<u32>,
 }
 
+/// `STORAGE_BUS_TYPE`, as Windows defines it.
+///
+/// **These values are not ours to choose.** Each is the discriminant Windows
+/// assigns in `STORAGE_BUS_TYPE`, so changing one would not rename a bus, it
+/// would silently report a different one -- and this spike's whole purpose is
+/// distinguishing a virtual bus from real hardware. Named rather than written
+/// inline because windows-sys 0.61 does not expose the enum, and a bare
+/// `0x11 =>` in a match arm is a number a reader has nothing to check against.
+///
+/// Adding a value as the SDK grows is safe; editing one is a breaking change to
+/// what this probe reports.
+mod bus {
+    pub const SCSI: u8 = 0x01;
+    pub const ATAPI: u8 = 0x02;
+    pub const ATA: u8 = 0x03;
+    pub const IEEE1394: u8 = 0x04;
+    pub const SSA: u8 = 0x05;
+    pub const FIBRE: u8 = 0x06;
+    pub const USB: u8 = 0x07;
+    pub const RAID: u8 = 0x08;
+    pub const ISCSI: u8 = 0x09;
+    pub const SAS: u8 = 0x0A;
+    pub const SATA: u8 = 0x0B;
+    pub const SD: u8 = 0x0C;
+    pub const MMC: u8 = 0x0D;
+    pub const VIRTUAL: u8 = 0x0E;
+    pub const FILE_BACKED_VIRTUAL: u8 = 0x0F;
+    pub const SPACES: u8 = 0x10;
+    pub const NVME: u8 = 0x11;
+    pub const SCM: u8 = 0x12;
+    pub const UFS: u8 = 0x13;
+}
+
+/// One JSON string literal, with every character JSON requires escaped.
+///
+/// **The strings here come from firmware, not from this program.** A storage
+/// descriptor's product and vendor text is whatever the device reports, and a
+/// device that returns a tab or a newline inside it is unusual rather than
+/// impossible. Escaping only `\` and `"` -- which is what this did -- emits
+/// those bytes raw, and JSON forbids an unescaped character below U+0020, so
+/// the one line in this spike that promises to be machine-readable would be
+/// the line that fails to parse. Escaped here rather than depended on not
+/// happening, because a CI log is mined long after the run.
+fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // Every other control character has no short form and must be
+            // written as a Unicode escape.
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// `STORAGE_BUS_TYPE` values worth naming. A virtual bus is the tell for a
 /// hosted runner; NVMe and SAS are the cases where device proximity data
 /// plausibly exists.
-fn bus_name(bus: u8) -> &'static str {
-    match bus {
-        0x01 => "SCSI",
-        0x02 => "ATAPI",
-        0x03 => "ATA",
-        0x04 => "1394",
-        0x05 => "SSA",
-        0x06 => "Fibre",
-        0x07 => "USB",
-        0x08 => "RAID",
-        0x09 => "iSCSI",
-        0x0A => "SAS",
-        0x0B => "SATA",
-        0x0C => "SD",
-        0x0D => "MMC",
-        0x0E => "Virtual",
-        0x0F => "FileBackedVirtual",
-        0x10 => "Spaces",
-        0x11 => "NVMe",
-        0x12 => "SCM",
-        0x13 => "UFS",
+fn bus_name(value: u8) -> &'static str {
+    match value {
+        bus::SCSI => "SCSI",
+        bus::ATAPI => "ATAPI",
+        bus::ATA => "ATA",
+        bus::IEEE1394 => "1394",
+        bus::SSA => "SSA",
+        bus::FIBRE => "Fibre",
+        bus::USB => "USB",
+        bus::RAID => "RAID",
+        bus::ISCSI => "iSCSI",
+        bus::SAS => "SAS",
+        bus::SATA => "SATA",
+        bus::SD => "SD",
+        bus::MMC => "MMC",
+        bus::VIRTUAL => "Virtual",
+        bus::FILE_BACKED_VIRTUAL => "FileBackedVirtual",
+        bus::SPACES => "Spaces",
+        bus::NVME => "NVMe",
+        bus::SCM => "SCM",
+        bus::UFS => "UFS",
         _ => "unknown",
     }
 }
@@ -516,11 +583,7 @@ fn main() -> std::io::Result<()> {
     // One machine-readable line, so accumulated CI logs can be mined without
     // parsing the prose above.
     let json_opt_u32 = |v: Option<u32>| v.map_or("null".to_string(), |n| n.to_string());
-    let json_opt_str = |v: Option<&str>| {
-        v.map_or("null".to_string(), |s| {
-            format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-        })
-    };
+    let json_opt_str = |v: Option<&str>| v.map_or("null".to_string(), json_string);
     println!(
         concat!(
             r#"{{"reason":"x-spike-file-handle-numa","arch":"{}","volume_root":{},"#,
