@@ -43,6 +43,7 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
         schema_version: SCHEMA_VERSION,
         recorded_at: "2026-08-31T12:00:00Z".to_owned(),
         recorded_at_epoch_seconds: 1_788_177_600,
+        recorded_at_subsecond_millis: 250,
         build: BuildIdentity {
             crate_version: "0.1.0",
             commit: Some("abcdef123456"),

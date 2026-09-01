@@ -212,3 +212,51 @@ fn two_runs_do_not_collide_on_one_file_name() {
 
     assert_ne!(file_name(&first), file_name(&second));
 }
+
+#[test]
+fn two_records_in_the_same_second_get_different_names() {
+    // The collision the name is meant to avoid. Both records carry the same
+    // `recorded_at`, because a run finishes in well under a second; only the
+    // sub-second part separates them.
+    let mut first = fully_populated();
+    first.recorded_at_subsecond_millis = 120;
+    let mut second = fully_populated();
+    second.recorded_at_subsecond_millis = 890;
+
+    assert_eq!(
+        first.recorded_at, second.recorded_at,
+        "the fixture must share a second for this test to mean anything"
+    );
+    assert_ne!(file_name(&first), file_name(&second));
+}
+
+#[test]
+fn the_millisecond_is_zero_padded_so_names_sort_chronologically() {
+    // Without padding, `-90` sorts after `-100` and a directory listing stops
+    // being a timeline.
+    let mut early = fully_populated();
+    early.recorded_at_subsecond_millis = 90;
+    let mut late = fully_populated();
+    late.recorded_at_subsecond_millis = 100;
+
+    assert!(
+        file_name(&early) < file_name(&late),
+        "{} should sort before {}",
+        file_name(&early),
+        file_name(&late)
+    );
+}
+
+#[test]
+fn the_sub_second_precision_never_reaches_the_record() {
+    // **The property that keeps this out of the schema.** The field exists so a
+    // *file name* can be finer-grained than a *record*; if it ever serialized,
+    // it would silently change the published shape and every stored record with
+    // it. The archived schema guard would catch that too, but this says why.
+    let json = serde_json::to_string(&fully_populated()).expect("must serialize");
+
+    assert!(
+        !json.contains("subsecond"),
+        "the sub-second field reached the record: {json}"
+    );
+}

@@ -67,6 +67,21 @@ pub struct SubmissionRecord {
     /// to parse prose to sort records, and because it survives any later change
     /// to how the string is rendered.
     pub recorded_at_epoch_seconds: u64,
+    /// Milliseconds past that second, for naming a file and nothing else.
+    ///
+    /// **Deliberately not serialized, and deliberately not a second clock
+    /// reading.** The backup file's name needs finer resolution than the record
+    /// does: two runs in one second would otherwise want the same file. Taking
+    /// a fresh timestamp when the name is built would solve that while creating
+    /// a worse problem -- the name would state a different instant from the
+    /// record inside it -- so this is the same reading as the two fields above,
+    /// just the part of it they discard.
+    ///
+    /// `serde(skip)` keeps it out of the schema: precision a *file name* wants
+    /// is not a change to what a *record* promises, and the archived shape
+    /// stays as published.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub recorded_at_subsecond_millis: u32,
     /// Which build measured.
     pub build: BuildIdentity,
     /// What the machine was, beyond its measurable shape.
@@ -162,14 +177,18 @@ impl SubmissionRecord {
     /// Assemble a record from a completed run.
     #[must_use]
     pub fn new(observation: &Observation, host: Fingerprint, machine: MachineDescription) -> Self {
-        let now = SystemTime::now()
+        // One reading, split into the parts each consumer needs, so the record
+        // and the file named after it can never describe different instants.
+        let since_epoch = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs());
+            .unwrap_or_default();
+        let now = since_epoch.as_secs();
 
         Self {
             schema_version: SCHEMA_VERSION,
             recorded_at: iso8601_utc(now),
             recorded_at_epoch_seconds: now,
+            recorded_at_subsecond_millis: since_epoch.subsec_millis(),
             build: BuildIdentity::current(),
             machine,
             topology_provenance: host.provenance,

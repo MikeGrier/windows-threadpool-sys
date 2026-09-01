@@ -94,9 +94,27 @@ pub fn render_submission(record: &SubmissionRecord) -> Result<String, serde_json
 
 /// A predictable file name for the same record.
 ///
-/// Includes the timestamp so a second run does not overwrite a first, and the
-/// schema version so a directory of collected files can be sorted by shape
-/// without opening any of them.
+/// Includes the schema version so a directory of collected files can be sorted
+/// by shape without opening any of them, and the timestamp so two runs are
+/// distinguishable at a glance.
+///
+/// # Why the name carries milliseconds when the record does not
+///
+/// The record's own timestamp is second-resolution, which is all a measurement
+/// taken over several seconds can honestly claim. A *file name* has a different
+/// job: a run finishes in well under a second, so two of them can share a
+/// second and would otherwise want the same name.
+///
+/// The milliseconds come from the same clock reading as `recorded_at` rather
+/// than from a fresh one, so the name and the record inside it always describe
+/// the same instant -- and the record's published shape is unchanged, because
+/// precision a file name wants is not a promise a record makes.
+///
+/// **This makes a collision unlikely, not impossible**, which is why it is not
+/// the guarantee. Two runs can still start in the same millisecond, so the
+/// writer creates the file exclusively and falls back to a numbered suffix;
+/// that is what makes the guarantee, and this only keeps the suffix from ever
+/// being needed in practice.
 #[must_use]
 pub fn file_name(record: &SubmissionRecord) -> String {
     let stamp: String = record
@@ -104,7 +122,10 @@ pub fn file_name(record: &SubmissionRecord) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    format!("placement-probe-v{}-{}.json", record.schema_version, stamp)
+    format!(
+        "placement-probe-v{}-{}-{:03}.json",
+        record.schema_version, stamp, record.recorded_at_subsecond_millis
+    )
 }
 
 #[cfg(test)]
