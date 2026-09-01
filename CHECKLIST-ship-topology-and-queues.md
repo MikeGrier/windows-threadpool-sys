@@ -113,6 +113,44 @@ release-blocking rather than restating the decision itself.
   however rich its own `select`, which can only select over its own channels.
   Written into both the crate docs and the README, because docs.rs shows one and crates.io the other.
 
+- [ ] **SH-1.5** -- **BLOCKS MERGING [pull request #56](https://github.com/MikeGrier/windows-threadpool-sys/pull/56).**
+  **Bound `Reserving::Reservation<'a>` so a generic caller can redeem what it claims.**
+  The associated type is declared with no bound at all, so a caller generic over
+  [`Reserving`](crates/windows-waitable-queues/src/traits.rs) can call `reserve()` and then do
+  nothing with the result except drop it. `reserve` is `#[must_use]` precisely because a held claim
+  withholds capacity from every other producer -- and the one operation that discharges it, `send`,
+  is inherent to each shape's concrete type and unreachable through the trait. The trait cannot
+  express the operation it exists for.
+
+  **The two implementors already agree exactly, so this is additive**: both
+  `spsc::Reservation<'a, T>` and `reserving_mpsc::Reservation<T>` already have
+  `send(self, item: T) -> Result<(), Disconnected<T>>`, `is_disconnected(&self) -> bool`, and a
+  `Drop` that returns the slot. No concrete signature changes; nothing to migrate.
+
+  Add a `Reservation` trait carrying `send` and `is_disconnected`, bound the associated type on it,
+  and implement it for both types. `is_disconnected` is included rather than deferred for the reason
+  the `Reserving` docs give at length -- a caller needs to learn the stream ended *before* doing the
+  work the claim was taken for -- and because `reserving_mpsc`'s reservation is `Send`, so it may be
+  redeemed on a thread holding no producer handle to ask instead. Adding it later is the same
+  breaking change, merely deferred.
+
+  **Why this blocks rather than waits.** Adding a bound to an associated type is a breaking change
+  to the trait: every implementor must then satisfy it. It is free while the crate is unpublished
+  and a major bump with a migration afterwards, and this is the milestone that exists to settle
+  exactly that -- see SH-1.1 and SH-1.3, both landed on the same "free before the first publish"
+  reasoning. D-3 already makes this argument ("the trait *shape* is fixed now so signatures stay
+  compatible"); this is the same reasoning applied to a piece it missed. Pull request #56 is what
+  puts these traits in front of consumers, so the window closes when it merges.
+
+  **How it surfaced**, recorded because the route is the useful part: not from review and not from a
+  failing test, but from a `cargo mutants` run showing that nothing exercised the capability traits
+  at all, and then from being unable to write the obvious generic test for `Reserving` -- the test
+  in [traits/tests.rs](crates/windows-waitable-queues/src/traits/tests.rs) is scoped to claim-and-release
+  and says so. A contract gap presenting as an untestable API is a signal worth keeping.
+
+  Extend that test to claim-and-redeem through the trait as part of this item, since it is the
+  check that would have caught the gap in the first place.
+
 ## M2: repair the release plumbing before relying on it
 
 - [x] **SH-2.1** -- **Add `windows-waitable-queues-v*` to the tag trigger list in
