@@ -59,6 +59,12 @@ use windows_sys::Win32::System::Diagnostics::Debug::{
 };
 
 /// Every bit this crate will place in a [`ThreadErrorMode`].
+///
+/// `SEM_FAILCRITICALERRORS` (0x0001), `SEM_NOGPFAULTERRORBOX` (0x0002) and
+/// `SEM_NOOPENFILEERRORBOX` (0x8000) are pairwise disjoint bits, so combining
+/// them with `^` instead of `|` produces the identical value. A mutation run
+/// will report both swaps surviving; that is correct rather than a gap, and
+/// is recorded here so it is not re-investigated.
 const SUPPORTED: THREAD_ERROR_MODE =
     SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX;
 
@@ -233,6 +239,18 @@ impl ApplyError {
     pub fn raw_os_error(&self) -> Option<i32> {
         self.source.raw_os_error()
     }
+
+    /// Builds an `ApplyError` reporting a specific outcome, for tests that
+    /// need one without a real `SetThreadErrorMode` failure to provoke --
+    /// every bit this crate ever installs is one Windows accepts, so there is
+    /// no reachable failure through the public API at all.
+    #[cfg(test)]
+    pub(crate) fn synthetic(requested: ThreadErrorMode, os_error: i32) -> Self {
+        Self {
+            requested,
+            source: io::Error::from_raw_os_error(os_error),
+        }
+    }
 }
 
 impl fmt::Display for ApplyError {
@@ -269,6 +287,16 @@ impl RestoreError {
     #[must_use]
     pub fn raw_os_error(&self) -> Option<i32> {
         self.source.raw_os_error()
+    }
+
+    /// Builds a `RestoreError` reporting a specific outcome, for tests that
+    /// need one without a genuine restore failure to provoke.
+    #[cfg(test)]
+    pub(crate) fn synthetic(unrestored: THREAD_ERROR_MODE, os_error: i32) -> Self {
+        Self {
+            unrestored,
+            source: io::Error::from_raw_os_error(os_error),
+        }
     }
 }
 
