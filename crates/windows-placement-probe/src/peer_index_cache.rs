@@ -783,7 +783,8 @@ fn current_affinity() -> Option<GROUP_AFFINITY> {
     (ok != 0).then_some(affinity)
 }
 
-/// Puts the calling thread's affinity back when it goes out of scope.///
+/// Puts the calling thread's affinity back when it goes out of scope.
+///
 /// A guard rather than a call at the end of the timed section, so an unwind
 /// restores it too: a panic between pinning and restoring would otherwise leave
 /// the thread confined for the rest of the process, and this crate's pinning
