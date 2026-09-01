@@ -699,3 +699,57 @@ unanswered rather than dissolved, which is what this item had to determine.
 
 **The transferable rule:** a diagnostic wants the live handle, not a cached copy. Needing the *value* is
 not a reason to keep the *field*.
+## Moved 2026-09-01 -- M15.3: paths are the caller's, verbatim (D-85)
+
+### <a id="m153"></a>M15.3 -- Decide whether this crate should open paths longer than `MAX_PATH`, and note the consequence for `canonical_path`'s retry either way. *(completed 2026-09-01 19:45:00 -04:00)*
+
+**Decision: D-85 -- a caller's path reaches Win32 verbatim, and long-path support is the consuming
+application's call, not this crate's.** That is what the code already did; what changed is that it is now
+a stated decision with the measurements behind it, rather than an unexamined default.
+
+**The item's own proposed fix was measurably wrong.** M15.3 offered "prefix `\\?\` in `wide_path`" as a
+coherent outcome. `\\?\` is a path *parsing mode*, not a length switch, and adopting it on a caller's
+behalf changes what their path means -- measured on a **short** directory that opens fine today, so this
+is nothing to do with length:
+
+| what the caller passed | verbatim | prefixed |
+|---|---|---|
+| `C:/Users/.../dir` (forward slashes) | opens | `ERROR_FILE_NOT_FOUND` |
+| `C:\...\dir\.` | opens | `ERROR_INVALID_NAME` |
+| `C:\...\dir\subdir\..` | opens | `ERROR_INVALID_NAME` |
+
+Relative paths would stop resolving entirely, and this crate supports them deliberately --
+`open_file_target` normalises a bare leaf's empty `parent()` to `.` precisely so `subscribe("target.txt")`
+works.
+
+**The item's premise was measuring the harness, not the crate.** M15.3 recorded that a directory deeper
+than `MAX_PATH` "cannot be opened". Long-path support without the prefix needs the machine's
+`LongPathsEnabled` policy **and** the application's `longPathAware` manifest. On this machine the policy
+was already `1`; the same probe source, same machine, differing only by an embedded manifest:
+
+| build | verbatim 300-character path | `\\?\` form |
+|---|---|---|
+| no manifest | `ERROR_PATH_NOT_FOUND` | opens |
+| + `longPathAware` manifest | **opens** | opens |
+
+A library cannot set its consumer's manifest, and a consumer that has not opted in should not have this
+crate opt in behind its back. A Rust test binary has no such manifest, which is the whole reason this
+looked like a crate defect.
+
+**The traversal hazard does not arise here, and the decision says so rather than leaving it silent.**
+Win32 has no relative open, so traversal must *build* child paths that can exceed `MAX_PATH` even when the
+caller's did not -- the one case where the caller's parsing mode is genuinely not enough. This crate never
+lengthens a path: recursion is the kernel's (`bWatchSubtree`), names stay relative (D-8), and the only
+structural path operation in production code is `open_file_target`'s `parent()`, which shortens. So the
+decision **schedules no work** for traversal; it records the rule for if it ever appears -- build on
+`DirectoryHandle::canonical_path`, not the caller's string, because `GetFinalPathNameByHandleW` returns the
+`\\?\` form *after* Win32 has applied the caller's parsing mode, making the switch meaning-preserving.
+
+**One consequence checked rather than assumed:** because the canonical form is a different parsing mode
+from the caller's, mixing them in a comparison would be a bug. Nothing does -- `opened_path` is stored
+verbatim and only ever reopened, never matched against a canonical path.
+
+**Deferred deliberately, as work items rather than prose:** M15.9 (guard tests pinning the pass-through, so
+a future "helpful" prefix fails the suite) and M15.10 (the junction fixture for the 512-unit retry -- the
+back door M15.3 called hypothetical is confirmed to work, no elevation needed, a 53-character junction
+resolving to a 578-character target).

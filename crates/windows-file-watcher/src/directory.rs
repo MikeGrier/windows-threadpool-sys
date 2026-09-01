@@ -256,6 +256,15 @@ pub(crate) fn classify(error: &std::io::Error) -> OpenFailure {
 
 /// Encode a path as a NUL-terminated wide string.
 ///
+/// Otherwise **verbatim**: the caller's units reach Win32 unchanged, and in
+/// particular this never prepends `\\?\` (D-85). That prefix is a different path
+/// *parsing mode*, not a longer-path switch -- it would stop forward slashes,
+/// `.`, `..`, and relative paths from resolving, all of which work today -- and
+/// whether a path past `MAX_PATH` opens without it depends on the machine's
+/// `LongPathsEnabled` policy together with the consuming *application's*
+/// `longPathAware` manifest, neither of which is a library's to decide. A caller
+/// who wants `\\?\` semantics passes a `\\?\` path, and it arrives intact.
+///
 /// An interior NUL is rejected rather than passed on: Win32 would stop at it and
 /// silently open a *different, shorter* path than the caller named, which is a
 /// correctness hole rather than a mere inconvenience. `Wtf16String` keeps content
@@ -357,6 +366,10 @@ pub struct DirectoryHandle {
 
 impl DirectoryHandle {
     /// Open `path` for change notification.
+    ///
+    /// `path` is passed to `CreateFileW` verbatim -- see [`wide_path`] and D-85
+    /// for why no `\\?\` prefix is added, and what that means for paths longer
+    /// than `MAX_PATH`.
     ///
     /// # Errors
     ///

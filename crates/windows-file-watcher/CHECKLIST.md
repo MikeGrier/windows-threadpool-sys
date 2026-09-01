@@ -139,24 +139,31 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 
 - [x] **M15.8** -- Settled the write-only tail of M15.2's removal: the stored `canonical_path` field is gone, `DirectoryHandle::canonical_path` stayed and now has a caller that uses its result plus the tests it never had. M15.3 stands, confirmed by injection. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m158)
 
-- [ ] **M15.3** -- Decide whether this crate should open paths longer than `MAX_PATH`, and note the
-  consequence for `canonical_path`'s retry either way.
-  **`wide_path` passes the caller's path to `CreateFileW` verbatim, with no `\\?\` prefix**, so a
-  directory deeper than `MAX_PATH` fails to open with `ERROR_PATH_NOT_FOUND` even though
-  `std::fs::create_dir_all` will happily create it (Rust prefixes internally). Measured while building a
-  fixture for the item below: the directory existed on disk and `DirectoryHandle::open` refused it.
-  **The knock-on.** `canonical_path` sizes a 512-unit buffer and retries when
-  `GetFinalPathNameByHandleW` says the path did not fit. Reaching that retry needs a canonical path of
-  512+ units, and the only way in through `open` is a path longer than `MAX_PATH` -- which cannot be
-  opened. So the retry is unreachable via the crate's own API, which is why its `<` survives being
-  changed to `>` and `<=` (the `>` case loops forever and shows up as a timeout rather than a failure).
-  There *is* a back door -- a short junction pointing at a deep target, since
-  `GetFinalPathNameByHandleW` returns the resolved target -- so the code is not dead, merely unreachable
-  by the obvious route. That is the fixture to build if the retry is worth testing as it stands.
-  **Two coherent outcomes.** Support long paths (prefix `\\?\` in `wide_path`, which also makes the
-  retry reachable and testable), or state the `MAX_PATH` limit as deliberate and note that the retry
-  covers only the junction case. Silence is the one option that leaves a caller to discover the limit
-  from a `NotFound` that names nothing.
+- [x] **M15.3** -- Decided: a caller's path goes to Win32 verbatim, and long-path support is the consuming application's call, not this crate's (D-85). The proposed `\\?\` prefix was measured to break forward slashes, `.`, `..` and relative paths that work today. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m153)
+
+- [ ] **M15.9** -- Guard D-85's pass-through with tests, so a future "helpful" `\\?\` prefix fails the
+  suite instead of silently changing what callers' paths mean. **Deliberately scoped out of M15.3, which
+  recorded the decision only.**
+  **What to pin, all measured against a short directory that opens fine today** -- each of these would
+  break under a blanket prefix, which is exactly why they are the guard: `C:/Users/.../dir` (forward
+  slashes) becomes `ERROR_FILE_NOT_FOUND`; `...\dir\.` and `...\dir\subdir\..` become
+  `ERROR_INVALID_NAME`; a bare relative leaf stops resolving at all.
+  **And the other direction:** a caller's own `\\?\`-prefixed path must arrive intact and open, since
+  that is one of the two routes D-85 leaves a caller who wants long-path behaviour.
+  **Not** a long-path test: a Rust test binary has no `longPathAware` manifest, so a >`MAX_PATH` open
+  fails in-suite regardless of machine policy. Asserting that failure would pin the harness, not the
+  crate -- see M15.10 for the part that can be tested.
+
+- [ ] **M15.10** -- Test `canonical_path`'s 512-unit retry through the junction back door. **The back
+  door is confirmed to work, so this is now a fixture to build rather than a question to answer.**
+  **Measured:** `mklink /J` needs no elevation, and a **53-character** junction path resolving to a
+  **578-character** target is enough -- `GetFinalPathNameByHandleW` returns the resolved target, so
+  `open` only ever sees the short path while `canonical_path` must grow its buffer. Setup creates the
+  deep target through an explicitly `\\?\`-prefixed string, so the fixture does not depend on any
+  library prefixing on its behalf.
+  **Why it is worth doing:** the retry is the last untested branch in `canonical_path`, and its `<` ->
+  `>` mutant does not merely fail, it **loops forever** -- a defect that would surface as a hung suite
+  rather than a red test. `<` -> `<=` currently survives (verified by injection in M15.8).
 
 - [ ] **M15.4** -- Isolate the last two notification-filter categories, or record that they cannot be
   isolated from outside. Two mutants in `ALL_NOTIFY_FILTERS` survive: replacing the `|` before

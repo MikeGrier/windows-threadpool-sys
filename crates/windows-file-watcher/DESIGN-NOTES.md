@@ -103,6 +103,7 @@ threads of its own.
 | <a id="d-82"></a>D-82 | **Everything a consumer needs but cannot otherwise reach is exposed behind an off-by-default `test-util` feature, not on the unconditional public surface: the feedable channel (`channel_with_bound` with `Sender`/`Delivery`/`Reservation`, previously `pub` only inside a private module) and valid-by-construction builders for the two unconstructible boundary types (`RelativeName`, `VolumeIdentity`).** This does not reverse [D-64](DESIGN-RATIONALE.md#the-m64-test-seam-is-a-private-constructor-not-a-public-feature-flag-d-64): D-64's seams serve the crate's own tests reaching internal state, for which `#[cfg(test)]`/`pub(crate)` is strictly better; this seam serves a downstream consumer's tests, which `#[cfg(test)]` cannot reach at all, and it exposes the delivery channel and public boundary constructors rather than internal state (so the retired `unstable-internals` objection does not apply). Feature-gating keeps the crate's internal queue sender, and identity/name construction, out of the production API. See [Consumer test surface](#consumer-test-surface). |
 | <a id="d-83"></a>D-83 | **The consumer test surface tests the consumer's reactions, not whether this crate would ever emit a given sequence.** Builders are valid-by-construction in the type-safety sense (memory-safe, lossless), not production-domain-validating: a `RelativeName` can still carry a unit sequence the kernel itself never reports (an interior NUL, say), and an impossible ordering or an impossible relationship between two otherwise valid values (a `VolumeChanged` with equal `previous`/`current` serials, each individually a legal `VolumeIdentity`) both remain the consumer's responsibility, as with any hand-fed test double. This fidelity limit is documented on the surface so a passing handler test is not mistaken for confirmation that the crate produces that traffic. See [Consumer test surface](#consumer-test-surface). |
 | <a id="d-84"></a>D-84 | **The delivery contract was under-specified, and a second implementation of it -- not a test suite -- is what proved that.** PR #42's example harness promised contract-legal schedules only (its own D-5), which made its generator a second implementation of *this* crate's contract. Converging it took **19 automated review rounds**: eight fixed generated sequences this crate could never emit, five corrected the contract prose itself, and one found a real shipped reliability defect ([`has_room`](#the-has_room-finding-in-this-crate)) on [D-29](#d-29)'s backpressure path. All 278 of this crate's own tests passed throughout and were never going to fail -- they assert what the watcher *does*, and every gap was in what the contract *permits*. The gap categories are workspace-wide and recorded once, in [the workspace design notes](../../DESIGN-NOTES.md#specifying-a-delivery-contract); the decisions amended in response were [D-9](#d-9) (renames never joined), [D-12](#d-12)/[D-30](#d-30) (branch and terminal paths), [D-17](#d-17) (per-tier emission legality), [D-27](#d-27)/[D-28](#d-28) (a fault question is unconditional, and enters as `Arm`), [D-50](#d-50)/[D-78](#d-78) (volume identity: distinct serials, and continuity across reopens), and [D-83](#d-83) (fidelity is type-safety, not production-domain). See [What the second implementation exposed](#what-the-second-implementation-exposed). |
+| <a id="d-85"></a>D-85 | **A caller's path is passed to Win32 verbatim: this crate never adds a `\\?\` prefix, and whether a path longer than `MAX_PATH` opens is the consuming application's decision, not this crate's.** `\\?\` is not a longer-path switch, it is a *different parsing mode*, and adopting it on a caller's behalf silently changes what their path means -- measured, on short paths that open fine today: forward slashes fail with `ERROR_FILE_NOT_FOUND`, and a trailing `.` or an interior `..` fail with `ERROR_INVALID_NAME`. Relative paths would stop resolving entirely, which this crate supports on purpose (`open_file_target` normalises a bare leaf's empty parent to `.`). Long paths *without* the prefix are gated on the machine's `LongPathsEnabled` policy **and** the application's `longPathAware` manifest -- measured: the same source, on the same machine, opens a 300-character path only once that manifest is present. A library cannot set its consumer's manifest, so a caller who wants long-path behaviour either opts in at the application level or passes an explicitly `\\?\`-prefixed path, and both work here because the path is passed through untouched. See [Paths are the caller's, verbatim](#paths-are-the-callers-verbatim). |
 
 
 ### Queue mediation
@@ -875,3 +876,61 @@ symptom of a doc that had gone false by vacuity -- `Entry`, `StandingHold`,
 `StandingState`, and `take` all described this `Drop` as the live release
 mechanism, so a reader would have trusted a fallback that could not work. Four
 restatements of one fact, none of which moved when the fact did.
+### <a id="paths-are-the-callers-verbatim"></a>Paths are the caller's, verbatim
+
+D-85. `wide_path` hands `CreateFileW` exactly the units the caller supplied. That
+is a deliberate decision, not an omission, and the temptation it resists is to
+"helpfully" prepend `\\?\` so that longer paths work.
+
+**`\\?\` is a parsing mode, not a length switch.** It turns off the Win32 path
+parser wholesale: no forward-slash translation, no `.`/`..` resolution, no
+trailing-dot-or-space stripping, no reserved-name interception, and no relative
+paths at all. Adopting it on a caller's behalf therefore changes what their path
+*means*, and it does so on paths that have nothing to do with `MAX_PATH`.
+Measured on a short directory that opens fine today:
+
+| what the caller passed | verbatim | if this crate had prefixed it |
+|---|---|---|
+| `C:/Users/.../dir` | opens | `ERROR_FILE_NOT_FOUND` |
+| `C:\...\dir\.` | opens | `ERROR_INVALID_NAME` |
+| `C:\...\dir\subdir\..` | opens | `ERROR_INVALID_NAME` |
+
+Relative paths would stop working entirely, and this crate supports them on
+purpose -- `open_file_target` normalises a bare leaf's empty `parent()` to `.`
+precisely so `subscribe("target.txt", ...)` resolves.
+
+**Long paths are the application's call, not the library's.** Opening past
+`MAX_PATH` without the prefix requires *both* the machine's
+`LongPathsEnabled` policy and the application's own `longPathAware` manifest.
+Measured: the same binary source, on the same machine with the policy already
+enabled, fails a 300-character open with `ERROR_PATH_NOT_FOUND` and succeeds once
+the manifest is embedded. A library cannot set its consumer's manifest, and a
+consumer that has deliberately not opted in should not have this crate opt in for
+it behind its back. So the caller has two routes, and passing the path through
+untouched is what keeps both open: opt in at the application level, or pass an
+explicitly `\\?\`-prefixed path, which this crate forwards unchanged and Win32
+then honours.
+
+A caveat worth stating plainly, since it is the reason this looked like a defect:
+a Rust test binary has no such manifest, so a long-path open fails inside this
+crate's own test suite regardless of machine policy. That is a property of the
+harness, not of the crate.
+
+**Path construction, if it is ever needed here.** Win32 has no relative open, so
+any traversal has to *build* a child path, and a built path can exceed `MAX_PATH`
+even when the caller's own did not -- the one case where the caller's parsing
+mode is genuinely not enough. This crate does not have that problem today and the
+decision schedules no work for it: recursion is the kernel's (`bWatchSubtree`),
+notification names stay relative (D-8), and the only structural path operation in
+the crate is `open_file_target`'s `parent()`, which shortens. If traversal is
+ever added, the base to build on is `DirectoryHandle::canonical_path`, not the
+caller's string: `GetFinalPathNameByHandleW` returns the `\\?\` form *after*
+Win32 has already applied the caller's parsing mode, so switching to `\\?\`
+semantics at that point preserves the meaning the caller's path had, rather than
+reinterpreting it.
+
+One consequence to keep in view: because that canonical form is a different
+parsing mode from what the caller supplied, it must not be compared against, or
+handed back as, the caller's own path. Today it is used only in a diagnostic, and
+nothing in the crate compares the two forms -- `opened_path` is stored verbatim
+and only ever reopened, never matched against a canonical path.

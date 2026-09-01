@@ -66,6 +66,15 @@ impl Session {
     /// returned handle owns the subscription's lifetime -- dropping it cancels --
     /// so it must be kept for as long as the client wants notifications.
     ///
+    /// `path` reaches Win32 **verbatim** (D-85). It may be relative, may use
+    /// forward slashes, and may contain `.` or `..`, because this crate does not
+    /// prepend `\\?\` on a caller's behalf -- that prefix selects a different
+    /// path parsing mode in which none of those resolve. The consequence worth
+    /// knowing: a path longer than `MAX_PATH` opens only if **your**
+    /// application declares `longPathAware` in its manifest and the machine has
+    /// `LongPathsEnabled` set, or if you pass an already-`\\?\`-prefixed path,
+    /// which is forwarded unchanged.
+    ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::WouldBlock`] if the notification queue has no
