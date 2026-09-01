@@ -53,11 +53,26 @@
 //! a synthetic host compare *equal* to a real one -- and the comparison is the
 //! whole point of having a canonical form.
 //!
-//! **It is canonical**, so two hosts that render the same string can express
-//! the same placements, and string equality is a usable comparison. It
-//! deliberately omits clock speeds, cache sizes, and model names: those vary
-//! without changing which experiments are possible, and a fingerprint that
-//! changes when the answer does not is a fingerprint nobody can compare.
+//! **It is a canonical summary of the machine's marginal shape.** Two hosts
+//! rendering the same string have the same processor, core, cache-domain,
+//! efficiency-class and NUMA-node *sizes*, which makes string equality a usable
+//! way to group results by shape. It deliberately omits clock speeds, cache
+//! sizes, and model names: those vary without changing which experiments are
+//! possible, and a fingerprint that changes when the answer does not is a
+//! fingerprint nobody can compare.
+//!
+//! **Equal strings do not mean the two hosts can express the same placements.**
+//! Every partition is recorded as a list of sizes and never as how those
+//! partitions intersect, so two hosts can agree here and still offer different
+//! pairs to measure. That is set out in full on the `provenance` field of
+//! [`Fingerprint`](crate::fingerprint::Fingerprint), along with why it is not a
+//! key for pooling measurements; do not restate the stronger claim here, which
+//! is what an earlier revision of this header did.
+//!
+//! (The path is spelled from the crate root deliberately: `lib.rs` also carries
+//! an outer doc comment on `pub mod fingerprint;`, so the merged documentation
+//! resolves its links in the parent's scope, where the bare name is not in
+//! scope.)
 
 use std::fmt;
 

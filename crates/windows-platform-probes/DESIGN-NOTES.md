@@ -576,9 +576,12 @@ measured reason: the effects it studies are coherence effects that a debug build
 
 ## The fingerprint carries provenance inside the string, not beside it
 
-The fingerprint is documented as **canonical**: two hosts rendering the same string can express the
-same placements, so string equality is a supported comparison. That property is what forces the
-provenance marker to live *inside* the rendered form. A marker kept alongside -- a separate field, a
+The fingerprint is a **canonical summary of a machine's marginal shape**: two hosts rendering the
+same string have the same processor, core, cache-domain, class and node sizes, so string equality
+is a supported way to group results by shape. (It does *not* mean the two can express the same
+placements -- the sizes are recorded without how the partitions intersect. See
+[`Fingerprint::provenance`](../windows-placement-probe/src/fingerprint.rs).) That the string is
+compared at all is what forces the provenance marker to live *inside* the rendered form. A marker kept alongside -- a separate field, a
 second printed line, a note in the surrounding prose -- would leave a fabricated machine claiming the
 exact shape of a real one **comparing equal to it**. That is a concrete bug rather than a display
 preference, and it has a test named for it.
