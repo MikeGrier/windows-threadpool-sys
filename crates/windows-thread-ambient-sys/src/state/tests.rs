@@ -6,10 +6,11 @@ use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_TOKEN, HANDLE};
 use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
-use super::AmbientState;
+use super::{AmbientState, ApplyError, ApplyFailure, CaptureError, CaptureFailure, RestoreReport};
 use crate::capture_set::{CapturableAspect, CaptureSet};
-use crate::declared::MemoryPriority;
+use crate::declared::{DeclaredAspect, DeclaredError, MemoryPriority};
 use crate::error_mode::ThreadErrorMode;
+use crate::transaction::{TransactionError, TransactionFailure};
 use crate::{Captured, Declared};
 
 /// Whether the calling thread currently carries an impersonation token.
@@ -220,7 +221,6 @@ fn capture_does_not_disturb_the_thread_it_reads() {
 // --- composition (M23.3) ---------------------------------------------------
 
 use crate::declared::{BackgroundMode, Wow64Redirection};
-use crate::state::ApplyFailure;
 
 #[test]
 fn applying_an_empty_state_runs_the_operation_and_touches_nothing() {
@@ -502,4 +502,152 @@ fn an_uncaptured_aspect_leaves_the_running_threads_value_alone() {
         ThreadErrorMode::NO_GP_FAULT_ERROR_BOX,
         "an uncaptured aspect was overwritten instead of left alone"
     );
+}
+
+// --- CaptureError::raw_os_error ---------------------------------------------
+//
+// Every existing test only reaches `CaptureError` by way of a real capture
+// failure, none of which this suite can provoke on demand. `raw_os_error`'s
+// three constant mutants (`Some(0)`, `Some(1)`, `Some(-1)`) are ruled out by
+// the `ErrorMode` arm alone, which hardcodes `None` (there is no OS code for
+// an unrepresentable bit) -- but that same case cannot rule out the fourth,
+// `-> None` unconditionally, since it already agrees there. The `Transaction`
+// arm, built with `TransactionError::synthetic`, is what supplies a `Some`
+// case to rule that one out too.
+
+#[test]
+fn raw_os_error_forwards_through_the_failing_aspect_or_reports_none() {
+    let unsupported_bits = ThreadErrorMode::from_bits(0x0100).expect_err("0x0100 is not a mode");
+    let error_mode_failure = CaptureError {
+        failure: CaptureFailure::ErrorMode(unsupported_bits),
+    };
+    assert_eq!(
+        error_mode_failure.raw_os_error(),
+        None,
+        "an unsupported thread error mode carries no Win32 code to report"
+    );
+
+    let transaction_failure = CaptureError {
+        failure: CaptureFailure::Transaction(TransactionError::synthetic(
+            TransactionFailure::Duplicate,
+            Some(5),
+        )),
+    };
+    assert_eq!(transaction_failure.raw_os_error(), Some(5));
+}
+
+// --- release_error_mode ------------------------------------------------------
+
+#[test]
+fn release_error_mode_restores_a_real_guard() {
+    // Not a mutation-kill: `release_error_mode -> ()` is a documented
+    // equivalent mutant (see the function itself) because `ErrorModeGuard`'s
+    // own `Drop` restores identically the instant an unreleased guard is
+    // discarded. This test still pins the function's real, intended
+    // behaviour -- calling it explicitly restores the mode -- rather than
+    // leaving it unverified because the alternate route happens to agree.
+    let entry = ThreadErrorMode::capture().expect("representable");
+    let guard = ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX
+        .apply()
+        .expect("install");
+    assert_eq!(
+        ThreadErrorMode::capture().expect("representable"),
+        ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX
+    );
+
+    super::release_error_mode(Some(guard));
+    assert_eq!(
+        ThreadErrorMode::capture().expect("representable"),
+        entry,
+        "release_error_mode did not restore the entry mode"
+    );
+
+    // The `None` branch is a real no-op, not merely untested.
+    super::release_error_mode(None);
+    assert_eq!(ThreadErrorMode::capture().expect("representable"), entry);
+}
+
+// --- RestoreReport -----------------------------------------------------------
+//
+// `is_clean` chains three `&&`, and both operators survived: every existing
+// test either sets no field (all `is_none()` agree with any operator) or
+// reaches `RestoreReport` only through a real, clean `with_applied` call. One
+// field set at a time is what a wrong operator cannot survive; the three
+// accessors are exercised the same way `Declared::is_empty`'s gap was, and the
+// `error_mode`/`declared`/`transaction` accessors are covered alongside them
+// since building a non-empty report is the same construction either test needs.
+
+#[test]
+fn is_clean_and_the_accessors_require_every_field_to_be_unset() {
+    let empty = RestoreReport::default();
+    assert!(empty.is_clean());
+    assert!(empty.error_mode().is_none());
+    assert!(empty.declared().is_none());
+    assert!(empty.transaction().is_none());
+
+    let only_error_mode = RestoreReport {
+        error_mode: Some(crate::error_mode::RestoreError::synthetic(0x0001, 5)),
+        declared: None,
+        transaction: None,
+    };
+    assert!(
+        !only_error_mode.is_clean(),
+        "an error-mode failure alone must not read as clean"
+    );
+    assert!(only_error_mode.error_mode().is_some());
+
+    let only_declared = RestoreReport {
+        error_mode: None,
+        declared: Some(DeclaredError::synthetic(
+            DeclaredAspect::MemoryPriority,
+            Some(5),
+        )),
+        transaction: None,
+    };
+    assert!(
+        !only_declared.is_clean(),
+        "a declared failure alone must not read as clean"
+    );
+    assert!(only_declared.declared().is_some());
+
+    let only_transaction = RestoreReport {
+        error_mode: None,
+        declared: None,
+        transaction: Some(TransactionError::synthetic(
+            TransactionFailure::Install,
+            Some(5),
+        )),
+    };
+    assert!(
+        !only_transaction.is_clean(),
+        "a transaction failure alone must not read as clean"
+    );
+    assert!(only_transaction.transaction().is_some());
+}
+
+// --- state::ApplyError's own error-trait surface ----------------------------
+//
+// Nothing exercised this type's `raw_os_error`, `Display`, or `Error::source`
+// directly -- only `ApplyFailure::Declared` reaching a real test through
+// `a_failing_aspect_releases_the_ones_already_installed`, which never calls
+// any of the three. One synthetic variant is enough: every arm forwards
+// unconditionally, so a single `Some(5)` rules out all four `raw_os_error`
+// constants at once, and any one working arm proves `Display`/`source`'s real
+// bodies ran.
+
+#[test]
+fn apply_error_forwards_through_the_failing_aspect() {
+    let error = ApplyError {
+        failure: ApplyFailure::Declared(DeclaredError::synthetic(
+            DeclaredAspect::MemoryPriority,
+            Some(5),
+        )),
+    };
+    assert_eq!(error.raw_os_error(), Some(5));
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("applying the ambient state failed"),
+        "got {rendered}"
+    );
+    assert!(std::error::Error::source(&error).is_some());
 }
