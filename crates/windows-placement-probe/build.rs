@@ -158,18 +158,53 @@ fn watch_git_head(git_dir: &Path) {
         Err(_) => git_dir.clone(),
     };
 
-    // A loose ref is rewritten on every commit. A ref that has been packed does
-    // not exist as a file, and `packed-refs` is what changes instead -- so
-    // whichever of the two is present is the one to watch. Emitting a path that
-    // does not exist would make cargo re-run this script on every single build.
+    // A loose ref is rewritten on every commit, so watching it is exact.
     let loose = refs_dir.join(reference.trim());
     if loose.exists() {
         watch(&loose);
-    } else {
-        let packed = refs_dir.join("packed-refs");
-        if packed.exists() {
-            watch(&packed);
+        return;
+    }
+
+    // Otherwise the ref is packed: it exists only as a line in `packed-refs`,
+    // and that file is what a `git pack-refs` or `git gc` rewrites.
+    let packed = refs_dir.join("packed-refs");
+    if packed.exists() {
+        watch(&packed);
+    }
+
+    // **Packed is a state, not a fate, and this is the half that was missing.**
+    // The next commit on this branch writes a *loose* ref and leaves
+    // `packed-refs` completely untouched -- the stale packed line simply loses
+    // to the new file. So watching `packed-refs` alone sees nothing, cargo does
+    // not re-run, and the binary keeps the previous commit's stamp.
+    //
+    // Measured on a clone of this repository rather than reasoned about: after
+    // `git pack-refs --all`, a commit moved HEAD from 28f0486205df to
+    // 64259d9d8320 while the built binary went on reporting 28f0486205df.
+    //
+    // Cargo takes a watched directory's newest contained mtime, so naming the
+    // nearest existing ancestor catches the loose ref being created. It is
+    // deliberately coarse: another branch's commit re-runs this script too,
+    // which costs one cheap script run, while missing our own commit costs a
+    // wrong answer in a shipped record.
+    if let Some(ancestor) = nearest_existing_dir(&loose) {
+        watch(&ancestor);
+    }
+}
+
+/// The closest ancestor of `path` that exists as a directory.
+///
+/// A branch name may contain slashes, so the loose ref for `feature/x` sits at
+/// `refs/heads/feature/x` and *neither* the file nor its `feature` directory
+/// need exist while the ref is packed. Walking up finds the deepest directory
+/// that does, which is the one that will observe the ref appearing.
+fn nearest_existing_dir(path: &Path) -> Option<std::path::PathBuf> {
+    let mut candidate = path.parent()?;
+    loop {
+        if candidate.is_dir() {
+            return Some(candidate.to_path_buf());
         }
+        candidate = candidate.parent()?;
     }
 }
 
