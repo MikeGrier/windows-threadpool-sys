@@ -189,6 +189,62 @@ fn dropping_a_reservation_returns_the_slot() {
 }
 
 #[test]
+fn the_consumer_can_see_that_something_was_promised_even_with_nothing_queued() {
+    // The consumer's own `outstanding_reservations`, which is a *second*
+    // accessor rather than a view of the producer's -- and one no test reached,
+    // so a mutation run found it could return a constant. The distinction it
+    // exists to draw is in the name: a drained queue with a reservation
+    // outstanding is not an idle one, and a consumer deciding whether to park
+    // has to be able to tell the two apart.
+    let (tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+
+    assert_eq!(
+        rx.outstanding_reservations(),
+        0,
+        "a fresh queue has promised nothing"
+    );
+
+    // Two, not one: a count asserted only at one is satisfied by a method that
+    // always answers one.
+    let first = tx.reserve().expect("room");
+    let second = tx.reserve().expect("room");
+    assert_eq!(rx.outstanding_reservations(), 2);
+    assert_eq!(
+        rx.outstanding_reservations(),
+        tx.outstanding_reservations(),
+        "the two handles read the same claim word, so they cannot disagree"
+    );
+
+    // The state the method is for: nothing to pop, and yet not idle.
+    assert!(rx.is_empty(), "nothing has been sent");
+    assert_eq!(
+        rx.outstanding_reservations(),
+        2,
+        "an empty queue with two slots promised is waiting, not finished"
+    );
+
+    first.send(7).expect("the room was ours");
+    assert_eq!(
+        rx.outstanding_reservations(),
+        1,
+        "one redeemed, one still out"
+    );
+    assert_eq!(rx.pop(), Some(7));
+    assert_eq!(
+        rx.outstanding_reservations(),
+        1,
+        "and taking the item does not release the *other* promise"
+    );
+
+    drop(second);
+    assert_eq!(
+        rx.outstanding_reservations(),
+        0,
+        "a dropped reservation is a promise withdrawn"
+    );
+}
+
+#[test]
 fn a_redeemed_reservation_does_not_also_release_its_slot() {
     // The double-release bug this shape's `send` avoids by consuming `self` and
     // suppressing the drop. If both ran, the count would underflow and the
