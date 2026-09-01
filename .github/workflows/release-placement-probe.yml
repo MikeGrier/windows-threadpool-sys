@@ -26,10 +26,23 @@ on:
   # builds. The release job below is guarded on the tag ref, so nothing is
   # published from a pull request no matter what runs here.
   pull_request:
+    # **The dependencies are in this filter for a reason specific to ARM64.**
+    # This is the only workflow in the repository that builds
+    # `aarch64-pc-windows-msvc`, and `windows-placement-probe` compiles both
+    # path dependencies into itself. Filtering on this crate's own directory
+    # alone meant a change to either dependency was exercised on x64 by `ci.yml`
+    # and on no other architecture at all, so an architecture-specific
+    # regression in one of them would first surface *after* a release tag was
+    # pushed -- turning a build failure into a broken release, which is exactly
+    # what the pull-request trigger exists to prevent.
     paths:
       - 'crates/windows-placement-probe/**'
+      - 'crates/windows-topology-sys/**'
+      - 'crates/windows-waitable-queues/**'
       - '.github/workflows/release-placement-probe.yml'
+      - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
   # Kept for a re-run after merge, when the file does live on the default
   # branch. Inherently build-and-verify-only for the same reason as above: an
   # earlier revision declared a `dry_run` input and never read it, which would

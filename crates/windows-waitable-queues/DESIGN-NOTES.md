@@ -36,7 +36,7 @@ preferred.
 | <a id="d-10"></a>D-10 | **The multi-producer shape is Vyukov's bounded array queue: a sequence number per slot, claimed by a compare-and-swap on the tail and published by a release store.** The sequence is what lets the consumer tell a *claimed* slot from a *written* one, which a plain fetch-and-add cannot. Lock-free rather than wait-free, bounded by construction, and no allocation after the constructor. |
 | <a id="d-11"></a>D-11 | **The capability traits shipped with this second shape, and the signatures `spsc` wrote down in advance held unchanged.** That is [D-3](#d-3)'s check actually being run rather than assumed. The load-bearing choice was `push(&self)`: `&mut self` would have been sound for one producer and would have made the trait unimplementable by this one. |
 | <a id="d-12"></a>D-12 | **A shape's *minimum* capacity belongs to the shape, not to the crate, and `slotwise_mpsc`'s is two.** One slot cannot encode three states when the lap stride is the capacity, so "published at `p`" and "free again at `p + capacity`" collide. Reported through `CapacityError` rather than worked around, because every available workaround puts a load back on the producer's hot path for every queue in order to serve a capacity of one. |
-| <a id="d-13"></a>D-13 | **The arming protocol is written once, in `blocking.rs`, and a shape binds to it by implementing a crate-private `Parked` trait.** The blocking receive loop *is* [D-9](#d-9), not glue around it; a second shape spelling it out again would be a second copy of a rule -- the exact mistake this crate has already paid for once. |
+| <a id="d-13"></a>D-13 | **The arming protocol is written once, in [`blocking.rs`](src/blocking.rs), and a shape binds to it by implementing a crate-private `Parked` trait.** The blocking receive loop *is* [D-9](#d-9), not glue around it; a second shape spelling it out again would be a second copy of a rule -- the exact mistake this crate has already paid for once. |
 | <a id="d-14"></a>D-14 | **`slotwise_mpsc`'s arming asks "would `pop` find something", not "is `len` zero".** The two disagree over a slot a producer has claimed but not published, and only the first answer lets the consumer park on it instead of spinning until that producer is rescheduled. |
 | <a id="d-15"></a>D-15 | **`Doorbell::clear` resets the event *before* clearing the flag that mirrors it, and the original order was a lost wakeup.** A producer signalling between the two lines set the flag and issued a real `SetEvent`; the `ResetEvent` that followed erased the signal and left the flag set, wedging the doorbell dark while it claimed to be lit. **Amends [D-9](#d-9)**, whose "there is no third case" holds only for a queue whose emptiness is one position comparison. |
 | <a id="d-16"></a>D-16 | **Its cost premise is falsified by [D-26](#d-26); the conclusion stands on capability instead -- see [D-29](#d-29).** Reservation is a capability a shape may lack, so the reserving multi-producer queue ships as a peer of `slotwise_mpsc` rather than replacing it. Honouring a reservation requires counting free slots, which requires the consumer's position -- a single shared line `slotwise_mpsc`'s push deliberately never reads. The original rationale added that this made reserving the *more expensive* shape and that both should ship rather than charge every caller for it; measurement reversed that, and the split is now justified by the capability alone. **Amends [D-6](#d-6)**, which assumed one queue would carry every policy. |
@@ -231,7 +231,7 @@ code generator plus a particular processor -- rather than to the ordering primit
 trap that rule exists to name.
 
 **No test can catch this, and that is a property of the hazard.** Removing either fence leaves the
-whole suite green, and no entry in `sabotage.json` can express it, because the defect is a fact about
+whole suite green, and no entry in [`sabotage.json`](sabotage.json) can express it, because the defect is a fact about
 the memory model rather than an interleaving a scheduler can be coaxed into producing. It is the named
 target of the `loom` work in [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) item M31.6.
 
@@ -737,7 +737,7 @@ regardless -- which is asserted by a concurrent test rather than argued.
 R9 asks for the ring count so that "disabling the skip must change the number". Following that literally
 has a consequence worth naming, because it inverts something this crate had already written down.
 
-`sabotage.json` carried an entry that removed the skip optimisation, expecting **`survives`**. It was a
+[`sabotage.json`](sabotage.json) carried an entry that removed the skip optimisation, expecting **`survives`**. It was a
 *control*: skipping a redundant `SetEvent` changed no observable behaviour, so a suite that went red on
 its removal would have been asserting the implementation instead of the contract -- and
 [D-9](#d-9) records that the control earned its place by proving exactly that.

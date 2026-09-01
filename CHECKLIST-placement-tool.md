@@ -285,7 +285,7 @@ that carries them is written.
   tree, an unknown commit -- must be visibly marked so a result that arrives from one is not silently
   pooled with the rest. Default to the untrusted reading when the answer cannot be established, for
   the same reason `Provenance::Synthetic` is `Default`: forgetting must be safe.
-  A `build.rs` reads the commit from an environment variable when CI sets one, falls back to `git`
+  A [build.rs](crates/windows-placement-probe/build.rs) reads the commit from an environment variable when CI sets one, falls back to `git`
   when there is a repository, and records *unknown* otherwise -- which is exactly what a `cargo
   install` from a crates.io tarball will produce, and is the honest answer there.
 
@@ -429,7 +429,7 @@ build" distinction meaningful rather than decorative.
   **The pull request verifies it, which is better than the dispatch this originally called for.** The
   workflow now also triggers on a pull request touching the tool, building and verifying both targets
   without releasing. Two things made that the right answer rather than a convenience:
-  - **Nothing else in this repository builds the ARM64 target.** `ci.yml` cross-compiles only
+  - **Nothing else in this repository builds the ARM64 target.** [ci.yml](.github/workflows/ci.yml) cross-compiles only
     `thumbv7em` for `wtf-string`, so without this a tag would be the first time `aarch64` was ever
     attempted -- turning a build failure into a broken release.
   - **`workflow_dispatch` could not have done it.** GitHub only offers dispatch for workflows already

@@ -54,7 +54,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   and the runtime's name may carry `io` because that crate genuinely is about I/O.
 
 - [x] **M30.2** -- Create the crate with `publish = true` (the engineer's decision: this is general-purpose
-  and worth publishing, unlike `windows-guard-alloc`), and write its `DESIGN-NOTES.md` with the decisions
+  and worth publishing, unlike `windows-guard-alloc`), and write its [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md) with the decisions
   the session already reached: the shape menu and which shapes ship now, the
   concrete-types-plus-optional-trait rule, the overflow policy, and the doorbell invariant. This is the
   Tier-1 transcription of Tier-3 session content -- design notes are not a work queue, so a decision that
@@ -77,8 +77,10 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   a trait written against one type designs in a vacuum, since every signature that type happens to have
   looks like a requirement. The trait *shape* is fixed now because it constrains M30.3; the traits
   themselves land with M31.1.
-  Crate created with `DESIGN-NOTES.md` (D-1..D-8), `README.md`, `PLANS.md` pointing back at this file, and
-  registration in the workspace members, `release-please-config.json`, and `.release-please-manifest.json`
+  Crate created with [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md) (D-1..D-8),
+  [README.md](crates/windows-waitable-queues/README.md), [PLANS.md](PLANS.md) pointing back at this file, and
+  registration in the workspace members, [release-please-config.json](release-please-config.json), and
+  [.release-please-manifest.json](.release-please-manifest.json)
   -- the last two because `publish = true` makes it release-managed, and omitting them would have left it
   silently unreleasable.
   **One earlier position reversed with its reason recorded** ([D-7](crates/windows-waitable-queues/DESIGN-NOTES.md#d-7)):
@@ -99,7 +101,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   match, the `WaitableQueue` trait becomes a breaking change to one of them rather than an addition.
   Verify it the cheap way: write the trait's method signatures down as a comment before writing the
   type, and confirm the type satisfies them.
-  **Done, and the signatures are written down in `spsc.rs`'s module documentation before the type**, as
+  **Done, and the signatures are written down in [spsc.rs](crates/windows-waitable-queues/src/spsc.rs)'s module documentation before the type**, as
   the item asked. `push`/`pop` take **`&self`**, not `&mut self`: the latter would also make
   single-producer sound and is what several SPSC crates use, but it cannot generalize to a shape where
   several threads push through a shared handle, and one spelling has to serve every shape.
@@ -136,7 +138,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   builds with `-D warnings`, so M30.4 cannot compile on its own. Recorded as an acknowledged
   structuring defect rather than worked around by widening the type's visibility to silence the lint --
   making an API public to dodge a warning is a real design decision taken for a fake reason.
-  Delivered as `src/doorbell.rs`: lazily created (a poll-only consumer allocates no kernel object,
+  Delivered as [src/doorbell.rs](crates/windows-waitable-queues/src/doorbell.rs): lazily created (a poll-only consumer allocates no kernel object,
   asserted, not assumed), manual-reset, with `handle` / `owned` / `signal` / `clear`. The redundant
   signal is skipped through an `AtomicBool` mirroring the event, which is sound in exactly one
   direction -- see the done-note on M30.5 for the asymmetry that permits it.
@@ -183,7 +185,8 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   forward, writes, then publishes by storing the slot's sequence. Lock-free rather than wait-free, bounded
   by construction so backpressure is free, and no allocation anywhere. Pad the head and tail onto separate
   cache lines and say so in a comment, because the padding is load-bearing and looks like waste.
-  **Done as `src/mpsc.rs`**, with the padding commented at *both* positions rather than once, since a
+  **Done as `src/mpsc.rs`, since renamed to
+  [slotwise_mpsc.rs](crates/windows-waitable-queues/src/slotwise_mpsc.rs)**, with the padding commented at *both* positions rather than once, since a
   reader arriving at either field is the one who might delete it. Recorded as
   [D-10](crates/windows-waitable-queues/DESIGN-NOTES.md#d-10).
   **The traits landed here too, because M30.2 scheduled them here** ("the traits themselves land with
@@ -206,8 +209,8 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   loop *is* the arming protocol (D-9), not glue around it, so a second spelling of it would have been a
   second copy of a rule -- the exact mistake M30.5 already paid for, where a lost-wakeup proof exercised a
   hand-written duplicate of `arm` and could not have noticed the real `arm` being reversed. It now lives
-  in `blocking.rs` with shapes binding to it, and the `ARM_RACE` hook is shared for the same reason
-  ([D-13](crates/windows-waitable-queues/DESIGN-NOTES.md#d-13)). The capacity rule moved to `capacity.rs`
+  in [blocking.rs](crates/windows-waitable-queues/src/blocking.rs) with shapes binding to it, and the `ARM_RACE` hook is shared for the same reason
+  ([D-13](crates/windows-waitable-queues/DESIGN-NOTES.md#d-13)). The capacity rule moved to [capacity.rs](crates/windows-waitable-queues/src/capacity.rs)
   on the weaker version of the same argument.
   **One question the checklist did not anticipate: what "empty" means for arming.** `len` and "would `pop`
   find something" disagree over a slot a producer has claimed but not published, and arming on `len` is
@@ -355,7 +358,7 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   `bounded_with_disposal`. As constructors that is four per shape and twelve in the crate, with every
   future switch doubling it. The crate is unreleased, so the replacement cost nothing.
   **One consequence is worth naming because it inverts something already written down**
-  ([D-24](crates/windows-waitable-queues/DESIGN-NOTES.md#d-24)). `sabotage.json` carried a *control* that
+  ([D-24](crates/windows-waitable-queues/DESIGN-NOTES.md#d-24)). [sabotage.json](crates/windows-waitable-queues/sabotage.json) carried a *control* that
   removed the skip optimisation expecting `survives` -- and it had earned its place, by proving the suite
   asserted the contract rather than the implementation. Counting the rings makes the skip observable, so
   the same patch now has to be **caught**, and the entry changed sides. That is R9 working rather than a
@@ -564,7 +567,7 @@ the runtime's shape, so all three land before M33+ begins.
 
 > **-> CROSS-COMPONENT HANDOFF:** M33+ below spans `crates/windows-thread-ambient-sys`,
 > `crates/windows-namespace-request-sys`, and `crates/windows-ioring-sys`. Each has its own
-> `CHECKLIST.md`; the items are held here until M32 settles, then move to the component that owns them.
+> [CHECKLIST.md](CHECKLIST.md); the items are held here until M32 settles, then move to the component that owns them.
 
 ## M33+ -- The domain runtime (gated on M32)
 
