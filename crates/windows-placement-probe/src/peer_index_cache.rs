@@ -52,7 +52,7 @@
 
 use std::cell::UnsafeCell;
 use std::hint::black_box;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Instant;
 
@@ -657,19 +657,54 @@ pub fn time_model_placed(
 ) -> Sample {
     let ring = Ring::new_on(CAPACITY, memory_node);
     let placed_on = ring.memory_node();
+
+    // **Pinned before anything is spawned.** `pin_current_thread` panics on
+    // failure, and this used to run *after* the producer was already started:
+    // the unwind then reached `thread::scope`'s cleanup, which waits for a
+    // producer that is itself blocked forever on a ring nobody is draining. A
+    // failure that should stop the run hung it instead. Nothing is running yet
+    // here, so the panic simply propagates.
+    let _consumer_pinned = pin_current_thread(consumer_cpu);
+
+    // Outside the scope so it outlives every borrow the spawned thread takes.
+    let producer_pin = AtomicU8::new(PIN_PENDING);
+
     let started = Instant::now();
     let (consumer_refreshes, producer_refreshes) = thread::scope(|scope| {
         let shared = &ring;
+        let producer_pin = &producer_pin;
         let producer = scope.spawn(move || {
+            // Armed *before* the pin attempt, so an unwind out of it still
+            // publishes an answer. Without that the consumer below waits on a
+            // thread that has already died.
+            let signal = PinSignal(producer_pin);
             // Bound, not discarded: an unbound guard drops at the end of its
             // own statement, which would unpin the thread immediately and
             // measure the scheduler's choice while claiming to measure this
             // processor. `#[must_use]` makes that mistake a warning.
             let _pinned = pin_current_thread(producer_cpu);
+            producer_pin.store(PIN_READY, Ordering::Release);
+            // Its work is done; dropping it now cannot overwrite `PIN_READY`.
+            drop(signal);
             produce(shared, strategy)
         });
-        let _pinned = pin_current_thread(consumer_cpu);
-        let consumer_refreshes = consume(&ring, strategy);
+
+        // **Neither side enters the transfer until both pins are settled.**
+        // Spinning rather than parking because the wait is a pin call long,
+        // and because this thread is already pinned and must not be handed to
+        // another processor by a blocking primitive.
+        while producer_pin.load(Ordering::Acquire) == PIN_PENDING {
+            std::hint::spin_loop();
+        }
+
+        // On failure `consume` is skipped entirely: it would spin forever on
+        // items no living producer will write. `join` then surfaces the
+        // producer's panic, which is the outcome the caller should see.
+        let consumer_refreshes = if producer_pin.load(Ordering::Acquire) == PIN_READY {
+            consume(&ring, strategy)
+        } else {
+            0
+        };
         let producer_refreshes = producer.join().expect("the producer must not panic");
         (consumer_refreshes, producer_refreshes)
     });
@@ -678,6 +713,34 @@ pub fn time_model_placed(
         consumer_refreshes,
         producer_refreshes,
         memory_node: placed_on,
+    }
+}
+
+/// The producer has not yet reached the end of its pin attempt.
+const PIN_PENDING: u8 = 0;
+/// The producer is pinned and has begun producing.
+const PIN_READY: u8 = 1;
+/// The producer left its pin attempt without succeeding, so no data is coming.
+const PIN_FAILED: u8 = 2;
+
+/// Publishes [`PIN_FAILED`] if the producer unwinds before it reports success.
+///
+/// **The point is the unwind path, not the success path.** A plain store after
+/// `pin_current_thread` would never run when that call panics, and the consumer
+/// would then wait on a producer that no longer exists. A guard armed before
+/// the attempt runs either way, so the wait always ends.
+struct PinSignal<'a>(&'a AtomicU8);
+
+impl Drop for PinSignal<'_> {
+    fn drop(&mut self) {
+        // Only moves `PENDING` on, so dropping this after a successful
+        // `PIN_READY` store is a no-op rather than a lost signal.
+        let _ = self.0.compare_exchange(
+            PIN_PENDING,
+            PIN_FAILED,
+            Ordering::Release,
+            Ordering::Relaxed,
+        );
     }
 }
 

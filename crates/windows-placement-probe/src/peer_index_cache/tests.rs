@@ -305,3 +305,60 @@ fn asking_for_no_pin_leaves_the_affinity_alone() {
     .join()
     .expect("must not panic");
 }
+
+/// A processor number no group can hold, so `pin_current_thread` always fails.
+///
+/// 200 is past `usize::BITS`, which the pin asserts on before it ever reaches
+/// Windows -- deterministic on every machine rather than dependent on which
+/// processors happen to be online.
+const UNPINNABLE: (u16, u8) = (0, 200);
+
+/// Well inside the time either case takes when it works (both return in
+/// milliseconds), and far outside the "never" the defect produced.
+const MUST_FINISH_WITHIN: std::time::Duration = std::time::Duration::from_secs(20);
+
+#[test]
+fn a_failed_producer_pin_stops_the_run_rather_than_hanging_it() {
+    // **The defect this guards.** `pin_current_thread` panics on failure. When
+    // the producer was the one to fail, the consumer still entered `consume`
+    // and spun forever on items no living thread would ever write -- an
+    // unbounded loop with no deadline, so the process simply stopped making
+    // progress. A run that should have failed loudly hung instead, which in CI
+    // is a job timeout rather than a diagnosis.
+    let started = std::time::Instant::now();
+    let outcome = std::panic::catch_unwind(|| {
+        super::time_model_on(super::Strategy::Baseline, Some(UNPINNABLE), None)
+    });
+
+    assert!(
+        outcome.is_err(),
+        "an impossible pin must not report success"
+    );
+    assert!(
+        started.elapsed() < MUST_FINISH_WITHIN,
+        "the run did not terminate: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn a_failed_consumer_pin_stops_the_run_rather_than_hanging_it() {
+    // The other direction, and it hung for a different reason: the consumer
+    // was pinned *after* the producer had been spawned, so the panic unwound
+    // into `thread::scope`'s cleanup, which waits for a producer that is
+    // itself blocked forever on a ring nobody is draining.
+    let started = std::time::Instant::now();
+    let outcome = std::panic::catch_unwind(|| {
+        super::time_model_on(super::Strategy::Baseline, None, Some(UNPINNABLE))
+    });
+
+    assert!(
+        outcome.is_err(),
+        "an impossible pin must not report success"
+    );
+    assert!(
+        started.elapsed() < MUST_FINISH_WITHIN,
+        "the run did not terminate: {:?}",
+        started.elapsed()
+    );
+}
