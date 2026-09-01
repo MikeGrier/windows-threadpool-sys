@@ -1535,3 +1535,28 @@ fn a_standing_slot_keeps_its_carve_out_across_many_send_drain_cycles() {
         drop(held);
     }
 }
+
+#[test]
+fn the_opaque_handles_name_themselves_when_formatted() {
+    // Both `Debug` impls survived being replaced with a body that writes
+    // nothing. They are hand-written and deliberately opaque -- neither type
+    // can usefully show its interior, and `finish_non_exhaustive` says so --
+    // but "opaque" is not "empty": a `StandingSlot` that formats as nothing at
+    // all makes a panic message or a log line name no type, which is the one
+    // job these impls have.
+    let (sender, _receiver) = bounded(2);
+    let slot = sender.reserve_standing().expect("a slot");
+    let reservation = sender.reserve().expect("a reservation");
+
+    let rendered = format!("{slot:?}");
+    assert!(
+        rendered.contains("StandingSlot"),
+        "a standing slot must name itself when formatted, got {rendered:?}"
+    );
+
+    let rendered = format!("{reservation:?}");
+    assert!(
+        rendered.contains("Reservation"),
+        "a reservation must name itself when formatted, got {rendered:?}"
+    );
+}
