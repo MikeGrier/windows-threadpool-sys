@@ -112,3 +112,137 @@ fn no_duration_ever_produces_a_zero_wait() {
         );
     }
 }
+
+// The `Parked` protocol itself, across every shape that implements it.
+//
+// # Why this is here and not in each shape's suite
+//
+// `Parked` is what `recv` and `recv_timeout` are written against, and its four
+// methods are a contract each shape restates. A mutation run found the whole
+// group unguarded: `finish` could return `None` and `arm` could return
+// `Ok(true)` on all three shapes with the suite green.
+//
+// Neither is cosmetic. `finish` is the last take before the end of a stream is
+// reported, so a `None` silently discards an item that was successfully sent.
+// `arm` reports whether parking is safe, so an unconditional `true` blesses a
+// wait over a queue that already has an item -- which is a lost wakeup, the one
+// ordering bug this crate has actually had (D-15).
+//
+// The methods are exercised **through the trait**, because that is the surface
+// the loop uses. Calling the inherent method instead is what left these alive:
+// it shadows the trait one, so a broken forwarder is never reached.
+
+use super::Parked;
+use crate::{reserving_mpsc, slotwise_mpsc, spsc};
+
+/// `finish` must hand back an item that arrived before disconnection was seen.
+///
+/// Called directly rather than by scheduling the race it guards. That is the
+/// stated reason it exists as a named step: the window between a receive's
+/// first `pop` and its disconnection check cannot be hit reliably from a test,
+/// so the step is reachable on its own instead.
+fn finish_returns_the_owed_item<C>(consumer: &C)
+where
+    C: Parked<Item = u32>,
+{
+    assert_eq!(
+        Parked::finish(consumer),
+        Some(1),
+        "an item pushed before the producer went is still owed to the consumer"
+    );
+    assert_eq!(
+        Parked::finish(consumer),
+        None,
+        "and once taken it is gone, so the stream really has ended"
+    );
+}
+
+/// `arm` must refuse to bless a wait while an item is sitting there.
+fn arm_refuses_to_park_over_an_item<C>(consumer: &C, has_item: bool)
+where
+    C: Parked<Item = u32>,
+{
+    let safe = Parked::arm(consumer).expect("arming must succeed");
+    if has_item {
+        assert!(
+            !safe,
+            "parking over a queued item is a wait nothing will wake"
+        );
+    } else {
+        assert!(safe, "an empty queue is safe to park on");
+    }
+}
+
+#[test]
+fn every_shape_hands_back_the_last_item_through_parked_finish() {
+    let (spsc_tx, spsc_rx) = spsc::bounded::<u32>(4).expect("4 is valid");
+    let (slot_tx, slot_rx) = slotwise_mpsc::bounded::<u32>(4).expect("4 is valid");
+    let (res_tx, res_rx) = reserving_mpsc::bounded::<u32>(4).expect("4 is valid");
+
+    // Push, then drop the producer: the item is owed even though the stream has
+    // ended, which is exactly the state `finish` exists to resolve.
+    spsc_tx.push(1).expect("there is room");
+    slot_tx.push(1).expect("there is room");
+    res_tx.push(1).expect("there is room");
+    drop(spsc_tx);
+    drop(slot_tx);
+    drop(res_tx);
+
+    finish_returns_the_owed_item(&spsc_rx);
+    finish_returns_the_owed_item(&slot_rx);
+    finish_returns_the_owed_item(&res_rx);
+}
+
+#[test]
+fn every_shape_refuses_to_park_over_an_item_through_parked_arm() {
+    let (spsc_tx, spsc_rx) = spsc::bounded::<u32>(4).expect("4 is valid");
+    let (slot_tx, slot_rx) = slotwise_mpsc::bounded::<u32>(4).expect("4 is valid");
+    let (res_tx, res_rx) = reserving_mpsc::bounded::<u32>(4).expect("4 is valid");
+
+    // Empty first, so the `true` answer is shown to be a real reading rather
+    // than the only answer this method ever gives.
+    arm_refuses_to_park_over_an_item(&spsc_rx, false);
+    arm_refuses_to_park_over_an_item(&slot_rx, false);
+    arm_refuses_to_park_over_an_item(&res_rx, false);
+
+    spsc_tx.push(1).expect("there is room");
+    slot_tx.push(1).expect("there is room");
+    res_tx.push(1).expect("there is room");
+
+    arm_refuses_to_park_over_an_item(&spsc_rx, true);
+    arm_refuses_to_park_over_an_item(&slot_rx, true);
+    arm_refuses_to_park_over_an_item(&res_rx, true);
+}
+
+#[test]
+fn every_shape_reports_disconnection_and_pops_through_parked() {
+    // The other two methods of the same contract, so the trait is covered as a
+    // whole rather than only where mutants happened to survive.
+    fn pop_and_disconnection<C: Parked<Item = u32>>(
+        consumer: &C,
+        expect_item: Option<u32>,
+    ) -> bool {
+        assert_eq!(Parked::pop(consumer), expect_item);
+        Parked::is_disconnected(consumer)
+    }
+
+    let (spsc_tx, spsc_rx) = spsc::bounded::<u32>(4).expect("4 is valid");
+    let (slot_tx, slot_rx) = slotwise_mpsc::bounded::<u32>(4).expect("4 is valid");
+    let (res_tx, res_rx) = reserving_mpsc::bounded::<u32>(4).expect("4 is valid");
+
+    spsc_tx.push(5).expect("there is room");
+    slot_tx.push(5).expect("there is room");
+    res_tx.push(5).expect("there is room");
+
+    assert!(!pop_and_disconnection(&spsc_rx, Some(5)));
+    assert!(!pop_and_disconnection(&slot_rx, Some(5)));
+    assert!(!pop_and_disconnection(&res_rx, Some(5)));
+
+    drop(spsc_tx);
+    drop(slot_tx);
+    drop(res_tx);
+
+    assert!(pop_and_disconnection(&spsc_rx, None));
+    assert!(pop_and_disconnection(&slot_rx, None));
+    assert!(pop_and_disconnection(&res_rx, None));
+}
