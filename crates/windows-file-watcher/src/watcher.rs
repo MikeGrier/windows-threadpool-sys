@@ -273,25 +273,29 @@ struct WatcherInner {
     /// crate), but never set outside a test.
     force_coarse: AtomicBool,
     /// The `DirectoryId` this watcher is currently known by -- i.e. the key
-    /// `Resident.directories` holds it under. Only a path-based reopen
-    /// fallback (M11.2) can legitimately change this; an `OpenFileById`
-    /// success is structurally incapable of landing on a different
-    /// filesystem object (D-78).
+    /// `Resident.directories` holds it under. A reopen is always path-based
+    /// (D-80 removed the by-reference fast path), and a path-based reopen can
+    /// legitimately land on a different filesystem object, so this is updated
+    /// on every one (M11.2/D-78).
     directory_id: Mutex<DirectoryId>,
     /// The last volume identity recorded from an installed handle (M11.3,
-    /// D-78 groundwork), compared against on the next path-based reopen
-    /// fallback. `None` only if `GetVolumeInformationByHandleW` itself failed
-    /// when this watcher was last installed.
+    /// D-78 groundwork), compared against on the next reopen. `None` only if
+    /// `GetVolumeInformationByHandleW` itself failed when this watcher was
+    /// last installed.
     volume_identity: Mutex<Option<VolumeIdentity>>,
     /// This watcher's own canonical path (M11.2), recorded from the handle
     /// installed each time, via `GetFinalPathNameByHandleW` rather than
     /// `self.path` (a client-supplied string, possibly not even fully
-    /// resolved). `OpenFileById` is path-independent -- it keeps finding the
-    /// same object even after it is moved or renamed elsewhere -- so this is
-    /// what lets a fast reopen notice that and refuse to trust it, since a
-    /// client subscribed to a path expects to watch that path, not wherever
-    /// the object ends up. `None` only if the query itself failed when this
-    /// watcher was last installed.
+    /// resolved). `None` only if the query itself failed when this watcher was
+    /// last installed.
+    ///
+    /// **Currently written and never read.** Its one reader was the
+    /// by-reference fast reopen, which used it to notice that `OpenFileById`
+    /// had followed the object somewhere else and refuse to trust it; D-80
+    /// removed that path, and nothing has consulted this since. Kept rather
+    /// than deleted only because removing it cascades into
+    /// `DirectoryHandle::canonical_path` and the retry M15.3 is about -- see
+    /// M15.8, which owns the decision.
     canonical_path: Mutex<Option<PathBuf>>,
     /// The resident-state map this watcher's directory entry lives in, bound
     /// once by [`DirectoryWatcher::bind_resident`] immediately after
@@ -708,22 +712,16 @@ impl WatcherInner {
 
     /// `retry_timer`'s callback: attempt one re-establishment.
     ///
-    /// Tries `OpenFileById` against the file reference this watcher is
-    /// currently known by first (M11.2/D-78): structurally incapable of
-    /// landing on a different filesystem object, so no volume-identity
-    /// comparison or `DirectoryId` re-key is ever needed when it succeeds.
-    /// Falls back to the path-based `DirectoryHandle::open` only when that
-    /// fails -- most often because the original object is genuinely gone
-    /// (deleted, or its media was ejected). An open failure that is retryable
-    /// (D-22) re-enters the fault loop as an open-class fault; a permanent one
-    /// is the one edge that does not (`stopped`). An arm failure after a
-    /// successful open re-enters the fault loop as an arm-class fault.
+    /// Always a path-based `DirectoryHandle::open`. A by-reference reopen was
+    /// tried first here (M11.2/D-78) because it is structurally incapable of
+    /// landing on a different filesystem object; D-80 removed it, because
+    /// `ReadDirectoryChangesW` rejects a handle opened by file ID, so such a
+    /// reopen could never produce a watchable handle. An open failure that is
+    /// retryable (D-22) re-enters the fault loop as an open-class fault; a
+    /// permanent one is the one edge that does not (`stopped`). An arm failure
+    /// after a successful open re-enters the fault loop as an arm-class fault.
     fn retry_reestablish(self: &Arc<Self>) {
         if *lock(&self.gate) == ArmGate::TornDown {
-            return;
-        }
-        if let Some(handle) = self.reopen_via_existing_handle() {
-            self.finish_reopen(handle);
             return;
         }
         match DirectoryHandle::open(&self.path) {
@@ -747,51 +745,9 @@ impl WatcherInner {
         }
     }
 
-    /// Try `OpenFileById` against the file reference this watcher is
-    /// currently known by, using the installed detailed endpoint's handle
-    /// only as the volume hint (M11.2). `None` if there is no detailed handle
-    /// installed (coarse mode, or nothing installed yet), if `OpenFileById`
-    /// itself failed, or if the reopened object's current path no longer
-    /// matches this watcher's own recorded canonical path -- `OpenFileById`
-    /// is path-independent, so it would otherwise silently keep following the
-    /// object after a move or rename elsewhere in the namespace, which a
-    /// client subscribed to a specific path does not expect. Either way, the
-    /// caller falls back to a path-based open.
-    ///
-    /// **Disabled for now (returns `None` unconditionally):** measured
-    /// (real-OS test, D-52's precedent) to hang or, once, crash with
-    /// `STATUS_STACK_BUFFER_OVERRUN` once a handle obtained this way is
-    /// associated with the thread pool's I/O completion port and armed --
-    /// reproduced with `OpenFileById` alone, with `canonical_path`'s
-    /// comparison never reached. The cause is not yet understood; every
-    /// piece below (`DirectoryHandle::reopen_by_id`, `canonical_path`) is
-    /// independently verified correct by `directory::tests`, so the defect is
-    /// specifically in the IOCP-association/arm path against such a handle,
-    /// not in identity or path computation. Path-based reopen (this
-    /// function's caller's fallback) is unaffected and remains the only
-    /// active mechanism until this is root-caused.
-    fn reopen_via_existing_handle(&self) -> Option<DirectoryHandle> {
-        return None;
-        #[expect(
-            unreachable_code,
-            reason = "kept ready for when the hang/crash above is root-caused"
-        )]
-        let candidate = {
-            let endpoint = lock(&self.endpoint);
-            let Some(Endpoint::Detailed(io)) = endpoint.as_ref() else {
-                return None;
-            };
-            let file_id = lock(&self.directory_id).file_reference();
-            DirectoryHandle::reopen_by_id(io.handle(), file_id).ok()?
-        };
-        let current_path = candidate.canonical_path().ok()?;
-        let expected_path = lock(&self.canonical_path).clone()?;
-        (current_path == expected_path).then_some(candidate)
-    }
-
-    /// Only a path-based reopen can legitimately land on a different
-    /// directory or volume than before (M11.3/M11.4/M12) -- an `OpenFileById`
-    /// success cannot. Re-keys `Resident.directories` immediately if the
+    /// A path-based reopen can legitimately land on a different directory or
+    /// volume than before (M11.3/M11.4/M12), and since D-80 it is the only kind
+    /// there is. Re-keys `Resident.directories` immediately if the
     /// directory changed (identity is never subject to confirmation), then
     /// either installs `handle` straight away (no volume change, or nobody
     /// asked) or asks every `Confirm`-opted route and defers installing until

@@ -601,3 +601,68 @@ body. `queue.rs` now has **4 missed mutants, none in this impl**.
 `StandingHold`, `StandingState`, and `take` all described this `Drop` as the live release mechanism. Four
 restatements of one fact, none of which moved when the fact did; all four corrected here, plus the note in
 `queue/tests.rs`. Recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `Dead code that could not have run`.
+## Moved 2026-09-01 -- M15.2 / M-inf.4: why a by-id reopen cannot be watched
+
+### <a id="m152"></a>M15.2 -- Explain, then either fix or document, why a handle from `reopen_by_id` rejects the very read the watcher exists to issue. *(completed 2026-09-01 19:05:00 -04:00)*
+
+Closes **M-inf.4** as well, which had parked exactly this root-cause question.
+
+**Root cause, measured with a control.** A standalone probe -- no thread pool, no IOCP, no crate code,
+just `CreateFileW`, `OpenFileById`, `NtCreateFile` and a bare `ReadDirectoryChangesW`:
+
+| How the directory was opened | `ReadDirectoryChangesW` |
+|---|---|
+| `CreateFileW`, by path | TRUE (pending) |
+| `OpenFileById` | FALSE, `ERROR_INVALID_PARAMETER` (87) |
+| `NtCreateFile` by id, **with** `FILE_DIRECTORY_FILE` | FALSE, 87 |
+| `NtCreateFile` by id, without `FILE_DIRECTORY_FILE` | FALSE, 87 |
+| **control:** `NtCreateFile` **by name**, same options | TRUE (pending) |
+
+All five handles are identical everywhere it is natural to look: `FileModeInformation` reports each
+asynchronous (neither `SYNCHRONOUS_IO` bit set), `FileAccessInformation` reports the same granted mask
+`0x00100081`, and `FileNameInformation` resolves the same path. The only variable that changes the
+outcome is whether the object was resolved **by file ID** or **by name**.
+
+**The checklist's three readings, adjudicated.** (b) is disproved -- it is not `SYNCHRONIZE` or
+volume-hint semantics, since access and mode are byte-identical. (c) is disproved by the by-name control
+through the identical `NtCreateFile` call. It is (a): the reopen path cannot serve a watch.
+
+**D-80's recorded cause was wrong, which mattered.** It attributed the failure to "the `OpenFileById`
+handle's interaction with IOCP association/arming specifically" and recorded the cause as not understood.
+IOCP is not involved at all. An attribution recorded as unexplained is not inert -- it had named a
+subsystem, and naming the wrong one is worse than naming none, because it points the next investigation
+away from the answer.
+
+**Confirmed against the crate.** Re-enabling the fast path fails six tests, every one a fault-resolution
+test, with "the fault never resolved after being answered" -- D-80's symptom verbatim. Instrumenting the
+arm prints `Os { code: 87, kind: InvalidInput }`. The read never completes because it never starts: the
+arm fails, the watcher re-faults, retries, reopens by id again, and fails identically.
+
+**Removed, not disabled.** It is impossible rather than blocked, and it could not have paid for itself
+either way: `reopen_via_existing_handle` returned its candidate only when the reopened object's path
+already equalled the watcher's recorded canonical path, so by construction it could only ever hand back a
+handle to the object *at the path the path-based fallback already opens*. Gone:
+`WatcherInner::reopen_via_existing_handle`, `DirectoryHandle::reopen_by_id`,
+`DirectoryId::file_reference`, and the four `reopen_by_id_*` identity tests that characterised the
+mechanism.
+
+**What replaces them.** [tests/reopen_by_id_cannot_be_watched.rs](tests/reopen_by_id_cannot_be_watched.rs)
+asserts the OS limitation itself, including the by-name control, so the decision rests on something that
+executes rather than on a paragraph. If a future Windows accepts that read, the test fails and D-80 should
+be revisited.
+
+**The surviving mutant is explained rather than closed.** `directory.rs`'s `|` -> `&` in `reopen_by_id`
+zeroed both flags; measurement shows `OpenFileById` on a directory succeeds with **flags = 0**
+(`FILE_FLAG_BACKUP_SEMANTICS` is not required for a by-id open the way it is for `CreateFileW`), and the
+only difference is that the handle becomes synchronous. That property is observable exclusively through an
+I/O this handle can never perform -- so the mutant was unkillable, and it is now moot: the function is
+gone.
+
+**Blast-radius sweep.** D-80's decision row and detail section, the reopen paragraph above it, the field
+and method docs on `WatcherInner::directory_id` / `canonical_path` / `DirectoryHandle::canonical_path`,
+`retry_reestablish`, `on_path_based_reopen`, a `monitor::tests` comment, and the M11.1/M11.2/M11.5
+checklist entries all described the fast path as live or as pending root-cause; all corrected.
+`COMPLETED-PLANS.md` is left alone as dated, append-only history.
+
+**Spawned M15.8:** `WatcherInner::canonical_path` is now write-only, and no warning will ever surface it
+because `lock(&self.canonical_path)` counts as a read of the field.

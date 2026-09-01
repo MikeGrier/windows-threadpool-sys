@@ -477,10 +477,10 @@ fn a_path_based_reopen_that_lands_on_a_new_directory_rekeys_so_a_later_subscript
     monitor.quiesce();
     assert_eq!(monitor.directory_count(), 1);
 
-    // Delete and recreate the watched directory: the fast, file-reference-based
-    // reopen path is currently disabled (D-80), so re-establishment always
-    // falls back to a path-based open here, which lands on a genuinely
-    // different `DirectoryId` than the one this watcher started under.
+    // Delete and recreate the watched directory: every reopen is a path-based
+    // open (D-80 removed the file-reference fast path), so re-establishment
+    // lands on a genuinely different `DirectoryId` than the one this watcher
+    // started under.
     std::fs::remove_dir_all(dir.path()).expect("delete the watched directory");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
