@@ -114,12 +114,18 @@ pub struct SubmissionRecord {
     /// One entry per *directed* node pair, per ring placement, per strategy.
     ///
     /// **The ring placement is the dimension a collector is most likely to
-    /// miss.** Each directed hop is measured twice, once with the ring on the
-    /// producer's node and once on the consumer's, and `memory_node` on each
-    /// row says which. Rows that agree on every other field are therefore not
-    /// duplicates, and averaging them together would erase exactly the
-    /// asymmetry -- remote write against remote read -- that measuring both
-    /// placements exists to expose.
+    /// miss.** Each directed hop is measured twice, once with the ring asked
+    /// for on the producer's node and once on the consumer's, and
+    /// `requested_memory_node` on each row says which. Rows that agree on every
+    /// other field are therefore not duplicates, and averaging them together
+    /// would erase exactly the asymmetry -- remote write against remote read --
+    /// that measuring both placements exists to expose.
+    ///
+    /// **Key on the request, not on `memory_node`.** That field records what
+    /// the allocation actually got, and Windows may satisfy a request on
+    /// another node, so both rows of a pair can carry the same achieved node
+    /// while describing different placements. A row whose two nodes disagree
+    /// did not measure the placement it names.
     ///
     /// Empty on a single-node machine. **That emptiness is the finding this
     /// tool most wants from a large host**, so it is an empty list rather than
@@ -266,9 +272,25 @@ impl SubmissionRecord {
     /// A record that fails this is still worth sending -- it is not worth
     /// silently pooling with the rest, because a defect found later can only be
     /// traced through a build and a topology that can name themselves.
+    ///
+    /// # Both copies of the provenance are consulted, not just one
+    ///
+    /// `topology_provenance` deliberately duplicates the fingerprint's own
+    /// provenance so a collector reading the record's top level need not reach
+    /// into `host`. Both fields are public, so the duplication can be broken --
+    /// by hand-assembling a record, or by editing one field of a deserialized
+    /// one -- and consulting only the copy let a record whose fingerprint
+    /// renders `!!SYNTHETIC!!` report itself fully trusted. The printed report
+    /// would then contradict the very string beside it.
+    ///
+    /// Requiring both is the conservative reading: a record that disagrees with
+    /// itself about where its topology came from is exactly the record not to
+    /// pool, whichever field happens to be right.
     #[must_use]
     pub fn is_fully_trusted(&self) -> bool {
-        self.build.is_official() && self.topology_provenance.is_measured()
+        self.build.is_official()
+            && self.topology_provenance.is_measured()
+            && self.host.provenance.is_measured()
     }
 }
 

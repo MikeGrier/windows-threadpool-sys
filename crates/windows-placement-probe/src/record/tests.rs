@@ -232,6 +232,27 @@ fn a_record_is_fully_trusted_only_when_the_build_and_the_topology_both_are() {
 }
 
 #[test]
+fn a_record_whose_two_provenance_fields_disagree_is_not_trusted() {
+    // **The defect this guards.** `topology_provenance` duplicates the
+    // fingerprint's provenance for a collector's convenience, and both fields
+    // are public, so the two can be made to disagree. Consulting only the
+    // top-level copy let a record whose fingerprint renders `!!SYNTHETIC!!`
+    // report itself fully trusted -- the printed report contradicting the very
+    // string beside it.
+    let mut top_level_lies = fully_populated();
+    top_level_lies.host.provenance = Provenance::Synthetic;
+    assert!(
+        !top_level_lies.is_fully_trusted(),
+        "a synthetic fingerprint was reported as fully trusted"
+    );
+
+    // And the converse, so the check is not merely reading the other field now.
+    let mut duplicate_lies = fully_populated();
+    duplicate_lies.topology_provenance = Provenance::Restored;
+    assert!(!duplicate_lies.is_fully_trusted());
+}
+
+#[test]
 fn the_timestamp_renders_known_instants_correctly() {
     // Pins the hand-rolled civil-from-days conversion against instants whose
     // answers are independently known, including a leap day and a century
