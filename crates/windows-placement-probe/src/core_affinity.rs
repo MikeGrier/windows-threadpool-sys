@@ -415,11 +415,20 @@ pub fn representative_pairs(
     let mut chosen = BTreeMap::new();
     for producer in places {
         for consumer in places {
-            if producer.number == consumer.number {
+            if producer.id() == consumer.id() {
                 // One processor cannot be both ends: that measures the
                 // scheduler time-slicing a thread against itself. Two
                 // processors on one *core* are a different matter entirely and
                 // are measured, as `Placement::SameCoreSiblings`.
+                //
+                // **The full identity, not the number.** A number is unique
+                // only within its processor group, so comparing numbers alone
+                // treats group 0's processor 5 and group 1's processor 5 as one
+                // processor and skips the pair -- discarding a real,
+                // cross-group placement on exactly the large machines this tool
+                // exists to measure. That is the same defect M1B removed from
+                // `classify` and the selection maps; this comparison was
+                // missed.
                 continue;
             }
             chosen

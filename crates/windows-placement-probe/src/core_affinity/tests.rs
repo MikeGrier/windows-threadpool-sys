@@ -810,6 +810,46 @@ mod processor_groups {
     }
 
     #[test]
+    fn a_pair_sharing_a_number_across_groups_is_still_a_pair() {
+        // The self-pair guard exists to stop a processor being measured against
+        // itself. Written as `producer.number == consumer.number` it also
+        // discards every pair whose two processors merely *share* a number in
+        // different groups -- which on a two-group machine is a large fraction
+        // of the cross-group pairs, and on a machine with more groups, more.
+        //
+        // Checked through `representative_pairs` rather than on the predicate,
+        // because the predicate is private and the selection is what the run
+        // consumes.
+        // Two processors, one per group, both numbered 0 -- so the machine's
+        // only possible pair is one the number-only guard would discard, and
+        // the whole selection comes back empty. Deliberately minimal: on a
+        // larger fixture the loss hides, because another cross-group pair with
+        // differing numbers lands in the same category and fills it. That is
+        // why this is not tested through `two_groups`, and why the defect
+        // survived the group work: it is invisible unless the discarded pair is
+        // the only representative of its placement.
+        let mut here = place(0, 0, Some(0));
+        here.numa_node = 0;
+        let mut there = in_group(place(0, 0, Some(1)), 1);
+        there.numa_node = 1;
+
+        let pairs = representative_pairs(&[here, there]);
+
+        assert_eq!(
+            pairs.len(),
+            1,
+            "the only pair this machine can express was discarded: {pairs:?}"
+        );
+        let (producer, consumer) = pairs[&Placement::CrossNumaNode];
+        assert_ne!(
+            producer.id(),
+            consumer.id(),
+            "a placement measures one processor against itself"
+        );
+        assert_ne!(producer.group, consumer.group);
+    }
+
+    #[test]
     fn a_group_is_part_of_the_rendered_identity() {
         // The slice string is how a measurement's provenance travels into a
         // checklist or a submitted record. If it omits the group, two different

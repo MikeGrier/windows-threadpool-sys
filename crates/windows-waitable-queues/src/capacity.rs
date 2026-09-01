@@ -47,6 +47,9 @@ use crate::error::CapacityError;
 /// shape may be.
 pub(crate) const WRAPPING_MAX_CAPACITY: usize = usize::MAX / 2;
 
+#[cfg(test)]
+mod tests;
+
 /// What one shape will accept as a capacity.
 ///
 /// A named pair rather than two loose arguments, so neither a call site nor a

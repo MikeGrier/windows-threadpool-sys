@@ -195,7 +195,7 @@ can run that measurement on your hardware instead of inheriting ours.
 
 Two things that look like reasons to choose and are not:
 
-- **Capacity.** `slotwise_mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, but that
+- **Capacity.** `slotwise_mpsc` reaches 2^62 slots and `reserving_mpsc` 2^31, but that
   counts slots allocated up front, not items ever pushed. A ring of 2^31 slots
   is tens of gigabytes before it holds anything useful.
 - **`slotwise_mpsc` winning at one producer.** True in one regime, and at one producer

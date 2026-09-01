@@ -33,6 +33,22 @@ fn main() {
     println!("cargo::rerun-if-env-changed={SOURCE_ENV}");
     watch_git_head(Path::new("../../.git"));
 
+    // **The dirty flag has a second way to go stale, and these close the common
+    // case rather than all of it.** Emitting any `rerun-if-changed` replaces
+    // cargo's default of watching the whole package, so without naming them,
+    // editing this crate and rebuilding would recompile the binary while
+    // leaving the previous run's clean/dirty answer stamped into it.
+    //
+    // What remains: an uncommitted edit in *another* crate of the workspace
+    // rebuilds this one without re-running this script, so the flag can still
+    // report a tree cleaner than it is. That is disclosed on the record's
+    // `dirty` field rather than papered over, and it only ever affects builds
+    // already marked `!!UNOFFICIAL!!` and `[LOCAL]` -- a CI build takes its
+    // answer from the environment instead.
+    println!("cargo::rerun-if-changed=src");
+    println!("cargo::rerun-if-changed=Cargo.toml");
+    println!("cargo::rerun-if-changed=build.rs");
+
     let (commit, dirty) = match std::env::var(COMMIT_ENV) {
         // CI knows the commit it checked out, and a CI checkout is clean by
         // construction, so no `git` call is needed or wanted there.

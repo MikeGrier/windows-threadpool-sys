@@ -65,6 +65,15 @@ pub struct BuildIdentity {
     /// `None` means the question could not be asked -- no repository, or no
     /// `git` -- which is a different fact from "clean" and is kept distinct
     /// from it.
+    ///
+    /// **On a local build this can report a tree cleaner than it was**, and the
+    /// limit is disclosed rather than hidden. The answer is taken by a build
+    /// script, and cargo re-runs that script only when something it declared an
+    /// interest in changes; an uncommitted edit in another crate of the
+    /// workspace rebuilds this one without re-running it. A CI build is
+    /// unaffected, because there the answer comes from the environment and the
+    /// checkout is clean by construction -- and a local build is already marked
+    /// `!!UNOFFICIAL!!`, which is the stronger caveat.
     pub dirty: Option<bool>,
     /// Where the binary came from.
     pub source: BuildSource,

@@ -193,12 +193,31 @@ jobs:
           every host measured so far has exactly one.
           NOTES
 
+      # Written to be re-runnable, because the failure it guards against leaves
+      # the job in exactly the state that blocks a retry. `gh release create`
+      # both creates the release and uploads the assets; if it creates the
+      # release and then an upload fails -- a network blip, a throttled API --
+      # the tag now has a release, so a re-run fails immediately with "release
+      # already exists" and the only way forward is to delete the release by
+      # hand. So: create it only if it is absent, then upload separately with
+      # `--clobber` so a partial upload can be completed rather than restarted.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists; updating its notes and assets."
+            gh release edit "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "windows-placement-probe ${GITHUB_REF_NAME##*-v}" \
+              --notes-file notes.md
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "windows-placement-probe ${GITHUB_REF_NAME##*-v}" \
+              --notes-file notes.md
+          fi
+          gh release upload "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "windows-placement-probe ${GITHUB_REF_NAME##*-v}" \
-            --notes-file notes.md \
+            --clobber \
             artifacts/placement-probe-*.exe

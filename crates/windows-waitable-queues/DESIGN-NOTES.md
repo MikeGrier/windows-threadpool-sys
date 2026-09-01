@@ -566,7 +566,7 @@ keep both halves full width. The answer has one decisive part and three supporti
 **It does not remove the cost that matters.** The expense in this shape is the shared read of the
 consumer's position, and free space is `capacity - (position - head) - reserved`. `head` belongs to the
 consumer; no width of *producer-side* compare-and-swap makes it appear in the producer's word. So a
-double-width exchange buys exactly one thing: lifting the ceiling from 2^31 to 2^63, on a ring that is
+double-width exchange buys exactly one thing: lifting the ceiling from 2^31 to 2^62, on a ring that is
 allocated in full at construction.
 
 The supporting reasons:
@@ -1087,7 +1087,7 @@ What the crate owes a caller instead is honesty and equipment:
 Two justifications are available and both are refused, because a rationale that evaporates on
 inspection is worse than none:
 
-- **Not capacity.** `slotwise_mpsc` reaches 2^63 slots and `reserving_mpsc` 2^31, and that difference is
+- **Not capacity.** `slotwise_mpsc` reaches 2^62 slots and `reserving_mpsc` 2^31, and that difference is
   unreachable: it counts slots allocated at construction, not items ever pushed, and 2^31 slots is tens
   of gigabytes before the ring holds anything useful. See [D-17](#d-17) for why the packing forces it.
 - **Not `slotwise_mpsc` being faster somewhere.** Its one measured advantage is a single producer with a live

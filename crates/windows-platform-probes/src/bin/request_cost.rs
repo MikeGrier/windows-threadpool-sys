@@ -48,11 +48,20 @@ fn main() {
     let capture = observation.get("capture_handle");
 
     if let Some(build) = build {
+        // The ratio names its own reference, because the two numbers do not
+        // come from the same machine. `build` was measured on this host just
+        // now; the doorbell figure is a constant captured once on the
+        // development machine. This probe now runs on hosted CI runners, which
+        // are a heterogeneous fleet, so a ratio printed as though both halves
+        // were local can be wrong even when the measurement is sound.
         println!(
             "  building a pathed request costs {build:.0} ns, which is {:.1}x one",
             build / DOORBELL_NS_REFERENCE
         );
-        println!("  doorbell.");
+        println!(
+            "  doorbell AS MEASURED ON THE DEVELOPMENT MACHINE ({DOORBELL_NS_REFERENCE:.1} ns),"
+        );
+        println!("  not on this one. Run probe-doorbell-cost here to make the ratio local.");
         println!();
         println!("  SCOPE, because this is easy to over-read: that is a statement about");
         println!("  ONE OPERATION TYPE, not about the queue. A namespace open is the");

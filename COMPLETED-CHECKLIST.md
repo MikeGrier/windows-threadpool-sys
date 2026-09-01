@@ -1685,3 +1685,22 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
   is what the caller asked for and cannot be mistaken for a measurement. Feeding one to `measure()`
   would produce genuine timings under fabricated node ids, because a synthetic topology's processor
   *numbers* are still valid on the real host and every pin would succeed.
+
+## Moved 2026-08-31 -- the sabotage harness became a tool
+
+### <a id="m341"></a>M34.1 -- Promote the ad-hoc sabotage harness into a reusable tool. *(completed 2026-08-31 20:03:57 -04:00)*
+- [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. **Done.**
+  [tools/run-sabotage.ps1](tools/run-sabotage.ps1) plus
+  [tools/README-sabotage.md](tools/README-sabotage.md), driven by a `sabotage.json` kept beside the
+  code it patches; the first is
+  [crates/windows-waitable-queues/sabotage.json](crates/windows-waitable-queues/sabotage.json), whose
+  nine entries reproduce the M30.4/M30.5 sweep exactly through the promoted tool.
+  Six of the tool's own guards were verified by making each one fire: a name filter matching nothing,
+  a missing file, a dirty target, a pattern matching 14 sites instead of 1, a patch that changes
+  nothing, and a deliberately red baseline. A harness whose guards are untested is the thing it exists
+  to warn about.
+  Two subtleties are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `Sabotage sweeps` rather than
+  left in the script: a **survived** sabotage may be a defect in the *sabotage* rather than a hole in
+  the tests, which is why the patch is now printed on every unexpected result; and a **too-short
+  timeout manufactures a false "caught"**, crediting tests with catching a defect they never ran
+  against, so the bound errs generous.

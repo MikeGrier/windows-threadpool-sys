@@ -13,13 +13,16 @@ fn main() -> std::io::Result<()> {
 
     println!("processors, as discovered:");
     println!(
-        "  {:>4}  {:>16}  {:>13}",
+        "  {:>8}  {:>16}  {:>13}",
         "cpu", "efficiency class", "cache domain"
     );
     for place in &observation.processors {
+        // Group and number together: a number is unique only within its group,
+        // so two distinct processors on a machine with more than 64 of them
+        // would otherwise both render as `cpu5`.
         println!(
-            "  {:>4}  {:>16}  {:>13}",
-            place.number,
+            "  {:>8}  {:>16}  {:>13}",
+            format!("g{}/cpu{}", place.group, place.number),
             place.efficiency_class,
             place
                 .cache_domain
@@ -55,7 +58,7 @@ fn main() -> std::io::Result<()> {
     if !observation.by_class.is_empty() {
         println!("\n-- the same handoff, within each efficiency class --");
         println!(
-            "{:<12} {:>4} {:>4} {:>12} {:>12} {:>10}",
+            "{:<12} {:>8} {:>8} {:>12} {:>12} {:>10}",
             "class", "prod", "cons", "base ns/it", "cached ns/it", "cach depth"
         );
         let mut classes: Vec<u8> = observation
@@ -76,10 +79,10 @@ fn main() -> std::io::Result<()> {
                 .find(|m| m.producer.efficiency_class == class && m.strategy == Strategy::Cached);
             if let (Some(base), Some(cached)) = (base, cached) {
                 println!(
-                    "{:<12} {:>4} {:>4} {:>12.1} {:>12.1} {:>10.1}",
+                    "{:<12} {:>8} {:>8} {:>12.1} {:>12.1} {:>10.1}",
                     format!("class {class}"),
-                    base.producer.number,
-                    base.consumer.number,
+                    format!("g{}/cpu{}", base.producer.group, base.producer.number),
+                    format!("g{}/cpu{}", base.consumer.group, base.consumer.number),
                     base.nanos_per_item,
                     cached.nanos_per_item,
                     cached.consumer_batch
@@ -94,7 +97,7 @@ fn main() -> std::io::Result<()> {
 
     println!("\n-- the handoff, by placement --");
     println!(
-        "{:<26} {:>4} {:>4} {:>12} {:>12} {:>10} {:>10}",
+        "{:<26} {:>8} {:>8} {:>12} {:>12} {:>10} {:>10}",
         "placement", "prod", "cons", "base ns/it", "cached ns/it", "base depth", "cach depth"
     );
 
@@ -119,7 +122,7 @@ fn main() -> std::io::Result<()> {
             // Absent is a finding, not a gap: it means this machine cannot
             // express the placement at all.
             println!(
-                "{:<26} {:>4} {:>4} {:>12} {:>12} {:>10} {:>10}",
+                "{:<26} {:>8} {:>8} {:>12} {:>12} {:>10} {:>10}",
                 placement.label(),
                 "-",
                 "-",
@@ -131,10 +134,10 @@ fn main() -> std::io::Result<()> {
             continue;
         };
         println!(
-            "{:<26} {:>4} {:>4} {:>12.1} {:>12.1} {:>10.1} {:>10.1}",
+            "{:<26} {:>8} {:>8} {:>12.1} {:>12.1} {:>10.1} {:>10.1}",
             placement.label(),
-            base.producer.number,
-            base.consumer.number,
+            format!("g{}/cpu{}", base.producer.group, base.producer.number),
+            format!("g{}/cpu{}", base.consumer.group, base.consumer.number),
             base.nanos_per_item,
             cached.nanos_per_item,
             base.consumer_batch,
@@ -344,8 +347,8 @@ fn print_node_distances(observation: &Observation) {
 
     println!("\n-- the handoff, by NUMA node pair --");
     println!(
-        "{:<14} {:>4} {:>4} {:>12} {:>12} {:>10}",
-        "node pair", "prod", "cons", "base ns/it", "cached ns/it", "cach depth"
+        "{:<14} {:>8} {:>8} {:>12} {:>12} {:>10}",
+        "prod -> cons", "prod", "cons", "base ns/it", "cached ns/it", "cach depth"
     );
 
     let mut slowest: Option<(f64, (u32, u32))> = None;
@@ -359,10 +362,14 @@ fn print_node_distances(observation: &Observation) {
             continue;
         };
         println!(
-            "{:<14} {:>4} {:>4} {:>12.1} {:>12.1} {:>10.1}",
-            format!("{} <-> {}", pair.0, pair.1),
-            base.producer.number,
-            base.consumer.number,
+            "{:<14} {:>8} {:>8} {:>12.1} {:>12.1} {:>10.1}",
+            // `->`, not `<->`: hops are directed, because the producer writes
+            // and the consumer reads. The probe crate's own report was
+            // corrected for this and this second renderer of the same data was
+            // not, which is how two views of one measurement drift apart.
+            format!("{} -> {}", pair.0, pair.1),
+            format!("g{}/cpu{}", base.producer.group, base.producer.number),
+            format!("g{}/cpu{}", base.consumer.group, base.consumer.number),
             base.nanos_per_item,
             cached.nanos_per_item,
             cached.consumer_batch
