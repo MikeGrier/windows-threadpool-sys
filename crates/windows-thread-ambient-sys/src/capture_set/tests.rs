@@ -170,6 +170,27 @@ fn debug_names_the_aspects_rather_than_a_bit_pattern() {
 }
 
 #[test]
+fn debug_places_the_separator_exactly_between_aspects_never_before_or_doubled() {
+    // `index > 0` guards the ", " separator so it appears strictly *between*
+    // aspects, never before the first or after the last. Checking only that
+    // both names appear (as the test above does) cannot catch a stray or
+    // missing separator: a mutation to `==`/`<`/`>=` still leaves both
+    // substrings present, just misplaced or duplicated. Pinning the exact
+    // string is what makes the placement itself an assertion.
+    assert_eq!(
+        format!("{:?}", CaptureSet::DEFAULT),
+        "CaptureSet(impersonation, error mode)"
+    );
+    // A single-aspect set is the other edge: `index` is only ever 0, so
+    // `==`/`>=` (both true at 0) would wrongly prepend a separator that `>`
+    // (false at 0) does not.
+    assert_eq!(
+        format!("{:?}", CaptureSet::IMPERSONATION),
+        "CaptureSet(impersonation)"
+    );
+}
+
+#[test]
 fn an_aspect_converts_into_its_singleton_set() {
     for aspect in CapturableAspect::EVERY {
         assert_eq!(CaptureSet::from(*aspect), aspect.as_set());
