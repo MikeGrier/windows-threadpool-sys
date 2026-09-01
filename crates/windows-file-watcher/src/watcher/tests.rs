@@ -1662,3 +1662,183 @@ fn stopping_a_volume_change_removes_only_that_route() {
     drop(watcher);
     dir.cleanup();
 }
+
+// --- the notification filter's less-travelled categories (mutation gap) ---
+//
+// `ALL_NOTIFY_FILTERS` is seven flags OR'd together. Replacing one `|` with `&`
+// zeroes the two flags on either side of it -- `A | B & C | D` parses as
+// `A | (B & C) | D`, and disjoint flags AND to nothing -- so each such mutant
+// silently drops a whole category of change from what the kernel is asked to
+// report.
+//
+// Three of those survived: the ones dropping ATTRIBUTES+SIZE,
+// LAST_WRITE+CREATION and CREATION+SECURITY. The mutants dropping FILE_NAME and
+// DIR_NAME were caught, which says exactly what the suite covered -- files
+// appearing, disappearing and being renamed -- and what it did not: anything
+// that happens to a file that already exists and keeps its name.
+//
+// That is a real gap rather than a curiosity. A watcher that reports creation
+// and deletion but silently never reports a write is a plausible defect, and
+// until now nothing here would have noticed.
+//
+// The tests below close the ATTRIBUTES+SIZE one. **They do not close the other
+// two**, and that is recorded rather than papered over: ATTRIBUTES and SIZE stay
+// present in both of those mutants, and ordinary file operations set the archive
+// bit or change the length, so those two filters mask the dropped ones. Catching
+// LAST_WRITE needs a timestamp-only change; catching SECURITY needs an operation
+// that provably touches nothing else, which a DACL edit turns out not to be. See
+// M15.4.
+
+#[test]
+fn writing_to_an_existing_file_is_reported_as_modified() {
+    // Covers FILE_NOTIFY_CHANGE_SIZE and FILE_NOTIFY_CHANGE_LAST_WRITE: the
+    // file already exists and keeps its name, so neither of the name filters
+    // can account for this notification.
+    let dir = TempDir::new("modified-write");
+    std::fs::write(dir.path().join("existing.txt"), b"first").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    std::fs::write(dir.path().join("existing.txt"), b"second, and longer").expect("rewrite");
+
+    collected.wait_until("a Modified for existing.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "existing.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn changing_an_existing_files_attributes_is_reported_as_modified() {
+    // Covers FILE_NOTIFY_CHANGE_ATTRIBUTES. The file's name, size and contents
+    // are untouched, so this is the one category that can report it.
+    let dir = TempDir::new("modified-attrs");
+    let path = dir.path().join("attrs.txt");
+    std::fs::write(&path, b"x").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    let mut permissions = std::fs::metadata(&path)
+        .expect("read metadata")
+        .permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&path, permissions).expect("mark read-only");
+
+    collected.wait_until("a Modified for attrs.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "attrs.txt")
+    });
+
+    // Clear it again so the temp directory can be removed.
+    let mut permissions = std::fs::metadata(&path)
+        .expect("read metadata")
+        .permissions();
+    // clippy warns that this makes a file world-writable *on Unix*. This crate
+    // is entirely `cfg(windows)`, where the call clears the read-only attribute
+    // and nothing more -- which is exactly what the cleanup below needs.
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&path, permissions).expect("clear read-only");
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn the_default_buffer_is_the_documented_size() {
+    // `64 * 1024` survived being changed to `64 + 1024`, which would leave a
+    // 1088-byte buffer: still large enough for the handful of records a test
+    // produces, so nothing noticed, but small enough to overflow under the
+    // burst this constant's doc comment says it is sized for.
+    //
+    // Asserting a constant's value is usually circular. It is not here: this is
+    // `pub`, so the number is part of the crate's published surface, and the
+    // doc comment two lines above it states the size in prose that a reader is
+    // entitled to trust.
+    assert_eq!(
+        super::DEFAULT_BUFFER_BYTES,
+        64 * 1024,
+        "the documented default is 64 KiB"
+    );
+}
+
+#[test]
+fn rewriting_a_file_without_changing_its_length_is_reported_as_modified() {
+    // A rewrite that leaves the length alone, so this cannot be reported
+    // through FILE_NOTIFY_CHANGE_SIZE.
+    //
+    // It was written to isolate FILE_NOTIFY_CHANGE_LAST_WRITE and it does not:
+    // dropping that flag still leaves this green, because writing to a file
+    // also sets its archive bit and FILE_NOTIFY_CHANGE_ATTRIBUTES reports the
+    // change instead. Isolating last-write needs a change that touches only the
+    // timestamp -- a `SetFileTime` call rather than a write. Kept anyway,
+    // because a same-length rewrite being reported at all is worth asserting
+    // and nothing else here does it.
+    let dir = TempDir::new("modified-same-size");
+    let path = dir.path().join("fixed-size.txt");
+    std::fs::write(&path, b"aaaa").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    std::fs::write(&path, b"bbbb").expect("rewrite at the same length");
+
+    collected.wait_until("a Modified for fixed-size.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "fixed-size.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn changing_a_files_permissions_is_reported_as_modified() {
+    // A DACL edit, which is a change no other test here makes.
+    //
+    // It was written to isolate FILE_NOTIFY_CHANGE_SECURITY and it does not:
+    // dropping that flag leaves this green, so the notification is arriving
+    // through one of the filters that remain. Which one is not established --
+    // the assumption that a DACL edit touches nothing else is what this
+    // disproves, and guessing a replacement would repeat the error.
+    //
+    // Kept anyway: "a permission change is reported to a watcher" is a
+    // user-visible behaviour worth asserting on its own terms, whatever filter
+    // delivers it.
+    //
+    // `icacls` rather than a Win32 call, because the point is to make a real
+    // security-descriptor change and observe that the watch reports it, not to
+    // exercise any particular way of making one.
+    let dir = TempDir::new("modified-acl");
+    let path = dir.path().join("acl.txt");
+    std::fs::write(&path, b"x").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    // *S-1-1-0 is the well-known Everyone SID, named by SID so this does not
+    // depend on the machine's language.
+    let granted = std::process::Command::new("icacls.exe")
+        .arg(path.as_os_str())
+        .args(["/grant", "*S-1-1-0:(R)"])
+        .output()
+        .expect("run icacls");
+    assert!(
+        granted.status.success(),
+        "could not change the file's DACL, so the security half of the filter \
+         went untested: {}",
+        String::from_utf8_lossy(&granted.stderr)
+    );
+
+    collected.wait_until("a Modified for acl.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "acl.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
