@@ -539,6 +539,22 @@ it mutated a *different, tested* line and reported the untested one as caught --
 the conclusion. This is the same defect `tools/run-sabotage.ps1` guards with its "pattern
 found N times, expected 1" check; done by hand, nothing guards it.
 
+**A mutant that crashes is scored `caught`, and that is a weaker claim than it looks.**
+cargo-mutants judges by exit code, so a mutant that produces memory unsafety counts as caught
+because the process died -- not because a test noticed. Detection then depends on allocator
+behaviour and heap layout, so the same mutant can be `caught` in one sweep and `missed` in the
+next. Measured in `windows-file-watcher`: sixteen crashes across runs, two scored `CaughtMutant`
+via `STATUS_HEAP_CORRUPTION` and `STATUS_STACK_BUFFER_OVERRUN`, and the mutant that had crashed
+one run was `missed` in another. Treat a crash-caught mutant as an *uncovered* one: write the
+assertion that makes it deterministically red.
+
+**Before blaming the code, check whether the crash needs a mutant at all.** The test binary's
+filename is derived from the target and its features, not its contents, so every crash report
+names the same `.exe` whether the build was mutated or not -- the name proves nothing. Two
+checks settle it: run the unmutated binary many times (55 runs settled the file-watcher case),
+and compare the PE timestamp in each Application Error event against the clean build's. Distinct
+timestamps mean distinct builds, i.e. mutants.
+
 **Read the results as a to-do list, not a score.** `mutants.out/missed.txt` is the useful
 artifact; group it by file and by function to find the shape of the gap rather than
 fixing mutants one at a time. A large block of survivors usually names one absent *kind*

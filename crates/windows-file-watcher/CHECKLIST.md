@@ -215,6 +215,30 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
   changes an attribute or a length, then no black-box test can distinguish the mutants, and they belong
   with the equivalent ones rather than on this list. Establishing that is as good an answer as a test.
 
+- [ ] **M15.5** -- Assert the arming contract in `arm_detailed_read`, so a broken one fails a test
+  instead of *sometimes* corrupting the heap. **The shipping code is not at fault here** -- that was
+  checked before anything else, and the check is recorded below so nobody has to repeat it.
+  **What is wrong.** Inverting the `ERROR_IO_PENDING` test at `watcher.rs:482` makes a genuinely-pending
+  read look failed, so the thread pool cancels its accounting for an I/O the kernel is still going to
+  complete, and the completion lands in a freed buffer. Nothing asserts otherwise, so the only thing
+  standing between that mutation and a green suite is whether the allocator happens to notice.
+  **It is not reliable, and that is the point.** The same mutant was recorded `MISSED` in one sweep and
+  crashed the process in another. Sixteen crashes were logged across the runs, and cargo-mutants counted
+  two of them as `CaughtMutant` purely because the process exited non-zero -- one with
+  `STATUS_HEAP_CORRUPTION` (`0xC0000374`), one with `STATUS_STACK_BUFFER_OVERRUN` (`0xC0000409`). **A
+  crash is not a test.** Detection by memory corruption depends on allocator behaviour and heap layout,
+  so the mutation score for this file is non-deterministic run to run, and a "caught" here is a weaker
+  claim than it looks.
+  **Wanted:** a test that observes the arming *contract* rather than its wreckage -- that a read
+  reporting `ERROR_IO_PENDING` is treated as armed and its completion delivered exactly once, and that a
+  genuinely failed submission is not left accounted-for. That makes both the mutant and any future
+  regression a deterministic red test.
+  **Ruled out: a defect in the unmutated code.** 55 runs of the unmutated suite (25 default-feature, 30
+  `--all-features`, including the exact binary named in every crash report) produced zero failures. All
+  sixteen crash reports carry distinct PE timestamps, none equal to the clean build's -- each was its own
+  mutant build. The test binary's filename is derived from the target and features rather than its
+  contents, which is why every report names the same `.exe` and why that name alone proves nothing.
+
 ## M-inf -- Horizon (ungated, post-v1)
 
 Parked, not pending. These are the deferred seams recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-19,
