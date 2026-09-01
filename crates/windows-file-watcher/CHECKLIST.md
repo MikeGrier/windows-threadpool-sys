@@ -239,6 +239,27 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
   mutant build. The test binary's filename is derived from the target and features rather than its
   contents, which is why every report names the same `.exe` and why that name alone proves nothing.
 
+- [ ] **M15.6** -- Finish converting `queue/tests.rs` to bounded waiting, so a broken wake fails
+  instead of hanging. **Partly done, and the remainder is a sweep rather than a puzzle.**
+  **The finding.** 16 of 106 mutants in `queue.rs` are recorded as `timeout`, which at 120s each is
+  32 minutes of a 32.9-minute sweep -- roughly half the wall clock at `-j 2`, and far more than the
+  crashes cost. Every one is in a blocking path (`Drop for Sender`, `Drop for Reservation`, `recv`,
+  `is_empty`, `latch`). The tests *do* detect these defects; they detect them by hanging, which is the
+  worst available shape: it wedges the suite, reports nothing about what broke, and cargo-mutants files
+  it as `timeout` -- neither counted as caught nor visible as a gap.
+  **Done so far.** Two helpers with the reasoning attached: `next` (bounded `recv_timeout` where an item
+  is owed) and `assert_stream_ended` (bounded, and paired with `is_disconnected` because `recv_timeout`
+  alone answers `None` both for "ended" and "nothing came"). Eight sites converted. Verified: the
+  `senders == 0` mutant went from a 120s timeout to **caught in 8s**.
+  **Not done.** The `senders -= 1` mutants still hang, and chasing them one test at a time did not
+  converge -- each fix surfaced a different test as the next blocker, because the file uses unbounded
+  `recv()` in roughly 47 places and *any* of them will hang when the wake is broken. It is a convention
+  of the file, not a defect in one test, and the remaining work is to apply the two helpers across the
+  rest rather than to reason about which test is next.
+  **One caution learned the hard way:** `--test-threads=1` output is buffered, so the last line printed
+  is not reliably the test that hung. Use `--nocapture`, or run the suspect test with `--exact` and time
+  it. Two of the three diagnoses made without that were wrong.
+
 ## M-inf -- Horizon (ungated, post-v1)
 
 Parked, not pending. These are the deferred seams recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> D-19,

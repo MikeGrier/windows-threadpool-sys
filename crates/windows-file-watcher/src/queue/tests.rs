@@ -15,7 +15,7 @@ use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_threadpool_sys::wait::{ThreadpoolWait, WaitableHandle};
 
-use super::{Delivery, Notification, WatchId, channel};
+use super::{Delivery, Notification, Receiver, WatchId, channel};
 use crate::directory::{FailureCode, FaultDetail, OpenFailure};
 use crate::notify::{Change, ChangeKind, DesyncCause, RelativeName};
 
@@ -205,8 +205,13 @@ fn many_senders_can_enqueue_concurrently() {
     }
     drop(sender);
 
+    // Bounded, for the reason `assert_stream_ended` exists: an unbounded drain
+    // loop ends only when the last sender's drop wakes the receiver, so a
+    // broken wake turns this into an infinite loop rather than a failure. It
+    // was the last such loop in this file, and the one that kept the
+    // `Drop for Sender` mutants costing a full mutation deadline apiece.
     let mut per_watch = std::collections::HashMap::<u64, usize>::new();
-    while let Some(item) = receiver.recv() {
+    while let Some(item) = receiver.recv_timeout(Duration::from_secs(5)) {
         *per_watch.entry(item.watch().get()).or_default() += 1;
     }
     assert_eq!(per_watch.len(), SENDERS as usize);
@@ -277,22 +282,57 @@ fn recv_returns_none_once_every_sender_is_gone() {
     // can never be filled again.
     let (sender, receiver) = channel();
     drop(sender);
-    assert!(receiver.recv().is_none());
+    assert_stream_ended(&receiver, "every sender is gone");
     assert!(receiver.is_disconnected());
 }
 
 #[test]
 fn a_blocked_receiver_is_woken_by_the_last_sender_dropping() {
+    // The blocking `recv` runs on a worker and the *assertion* waits with a
+    // deadline, rather than the test itself blocking in `recv`.
+    //
+    // The distinction is not stylistic. This test does detect a broken wake --
+    // but by hanging, because an unwoken `recv` never returns and there is no
+    // deadline on the main thread to notice. A hang is the worst shape a
+    // failure can take: it wedges the whole suite, reports nothing about what
+    // broke, and under `cargo mutants` is filed as `timeout` rather than
+    // `caught`, so the mutant reads as undetected *and* costs the full deadline.
+    // Four mutants in `Drop for Sender` did exactly that, at 120s each.
+    //
+    // Bounded, the same defect fails in about a second and says which rule it
+    // broke. The waiting thread is left blocked when that happens, which is
+    // fine: libtest exits the process at the end of the run without joining it.
     let (sender, receiver) = channel();
-    let handle = std::thread::spawn(move || {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let waiter = std::thread::spawn(move || {
+        let outcome = receiver.recv();
+        // Ignored deliberately: on the failure path the main thread has already
+        // given up and dropped its end, and this send is how we find out.
+        let _ = tx.send(outcome.is_none());
+    });
+
+    let dropper = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
         drop(sender);
     });
-    assert!(
-        receiver.recv().is_none(),
-        "dropping the last sender must wake a blocked receiver"
-    );
-    handle.join().expect("dropper thread");
+
+    // Generous against a loaded machine, and still two orders of magnitude
+    // below the mutation deadline it replaces. This is a liveness bound, not a
+    // performance assertion.
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(disconnected) => assert!(
+            disconnected,
+            "a woken receiver must observe disconnection, not a notification"
+        ),
+        Err(_) => panic!(
+            "dropping the last sender did not wake a blocked receiver within 5s \
+             -- the wake in `Drop for Sender` is the rule this asserts"
+        ),
+    }
+
+    dropper.join().expect("dropper thread");
+    drop(waiter);
 }
 
 #[test]
@@ -305,7 +345,7 @@ fn queued_items_are_drained_before_disconnection_is_reported() {
 
     assert_eq!(names(&receiver.recv().expect("a")), vec!["a.txt"]);
     assert_eq!(names(&receiver.recv().expect("b")), vec!["b.txt"]);
-    assert!(receiver.recv().is_none());
+    assert_stream_ended(&receiver, "the stream should be finished");
 }
 
 #[test]
@@ -528,18 +568,71 @@ fn a_latched_loss_reaches_a_receiver_even_if_nothing_further_is_sent() {
     deliver(&sender, batch(watch, &["only.txt"]));
     assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
 
-    assert_eq!(
-        names(&receiver.recv().expect("the queued one")),
-        vec!["only.txt"]
-    );
+    assert_eq!(names(&next(&receiver, "the queued one")), vec!["only.txt"]);
     assert!(matches!(
-        receiver.recv().expect("the latched one"),
+        next(&receiver, "the latched one"),
         Notification::Desync {
             cause: DesyncCause::QueueFull,
             ..
         }
     ));
     assert!(receiver.try_recv().is_none());
+}
+
+/// The next notification, or a failure that says what was expected.
+///
+/// Use this instead of `recv().expect(..)` wherever a test *knows* an item is
+/// owed. The two differ only when something is broken, and that is exactly when
+/// the difference matters: an unbounded `recv` that is never woken hangs the
+/// whole suite and reports nothing, while this fails in seconds and names the
+/// item it was waiting for.
+///
+/// Measured, not stylistic: four mutants in `Drop for Sender` break the wake
+/// that ends a stream, and under `cargo mutants` each cost the full 120s
+/// deadline and was filed as `timeout` -- neither counted as caught nor visible
+/// as a gap. The tests had detected them all along, by hanging.
+///
+/// The bound is a liveness check rather than a performance assertion, so it is
+/// set far above anything a loaded machine would need.
+#[track_caller]
+fn next(receiver: &Receiver, expected: &str) -> Notification {
+    receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|| panic!("expected {expected} within 5s, but nothing arrived"))
+}
+
+/// Assert that the stream has ended, without hanging if it has not.
+///
+/// The companion to [`next`], and a separate function because `recv_timeout`
+/// cannot express this: it returns `None` both for "the stream ended" and for
+/// "nothing arrived in time", so it cannot tell a correct disconnection from
+/// the exact bug this is checking for. The blocking `recv` *can* -- it returns
+/// only on a real end -- so the wait has to happen on another thread with the
+/// deadline enforced here.
+///
+/// Borrows rather than consuming, and uses no thread. A first attempt moved the
+/// receiver onto a worker so the blocking `recv` could be abandoned on failure;
+/// that does work, but it cannot be used where something else already borrows
+/// the receiver -- the doorbell test, for one -- and the two assertions below
+/// are strictly more informative anyway.
+///
+/// The pair is what makes this unambiguous. `recv_timeout` alone cannot express
+/// "the stream ended", because it answers `None` both for that and for "nothing
+/// arrived in time". Pairing it with [`Receiver::is_disconnected`] separates
+/// them: a real end satisfies both, a broken wake satisfies neither.
+#[track_caller]
+fn assert_stream_ended(receiver: &Receiver, what: &str) {
+    assert!(
+        receiver.recv_timeout(Duration::from_secs(5)).is_none(),
+        "{what}: a notification arrived where the stream should have ended, or \
+         the receiver was never woken -- either way this is not a finished stream"
+    );
+    assert!(
+        receiver.is_disconnected(),
+        "{what}: nothing arrived within 5s but the queue does not report \
+         disconnection, so the receiver was never woken rather than the stream \
+         having ended"
+    );
 }
 
 #[test]
@@ -552,18 +645,15 @@ fn a_latched_loss_is_delivered_even_after_every_sender_is_gone() {
     assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
     drop(sender);
 
-    assert_eq!(
-        names(&receiver.recv().expect("the queued one")),
-        vec!["only.txt"]
-    );
+    assert_eq!(names(&next(&receiver, "the queued one")), vec!["only.txt"]);
     assert!(matches!(
-        receiver.recv().expect("the latched one"),
+        next(&receiver, "the latched one"),
         Notification::Desync {
             cause: DesyncCause::QueueFull,
             ..
         }
     ));
-    assert!(receiver.recv().is_none(), "and only then is it finished");
+    assert_stream_ended(&receiver, "and only then is it finished");
 }
 
 #[test]
@@ -1099,7 +1189,7 @@ fn disconnection_signals_the_doorbell() {
 
     drop(sender);
     assert!(is_signalled(doorbell));
-    assert!(receiver.recv().is_none());
+    assert_stream_ended(&receiver, "disconnection");
     assert!(
         is_signalled(doorbell),
         "the end of the stream is permanent, so it stays signalled"
@@ -1339,7 +1429,7 @@ fn a_disconnected_empty_queue_still_has_something_to_take() {
         receiver.has_pending(),
         "disconnection is collectable: recv returns None rather than blocking"
     );
-    assert!(receiver.recv().is_none());
+    assert_stream_ended(&receiver, "the stream should be finished");
 }
 
 // --- the resume edge must agree with has_room (PR #42 review) ---
