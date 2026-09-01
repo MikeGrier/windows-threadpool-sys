@@ -304,27 +304,60 @@ fn main() {
         println!("discriminated. Running anyway only validates the apparatus.");
     }
 
-    // The far node is the highest-numbered one that actually has processors; a
-    // memory-only node cannot host a thread, so it cannot answer this question.
-    let mut far = GROUP_AFFINITY::default();
-    let mut far_node = u32::MAX;
-    for candidate in (0..=highest).rev() {
+    // Every node that can actually host a thread. A memory-only node cannot
+    // answer this question, so it is not a candidate for either end.
+    let mut hosting: Vec<(u32, GROUP_AFFINITY)> = Vec::new();
+    for candidate in 0..=highest {
         let mut ga = GROUP_AFFINITY::default();
         if unsafe { GetNumaNodeProcessorMaskEx(candidate as u16, &raw mut ga) } != 0 && ga.Mask != 0
         {
-            far = ga;
-            far_node = candidate;
-            break;
+            hosting.push((candidate, ga));
         }
     }
-    if far_node == u32::MAX {
+    let (Some(&(near_node, near)), Some(&(far_node, far))) = (hosting.first(), hosting.last())
+    else {
         println!("no NUMA node reports any processors; cannot proceed.");
+        return;
+    };
+
+    // **The creator's node has to be established, not assumed -- this is what
+    // makes control B a control at all.** B is created with no affinity
+    // attribute, so it inherits the creating thread's node. Nothing here ever
+    // located that thread, so if it happened to be running on the node picked
+    // as "far", then A (created *with* the far attribute) and B were created on
+    // the same node. The comparison below reads `a == b` as "creation-time
+    // affinity does NOT govern stack placement" and tells the reader to stop
+    // claiming otherwise -- a confident conclusion produced by the apparatus
+    // rather than by the machine, and the exact opposite of the truth.
+    //
+    // Pinning the creator to a definite near node removes the coincidence.
+    let pinned =
+        unsafe { SetThreadGroupAffinity(GetCurrentThread(), &raw const near, std::ptr::null_mut()) };
+    println!(
+        "creator pinned to near node {near_node} (group {}, mask {:#x}): {}",
+        near.Group,
+        near.Mask,
+        pinned != 0
+    );
+    if pinned == 0 {
+        println!("could not pin the creator, so control B's node is not known; cannot proceed.");
         return;
     }
     println!(
         "far node chosen: {far_node} (group {}, mask {:#x})",
         far.Group, far.Mask
     );
+    if near_node == far_node && highest > 0 {
+        // Guarded on `highest > 0` because the single-node case already said
+        // this above, and saying it twice reads as two separate problems. What
+        // is left is the case that announcement misses: several nodes reported,
+        // but only one of them hosts processors, so near and far coincide and
+        // the control cannot differ from the treatment.
+        println!();
+        println!("*** VACUOUS ON THIS MACHINE ***");
+        println!("Only one NUMA node hosts processors, so near and far are the");
+        println!("same node and the control cannot differ from the treatment.");
+    }
 
     let mut slots = [
         Slot {
@@ -360,6 +393,15 @@ fn main() {
             Ok(h) => handles.push(h),
             Err(e) => {
                 println!("spawn failed for {}: {e}", slot.label);
+                // **Join what is already running before unwinding this frame.**
+                // Each spawned thread writes its results through a raw pointer
+                // into `slots`, which lives on this stack frame, so returning
+                // with threads still alive is a use-after-free -- and one that
+                // would surface as corrupted numbers or an intermittent crash
+                // in exactly the partial-failure case nobody reruns.
+                for handle in std::mem::take(&mut handles) {
+                    join(handle);
+                }
                 return;
             }
         }
@@ -432,15 +474,19 @@ fn main() {
     println!(
         concat!(
             r#"{{"reason":"x-spike-thread-stack-numa","arch":"{}","numa_nodes":{},"#,
-            r#""far_node":{},"vacuous":{},"usable":{},"#,
+            r#""near_node":{},"far_node":{},"vacuous":{},"usable":{},"#,
             r#""created_far":{{"shallow":{},"deep":{}}},"#,
             r#""control_near":{{"shallow":{},"deep":{}}},"#,
             r#""bound_after":{{"shallow":{},"deep":{}}}}}"#
         ),
         std::env::consts::ARCH,
         highest + 1,
+        near_node,
         far_node,
-        highest == 0,
+        // Vacuous whenever the control cannot differ from the treatment, which
+        // is not only the single-node case: several nodes may be reported while
+        // just one of them hosts processors.
+        highest == 0 || near_node == far_node,
         usable,
         probe_json(slots[0].shallow),
         probe_json(slots[0].deep),
