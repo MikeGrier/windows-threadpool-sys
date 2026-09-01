@@ -91,6 +91,45 @@ fn main() {
         }
     );
     println!("cargo::rustc-env=PLACEMENT_PROBE_SOURCE_OUT={source}");
+
+    // **Whether a repository was there to ask, which is not the same as whether
+    // a commit was found.** The two differ exactly when the build script is
+    // broken: a repository present but no commit produced is the silent-failure
+    // case the tests exist to catch, and without this flag a test cannot tell
+    // that apart from the honest "there was no repository".
+    //
+    // It exists because the honest case is reachable in ordinary use. A
+    // `cargo install` from a crates.io tarball has no repository, a downloaded
+    // source zip has none, and `cargo mutants` builds from a scratch copy of
+    // the tree with `.git` left behind -- which is what surfaced this: a suite
+    // asserting "a commit must have been found" failed in an unmutated tree and
+    // stopped the run before a single mutant was tested.
+    //
+    // Not a `cfg`: this is data about the build, and a test that reads it can
+    // assert the *right* thing in each case rather than being skipped.
+    println!(
+        "cargo::rustc-env=PLACEMENT_PROBE_REPOSITORY_OUT={}",
+        if repository_present() { "1" } else { "" }
+    );
+}
+
+/// Whether this build can see a git repository at all.
+///
+/// Deliberately independent of whether a commit was obtained: it answers "was
+/// there something to ask", so a test can distinguish a build script that
+/// failed to read an available repository from one that correctly reported an
+/// unavailable one.
+///
+/// `git rev-parse` rather than looking for a `.git` entry, because that entry
+/// may be a file redirecting elsewhere, may name a gitdir that no longer
+/// exists, and says nothing about whether `git` is on `PATH` -- which is the
+/// other way the commit legitimately comes back unknown.
+fn repository_present() -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--git-dir"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 /// Ask cargo to re-run this script whenever the checked-out commit changes.

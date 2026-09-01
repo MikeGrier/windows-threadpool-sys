@@ -135,41 +135,84 @@ fn this_binarys_identity_is_readable_and_names_its_version() {
 }
 
 #[test]
-fn the_build_script_stamped_a_real_commit_here() {
+fn the_build_script_stamped_what_this_build_could_determine() {
     // Guards against the build script silently emitting nothing: every stamp
     // would then be empty, `commit` would be `None` everywhere, and the shape
     // assertions above would all still pass while the record carried no
     // identity at all.
     //
-    // This suite is built from a git working copy, so the commit *is*
-    // determinable and must have been determined. On a machine where it is
-    // genuinely unavailable -- a crates.io tarball, a source zip -- this test
-    // is not the one that runs, because that is not where the suite runs.
+    // # Both outcomes are asserted, because both are correct somewhere
+    //
+    // An earlier version of this test simply required a commit, on the reasoning
+    // that the suite is built from a working copy. That is usually true and is
+    // not a property of the suite: `cargo mutants` builds from a scratch copy of
+    // the tree with `.git` left behind, and this test then failed in the
+    // *unmutated* baseline and stopped the run before a single mutant was
+    // tested. A `cargo install` from a crates.io tarball and a downloaded source
+    // zip reach the same state, and for those the honest answer is `None`.
+    //
+    // So the build script reports whether a repository was there to ask, and
+    // this asserts the right thing in each case rather than skipping. Skipping
+    // would leave the silent-emit defect uncaught in exactly the environment the
+    // skip fires in; requiring a commit unconditionally calls a correct build a
+    // failure. Neither branch is vacuous -- what is forbidden is the build
+    // script disagreeing with its own surroundings.
     let current = BuildIdentity::current();
 
-    let commit = current
-        .commit
-        .expect("the build script must find a commit when built from a repository");
-    assert!(
-        commit.len() == 12 && commit.chars().all(|c| c.is_ascii_hexdigit()),
-        "the stamped commit is not a shortened hex sha: {commit:?}"
-    );
-    assert!(
-        current.dirty.is_some(),
-        "the tree state must be determinable from a repository"
-    );
-    assert_eq!(
-        current.source,
-        BuildSource::Local,
-        "a working-copy build must report itself as local"
-    );
+    if built_from_a_repository() {
+        let commit = current
+            .commit
+            .expect("a repository was available, so the commit must have been determined");
+        assert!(
+            commit.len() == 12 && commit.chars().all(|c| c.is_ascii_hexdigit()),
+            "the stamped commit is not a shortened hex sha: {commit:?}"
+        );
+        assert!(
+            current.dirty.is_some(),
+            "the tree state must be determinable from a repository"
+        );
+        assert_eq!(
+            current.source,
+            BuildSource::Local,
+            "a working-copy build must report itself as local"
+        );
+    } else {
+        // The honest-unknown case, and it has real content: "unknown" must mean
+        // unknown all the way through rather than a guess or a stale value.
+        assert!(
+            current.commit.is_none(),
+            "no repository was available, yet a commit was stamped: {:?}",
+            current.commit
+        );
+        assert!(
+            current.dirty.is_none(),
+            "no repository was available, yet a tree state was claimed"
+        );
+        assert_eq!(
+            current.source,
+            BuildSource::Unknown,
+            "a build that could not identify itself must say so"
+        );
+    }
+}
+
+/// Whether the build script found a repository to read.
+///
+/// Set by `build.rs`, not recomputed here: what this test checks is that the
+/// stamp agrees with the conditions the *build* ran under, and those are not
+/// necessarily the conditions the test runs under -- a binary built in a
+/// working copy can be executed anywhere.
+fn built_from_a_repository() -> bool {
+    !env!("PLACEMENT_PROBE_REPOSITORY_OUT").is_empty()
 }
 
 #[test]
 fn a_local_development_build_does_not_claim_to_be_official() {
-    // This suite runs from a working copy, never from CI, so the binary under
-    // test must not pass as official. If this ever fails, the build script is
-    // claiming something it cannot know.
+    // This suite is never built by the release workflow, so whatever else the
+    // build could determine, it must not pass as official. That holds in both
+    // worlds the test above distinguishes: a working copy stamps `Local`, and a
+    // tree with no repository stamps `Unknown`. If this ever fails, the build
+    // script is claiming something it cannot know.
     assert!(
         !BuildIdentity::current().is_official(),
         "a build from a working copy claimed to be official: {}",
