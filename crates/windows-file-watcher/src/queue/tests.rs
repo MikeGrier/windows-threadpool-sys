@@ -102,7 +102,7 @@ fn notifications_are_received_in_send_order() {
         deliver(&sender, batch(watch, &[&format!("file-{index}.txt")]));
     }
     for index in 0..16 {
-        let received = receiver.recv().expect("a notification");
+        let received = next(&receiver, "a notification");
         assert_eq!(names(&received), vec![format!("file-{index}.txt")]);
     }
 }
@@ -122,15 +122,15 @@ fn changes_and_desyncs_share_one_ordered_stream() {
     );
     deliver(&sender, batch(watch, &["after.txt"]));
 
-    assert_eq!(names(&receiver.recv().expect("first")), vec!["before.txt"]);
+    assert_eq!(names(&next(&receiver, "first")), vec!["before.txt"]);
     assert!(matches!(
-        receiver.recv().expect("second"),
+        next(&receiver, "second"),
         Notification::Desync {
             cause: DesyncCause::Overflow,
             ..
         }
     ));
-    assert_eq!(names(&receiver.recv().expect("third")), vec!["after.txt"]);
+    assert_eq!(names(&next(&receiver, "third")), vec!["after.txt"]);
 }
 
 #[test]
@@ -144,8 +144,8 @@ fn every_notification_carries_its_subscription() {
             cause: DesyncCause::Coarse,
         },
     );
-    assert_eq!(receiver.recv().expect("a").watch(), WatchId::from_raw(10));
-    assert_eq!(receiver.recv().expect("b").watch(), WatchId::from_raw(20));
+    assert_eq!(next(&receiver, "a").watch(), WatchId::from_raw(10));
+    assert_eq!(next(&receiver, "b").watch(), WatchId::from_raw(20));
 }
 
 #[test]
@@ -248,7 +248,7 @@ fn order_is_preserved_per_sender_under_concurrency() {
 
     let mut seen_a = Vec::new();
     let mut seen_b = Vec::new();
-    while let Some(item) = receiver.recv() {
+    while let Some(item) = receiver.recv_timeout(Duration::from_secs(5)) {
         let name = names(&item).remove(0);
         if item.watch() == WatchId::from_raw(1) {
             seen_a.push(name);
@@ -271,7 +271,7 @@ fn recv_blocks_until_something_arrives() {
         std::thread::sleep(Duration::from_millis(50));
         deliver(&sender, batch(WatchId::from_raw(1), &["late.txt"]));
     });
-    let received = receiver.recv().expect("the late notification");
+    let received = next(&receiver, "the late notification");
     assert_eq!(names(&received), vec!["late.txt"]);
     handle.join().expect("sender thread");
 }
@@ -343,8 +343,8 @@ fn queued_items_are_drained_before_disconnection_is_reported() {
     deliver(&sender, batch(WatchId::from_raw(1), &["b.txt"]));
     drop(sender);
 
-    assert_eq!(names(&receiver.recv().expect("a")), vec!["a.txt"]);
-    assert_eq!(names(&receiver.recv().expect("b")), vec!["b.txt"]);
+    assert_eq!(names(&next(&receiver, "a")), vec!["a.txt"]);
+    assert_eq!(names(&next(&receiver, "b")), vec!["b.txt"]);
     assert_stream_ended(&receiver, "the stream should be finished");
 }
 
@@ -487,7 +487,7 @@ fn has_room_accounts_for_a_pending_latch() {
     assert!(!sender.has_room(), "the queue is full, no room at all");
 
     // Draining the queued entry frees a slot, but the latch is still owed.
-    let _ = receiver.recv().expect("the queued entry");
+    let _ = next(&receiver, "the queued entry");
     assert!(
         !sender.has_room(),
         "the freed slot is already earmarked for the pending latch flush"
@@ -513,9 +513,9 @@ fn a_dropped_notification_is_reported_as_a_desync_not_lost_silently() {
         Delivery::Latched
     );
 
-    assert_eq!(names(&receiver.recv().expect("first")), vec!["fill-0"]);
-    assert_eq!(names(&receiver.recv().expect("second")), vec!["fill-1"]);
-    let reported = receiver.recv().expect("the loss report");
+    assert_eq!(names(&next(&receiver, "first")), vec!["fill-0"]);
+    assert_eq!(names(&next(&receiver, "second")), vec!["fill-1"]);
+    let reported = next(&receiver, "the loss report");
     assert!(matches!(
         reported,
         Notification::Desync {
@@ -540,14 +540,14 @@ fn a_latched_loss_is_reported_after_everything_that_preceded_it() {
 
     // Two slots, so the flushed desync and the new notification both fit and
     // their relative order is what is under test.
-    assert_eq!(names(&receiver.recv().expect("first")), vec!["first.txt"]);
-    assert_eq!(names(&receiver.recv().expect("second")), vec!["second.txt"]);
+    assert_eq!(names(&next(&receiver, "first")), vec!["first.txt"]);
+    assert_eq!(names(&next(&receiver, "second")), vec!["second.txt"]);
     deliver(&sender, batch(watch, &["fourth.txt"]));
 
-    assert_eq!(names(&receiver.recv().expect("third")), vec!["third.txt"]);
+    assert_eq!(names(&next(&receiver, "third")), vec!["third.txt"]);
     assert!(
         matches!(
-            receiver.recv().expect("the desync"),
+            next(&receiver, "the desync"),
             Notification::Desync {
                 cause: DesyncCause::QueueFull,
                 ..
@@ -555,7 +555,7 @@ fn a_latched_loss_is_reported_after_everything_that_preceded_it() {
         ),
         "the loss belongs after the changes that preceded it and before the one that followed"
     );
-    assert_eq!(names(&receiver.recv().expect("fourth")), vec!["fourth.txt"]);
+    assert_eq!(names(&next(&receiver, "fourth")), vec!["fourth.txt"]);
 }
 
 #[test]
@@ -688,7 +688,7 @@ fn losses_are_latched_per_subscription() {
     }
     assert_eq!(receiver.latched(), 4, "each subscription is owed its own");
 
-    let _ = receiver.recv().expect("the queued one");
+    let _ = next(&receiver, "the queued one");
     let mut reported: Vec<u64> = Vec::new();
     while let Some(item) = receiver.try_recv() {
         reported.push(item.watch().get());
@@ -755,7 +755,7 @@ fn a_freed_slot_reports_the_owed_loss_before_it_carries_new_changes() {
     // is latched too -- and having been reported, the latch reopens for it.
     assert_eq!(sender.send(batch(watch, &["next.txt"])), Delivery::Latched);
     assert!(matches!(
-        receiver.recv().expect("the flushed desync"),
+        next(&receiver, "the flushed desync"),
         Notification::Desync {
             cause: DesyncCause::QueueFull,
             ..
@@ -765,7 +765,7 @@ fn a_freed_slot_reports_the_owed_loss_before_it_carries_new_changes() {
     // own -- synthesised here, because the queue drained before anything else
     // was sent.
     assert!(matches!(
-        receiver.recv().expect("the second desync"),
+        next(&receiver, "the second desync"),
         Notification::Desync {
             cause: DesyncCause::QueueFull,
             ..
@@ -775,7 +775,7 @@ fn a_freed_slot_reports_the_owed_loss_before_it_carries_new_changes() {
 
     // With nothing owed, the released slot carries traffic normally again.
     deliver(&sender, batch(watch, &["now.txt"]));
-    assert_eq!(names(&receiver.recv().expect("now")), vec!["now.txt"]);
+    assert_eq!(names(&next(&receiver, "now")), vec!["now.txt"]);
 }
 
 #[test]
@@ -826,7 +826,7 @@ fn a_reservation_keeps_the_queue_connected() {
         watch: WatchId::from_raw(1),
         cause: DesyncCause::Reestablished,
     });
-    assert!(receiver.recv().is_some());
+    assert!(receiver.recv_timeout(Duration::from_secs(5)).is_some());
     assert!(receiver.is_disconnected());
 }
 
@@ -1030,9 +1030,9 @@ fn a_bound_of_one_still_reports_its_own_saturation() {
     assert_eq!(sender.send(batch(watch, &["b.txt"])), Delivery::Latched);
     assert_eq!(sender.send(batch(watch, &["c.txt"])), Delivery::Latched);
 
-    assert_eq!(names(&receiver.recv().expect("a")), vec!["a.txt"]);
+    assert_eq!(names(&next(&receiver, "a")), vec!["a.txt"]);
     assert!(matches!(
-        receiver.recv().expect("the desync"),
+        next(&receiver, "the desync"),
         Notification::Desync {
             cause: DesyncCause::QueueFull,
             ..
@@ -1048,7 +1048,7 @@ fn a_blocked_receiver_is_woken_by_a_latched_loss() {
     let (sender, receiver) = bounded(1);
     let watch = WatchId::from_raw(1);
     deliver(&sender, batch(watch, &["a.txt"]));
-    assert_eq!(names(&receiver.recv().expect("a")), vec!["a.txt"]);
+    assert_eq!(names(&next(&receiver, "a")), vec!["a.txt"]);
 
     // The background thread only delivers "b.txt" and hands `sender` back
     // once that has happened; the overflow send that must observe a full
@@ -1070,9 +1070,9 @@ fn a_blocked_receiver_is_woken_by_a_latched_loss() {
         .expect("the background thread delivered");
     assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
 
-    assert_eq!(names(&receiver.recv().expect("b")), vec!["b.txt"]);
+    assert_eq!(names(&next(&receiver, "b")), vec!["b.txt"]);
     assert!(matches!(
-        receiver.recv().expect("the desync"),
+        next(&receiver, "the desync"),
         Notification::Desync {
             cause: DesyncCause::QueueFull,
             ..
@@ -1101,7 +1101,7 @@ fn a_receiver_that_never_asks_allocates_no_doorbell() {
     // kernel object it never waits on.
     let (sender, receiver) = channel();
     deliver(&sender, batch(WatchId::from_raw(1), &["a.txt"]));
-    let _ = receiver.recv().expect("a notification");
+    let _ = next(&receiver, "a notification");
     assert!(
         receiver.shared.doorbell.get().is_none(),
         "the event must not exist until it is asked for"
@@ -1360,7 +1360,7 @@ fn a_drained_queue_with_a_loss_owed_is_empty_but_still_has_something_to_take() {
     assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
 
     assert_eq!(
-        names(&receiver.recv().expect("the queued batch")),
+        names(&next(&receiver, "the queued batch")),
         vec!["queued.txt"]
     );
 
@@ -1374,7 +1374,7 @@ fn a_drained_queue_with_a_loss_owed_is_empty_but_still_has_something_to_take() {
     );
 
     assert!(matches!(
-        receiver.recv().expect("the synthesised loss report"),
+        next(&receiver, "the synthesised loss report"),
         Notification::Desync {
             cause: DesyncCause::QueueFull,
             ..
@@ -1401,7 +1401,7 @@ fn has_pending_tracks_the_doorbell_exactly_through_a_latched_loss() {
     assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
     assert_eq!(receiver.has_pending(), is_signalled(doorbell));
 
-    receiver.recv().expect("the queued batch");
+    next(&receiver, "the queued batch");
     assert_eq!(
         receiver.has_pending(),
         is_signalled(doorbell),
@@ -1410,7 +1410,7 @@ fn has_pending_tracks_the_doorbell_exactly_through_a_latched_loss() {
     assert!(is_signalled(doorbell), "the doorbell is still ringing");
     assert!(receiver.is_empty(), "yet the queue reports itself empty");
 
-    receiver.recv().expect("the loss report");
+    next(&receiver, "the loss report");
     assert_eq!(receiver.has_pending(), is_signalled(doorbell));
     assert!(!is_signalled(doorbell), "and only now does it stop");
 }
@@ -1474,7 +1474,7 @@ fn a_parked_producer_is_prodded_at_the_slot_has_room_actually_becomes_true() {
     // free() == 1, latched == 1: the old edge fired here, but has_room is
     // still false, so a prod now is wasted -- and, worse, it is the *only*
     // one that ever comes.
-    receiver.recv().expect("first");
+    next(&receiver, "first");
     assert!(
         !sender.has_room(),
         "the freed slot is owed to the latch flush, not to a new notification"
@@ -1488,7 +1488,7 @@ fn a_parked_producer_is_prodded_at_the_slot_has_room_actually_becomes_true() {
 
     // free() == 2, latched == 1: has_room becomes true, so the prod must land
     // here. The old edge skipped it and never fired again.
-    receiver.recv().expect("second");
+    next(&receiver, "second");
     assert!(sender.has_room(), "room genuinely exists now");
     assert_eq!(
         producer.count(),
@@ -1517,15 +1517,15 @@ fn draining_only_latched_reports_still_reaches_the_resume_edge() {
     }
     assert_eq!(receiver.latched(), 2);
 
-    receiver.recv().expect("first queued");
-    receiver.recv().expect("second queued");
+    next(&receiver, "first queued");
+    next(&receiver, "second queued");
     // Queue empty, free() == 2, latched == 2: still no room.
     assert!(!sender.has_room());
     assert_eq!(producer.count(), 0);
 
     // Taking one synthesised report is what creates the room.
     assert!(matches!(
-        receiver.recv().expect("a synthesised loss report"),
+        next(&receiver, "a synthesised loss report"),
         Notification::Desync {
             cause: DesyncCause::QueueFull,
             ..
