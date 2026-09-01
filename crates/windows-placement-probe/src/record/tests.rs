@@ -30,9 +30,13 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
         producer_group: 0,
         producer_number: 0,
         producer_numa_node: 0,
+        // Matching the `ec0` in the slice above. A fixture whose fields
+        // contradict its own slice string would teach the wrong shape.
+        producer_efficiency_class: 0,
         consumer_group: 0,
         consumer_number: 1,
         consumer_numa_node: 0,
+        consumer_efficiency_class: 0,
         nanos_per_item: 10.5,
         consumer_batch: 84.9,
         producer_batch: 1.0,

@@ -51,7 +51,7 @@ use crate::machine::MachineDescription;
 /// **The golden files are append-only and a published version is never
 /// redefined.** Once a record exists in the wild claiming schema N, N's meaning
 /// is fixed, because that record cannot be regenerated.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// One run's complete output.
 #[derive(Clone, Debug)]
@@ -139,12 +139,29 @@ pub struct MeasurementRecord {
     pub producer_number: u8,
     /// The producer's NUMA node.
     pub producer_numa_node: u32,
+    /// The producer's efficiency class.
+    ///
+    /// **Without this a `by_class` row cannot be attributed to the class it
+    /// measures.** That list holds one same-class pair per class, so two rows
+    /// agreeing on `placement` and `strategy` are the comparison rather than
+    /// duplicates -- and a reader with no class field has no way to tell which
+    /// row describes the fast cores. Carried on every row, not only those, so
+    /// a heterogeneous pair in `placements` or `node_hops` is legible too:
+    /// Windows will schedule across classes, and a hop between a performance
+    /// core and an efficiency core is a different measurement from one between
+    /// two peers.
+    pub producer_efficiency_class: u8,
     /// The consumer's processor group.
     pub consumer_group: u16,
     /// The consumer's processor number within its group.
     pub consumer_number: u8,
     /// The consumer's NUMA node.
     pub consumer_numa_node: u32,
+    /// The consumer's efficiency class. See
+    /// [`Self::producer_efficiency_class`]; in a `by_class` row the two are
+    /// equal by construction, and their being equal is what makes the row a
+    /// like-for-like comparison.
+    pub consumer_efficiency_class: u8,
     /// Median nanoseconds per item handed across the ring.
     pub nanos_per_item: f64,
     /// How many items each consumer-side shared read was amortised over.
@@ -174,9 +191,11 @@ impl From<&Measurement> for MeasurementRecord {
             producer_group: measurement.producer.group,
             producer_number: measurement.producer.number,
             producer_numa_node: measurement.producer.numa_node,
+            producer_efficiency_class: measurement.producer.efficiency_class,
             consumer_group: measurement.consumer.group,
             consumer_number: measurement.consumer.number,
             consumer_numa_node: measurement.consumer.numa_node,
+            consumer_efficiency_class: measurement.consumer.efficiency_class,
             nanos_per_item: measurement.nanos_per_item,
             consumer_batch: measurement.consumer_batch,
             producer_batch: measurement.producer_batch,

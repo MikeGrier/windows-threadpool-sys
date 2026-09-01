@@ -26,6 +26,7 @@ pub fn render(record: &SubmissionRecord) -> String {
     render_header(&mut out, record);
     render_machine(&mut out, record);
     render_placements(&mut out, record);
+    render_by_class(&mut out, record);
     render_node_hops(&mut out, record);
     render_trust(&mut out, record);
     out
@@ -125,6 +126,56 @@ fn render_placements(out: &mut String, record: &SubmissionRecord) {
         let _ = writeln!(out, "  {}", entry.placement);
         let _ = writeln!(out, "      {}", entry.slice);
     }
+}
+
+fn render_by_class(out: &mut String, record: &SubmissionRecord) {
+    let _ = writeln!(out);
+    let _ = writeln!(out, "-- the handoff, by efficiency class --");
+
+    if record.by_class.is_empty() {
+        // Same reasoning as the empty node-hop table: on a homogeneous machine
+        // there is no second class to compare against, and saying so is a fact
+        // about the host rather than a measurement that failed.
+        let _ = writeln!(
+            out,
+            "  Every core on this machine reports the same efficiency class, so"
+        );
+        let _ = writeln!(
+            out,
+            "  there is no fast-against-slow comparison to draw. On a machine"
+        );
+        let _ = writeln!(
+            out,
+            "  with performance and efficiency cores this table has a row each."
+        );
+        return;
+    }
+
+    // Class first, because it is what distinguishes these rows: the pair inside
+    // a class is same-class and same-cache by construction, so `placement` and
+    // `strategy` repeat down the table and only the class and the numbers move.
+    let _ = writeln!(
+        out,
+        "{:<8} {:<26} {:<10} {:>12} {:>12}",
+        "class", "placement", "strategy", "ns/item", "batch depth"
+    );
+    for entry in &record.by_class {
+        let _ = writeln!(
+            out,
+            "{:<8} {:<26} {:<10} {:>12.1} {:>12.1}",
+            entry.producer_efficiency_class,
+            entry.placement,
+            entry.strategy,
+            entry.nanos_per_item,
+            entry.consumer_batch
+        );
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  Higher class is the faster core. The values are only comparable"
+    );
+    let _ = writeln!(out, "  against each other on this machine.");
 }
 
 fn render_node_hops(out: &mut String, record: &SubmissionRecord) {

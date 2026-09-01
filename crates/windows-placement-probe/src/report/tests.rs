@@ -269,3 +269,76 @@ fn the_placement_table_says_it_covers_one_direction() {
         "the placement table does not say what it covers:\n{text}"
     );
 }
+
+#[test]
+fn the_by_class_rows_are_rendered_and_labelled_by_class() {
+    // The defect this guards: `by_class` was measured, recorded, and then
+    // dropped from the report, so an entire dimension of the run existed only
+    // in the raw JSON. Rendering it is not enough on its own -- the rows of
+    // that list agree on placement and strategy by construction, so the class
+    // is the only thing distinguishing them and must appear.
+    let mut record = fully_populated();
+    let mut fast = record.by_class[0].clone();
+    fast.producer_efficiency_class = 1;
+    fast.consumer_efficiency_class = 1;
+    fast.nanos_per_item = 4.25;
+    record.by_class.push(fast);
+
+    let text = render(&record);
+
+    assert!(
+        text.contains("efficiency class"),
+        "the by-class section is missing entirely: {text}"
+    );
+    for entry in &record.by_class {
+        assert!(
+            text.contains(&format!("{:.1}", entry.nanos_per_item)),
+            "the measurement for class {} is absent from the report: {text}",
+            entry.producer_efficiency_class
+        );
+    }
+    // Both classes named in the *class column*, so the two rows can be told
+    // apart. Deliberately not a bare `contains("0")`: every row carries times
+    // like "10.5", so a substring search would pass on a table that never
+    // printed a class at all.
+    // Bounded at the next heading. Without that, the scan runs on into the node
+    // hop table, whose rows begin "0 -> 0" and so also start with a parsable
+    // number -- which is how the first draft of this test read a third class
+    // that the by-class table never printed.
+    let section = text
+        .split("-- the handoff, by efficiency class --")
+        .nth(1)
+        .expect("the by-class section must exist")
+        .split(
+            "
+--",
+        )
+        .next()
+        .expect("split always yields at least one part");
+    let classes: Vec<&str> = section
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|first| first.parse::<u8>().is_ok())
+        .collect();
+    assert_eq!(
+        classes,
+        vec!["0", "1"],
+        "the class column must name each row's class: {section}"
+    );
+}
+
+#[test]
+fn a_homogeneous_machine_says_why_there_is_no_class_comparison() {
+    // Same contract as the single-node hop table: an empty section must read as
+    // a fact about the host, not as a measurement that failed.
+    let mut record = fully_populated();
+    record.by_class.clear();
+
+    let text = render(&record);
+
+    assert!(text.contains("same efficiency class"), "got {text}");
+    assert!(
+        !text.to_lowercase().contains("error"),
+        "a homogeneous machine was reported as an error: {text}"
+    );
+}
