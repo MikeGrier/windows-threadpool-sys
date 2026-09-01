@@ -991,14 +991,12 @@ impl Drop for IoRing {
     fn drop(&mut self) {
         // A count of how many times this body has run, so a test can confirm
         // the rundown-and-close actually executes rather than trusting the
-        // impl exists. Read as "increased by at least this many" rather than
-        // an exact value: other rings drop concurrently on the same counter
-        // from other tests, but that only ever adds to it, and a mutation
-        // that replaces this whole body removes the increment along with
-        // everything else -- so it is caught regardless of what else the
-        // suite is doing at the same time.
+        // impl exists. The counter is thread-local: a process-wide one is
+        // incremented by every other test's rings as they drop, which would
+        // let an `after > before` assertion be satisfied by somebody else's
+        // drop and mask the very mutation it exists to catch.
         #[cfg(test)]
-        DROP_RUNS.fetch_add(1, Ordering::Relaxed);
+        DROP_RUNS.with(|runs| runs.set(runs.get() + 1));
 
         // Best-effort rundown: a ring with an operation still outstanding at
         // drop time is a use bug (M3's Batch/Token are the sanctioned way to
@@ -1016,10 +1014,19 @@ impl Drop for IoRing {
     }
 }
 
-/// How many times [`IoRing`]'s `Drop` impl has run; see its use there.
+/// How many times [`IoRing`]'s `Drop` impl has run **on the calling thread**;
+/// see its use there.
+///
+/// Thread-local rather than a shared `static`, and that is load-bearing rather
+/// than tidiness. `cargo test` runs tests as threads in one process, so a
+/// process-wide counter is incremented by every other test's rings as they
+/// drop -- and an assertion of the form `after > before` is then satisfied by
+/// *somebody else's* drop, which is exactly the mutant it was written to catch.
+/// A thread-local is only touched by rings dropped on this test's own thread.
 #[cfg(test)]
-pub(crate) static DROP_RUNS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    pub(crate) static DROP_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 mod tests;

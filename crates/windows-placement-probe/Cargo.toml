@@ -3,12 +3,14 @@
 [package]
 name = "windows-placement-probe"
 version = "0.1.0"
-# Publication to crates.io is an open decision -- see PT-5.3 in
-# CHECKLIST-placement-tool.md. The distribution that matters is the CI-built
-# binary attached to a GitHub release, because the download is the provenance:
-# a binary built here is traceable to the commit that produced it in a way a
-# local build of identical source is not. `false` until that decision is made,
-# so the crate cannot be published by accident before it is meant to be.
+# Publishing to crates.io is decided -- yes, but not yet (PT-5.3 in
+# CHECKLIST-placement-tool.md, reasoning in DESIGN-NOTES.md). The distribution
+# that matters is the CI-built binary attached to a GitHub release, because the
+# download is the provenance: a binary built here is traceable to the commit
+# that produced it in a way a local build of identical source is not. Publishing
+# only after that path exists and has been walked end to end keeps the strong
+# path the one a runner meets first. `false` until PT-5.6 performs the
+# publication, so the crate cannot go out early by accident.
 publish = false
 authors.workspace = true
 edition.workspace = true

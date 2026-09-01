@@ -138,13 +138,27 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   [core_affinity.rs](crates/windows-platform-probes/src/bin/core_affinity.rs) and
   [peer_index_cache.rs](crates/windows-platform-probes/src/bin/peer_index_cache.rs). The banner
   helpers that hardcode stdout are part of it, not an exception to it.
-  **Deferred from that pull request deliberately, and the reason is sequencing rather than doubt.** It
-  is one refactor across seven binaries; done properly it means choosing the seam once and applying it
-  uniformly, which is a large diff touching every probe's output. Landing it inside a 90-commit branch
-  already under review would mix it with unrelated correctness work.
+  **The PowerShell tools are NOT part of this item, because they are already done.** A later review
+  round on the same pull request observed that the inventory above named only Rust binaries while five
+  scripts emitted from many sites, so those were converted in that pull request rather than queued
+  here: [inject-mutant.ps1](tools/inject-mutant.ps1),
+  [check-publishable.ps1](tools/check-publishable.ps1),
+  [run-numa-spikes.ps1](tools/run-numa-spikes.ps1), [run-mutants.ps1](tools/run-mutants.ps1) and
+  [run-sabotage.ps1](tools/run-sabotage.ps1) each now route everything through one `Write-Report`
+  sink. They were small enough to convert in place, which is exactly why they did not need deferring.
+  (`run-sabotage.ps1`'s `Exit-WithMessage` is deliberately outside its sink: that path writes to
+  stderr and exits, and there the destination is part of the meaning.)
+  **What remains deferred is the seven Rust binaries, and the reason is sequencing rather than doubt.**
+  It is one refactor across seven binaries; done properly it means choosing the seam once and applying
+  it uniformly, which is a large diff touching every probe's output. Landing it inside a 90-commit
+  branch already under review would mix it with unrelated correctness work.
   **The point of the rule is that output becomes testable, so the conversion is not done until
   something tests it.** An abstraction introduced without a capture-based test spends the cost and
-  skips the benefit -- do not check this item off on the refactor alone.
+  skips the benefit -- do not check this item off on the refactor alone. That test is what the Rust
+  binaries still owe; a PowerShell sink is a function whose destination can be swapped, but this
+  workspace runs no PowerShell test harness in which to assert against it, and inventing one to cover
+  five diagnostic scripts is not a cost this item is willing to spend without deciding to adopt such a
+  harness first.
   Start with `placement_probe`: its output is a published artifact that strangers paste into a
   discussion thread, so "can this be captured and asserted end to end?" has real value there rather
   than being architectural tidiness.

@@ -120,6 +120,23 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# The single output sink. Every message this tool emits goes through here, so
+# the destination and the formatting stay separable from the call sites that
+# produce the content -- the repository's one-output-sink rule.
+function Write-Report {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Message,
+        [ValidateSet('info', 'detail', 'note', 'warn')][string] $Level = 'info'
+    )
+    $colour = switch ($Level) {
+        'detail' { 'DarkGray' }
+        'note' { 'Cyan' }
+        'warn' { 'Yellow' }
+        default { 'Gray' }
+    }
+    Write-Host $Message -ForegroundColor $colour
+}
+
 $repo = (git rev-parse --show-toplevel).Replace('/', '\')
 if (-not $OutputDirectory) {
     $leaf = if ($File) { [System.IO.Path]::GetFileNameWithoutExtension($File) } else { $Package }
@@ -145,14 +162,14 @@ if ($previous -eq 1) {
     # -- the one hole in the restore, since a hard kill runs no cleanup. Say so,
     # because silently treating it as the user's own preference would restore it
     # to 1 afterwards and leave the machine permanently changed by a crash.
-    Write-Host "NOTE: DontShowUI was already 1. If a previous run was killed, clear it after:" -ForegroundColor Yellow
-    Write-Host "  Remove-ItemProperty '$werKey' -Name DontShowUI" -ForegroundColor Yellow
+    Write-Report "NOTE: DontShowUI was already 1. If a previous run was killed, clear it after:" -Level warn
+    Write-Report "  Remove-ItemProperty '$werKey' -Name DontShowUI" -Level warn
 }
 
 try {
     if (-not $hadKey) { New-Item -Path $werKey -Force | Out-Null }
     Set-ItemProperty -Path $werKey -Name DontShowUI -Value 1 -Type DWord
-    Write-Host "WER dialogs suppressed for this run (DontShowUI=1)." -ForegroundColor Cyan
+    Write-Report "WER dialogs suppressed for this run (DontShowUI=1)." -Level note
 
     $argv = @('mutants', '-p', $Package, '-j', $Jobs,
         '--output', $OutputDirectory, '--all-features')
@@ -164,7 +181,7 @@ try {
     }
     if ($File) { $argv += @('--file', $File) }
 
-    Write-Host "cargo $($argv -join ' ')" -ForegroundColor DarkGray
+    Write-Report "cargo $($argv -join ' ')" -Level detail
     & cargo @argv
     $code = $LASTEXITCODE
 }
@@ -185,7 +202,7 @@ finally {
         Remove-ItemProperty -Path $werKey -Name DontShowUI -ErrorAction SilentlyContinue
         if (-not $hadKey) { Remove-Item -Path $werKey -ErrorAction SilentlyContinue }
     }
-    Write-Host "WER dialog setting restored." -ForegroundColor Cyan
+    Write-Report "WER dialog setting restored." -Level note
 }
 
 $out = Join-Path $OutputDirectory 'mutants.out'
@@ -194,7 +211,7 @@ foreach ($name in 'caught', 'missed', 'timeout', 'unviable') {
     $count = if (Test-Path $path) { (Get-Content $path | Measure-Object -Line).Lines } else { 0 }
     "{0,-9} {1}" -f $name, $count
 }
-Write-Host "results: $out" -ForegroundColor DarkGray
+Write-Report "results: $out" -Level detail
 
 # cargo-mutants exits non-zero when anything survived, which is the normal
 # outcome of an investigative run rather than a failure of this script.

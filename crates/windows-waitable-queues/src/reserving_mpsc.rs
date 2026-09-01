@@ -367,8 +367,9 @@ struct Shared<T> {
 // publishes it. The write of the item therefore happens-before the read, and no
 // two threads ever touch the same slot's contents at the same time. `T: Send` is
 // required and sufficient because an item is moved between threads and never
-// referenced from both.//
-// The 	eardown field is deliberately NOT covered by that argument, because it
+// referenced from both.
+//
+// The `teardown` field is deliberately NOT covered by that argument, because it
 // cannot be: it holds a boxed FnMut, which is Send but not Sync, so this
 // impl is forcing Sync onto a field that does not have it. That is sound for
 // a narrower reason -- the field is unreachable through a shared reference. It

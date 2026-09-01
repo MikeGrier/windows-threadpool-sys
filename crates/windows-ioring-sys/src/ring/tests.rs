@@ -2,7 +2,6 @@
 use super::{Completion, InjectedFailure, IoRing, Op, OpSupport};
 use crate::IoRingErrorExt;
 use crate::capability::{RingVersion, capabilities};
-use std::sync::atomic::Ordering;
 
 #[test]
 fn op_support_starts_empty() {
@@ -167,17 +166,21 @@ fn dropping_a_ring_actually_runs_its_drop_body() {
     // the real body, so a mutation that replaces the whole body removes the
     // increment along with everything else.
     //
-    // Read as "increased by at least one" rather than "increased by exactly
-    // one": other tests' rings drop concurrently on this same counter, but
-    // that only ever adds further increments, and can never mask this one --
-    // so the assertion is race-free despite the shared static.
-    let before = super::DROP_RUNS.load(Ordering::Relaxed);
+    // The counter is thread-local, and an EXACT count is asserted. An earlier
+    // version used a process-wide static and asserted `after > before`, which
+    // is not race-free: `cargo test` runs tests as threads in one process, so
+    // another test dropping any ring between the two reads satisfies the
+    // assertion on its own -- masking precisely the mutant this exists to
+    // catch. Only rings dropped on this thread can move a thread-local, and
+    // this test drops exactly one.
+    let before = super::DROP_RUNS.with(std::cell::Cell::get);
     let ring = IoRing::new(8, 8).expect("create ring");
     drop(ring);
-    let after = super::DROP_RUNS.load(Ordering::Relaxed);
-    assert!(
-        after > before,
-        "dropping a ring must run its Drop impl at least once (before={before}, after={after})"
+    let after = super::DROP_RUNS.with(std::cell::Cell::get);
+    assert_eq!(
+        after,
+        before + 1,
+        "dropping one ring must run its Drop impl exactly once (before={before}, after={after})"
     );
 }
 

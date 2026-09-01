@@ -233,23 +233,45 @@
 #![warn(missing_docs)]
 #![warn(unsafe_op_in_unsafe_fn)]
 
+// Every item is gated, so the crate builds to an empty shell off Windows rather
+// than failing: the implementation rests on `std::os::windows::io` and
+// `windows-sys` throughout, and the whole premise -- readiness that *is* a
+// waitable `HANDLE` -- has no meaning on another platform. This mirrors the
+// sibling Windows-only crates here, and the crate documentation above states
+// the same contract, so the two cannot drift apart.
+
+#[cfg(windows)]
 mod blocking;
+#[cfg(windows)]
 mod capacity;
+#[cfg(windows)]
 pub mod disposal;
+#[cfg(windows)]
 mod doorbell;
+#[cfg(windows)]
 mod error;
+#[cfg(windows)]
 mod metrics;
+#[cfg(windows)]
 mod options;
-#[cfg(test)]
+#[cfg(all(windows, test))]
 mod race_hooks;
+#[cfg(windows)]
 pub mod reserving_mpsc;
+#[cfg(windows)]
 pub mod slotwise_mpsc;
+#[cfg(windows)]
 pub mod spsc;
+#[cfg(windows)]
 pub mod traits;
 
+#[cfg(windows)]
 pub use disposal::Disposal;
+#[cfg(windows)]
 pub use error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
+#[cfg(windows)]
 pub use options::Options;
+#[cfg(windows)]
 pub use traits::{Bounded, Claim, Consumer, Drain, Observable, Producer, Reserving, Waitable};
 
 /// Pads and aligns a value onto its own cache line.
@@ -263,5 +285,6 @@ pub use traits::{Bounded, Claim, Consumer, Drain, Observable, Producer, Reservin
 /// 128 rather than 64: that is the cache line on aarch64, and on x86-64 the
 /// adjacent-line prefetcher pulls pairs of 64-byte lines, so 64 does not
 /// reliably separate them.
+#[cfg(windows)]
 #[repr(align(128))]
 struct CacheAligned<T>(T);

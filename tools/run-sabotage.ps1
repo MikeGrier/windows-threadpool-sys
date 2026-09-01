@@ -114,6 +114,25 @@ $ErrorActionPreference = 'Stop'
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
+# The single output sink. Every message this tool emits goes through here, so
+# the destination and the formatting stay separable from the call sites that
+# produce the content -- the repository's one-output-sink rule. `Exit-WithMessage`
+# below is deliberately NOT routed through it: that path writes to stderr and
+# then exits, and is the one case where the destination is part of the meaning.
+function Write-Report {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Message,
+        [ValidateSet('info', 'note', 'good', 'bad')][string] $Level = 'info'
+    )
+    $colour = switch ($Level) {
+        'note' { 'Cyan' }
+        'good' { 'Green' }
+        'bad' { 'Red' }
+        default { 'Gray' }
+    }
+    Write-Host $Message -ForegroundColor $colour
+}
+
 # Writes to stderr and exits with a code, rather than Write-Error, which under
 # $ErrorActionPreference = 'Stop' raises a terminating error that propagates out
 # of this script and aborts whatever invoked it. A diagnostic tool reporting a
@@ -267,7 +286,7 @@ foreach ($sabotage in $selected) {
     }
 }
 
-Write-Host 'Baseline: running the unmodified suite.' -ForegroundColor Cyan
+Write-Report 'Baseline: running the unmodified suite.' -Level note
 $baselinePath = Join-Path $OutputDirectory 'baseline.txt'
 $baseline = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $repoRoot `
     -TranscriptPath $baselinePath -BuildSeconds $BuildTimeoutSeconds -TestSeconds $TimeoutSeconds
@@ -280,7 +299,7 @@ if ($baseline.Outcome -ne 'passed') {
             "nothing while looking like a clean bill of health. Fix the suite first."
         ) -join "`n") 2
 }
-Write-Host 'Baseline is green. Sweeping.' -ForegroundColor Cyan
+Write-Report 'Baseline is green. Sweeping.' -Level note
 ''
 
 $results = @()
@@ -353,8 +372,8 @@ foreach ($sabotage in $selected) {
         Actual   = $actual; Ok = $ok; Patch = (Format-Patch -Find $find -Replace $replace)
     }
 
-    $colour = if ($ok) { 'Green' } else { 'Red' }
-    Write-Host ("{0,-58} {1}" -f $sabotage.name, $actual) -ForegroundColor $colour
+    $level = if ($ok) { 'good' } else { 'bad' }
+    Write-Report ("{0,-58} {1}" -f $sabotage.name, $actual) -Level $level
 }
 
 ''
@@ -362,17 +381,17 @@ $results | Select-Object Sabotage, Expected, Actual, Ok | Format-Table -AutoSize
 
 $unexpected = @($results | Where-Object { -not $_.Ok })
 if ($unexpected.Count -eq 0) {
-    Write-Host "All $($results.Count) sabotages behaved as declared." -ForegroundColor Green
+    Write-Report "All $($results.Count) sabotages behaved as declared." -Level good
     exit 0
 }
 
 ''
-Write-Host 'UNEXPECTED RESULTS -- read the patch before concluding the tests have a hole.' -ForegroundColor Red
-Write-Host 'A sabotage that does not actually break anything will be survived for an honest reason.' -ForegroundColor Red
+Write-Report 'UNEXPECTED RESULTS -- read the patch before concluding the tests have a hole.' -Level bad
+Write-Report 'A sabotage that does not actually break anything will be survived for an honest reason.' -Level bad
 foreach ($result in $unexpected) {
     ''
-    Write-Host "  $($result.Sabotage)" -ForegroundColor Red
-    Write-Host "    expected $($result.Expected), got: $($result.Actual)"
+    Write-Report "  $($result.Sabotage)" -Level bad
+    Write-Report "    expected $($result.Expected), got: $($result.Actual)"
     $result.Patch
 }
 ''

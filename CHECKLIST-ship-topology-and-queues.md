@@ -390,7 +390,7 @@ repair from a reviewer's guess that was taken on trust.
   The placement probe's tests name scratch directories without the process id, so two concurrent test
   processes -- which the documented `-j 2` mutation workflow creates -- delete each other's fixtures.
 
-- [ ] **SH-7.8** -- **Reply to every thread and resolve the ones that are addressed**, including the one
+- [x] **SH-7.8** -- **Reply to every thread and resolve the ones that are addressed**, including the one
   finding that was checked and found not to hold: `GetSystemDirectoryW` returning exactly the buffer
   length is unreachable (success excludes the terminator, failure includes it and so exceeds the
   buffer), though the guard is widened anyway so the next reader need not redo the analysis.
