@@ -504,9 +504,50 @@ of test -- the run that prompted this section had 79 survivors in trait impls, a
 single missing idea (nothing exercised the traits generically), and one new test file
 section killed all of them.
 
-Treat `timeout` and `unviable` separately from `caught`: an unviable mutant did not
-compile and says nothing, and a timeout may mean the suite hangs on that mutation rather
-than failing on it, which is worth knowing on its own.
+**Treat `timeout` and `unviable` separately from `caught`.** An unviable mutant did not
+compile and says nothing. A timeout needs interpreting, and in this workspace the
+interpretation is usually the opposite of the alarming reading:
+
+- **In a crate of blocking APIs, a timeout is a detection that has been robbed of its
+  name.** `cargo test` runs every test as a thread in one process (which is deliberate
+  here -- see the nextest note in the cargo section above), so a single test parked on a
+  queue that will never fill stops the *harness* reporting, and the run is recorded as a
+  timeout even though other tests have already failed. Measured: a
+  `windows-waitable-queues` sweep recorded 100 timeouts, and the mutant
+  `<impl Parked for Consumer<T>>::arm -> Ok(true)` was one of them -- yet run against its
+  own test alone it fails in **0.00s**, with the message written for exactly that
+  mutation. The suite cannot pass either way; the timeout only hides which test caught it,
+  and costs the full auto-timeout to do so.
+- So **do not read a timeout as a gap**, and do not go writing tests for one. To find out
+  what a timeout really is, re-inject that single mutant and run the one test that should
+  catch it, or use `cargo_test`'s `bisect` to name the thread that parked.
+- The auto-timeout is `max(20s, 5x baseline)`, so on a fast suite it is the 20s floor. With
+  a 0.31s baseline that is a 60x margin, which is worth knowing because it rules out the
+  other reading: a timeout on this crate cannot be a merely-slower mutant, only a stalled
+  one.
+
+**Some survivors are equivalent mutants, and the answer is to document them in place.**
+An equivalent mutant changes no observable behaviour, so no test can kill it and looking
+for one is wasted effort -- but only the *second* reader knows that, and only if the first
+wrote it down. Record the equivalence as a comment at the mutation site, with the argument
+for why the two forms agree. Three from one crate, as worked examples: `record_depth`'s
+`>` against `>=` differs by one idempotent `fetch_max`; `claim_word`'s `|` against `^`
+cannot differ at all, because the shift leaves the halves disjoint; and `slotwise_mpsc`'s
+lost-race `continue` reaches the same state as the failing compare-exchange it falls
+through to. **Argue it, then measure it anyway** where the claim is about concurrency --
+the third was confirmed by re-injecting the mutant and running the many-producer tests
+thirty times, because a concurrency claim reasoned from source is exactly the kind this
+workspace has been wrong about before.
+
+**Where a fact about constants survives, prefer a `const` assertion to a test.** A mutation
+to a constant is often invisible to every test while still being a real defect. The
+reversed shift in `reserving_mpsc`'s `MAX_RESERVED` passed every existing const assertion,
+because a ceiling wider than the word still satisfies a `<=` against it -- and the count is
+read back out through a cast to `u32`, so the too-wide ceiling truncates silently. Asserting
+that relationship closes it *at compile time*, which is stronger than a test: it cannot be
+skipped, and it fails on the build rather than on a run somebody chose to make. Verify such
+an assertion in both directions -- the mutation must compile cleanly without it and fail to
+compile with it -- or you have not shown it is load-bearing.
 
 ## Scratch directory for temporary files
 
