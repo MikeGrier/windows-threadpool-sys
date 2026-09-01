@@ -347,7 +347,15 @@ fn main() {
         "far node chosen: {far_node} (group {}, mask {:#x})",
         far.Group, far.Mask
     );
-    if near_node == far_node && highest > 0 {
+    // **One definition of vacuity, asked by everything that depends on it.**
+    // The announcement, the final verdict, and the structured record must not
+    // each decide this for themselves: an earlier revision announced that near
+    // and far had collapsed and then let the interpretation run anyway, which
+    // printed a confident "GOVERNS" from a setup whose control was identical to
+    // its treatment.
+    let vacuous = highest == 0 || near_node == far_node;
+
+    if vacuous && highest > 0 {
         // Guarded on `highest > 0` because the single-node case already said
         // this above, and saying it twice reads as two separate problems. What
         // is left is the case that announcement misses: several nodes reported,
@@ -423,14 +431,24 @@ fn main() {
         }
     }
 
-    // Only interpret when the pages are resident and the machine has more than
-    // one node; otherwise say so rather than printing a confident conclusion.
+    // Only interpret when the pages are resident and the treatment could
+    // actually differ from the control; otherwise say so rather than printing a
+    // confident conclusion.
+    //
+    // **Gated on `vacuous`, not on the node count.** Testing `highest == 0`
+    // here let the case where several nodes are reported but only one hosts
+    // processors fall straight through to the interpretation -- and with every
+    // thread on one node, A, B and C all equal `far_node`, so the first arm
+    // matched and it printed "GOVERNS ... the thread builder is justified".
+    // That is the strongest claim this spike can make, produced by an
+    // apparatus that measured nothing.
     let usable = slots
         .iter()
         .all(|s| s.shallow.queried && s.shallow.valid && s.deep.queried && s.deep.valid);
     println!();
-    if highest == 0 {
-        println!("=> VACUOUS: one node. Apparatus works; question unanswered.");
+    if vacuous {
+        println!("=> VACUOUS: near and far are the same node. Apparatus works;");
+        println!("   question unanswered.");
     } else if !usable {
         println!("=> INCONCLUSIVE: a probed page was not resident or the query failed.");
     } else {
@@ -483,10 +501,9 @@ fn main() {
         highest + 1,
         near_node,
         far_node,
-        // Vacuous whenever the control cannot differ from the treatment, which
-        // is not only the single-node case: several nodes may be reported while
-        // just one of them hosts processors.
-        highest == 0 || near_node == far_node,
+        // The same value the announcement and the verdict used, so the record
+        // cannot disagree with the text beside it.
+        vacuous,
         usable,
         probe_json(slots[0].shallow),
         probe_json(slots[0].deep),
