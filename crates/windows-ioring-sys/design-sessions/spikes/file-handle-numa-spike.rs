@@ -80,9 +80,11 @@
 //!     runners are virtual;
 //!   - the physical disk number (`IOCTL_STORAGE_GET_DEVICE_NUMBER`);
 //!   - **how many disks back the volume**
-//!     (`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`). More than one means the volume
-//!     spans devices, which is exactly the Q6 hazard: a single reported node
-//!     for a multi-device volume is a fiction, and worse than no answer.
+//!     (`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`), counted by *distinct*
+//!     `DiskNumber` across the returned extents rather than by extent -- a
+//!     volume extended twice onto one disk reports two extents and sits on one
+//!     device. More than one device is exactly the Q6 hazard: a single reported
+//!     node for a multi-device volume is a fiction, and worse than no answer.
 //!
 //! That last one needs no NUMA hardware, so a spanned volume anywhere in a CI
 //! fleet is a result.
@@ -139,6 +141,9 @@ struct Storage {
     /// Disks backing the volume. Greater than one means it spans devices, and a
     /// single NUMA node reported for it cannot be true of all of them.
     disk_extents: Option<u32>,
+    /// Distinct DiskNumbers among those extents. This, not the extent count,
+    /// is what says whether the volume spans devices.
+    distinct_disks: Option<u32>,
 }
 
 /// `STORAGE_BUS_TYPE`, as Windows defines it.
@@ -357,28 +362,18 @@ fn describe_storage(path: &Path) -> Storage {
         out.disk_number = Some(number.DeviceNumber);
     }
 
-    // How many disks back this volume. This is the Q6 question, and it needs no
-    // NUMA hardware: more than one extent means a reported node cannot be true
-    // of every device the volume sits on.
-    let mut extents = vec![0_u8; 4096];
-    let ok = unsafe {
-        DeviceIoControl(
-            handle,
-            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-            std::ptr::null(),
-            0,
-            extents.as_mut_ptr().cast::<c_void>(),
-            u32::try_from(extents.len()).unwrap(),
-            &raw mut returned,
-            std::ptr::null_mut(),
-        )
-    };
-    if ok != 0 && (returned as usize) >= size_of::<u32>() {
-        // SAFETY: the first field of VOLUME_DISK_EXTENTS is NumberOfDiskExtents.
-        // Unaligned for the same reason as the descriptor above: `extents` is a
-        // `Vec<u8>` and carries no alignment guarantee beyond one byte.
-        let count = unsafe { extents.as_ptr().cast::<u32>().read_unaligned() };
-        out.disk_extents = Some(count);
+    // How many *disks* back this volume. This is the Q6 question, and it needs
+    // no NUMA hardware: sitting on more than one device means a single reported
+    // node cannot be true of all of them.
+    //
+    // **Extents are not devices, and counting them was the bug.** A volume
+    // extended twice onto the same disk reports two extents with one
+    // `DiskNumber`, so `NumberOfDiskExtents > 1` claimed a multi-device volume
+    // for an ordinary single-disk one. The extent array has to be walked and
+    // its disk numbers deduplicated.
+    if let Some((extent_count, disks)) = read_disk_extents(handle) {
+        out.disk_extents = Some(extent_count);
+        out.distinct_disks = Some(disks);
     }
 
     unsafe { CloseHandle(handle) };
@@ -404,6 +399,81 @@ fn numa_node_count() -> u32 {
     } else {
         1
     }
+}
+
+/// `VOLUME_DISK_EXTENTS` layout, which windows-sys 0.61 does not declare.
+///
+/// Named rather than written inline for the same reason as the bus tags: these
+/// are the ABI's offsets, fixed by Windows, and a bare `+ 24` in a loop is a
+/// number a reader cannot check. `DISK_EXTENT` is `DWORD DiskNumber` followed
+/// by two `LARGE_INTEGER`s, and the eight-byte alignment those force is why the
+/// array starts at 8 rather than 4 and each entry is 24 rather than 20.
+mod extents {
+    /// Byte offset of the first `DISK_EXTENT`.
+    pub const ARRAY_OFFSET: usize = 8;
+    /// Size of one `DISK_EXTENT`.
+    pub const ENTRY_SIZE: usize = 24;
+    /// Byte offset of `DiskNumber` within a `DISK_EXTENT`.
+    pub const DISK_NUMBER_OFFSET: usize = 0;
+}
+
+/// The volume's extent count and how many *distinct* disks those extents name.
+///
+/// `None` when the query fails or returns less than it promised -- an
+/// incomplete answer is reported as unknown rather than as a small number,
+/// because a truncated extent list under-counts devices and the whole point of
+/// the question is not to under-count them.
+fn read_disk_extents(handle: HANDLE) -> Option<(u32, u32)> {
+    // One retry: the first buffer holds 170 extents, and a volume with more
+    // than that returns ERROR_MORE_DATA having written only the count.
+    let mut buf = vec![0_u8; 4096];
+    for attempt in 0..2 {
+        let mut returned: u32 = 0;
+        let ok = unsafe {
+            DeviceIoControl(
+                handle,
+                IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+                std::ptr::null(),
+                0,
+                buf.as_mut_ptr().cast::<c_void>(),
+                u32::try_from(buf.len()).unwrap(),
+                &raw mut returned,
+                std::ptr::null_mut(),
+            )
+        };
+
+        // The count is written even when the buffer was too small, which is
+        // what makes the retry a sized one rather than a guess.
+        if (returned as usize) < size_of::<u32>() && ok == 0 {
+            return None;
+        }
+        // SAFETY: at least four bytes were written; `buf` is a `Vec<u8>` and so
+        // carries no alignment guarantee, hence the unaligned read.
+        let count = unsafe { buf.as_ptr().cast::<u32>().read_unaligned() };
+
+        let needed = extents::ARRAY_OFFSET + (count as usize) * extents::ENTRY_SIZE;
+        if ok == 0 || (returned as usize) < needed {
+            if attempt == 0 && needed > buf.len() {
+                buf = vec![0_u8; needed];
+                continue;
+            }
+            return None;
+        }
+
+        let mut disks: Vec<u32> = Vec::new();
+        for index in 0..count as usize {
+            let at = extents::ARRAY_OFFSET
+                + index * extents::ENTRY_SIZE
+                + extents::DISK_NUMBER_OFFSET;
+            // SAFETY: `needed` bytes were returned, so this entry is present.
+            let disk = unsafe { buf.as_ptr().add(at).cast::<u32>().read_unaligned() };
+            if !disks.contains(&disk) {
+                disks.push(disk);
+            }
+        }
+        return Some((count, u32::try_from(disks.len()).unwrap_or(u32::MAX)));
+    }
+    None
 }
 
 fn probe(label: &str, handle: HANDLE) -> (Option<u32>, Option<u16>) {
@@ -453,11 +523,19 @@ fn probe(label: &str, handle: HANDLE) -> (Option<u32>, Option<u16>) {
         None
     };
 
-    // Q3: the discriminating comparison. Agreement means volume locality is
-    // what is being observed, and that there is no per-file answer here.
+    // Q3: the comparison, and it discriminates in one direction only.
+    //
+    // **Agreement is consistent with volume locality; it does not establish
+    // it.** A genuinely per-file answer may equal its volume's node -- most
+    // files on a single-device volume would -- so one file agreeing rules
+    // nothing out. Only disagreement is decisive, because a per-volume answer
+    // cannot differ from itself. Settling it the other way needs files known to
+    // have different locality, which needs a volume spanning devices.
     match (volume, file) {
         (Some(v), Some(f)) if u32::from(f) == v => {
-            println!("  => AGREE on {v}: this is VOLUME locality, not file locality.");
+            println!("  => AGREE on {v}: consistent with VOLUME locality, but one file");
+            println!("     agreeing does not rule out a per-file answer that happens");
+            println!("     to match. Only a DISAGREE settles this.");
         }
         (Some(v), Some(f)) => {
             println!("  => DISAGREE (volume {v}, handle {f}) -- interesting, investigate.");
@@ -533,13 +611,16 @@ fn main() -> std::io::Result<()> {
         Some(n) => println!("  disk number  : {n}"),
         None => println!("  disk number  : (query failed)"),
     }
-    match storage.disk_extents {
-        Some(1) => println!("  disk extents : 1 (single device)"),
-        Some(n) => println!(
-            "  disk extents : {n} -- THIS VOLUME SPANS {n} DEVICES, so any single \
-             node reported for it cannot be true of all of them"
+    match (storage.disk_extents, storage.distinct_disks) {
+        (Some(extents), Some(1)) => {
+            println!("  disk extents : {extents} on 1 device (single device)");
+        }
+        (Some(extents), Some(disks)) => println!(
+            "  disk extents : {extents} on {disks} devices -- THIS VOLUME SPANS \
+             {disks} DEVICES, so any single node reported for it cannot be true \
+             of all of them"
         ),
-        None => println!("  disk extents : (query failed)"),
+        _ => println!("  disk extents : (query failed or returned an incomplete list)"),
     }
 
     // Q1-Q4: a garden-variety data file, opened the ordinary way. This is the
@@ -588,7 +669,7 @@ fn main() -> std::io::Result<()> {
         concat!(
             r#"{{"reason":"x-spike-file-handle-numa","arch":"{}","volume_root":{},"#,
             r#""bus_type":{},"bus_name":{},"product":{},"removable":{},"disk_number":{},"#,
-            r#""disk_extents":{},"spans_devices":{},"fsctl_volume_node":{},"#,
+            r#""disk_extents":{},"distinct_disks":{},"spans_devices":{},"fsctl_volume_node":{},"#,
             r#""handle_node":{},"both_succeeded":{}}}"#
         ),
         std::env::consts::ARCH,
@@ -601,8 +682,11 @@ fn main() -> std::io::Result<()> {
             .map_or("null".to_string(), |b| b.to_string()),
         json_opt_u32(storage.disk_number),
         json_opt_u32(storage.disk_extents),
+        json_opt_u32(storage.distinct_disks),
+        // Derived from the distinct device count, not the extent count: a
+        // volume extended twice onto one disk has two extents and one device.
         storage
-            .disk_extents
+            .distinct_disks
             .map_or("null".to_string(), |n| (n > 1).to_string()),
         json_opt_u32(file_volume_node),
         json_opt_u32(file_handle_node.map(u32::from)),
