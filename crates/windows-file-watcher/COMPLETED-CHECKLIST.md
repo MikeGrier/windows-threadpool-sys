@@ -753,3 +753,37 @@ verbatim and only ever reopened, never matched against a canonical path.
 a future "helpful" prefix fails the suite) and M15.10 (the junction fixture for the 512-unit retry -- the
 back door M15.3 called hypothetical is confirmed to work, no elevation needed, a 53-character junction
 resolving to a 578-character target).
+## Moved 2026-09-01 -- M15.9: guarding D-85's pass-through
+
+### <a id="m159"></a>M15.9 -- Guard D-85's pass-through with tests, so a future "helpful" `\\?\` prefix fails the suite instead of silently changing what callers' paths mean. *(completed 2026-09-01 20:05:00 -04:00)*
+
+**Five guards, in a labelled `directory::tests` section.** Four new -- forward slashes, a `.` component,
+a `..` component, and a caller's own `\\?\` path -- plus `opens_the_current_directory_by_relative_path`,
+which already existed and turned out to be load-bearing for the same reason; its comment now says so, so
+it is not simplified away by someone who does not know.
+
+**Each asserts the resolved identity, not `is_ok()`.** A path that opens the *wrong* directory is the
+failure worth catching, and the `..` case is the one where that matters concretely: under an ordinary
+parse it must land on the parent, and a test that only checked "something opened" would accept a handle
+on the child.
+
+**The measurement that justifies the item.** With a blanket prefix injected into `wide_path`, **exactly
+those five fail and the other 33 tests in the module pass.** So a "helpful" prefix would otherwise land
+looking entirely green -- the existing suite does not constrain this at all, which is precisely why the
+guards had to be written rather than assumed.
+
+**Two facts settled by that run, rather than by reasoning.** A trailing separator *survives* the prefix
+(`opens_a_directory_with_a_trailing_separator` passed), so it is not a distinguishing case and was left
+out. And the guards are precise rather than broad: they fail on the prefix specifically, not on
+incidental path handling.
+
+**Deliberately absent: a long-path test.** A Rust test binary has no `longPathAware` manifest, so a
+`MAX_PATH`-exceeding open fails in-suite regardless of machine policy; asserting that would pin the
+harness rather than the crate. That is stated in the section header so the omission reads as a decision
+rather than an oversight. M15.10 covers the part that *can* be tested.
+
+**A self-inflicted detour worth recording.** The first injection was written through PowerShell and
+over-escaped -- eight backslashes reached Rust where four were needed -- so every path became invalid and
+23 tests failed instead of 5. The over-broad result is what exposed it; a subtler mis-escape would have
+read as a real finding. Redone with a direct file edit and a Rust raw string, which removes the escaping
+layer entirely. This is the same multi-layer escaping trap recorded earlier in this sweep.

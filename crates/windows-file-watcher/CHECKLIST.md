@@ -141,18 +141,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 
 - [x] **M15.3** -- Decided: a caller's path goes to Win32 verbatim, and long-path support is the consuming application's call, not this crate's (D-85). The proposed `\\?\` prefix was measured to break forward slashes, `.`, `..` and relative paths that work today. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m153)
 
-- [ ] **M15.9** -- Guard D-85's pass-through with tests, so a future "helpful" `\\?\` prefix fails the
-  suite instead of silently changing what callers' paths mean. **Deliberately scoped out of M15.3, which
-  recorded the decision only.**
-  **What to pin, all measured against a short directory that opens fine today** -- each of these would
-  break under a blanket prefix, which is exactly why they are the guard: `C:/Users/.../dir` (forward
-  slashes) becomes `ERROR_FILE_NOT_FOUND`; `...\dir\.` and `...\dir\subdir\..` become
-  `ERROR_INVALID_NAME`; a bare relative leaf stops resolving at all.
-  **And the other direction:** a caller's own `\\?\`-prefixed path must arrive intact and open, since
-  that is one of the two routes D-85 leaves a caller who wants long-path behaviour.
-  **Not** a long-path test: a Rust test binary has no `longPathAware` manifest, so a >`MAX_PATH` open
-  fails in-suite regardless of machine policy. Asserting that failure would pin the harness, not the
-  crate -- see M15.10 for the part that can be tested.
+- [x] **M15.9** -- Guarded D-85's pass-through with five identity-asserting tests. Measured worth: with a blanket prefix injected into `wide_path`, exactly those five fail and the other 33 in the module pass. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m159)
 
 - [ ] **M15.10** -- Test `canonical_path`'s 512-unit retry through the junction back door. **The back
   door is confirmed to work, so this is now a fixture to build rather than a question to answer.**

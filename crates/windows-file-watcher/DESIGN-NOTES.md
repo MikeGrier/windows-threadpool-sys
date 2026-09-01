@@ -899,6 +899,15 @@ Relative paths would stop working entirely, and this crate supports them on
 purpose -- `open_file_target` normalises a bare leaf's empty `parent()` to `.`
 precisely so `subscribe("target.txt", ...)` resolves.
 
+Each of those is pinned by a test in `directory::tests` (the "D-85" section),
+asserting the resolved *identity* rather than merely that something opened, plus
+one in the other direction: a caller's own `\\?\` path must arrive intact and
+reach the same directory, which is what makes "we never add the prefix" a
+complete contract rather than a refusal. The measurement that says those guards
+are worth having: with a blanket prefix injected into `wide_path`, exactly those
+five tests fail and the other **33** in the module pass. A "helpful" prefix would
+otherwise land looking entirely green.
+
 **Long paths are the application's call, not the library's.** Opening past
 `MAX_PATH` without the prefix requires *both* the machine's
 `LongPathsEnabled` policy and the application's own `longPathAware` manifest.

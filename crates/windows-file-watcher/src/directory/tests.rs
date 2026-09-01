@@ -57,6 +57,9 @@ fn opens_the_system_temp_directory() {
 
 #[test]
 fn opens_the_current_directory_by_relative_path() {
+    // Also a D-85 guard: a relative path cannot survive a `\\?\` prefix, which
+    // accepts only fully qualified paths. See the section at the end of this
+    // file for the rest of the pass-through guards.
     assert!(
         DirectoryHandle::open(Path::new(".")).is_ok(),
         "a relative path must be accepted; Win32 resolves it"
@@ -530,4 +533,114 @@ fn case_sensitivity_is_read_from_the_directory_rather_than_assumed() {
         "a directory with FILE_CS_FLAG_CASE_SENSITIVE_DIR set must report \
          sensitive -- this is the half a hard-coded `false` passes"
     );
+}
+
+// --- D-85: the caller's path reaches Win32 verbatim ---
+//
+// These exist to fail if this crate ever "helpfully" prepends `\\?\`. That
+// prefix is a different path *parsing mode*, not a longer-path switch, so
+// adopting it on a caller's behalf silently changes what their path means --
+// and it does so on paths that have nothing to do with `MAX_PATH`, which is
+// what makes the change easy to justify to oneself and hard to notice.
+//
+// Each asserts on the resolved *identity*, not merely that something opened: a
+// path that resolves to the wrong directory is the failure mode worth catching,
+// and `is_ok()` would not see it.
+//
+// Deliberately absent: a test that a path longer than `MAX_PATH` opens. That
+// depends on the host executable's `longPathAware` manifest, which a Rust test
+// binary does not have, so such a test would pin the harness rather than this
+// crate. `opens_the_current_directory_by_relative_path` above is part of this
+// set -- a relative path cannot survive the prefix either.
+
+/// The identity of a directory opened by its plain absolute path, to compare a
+/// differently-spelled route to the same directory against.
+fn identity_of(path: &Path) -> super::DirectoryId {
+    DirectoryHandle::open(path)
+        .expect("the plain absolute path must open")
+        .identity()
+}
+
+#[test]
+fn forward_slashes_resolve_to_the_same_directory() {
+    // Win32 translates `/` to `\` during ordinary parsing. Under `\\?\` it does
+    // not, and this path would fail with `ERROR_FILE_NOT_FOUND`.
+    let dir = TempDir::new("verbatim-slashes");
+    let expected = identity_of(dir.path());
+
+    let with_slashes = dir.path().to_string_lossy().replace('\\', "/");
+    let handle = DirectoryHandle::open(Path::new(&with_slashes))
+        .expect("a forward-slash spelling must open, because Win32 translates it");
+    assert_eq!(
+        handle.identity(),
+        expected,
+        "the forward-slash spelling must reach the same directory"
+    );
+
+    drop(handle);
+    dir.cleanup();
+}
+
+#[test]
+fn a_dot_component_resolves_to_the_same_directory() {
+    // Win32 resolves `.` during ordinary parsing. Under `\\?\` it is a literal
+    // component and this fails with `ERROR_INVALID_NAME`.
+    let dir = TempDir::new("verbatim-dot");
+    let expected = identity_of(dir.path());
+
+    let with_dot = dir.path().join(".");
+    let handle = DirectoryHandle::open(&with_dot)
+        .expect("a `.` component must open, because Win32 resolves it");
+    assert_eq!(
+        handle.identity(),
+        expected,
+        "`.` must resolve to the directory itself"
+    );
+
+    drop(handle);
+    dir.cleanup();
+}
+
+#[test]
+fn a_dot_dot_component_resolves_to_the_parent() {
+    // As above for `..`, and this one proves the component was *resolved*
+    // rather than merely tolerated: the handle must land on the parent.
+    let dir = TempDir::new("verbatim-dotdot");
+    let child = dir.path().join("child");
+    std::fs::create_dir(&child).expect("create the child directory");
+    let expected = identity_of(dir.path());
+
+    let up_again = child.join("..");
+    let handle = DirectoryHandle::open(&up_again)
+        .expect("a `..` component must open, because Win32 resolves it");
+    assert_eq!(
+        handle.identity(),
+        expected,
+        "`..` must resolve back to the parent, not open the child"
+    );
+
+    drop(handle);
+    dir.cleanup();
+}
+
+#[test]
+fn a_caller_supplied_verbatim_prefix_is_forwarded_and_honoured() {
+    // The other direction of D-85, and the route a caller takes when they want
+    // extended-length or verbatim semantics: their own `\\?\` path must arrive
+    // intact. This is what makes "we never add the prefix" a complete contract
+    // rather than a refusal.
+    let dir = TempDir::new("verbatim-prefixed");
+    let expected = identity_of(dir.path());
+
+    let prefixed = format!(r"\\?\{}", dir.path().display());
+    let handle = DirectoryHandle::open(Path::new(&prefixed))
+        .expect("a caller's own `\\?\\` path must be forwarded unchanged and open");
+    assert_eq!(
+        handle.identity(),
+        expected,
+        "the verbatim spelling must reach the same directory"
+    );
+
+    drop(handle);
+    dir.cleanup();
 }
