@@ -390,3 +390,159 @@ mod serde_provenance {
         assert_eq!(reloaded.distances, measured.distances);
     }
 }
+
+// --- capacity is the class of the processor's OWN core (mutation-testing gap) ---
+//
+// A `cargo mutants` run replaced the match guard in `processors_from` -- the
+// test that a core domain actually contains the processor being described --
+// with both `true` and `false`, and the whole suite passed either way.
+//
+// Both mutants are real defects. With `true`, every processor takes the first
+// core domain's efficiency class, so on a heterogeneous machine the performance
+// cores would be reported with the efficiency cores' class. With `false`, no
+// domain ever matches and every processor reports capacity 0.
+//
+// Nothing caught them because the only test reaching `processors_from` asserted
+// the *count* of processors, and the serde round-trip compares a discovered
+// topology against itself -- identically wrong on both sides of the comparison.
+//
+// These use a synthetic two-core, two-class fixture rather than the real
+// machine, so they assert the mapping on every host rather than only on a
+// heterogeneous one.
+
+/// Two processors on two cores of different efficiency classes.
+fn heterogeneous_relations() -> (crate::relation::Relations, Vec<Domain>) {
+    use crate::relation::{CoreRelation, GroupRelation, Relations};
+
+    let cpu0 = ProcessorSet::from_group_mask(0, 0b01);
+    let cpu1 = ProcessorSet::from_group_mask(0, 0b10);
+
+    let relations = Relations {
+        cores: vec![
+            CoreRelation {
+                simultaneous_multithreading: false,
+                efficiency_class: 0,
+                processors: cpu0.clone(),
+            },
+            CoreRelation {
+                simultaneous_multithreading: false,
+                efficiency_class: 1,
+                processors: cpu1.clone(),
+            },
+        ],
+        packages: Vec::new(),
+        dies: Vec::new(),
+        modules: Vec::new(),
+        caches: Vec::new(),
+        numa_nodes: Vec::new(),
+        groups: vec![GroupRelation {
+            group: 0,
+            maximum_processor_count: 2,
+            active_processor_count: 2,
+            active_processors: ProcessorSet::from_group_mask(0, 0b11),
+        }],
+    };
+
+    let domains = vec![
+        Domain {
+            kind: DomainKind::Core {
+                simultaneous_multithreading: false,
+                efficiency_class: 0,
+            },
+            id: 0,
+            processors: cpu0,
+        },
+        Domain {
+            kind: DomainKind::Core {
+                simultaneous_multithreading: false,
+                efficiency_class: 1,
+            },
+            id: 1,
+            processors: cpu1,
+        },
+    ];
+
+    (relations, domains)
+}
+
+#[test]
+fn each_processor_takes_the_efficiency_class_of_its_own_core() {
+    let (relations, domains) = heterogeneous_relations();
+    let processors = Topology::processors_from(&relations, &domains);
+
+    assert_eq!(processors.len(), 2);
+    assert_eq!(
+        processors[0].capacity, 0,
+        "processor 0 belongs to the class-0 core"
+    );
+    assert_eq!(
+        processors[1].capacity, 1,
+        "processor 1 belongs to the class-1 core, and must not inherit the \
+         first core domain's class"
+    );
+}
+
+#[test]
+fn a_processor_with_no_matching_core_domain_reports_no_capacity() {
+    // The other side of the same guard: a domain list that does not describe
+    // this processor must yield 0 rather than borrowing some other core's
+    // class. Windows reports relations only for active processors, so this is
+    // the inactive-slot path.
+    let (relations, _) = heterogeneous_relations();
+    let processors = Topology::processors_from(&relations, &[]);
+
+    assert_eq!(processors.len(), 2);
+    for processor in &processors {
+        assert_eq!(
+            processor.capacity, 0,
+            "with no core domains there is no class to report"
+        );
+    }
+}
+
+#[test]
+fn an_offline_processor_reports_no_capacity_even_when_a_core_claims_it() {
+    use crate::relation::{CoreRelation, GroupRelation, Relations};
+
+    // A slot that exists but is not active. The core domain still names it, so
+    // only the `online` check keeps its capacity at 0 -- which makes this the
+    // test for that check rather than for the guard above.
+    let both = ProcessorSet::from_group_mask(0, 0b11);
+    let relations = Relations {
+        cores: vec![CoreRelation {
+            simultaneous_multithreading: false,
+            efficiency_class: 7,
+            processors: both.clone(),
+        }],
+        packages: Vec::new(),
+        dies: Vec::new(),
+        modules: Vec::new(),
+        caches: Vec::new(),
+        numa_nodes: Vec::new(),
+        groups: vec![GroupRelation {
+            group: 0,
+            maximum_processor_count: 2,
+            active_processor_count: 1,
+            // Only processor 0 is online.
+            active_processors: ProcessorSet::from_group_mask(0, 0b01),
+        }],
+    };
+    let domains = vec![Domain {
+        kind: DomainKind::Core {
+            simultaneous_multithreading: false,
+            efficiency_class: 7,
+        },
+        id: 0,
+        processors: both,
+    }];
+
+    let processors = Topology::processors_from(&relations, &domains);
+
+    assert!(processors[0].online);
+    assert_eq!(processors[0].capacity, 7);
+    assert!(!processors[1].online);
+    assert_eq!(
+        processors[1].capacity, 0,
+        "an offline slot's capacity is not invented from a domain that names it"
+    );
+}

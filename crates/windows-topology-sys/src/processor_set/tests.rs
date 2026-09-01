@@ -175,3 +175,34 @@ fn deserializing_a_well_formed_description_produces_the_expected_set() {
     assert!(set.contains(1, 0));
     assert_eq!(set.len(), 3);
 }
+
+#[test]
+fn a_populated_set_is_not_empty() {
+    // A `cargo mutants` run replaced `is_empty` with `true` and the suite
+    // passed: every existing test asserted only that an *empty* set reports
+    // empty, so a predicate that always said "yes" satisfied all of them.
+    //
+    // One-sided assertions on a boolean accessor are the classic shape of this
+    // gap -- the tests were correct and jointly proved nothing.
+    let mut set = ProcessorSet::empty();
+    set.insert(0, 3);
+    assert!(!set.is_empty(), "a set with a member is not empty");
+    assert_eq!(set.len(), 1);
+}
+
+#[test]
+fn a_set_built_from_a_nonzero_mask_is_not_empty() {
+    let set = ProcessorSet::from_group_mask(0, 0b1011);
+    assert!(!set.is_empty());
+    assert_eq!(set.len(), 3);
+}
+
+#[test]
+fn emptiness_tracks_the_contents_across_groups() {
+    // A member in any group is enough, which is what makes `is_empty` a
+    // statement about the whole set rather than about group 0.
+    let mut set = ProcessorSet::empty();
+    assert!(set.is_empty());
+    set.insert(5, 0);
+    assert!(!set.is_empty(), "a member in a non-zero group still counts");
+}
