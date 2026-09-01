@@ -14,6 +14,7 @@ on:
       - 'windows-thread-ambient-sys-v*'
       - 'windows-threadpool-sys-v*'
       - 'windows-topology-sys-v*'
+      - 'windows-waitable-queues-v*'
       - 'wtf-string-v*'
   # Manual escape hatch for a tag whose commit cannot publish. `cargo publish
   # --locked` refuses when Cargo.lock disagrees with the manifests, and the
@@ -38,6 +39,7 @@ on:
           - windows-thread-ambient-sys
           - windows-threadpool-sys
           - windows-topology-sys
+          - windows-waitable-queues
           - wtf-string
 
 permissions:

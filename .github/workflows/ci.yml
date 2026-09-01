@@ -33,6 +33,22 @@ jobs:
         shell: pwsh
         run: ./tools/check-encoding.ps1
 
+  # release-please decides which crates are versioned and tagged;
+  # publish-crate.yml decides which tags publish. Nothing connected the two, so
+  # a crate could be release-managed and unpublishable at once -- and the
+  # failure is silent in the worst way: the release PR merges, the tag is
+  # created, the workflow never runs, and the crate is released everywhere
+  # except crates.io. That happened to `windows-waitable-queues` and was caught
+  # by review rather than by anything here.
+  publishable:
+    name: every release-managed crate can publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check-publishable.ps1
+        shell: pwsh
+        run: ./tools/check-publishable.ps1
+
   # The edition, MSRV, and pinned channel are declared once in Cargo.toml and
   # rust-toolchain.toml, then restated a dozen times -- in this file's `msrv`
   # job below, in README/DEVELOPMENT prose, and in the instruction files a code

@@ -115,12 +115,22 @@ release-blocking rather than restating the decision itself.
 
 ## M2: repair the release plumbing before relying on it
 
-- [ ] **SH-2.1** -- **Add `windows-waitable-queues-v*` to the tag trigger list in
+- [x] **SH-2.1** -- **Add `windows-waitable-queues-v*` to the tag trigger list in
   [.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml).** It is missing. The
   crate *is* registered with release-please, so release-please will happily raise the release PR and
   push the tag -- and then nothing will publish it, with no error, because no workflow matches the tag.
   **This is a silent failure, which is why it is its own item**: the symptom is a tag that exists, a
   changelog that looks right, and a crate that never appears on crates.io.
+  **Done, in both the tag trigger and the `workflow_dispatch` choices** -- the second matters because
+  without it the manual escape hatch could not publish the crate either, so there would have been no
+  way to recover from the first failure by hand.
+  **And the drift is now checked rather than remembered.** This defect existed because two files had
+  to agree and nothing compared them; it was found by a reviewer, not by CI.
+  [tools/check-publishable.ps1](tools/check-publishable.ps1) asserts that every crate release-please
+  manages has a publish trigger, and runs as its own CI job. The comparison is deliberately
+  one-directional -- a crate may be publishable without being release-managed, which is what
+  `windows-placement-probe` is today. Verified by removing the trigger again and watching the check
+  fail with the crate named.
 
 - [ ] **SH-2.2** -- Plan the **`windows-topology-sys` 0.2.0 ripple**. `windows-ioring-sys` is published
   and pins `windows-topology-sys = "0.1.0"`, so the breaking bump obliges updating that dependency and

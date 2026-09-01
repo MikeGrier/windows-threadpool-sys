@@ -15,8 +15,8 @@
 //! the crate's three-state [`Captured`] shape and to subset application; it does
 //! not reimplement any part of it, and it does not soften its semantics.
 //!
-//! In particular, **restore failure remains fail-fast**, inherited rather than
-//! chosen. Returning a shared worker to a pool under an unknown identity is a
+//! In particular, **restore failure is fail-fast, and this crate owns that
+//! choice.** Returning a shared worker to a pool under an unknown identity is a
 //! process-wide security failure, which is a different order of hazard from the
 //! other aspects, and the reason this crate composes per-aspect guards instead
 //! of one guard with one policy.
@@ -89,10 +89,11 @@ pub fn capture() -> Result<Captured<ImpersonationToken>, CaptureError> {
 ///
 /// # Panics
 ///
-/// Panics if the thread's entry context cannot be restored afterwards. This is
-/// [`windows_impersonation_token_sys`]'s documented behaviour and is inherited
-/// deliberately: a worker left under an unknown identity must not be returned to
-/// shared infrastructure.
+/// Panics if the thread's entry context cannot be restored afterwards. **That
+/// is this crate's guarantee**: a worker left under an unknown identity must not
+/// be returned to shared infrastructure, and no error return could make a caller
+/// notice in time. [`windows_impersonation_token_sys`] is used because its
+/// documented behaviour already satisfies it.
 pub fn with_applied<F, T>(
     captured: &Captured<ImpersonationToken>,
     operation: F,

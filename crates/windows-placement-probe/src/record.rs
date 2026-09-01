@@ -96,7 +96,15 @@ pub struct SubmissionRecord {
     pub topology_provenance: Provenance,
     /// One entry per placement this machine could express, per strategy.
     pub placements: Vec<MeasurementRecord>,
-    /// One entry per distinct pair of NUMA nodes, per strategy.
+    /// One entry per *directed* node pair, per ring placement, per strategy.
+    ///
+    /// **The ring placement is the dimension a collector is most likely to
+    /// miss.** Each directed hop is measured twice, once with the ring on the
+    /// producer's node and once on the consumer's, and `memory_node` on each
+    /// row says which. Rows that agree on every other field are therefore not
+    /// duplicates, and averaging them together would erase exactly the
+    /// asymmetry -- remote write against remote read -- that measuring both
+    /// placements exists to expose.
     ///
     /// Empty on a single-node machine. **That emptiness is the finding this
     /// tool most wants from a large host**, so it is an empty list rather than
@@ -215,7 +223,7 @@ impl fmt::Display for SubmissionRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "schema {} | {} | {} | {} placements, {} node hops",
+            "schema {} | {} | {} | {} placement rows, {} node-hop rows",
             self.schema_version,
             self.build,
             self.host,

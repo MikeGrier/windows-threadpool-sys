@@ -23,7 +23,10 @@ use core::ffi::c_void;
 
 use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READ, PAGE_READWRITE};
 
-use super::{CAPACITY, Ring, Slots, observed_node, working_set, working_set_flags};
+use super::{
+    CAPACITY, Ring, Slots, current_affinity, observed_node, pin_current_thread, working_set,
+    working_set_flags,
+};
 
 /// A node id no machine will have.
 ///
@@ -254,4 +257,51 @@ fn the_node_offset_is_pinned_by_a_page_whose_upper_fields_are_not_zero() {
         "a code page's protection did not decode to PAGE_EXECUTE_READ, so the \
          protection field's width is wrong and Node's offset with it: flags {flags:#x}"
     );
+}
+
+#[test]
+fn pinning_a_thread_restores_its_affinity_afterwards() {
+    // **The leak this guards biased the measurements themselves.** The pin used
+    // to discard the previous affinity, so a thread stayed confined after its
+    // sample finished -- and the next sample allocated its ring while still on
+    // the last sample's consumer, quietly placing memory that the report
+    // describes as "left where it fell". The public timing helpers also left
+    // their caller permanently re-affinitised.
+    //
+    // Run on a thread of this test's own, so a failure cannot disturb the rest
+    // of the suite through the very leak it is checking for.
+    std::thread::spawn(|| {
+        let before = current_affinity().expect("the thread has an affinity");
+
+        {
+            let _pinned = pin_current_thread(Some((0, 0)));
+            let during = current_affinity().expect("still has an affinity");
+            assert_eq!(during.Mask, 1, "the pin did not take effect");
+            assert_eq!(during.Group, 0);
+        }
+
+        let after = current_affinity().expect("the thread has an affinity");
+        assert_eq!(
+            (after.Mask, after.Group),
+            (before.Mask, before.Group),
+            "the affinity was not restored"
+        );
+    })
+    .join()
+    .expect("the pinning thread must not panic");
+}
+
+#[test]
+fn asking_for_no_pin_leaves_the_affinity_alone() {
+    std::thread::spawn(|| {
+        let before = current_affinity().expect("the thread has an affinity");
+        let guard = pin_current_thread(None);
+        let during = current_affinity().expect("the thread has an affinity");
+        assert_eq!((during.Mask, during.Group), (before.Mask, before.Group));
+        drop(guard);
+        let after = current_affinity().expect("the thread has an affinity");
+        assert_eq!((after.Mask, after.Group), (before.Mask, before.Group));
+    })
+    .join()
+    .expect("must not panic");
 }

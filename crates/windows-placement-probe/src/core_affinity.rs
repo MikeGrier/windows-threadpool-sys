@@ -361,7 +361,17 @@ pub struct Observation {
     /// rather than silently skipped, because "this host cannot test that" and
     /// "that made no difference" are opposite findings.
     pub measurements: Vec<Measurement>,
-    /// One measurement per *distinct pair of NUMA nodes*.
+    /// One measurement per *directed* node pair, ring placement and strategy.
+    ///
+    /// **Three dimensions, not one, and the count is their product.** A hop is
+    /// directed, because the producer writes and the consumer reads, so `(a, b)`
+    /// and `(b, a)` are different measurements; each of those is measured with
+    /// the ring on each endpoint's node; and each of those under each strategy.
+    /// A two-node machine therefore contributes eight rows here, not one. An
+    /// earlier version of this note promised one entry per distinct pair, which
+    /// would lead a consumer to treat these rows as unique hops and to collapse
+    /// the producer-local and consumer-local measurements into each other --
+    /// the two quantities the ring placement exists to separate.
     ///
     /// Separate from [`Self::measurements`] for the same reason [`Self::by_class`]
     /// is: the placement categories collapse every node crossing into a single
@@ -683,7 +693,12 @@ impl Observation {
             .cloned()
     }
 
-    /// Every node pair measured, in canonical `(low, high)` order.
+    /// Every node pair measured, as *directed* `(producer, consumer)` pairs.
+    ///
+    /// Both `(0, 1)` and `(1, 0)` appear, because they are different
+    /// measurements rather than two spellings of one. This said "canonical
+    /// `(low, high)` order" while returning the directed pairs, so a caller
+    /// trusting the documentation would have deduplicated away half the hops.
     #[must_use]
     pub fn node_pairs_measured(&self) -> Vec<(u32, u32)> {
         let mut seen: Vec<(u32, u32)> = self

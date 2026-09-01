@@ -117,7 +117,7 @@ assert_eq!(refused.bits(), 0x0004);
 
 | Aspect | How it relates to the caller | Notes |
 |---|---|---|
-| Impersonation | captured | Consumed from [windows-impersonation-token-sys](../windows-impersonation-token-sys/README.md); its fail-fast restore is inherited unchanged |
+| Impersonation | captured | Fail-fast restore, guaranteed by this crate; [windows-impersonation-token-sys](../windows-impersonation-token-sys/README.md) is used because it already behaves that way |
 | Thread error mode | captured **and** declarable | The only aspect in both sets, so a consumer may transplant it or impose its own |
 | TxF transaction | captured | Outside the default set: deprecated, and a captured transaction can be committed or rolled back beneath the worker |
 | WOW64 redirection | declared | Has no getter at all, so there is nothing to capture |

@@ -164,12 +164,36 @@ impl fmt::Display for CapacityError {
                 write!(f, "a queue capacity of zero can never accept an item")
             }
             CapacityErrorKind::NotPowerOfTwo => {
-                let (lo, hi) = (self.previous_valid(), self.next_valid());
-                write!(
-                    f,
-                    "capacity {} is not a power of two; the nearest valid capacities are {:?} and {:?}",
-                    self.requested, lo, hi
-                )
+                // Each case spelled out, because `{:?}` on an `Option` puts
+                // Rust's own vocabulary into a message a user reads: "the
+                // nearest valid capacities are Some(64) and None" is both
+                // cluttered when there are two and wrong when there is one.
+                // What a caller needs is a number they can pass instead.
+                let requested = self.requested;
+                match (self.previous_valid(), self.next_valid()) {
+                    (Some(lower), Some(upper)) => write!(
+                        f,
+                        "capacity {requested} is not a power of two; \
+                         the nearest valid capacities are {lower} and {upper}"
+                    ),
+                    (Some(lower), None) => write!(
+                        f,
+                        "capacity {requested} is not a power of two; \
+                         the nearest valid capacity below it is {lower}, \
+                         and none above it is representable"
+                    ),
+                    (None, Some(upper)) => write!(
+                        f,
+                        "capacity {requested} is not a power of two; \
+                         the nearest valid capacity above it is {upper}, \
+                         and none below it is large enough"
+                    ),
+                    (None, None) => write!(
+                        f,
+                        "capacity {requested} is not a power of two, \
+                         and this queue shape can represent no valid capacity near it"
+                    ),
+                }
             }
             CapacityErrorKind::TooSmall => write!(
                 f,

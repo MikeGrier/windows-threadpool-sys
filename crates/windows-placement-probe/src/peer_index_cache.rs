@@ -66,6 +66,8 @@ use windows_sys::Win32::System::ProcessStatus::{
     PSAPI_WORKING_SET_EX_INFORMATION, QueryWorkingSetEx,
 };
 use windows_sys::Win32::System::SystemInformation::{GROUP_AFFINITY, GetSystemInfo, SYSTEM_INFO};
+#[cfg(test)]
+use windows_sys::Win32::System::Threading::GetThreadGroupAffinity;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThread, SetThreadGroupAffinity,
 };
@@ -659,10 +661,14 @@ pub fn time_model_placed(
     let (consumer_refreshes, producer_refreshes) = thread::scope(|scope| {
         let shared = &ring;
         let producer = scope.spawn(move || {
-            pin_current_thread(producer_cpu);
+            // Bound, not discarded: an unbound guard drops at the end of its
+            // own statement, which would unpin the thread immediately and
+            // measure the scheduler's choice while claiming to measure this
+            // processor. `#[must_use]` makes that mistake a warning.
+            let _pinned = pin_current_thread(producer_cpu);
             produce(shared, strategy)
         });
-        pin_current_thread(consumer_cpu);
+        let _pinned = pin_current_thread(consumer_cpu);
         let consumer_refreshes = consume(&ring, strategy);
         let producer_refreshes = producer.join().expect("the producer must not panic");
         (consumer_refreshes, producer_refreshes)
@@ -677,6 +683,11 @@ pub fn time_model_placed(
 
 /// Confine the calling thread to one logical processor, named by group.
 ///
+/// **The returned guard restores the previous affinity and must be held for as
+/// long as the pinning is wanted.** Dropping it immediately -- by discarding
+/// the return value -- unpins the thread at once, so the work that follows
+/// measures wherever the scheduler puts it while the row claims a processor.
+///
 /// Panics rather than warns on failure. A silently unpinned thread would turn
 /// a placement experiment into a measurement of the scheduler's preferences,
 /// and the run would still print a confident number -- the same failure mode as
@@ -689,9 +700,9 @@ pub fn time_model_placed(
 /// processors that is not a matter of widening the mask; the call has no way to
 /// express the target at all. `SetThreadGroupAffinity` takes the group
 /// explicitly, and is the only way to pin across the whole machine.
-fn pin_current_thread(cpu: Option<(u16, u8)>) {
+fn pin_current_thread(cpu: Option<(u16, u8)>) -> AffinityGuard {
     let Some((group, number)) = cpu else {
-        return;
+        return AffinityGuard { previous: None };
     };
     assert!(
         u32::from(number) < usize::BITS,
@@ -703,10 +714,24 @@ fn pin_current_thread(cpu: Option<(u16, u8)>) {
         Group: group,
         Reserved: [0; 3],
     };
+    // The previous affinity is captured, not discarded. Passing null here left
+    // the calling thread pinned after the sample finished, and the next sample
+    // then allocated its ring while still confined to the *previous* sample's
+    // consumer -- so the rows that report "ring left where it fell" were
+    // quietly biased toward whichever processor was last measured. It also made
+    // the public timing helpers permanently re-affinitise their caller, which
+    // is not a thing a measurement function may do to the program that called
+    // it.
+    //
     // SAFETY: `affinity` is a fully initialised `GROUP_AFFINITY` naming one
-    // processor the caller took from the discovered topology, and the previous
-    // affinity is not wanted, so a null pointer is passed for it.
-    let ok = unsafe { SetThreadGroupAffinity(GetCurrentThread(), &affinity, ptr::null_mut()) };
+    // processor the caller took from the discovered topology, and `previous` is
+    // a writable `GROUP_AFFINITY` this call fills in.
+    let mut previous = GROUP_AFFINITY {
+        Mask: 0,
+        Group: 0,
+        Reserved: [0; 3],
+    };
+    let ok = unsafe { SetThreadGroupAffinity(GetCurrentThread(), &affinity, &raw mut previous) };
     // A raw string rather than an escaped-continuation one: `cargo fmt`
     // reindents a multi-line string literal and the backslash continuations
     // then swallow the blank lines, which turns a carefully laid-out message
@@ -734,6 +759,60 @@ Reporting this is genuinely useful: please include this message.
 ",
         error = std::io::Error::last_os_error()
     );
+
+    AffinityGuard {
+        previous: Some(previous),
+    }
+}
+
+/// This thread's group affinity as the system currently reports it.
+///
+/// Used by the tests that check the pin is undone. Reading it back from the
+/// operating system rather than trusting the value the guard stored is the
+/// point: a guard that recorded the right thing and restored nothing would
+/// otherwise pass.
+#[cfg(test)]
+fn current_affinity() -> Option<GROUP_AFFINITY> {
+    let mut affinity = GROUP_AFFINITY {
+        Mask: 0,
+        Group: 0,
+        Reserved: [0; 3],
+    };
+    // SAFETY: writes one fully owned `GROUP_AFFINITY`.
+    let ok = unsafe { GetThreadGroupAffinity(GetCurrentThread(), &raw mut affinity) };
+    (ok != 0).then_some(affinity)
+}
+
+/// Puts the calling thread's affinity back when it goes out of scope.///
+/// A guard rather than a call at the end of the timed section, so an unwind
+/// restores it too: a panic between pinning and restoring would otherwise leave
+/// the thread confined for the rest of the process, and this crate's pinning
+/// failure path panics by design.
+#[must_use = "the thread is unpinned as soon as this guard is dropped"]
+struct AffinityGuard {
+    /// What to restore, or `None` when nothing was changed.
+    previous: Option<GROUP_AFFINITY>,
+}
+
+impl Drop for AffinityGuard {
+    fn drop(&mut self) {
+        let Some(previous) = self.previous else {
+            return;
+        };
+        // SAFETY: `previous` is the affinity this thread had, as reported by
+        // the call that replaced it.
+        let ok = unsafe { SetThreadGroupAffinity(GetCurrentThread(), &previous, ptr::null_mut()) };
+
+        // Failing to restore silently is the defect this type exists to remove,
+        // so it is not swallowed -- but panicking while already unwinding would
+        // abort the process and destroy the original failure's message, which
+        // is the one worth reading.
+        assert!(
+            ok != 0 || std::thread::panicking(),
+            "could not restore the thread's affinity: {}",
+            std::io::Error::last_os_error()
+        );
+    }
 }
 
 /// Fills the ring, returning how many times it read the consumer's position.
