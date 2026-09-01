@@ -410,6 +410,55 @@ written against — a decision to raise, not a gap to close in passing.
 `cargo_nextest_run` and `cargo_nextest_list` remain in the tool table above because the
 MCP server exposes them; they will fail here until cargo-nextest is installed.
 
+### cargo-mutants — run it with `-j 2`, from the terminal
+
+`cargo-mutants` is installed and is **not** exposed by the cargo-mcp server, so it is one
+of the few cargo commands that legitimately runs in a terminal rather than through a
+`cargo_*` tool.
+
+**Always pass `-j 2`.** The default is serial, and a mutation run is long enough that the
+difference matters: a 125-mutant sweep over this workspace took **3m30s at `-j 2` against
+roughly six minutes serially**, with identical results. Two is the recommended value here
+rather than "as many as there are cores":
+
+- Each job is a full build plus test run of a scratch copy of the tree, so the cost is
+  disk and RAM as much as CPU, and the builds contend for the same target directory
+  layout.
+- **More importantly, this workspace has timing-sensitive tests** -- doorbell signalling,
+  queue contention, and the placement probe's transfer loops. Under heavy parallel load a
+  timing test can fail for want of a CPU rather than because it detected the mutant, and
+  cargo-mutants records that as `caught`. That is a *false* caught: it inflates the score
+  while leaving the mutant undetected in a real run. Two jobs on an ordinary development
+  machine stays well clear of that; raising it needs the result checked against a serial
+  run before being believed.
+
+Useful narrowing flags, since a full run is long:
+
+- `--file <path>` to scope to one file; repeat it for several.
+- `--re <regex>` to scope to matching function names, e.g.
+  `--re "impl crate::(Bounded|Observable)"` for a trait surface.
+- `--timeout <secs>` to bound each mutant, which matters because a mutant that hangs is
+  otherwise bounded only by cargo-mutants' own auto-timeout.
+
+**A baseline failure stops the whole run before any mutant is tested**, and the message
+(`cargo test failed in an unmutated tree`) does not name the cause. The usual cause here
+is a test that assumes something about the build environment: cargo-mutants builds from a
+scratch copy of the tree **with `.git` left behind**, so anything asserting that a
+repository, a commit, or a clean checkout exists will fail there and nowhere else. Fix
+such a test by asserting what the build could actually determine rather than by skipping
+it -- see `windows-placement-probe`'s `build_identity` tests for the worked example.
+
+**Read the results as a to-do list, not a score.** `mutants.out/missed.txt` is the useful
+artifact; group it by file and by function to find the shape of the gap rather than
+fixing mutants one at a time. A large block of survivors usually names one absent *kind*
+of test -- the run that prompted this section had 79 survivors in trait impls, all from a
+single missing idea (nothing exercised the traits generically), and one new test file
+section killed all of them.
+
+Treat `timeout` and `unviable` separately from `caught`: an unviable mutant did not
+compile and says nothing, and a timeout may mean the suite hangs on that mutation rather
+than failing on it, which is worth knowing on its own.
+
 ## Scratch directory for temporary files
 
 When you need to capture command output, test results, debug logs, build warnings, or any
