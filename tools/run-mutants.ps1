@@ -8,17 +8,39 @@
     Three things go wrong when cargo-mutants is invoked directly here, and this
     wrapper exists because each one has already cost a run.
 
-    **A crashing mutant pops a Windows Error Reporting dialog.** Some mutants do
-    not merely fail a test, they produce genuine memory unsafety -- inverting
-    the `ERROR_IO_PENDING` check in `arm_detailed_read` makes the thread pool
-    cancel its accounting for an I/O the kernel is still going to complete, so
-    the completion lands in a freed buffer. The process dies at address zero,
-    WER shows a modal "Application Error" box, and the run stops dead waiting
-    for a human to click OK. `--timeout` does not save it: the process is alive,
-    blocked on a dialog, and the crash never reaches the log as a signature that
-    a scan would find. This wrapper sets `DontShowUI` for the duration and puts
-    it back afterwards, so a crash is just a non-zero exit code and cargo-mutants
-    records it as caught.
+    **A crashing mutant pops a modal dialog and stalls the entire run.** Mutation
+    testing is expected to produce weird programs, and some of them are not
+    merely wrong but memory-unsafe -- inverting the `ERROR_IO_PENDING` check in
+    `arm_detailed_read` makes the thread pool cancel its accounting for an I/O
+    the kernel is still going to complete, so the completion lands in a freed
+    buffer. The crash is fine and expected. What is not fine is the operating
+    system's response: a modal "Application Error" box offering to debug, which
+    nothing in an automated run will ever click.
+
+    Two dialogs can appear, and they have different switches:
+
+    - The **WER "Application Error" box**, controlled by `DontShowUI` under
+      HKCU. That is what this wrapper sets and restores.
+    - The **JIT debugger prompt** ("Click on CANCEL to debug the program"),
+      controlled by `AeDebug\Debugger` and `AeDebug\Auto` under HKLM. On this
+      machine `vsjitdebugger.exe` is registered with `Auto` unset, which means
+      prompt. `DontShowUI` suppressed it in practice -- a 144-mutant sweep with
+      sixteen crashes ran to completion -- but the key is HKLM and would need
+      elevation to change, so if a run ever stalls again with a debugger prompt,
+      that is the knob to look at rather than this one.
+
+    **Measured cost, which is the reason this is not optional.** With the dialog
+    suppressed, a crashing mutant costs 7.9s and 10.5s (the two that crashed in
+    the watcher.rs sweep) and is recorded as `CaughtMutant`. Without it the run
+    does not merely slow down: it stops advancing entirely and never resumes,
+    because `--timeout` bounds the *test*, not a process sitting on a message
+    pump. The first watcher.rs attempt wedged after 33 mutants and had to be
+    killed by hand.
+
+    Deliberately **not** setting WER's `Disabled` as well: with `DontShowUI` on,
+    zero crash dumps were collected during that sweep, so there is no report
+    collection left to switch off and the extra registry write would be
+    unmeasured complexity.
 
     **Features go to cargo-mutants itself, not after `--`, and never both.**
     cargo-mutants mutates source, so it happily mutates a module behind a
@@ -86,6 +108,15 @@ $hadKey = Test-Path $werKey
 # do anything -- reading the "is it already set?" question was itself the bug.
 $previous = if ($hadKey) { (Get-Item $werKey).GetValue('DontShowUI', $null) } else { $null }
 
+if ($previous -eq 1) {
+    # Left set by a previous run that was killed before its `finally` could run
+    # -- the one hole in the restore, since a hard kill runs no cleanup. Say so,
+    # because silently treating it as the user's own preference would restore it
+    # to 1 afterwards and leave the machine permanently changed by a crash.
+    Write-Host "NOTE: DontShowUI was already 1. If a previous run was killed, clear it after:" -ForegroundColor Yellow
+    Write-Host "  Remove-ItemProperty '$werKey' -Name DontShowUI" -ForegroundColor Yellow
+}
+
 try {
     if (-not $hadKey) { New-Item -Path $werKey -Force | Out-Null }
     Set-ItemProperty -Path $werKey -Name DontShowUI -Value 1 -Type DWord
@@ -100,6 +131,15 @@ try {
     $code = $LASTEXITCODE
 }
 finally {
+    # Anything WER or the JIT debugger left holding a dead test process. With
+    # the dialog suppressed these should not appear at all; killing them is
+    # insurance against a stale one pinning a target file and failing the next
+    # build with a confusing "access denied".
+    foreach ($name in 'WerFault', 'WerFaultSecure', 'vsjitdebugger') {
+        Get-Process -Name $name -ErrorAction SilentlyContinue |
+            ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+    }
+
     if ($null -ne $previous) {
         Set-ItemProperty -Path $werKey -Name DontShowUI -Value $previous -Type DWord
     }
