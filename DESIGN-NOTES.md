@@ -1758,3 +1758,60 @@ threads, so a resident value would be stranded on process-shared infrastructure;
 thread-local destructors are unreliable on Windows, so a value whose `Drop` must
 run cannot live there; and submission and completion happen on different threads
 by construction, so the binding would be absent exactly where completion occurs.
+
+## <a id="path-contracts-follow-path-construction"></a>A layer's path contract is decided by whether it constructs paths
+
+Two crates here treat a caller's path in opposite ways, and side by side they look
+like an inconsistency somebody should tidy up. They are not. Each follows from one
+question -- **does this layer ever build a path the caller did not give it?** --
+and the answer differs, so the contracts differ. This is recorded once, here,
+because the failure mode is a well-meant "harmonisation" that breaks whichever
+crate loses.
+
+Some background the rest of this depends on, measured rather than assumed. The
+`\\?\` prefix is not a longer-path switch; it selects a **different path parsing
+mode**. Under it Win32 stops translating forward slashes, stops resolving `.` and
+`..`, stops stripping trailing dots and spaces, stops intercepting reserved device
+names, and accepts only fully qualified paths. And whether an *unprefixed* path may
+exceed `MAX_PATH` is not the library's to decide: it needs the machine's
+`LongPathsEnabled` policy **and** the host executable's `longPathAware` manifest.
+Measured on one machine with that policy already enabled, the same probe source
+failed a 300-character open with `ERROR_PATH_NOT_FOUND` and succeeded once the
+manifest was embedded -- the manifest was the only variable.
+
+**A layer that never constructs a path passes the caller's through verbatim.**
+There is nothing to build, so nothing needs a form that is safe to build on, and
+the caller's parsing mode is preserved exactly. Long-path behaviour then varies
+with the host application's manifest, which is correct: it is the application's
+call, and this kind of layer has no business making it on the application's behalf.
+`windows-file-watcher` is this shape -- it opens one handle per watched directory
+and lets the kernel do subtree recursion, so it never joins anything. See
+[D-85](crates/windows-file-watcher/DESIGN-NOTES.md#d-85).
+
+**A layer that will construct paths demands a form it can build on, up front.**
+Win32 has no relative open, so descending means appending to an absolute path, and
+a built path can pass `MAX_PATH` even when the caller's did not. Discovering that
+mid-traversal is the worst possible time, so the contract front-loads it: resolve
+ordinary inputs once, cap them where behaviour is unambiguous, and tell the caller
+to supply a fully qualified `\\?\` path for anything longer -- an actionable
+synchronous error rather than a `NotFound` that names nothing.
+`windows-file-enumeration-sys` is this shape. See
+[D-7](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#d-7) and its
+[Request path contract](crates/windows-file-enumeration-sys/DESIGN-NOTES.md#request-path-contract).
+
+The two also differ on the manifest, and deliberately in opposite directions.
+The watcher lets behaviour follow the host, because it only ever hands the caller's
+own path back to Win32. The enumerator refuses to: it requires both the input and
+the resolved form to fit the ordinary limit specifically **so that acceptance does
+not depend on the host executable's manifest**, which keeps one input meaning one
+thing in every host that links it. A layer whose results feed further path
+construction cannot afford host-dependent acceptance; a layer that builds nothing
+can.
+
+**The conversion rule, shared.** When a layer does need to move a caller's path
+into `\\?\` form, it must convert from a form Win32 has *already* normalised under
+the caller's own parsing mode -- `GetFullPathNameW`'s output, or
+`GetFinalPathNameByHandleW`'s -- never by prefixing the caller's raw string. Doing
+it after normalisation preserves what the path meant; doing it before silently
+reinterprets it. Both crates arrived at this independently, which is why it is
+written down once.
