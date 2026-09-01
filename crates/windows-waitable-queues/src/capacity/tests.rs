@@ -90,3 +90,25 @@ fn a_capacity_that_is_not_a_power_of_two_is_refused_whatever_its_size() {
         );
     }
 }
+
+#[test]
+fn a_capacity_exactly_at_the_ceiling_is_accepted() {
+    // **The boundary the other tests here cannot reach.** They all use
+    // `WIDEST`, whose `max` is `usize::MAX / 2` -- not a power of two, so the
+    // power-of-two rule refuses every capacity near it and the `>` in
+    // `validate_capacity` is never asked about equality. Widening `>` to `>=`
+    // therefore changed nothing observable, and a mutation run found that
+    // comparison unguarded.
+    //
+    // With a ceiling that is itself a legal capacity, the two differ: the
+    // largest capacity a shape offers must be constructible, and off by one
+    // here would refuse it.
+    let bounds = Bounds { min: 2, max: 8 };
+
+    validate_capacity(8, bounds).expect("the ceiling itself must be accepted");
+    validate_capacity(16, bounds).expect_err("one power of two above it must not be");
+
+    // The same at the other end, so the floor is not off by one either.
+    validate_capacity(2, bounds).expect("the floor itself must be accepted");
+    validate_capacity(1, bounds).expect_err("below the floor must not be");
+}

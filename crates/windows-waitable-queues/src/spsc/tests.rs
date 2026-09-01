@@ -59,7 +59,13 @@ fn items_come_out_in_the_order_they_went_in() {
 #[test]
 fn a_full_queue_refuses_and_hands_the_item_back() {
     let (tx, rx) = bounded::<u32>(2).expect("a power-of-two capacity");
+    // **Both directions.** Asserting only that a full queue says so is
+    // satisfied by an `is_full` that always says so -- which is a queue that
+    // refuses every push, and a mutation run found exactly that constant alive
+    // on all three shapes.
+    assert!(!tx.is_full(), "an empty queue is not full");
     tx.push(1).expect("room");
+    assert!(!tx.is_full(), "nor is a partly filled one");
     tx.push(2).expect("room");
     assert!(tx.is_full());
 

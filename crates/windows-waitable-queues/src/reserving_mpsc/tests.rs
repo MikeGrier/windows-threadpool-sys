@@ -128,10 +128,19 @@ fn a_reserved_slot_is_delivered_into_a_queue_that_is_otherwise_full() {
     // The whole contract in one test: reserve, let the best-effort path fill
     // everything it is allowed to, and redeem anyway.
     let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    assert!(!tx.is_full(), "an empty queue is not full");
     let slot = tx.reserve().expect("a fresh queue has room");
+    assert!(
+        !tx.is_full(),
+        "nor is one holding a single reservation against four slots"
+    );
 
     let pushed = fill(&tx, 1);
     assert_eq!(pushed, 3, "the reservation withheld exactly one slot");
+    // Both directions, and this shape's is the interesting one: `is_full`
+    // counts held reservations as occupied, so the queue is full at three
+    // items rather than four. An `is_full` stuck at either constant would
+    // report that wrongly, and only the positive case was ever asserted.
     assert!(tx.is_full(), "and now nothing more may be pushed");
 
     slot.send(99).expect("the room was already ours");
