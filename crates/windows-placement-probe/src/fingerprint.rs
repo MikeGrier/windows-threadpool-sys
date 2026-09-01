@@ -335,19 +335,21 @@ impl Fingerprint {
         }
         efficiency_classes.sort_unstable();
 
-        // The outermost level that actually divides the machine. A level with
-        // one domain covers everything and partitions nothing.
+        // The outermost level that actually divides the machine, asked of the
+        // topology rather than recomputed here: `Topology` owns that rule, and
+        // a second statement of it drifts. It also deduplicates a level
+        // reported once per cache -- an L1 arriving as separate `data` and
+        // `instruction` domains over the same processors is two relationships
+        // but one partition, and counting relationships would put a doubled
+        // domain count into the fingerprint.
         let mut partitioning_cache_level = None;
         let mut cache_domain_sizes = Vec::new();
-        for level in 1..=4_u8 {
-            let sizes: Vec<usize> = topology
-                .caches_at_level(level)
+        if let Some((level, partitions)) = topology.outermost_partitioning_cache() {
+            partitioning_cache_level = Some(level);
+            cache_domain_sizes = partitions
+                .iter()
                 .map(|domain| domain.processors.len())
                 .collect();
-            if sizes.len() > 1 {
-                partitioning_cache_level = Some(level);
-                cache_domain_sizes = sizes;
-            }
         }
         cache_domain_sizes.sort_unstable();
         if partitioning_cache_level.is_none() {
@@ -490,17 +492,15 @@ pub fn places_from_topology(topology: &Topology) -> Vec<ProcessorPlace> {
         }
     }
 
-    // The outermost cache level that actually divides the machine, matching
-    // the fingerprint's own rule so the two cannot disagree.
+    // The outermost cache level that actually divides the machine. This calls
+    // the same `Topology` method the fingerprint does, rather than repeating
+    // the rule, so the two cannot disagree about which level partitions the
+    // host or about how many partitions it has.
     let mut cache_of = std::collections::BTreeMap::new();
-    for level in 1..=4_u8 {
-        let domains: Vec<_> = topology.caches_at_level(level).collect();
-        if domains.len() > 1 {
-            cache_of.clear();
-            for domain in domains {
-                for id in domain.processors.iter() {
-                    cache_of.insert(id, domain.id);
-                }
+    if let Some((_, partitions)) = topology.outermost_partitioning_cache() {
+        for domain in partitions {
+            for id in domain.processors.iter() {
+                cache_of.insert(id, domain.id);
             }
         }
     }

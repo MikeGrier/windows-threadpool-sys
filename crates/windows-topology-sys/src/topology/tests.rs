@@ -546,3 +546,143 @@ fn an_offline_processor_reports_no_capacity_even_when_a_core_claims_it() {
         "an offline slot's capacity is not invented from a domain that names it"
     );
 }
+
+/// A machine of `cores` two-processor cores, each with the split L1 that real
+/// firmware reports, plus a shared last-level cache.
+///
+/// The split L1 is the point: Windows reports one relationship per *cache*, so
+/// a core contributes an L1 `data` domain **and** an L1 `instruction` domain
+/// covering exactly the same two processors.
+fn split_l1_machine(cores: u32, last_level: u8) -> Topology {
+    let mut domains = Vec::new();
+    let mut all = 0usize;
+    let mut id = 0u32;
+    for core in 0..cores {
+        let mask = 0b11usize << (core * 2);
+        all |= mask;
+        let processors = ProcessorSet::from_group_mask(0, mask);
+        for cache_type in [CacheKind::Data, CacheKind::Instruction] {
+            domains.push(Domain {
+                kind: DomainKind::Cache {
+                    level: 1,
+                    associativity: 8,
+                    line_size: 64,
+                    size_bytes: 32 * 1024,
+                    cache_type,
+                },
+                id,
+                processors: processors.clone(),
+            });
+            id += 1;
+        }
+    }
+    domains.push(Domain {
+        kind: DomainKind::Cache {
+            level: last_level,
+            associativity: 16,
+            line_size: 64,
+            size_bytes: 32 * 1024 * 1024,
+            cache_type: CacheKind::Unified,
+        },
+        id,
+        processors: ProcessorSet::from_group_mask(0, all),
+    });
+
+    Topology {
+        processors: Vec::new(),
+        domains,
+        distances: None,
+        provenance: Provenance::Synthetic,
+    }
+}
+
+#[test]
+fn cache_levels_are_ascending_and_without_repeats() {
+    // Sixteen L1 relationships, one L3, but only two distinct levels.
+    assert_eq!(split_l1_machine(8, 3).cache_levels(), vec![1, 3]);
+}
+
+#[test]
+fn cache_levels_are_empty_when_no_cache_is_reported() {
+    let topo = Topology {
+        processors: Vec::new(),
+        domains: Vec::new(),
+        distances: None,
+        provenance: Provenance::Synthetic,
+    };
+    assert!(topo.cache_levels().is_empty());
+}
+
+#[test]
+fn a_split_instruction_and_data_cache_is_one_partition_not_two() {
+    // The measured shape of the development host: eight cores, so sixteen L1
+    // relationships over eight distinct processor pairs. Counting
+    // relationships reports twice as many partitions as the machine has.
+    let topo = split_l1_machine(8, 3);
+    assert_eq!(topo.caches_at_level(1).count(), 16);
+    assert_eq!(topo.cache_partitions_at_level(1).len(), 8);
+}
+
+#[test]
+fn cache_partitions_keep_the_first_domain_for_each_processor_set() {
+    let topo = split_l1_machine(2, 3);
+    let ids: Vec<u32> = topo
+        .cache_partitions_at_level(1)
+        .iter()
+        .map(|domain| domain.id)
+        .collect();
+    // 0 and 2 are the `data` domains; 1 and 3 are the `instruction` domains
+    // covering the same processors, and are the ones dropped.
+    assert_eq!(ids, vec![0, 2]);
+}
+
+#[test]
+fn the_outermost_partitioning_cache_skips_a_level_that_covers_everything() {
+    // L3 spans the machine and so divides nothing, however far out it sits.
+    let topo = split_l1_machine(4, 3);
+    let (level, partitions) = topo.outermost_partitioning_cache().expect("L1 divides");
+    assert_eq!(level, 1);
+    assert_eq!(partitions.len(), 4);
+}
+
+#[test]
+fn a_partitioning_cache_above_level_four_is_found() {
+    // `level` is a `u8`. A consumer sweeping a hard-coded `1..=4` reports this
+    // machine as having no partitioning cache at all.
+    let mut topo = split_l1_machine(1, 5);
+    // Replace the shared last level with two L5 partitions, so the dividing
+    // level is one a fixed `1..=4` ceiling cannot reach.
+    topo.domains.pop();
+    for (id, mask) in [(100u32, 0b01usize), (101, 0b10)] {
+        topo.domains.push(Domain {
+            kind: DomainKind::Cache {
+                level: 5,
+                associativity: 16,
+                line_size: 64,
+                size_bytes: 64 * 1024 * 1024,
+                cache_type: CacheKind::Unified,
+            },
+            id,
+            processors: ProcessorSet::from_group_mask(0, mask),
+        });
+    }
+    let (level, partitions) = topo.outermost_partitioning_cache().expect("L5 divides");
+    assert_eq!(level, 5);
+    assert_eq!(partitions.len(), 2);
+}
+
+#[test]
+fn a_single_core_split_l1_partitions_nothing() {
+    // The false positive deduplication removes: two cache relationships over
+    // one processor set is one partition, so no level divides this machine and
+    // a caller must not be told L1 does.
+    let topo = split_l1_machine(1, 3);
+    assert_eq!(topo.caches_at_level(1).count(), 2);
+    assert_eq!(topo.cache_partitions_at_level(1).len(), 1);
+    assert!(topo.outermost_partitioning_cache().is_none());
+}
+
+#[test]
+fn a_machine_with_no_cache_at_all_has_no_partitioning_cache() {
+    assert!(synthetic().outermost_partitioning_cache().is_none());
+}

@@ -45,9 +45,14 @@ use windows_topology_sys::{DomainKind, Topology};
 pub struct CacheLevel {
     /// 1, 2, 3, ... as the firmware reports it.
     pub level: u8,
-    /// How many distinct domains exist at this level.
+    /// How many distinct processor *partitions* exist at this level.
+    ///
+    /// Not the number of caches: a level Windows reports once per cache -- L1
+    /// as separate `data` and `instruction` domains over the same processors --
+    /// is several relationships but one partition per processor set, and it is
+    /// the partition a caller dividing work cares about.
     pub domains: usize,
-    /// Processors per domain, in discovery order.
+    /// Processors per partition, in discovery order.
     pub processors_per_domain: Vec<usize>,
 }
 
@@ -214,15 +219,24 @@ pub fn measure() -> io::Result<Observation> {
                 efficiency_class: *efficiency_class,
                 processors: domain.processors.len(),
             }),
-            DomainKind::Cache { level, .. } => {
-                let count = domain.processors.len();
-                match by_level.iter_mut().find(|(l, _)| l == level) {
-                    Some((_, spans)) => spans.push(count),
-                    None => by_level.push((*level, vec![count])),
-                }
-            }
             _ => {}
         }
+    }
+
+    // Asked of the topology rather than counted from `domains` above, because
+    // Windows reports one relationship per *cache* and not per partition.
+    // Measured here: L1 arrives as eight `data` domains plus eight
+    // `instruction` domains over the same eight processor pairs, so counting
+    // relationships printed "L1 16 domain(s)" on a machine with eight L1
+    // partitions -- and fed a doubled count to every policy in
+    // `domain_counts`.
+    for level in topology.cache_levels() {
+        let spans = topology
+            .cache_partitions_at_level(level)
+            .iter()
+            .map(|domain| domain.processors.len())
+            .collect();
+        by_level.push((level, spans));
     }
 
     by_level.sort_by_key(|(level, _)| *level);

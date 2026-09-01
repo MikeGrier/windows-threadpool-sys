@@ -214,6 +214,80 @@ impl Topology {
         )
     }
 
+    /// Every cache level this machine reports, ascending, without repeats.
+    ///
+    /// Derived from what the topology actually contains rather than from a
+    /// fixed ceiling. [`DomainKind::Cache`]'s `level` is a `u8`, so a caller
+    /// that sweeps a hard-coded `1..=4` silently reports a partitioning L5 as
+    /// absent -- a wrong answer that looks like a confident one.
+    pub fn cache_levels(&self) -> Vec<u8> {
+        let mut levels: Vec<u8> = self
+            .caches()
+            .filter_map(|d| match &d.kind {
+                DomainKind::Cache { level, .. } => Some(*level),
+                _ => None,
+            })
+            .collect();
+        levels.sort_unstable();
+        levels.dedup();
+        levels
+    }
+
+    /// The distinct processor partitions the caches at `level` form.
+    ///
+    /// # Why this is not [`Self::caches_at_level`]
+    ///
+    /// Windows reports one relationship per *cache*, not per partition, and a
+    /// level is routinely reported more than once over the very same
+    /// processors. Measured on the eight-core development host rather than
+    /// reasoned about: L1 arrives as eight `data` domains **plus** eight
+    /// `instruction` domains covering exactly the same eight processor pairs.
+    ///
+    /// Counting relationships therefore claims sixteen L1 partitions where the
+    /// machine has eight. Two consequences, both silent: a partition count that
+    /// is a whole multiple too large, and -- on a machine whose L1i and L1d are
+    /// its only two cache domains -- a level reported as *partitioning* when it
+    /// divides nothing at all.
+    ///
+    /// Deduplication is by processor set, which is the thing a caller
+    /// partitioning work actually cares about; the first domain covering each
+    /// distinct set is kept, so the returned ids are stable for a topology.
+    pub fn cache_partitions_at_level(&self, level: u8) -> Vec<&Domain> {
+        let mut partitions: Vec<&Domain> = Vec::new();
+        for domain in self.caches_at_level(level) {
+            if !partitions
+                .iter()
+                .any(|kept| kept.processors == domain.processors)
+            {
+                partitions.push(domain);
+            }
+        }
+        partitions
+    }
+
+    /// The outermost cache level that actually divides this machine, together
+    /// with the distinct partitions it forms.
+    ///
+    /// A level whose caches all cover the same processors partitions nothing --
+    /// a fully shared L3 is one domain spanning everything -- so it is never a
+    /// candidate however far out it sits. `None` means no reported level
+    /// divides the machine, which is a real answer and not a failure: a
+    /// single-core host is one partition by every measure.
+    ///
+    /// This is deliberately not "level 3". A shipping ARM64 laptop measured
+    /// during the 2026-08-30 session reports **no L3 at all**, with two L2
+    /// domains of six processors forming the real cluster boundary.
+    ///
+    /// Defined here, in the crate that owns the topology, so that every
+    /// consumer asks the same question rather than restating the rule and
+    /// drifting from it.
+    pub fn outermost_partitioning_cache(&self) -> Option<(u8, Vec<&Domain>)> {
+        self.cache_levels().into_iter().rev().find_map(|level| {
+            let partitions = self.cache_partitions_at_level(level);
+            (partitions.len() > 1).then_some((level, partitions))
+        })
+    }
+
     /// Every memory domain, including one with no processors (D-5).
     pub fn memory_domains(&self) -> impl Iterator<Item = &Domain> {
         self.domains
