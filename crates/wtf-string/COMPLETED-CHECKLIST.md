@@ -170,3 +170,11 @@ Append-only archive of completed milestones moved out of [CHECKLIST.md](CHECKLIS
   release-please prepends to in the already-released crates. The reserved seam -- a checked no-interior-NUL
   C-string companion (D-7, M-inf.1) -- is now recorded in the crate docs so users know the surface may grow
   there.
+
+## <a id="checklist-mutation-hardening"></a>Moved 2026-09-01 -- M1 mutation-test hardening
+
+### M1 -- Close mutation-test gaps
+
+- [x] **M1.1** -- Add direct unit coverage for the 14 surviving mutants in encoding defaults, capacity
+  management, comparison and hashing forwarders, and borrowed `OsString` conversion; sabotage-verify the
+  tests and rerun `cargo mutants` for `wtf-string`. *(completed 2026-09-01 18:39:22 UTC-04:00)*
