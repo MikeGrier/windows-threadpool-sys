@@ -448,6 +448,55 @@ repository, a commit, or a clean checkout exists will fail there and nowhere els
 such a test by asserting what the build could actually determine rather than by skipping
 it -- see `windows-placement-probe`'s `build_identity` tests for the worked example.
 
+**Pass the crate's features on BOTH sides, or most of what you find is fiction.**
+cargo-mutants mutates the *source*, so it happily mutates a module gated behind a feature
+that is switched off -- the mutation lands in code that is never compiled, the suite passes
+trivially, and the result is recorded as `missed`. It compiles out that module's tests at
+the same time, so both halves of the evidence disappear together.
+
+This is not a small correction. Measured on two runs here: a `windows-topology-sys` sweep
+reported 61 survivors of which **57 were in `#[cfg(feature = "serde")]` code**, and a
+`windows-file-watcher` sweep reported 247 of which **147 were in `scenario-tool` and
+`test-util` modules**. In both cases roughly 60% of the "gaps" were artifacts of the
+invocation. So:
+
+```
+cargo mutants -p <crate> --all-features -- --all-features
+```
+
+The flag is needed twice because the first governs cargo-mutants' own build and the one
+after `--` is passed to `cargo test`.
+
+**Verify which features were actually on before trusting a miss**, and do not do it by
+eye: `--check-cfg cfg(feature, values("scenario-tool", ...))` appears on every rustc line
+and merely *declares which names are valid*, so grepping the baseline log for a feature
+name matches whether or not it was enabled. The thing to look for is an explicit
+`--cfg feature="..."` flag; its absence means no features were on. Comparing the baseline's
+test count against a local `--all-features` run is the quicker check -- 283 against 350 on
+the file-watcher was the tell.
+
+**When a survivor looks alarming, check the gating before reporting it.** A
+`windows-file-watcher` run showed `ContractChecker::observe -> Ok(())` surviving, which
+would have meant the workspace's contract oracle could be replaced by "everything is fine"
+unnoticed. `mod contract` is `test-util`-gated; its tests are real and thorough; the
+finding was an artifact. The alarming ones are exactly where the check is cheapest and the
+cost of skipping it is highest.
+
+**A surviving mutant is not always a missing test -- sometimes it is unreachable code.**
+Before writing a test, check that a test *could* reach the line. Three survivors in
+`windows-file-watcher`'s `StandingHold::drop` turned out to sit past two early returns that
+between them cover every path: the drained case resolves the hold inline, and the
+undrained case only happens during teardown, when the `Weak` upgrade fails. No test can
+cover that body, and manufacturing one that reaches code nothing calls would be worse than
+leaving the gap visible. That is a design question for the engineer (queued as a checklist
+item), not something to close with a test.
+
+**Verify a fix by re-injecting the mutant on its own line, not by string replace.** A
+whole-file `.Replace` of `        state.reserved += 1;` matched four sites in one file, so
+it mutated a *different, tested* line and reported the untested one as caught -- inverting
+the conclusion. This is the same defect `tools/run-sabotage.ps1` guards with its "pattern
+found N times, expected 1" check; done by hand, nothing guards it.
+
 **Read the results as a to-do list, not a score.** `mutants.out/missed.txt` is the useful
 artifact; group it by file and by function to find the shape of the gap rather than
 fixing mutants one at a time. A large block of survivors usually names one absent *kind*
