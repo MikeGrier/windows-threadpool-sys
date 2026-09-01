@@ -136,15 +136,37 @@ fn watch_git_head(git_dir: &Path) {
         return;
     };
 
+    // **Refs may live somewhere other than the gitdir that holds `HEAD`.** A
+    // linked worktree keeps a private `HEAD` -- correctly, since each worktree
+    // is on its own branch -- but shares every ref with the repository it was
+    // created from, naming that shared directory in a `commondir` file beside
+    // the private `HEAD`. Looking for the ref in the private gitdir finds
+    // nothing, so watching would stop at `HEAD`: on a branch, precisely the file
+    // that does not change when you commit, which is the silent staleness this
+    // whole function exists to prevent, surviving in a layout it was meant to
+    // cover.
+    //
+    // Measured before fixing rather than reasoned about: in a throwaway
+    // `git worktree add`, a commit left the worktree's `HEAD` untouched while
+    // the ref under `commondir` was rewritten eight seconds later.
+    //
+    // A submodule has no `commondir` and keeps its refs in the gitdir its
+    // `gitdir:` redirect names, so it falls through to `git_dir` unchanged.
+    let refs_dir = match fs::read_to_string(git_dir.join("commondir")) {
+        // Relative to the gitdir the file sits in (git writes `../..`).
+        Ok(common) => git_dir.join(common.trim()),
+        Err(_) => git_dir.clone(),
+    };
+
     // A loose ref is rewritten on every commit. A ref that has been packed does
     // not exist as a file, and `packed-refs` is what changes instead -- so
     // whichever of the two is present is the one to watch. Emitting a path that
     // does not exist would make cargo re-run this script on every single build.
-    let loose = git_dir.join(reference.trim());
+    let loose = refs_dir.join(reference.trim());
     if loose.exists() {
         watch(&loose);
     } else {
-        let packed = git_dir.join("packed-refs");
+        let packed = refs_dir.join("packed-refs");
         if packed.exists() {
             watch(&packed);
         }
