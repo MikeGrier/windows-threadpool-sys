@@ -16,7 +16,7 @@
 //! unable to tell, must be the safe direction.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 /// What CI sets so the build does not have to shell out to `git`.
@@ -106,7 +106,16 @@ fn watch_git_head(git_dir: &Path) {
         Ok(_) => git_dir.to_path_buf(),
         Err(_) => match fs::read_to_string(git_dir) {
             Ok(redirect) => match redirect.trim().strip_prefix("gitdir:") {
-                Some(path) => PathBuf::from(path.trim()),
+                // **Resolved against the redirect file's own directory.** A
+                // `gitdir:` path may be relative, and it is relative to where
+                // the `.git` file sits -- not to wherever cargo happens to run
+                // this script. Taking it literally produced watch paths under
+                // the crate directory, so in a worktree or submodule checkout
+                // commits would stop refreshing the stamp: the exact failure
+                // this function was added to fix, surviving in the one layout
+                // it was added for. `join` still yields an absolute redirect
+                // unchanged, so both forms work.
+                Some(path) => git_dir.parent().unwrap_or(Path::new(".")).join(path.trim()),
                 None => return,
             },
             // No repository. The stamp is "unknown", which is the honest answer

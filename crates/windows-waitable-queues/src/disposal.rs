@@ -127,25 +127,35 @@ impl<T> Teardown<T> {
 
     /// Dispose of one surviving item.
     ///
-    /// # A panicking sink does not strand the items behind it
+    /// # A panicking disposal does not strand the items behind it
     ///
-    /// The sink is caller-supplied code running inside a destructor, which is
+    /// This applies to the item's own `Drop` as much as to a sink, and an
+    /// earlier version guarded only the sink. Both are caller-supplied code
+    /// running inside a destructor -- `T` belongs to the caller too -- so a
+    /// panicking `T::drop` escaped this manual walk over the surviving slots,
+    /// abandoning every item behind it and risking the second-panic abort. The
+    /// default path had exactly the failure the sink path was written to
+    /// prevent, and the reasoning below never distinguished them.
+    ///
+    /// The disposal is caller-supplied code running inside a destructor, which is
     /// the worst place for it to panic: a panic escaping here during an unwind
     /// aborts the process, and one escaping otherwise abandons every item not
     /// yet disposed -- precisely the handles this whole mechanism exists to
     /// account for.
     ///
     /// So a panic is caught and the walk continues. That is deliberately *not*
-    /// "swallowing an error": the item has already been handed over, so there
-    /// is nothing left to report about it, and the alternative is to lose the
-    /// rest of the queue as well. A sink that panics is a bug in the caller;
-    /// this only declines to make it a much larger one.
+    /// "swallowing an error": the item has already been handed over or
+    /// destroyed, so there is nothing left to report about it, and the
+    /// alternative is to lose the rest of the queue as well. A sink or a `Drop`
+    /// that panics is a bug in the caller; this only declines to make it a much
+    /// larger one.
     pub(crate) fn dispose(&mut self, item: T) {
         let Some(disposal) = self.disposal.as_mut() else {
             // The default. Written as an explicit drop rather than left to fall
             // out of the binding going out of scope, because "destroy it here"
-            // is a decision this type exists to name.
-            drop(item);
+            // is a decision this type exists to name -- and caught for the same
+            // reason the sink is: `T::drop` is the caller's code too.
+            let _ = catch_unwind(AssertUnwindSafe(move || drop(item)));
             return;
         };
 

@@ -265,12 +265,32 @@ pub struct Fingerprint {
     pub numa_node_sizes: Vec<usize>,
     /// Where the topology behind this fingerprint came from.
     ///
-    /// Rendered *inside* the string, not beside it. The fingerprint is
-    /// documented as canonical -- two hosts rendering the same string can
-    /// express the same placements, so string equality is a usable comparison.
-    /// A marker kept outside the string would leave a synthetic host comparing
-    /// equal to a real one, which is the specific bug this prevents rather than
-    /// a display nicety.
+    /// Rendered *inside* the string, not beside it. A marker kept outside would
+    /// leave a synthetic host comparing equal to a real one, which is the
+    /// specific bug this prevents rather than a display nicety.
+    ///
+    /// # What equal fingerprints do and do not mean
+    ///
+    /// **Equal strings mean equal marginal shape. They do not mean the two
+    /// hosts can express the same placements**, and an earlier version of this
+    /// note claimed they did.
+    ///
+    /// Every partition here is recorded as a list of *sizes* -- processors per
+    /// cache domain, per efficiency class, per NUMA node -- and never as how
+    /// those partitions intersect. Two eight-processor hosts can both render
+    /// `L2[4,4] ec[0:4,1:4] numa[4,4]` while one puts each efficiency class in
+    /// its own cache domain and the other splits both classes across both. Only
+    /// the second can express a same-cache/cross-class pair; only the first can
+    /// express cross-cache/same-class cleanly. The placements available to a
+    /// run therefore differ while the fingerprint agrees.
+    ///
+    /// So this is a summary for a banner and for grouping *by shape*, not a
+    /// key for pooling measurements. A consumer that needs placement
+    /// equivalence should read the placements a record actually reports, which
+    /// name themselves in every measurement row, rather than inferring them
+    /// from this string. Making the string canonical again would mean carrying
+    /// a placement signature, which is a serialized field and so a schema bump;
+    /// that is tracked as `PT-6.1` rather than done here.
     pub provenance: Provenance,
 }
 

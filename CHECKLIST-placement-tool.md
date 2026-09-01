@@ -506,6 +506,22 @@ and numbered when that has happened.
 
 ## M6: is a set of "equivalent" processors actually equivalent?
 
+- [ ] **PT-6.1** -- **Give the fingerprint a placement signature, or keep saying it is not canonical.**
+  [fingerprint.rs](crates/windows-placement-probe/src/fingerprint.rs) records each partition as a list
+  of *sizes* -- processors per cache domain, per efficiency class, per NUMA node -- and never how
+  those partitions intersect. Two eight-processor hosts can both render
+  `L2[4,4] ec[0:4,1:4] numa[4,4]` while one puts each efficiency class in its own cache domain and the
+  other splits both classes across both; only the second can express a same-cache/cross-class pair.
+  **The placements available to a run differ while the fingerprint agrees**, so string equality is not
+  placement equivalence.
+  The claim has been corrected in place, so nothing is currently wrong -- this item is the stronger
+  fix, not a bug. It needs a canonical signature of the expressible placements *in* the string, which
+  means a serialized field and therefore a schema bump.
+  **Deliberately gated on some other reason to bump the schema**, because a summary line is not worth
+  a version of its own when every measurement row already names the placement it was taken at, which
+  is what a collector needing equivalence should read. Raised by review 5073245942 on pull request
+  #56.
+
 **Not gated on the release, unlike the rest of this file.** The work is an extension of the affinity
 measurement, which today lives in [crates/windows-platform-probes](crates/windows-platform-probes) and
 moves wholesale under PT-2.1. Build it there now; it travels with everything else.

@@ -381,8 +381,11 @@ pub struct Observation {
     /// socket link -- so a single row would report whichever hop the enumeration
     /// happened to reach first.
     ///
-    /// Empty on a single-node machine, and a single entry on a two-node one,
-    /// where it restates the `CrossNumaNode` row rather than adding to it.
+    /// Empty on a single-node machine. A two-node machine yields **eight**
+    /// rows -- two directed pairs, each at two ring placements, each under two
+    /// strategies -- which is the product described above. This sentence said
+    /// "a single entry" while the paragraph above it said three dimensions,
+    /// which is the same doc comment contradicting itself.
     pub by_node_pair: Vec<Measurement>,
 }
 

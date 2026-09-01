@@ -152,3 +152,63 @@ fn the_debug_form_says_which_policy_is_in_force() {
     let handing: Teardown<u32> = Teardown::new(Some(Disposal::new(|_| {})));
     assert!(format!("{handing:?}").contains("hands_off: true"));
 }
+
+/// An item whose own destructor panics on one chosen value.
+///
+/// `T` is the caller's type, so its `Drop` is caller-supplied code exactly as a
+/// sink is -- which is the whole point of the test below.
+struct PanicsOnDrop {
+    value: u32,
+    dropped: Arc<AtomicUsize>,
+}
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        self.dropped.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(
+            self.value, 3,
+            "deliberate panic from a caller-supplied destructor"
+        );
+    }
+}
+
+#[test]
+fn a_panicking_item_destructor_does_not_strand_the_items_behind_it() {
+    // **The default policy had the defect the sink policy was written to
+    // avoid.** With no sink the item was dropped directly, so a panicking
+    // `T::drop` escaped this manual walk over the surviving slots -- abandoning
+    // every item behind it, and inside an unwind aborting the process on the
+    // second panic. The reasoning for catching the sink never distinguished the
+    // two, and neither does the code now.
+    let dropped = Arc::new(AtomicUsize::new(0));
+
+    let mut teardown = Teardown::new(None);
+    for value in 0..10 {
+        teardown.dispose(PanicsOnDrop {
+            value,
+            dropped: Arc::clone(&dropped),
+        });
+    }
+
+    assert_eq!(
+        dropped.load(Ordering::Relaxed),
+        10,
+        "the walk must continue past a panicking destructor, or one bad item loses the rest"
+    );
+}
+
+#[test]
+fn a_panicking_destructor_still_destroys_the_item_it_panicked_on() {
+    // Catching the panic must not turn into retaining the item: it was moved
+    // into the closure, so the unwind destroys it. Asserted separately so that
+    // "the panic is caught" cannot be mistaken for "the item survives".
+    let dropped = Arc::new(AtomicUsize::new(0));
+
+    let mut teardown = Teardown::new(None);
+    teardown.dispose(PanicsOnDrop {
+        value: 3,
+        dropped: Arc::clone(&dropped),
+    });
+
+    assert_eq!(dropped.load(Ordering::Relaxed), 1);
+}
