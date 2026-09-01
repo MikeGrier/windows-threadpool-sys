@@ -113,8 +113,13 @@ release-blocking rather than restating the decision itself.
   however rich its own `select`, which can only select over its own channels.
   Written into both the crate docs and the README, because docs.rs shows one and crates.io the other.
 
-- [ ] **SH-1.5** -- **BLOCKS MERGING [pull request #56](https://github.com/MikeGrier/windows-threadpool-sys/pull/56).**
-  **Bound `Reserving::Reservation<'a>` so a generic caller can redeem what it claims.**
+- [x] **SH-1.5** -- **Bound `Reserving::Reservation<'a>` so a generic caller can redeem what it claims.**
+  Done: the `Claim` trait carries `send` and `is_disconnected`, `Reservation<'a>` is bound on it, and
+  both reservation types implement it as forwarders. 87 lines across five files, no concrete signature
+  changed, `slotwise_mpsc` untouched because it does not implement `Reserving` at all. Mutation-tested
+  rather than assumed: 62 mutants over the whole reservation surface report 0 missed, and the first
+  run found a real gap -- `is_disconnected` stuck at `false` survived on `spsc`, because the connected
+  case was asserted there and the disconnected case only on the other shape.
   The associated type is declared with no bound at all, so a caller generic over
   [`Reserving`](crates/windows-waitable-queues/src/traits.rs) can call `reserve()` and then do
   nothing with the result except drop it. `reserve` is `#[must_use]` precisely because a held claim

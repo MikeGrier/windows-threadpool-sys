@@ -44,7 +44,7 @@
 use std::io;
 use std::os::windows::io::{BorrowedHandle, OwnedHandle};
 
-use crate::error::PushError;
+use crate::error::{Disconnected, PushError};
 
 /// The writing end of a queue.
 pub trait Producer {
@@ -148,6 +148,33 @@ pub trait Bounded {
         self.capacity().saturating_sub(self.len())
     }
 }
+/// A claimed slot, which is redeemed or released but never ignored.
+///
+/// Bound onto [`Reserving::Reservation`] so a caller generic over the trait can
+/// actually *discharge* what it claims. Without it `reserve` hands back a value
+/// with no usable operations: it can be dropped, and nothing else.
+pub trait Claim {
+    /// What the queue this claim came from carries.
+    type Item;
+
+    /// Delivers into the reserved slot.
+    ///
+    /// Consumes the claim, because the slot it names is used exactly once.
+    ///
+    /// # Errors
+    ///
+    /// [`Disconnected`] if every consumer has gone, carrying the item back so a
+    /// caller can account for it rather than losing it.
+    fn send(self, item: Self::Item) -> Result<(), Disconnected<Self::Item>>;
+
+    /// Whether every consumer is gone.
+    ///
+    /// Offered on the claim itself, not only on the producer that made it: a
+    /// reservation may outlive the moment the producer was last consulted, and
+    /// [`reserving_mpsc`](crate::reserving_mpsc)'s is [`Send`], so it may be
+    /// redeemed on a thread holding no producer handle to ask.
+    fn is_disconnected(&self) -> bool;
+}
 
 /// A producer that can claim a slot in advance, so that a later delivery cannot
 /// be refused for want of room.
@@ -199,7 +226,7 @@ pub trait Reserving {
     /// there the producer handle *is* the single-producer guarantee: an owned
     /// reservation could outlive it on another thread, and then two threads
     /// would be writing the ring.
-    type Reservation<'a>
+    type Reservation<'a>: Claim<Item = Self::Item>
     where
         Self: 'a;
 

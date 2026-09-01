@@ -35,7 +35,7 @@
 //! and fails an inherent method that does, and does not care which one broke.
 
 use crate::{
-    Bounded, Consumer, Observable, Options, Producer, PushError, Waitable, reserving_mpsc,
+    Bounded, Claim, Consumer, Observable, Options, Producer, PushError, Waitable, reserving_mpsc,
     slotwise_mpsc, spsc,
 };
 
@@ -584,4 +584,58 @@ fn every_shape_counts_a_doorbell_ring_that_actually_happened() {
     assert!(rings(&spsc_tx) >= 1);
     assert!(rings(&slot_tx) >= 1);
     assert!(rings(&res_tx) >= 1);
+}
+
+#[test]
+fn a_generic_caller_can_claim_check_and_redeem() {
+    // **The whole point of the bound.** This function names no concrete shape
+    // and still completes the operation `Reserving` exists for. Without the
+    // bound on `Reservation<'a>` it does not compile at all: `reserve` hands
+    // back a value whose only available operation is `drop`.
+    fn claim_and_send<P>(producer: &P, item: u32) -> Result<(), crate::Disconnected<u32>>
+    where
+        P: crate::Reserving<Item = u32>,
+    {
+        let claim = producer.reserve().expect("a fresh queue has room");
+        assert!(!claim.is_disconnected(), "the consumer is still there");
+        claim.send(item)
+    }
+
+    let (spsc_tx, spsc_rx) = spsc::bounded::<u32>(4).expect("4 is valid");
+    claim_and_send(&spsc_tx, 7).expect("delivery must succeed");
+    assert_eq!(spsc_rx.pop(), Some(7));
+
+    let (res_tx, res_rx) = reserving_mpsc::bounded::<u32>(4).expect("4 is valid");
+    claim_and_send(&res_tx, 9).expect("delivery must succeed");
+    assert_eq!(res_rx.pop(), Some(9));
+
+    // And the failure path is reachable generically too, which it was not
+    // before: a claim held past the consumer's exit reports it and hands the
+    // item back rather than losing it.
+    //
+    // **Both shapes, and both answers.** Asserting the connected case above and
+    // the disconnected case on only one shape leaves an `is_disconnected` stuck
+    // at `false` alive on the other -- which a mutation run found, and which is
+    // the reading that loses an item, since a caller checking it would deliver
+    // into a queue nobody will ever drain.
+    fn claim_survives_the_consumer<P>(producer: &P, item: u32)
+    where
+        P: crate::Reserving<Item = u32>,
+    {
+        let claim = producer.reserve().expect("a fresh queue has room");
+        assert!(
+            claim.is_disconnected(),
+            "the consumer is already gone, and the claim must say so"
+        );
+        let returned = claim.send(item).expect_err("no consumer remains");
+        assert_eq!(returned.into_inner(), item, "the item must come back");
+    }
+
+    let (spsc_tx, spsc_rx) = spsc::bounded::<u32>(4).expect("4 is valid");
+    drop(spsc_rx);
+    claim_survives_the_consumer(&spsc_tx, 11);
+
+    let (res_tx, res_rx) = reserving_mpsc::bounded::<u32>(4).expect("4 is valid");
+    drop(res_rx);
+    claim_survives_the_consumer(&res_tx, 13);
 }

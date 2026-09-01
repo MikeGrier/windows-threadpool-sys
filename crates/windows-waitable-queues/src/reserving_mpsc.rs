@@ -1081,6 +1081,18 @@ impl<T> crate::Producer for Producer<T> {
     }
 }
 
+impl<T> crate::Claim for Reservation<T> {
+    type Item = T;
+
+    fn send(self, item: T) -> Result<(), Disconnected<T>> {
+        Self::send(self, item)
+    }
+
+    fn is_disconnected(&self) -> bool {
+        Self::is_disconnected(self)
+    }
+}
+
 impl<T> crate::Reserving for Producer<T> {
     type Item = T;
     type Reservation<'a>

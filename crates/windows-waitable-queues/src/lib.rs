@@ -44,7 +44,11 @@
 //! What the shapes have in common is described by the [capability
 //! traits](traits) -- [`Producer`], [`Consumer`], [`Bounded`], [`Waitable`],
 //! [`Reserving`] -- each naming one thing a queue can do, so a caller can be
-//! generic over exactly what it needs and nothing more.
+//! generic over exactly what it needs and nothing more. [`Claim`] is the one
+//! that is not a queue capability: it describes the *reservation* a
+//! [`Reserving`] queue hands out, and is what lets a generic caller redeem one
+//! rather than only drop it. Bring it into scope to call `send` on a claim
+//! whose concrete type you have not named.
 //!
 //! # Waiting is one-directional: a producer cannot park on a full queue
 //!
@@ -246,7 +250,7 @@ pub mod traits;
 pub use disposal::Disposal;
 pub use error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
 pub use options::Options;
-pub use traits::{Bounded, Consumer, Drain, Observable, Producer, Reserving, Waitable};
+pub use traits::{Bounded, Claim, Consumer, Drain, Observable, Producer, Reserving, Waitable};
 
 /// Pads and aligns a value onto its own cache line.
 ///
