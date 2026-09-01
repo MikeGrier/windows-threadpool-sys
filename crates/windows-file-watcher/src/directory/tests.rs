@@ -447,3 +447,135 @@ fn volume_identity_for_test_is_the_public_synthetic_seam() {
     assert_eq!(a, b);
     assert_ne!(a, c);
 }
+
+// --- pure helpers and accessors (mutation-testing gaps) ---
+//
+// A `cargo mutants` run left survivors in three places that need no Win32 call
+// at all. Every test in this file above drives a real `CreateFileW`, which is
+// right for the open/classify contract but meant the pure helpers underneath it
+// were only ever exercised incidentally, on whatever values a real handle
+// happened to produce.
+
+#[test]
+fn trim_nul_stops_at_the_first_nul() {
+    // `replace == with !=` survived here, which inverts the search into "stop
+    // at the first non-NUL" -- returning an empty slice for every real buffer.
+    let units: Vec<u16> = "AB\0CD".encode_utf16().collect();
+    assert_eq!(
+        super::trim_nul(&units),
+        &"AB".encode_utf16().collect::<Vec<_>>()[..],
+        "the content before the first NUL is the string"
+    );
+}
+
+#[test]
+fn trim_nul_keeps_a_slice_with_no_nul_whole() {
+    // The `map_or` default. A fixed-size Win32 buffer filled exactly to its
+    // length has no terminator to find, and truncating it would silently drop
+    // the last unit.
+    let units: Vec<u16> = "ABCD".encode_utf16().collect();
+    assert_eq!(super::trim_nul(&units), &units[..]);
+}
+
+#[test]
+fn trim_nul_of_a_leading_nul_is_empty() {
+    let units = [0u16, 65, 66];
+    assert!(
+        super::trim_nul(&units).is_empty(),
+        "a buffer Win32 wrote nothing into is the empty string, not its residue"
+    );
+}
+
+#[test]
+fn trim_nul_of_an_empty_slice_is_empty() {
+    assert!(super::trim_nul(&[]).is_empty());
+}
+
+#[test]
+fn trim_nul_ignores_everything_after_the_first_nul() {
+    // Two NULs with content between them: the residue of a previous, longer
+    // write is exactly what a reused buffer holds.
+    let units = [65u16, 0, 66, 0, 67];
+    assert_eq!(super::trim_nul(&units), &[65u16][..]);
+}
+
+#[test]
+fn each_open_failure_code_classifies_to_its_own_outcome() {
+    // Deleting the `ERROR_DIRECTORY` and `ERROR_INVALID_NAME` match arms both
+    // survived: every arm falls through to `Retryable`, so dropping one turns a
+    // permanent failure into one the retry machinery would chase forever.
+    //
+    // Asserted per-code rather than through a real failing open, because a real
+    // open cannot be made to produce each of these on demand.
+    use super::{OpenFailure, classify};
+    use windows_sys::Win32::Foundation::{
+        ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_INVALID_FUNCTION, ERROR_INVALID_NAME,
+        ERROR_NOT_SUPPORTED, ERROR_PATH_NOT_FOUND,
+    };
+
+    let cases: [(u32, OpenFailure); 6] = [
+        (ERROR_FILE_NOT_FOUND, OpenFailure::NotFound),
+        (ERROR_PATH_NOT_FOUND, OpenFailure::NotFound),
+        (ERROR_DIRECTORY, OpenFailure::NotADirectory),
+        (ERROR_INVALID_FUNCTION, OpenFailure::Unsupported),
+        (ERROR_NOT_SUPPORTED, OpenFailure::Unsupported),
+        (ERROR_INVALID_NAME, OpenFailure::InvalidPath),
+    ];
+
+    for (code, expected) in cases {
+        let error = std::io::Error::from_raw_os_error(code as i32);
+        assert_eq!(
+            classify(&error),
+            expected,
+            "error {code} must classify as {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unrecognised_code_is_retryable() {
+    // The fallback arm, asserted beside the named ones so a classifier that
+    // returned `Retryable` for everything could not pass the group above.
+    let error = std::io::Error::from_raw_os_error(0x0000_DEAD);
+    assert_eq!(super::classify(&error), OpenFailure::Retryable);
+}
+
+#[test]
+fn an_error_with_no_os_code_is_retryable() {
+    // The `raw_os_error()` guard: a synthesised error carries no code, and
+    // guessing a permanent classification from one would strand a watch.
+    let error = std::io::Error::other("no OS code behind this one");
+    assert_eq!(super::classify(&error), OpenFailure::Retryable);
+}
+
+#[test]
+fn volume_identity_reports_the_descriptive_fields_it_was_built_with() {
+    // The accessors are plain `pub fn`, but their only test was behind
+    // `#[cfg(feature = "test-util")]` -- so with default features they shipped
+    // untested, and replacing either body with `String::new()` or a constant
+    // survived. This test uses the crate-internal `synthetic` seam so it runs
+    // in every configuration.
+    let identity = VolumeIdentity::synthetic(0x1234, "ReFS", "Data");
+    assert_eq!(identity.filesystem_name(), "ReFS");
+    assert_eq!(identity.volume_label(), "Data");
+}
+
+#[test]
+fn volume_identitys_two_descriptive_fields_do_not_alias() {
+    // Distinct values, so an accessor returning the *other* field -- which no
+    // equality-only test could notice, since identity compares by serial --
+    // fails here.
+    let identity = VolumeIdentity::synthetic(7, "NTFS", "System");
+    assert_ne!(identity.filesystem_name(), identity.volume_label());
+    assert_eq!(identity.filesystem_name(), "NTFS");
+    assert_eq!(identity.volume_label(), "System");
+}
+
+#[test]
+fn volume_identity_accepts_empty_descriptive_fields() {
+    // An unlabelled volume is ordinary, and the empty string must come back as
+    // itself rather than being confused with "not read".
+    let identity = VolumeIdentity::synthetic(1, "", "");
+    assert_eq!(identity.filesystem_name(), "");
+    assert_eq!(identity.volume_label(), "");
+}
