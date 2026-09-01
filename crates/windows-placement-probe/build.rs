@@ -49,15 +49,31 @@ fn main() {
     println!("cargo::rerun-if-changed=Cargo.toml");
     println!("cargo::rerun-if-changed=build.rs");
 
-    let (commit, dirty) = match std::env::var(COMMIT_ENV) {
-        // CI knows the commit it checked out, and a CI checkout is clean by
-        // construction, so no `git` call is needed or wanted there.
-        Ok(sha) if !sha.trim().is_empty() => (Some(shorten(sha.trim())), Some(false)),
-        _ => (git_commit(), git_dirty()),
+    // CI knows the commit it checked out, and a CI checkout is clean by
+    // construction, so no `git` call is needed or wanted there.
+    let stamped_commit = std::env::var(COMMIT_ENV)
+        .ok()
+        .map(|sha| sha.trim().to_owned())
+        .filter(|sha| !sha.is_empty());
+
+    let (commit, dirty) = match &stamped_commit {
+        Some(sha) => (Some(shorten(sha)), Some(false)),
+        None => (git_commit(), git_dirty()),
     };
 
+    // **The two stamps are honoured as a unit, never singly.** `ci` is a claim
+    // about provenance, and the commit stamp is the evidence for it; accepting
+    // the claim alone lets a local build inherit the rest of its identity from
+    // the working tree and still pass `BuildIdentity::is_official`, because a
+    // clean checkout supplies a commit and `dirty = false` on its own.
+    //
+    // Measured before fixing: with only `PLACEMENT_PROBE_SOURCE=ci` set, a
+    // local build reported `v0.1.0 79b9c4666a1b [ci]` -- no `!!UNOFFICIAL!!`
+    // marker, so a record from it would have pooled with real CI results.
+    // That inverts this file's stated default, which is that being unable to
+    // tell must resolve to untrusted.
     let source = match std::env::var(SOURCE_ENV) {
-        Ok(value) if value.trim().eq_ignore_ascii_case("ci") => "ci",
+        Ok(value) if value.trim().eq_ignore_ascii_case("ci") && stamped_commit.is_some() => "ci",
         _ if commit.is_some() => "local",
         _ => "unknown",
     };
