@@ -148,8 +148,18 @@ The alternatives are all worse in the same way:
 - **Move everything to async.** A real answer if the program is already async;
   not one for a thread whose other obligations are `HANDLE`s.
 
-So the queue owns a manual-reset event and keeps it consistent with the queue's
-state. That consistency is the hard part and is what this crate is actually for.
+So the queue owns a manual-reset event and keeps it **never unsignalled while
+there is something to take**. That one-sided guarantee is the hard part and is
+what this crate is actually for.
+
+It is one-sided deliberately. The event stays signalled after the last item is
+taken until the consumer clears it with `arm()`, and a producer's signal may
+land after the consumer has already drained -- so a wake means *there may be
+something*, never *there is something*. What the crate guarantees is the
+direction that matters: a wake is never missing. Follow the protocol the
+blocking receivers use -- pop, `arm()`, re-check -- rather than treating the
+handle as a readiness predicate.
+
 The event is created lazily, so a consumer that only polls never allocates a
 kernel object at all.
 

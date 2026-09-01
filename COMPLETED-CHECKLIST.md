@@ -1630,7 +1630,7 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
 
 ## M2: making it loud where it is read
 
-- [x] **TP-2.1** -- `Fingerprint` in [crates/windows-platform-probes/src/fingerprint.rs](crates/windows-platform-probes/src/fingerprint.rs)
+- [x] **TP-2.1** -- `Fingerprint` in [crates/windows-placement-probe/src/fingerprint.rs](crates/windows-placement-probe/src/fingerprint.rs)
   carries the provenance and renders it **first and unmissably** when it is not `Measured`. The
   fingerprint string is documented as canonical, so string equality is a usable comparison -- which
   means the marker must be *inside* the string, or a synthetic host could compare equal to a real one.
@@ -1647,7 +1647,7 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
   **`Slice` deliberately carries no marker of its own, and the reason is structural rather than an
   oversight.** A `Slice` records which processors a measurement was pinned to, and one can only exist
   from a real `measure()` run: `measure` takes no injected topology (and
-  [crates/windows-platform-probes/src/core_affinity.rs](crates/windows-platform-probes/src/core_affinity.rs)
+  [crates/windows-placement-probe/src/core_affinity.rs](crates/windows-placement-probe/src/core_affinity.rs)
   now documents why it must not), and pinning to a processor that does not exist panics. A slice is
   therefore always real, and it is always printed beneath the banner that carries the host's
   provenance. **If `measure` ever does gain such a seam, this reasoning collapses and `Slice` needs its
@@ -1661,7 +1661,7 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
   `discover_places` conversion; staying at `ProcessorPlace` keeps the tests pure and fast. **Decide on
   the evidence, and record the decision either way** -- this item is not "do it", it is "choose".
   Note the constraint from
-  [crates/windows-platform-probes/src/core_affinity.rs](crates/windows-platform-probes/src/core_affinity.rs):
+  [crates/windows-placement-probe/src/core_affinity.rs](crates/windows-placement-probe/src/core_affinity.rs):
   `measure()` must still not gain a topology-injection seam, whatever is decided here.
 
   **Decided: both, because they are tests of different units -- and the evidence that settled it was a

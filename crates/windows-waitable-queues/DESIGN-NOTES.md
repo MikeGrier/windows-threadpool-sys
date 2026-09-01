@@ -28,7 +28,7 @@ preferred.
 | <a id="d-2"></a>D-2 | **Capabilities are sliced into narrow traits, not gathered into one.** The `std::io` shape -- `Read`, `Write`, `Seek`, `BufRead` -- rather than a single fat `WaitableQueue`. Forced by the shapes themselves: a poll-only queue cannot implement a trait containing `doorbell()`, and an unbounded one cannot implement `capacity()` meaningfully. |
 | <a id="d-3"></a>D-3 | **No trait ships until a second implementation exists to validate it.** The trait *shape* is fixed now so signatures stay compatible; the traits themselves land with the second shape. |
 | <a id="d-4"></a>D-4 | **Every shape is split into producer and consumer handles, and cardinality is carried by `Clone`.** Single-producer becomes a compile-time guarantee rather than a documented precondition. |
-| <a id="d-5"></a>D-5 | **The doorbell is level state owned by the queue: signalled exactly when the consumer has something to observe.** The **reset** must not be separable from the observation that there is nothing to take; the **signal** may be. Manual-reset, and created lazily. Realized without a lock by [D-9](#d-9). |
+| <a id="d-5"></a>D-5 | **The doorbell is level state owned by the queue: never unsignalled while the consumer has something to observe.** One-sided on purpose -- it may be signalled with nothing there, because the event stays set after the last take until the consumer's `arm()` clears it, and a late signal may arrive after a drain. A wake is a hint, never a proof; the guarantee is that a wake is never missing. The **reset** must not be separable from the observation that there is nothing to take; the **signal** may be. Manual-reset, and created lazily. Realized without a lock by [D-9](#d-9). |
 | <a id="d-9"></a>D-9 | **Without a lock, the reset is made inseparable from the observation by two things: ordering (clear, then re-check, and never wait if the re-check finds anything) and a `SeqCst` fence on each side.** `Consumer::arm` is the ordering step; the fences defeat the store-buffer hazard that ordering alone leaves open. The natural order -- check, then clear -- is asserted to hang by deliberate sabotage; the fences are beyond any test's reach and are M31.6's target. **Amended: this decision originally claimed the ordering alone sufficed.** |
 | <a id="d-6"></a>D-6 | **Overflow fails or reserves, and never overwrites.** For telemetry an overwritten entry is a lost sample; for an I/O submission it is a lost operation, and the two must not share a policy knob. |
 | <a id="d-7"></a>D-7 | **Shapes are plain modules, not Cargo features, until compile time justifies otherwise.** Two features are four configurations to test, against a benefit dead-code elimination already provides. |
@@ -129,9 +129,17 @@ The consumer handle also owns the doorbell, because the consumer is what waits; 
 
 ## D-5: the doorbell invariant, and which half must be under a lock
 
-The invariant is one sentence: **the event is signalled exactly when the consumer has something to
-observe.** It is *level* state -- a function of the queue's contents -- rather than a record of edges,
-which is why it is manual-reset.
+The invariant is one sentence, and it is deliberately one-sided: **the event is never unsignalled
+while the consumer has something to observe.** It is *level* state -- a function of the queue's
+contents -- rather than a record of edges, which is why it is manual-reset.
+
+The converse does not hold, and stating it as "signalled exactly when" -- which an earlier wording
+of this section and of [D-5](#d-5) both did -- promises more than the crate delivers, in a
+paragraph immediately followed by the two bullets that contradict it. The event stays signalled
+after the last item is taken until the consumer's own `arm()` clears it, and a late signal can
+arrive after the consumer has already drained. So a wake is a **hint that there may be something**,
+never a proof that there is; what the crate guarantees is that a wake is never *missing*. That is
+why the consumer protocol is pop, `arm()`, re-check, and not "wait, then take".
 
 The asymmetry is the part that is easy to get wrong, and it was worked out by walking the interleavings:
 
