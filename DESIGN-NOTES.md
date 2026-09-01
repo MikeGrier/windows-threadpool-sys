@@ -105,21 +105,30 @@ MPSC are siblings, and the shapes deferred to `M-inf` -- intrusive-linked and sh
 siblings too. No single queue is the queue.
 
 **The consequence is accepted deliberately: there is no bare `Queue` type.** A crate named
-"queues" that exported one would be claiming a primacy the name denies, so every type is
-specifically named (`SpscRing`, `MpscRing`) and a consumer must say which it wants. That stops a
+"queues" that exported one would be claiming a primacy the name denies, so a consumer must say
+which shape it wants: the shipped surface is a module per shape -- `spsc`, `slotwise_mpsc`,
+`reserving_mpsc` -- each exporting its own `Producer` and `Consumer` handles. That stops a
 default from accreting by accident, which is the failure the plural is chosen to prevent.
 
-**A `WaitableQueue` *trait* is the opposite case, and is anticipated.** The rule above forbids a
-bare `Queue` *type*, and the distinction matters: a type named `Queue` sitting among peers claims
-to be the one that matters, while a trait names the contract those peers *share* and claims
-nothing. The two are complementary. Concrete types remain the primary API -- usable directly,
-with no type parameter and no dispatch -- and the trait exists for consumers who want to be
-generic over a shape, exactly as `std::io::Read` sits beside `File`.
+**The single `WaitableQueue` trait anticipated here was rejected when the traits were built.**
+Superseded by
+[D-2](crates/windows-waitable-queues/DESIGN-NOTES.md#d-2) in the crate's own notes, and by
+[traits.rs](crates/windows-waitable-queues/src/traits.rs), which states the same thing where a
+reader of the code will meet it.
 
-**Anticipating that trait is a constraint on the concrete types now, not an addition later.** If
-one shape ships `pop(&mut self) -> Option<T>` and another ships `try_pop(&self) -> Result<T,
-Empty>`, no trait unifies them afterwards without a breaking change to one of them. Signatures
-must therefore be trait-compatible from the first type, whether or not the trait ever ships.
+The reasoning below was right about *why* a trait is not the same case as a bare type, and wrong
+about the shape it would take. What forced the change is that a fat trait is not merely
+inelegant but **unimplementable** by shapes this crate intends to ship: a queue that is never
+waited on has no doorbell to return, and an unbounded one has no capacity to report. So the
+capability is sliced the way `std::io` slices it -- `Read`, `Write`, `Seek`, rather than one
+`Io` -- and what ships is `Bounded`, `Consumer`, `Drain`, `Observable`, `Producer`, `Reserving`
+and `Waitable`, with each shape implementing the subset it genuinely has.
+
+**What survives unchanged is the constraint that motivated recording this early.** If one shape
+ships `pop(&mut self) -> Option<T>` and another ships `try_pop(&self) -> Result<T, Empty>`, no
+trait unifies them afterwards without a breaking change to one of them. Signatures must
+therefore be trait-compatible from the first type -- which is exactly as binding for a set of
+narrow traits as it would have been for one wide one.
 
 **So every shape is split into producer and consumer handles, and cardinality is expressed by
 `Clone`.** This is the hard part, because the conventions differ by shape: an SPSC queue is
@@ -141,9 +150,12 @@ rule-you-must-remember that
 introduced to eliminate elsewhere in this workspace.
 
 **The doorbell belongs on the consumer side**, since the consumer is what waits and the producer
-merely rings. Whether that makes `WaitableQueue` a consumer-side trait, or splits the contract
-into a producer trait and a consumer trait, is left to the crate's own design notes rather than
-guessed here.
+merely rings. Whether that made the contract one consumer-side trait or a producer/consumer pair
+was deferred to the crate's own design notes rather than guessed here, and has since been
+answered: neither. The contract is sliced by *capability*, so waiting is its own trait --
+[`Waitable`](crates/windows-waitable-queues/src/traits.rs) -- which a shape implements only if it
+has a doorbell at all. See
+[D-2](crates/windows-waitable-queues/DESIGN-NOTES.md#d-2).
 
 **What unifies the family is waitability, not I/O.** An earlier candidate, `windows-io-queue`,
 was rejected on this point: the queues themselves have nothing to do with I/O, and the domain
