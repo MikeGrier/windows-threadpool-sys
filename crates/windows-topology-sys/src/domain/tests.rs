@@ -399,4 +399,146 @@ mod serde_tests {
             "error should name the missing field: {error}"
         );
     }
+
+    // --- float-to-integer coercion (mutation-testing gap) ---
+    //
+    // `as_u64`/`as_i64` accept a JSON float only when it is a whole number
+    // inside the target's range. That guard was added as a PR #20 review
+    // response, specifically to stop the silent precision loss the older
+    // f64-for-everything encoding had -- and a `cargo mutants` run found that
+    // *every* operator in it survives mutation. Replacing the whole guard with
+    // `true` or `false`, flipping `==` to `!=`, or `&&` to `||`, all left the
+    // suite green, because no test ever fed a float into an integer field.
+    //
+    // A correction made in response to review, never verified, is the worst
+    // case of this: the reasoning is on record and the behaviour is not.
+    //
+    // These matter for a hand-written or fed-in description, which is the whole
+    // reason the schema is open: JSON has one number type, so a generator that
+    // emits 4.0 for a count is entirely ordinary, and one that emits 4.5 is a
+    // defect that must be refused rather than truncated.
+
+    /// A memory domain whose `memory_bytes` is written as the given JSON number
+    /// literal, which is the shortest path to `as_u64`.
+    fn memory_domain_with(bytes_literal: &str) -> Result<Domain, serde_json::Error> {
+        let json = format!(
+            r#"{{"kind": "memory", "id": 0, "processors": [], "memory_bytes": {bytes_literal}}}"#
+        );
+        serde_json::from_str(&json)
+    }
+
+    #[test]
+    fn a_whole_number_float_is_accepted_as_an_unsigned_field() {
+        let domain = memory_domain_with("1024.0").expect("4.0 is a whole number");
+        assert_eq!(
+            domain.kind,
+            DomainKind::Memory {
+                memory_bytes: Some(1024)
+            },
+            "a generator emitting a whole number as a float is ordinary JSON"
+        );
+    }
+
+    #[test]
+    fn a_fractional_float_is_refused_rather_than_truncated() {
+        // The precision-loss case the guard exists for. Truncating to 1024
+        // would be silent data corruption in a field describing a machine.
+        assert!(
+            memory_domain_with("1024.5").is_err(),
+            "a fractional byte count must be refused, not rounded"
+        );
+    }
+
+    #[test]
+    fn a_negative_float_is_refused_for_an_unsigned_field() {
+        assert!(
+            memory_domain_with("-1.0").is_err(),
+            "a negative count is out of range for an unsigned field"
+        );
+    }
+
+    #[test]
+    fn a_float_beyond_the_unsigned_range_is_refused() {
+        // Above u64::MAX. `n as u64` would saturate silently, which is exactly
+        // the conversion the range half of the guard prevents.
+        assert!(
+            memory_domain_with("1e300").is_err(),
+            "a float larger than u64::MAX must be refused, not saturated"
+        );
+    }
+
+    #[test]
+    fn zero_is_accepted_at_the_bottom_of_the_unsigned_range() {
+        // The boundary the range check includes. A guard written with an
+        // exclusive bound would wrongly refuse this.
+        let domain = memory_domain_with("0.0").expect("zero is in range");
+        assert_eq!(
+            domain.kind,
+            DomainKind::Memory {
+                memory_bytes: Some(0)
+            }
+        );
+    }
+
+    #[test]
+    fn an_integer_literal_still_parses_unchanged() {
+        // The common path, asserted beside the float ones so a guard that
+        // refused everything could not pass this group.
+        let domain = memory_domain_with("4096").expect("plain integers parse");
+        assert_eq!(
+            domain.kind,
+            DomainKind::Memory {
+                memory_bytes: Some(4096)
+            }
+        );
+    }
+
+    /// A cache domain whose `cache_type` carries a raw signed code, which is
+    /// the path to `as_i64`.
+    fn cache_domain_with_other_type(code_literal: &str) -> Result<Domain, serde_json::Error> {
+        let json = format!(
+            r#"{{"kind": "cache", "id": 0, "processors": [],
+                 "level": 2, "associativity": 8, "line_size": 64,
+                 "size_bytes": 1024, "cache_type": {{"other": {code_literal}}}}}"#
+        );
+        serde_json::from_str(&json)
+    }
+
+    #[test]
+    fn a_whole_number_float_is_accepted_as_a_signed_field() {
+        let domain = cache_domain_with_other_type("9.0").expect("9.0 is a whole number");
+        let DomainKind::Cache { cache_type, .. } = domain.kind else {
+            panic!("expected a cache domain");
+        };
+        assert_eq!(cache_type, CacheKind::Other(9));
+    }
+
+    #[test]
+    fn a_negative_whole_float_is_accepted_as_a_signed_field() {
+        // The signed range genuinely extends below zero -- a raw
+        // PROCESSOR_CACHE_TYPE is an i32 and is not guaranteed non-negative --
+        // so this is the case that distinguishes `as_i64`'s guard from
+        // `as_u64`'s rather than duplicating it.
+        let domain = cache_domain_with_other_type("-3.0").expect("-3.0 is a whole number");
+        let DomainKind::Cache { cache_type, .. } = domain.kind else {
+            panic!("expected a cache domain");
+        };
+        assert_eq!(cache_type, CacheKind::Other(-3));
+    }
+
+    #[test]
+    fn a_fractional_float_is_refused_for_a_signed_field() {
+        assert!(
+            cache_domain_with_other_type("-3.5").is_err(),
+            "a fractional cache-type code must be refused, not truncated"
+        );
+    }
+
+    #[test]
+    fn a_float_beyond_the_signed_range_is_refused() {
+        assert!(
+            cache_domain_with_other_type("-1e300").is_err(),
+            "a float below i64::MIN must be refused, not saturated"
+        );
+    }
 }
