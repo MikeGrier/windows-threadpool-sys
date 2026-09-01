@@ -410,16 +410,32 @@ written against — a decision to raise, not a gap to close in passing.
 `cargo_nextest_run` and `cargo_nextest_list` remain in the tool table above because the
 MCP server exposes them; they will fail here until cargo-nextest is installed.
 
-### cargo-mutants — run it with `-j 2`, from the terminal
+### cargo-mutants — run it through `tools/run-mutants.ps1`
 
 `cargo-mutants` is installed and is **not** exposed by the cargo-mcp server, so it is one
 of the few cargo commands that legitimately runs in a terminal rather than through a
 `cargo_*` tool.
 
-**Always pass `-j 2`.** The default is serial, and a mutation run is long enough that the
-difference matters: a 125-mutant sweep over this workspace took **3m30s at `-j 2` against
-roughly six minutes serially**, with identical results. Two is the recommended value here
-rather than "as many as there are cores":
+**Run it through [tools/run-mutants.ps1](../tools/run-mutants.ps1) rather than invoking
+`cargo mutants` directly.** Each of the settings the wrapper applies is there because
+getting it wrong has already cost a run, and three of them are invisible until they have:
+it suppresses the Windows Error Reporting dialog that a genuinely-crashing mutant would
+otherwise block the whole run behind, it passes the features, and it writes `mutants.out`
+under `.scratch/` so a new run cannot overwrite the analysis you have not finished reading.
+
+```powershell
+.\tools\run-mutants.ps1 -Package windows-waitable-queues
+.\tools\run-mutants.ps1 -File crates/windows-file-watcher/src/watcher.rs
+```
+
+The rest of this section is why those settings are what they are, and how to read what
+comes back. A direct `cargo mutants` invocation is still fine for a one-off, but then
+every paragraph below is yours to apply by hand.
+
+**Always pass `-j 2`** (the wrapper's default). Serial is the cargo-mutants default, and a
+mutation run is long enough that the difference matters: a 125-mutant sweep over this
+workspace took **3m30s at `-j 2` against roughly six minutes serially**, with identical
+results. Two is the recommended value here rather than "as many as there are cores":
 
 - Each job is a full build plus test run of a scratch copy of the tree, so the cost is
   disk and RAM as much as CPU, and the builds contend for the same target directory
@@ -448,7 +464,7 @@ repository, a commit, or a clean checkout exists will fail there and nowhere els
 such a test by asserting what the build could actually determine rather than by skipping
 it -- see `windows-placement-probe`'s `build_identity` tests for the worked example.
 
-**Pass the crate's features on BOTH sides, or most of what you find is fiction.**
+**Pass the crate's features to cargo-mutants ITSELF, not after `--`, and never both.**
 cargo-mutants mutates the *source*, so it happily mutates a module gated behind a feature
 that is switched off -- the mutation lands in code that is never compiled, the suite passes
 trivially, and the result is recorded as `missed`. It compiles out that module's tests at
@@ -461,19 +477,45 @@ reported 61 survivors of which **57 were in `#[cfg(feature = "serde")]` code**, 
 invocation. So:
 
 ```
-cargo mutants -p <crate> --all-features -- --all-features
+cargo mutants -p <crate> --all-features
 ```
 
-The flag is needed twice because the first governs cargo-mutants' own build and the one
-after `--` is passed to `cargo test`.
+**An earlier version of this section said the flag was needed on both sides, and that
+recipe does not run at all.** cargo-mutants forwards its trailing arguments onto the same
+`cargo test` it is already building, so `--all-features -- --all-features` puts the flag on
+one command line twice and cargo refuses it outright:
+`error: the argument '--all-features' cannot be used multiple times`. The run dies in the
+baseline, before a single mutant is tested.
+
+The two single-sided forms are not equivalent either, and the difference is visible in the
+log's `***` command lines. cargo-mutants runs **two** cargo phases -- a `--no-run` build and
+then the test run -- and:
+
+- `--all-features` **before** `--` lands on **both** phases. This is the one to use.
+- `--all-features` **after** `--` lands on the run phase **only**, leaving the `--no-run`
+  build feature-less. The features do end up enabled for what is actually tested (measured
+  on `windows-file-watcher`: 315 lib tests either way, against 275 with default features),
+  so results are not wrong -- but the first build is thrown away and rebuilt, and the
+  build/test split cargo-mutants reports is timing a configuration it did not test.
 
 **Verify which features were actually on before trusting a miss**, and do not do it by
-eye: `--check-cfg cfg(feature, values("scenario-tool", ...))` appears on every rustc line
-and merely *declares which names are valid*, so grepping the baseline log for a feature
-name matches whether or not it was enabled. The thing to look for is an explicit
-`--cfg feature="..."` flag; its absence means no features were on. Comparing the baseline's
-test count against a local `--all-features` run is the quicker check -- 283 against 350 on
-the file-watcher was the tell.
+eye. Two traps, both measured here:
+
+- `--check-cfg cfg(feature, values("scenario-tool", ...))` appears on every rustc line and
+  merely *declares which names are valid*, so grepping the baseline log for a feature name
+  matches whether or not it was enabled.
+- The enabling flag is **not** spelled `--cfg feature="x"` in the log. cargo quotes it, so
+  the literal text is `--cfg "feature=\"scenario-tool\""` and a search for the unquoted
+  form returns zero hits on a run that had every feature on. (An earlier version of this
+  section told you to look for the unquoted form; it never matches.)
+
+The two checks that do work:
+
+- Read the `***` lines in `mutants.out/log/baseline.log`. They are the exact cargo command
+  lines for both phases, so `--all-features` is either there or it is not.
+- Compare the baseline's test count against a local run -- the quicker check, and
+  independent of log formatting. On `windows-file-watcher`, 275 lib tests with default
+  features against 315 with all of them is the tell.
 
 **When a survivor looks alarming, check the gating before reporting it.** A
 `windows-file-watcher` run showed `ContractChecker::observe -> Ok(())` surviving, which

@@ -20,11 +20,19 @@
     it back afterwards, so a crash is just a non-zero exit code and cargo-mutants
     records it as caught.
 
-    **Features must be passed on both sides.** cargo-mutants mutates source, so
-    it happily mutates a module behind a feature that is off -- the mutation
-    lands in code that is never compiled, the suite passes trivially, and the
-    result is recorded as `missed`. Measured here: 57 of 61 survivors in one
-    crate and 147 of 247 in another were this and nothing else.
+    **Features go to cargo-mutants itself, not after `--`, and never both.**
+    cargo-mutants mutates source, so it happily mutates a module behind a
+    feature that is off -- the mutation lands in code that is never compiled,
+    the suite passes trivially, and the result is recorded as `missed`.
+    Measured here: 57 of 61 survivors in one crate and 147 of 247 in another
+    were this and nothing else. Passing it on *both* sides does not work at all:
+    cargo-mutants forwards its trailing arguments onto the same `cargo test`, so
+    the flag lands twice on one command line and cargo refuses it outright
+    (`the argument '--all-features' cannot be used multiple times`), killing the
+    run in the baseline. Passing it only *after* `--` reaches the test run but
+    not the `--no-run` build, so the first build is thrown away and rebuilt with
+    features on, and the build/test split cargo-mutants reports times a
+    configuration it never tested.
 
     **`-j 2`, not more.** This workspace has timing-sensitive tests; under heavy
     parallel load one can fail for want of a CPU rather than because it detected
@@ -84,10 +92,8 @@ try {
     Write-Host "WER dialogs suppressed for this run (DontShowUI=1)." -ForegroundColor Cyan
 
     $argv = @('mutants', '-p', $Package, '-j', $Jobs, '--timeout', $TimeoutSeconds,
-        '--output', $OutputDirectory)
+        '--output', $OutputDirectory, '--all-features')
     if ($File) { $argv += @('--file', $File) }
-    # After `--`: passed through to `cargo test`. Both halves need the features.
-    $argv += @('--', '--all-features')
 
     Write-Host "cargo $($argv -join ' ')" -ForegroundColor DarkGray
     & cargo @argv
