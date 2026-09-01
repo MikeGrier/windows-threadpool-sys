@@ -50,3 +50,43 @@ later: the record schema becomes a semver surface the moment anyone stores one
 (see the package metadata), and the README must say plainly that a crates.io
 build produces records marked unofficial, so nobody chooses that path without
 knowing what it costs the data.
+
+## The schema freezes at the first release, not before
+
+**Decided: regenerate `schema/v1.txt` in place while the tool is unreleased, and
+apply the append-only rule from the first release onward.**
+
+The archived golden exists so that a shape change cannot happen silently, and the
+append-only rule on top of it exists for a narrower reason: **a record already
+held by someone else cannot be regenerated**, so once a record in the wild claims
+schema N, N's meaning is fixed.
+
+That rationale is about other people's data. Until the tool is released nobody
+has any, so bumping the version records a shape that never reached a single
+reader -- and the first public release then ships already carrying dead numbers,
+each with an archived file describing a record that never existed.
+
+This was learned by doing it. During development the schema was raised twice in
+one evening, to v3 and then v4, each with a derived golden, on the reasoning that
+the tool exists to emit records people paste and some had been produced locally.
+Following that consistently would have released a crate whose first version
+carried four schema files and three unreachable versions. It was collapsed back
+to v1 in one change.
+
+**The latitude ends at the release, and the boundary is deliberately sharp**
+rather than a judgement call repeated per change:
+
+- *Before the first release* -- regenerate `v1.txt` from the record. The golden
+  still guards every change, because the test compares the file against a freshly
+  serialized record either way; what is given up is only the archive of shapes
+  nobody received.
+- *After the first release* -- never edit a published golden. The next shape
+  change raises `SCHEMA_VERSION` and adds the next file beside it.
+
+**Rejected: keeping v1 through v4.** It is the safer-looking option and it is
+strictly worse for a reader, who would find four archived shapes and no way to
+tell that three of them were never emitted by any build anyone could obtain.
+
+**Rejected: dropping the golden until release.** The guard is what makes an
+accidental shape change visible, and that is as valuable during development as
+after it -- more so, since that is when the shape actually moves.

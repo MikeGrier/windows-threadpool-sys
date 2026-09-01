@@ -51,7 +51,22 @@ use crate::machine::MachineDescription;
 /// **The golden files are append-only and a published version is never
 /// redefined.** Once a record exists in the wild claiming schema N, N's meaning
 /// is fixed, because that record cannot be regenerated.
-pub const SCHEMA_VERSION: u32 = 4;
+///
+/// # That rule starts at the first release, and this crate has not had one
+///
+/// The freeze exists to protect records held by other people. Until the tool is
+/// released there are none, so a version bump would archive a shape that never
+/// reached anyone and leave the first public release already carrying dead
+/// numbers.
+///
+/// This crate reached version 4 during development that way, and was collapsed
+/// back to version 1.
+///
+/// **After the first release the rule above applies without exception**: the
+/// next shape change raises this to 2 and adds `schema/v2.txt`, and `v1.txt` is
+/// never touched again. See this crate's `DESIGN-NOTES.md`, "The schema freezes
+/// at the first release, not before".
+pub const SCHEMA_VERSION: u32 = 1;
 
 /// One run's complete output.
 #[derive(Clone, Debug)]
