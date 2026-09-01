@@ -446,3 +446,45 @@ fn dropping_a_registration_with_work_outstanding_is_refused() {
     // already in progress would abort instead of failing the test.
     drop(buffers);
 }
+
+#[test]
+fn require_refuses_an_op_the_ring_does_not_support() {
+    // `Batch::require -> Ok(())` survived: every op this crate names is
+    // genuinely supported on any real host these tests run on, so nothing
+    // distinguished the real check from one that always passes.
+    // `set_supported_ops_for_test` constructs a ring that lacks one, so the
+    // refusal has something to refuse.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    ring.set_supported_ops_for_test(&[crate::Op::Nop]);
+    let batch = Batch::new(&mut ring);
+
+    let error = batch
+        .require(crate::Op::Read)
+        .expect_err("Read was left out of the constructed capability set");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+
+    batch
+        .require(crate::Op::Nop)
+        .expect("Nop is in the constructed capability set");
+}
+
+#[test]
+fn the_debug_rendering_names_the_registration_and_its_identity() {
+    // `<impl Debug for PendingBufferRegistration<B>>::fmt -> Ok(Default::default())`
+    // survived: that mutation writes nothing to the formatter, so the
+    // rendering comes back empty regardless of what the registration holds.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(vec![vec![0_u8; 64]])
+        .expect("queue buffer registration");
+    let rendering = format!("{pending:?}");
+    assert!(
+        rendering.contains("PendingBufferRegistration"),
+        "got {rendering}"
+    );
+    assert!(
+        rendering.contains(&pending.user_data().to_string()),
+        "the operation's identity must appear: {rendering}"
+    );
+}

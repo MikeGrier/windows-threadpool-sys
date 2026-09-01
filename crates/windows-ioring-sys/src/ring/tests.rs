@@ -2,6 +2,7 @@
 use super::{Completion, InjectedFailure, IoRing, Op, OpSupport};
 use crate::IoRingErrorExt;
 use crate::capability::{RingVersion, capabilities};
+use std::sync::atomic::Ordering;
 
 #[test]
 fn op_support_starts_empty() {
@@ -73,6 +74,25 @@ fn capability_reporting_never_claims_more_than_is_io_ring_op_supported_reports()
 }
 
 #[test]
+fn supports_reports_exactly_the_capability_set_it_was_given() {
+    // `IoRing::supports -> true` survived: every op named in this crate is
+    // genuinely supported on any real host these tests run on, so the honest
+    // answer and the constant agree everywhere a test could ask a real ring.
+    // `set_supported_ops_for_test` constructs the disagreement instead of
+    // hoping to find a host that lacks something.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    ring.set_supported_ops_for_test(&[Op::Nop, Op::Read]);
+
+    assert!(ring.supports(Op::Nop));
+    assert!(ring.supports(Op::Read));
+    assert!(
+        !ring.supports(Op::Write),
+        "an op left out of the constructed set must read back as unsupported"
+    );
+    assert!(!ring.supports(Op::Cancel));
+}
+
+#[test]
 fn nop_read_and_write_are_supported_on_any_real_ring() {
     // A sanity floor: every documented IoRing version supports at least
     // these three. If this ever fails, either the host is exotic enough to
@@ -136,6 +156,29 @@ fn dropping_a_ring_with_nothing_outstanding_does_not_hang() {
     // return immediately rather than waiting on SubmitIoRing at all.
     let ring = IoRing::new(64, 128).expect("create ring");
     drop(ring);
+}
+
+#[test]
+fn dropping_a_ring_actually_runs_its_drop_body() {
+    // `<impl Drop for IoRing>::drop -> ()` survived: nothing distinguished a
+    // ring that ran rundown-and-close from one that silently leaked its
+    // kernel handle, because closing it is invisible to every test that only
+    // asks the ring itself. `DROP_RUNS` is incremented as the first line of
+    // the real body, so a mutation that replaces the whole body removes the
+    // increment along with everything else.
+    //
+    // Read as "increased by at least one" rather than "increased by exactly
+    // one": other tests' rings drop concurrently on this same counter, but
+    // that only ever adds further increments, and can never mask this one --
+    // so the assertion is race-free despite the shared static.
+    let before = super::DROP_RUNS.load(Ordering::Relaxed);
+    let ring = IoRing::new(8, 8).expect("create ring");
+    drop(ring);
+    let after = super::DROP_RUNS.load(Ordering::Relaxed);
+    assert!(
+        after > before,
+        "dropping a ring must run its Drop impl at least once (before={before}, after={after})"
+    );
 }
 
 // --- The fault-injection seam (M16.3) ---
@@ -265,13 +308,57 @@ fn an_injected_failure_preserves_the_identity_a_token_claims_against() {
     let _ = std::fs::remove_file(&path);
 }
 
-// Deliberately not tested: that injection zeroes the transferred byte count.
-// `information` is private and `result()` yields `Err` for an injected
-// failure, so the zeroing is unobservable through the public API -- there is
-// no assertion to write. It is still done, because modelling a state the
-// kernel never produces would be wrong even where nothing can see it, but a
-// test asserting only `is_err()` under that name would be coverage in
-// appearance and nothing in substance.
+#[test]
+fn an_injected_failure_zeroes_the_transferred_byte_count() {
+    // The deletion of `information: 0,` from the struct-update survived: with
+    // it gone, `..self` supplies the *original* transfer count, so an
+    // injected "failure" completion silently keeps reporting real bytes
+    // transferred. `Completion::result` cannot show this -- it only returns
+    // `information` on success, and this seam only injects failure -- so the
+    // field is read directly. This module is `ring.rs`'s own child and can
+    // see it, which is exactly what an earlier version of this file's comment
+    // (just above) said was impossible.
+    use crate::{Batch, PushOptions};
+    use std::os::windows::io::AsRawHandle;
+
+    let path = std::env::temp_dir().join(format!(
+        "windows-ioring-sys-injection-information-{}-{:?}.tmp",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::write(&path, b"hello").expect("create fixture");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&path)
+        .expect("open fixture");
+
+    let mut ring = IoRing::new(16, 16).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    // SAFETY: `file` outlives the operation, and the completion is popped
+    // below before it is dropped.
+    let _token =
+        unsafe { batch.read_raw(file.as_raw_handle(), vec![0_u8; 5], 0, PushOptions::new()) }
+            .expect("queue a read");
+    batch.submit_and_wait(1, 30_000).expect("submit and wait");
+    let completion = loop {
+        if let Some(completion) = ring.try_pop().expect("pop") {
+            break completion;
+        }
+    };
+    assert_eq!(
+        completion.information, 5,
+        "the fixture must transfer five real bytes, or this test proves nothing"
+    );
+
+    let injected = completion
+        .with_injected_failure(crate::InjectedFailure::Ring(crate::RingCondition::Corrupt));
+    assert_eq!(
+        injected.information, 0,
+        "an injected failure must report zero transferred, not the real completion's count"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
 
 #[test]
 fn each_spelling_of_a_failure_produces_the_condition_it_names() {
@@ -450,4 +537,19 @@ fn an_injected_failure_carries_the_condition_it_names() {
     // the seam sound: it rewrites a real completion rather than fabricating one.
     assert_eq!(win32.user_data(), base.user_data());
     assert_eq!(win32.ring_id(), base.ring_id());
+}
+
+#[test]
+fn the_debug_rendering_names_the_ring_and_its_key_fields() {
+    // `<impl Debug for IoRing>::fmt -> Ok(Default::default())` survived: that
+    // mutation writes nothing to the formatter at all, so `format!("{ring:?}")`
+    // comes back empty. Asserting the type name and a real field value is
+    // enough to tell "wrote nothing" from "wrote the real struct".
+    let ring = IoRing::new(8, 8).expect("create ring");
+    let rendering = format!("{ring:?}");
+    assert!(rendering.contains("IoRing"), "got {rendering}");
+    assert!(
+        rendering.contains("version"),
+        "the version field name must appear: {rendering}"
+    );
 }
