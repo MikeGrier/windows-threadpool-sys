@@ -1540,6 +1540,45 @@ fn draining_only_latched_reports_still_reaches_the_resume_edge() {
 }
 
 #[test]
+fn a_take_that_took_nothing_is_not_a_crossing_and_does_not_prod() {
+    // `Receiver::try_recv` is the only caller that can report `took_one ==
+    // false`, and the edge has to be a *crossing*: room that was already there
+    // is not a transition into having room. Without that guard, any poll of an
+    // empty queue that happens to sit on the edge prods again, so a producer
+    // parked behind a saturated queue would be woken by pollers rather than by
+    // capacity -- and the wake would carry no room with it.
+    let (sender, receiver) = bounded(1);
+    let watch = WatchId::from_raw(202);
+    let producer = Arc::new(CountingResumer::default());
+    sender.register_resume(&producer);
+
+    // Empty, and already sitting on the edge (`best_effort_room() == 1`), so
+    // the `took_one` guard is the only thing separating this no-op poll from a
+    // real crossing.
+    assert!(receiver.try_recv().is_none(), "nothing to take");
+    assert_eq!(
+        producer.count(),
+        0,
+        "a poll that took nothing crossed no edge"
+    );
+
+    // The genuine crossing: saturate, then take the one item.
+    fill(&sender, watch, 1);
+    assert!(!sender.has_room(), "saturated");
+    assert!(receiver.try_recv().is_some(), "the queued item");
+    assert_eq!(producer.count(), 1, "taking the item crossed the edge");
+
+    // The queue now sits on that same edge again, but nothing was taken, so the
+    // prod must not repeat.
+    assert!(receiver.try_recv().is_none(), "drained");
+    assert_eq!(
+        producer.count(),
+        1,
+        "an empty poll must not re-fire an edge it did not cross"
+    );
+}
+
+#[test]
 fn draining_a_standing_send_returns_the_carve_out_to_the_slot_not_to_the_pool() {
     // A `cargo mutants` run flagged the reservation accounting, and chasing it
     // showed the carve-out's *reachable* release -- the one `take` performs
@@ -1648,5 +1687,39 @@ fn the_opaque_handles_name_themselves_when_formatted() {
     assert!(
         rendered.contains("Reservation"),
         "a reservation must name itself when formatted, got {rendered:?}"
+    );
+
+    let rendered = format!("{sender:?}");
+    assert!(
+        rendered.contains("Sender"),
+        "a sender must name itself when formatted, got {rendered:?}"
+    );
+}
+
+#[test]
+fn a_formatted_receiver_reports_the_state_a_wedge_is_diagnosed_from() {
+    // Unlike the opaque handles above, `Receiver`'s `Debug` is the one place
+    // the queue's occupancy is visible from outside, and those four numbers are
+    // exactly what someone diagnosing a stalled watcher reads. A body that
+    // writes nothing, or a `disconnected` flag that reports the opposite of the
+    // truth, both survived mutation -- and an inverted flag is worse than no
+    // flag, because it misleads at the moment it is consulted.
+    let (sender, receiver) = bounded(2);
+    let watch = WatchId::from_raw(303);
+
+    fill(&sender, watch, 2);
+    assert_eq!(sender.send(batch(watch, &["lost.txt"])), Delivery::Latched);
+    assert_eq!(
+        format!("{receiver:?}"),
+        "Receiver { queued: 2, capacity: 2, latched: 1, disconnected: false, .. }",
+        "a live receiver must report its occupancy and that it is still connected"
+    );
+
+    // Dropping the last sender is the transition the flag exists to show.
+    drop(sender);
+    assert_eq!(
+        format!("{receiver:?}"),
+        "Receiver { queued: 2, capacity: 2, latched: 1, disconnected: true, .. }",
+        "once every sender is gone the receiver must say so"
     );
 }

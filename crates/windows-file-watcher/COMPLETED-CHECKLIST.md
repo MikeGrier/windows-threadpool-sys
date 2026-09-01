@@ -511,3 +511,46 @@ written down nowhere. Full results in [The M14 audit](DESIGN-NOTES.md#the-m14-au
   `!is_empty() || latched() > 0` by hand, is the same signal `has_room` gave before it was fixed. Fixed by
   publishing D-41's own predicate as `Receiver::has_pending` rather than redefining `is_empty`, with three
   regression tests that had no predecessor.
+
+## Moved 2026-09-01 -- M15.6: bounded waiting across queue/tests.rs
+
+### <a id="m156"></a>M15.6 -- Convert `queue/tests.rs` to bounded waiting, so a broken wake fails instead of hanging. *(completed 2026-09-01 17:37:46 -04:00)*
+
+**The sweep.** 40 unbounded `recv()` sites reduced to 1 -- the survivor is inside `assert_stream_ended`
+itself, where the bound is the assertion. All 40 were the same `receiver.recv().expect(...)` shape on the
+same variable, so the transform was mechanical; the one nearby `recv()` at line 1069 is an unrelated
+`mpsc` receiver and was left alone. The transform cannot turn a passing test red, which is why it needed
+no staging: a test that was already receiving what it expected still receives it within the bound.
+
+**The result, measured.** A confirming full-file sweep after the change: **124 mutants in 20 minutes,
+78 caught / 8 missed / 14 timeout / 24 unviable**, against a pre-sweep baseline of 32.9 minutes.
+The two mutants that previously hung for 120s each are now **caught in 32s**.
+
+**The finding that changes how `timeout` should be read.** Every one of the 14 remaining timeouts had
+between **4 and 132 tests already `FAILED`** before cargo-mutants killed the run. None is a wedge and
+none is a gap: the mutant is detected, and the run is killed only because a suite in which dozens of
+bounded waits each burn their budget exceeds 3x the baseline. Bounded waiting converted the remaining
+hangs into detected failures; what is left is a scoring artifact, and `missed` is now the only column
+that indicates a real gap. The cost is real, though -- 14 x 67s is 15.6 minutes of the 20-minute run --
+and the lever on it is the test-side wait budget, not more test work (see M15.7).
+
+**Gaps closed while adjudicating the residue** (each verified by re-injecting the mutant and observing
+a red suite, never by reasoning):
+
+- `freed_resumers`' `!took_one ||` guard. `&&` binds tighter than `||`, so the mutant reads
+  `(!took_one && resumers.is_empty()) || room != 1`, which differs only when a take that took *nothing*
+  lands on the edge -- `Receiver::try_recv` is the sole caller that can report `took_one == false`. The
+  mutant makes an empty poll prod a parked producer, so a producer behind a saturated queue would be
+  woken by pollers rather than by capacity, and woken with no room to use. Closed by
+  `a_take_that_took_nothing_is_not_a_crossing_and_does_not_prod`.
+- `Debug for Receiver`, both an empty body and an inverted `disconnected` flag. This impl is the only
+  outside view of the queue's occupancy and is exactly what someone diagnosing a stalled watcher reads;
+  an inverted flag is worse than no flag, because it misleads at the moment it is consulted. Closed by
+  `a_formatted_receiver_reports_the_state_a_wedge_is_diagnosed_from`, which asserts the rendered string
+  whole.
+- `Debug for Sender`, replaced with a body that writes nothing. Folded into the existing
+  `the_opaque_handles_name_themselves_when_formatted`, which already carried this exact rationale for
+  `StandingSlot` and `Reservation`.
+
+The remaining 4 missed mutants are all in `StandingHold::drop`, whose body is unreachable; that is M15.1
+and is an engineer decision, not a test gap.
