@@ -615,10 +615,10 @@ as unambiguously good and here it is only half true:
 **A seam that only moves data is safe. A seam that lets fabricated labels reach real hardware is
 not.**
 
-- [`places_from_topology`](src/fingerprint.rs) **has** a seam. It is a pure conversion -- topology in,
+- [`places_from_topology`](../windows-placement-probe/src/fingerprint.rs) **has** a seam. It is a pure conversion -- topology in,
   processor positions out, nothing pinned and nothing timed. A synthetic topology yields synthetic
   positions, which is what the caller asked for and cannot be mistaken for a measurement.
-- [`measure`](src/core_affinity.rs) **must not**, and its documentation says so at the definition.
+- [`measure`](../windows-placement-probe/src/core_affinity.rs) **must not**, and its documentation says so at the definition.
   A synthetic topology's processor *numbers* are still valid on the real host, so every pin would
   succeed and the run would produce genuine timings filed under fabricated node ids -- output
   indistinguishable from a real NUMA measurement that measured no such thing. The pin assertion does

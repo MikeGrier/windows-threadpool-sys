@@ -130,7 +130,7 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   call `println!`/`eprintln!` from more than one site in a tool; introduce a writer trait, sink or
   formatter at the first occurrence and route everything through it. Seven binaries violate this today
   and were flagged individually in review 5072622803 on pull request #56:
-  [placement_probe.rs](crates/windows-placement-probe/src/bin/placement_probe.rs),
+  [main.rs](crates/windows-placement-probe/src/bin/placement_probe/main.rs),
   [doorbell_cost.rs](crates/windows-platform-probes/src/bin/doorbell_cost.rs),
   [queue_contention.rs](crates/windows-platform-probes/src/bin/queue_contention.rs),
   [request_cost.rs](crates/windows-platform-probes/src/bin/request_cost.rs),
