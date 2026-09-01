@@ -429,6 +429,22 @@ impl<T> Producer<T> {
                 // Another producer claimed this position between the load of
                 // the tail and now. Re-read rather than incrementing blindly:
                 // several producers may have got in.
+                //
+                // **A mutation run reports this branch as removable, and it is
+                // right.** Reversing the comparison makes the branch dead --
+                // the negative case returned above -- so a stale position falls
+                // through to the exchange instead, which fails precisely
+                // because the position is stale and hands back the very tail
+                // this branch would have loaded. The two routes end in the same
+                // place. Kept because the difference is a failed
+                // read-modify-write on the one line every producer touches,
+                // taken on the contended path, in exchange for a load; and
+                // because saying "somebody got in" where it happens is worth
+                // more than leaving it to be re-derived from an exchange that
+                // fails for a reason nothing states. Measured rather than
+                // argued: the mutant survives thirty runs of the two
+                // many-producer tests, including the capacity-two one, without
+                // losing or duplicating an item.
                 position = self.shared.tail.0.load(Ordering::Relaxed);
                 continue;
             }
