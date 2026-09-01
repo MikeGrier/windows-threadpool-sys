@@ -2,6 +2,8 @@
 //! Tests for [`SubmissionRecord`](super::SubmissionRecord), including the
 //! schema guard.
 
+// Used only by the schema-shape helpers, which are serialization-only.
+#[cfg(feature = "serde")]
 use std::collections::BTreeSet;
 
 use windows_topology_sys::Provenance;
@@ -92,6 +94,9 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
 ///
 /// An array contributes `field[]`, not one entry per element, so the golden
 /// describes the shape and not the size of one sample.
+/// Serialization only: without the `serde` feature the record has no
+/// serialized shape for this to describe.
+#[cfg(feature = "serde")]
 fn key_paths(value: &serde_json::Value) -> BTreeSet<String> {
     fn walk(value: &serde_json::Value, prefix: &str, into: &mut BTreeSet<String>) {
         match value {
@@ -123,6 +128,7 @@ fn key_paths(value: &serde_json::Value) -> BTreeSet<String> {
 }
 
 #[test]
+#[cfg(feature = "serde")]
 fn the_records_shape_matches_the_archived_schema_for_its_version() {
     // The guard. Change the record's shape without raising SCHEMA_VERSION and
     // adding the next golden, and this fails -- with a diff that names exactly
@@ -171,6 +177,7 @@ fn the_schema_version_in_a_record_is_the_constant() {
 }
 
 #[test]
+#[cfg(feature = "serde")]
 fn every_field_of_a_fully_populated_record_is_present_in_the_json() {
     // Guards the fixture rather than the code: if a future field is added and
     // left `None` here, it would be omitted from the JSON and would never enter
@@ -195,6 +202,7 @@ fn every_field_of_a_fully_populated_record_is_present_in_the_json() {
 }
 
 #[test]
+#[cfg(feature = "serde")]
 fn node_hops_is_an_empty_list_rather_than_an_absent_field() {
     // The distinction a large-machine submission depends on: "measured, and
     // there are none" must be tellable from "this version did not report them".

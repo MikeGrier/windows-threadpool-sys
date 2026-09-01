@@ -41,6 +41,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "placement-probe"
 path = "src/bin/placement_probe/main.rs"
+# The binary's whole output is the serialized record wrapped in fences and a
+# checksum, so it cannot exist without the feature. Declared rather than left
+# implicit: without this, `--no-default-features` tried to build the binary and
+# failed with an unresolved import instead of simply not building it.
+required-features = ["serde"]
 
 [features]
 # The submission record is the product, so serialization is not optional the way

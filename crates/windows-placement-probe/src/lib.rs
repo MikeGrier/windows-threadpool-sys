@@ -60,6 +60,13 @@ pub mod fingerprint;
 /// What machine this was, beyond its measurable shape.
 pub mod machine;
 /// JSON laid out to be read in a terminal rather than by a machine.
+///
+/// Gated, because it is serialization and nothing else: it parses and re-lays
+/// out `serde_json` values and cannot be built without `serde` in scope. The
+/// `serde` feature exists so the *measurement* code can be used without it, and
+/// leaving this module ungated made `--no-default-features` -- a configuration
+/// this crate's manifest advertises -- fail to compile outright.
+#[cfg(feature = "serde")]
 pub mod paste_json;
 /// The handoff itself, and the strategies the placement experiment compares.
 pub mod peer_index_cache;
@@ -68,4 +75,10 @@ pub mod record;
 /// The human-readable report, rendered from the record.
 pub mod report;
 /// Turning a run into something a person can paste into a discussion thread.
+///
+/// Gated for the same reason as [`paste_json`]: the paste *is* the serialized
+/// record wrapped in fences and a checksum, so there is nothing here that can
+/// exist without a serializer. Measurement, the fingerprint, and the
+/// human-readable report all remain available without the feature.
+#[cfg(feature = "serde")]
 pub mod submission;
