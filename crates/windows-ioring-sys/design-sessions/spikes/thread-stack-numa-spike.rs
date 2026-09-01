@@ -445,12 +445,28 @@ fn main() {
     let usable = slots
         .iter()
         .all(|s| s.shallow.queried && s.shallow.valid && s.deep.queried && s.deep.valid);
+
+    // **The treatment has to have been applied before its result means
+    // anything.** Slot C is bound to the far node *after* it starts, and that
+    // call can fail. When it does, C was never treated -- it simply stayed
+    // near, exactly like control B -- so `c == b` holds for a reason that has
+    // nothing to do with stack placement. Combined with `a == far_node`, the
+    // first arm below then prints "binding afterwards does not move the
+    // stack", which is a claim about a bind that never happened.
+    let treated = slots
+        .iter()
+        .all(|s| !s.bind_far_after_start || s.bind_after_ok == Some(true));
+
     println!();
     if vacuous {
         println!("=> VACUOUS: near and far are the same node. Apparatus works;");
         println!("   question unanswered.");
     } else if !usable {
         println!("=> INCONCLUSIVE: a probed page was not resident or the query failed.");
+    } else if !treated {
+        println!("=> INCONCLUSIVE: the post-start bind did not take, so treatment C");
+        println!("   never differed from control B. Nothing here says whether binding");
+        println!("   afterwards moves a stack, because nothing was bound afterwards.");
     } else {
         let (a, b, c) = (
             slots[0].shallow.node,
@@ -492,7 +508,7 @@ fn main() {
     println!(
         concat!(
             r#"{{"reason":"x-spike-thread-stack-numa","arch":"{}","numa_nodes":{},"#,
-            r#""near_node":{},"far_node":{},"vacuous":{},"usable":{},"#,
+            r#""near_node":{},"far_node":{},"vacuous":{},"usable":{},"treated":{},"#,
             r#""created_far":{{"shallow":{},"deep":{}}},"#,
             r#""control_near":{{"shallow":{},"deep":{}}},"#,
             r#""bound_after":{{"shallow":{},"deep":{}}}}}"#
@@ -505,6 +521,10 @@ fn main() {
         // cannot disagree with the text beside it.
         vacuous,
         usable,
+        // Whether treatment C's post-start bind actually took. Without it a
+        // reader mining these lines cannot tell a real result from one where
+        // the treatment never happened.
+        treated,
         probe_json(slots[0].shallow),
         probe_json(slots[0].deep),
         probe_json(slots[1].shallow),
