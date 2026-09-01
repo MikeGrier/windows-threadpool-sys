@@ -22,38 +22,54 @@ const WIDEST: Bounds = Bounds {
     max: WRAPPING_MAX_CAPACITY,
 };
 
+/// The largest power-of-two capacity the wrapping bound admits, as a shift.
+///
+/// **Derived from `usize::BITS`, not written as 62.** The bound is
+/// `usize::MAX / 2`, which is `2^(BITS-1) - 1`, so the largest power of two
+/// under it is `2^(BITS-2)`. Hard-coding the 64-bit answer made these tests
+/// unbuildable on a 32-bit target -- `1_usize << 63` does not fit in a 32-bit
+/// `usize` -- a strange way for a test *about* `usize` bounds to fail.
+const LARGEST_ACCEPTED_SHIFT: u32 = usize::BITS - 2;
+
+/// One past it: the smallest power of two the bound refuses.
+const SMALLEST_REFUSED_SHIFT: u32 = usize::BITS - 1;
+
 #[test]
 fn the_wrapping_ceiling_is_one_below_a_power_of_two() {
     // The fact every other assertion here rests on, stated so a reader does not
     // have to do the arithmetic: `usize::MAX / 2` is odd, so it is not itself a
     // capacity any shape accepts.
-    assert_eq!(WRAPPING_MAX_CAPACITY, (1_usize << 63) - 1);
+    assert_eq!(
+        WRAPPING_MAX_CAPACITY,
+        (1_usize << SMALLEST_REFUSED_SHIFT) - 1
+    );
     assert!(!WRAPPING_MAX_CAPACITY.is_power_of_two());
 }
 
 #[test]
-fn the_largest_accepted_capacity_is_two_to_the_sixty_two() {
-    // The documented number. `2^62` fits under `usize::MAX / 2`; `2^63` is one
-    // larger than the bound and is refused, which is what four documents used
-    // to claim was reachable.
-    validate_capacity(1_usize << 62, WIDEST).expect("2^62 is within the wrapping bound");
+fn the_largest_accepted_capacity_is_two_below_the_word_size() {
+    // On 64-bit that is 2^62 accepted and 2^63 refused, which is what four
+    // documents used to claim was the other way round. Expressed as shifts so
+    // the same assertion holds on a narrower word.
+    validate_capacity(1_usize << LARGEST_ACCEPTED_SHIFT, WIDEST)
+        .expect("the largest power of two under the bound is within it");
 
-    validate_capacity(1_usize << 63, WIDEST)
-        .expect_err("2^63 exceeds the wrapping bound and must be refused");
+    validate_capacity(1_usize << SMALLEST_REFUSED_SHIFT, WIDEST)
+        .expect_err("one power of two past the bound must be refused");
 }
 
 #[test]
 fn every_power_of_two_up_to_the_ceiling_is_accepted() {
     // A property rather than the two boundary samples above, so a bound that
     // moved for some other reason cannot pass by coincidence.
-    for shift in 0..63_u32 {
+    for shift in 0..=LARGEST_ACCEPTED_SHIFT {
         let capacity = 1_usize << shift;
         assert!(
             validate_capacity(capacity, WIDEST).is_ok(),
             "2^{shift} should be accepted"
         );
     }
-    for shift in 63..usize::BITS {
+    for shift in SMALLEST_REFUSED_SHIFT..usize::BITS {
         let capacity = 1_usize << shift;
         assert!(
             validate_capacity(capacity, WIDEST).is_err(),
@@ -66,7 +82,8 @@ fn every_power_of_two_up_to_the_ceiling_is_accepted() {
 fn a_capacity_that_is_not_a_power_of_two_is_refused_whatever_its_size() {
     // Guards the other half of the rule, so a fix to the ceiling cannot be made
     // by loosening the shape of what is accepted.
-    for capacity in [3_usize, 6, 100, (1 << 62) - 1, (1 << 62) + 1] {
+    let largest = 1_usize << LARGEST_ACCEPTED_SHIFT;
+    for capacity in [3_usize, 6, 100, largest - 1, largest + 1] {
         assert!(
             validate_capacity(capacity, WIDEST).is_err(),
             "{capacity} is not a power of two and must be refused"

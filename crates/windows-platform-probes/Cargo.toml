@@ -101,6 +101,9 @@ features = [
 	"Win32_Foundation",
 	"Win32_Security",
 	"Win32_Storage_FileSystem",
+	# GetSystemDirectoryW, so the request probe measures the real system
+	# directory instead of assuming Windows is installed on C:.
+	"Win32_System_SystemInformation",
 	"Win32_System_Diagnostics_Debug",
 	"Win32_System_IO",
 	"Win32_System_Pipes",

@@ -215,10 +215,20 @@ pub fn measure() -> Observation {
 /// timeout turns it into a reported anomaly instead.
 ///
 /// Returns `None` if the handshake ever timed out, because a partial run's
-/// average would be meaningless.
+/// average would be meaningless -- and for the same reason if `rounds` is zero,
+/// which has no average at all rather than an average of nothing.
 #[must_use]
 pub fn measure_park_and_wake(rounds: u32) -> Option<f64> {
     const WAIT_TIMEOUT_MS: u32 = 5_000;
+
+    // An empty sample has no average, and the arithmetic below would not say
+    // so: no round runs, so the elapsed time is zero, and `0.0 / 0.0` is `NaN`
+    // wrapped in the `Some` this function documents as a meaningful number. A
+    // caller comparing that against a threshold gets `false` from every
+    // comparison and no indication why.
+    if rounds == 0 {
+        return None;
+    }
 
     // SAFETY: two auto-reset, initially-unsignalled, unnamed events.
     let ping: HANDLE = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };

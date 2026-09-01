@@ -125,7 +125,17 @@ impl Observation {
             ("by-package", self.packages),
             (
                 "by-numa-domain-with-processors",
-                self.numa_domains - self.memoryless_numa_domains,
+                // Clamped to one, as the cache policy beside it already is. A
+                // host that reports no NUMA relationships leaves both counters
+                // at zero, and a policy that yields zero domains contradicts
+                // the execution-domain contract: there is always at least one
+                // domain, because the machine exists. Saturating for the same
+                // reason -- these are two independent counts from the
+                // operating system, and an unsigned subtraction that trusts
+                // their relationship would panic rather than report.
+                self.numa_domains
+                    .saturating_sub(self.memoryless_numa_domains)
+                    .max(1),
             ),
             (
                 "by-outermost-partitioning-cache",

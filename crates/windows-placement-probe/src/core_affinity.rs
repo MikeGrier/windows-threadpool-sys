@@ -127,10 +127,14 @@ fn efficiency_classes(places: &[ProcessorPlace]) -> Vec<u8> {
 /// # Why this is computed rather than estimated
 ///
 /// A person is being asked to give up minutes of their machine as a favour, and
-/// on a large multi-socket host the hop matrix alone grows as `n*(n-1)/2`. The
-/// *counts* here are exact -- they come from the same selection the run will
-/// use -- so only the per-run duration is approximate, and it is presented as a
-/// range rather than a single confident number.
+/// on a large multi-socket host the hop work alone grows as `2*n*(n-1)`: every
+/// *ordered* pair of nodes, because a hop is directed, and each of those
+/// measured at both ring placements. An earlier version of this note said
+/// `n*(n-1)/2`, the undirected count, which understated the dominant term by a
+/// factor of four -- 6 hops rather than 24 on a four-node host.
+/// The *counts* here are exact -- they come from the same selection the run
+/// will use -- so only the per-run duration is approximate, and it is presented
+/// as an upper bound rather than a single confident number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunPlan {
     /// Placements this machine can express.

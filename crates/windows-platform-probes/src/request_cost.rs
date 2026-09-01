@@ -74,6 +74,7 @@ use wtf_string::Wtf16String;
 use windows_namespace_request_sys::{CapturedHandle, OpenFile, prepare};
 use windows_sys::Win32::Foundation::GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, OPEN_EXISTING};
+use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
 /// Nanoseconds per operation for one timed loop.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -133,7 +134,16 @@ pub fn measure() -> Observation {
     const ITERATIONS: u32 = 100_000;
     const HANDLE_ITERATIONS: u32 = 50_000;
 
-    let short = Wtf16String::from(r"C:\Windows\System32\kernel32.dll");
+    // Resolved, not assumed. Windows is not always on `C:` -- a valid
+    // installation can sit on any volume -- and hard-coding it made this probe
+    // panic on such a machine rather than measure it. The same path is used for
+    // the prepared request and the real open below, so the two stay consistent.
+    let system_dll = system_directory().join("kernel32.dll");
+    let short = Wtf16String::from(
+        system_dll
+            .to_str()
+            .expect("the system directory is representable"),
+    );
     let long_text = format!(r"C:\{}\file.txt", vec!["directory"; 24].join("\\"));
     let long = Wtf16String::from(long_text.as_str());
 
@@ -169,12 +179,27 @@ pub fn measure() -> Observation {
 
     // The kernel transition a captured handle costs. Measured against a handle
     // this process already owns, so nothing here depends on the filesystem.
-    let file =
-        std::fs::File::open(r"C:\Windows\System32\kernel32.dll").expect("kernel32.dll is readable");
+    let file = std::fs::File::open(&system_dll).expect("kernel32.dll is readable");
     let borrowed = std::os::windows::io::AsHandle::as_handle(&file);
     timings.push(time_loop("capture_handle", HANDLE_ITERATIONS, || {
         CapturedHandle::capture(borrowed).expect("duplicating an owned handle")
     }));
 
     Observation { timings }
+}
+
+/// Where Windows is actually installed, rather than where it usually is.
+///
+/// Falls back to the conventional path only when the system will not say, which
+/// keeps the probe running on a machine that answers and keeps the failure
+/// visible on one that does not.
+fn system_directory() -> std::path::PathBuf {
+    let mut buffer = [0_u16; 260];
+    // SAFETY: writes at most `buffer.len()` units into a buffer of that size.
+    let written = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    let written = written as usize;
+    if written == 0 || written > buffer.len() {
+        return std::path::PathBuf::from(r"C:\Windows\System32");
+    }
+    std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..written]))
 }

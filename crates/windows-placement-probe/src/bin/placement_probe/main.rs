@@ -7,6 +7,9 @@
 
 use std::process::ExitCode;
 
+#[cfg(test)]
+mod tests;
+
 use windows_placement_probe::build_identity::BuildIdentity;
 use windows_placement_probe::core_affinity::{self, RunPlan};
 use windows_placement_probe::fingerprint::{Fingerprint, discover_places};
@@ -188,18 +191,65 @@ fn print_plan(plan: &RunPlan) {
 /// A failure here is reported and does not fail the run: the submission is the
 /// text on screen, and losing the backup copy costs nothing that matters.
 fn write_backup(record: &SubmissionRecord) {
-    let name = submission::file_name(record);
     // The same layout as the printed record, so the backup a runner attaches
     // and the text they paste are byte-identical.
-    match windows_placement_probe::paste_json::to_paste_json(record) {
-        Ok(json) => match std::fs::write(&name, json) {
-            Ok(()) => println!("(a copy of the record was also written to {name})"),
-            Err(error) => {
-                println!("(could not write {name}: {error} -- paste the text below instead)")
-            }
-        },
-        Err(error) => println!("(could not serialize the record to a file: {error})"),
+    let json = match windows_placement_probe::paste_json::to_paste_json(record) {
+        Ok(json) => json,
+        Err(error) => {
+            println!("(could not serialize the record to a file: {error})");
+            return;
+        }
+    };
+
+    match write_backup_to_new_file(&submission::file_name(record), &json) {
+        Ok(name) => println!("(a copy of the record was also written to {name})"),
+        Err(error) => println!("(could not write the backup: {error} -- paste the text below)"),
     }
+}
+
+/// Write `json` to a file that did not already exist, and return its name.
+///
+/// **`create_new`, not `write`, and this is a correction.** The name carries a
+/// timestamp so that a second run does not overwrite a first, but the stamp has
+/// one-second resolution and `fs::write` truncates whatever it finds. A run
+/// takes well under a second on a small machine, so two of them could land in
+/// the same second and the second would silently destroy the first -- exactly
+/// the loss the naming scheme promised to prevent, and worst for someone
+/// re-running the tool because they were unsure the first result was good.
+///
+/// Exclusive creation makes the collision visible instead of silent, and a
+/// suffix resolves it. The suffix is only reached on a real collision, so the
+/// ordinary name stays the predictable one.
+fn write_backup_to_new_file(name: &str, json: &str) -> std::io::Result<String> {
+    /// Enough to outlast any plausible burst of same-second runs; past this,
+    /// failing is better than looping while a caller waits.
+    const MAX_ATTEMPTS: u32 = 100;
+
+    for attempt in 0..MAX_ATTEMPTS {
+        let candidate = if attempt == 0 {
+            name.to_owned()
+        } else {
+            match name.strip_suffix(".json") {
+                Some(stem) => format!("{stem}-{attempt}.json"),
+                None => format!("{name}-{attempt}"),
+            }
+        };
+
+        match std::fs::File::create_new(&candidate) {
+            Ok(mut file) => {
+                std::io::Write::write_all(&mut file, json.as_bytes())?;
+                return Ok(candidate);
+            }
+            // Someone else has this name. Not a failure yet: try the next.
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("{MAX_ATTEMPTS} names starting from {name} were all taken"),
+    ))
 }
 
 fn parse_arguments() -> Result<Options, String> {

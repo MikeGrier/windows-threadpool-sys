@@ -328,12 +328,21 @@ impl AmbientState {
     ///
     /// # Panics
     ///
-    /// Panics if the impersonation context cannot be restored. That semantics is
-    /// inherited from
-    /// [`windows_impersonation_token_sys`],
-    /// not chosen here: returning a shared worker to a pool under an unknown
-    /// identity is a process-wide security failure, which is a different order
-    /// of hazard from the other aspects.
+    /// **Panics if the impersonation context cannot be restored, and that is
+    /// this crate's guarantee rather than a detail of its dependencies.**
+    /// Returning a shared worker to a pool under an unknown identity is a
+    /// process-wide security failure: every later task on that thread would run
+    /// as whoever the failed restore left behind, and no caller could detect it
+    /// from a returned error. Failing fast is the only response that cannot be
+    /// ignored, which is a different order of hazard from the other aspects
+    /// here, and they are reported rather than fatal.
+    ///
+    /// [`windows_impersonation_token_sys`] is used because its behaviour
+    /// already satisfies that guarantee. If it ever stopped doing so, the
+    /// dependency would be wrong and this contract would not change -- an
+    /// earlier version of this note described the semantics as *inherited* from
+    /// that crate and "not chosen here", which left a security property of this
+    /// public API resting on someone else's implementation detail.
     pub fn with_applied<F, T>(&self, operation: F) -> Result<Applied<T>, ApplyError>
     where
         F: FnOnce() -> T,
