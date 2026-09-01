@@ -71,7 +71,19 @@ fn main() -> ExitCode {
     };
     let plan = RunPlan::for_processors(&places);
 
-    print_collection_notice(&machine, options.suppress_model);
+    // Read before the notice, not after the measurement, because the notice is
+    // what a runner decides on and it cannot show a value it does not have.
+    // One reading serves both the notice and the record, so the two can never
+    // describe different machines.
+    let host = match Fingerprint::discover() {
+        Ok(host) => host,
+        Err(error) => {
+            eprintln!("could not read this machine's shape: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    print_collection_notice(&machine, &host, options.suppress_model);
     print_plan(&plan);
 
     if options.preview {
@@ -92,14 +104,6 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let host = match Fingerprint::discover() {
-        Ok(host) => host,
-        Err(error) => {
-            eprintln!("could not read this machine's shape: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
     let record = SubmissionRecord::new(&observation, host, machine);
     let text = match submission::render_submission(&record) {
         Ok(text) => text,
@@ -122,7 +126,7 @@ fn main() -> ExitCode {
 /// A person deciding whether to do this a favour should be able to decide with
 /// the real values in front of them rather than a promise about them, which is
 /// why the preview exists and why this prints what was actually read.
-fn print_collection_notice(machine: &MachineDescription, suppressed: bool) {
+fn print_collection_notice(machine: &MachineDescription, host: &Fingerprint, suppressed: bool) {
     println!("== windows-placement-probe ==");
     println!();
     println!("This measures what thread placement costs on your machine, and prints");
@@ -150,7 +154,14 @@ fn print_collection_notice(machine: &MachineDescription, suppressed: bool) {
             None => String::new(),
         }
     );
-    println!("  topology       processor, core, cache and NUMA layout");
+    // **The value, not the category.** Every other row here shows what was
+    // actually read, and this one named a subject instead -- while the
+    // paragraph below warns that the topology identifies the part whether or
+    // not the model is named. A runner asked to judge that could not see the
+    // thing they were being asked to judge, which is the one job the preview
+    // has.
+    println!("  topology       {host}");
+    println!("                 (processor, core, cache and NUMA layout)");
     println!("  timings        how long a handoff takes at each placement");
     println!();
     println!("What it does NOT collect: your host name, your user name, file paths,");
@@ -191,8 +202,14 @@ fn print_plan(plan: &RunPlan) {
 /// A failure here is reported and does not fail the run: the submission is the
 /// text on screen, and losing the backup copy costs nothing that matters.
 fn write_backup(record: &SubmissionRecord) {
-    // The same layout as the printed record, so the backup a runner attaches
-    // and the text they paste are byte-identical.
+    // The same layout as the printed record, so the JSON a runner attaches and
+    // the JSON embedded in the text they paste are byte-identical.
+    //
+    // The two artifacts are not: the terminal text also carries the
+    // instructions, the human-readable report, the checksum line and the
+    // markdown fences. Saying otherwise promised an equivalence a collector
+    // might rely on -- diffing a pasted comment against an attached file would
+    // report a difference on every submission.
     let json = match windows_placement_probe::paste_json::to_paste_json(record) {
         Ok(json) => json,
         Err(error) => {
