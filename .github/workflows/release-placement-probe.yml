@@ -23,8 +23,15 @@ on:
   # exactly when verification is wanted.
   #
   # Path-scoped so an unrelated pull request does not pay for two Windows
-  # builds. The release job below is guarded on the tag ref, so nothing is
-  # published from a pull request no matter what runs here.
+  # builds.
+  #
+  # **Nothing is published from a pull request**, and that now takes two guards
+  # rather than one. The release job below is guarded on the tag ref, which was
+  # once described here as sufficient -- it was not. The artifact upload in the
+  # build job ran on every trigger, so each pull-request run attached two
+  # downloadable binaries stamped `[ci]` that reported themselves official. The
+  # publishing steps are guarded on the tag ref too, and this sentence is only
+  # true because of that.
   pull_request:
     # **The dependencies are in this filter for a reason specific to ARM64.**
     # This is the only workflow in the repository that builds
@@ -163,10 +170,31 @@ jobs:
               ;;
           esac
 
+      # **Everything below here is release-only, and the guard is the point.**
+      #
+      # A pull-request or dispatch run builds and verifies -- that is why those
+      # triggers exist -- but it must not *publish*. Without the guard these
+      # steps ran on every trigger, so each pull-request run attached two
+      # downloadable binaries stamped `[ci]`, which `is_official` accepts and
+      # `SubmissionRecord::is_fully_trusted` then passes. Anyone could take one
+      # from the run's artifact list and submit results indistinguishable from a
+      # real release build, which is precisely the boundary this file's header
+      # says the release attachment exists to draw.
+      #
+      # Measured on this pull request rather than reasoned about: the run
+      # published both artifacts, and the x86_64 one reported
+      # `v0.1.0 5e9e85de527c [ci]` -- no `!!UNOFFICIAL!!` marker. Worse, on a
+      # `pull_request` event `github.sha` is the ephemeral merge commit, so that
+      # identity names a commit which exists on no branch and cannot be checked
+      # out. The claim was not merely unearned; it was unresolvable.
+      #
+      # The release job below is already tag-guarded, so nothing consumes these
+      # on any other trigger and gating them loses nothing.
       - name: Rebuild with the stamps for release
         # The negative check above overwrote the artifact with an unstamped one.
         # Rebuilding is not a formality: shipping that binary would attach a
         # file marked UNOFFICIAL to an official release.
+        if: startsWith(github.ref, 'refs/tags/placement-probe-v')
         shell: bash
         env:
           PLACEMENT_PROBE_COMMIT: ${{ github.sha }}
@@ -177,6 +205,7 @@ jobs:
             -p windows-placement-probe --bin placement-probe
 
       - name: Name the artifact for its architecture
+        if: startsWith(github.ref, 'refs/tags/placement-probe-v')
         shell: bash
         run: |
           arch="${{ matrix.target }}"
@@ -186,6 +215,7 @@ jobs:
              "dist/placement-probe-${arch}.exe"
 
       - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/placement-probe-v')
         with:
           name: placement-probe-${{ matrix.target }}
           path: dist/placement-probe-*.exe
