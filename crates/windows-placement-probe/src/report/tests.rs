@@ -385,6 +385,7 @@ fn a_homogeneous_machine_says_why_there_is_no_class_comparison() {
     // a fact about the host, not as a measurement that failed.
     let mut record = fully_populated();
     record.by_class.clear();
+    record.host.efficiency_classes = vec![(0, 16)];
 
     let text = render(&record);
 
@@ -392,5 +393,37 @@ fn a_homogeneous_machine_says_why_there_is_no_class_comparison() {
     assert!(
         !text.to_lowercase().contains("error"),
         "a homogeneous machine was reported as an error: {text}"
+    );
+}
+
+#[test]
+fn a_heterogeneous_machine_is_not_told_its_cores_are_all_one_class() {
+    // **The defect this guards.** An empty `by_class` does not prove the
+    // machine is homogeneous: the measurement skips any class that cannot
+    // supply two cores sharing a cache domain, so a machine with a singleton
+    // class -- or one whose class is split across caches -- lands here too.
+    // Telling its owner that every core reports the same class is a false
+    // statement about their hardware, in the section that exists to describe
+    // exactly that.
+    let mut record = fully_populated();
+    record.by_class.clear();
+    record.host.efficiency_classes = vec![(0, 8), (1, 1)];
+
+    let text = render(&record);
+
+    assert!(
+        !text.contains("Every core on this machine reports the same"),
+        "a heterogeneous machine was reported as homogeneous:
+{text}"
+    );
+    assert!(
+        text.contains("2 efficiency classes"),
+        "the report must name what it actually found:
+{text}"
+    );
+    assert!(
+        text.contains("sharing a cache domain"),
+        "the report must state the selection rule that failed:
+{text}"
     );
 }

@@ -133,21 +133,51 @@ fn render_by_class(out: &mut String, record: &SubmissionRecord) {
     let _ = writeln!(out, "-- the handoff, by efficiency class --");
 
     if record.by_class.is_empty() {
-        // Same reasoning as the empty node-hop table: on a homogeneous machine
-        // there is no second class to compare against, and saying so is a fact
-        // about the host rather than a measurement that failed.
-        let _ = writeln!(
-            out,
-            "  Every core on this machine reports the same efficiency class, so"
-        );
-        let _ = writeln!(
-            out,
-            "  there is no fast-against-slow comparison to draw. On a machine"
-        );
-        let _ = writeln!(
-            out,
-            "  with performance and efficiency cores this table has a row each."
-        );
+        // **Empty does not mean homogeneous, and it must not claim to.** The
+        // measurement needs a pair in one class on two different cores that
+        // share a cache domain, and skips any class that cannot supply one --
+        // a singleton class, or one whose cores sit in different cache
+        // domains. A heterogeneous machine reaches here too, and telling its
+        // owner that every core reports the same class is simply false.
+        //
+        // The record already knows which case this is, so it is asked rather
+        // than guessed at.
+        if record.host.efficiency_classes.len() <= 1 {
+            let _ = writeln!(
+                out,
+                "  Every core on this machine reports the same efficiency class, so"
+            );
+            let _ = writeln!(
+                out,
+                "  there is no fast-against-slow comparison to draw. On a machine"
+            );
+            let _ = writeln!(
+                out,
+                "  with performance and efficiency cores this table has a row each."
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "  This machine reports {} efficiency classes, but none of them could",
+                record.host.efficiency_classes.len()
+            );
+            let _ = writeln!(
+                out,
+                "  supply a comparable pair: the measurement needs two cores of the"
+            );
+            let _ = writeln!(
+                out,
+                "  same class sharing a cache domain, and a class with a single core"
+            );
+            let _ = writeln!(
+                out,
+                "  -- or with its cores split across caches -- cannot provide one."
+            );
+            let _ = writeln!(
+                out,
+                "  That is a fact about this machine's layout, not a failed run."
+            );
+        }
         return;
     }
 
