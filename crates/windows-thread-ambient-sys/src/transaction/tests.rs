@@ -314,39 +314,62 @@ fn release_reports_a_genuine_restore_failure_and_restores_on_drop_even_without_i
     // that restores nothing is indistinguishable from one that does. A real
     // transaction as the entry state is what makes "restored" and "still
     // cleared" two different, checkable things.
-    let Some(transaction) = Transaction::new() else {
+    //
+    // Run on a dedicated thread rather than the calling one. Measured: with
+    // the mutation genuinely applied, leaving this thread's transaction
+    // unrestored does not stay confined to this thread or even to this test --
+    // running the whole crate's `cargo test` reliably fails three *other*,
+    // unrelated transaction tests alongside this one every time (confirmed
+    // clean 25/25 without the mutation, failing 10/10 with it, both via a
+    // direct `cargo test` invocation, which is what this workspace's CI runs).
+    // TxF's current-transaction state is process-visible in a way this
+    // crate's own aspects are not, so an unreleased guard is a sharper
+    // contamination than the same mistake on error mode or memory priority
+    // would be. A dedicated thread does not prevent that spread -- nothing
+    // this test does can -- but it does mean the *test's own* pass/fail
+    // reflects its own assertion rather than another test's unrelated state.
+    let observed = std::thread::spawn(|| {
+        let transaction = Transaction::new()?;
+        Some(while_transacted(&transaction, || {
+            let before = live();
+            assert!(!super::is_none_sentinel(before), "precondition: transacted");
+
+            // `release`'s own restore, checked by state rather than by return
+            // value.
+            let guard = install(&Captured::Absent).expect("install");
+            assert!(
+                super::is_none_sentinel(live()),
+                "Absent did not clear the thread's transaction"
+            );
+            guard
+                .release()
+                .expect("releasing an installed Absent must succeed");
+            let released_cleanly = live() == before;
+
+            // `Drop`'s restore, on a guard that is never released explicitly.
+            let dropped_cleanly = {
+                let _guard = install(&Captured::Absent).expect("install");
+                assert!(super::is_none_sentinel(live()));
+                drop(_guard);
+                live() == before
+            };
+
+            (released_cleanly, dropped_cleanly)
+        }))
+    })
+    .join()
+    .expect("the worker did not panic");
+
+    let Some((released_cleanly, dropped_cleanly)) = observed else {
         eprintln!("skipped: this system cannot create a transaction");
         return;
     };
-    while_transacted(&transaction, || {
-        let before = live();
-        assert!(!super::is_none_sentinel(before), "precondition: transacted");
-
-        // `release`'s own restore, checked by state rather than by return
-        // value.
-        let guard = install(&Captured::Absent).expect("install");
-        assert!(
-            super::is_none_sentinel(live()),
-            "Absent did not clear the thread's transaction"
-        );
-        guard
-            .release()
-            .expect("releasing an installed Absent must succeed");
-        assert_eq!(
-            live(),
-            before,
-            "release did not restore the entry transaction"
-        );
-
-        // `Drop`'s restore, on a guard that is never released explicitly.
-        {
-            let _guard = install(&Captured::Absent).expect("install");
-            assert!(super::is_none_sentinel(live()));
-        }
-        assert_eq!(
-            live(),
-            before,
-            "dropping the guard without releasing did not restore the entry transaction"
-        );
-    });
+    assert!(
+        released_cleanly,
+        "release did not restore the entry transaction"
+    );
+    assert!(
+        dropped_cleanly,
+        "dropping the guard without releasing did not restore the entry transaction"
+    );
 }

@@ -536,6 +536,28 @@ fn raw_os_error_forwards_through_the_failing_aspect_or_reports_none() {
     assert_eq!(transaction_failure.raw_os_error(), Some(5));
 }
 
+#[test]
+fn display_and_source_forward_through_the_failing_aspect() {
+    // `<impl Display for CaptureError>::fmt -> Ok(Default::default())` and
+    // `<impl Error for CaptureError>::source -> None` survived alongside
+    // `raw_os_error`'s gap above, for the same reason: nothing in this suite
+    // provokes a real capture failure. One constructed variant is enough for
+    // both -- the mutation replaces the whole body, so any one working arm
+    // proves the real one ran.
+    let error = CaptureError {
+        failure: CaptureFailure::Transaction(TransactionError::synthetic(
+            TransactionFailure::Duplicate,
+            Some(5),
+        )),
+    };
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("capturing the transaction aspect failed"),
+        "got {rendered}"
+    );
+    assert!(std::error::Error::source(&error).is_some());
+}
+
 // --- release_error_mode ------------------------------------------------------
 
 #[test]
