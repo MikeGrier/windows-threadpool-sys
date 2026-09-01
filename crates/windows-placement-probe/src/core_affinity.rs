@@ -763,22 +763,33 @@ impl Observation {
             .collect()
     }
 
-    /// The measurement for one node pair, strategy and ring placement.
+    /// The measurement for one node pair, strategy and *requested* ring
+    /// placement.
     ///
-    /// The full key. `memory_node` is what the singular lookup used to omit.
+    /// The full key. `requested_memory_node` is what the singular lookup used
+    /// to omit entirely, and then keyed on the achieved node instead.
+    ///
+    /// **Keyed on the request, because the request is what identifies the
+    /// row.** Windows may satisfy an allocation on a node other than the one
+    /// asked for, so two rows of a pair can share an achieved node while
+    /// describing different placements. Keyed on that, one requested placement
+    /// becomes unfindable and a lookup for the other returns whichever row
+    /// happens to come first -- silently pairing a baseline taken at one
+    /// placement against a cached run taken at the other, which is precisely
+    /// the mistake the caller's own comment says this key exists to prevent.
     #[must_use]
     pub fn node_pair(
         &self,
         pair: (u32, u32),
         strategy: Strategy,
-        memory_node: Option<u32>,
+        requested_memory_node: Option<u32>,
     ) -> Option<Measurement> {
         self.by_node_pair
             .iter()
             .find(|m| {
                 (m.producer.numa_node, m.consumer.numa_node) == pair
                     && m.strategy == strategy
-                    && m.memory_node == memory_node
+                    && m.requested_memory_node == requested_memory_node
             })
             .cloned()
     }

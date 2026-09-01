@@ -1062,3 +1062,91 @@ fn a_longer_run_is_never_promised_as_shorter() {
         previous = seconds;
     }
 }
+
+/// One `by_node_pair` row, with the request and the result stated separately.
+fn hop_row(
+    pair: (u32, u32),
+    strategy: super::Strategy,
+    requested: Option<u32>,
+    achieved: Option<u32>,
+    nanos: f64,
+) -> super::Measurement {
+    let mut producer = place(0, 0, Some(0));
+    let mut consumer = place(1, 0, Some(0));
+    producer.numa_node = pair.0;
+    consumer.numa_node = pair.1;
+    super::Measurement {
+        slice: super::Slice::pair(producer, consumer),
+        producer,
+        consumer,
+        placement: Placement::CrossNumaNode,
+        strategy,
+        nanos_per_item: nanos,
+        consumer_batch: 1.0,
+        producer_batch: 1.0,
+        memory_node: achieved,
+        requested_memory_node: requested,
+    }
+}
+
+/// An observation carrying only the given node-pair rows.
+fn observation_of(rows: Vec<super::Measurement>) -> super::Observation {
+    super::Observation {
+        processors: Vec::new(),
+        by_class: Vec::new(),
+        measurements: Vec::new(),
+        by_node_pair: rows,
+    }
+}
+
+#[test]
+fn a_node_pair_lookup_finds_each_requested_placement_when_both_were_redirected() {
+    // **The defect this guards.** Windows may satisfy a NUMA allocation on a
+    // node other than the one requested. Keyed on the achieved node, the two
+    // rows of a pair become indistinguishable: one requested placement is
+    // unfindable and a lookup for the other returns whichever row comes first,
+    // which silently pairs a baseline taken at one placement against a cached
+    // run taken at the other.
+    let observation = observation_of(vec![
+        hop_row((0, 1), super::Strategy::Cached, Some(0), Some(0), 10.0),
+        hop_row((0, 1), super::Strategy::Cached, Some(1), Some(0), 20.0),
+    ]);
+
+    let asked_for_zero = observation
+        .node_pair((0, 1), super::Strategy::Cached, Some(0))
+        .expect("the row that asked for node 0 must be findable");
+    let asked_for_one = observation
+        .node_pair((0, 1), super::Strategy::Cached, Some(1))
+        .expect("the row that asked for node 1 must be findable");
+
+    assert!(
+        (asked_for_zero.nanos_per_item - 10.0).abs() < f64::EPSILON,
+        "got {}",
+        asked_for_zero.nanos_per_item
+    );
+    assert!(
+        (asked_for_one.nanos_per_item - 20.0).abs() < f64::EPSILON,
+        "got {}",
+        asked_for_one.nanos_per_item
+    );
+}
+
+#[test]
+fn a_node_pair_lookup_distinguishes_rows_that_share_a_requested_node() {
+    // The converse, so the key is not merely coarser in the other direction:
+    // rows differing by strategy must still be told apart.
+    let observation = observation_of(vec![
+        hop_row((0, 1), super::Strategy::Baseline, Some(1), Some(1), 30.0),
+        hop_row((0, 1), super::Strategy::Cached, Some(1), Some(1), 40.0),
+    ]);
+
+    let baseline = observation
+        .node_pair((0, 1), super::Strategy::Baseline, Some(1))
+        .expect("baseline row");
+    let cached = observation
+        .node_pair((0, 1), super::Strategy::Cached, Some(1))
+        .expect("cached row");
+
+    assert!((baseline.nanos_per_item - 30.0).abs() < f64::EPSILON);
+    assert!((cached.nanos_per_item - 40.0).abs() < f64::EPSILON);
+}

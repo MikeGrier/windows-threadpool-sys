@@ -355,6 +355,11 @@ fn print_node_distances(observation: &Observation) {
         "{:<14} {:>8} {:>8} {:>8} {:>12} {:>12} {:>10}",
         "prod -> cons", "ring on", "prod", "cons", "base ns/it", "cached ns/it", "cach depth"
     );
+    // Stated rather than left as a mystery glyph. `ring on` names the node the
+    // run asked for, since that is what identifies the row; a `!` means the
+    // memory did not land there, so that row does not measure the placement it
+    // names.
+    println!("  (`ring on` is the node requested; `!` means it landed elsewhere)");
 
     let mut slowest: Option<(f64, (u32, u32))> = None;
     let mut fastest: Option<(f64, (u32, u32))> = None;
@@ -362,8 +367,15 @@ fn print_node_distances(observation: &Observation) {
     for pair in &pairs {
         for base in observation.node_pair_rows(*pair, Strategy::Baseline) {
             // Matched on the ring placement as well, so the two columns
-            // describe the same configuration.
-            let Some(cached) = observation.node_pair(*pair, Strategy::Cached, base.memory_node)
+            // describe the same configuration -- and on the placement that was
+            // *requested*, not the one that was achieved. Windows may redirect
+            // an allocation, so two rows can share an achieved node while
+            // describing different placements; keyed on that, this pairs a
+            // baseline taken at one placement against a cached run taken at the
+            // other, which is the exact error the comment above says the key
+            // exists to prevent.
+            let Some(cached) =
+                observation.node_pair(*pair, Strategy::Cached, base.requested_memory_node)
             else {
                 continue;
             };
@@ -375,8 +387,15 @@ fn print_node_distances(observation: &Observation) {
                 // data was not, which is how two views of one measurement drift
                 // apart.
                 format!("{} -> {}", pair.0, pair.1),
-                base.memory_node
-                    .map_or_else(|| "unknown".to_owned(), |node| format!("node {node}")),
+                // The requested node, matching the key above and the probe
+                // crate's own report. A trailing `!` marks a row whose memory
+                // did not land where it was asked to go, so a redirected run
+                // is not read as a measurement of the placement it names.
+                match (base.requested_memory_node, base.memory_node) {
+                    (Some(asked), Some(got)) if asked == got => format!("node {asked}"),
+                    (Some(asked), _) => format!("node {asked}!"),
+                    (None, _) => "unspecified".to_owned(),
+                },
                 format!("g{}/cpu{}", base.producer.group, base.producer.number),
                 format!("g{}/cpu{}", base.consumer.group, base.consumer.number),
                 base.nanos_per_item,
