@@ -46,6 +46,31 @@
 //! [`Reserving`] -- each naming one thing a queue can do, so a caller can be
 //! generic over exactly what it needs and nothing more.
 //!
+//! # Waiting is one-directional: a producer cannot park on a full queue
+//!
+//! [`Waitable`] is a *consumer's* capability. A consumer can park until there
+//! is something to take; there is **no equivalent for a producer waiting until
+//! there is somewhere to put**. [`Producer::push`] refuses immediately with
+//! [`PushError::Full`], [`Reserving::reserve`] returns `None`, and neither
+//! offers a handle to wait on.
+//!
+//! **Stated here because the obvious comparison misleads.** `crossbeam-channel`
+//! blocks in `send` on a full bounded channel, so a reader arriving from it
+//! will expect the same and get a refusal. A producer with nowhere to go has to
+//! decide for itself -- shed the item, retry on its own schedule, or buffer --
+//! rather than being parked by the queue. The refusal *is* the backpressure
+//! (D-6), and it is typed so the item comes back rather than being swallowed.
+//!
+//! The absence is deliberate and not permanent. Whether a producer can wait,
+//! and **what it would wait on**, is open: a blocking send that parks on
+//! something `WaitForMultipleObjects` cannot see would reintroduce the very
+//! composition problem that ruled out the existing channel crates, which is the
+//! reason this one exists. Two properties already shape the answer -- a bounded
+//! queue can offer such a wait and an unbounded one never can, so it belongs in
+//! its own capability trait rather than in [`Waitable`]; and while every shape
+//! here has a single consumer, two of them have many *producers*, so a
+//! "there is room" signal has N waiters and is not the doorbell mirrored.
+//!
 //! # How far the memory orderings are verified, and how far they are not
 //!
 //! Stated plainly because a lock-free queue that is vague about this is asking

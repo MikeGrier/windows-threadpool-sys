@@ -215,7 +215,25 @@ impl core::error::Error for CapacityError {}
 ///
 /// The item is returned rather than dropped, because a queue that swallows what
 /// it refuses gives a caller no way to retry, redirect, or account for it.
+///
+/// # Why this is `#[non_exhaustive]`
+///
+/// Match it with a wildcard arm. Both receive-side errors already carry this
+/// attribute, and the send side lacked it only by omission -- which mattered
+/// more than an inconsistency, because **adding it later is itself a breaking
+/// change**: every caller's exhaustive `match` would need the wildcard it does
+/// not have. Free before the first publish, and a major bump after it.
+///
+/// The concrete reason to keep the room open is
+/// [M32.3](../../CHECKLIST-io-domains.md), the open decision on whether a
+/// producer can *wait* for capacity rather than only being refused it. If that
+/// lands, the send side may need to report something this enum cannot express
+/// today. The crate's own precedent suggests a separate error type instead --
+/// [`RecvError`] and [`RecvTimeoutError`] are distinct rather than one extended
+/// enum -- so a new variant here may never be needed. Deciding that under time
+/// pressure, with the choice already foreclosed, is the outcome this avoids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PushError<T> {
     /// The queue is at capacity.
     ///

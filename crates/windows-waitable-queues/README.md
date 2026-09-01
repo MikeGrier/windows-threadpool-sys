@@ -217,6 +217,29 @@ Two things that look like reasons to choose and are not:
   slot. Overwrite-oldest is right for telemetry, where a lost entry is a lost
   sample; here an entry may be an I/O submission, where a lost entry is a lost
   operation.
+- **It will not let a producer wait for room.** The doorbell is one-directional:
+  a consumer can park until there is something to take, and there is no
+  equivalent for a producer waiting until there is somewhere to put. `push`
+  refuses immediately with `PushError::Full`, and `reserve` returns `None`;
+  neither blocks, and no handle is offered to wait on.
+
+  **Said plainly because the obvious comparison misleads.** `crossbeam-channel`'s
+  `send` blocks on a full bounded channel, so a reader arriving from it will
+  expect the same here and get a refusal instead. A producer with nowhere to go
+  must decide what to do -- shed the item, retry on its own schedule, or grow a
+  buffer of its own -- rather than being parked by the queue.
+
+  This is a deliberate absence rather than an oversight, and it is not
+  permanent: whether a producer can wait, and **what it would wait on**, is the
+  open question in [M32.3](../../CHECKLIST-io-domains.md). The constraint that
+  makes it non-trivial is the one this crate exists for -- a blocking send that
+  parks on something `WaitForMultipleObjects` cannot see would reintroduce
+  exactly the composition problem that ruled out the existing channel crates.
+  Two further wrinkles, recorded so the shape of the problem is visible: a
+  bounded queue can offer this and an unbounded one never can, so it belongs in
+  its own capability trait rather than in `Waitable`; and while every shape here
+  has one consumer, two have many *producers*, so a room signal has N waiters
+  and is not the mirror image of the doorbell.
 - **It will not decide between two real queue designs on your behalf.** `slotwise_mpsc`
   and `reserving_mpsc` are different claim protocols, both well studied and both
   used in production and in research. `slotwise_mpsc` asks each slot's own sequence
