@@ -173,10 +173,26 @@ fn read_os_build() -> Option<String> {
     }
 }
 
-/// Firmware strings that name a hypervisor.
+/// Firmware strings that name a hypervisor and nothing else.
 ///
 /// Matched case-insensitively on a substring, because the exact strings vary by
 /// version and by how the host was configured.
+///
+/// # Every marker here must be unambiguous on its own
+///
+/// **A vendor name is not a hypervisor marker**, and two used to be here.
+/// `microsoft corporation` is the `SystemManufacturer` of a Hyper-V guest *and*
+/// of a physical Surface, so it marked every Surface as virtualised -- a false
+/// positive that a submitter could not see and a reader of the collected data
+/// would have no way to question. `google` had the same shape.
+///
+/// What distinguishes those hosts is the *product*: a Hyper-V or Azure guest
+/// reports `Virtual Machine`, and Compute Engine reports `Google Compute
+/// Engine`, neither of which any physical machine reports. So the product
+/// markers are here and the vendor names are not, which keeps detection
+/// working on this workspace's own Hyper-V host -- checked, it reports
+/// manufacturer `Microsoft Corporation` and product `Virtual Machine` -- while
+/// leaving physical hardware from the same vendors alone.
 const HYPERVISOR_MARKERS: &[&str] = &[
     "vmware",
     "virtualbox",
@@ -187,32 +203,53 @@ const HYPERVISOR_MARKERS: &[&str] = &[
     "parallels",
     "bhyve",
     "amazon ec2",
-    "google",
-    "microsoft corporation",
+    "google compute engine",
+    "virtual machine",
     "hyper-v",
 ];
 
 fn detect_virtualisation() -> (VirtualisationHint, Option<String>) {
     const KEY: &str = r"HARDWARE\DESCRIPTION\System\BIOS";
 
-    let manufacturer = read_registry_string(KEY, "SystemManufacturer");
-    let product = read_registry_string(KEY, "SystemProductName");
+    classify_virtualisation(
+        read_registry_string(KEY, "SystemManufacturer").as_deref(),
+        read_registry_string(KEY, "SystemProductName").as_deref(),
+    )
+}
 
+/// Decide what the firmware strings say about virtualisation.
+///
+/// Split from the registry read so the decision can be tested against the
+/// strings real machines report. The false positive this replaced was in the
+/// *rule*, not in the reading, and no test could reach the rule while the two
+/// were one function.
+fn classify_virtualisation(
+    manufacturer: Option<&str>,
+    product: Option<&str>,
+) -> (VirtualisationHint, Option<String>) {
     if manufacturer.is_none() && product.is_none() {
         return (VirtualisationHint::Unknown, None);
     }
 
-    for candidate in [manufacturer, product].into_iter().flatten() {
-        let lowered = candidate.to_lowercase();
-        if HYPERVISOR_MARKERS
+    let matched = [manufacturer, product].into_iter().flatten().any(|field| {
+        let lowered = field.to_lowercase();
+        HYPERVISOR_MARKERS
             .iter()
             .any(|marker| lowered.contains(marker))
-        {
-            return (VirtualisationHint::Detected, Some(candidate));
-        }
+    });
+    if !matched {
+        return (VirtualisationHint::NotDetected, None);
     }
 
-    (VirtualisationHint::NotDetected, None)
+    // Both fields, not whichever one matched. "Microsoft Corporation Virtual
+    // Machine" tells a reader which hypervisor; "Virtual Machine" alone does
+    // not, and that string is what a collector sees months later.
+    let described = [manufacturer, product]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (VirtualisationHint::Detected, Some(described))
 }
 
 /// Read one string value from `HKEY_LOCAL_MACHINE`.

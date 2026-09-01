@@ -345,7 +345,10 @@ pub struct Measurement {
 pub struct Observation {
     /// Every logical processor, as discovered.
     pub processors: Vec<ProcessorPlace>,
-    /// One within-class, within-cache pair per efficiency class.
+    /// One within-class, within-cache pair per efficiency class, per strategy.
+    ///
+    /// Two rows per class, not one: the pair is chosen once and then measured
+    /// under each strategy, which is the comparison the rows exist to support.
     ///
     /// Separate from [`Self::measurements`] because the placement categories
     /// collapse every same-class pair into one row, which would answer "does

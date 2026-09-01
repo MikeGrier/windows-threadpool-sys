@@ -7,7 +7,7 @@
 //! suppression, that nothing forbidden is read -- rather than any particular
 //! value, which would be an assertion about whatever host ran the suite.
 
-use super::{MachineDescription, VirtualisationHint};
+use super::{MachineDescription, VirtualisationHint, classify_virtualisation};
 
 #[test]
 fn the_default_hint_is_not_a_claim_of_bare_metal() {
@@ -158,4 +158,106 @@ fn a_detected_hypervisor_names_itself() {
             "a name was recorded without a detection: {described:?}"
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Virtualisation detection.
+//
+// These use the strings real machines report, because the defect they guard was
+// a rule that looked reasonable and was wrong about specific hardware: a vendor
+// name that a hypervisor and a laptop both carry.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_physical_surface_is_not_reported_as_virtualised() {
+    // **The false positive.** `Microsoft Corporation` is the manufacturer of a
+    // Hyper-V guest and of every Surface, so matching the vendor marked real
+    // hardware as a VM -- invisibly to the submitter, and unquestionable by
+    // anyone reading the collected data later.
+    let (hint, name) =
+        classify_virtualisation(Some("Microsoft Corporation"), Some("Surface Pro 9"));
+
+    assert_eq!(hint, VirtualisationHint::NotDetected, "got {name:?}");
+    assert_eq!(name, None);
+}
+
+#[test]
+fn a_hyper_v_guest_is_still_detected() {
+    // The case that must keep working, and the reason the vendor marker was
+    // there. This workspace's own host reports exactly these two strings.
+    let (hint, name) =
+        classify_virtualisation(Some("Microsoft Corporation"), Some("Virtual Machine"));
+
+    assert_eq!(hint, VirtualisationHint::Detected);
+    assert_eq!(
+        name.as_deref(),
+        Some("Microsoft Corporation Virtual Machine")
+    );
+}
+
+#[test]
+fn physical_hardware_from_a_cloud_vendor_is_not_virtualised() {
+    // The same shape as the Surface case: `Google` names both a cloud and a
+    // laptop, so only the product marker decides.
+    let (physical, _) = classify_virtualisation(Some("Google"), Some("Pixelbook"));
+    let (cloud, _) = classify_virtualisation(Some("Google"), Some("Google Compute Engine"));
+
+    assert_eq!(physical, VirtualisationHint::NotDetected);
+    assert_eq!(cloud, VirtualisationHint::Detected);
+}
+
+#[test]
+fn the_common_hypervisors_are_detected_from_either_field() {
+    for (manufacturer, product) in [
+        ("VMware, Inc.", "VMware Virtual Platform"),
+        ("innotek GmbH", "VirtualBox"),
+        ("QEMU", "Standard PC (Q35 + ICH9, 2009)"),
+        ("Xen", "HVM domU"),
+        ("Parallels International", "Parallels Virtual Platform"),
+        ("Amazon EC2", "t3.medium"),
+    ] {
+        let (hint, _) = classify_virtualisation(Some(manufacturer), Some(product));
+        assert_eq!(
+            hint,
+            VirtualisationHint::Detected,
+            "{manufacturer} / {product} was not detected"
+        );
+    }
+}
+
+#[test]
+fn ordinary_hardware_is_left_alone() {
+    for (manufacturer, product) in [
+        ("Dell Inc.", "XPS 15 9520"),
+        ("LENOVO", "20XW00"),
+        ("ASUSTeK COMPUTER INC.", "ROG STRIX"),
+        ("Apple Inc.", "MacBookPro18,3"),
+    ] {
+        let (hint, _) = classify_virtualisation(Some(manufacturer), Some(product));
+        assert_eq!(
+            hint,
+            VirtualisationHint::NotDetected,
+            "{manufacturer} / {product} was called a virtual machine"
+        );
+    }
+}
+
+#[test]
+fn firmware_that_says_nothing_is_unknown_rather_than_physical() {
+    // Unknown and NotDetected are different answers: one is "asked and told
+    // no", the other is "could not ask", and a reader deciding how much to
+    // trust a submission needs to tell them apart.
+    let (hint, name) = classify_virtualisation(None, None);
+
+    assert_eq!(hint, VirtualisationHint::Unknown);
+    assert_eq!(name, None);
+}
+
+#[test]
+fn one_readable_field_is_enough_to_answer() {
+    let (hint, _) = classify_virtualisation(None, Some("VMware Virtual Platform"));
+    assert_eq!(hint, VirtualisationHint::Detected);
+
+    let (hint, _) = classify_virtualisation(Some("Dell Inc."), None);
+    assert_eq!(hint, VirtualisationHint::NotDetected);
 }

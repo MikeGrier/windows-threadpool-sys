@@ -111,7 +111,11 @@ pub struct SubmissionRecord {
     /// an omitted field: a collector can then tell "measured, none exist" from
     /// "this version did not report them".
     pub node_hops: Vec<MeasurementRecord>,
-    /// One entry per efficiency class, comparing like with like.
+    /// One entry per efficiency class, per strategy, comparing like with like.
+    ///
+    /// Two rows per class. The pair is chosen once and measured under each
+    /// strategy, so rows that differ only in `strategy` are the comparison
+    /// rather than duplicates.
     pub by_class: Vec<MeasurementRecord>,
 }
 
