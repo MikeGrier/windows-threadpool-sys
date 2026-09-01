@@ -103,6 +103,7 @@
 
 use std::ffi::{OsStr, c_void};
 use std::fs;
+use std::io::Write as _;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
@@ -239,7 +240,13 @@ fn describe_storage(path: &Path) -> Storage {
     };
     if ok != 0 && (returned as usize) >= size_of::<STORAGE_DEVICE_DESCRIPTOR>() {
         // SAFETY: the driver filled at least a descriptor's worth of `buf`.
-        let desc = unsafe { &*buf.as_ptr().cast::<STORAGE_DEVICE_DESCRIPTOR>() };
+        //
+        // Read out, not borrowed in place. `buf` is a `Vec<u8>`, which promises
+        // only byte alignment, so forming a `&STORAGE_DEVICE_DESCRIPTOR` into it
+        // is undefined behaviour no matter how many bytes are there. That the
+        // system allocator happens to hand back suitably aligned blocks today is
+        // exactly the kind of incidental behaviour not to build on.
+        let desc = unsafe { buf.as_ptr().cast::<STORAGE_DEVICE_DESCRIPTOR>().read_unaligned() };
         out.bus_type = Some(desc.BusType as u8);
         out.removable = Some(desc.RemovableMedia);
         // The ID offsets are byte offsets into the same buffer, or 0 for absent.
@@ -301,7 +308,9 @@ fn describe_storage(path: &Path) -> Storage {
     };
     if ok != 0 && (returned as usize) >= size_of::<u32>() {
         // SAFETY: the first field of VOLUME_DISK_EXTENTS is NumberOfDiskExtents.
-        let count = unsafe { *extents.as_ptr().cast::<u32>() };
+        // Unaligned for the same reason as the descriptor above: `extents` is a
+        // `Vec<u8>` and carries no alignment guarantee beyond one byte.
+        let count = unsafe { extents.as_ptr().cast::<u32>().read_unaligned() };
         out.disk_extents = Some(count);
     }
 
@@ -313,6 +322,21 @@ fn describe_storage(path: &Path) -> Storage {
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetNumaNodeNumberFromHandle(hFile: HANDLE, NodeNumber: *mut u16) -> i32;
+    fn GetNumaHighestNodeNumber(HighestNodeNumber: *mut u32) -> i32;
+}
+
+/// How many NUMA nodes this machine reports.
+///
+/// One on failure, which is the conservative answer: it makes the spike call
+/// itself vacuous rather than claim a result it cannot support.
+fn numa_node_count() -> u32 {
+    let mut highest = 0_u32;
+    // SAFETY: `highest` is a live local for the duration of the call.
+    if unsafe { GetNumaHighestNodeNumber(&raw mut highest) } != 0 {
+        highest.saturating_add(1)
+    } else {
+        1
+    }
 }
 
 fn probe(label: &str, handle: HANDLE) -> (Option<u32>, Option<u16>) {
@@ -379,8 +403,21 @@ fn probe(label: &str, handle: HANDLE) -> (Option<u32>, Option<u16>) {
 }
 
 fn main() -> std::io::Result<()> {
-    println!("NOTE: on a single-NUMA-node machine this spike is VACUOUS.");
-    println!("Check the node count first; if it is 1, these results say nothing.\n");
+    // **The token is a verdict, not a disclaimer, and must be earned.**
+    // `tools/run-numa-spikes.ps1` classifies a spike by searching its output for
+    // `VACUOUS`, so printing it unconditionally -- as this did, before any node
+    // was queried -- marked every run vacuous and made the one signal the CI job
+    // exists to raise unreachable for this spike. The other spikes gate theirs
+    // on a measured node count; this one now does too.
+    let nodes = numa_node_count();
+    if nodes <= 1 {
+        println!("NOTE: this machine reports one NUMA node, so this spike is VACUOUS.");
+        println!("The apparatus below still runs, but its results say nothing.
+");
+    } else {
+        println!("this machine reports {nodes} NUMA nodes, so the results below are real.
+");
+    }
 
     // Q6: pass a directory on a Storage Space as argv[1] to ask the harder
     // question. Default target is the temp directory, i.e. the boot volume.
@@ -394,8 +431,19 @@ fn main() -> std::io::Result<()> {
         }
         None => std::env::temp_dir(),
     };
-    let path = dir.join("numa-probe-target.bin");
-    fs::write(&path, vec![0_u8; 4096])?;
+    // **Per-process, and created exclusively.** The old fixed name was written
+    // with truncation and deleted at the end, so a second copy of this spike --
+    // or any unrelated file that happened to sit at that path -- was destroyed
+    // and then removed. `create_new` refuses to open anything that already
+    // exists, so the probe can only ever delete a file it made itself.
+    let path = dir.join(format!("numa-probe-target-{}.bin", std::process::id()));
+    {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(&[0_u8; 4096])?;
+    }
 
     // What the volume is physically made of. Printed before the node queries so
     // that a reader has the context to interpret a failure: a virtual disk
