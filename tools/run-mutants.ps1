@@ -72,7 +72,30 @@
     Parallel jobs. See above before raising it.
 
 .PARAMETER TimeoutSeconds
-    Per-mutant test timeout.
+    Fixed per-mutant test timeout, in seconds. Leave at 0 to derive it from the
+    measured baseline instead, which is the default and the better option.
+
+    **Timeouts, not crashes, dominate the wall clock here.** Measured on
+    `queue.rs`: 14 of 101 mutants timed out, and at a fixed 120s that is 28
+    minutes of budget in a 28-minute run -- roughly half the elapsed time at
+    `-j 2`. They are all in blocking paths (`Drop` for `Sender`, `recv`,
+    `is_empty`, `latch`), which is exactly what a queue's mutants do: break the
+    disconnect accounting and a receiver waits forever rather than failing.
+
+    A fixed number is the wrong shape for that. `--timeout-multiplier` scales
+    the deadline from the baseline test time cargo-mutants already measures, so
+    it adapts to the machine instead of encoding one. The baseline here is about
+    30s for the full `--all-features` suite, so the default multiplier of 3
+    gives ~90s: comfortably above any legitimate run, and it shrinks
+    automatically on a faster host.
+
+    Lower it only with the false-timeout risk in mind. A mutant that is recorded
+    `timeout` because the deadline was too tight is misattributed twice over --
+    it is not a hang, and it is not necessarily caught either.
+
+.PARAMETER TimeoutMultiplier
+    Test timeout as a multiple of the measured baseline. Ignored when
+    `-TimeoutSeconds` is non-zero.
 
 .PARAMETER OutputDirectory
     Where to write `mutants.out`. Defaults under `.scratch/`, so a run never
@@ -87,7 +110,9 @@ param(
     [string] $Package = 'windows-file-watcher',
     [string] $File,
     [int] $Jobs = 2,
-    [int] $TimeoutSeconds = 120,
+    [int] $TimeoutSeconds = 0,
+
+    [double] $TimeoutMultiplier = 3,
     [string] $OutputDirectory
 )
 
@@ -122,8 +147,14 @@ try {
     Set-ItemProperty -Path $werKey -Name DontShowUI -Value 1 -Type DWord
     Write-Host "WER dialogs suppressed for this run (DontShowUI=1)." -ForegroundColor Cyan
 
-    $argv = @('mutants', '-p', $Package, '-j', $Jobs, '--timeout', $TimeoutSeconds,
+    $argv = @('mutants', '-p', $Package, '-j', $Jobs,
         '--output', $OutputDirectory, '--all-features')
+    if ($TimeoutSeconds -gt 0) {
+        $argv += @('--timeout', $TimeoutSeconds)
+    }
+    else {
+        $argv += @('--timeout-multiplier', $TimeoutMultiplier)
+    }
     if ($File) { $argv += @('--file', $File) }
 
     Write-Host "cargo $($argv -join ' ')" -ForegroundColor DarkGray
