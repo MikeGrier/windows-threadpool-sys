@@ -1014,15 +1014,19 @@ impl Drop for IoRing {
     }
 }
 
-/// How many times [`IoRing`]'s `Drop` impl has run **on the calling thread**;
-/// see its use there.
-///
-/// Thread-local rather than a shared `static`, and that is load-bearing rather
-/// than tidiness. `cargo test` runs tests as threads in one process, so a
-/// process-wide counter is incremented by every other test's rings as they
-/// drop -- and an assertion of the form `after > before` is then satisfied by
-/// *somebody else's* drop, which is exactly the mutant it was written to catch.
-/// A thread-local is only touched by rings dropped on this test's own thread.
+// How many times `IoRing`'s `Drop` impl has run **on the calling thread**; see
+// its use there.
+//
+// A plain comment rather than a doc comment: rustdoc does not document items
+// produced by a macro invocation, so a doc comment here is an
+// `unused_doc_comments` warning, which CI escalates with `-D warnings`.
+//
+// Thread-local rather than a shared `static`, and that is load-bearing rather
+// than tidiness. `cargo test` runs tests as threads in one process, so a
+// process-wide counter is incremented by every other test's rings as they
+// drop -- and an assertion of the form `after > before` is then satisfied by
+// *somebody else's* drop, which is exactly the mutant it was written to catch.
+// A thread-local is only touched by rings dropped on this test's own thread.
 #[cfg(test)]
 thread_local! {
     pub(crate) static DROP_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
