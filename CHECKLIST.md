@@ -114,6 +114,29 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
 
 - [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. -> [completed 2026-08-31](COMPLETED-CHECKLIST.md#m341)
 
+- [ ] **M34.2** -- **Route every tool's output through one sink, per the repository's own rule**: never
+  call `println!`/`eprintln!` from more than one site in a tool; introduce a writer trait, sink or
+  formatter at the first occurrence and route everything through it. Seven binaries violate this today
+  and were flagged individually in review 5072622803 on pull request #56:
+  [placement_probe.rs](crates/windows-placement-probe/src/bin/placement_probe.rs),
+  [doorbell_cost.rs](crates/windows-platform-probes/src/bin/doorbell_cost.rs),
+  [queue_contention.rs](crates/windows-platform-probes/src/bin/queue_contention.rs),
+  [request_cost.rs](crates/windows-platform-probes/src/bin/request_cost.rs),
+  [topology.rs](crates/windows-platform-probes/src/bin/topology.rs),
+  [core_affinity.rs](crates/windows-platform-probes/src/bin/core_affinity.rs) and
+  [peer_index_cache.rs](crates/windows-platform-probes/src/bin/peer_index_cache.rs). The banner
+  helpers that hardcode stdout are part of it, not an exception to it.
+  **Deferred from that pull request deliberately, and the reason is sequencing rather than doubt.** It
+  is one refactor across seven binaries; done properly it means choosing the seam once and applying it
+  uniformly, which is a large diff touching every probe's output. Landing it inside a 90-commit branch
+  already under review would mix it with unrelated correctness work.
+  **The point of the rule is that output becomes testable, so the conversion is not done until
+  something tests it.** An abstraction introduced without a capture-based test spends the cost and
+  skips the benefit -- do not check this item off on the refactor alone.
+  Start with `placement_probe`: its output is a published artifact that strangers paste into a
+  discussion thread, so "can this be captured and asserted end to end?" has real value there rather
+  than being architectural tidiness.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.
