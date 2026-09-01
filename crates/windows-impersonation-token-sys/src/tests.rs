@@ -14,8 +14,9 @@ use windows_sys::Win32::Foundation::{
 };
 
 use super::{
-    ApplicationGuard, ApplyFailure, CaptureFailure, ThreadTokenOpenError, check_application_result,
-    classify_thread_token_open_error, restore, run_in_scope,
+    ApplicationGuard, ApplyError, ApplyFailure, CaptureFailure, ImpersonationToken,
+    ThreadTokenOpenError, check_application_result, classify_thread_token_open_error, restore,
+    run_in_scope,
 };
 
 struct DropFlag {
@@ -86,6 +87,30 @@ fn application_failure_does_not_run_the_operation() {
         Some(i32::try_from(ERROR_ACCESS_DENIED).expect("error code fits in i32"))
     );
     assert!(error.source().is_some());
+}
+
+#[test]
+fn application_errors_display_the_failed_stage_and_source() {
+    for (failure, stage) in [
+        (
+            ApplyFailure::SavePreviousToken,
+            "OpenThreadToken for exact restoration",
+        ),
+        (ApplyFailure::ApplyToken, "SetThreadToken"),
+    ] {
+        let source = os_error(ERROR_ACCESS_DENIED);
+        let expected = format!("{stage}: {source}");
+        let error = ApplyError::new(failure, source);
+
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
+#[test]
+fn captured_token_debug_is_non_exhaustive_and_redacts_the_handle() {
+    let token = ImpersonationToken::capture().expect("the process token can be captured");
+
+    assert_eq!(format!("{token:?}"), "ImpersonationToken { .. }");
 }
 
 #[test]
