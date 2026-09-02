@@ -13,29 +13,53 @@
 //! JSON object so those results can be mined out of build logs mechanically
 //! rather than read by eye.
 
+use std::fmt::Write as _;
+use windows_platform_probes::report::{Stdout, emit};
 use windows_platform_probes::topology::measure;
 
 fn main() {
-    println!("== processor topology, and what each partitioning policy would yield ==\n");
+    // The only place that names the real stream. Everything below composes
+    // text; nothing below knows where it goes.
+    emit(&mut Stdout, &render());
+}
+
+/// The probe's whole report, as text.
+fn render() -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "== processor topology, and what each partitioning policy would yield ==\n"
+    );
 
     let observation = match measure() {
         Ok(observation) => observation,
         Err(error) => {
-            println!("Topology::discover failed: {error}");
-            println!("(Reported rather than measured: a probe that cannot read its");
-            println!("subject must say so instead of printing a misleading shape.)");
-            return;
+            let _ = writeln!(out, "Topology::discover failed: {error}");
+            let _ = writeln!(
+                out,
+                "(Reported rather than measured: a probe that cannot read its"
+            );
+            let _ = writeln!(
+                out,
+                "subject must say so instead of printing a misleading shape.)"
+            );
+            return out;
         }
     };
 
-    println!("processors (online) : {}", observation.online_processors);
-    println!("processor groups    : {}", observation.groups);
-    println!("packages            : {}", observation.packages);
-    println!(
+    let _ = writeln!(
+        out,
+        "processors (online) : {}",
+        observation.online_processors
+    );
+    let _ = writeln!(out, "processor groups    : {}", observation.groups);
+    let _ = writeln!(out, "packages            : {}", observation.packages);
+    let _ = writeln!(
+        out,
         "NUMA domains        : {} ({} with no processors)",
         observation.numa_domains, observation.memoryless_numa_domains
     );
-    println!("physical cores      : {}", observation.cores.len());
+    let _ = writeln!(out, "physical cores      : {}", observation.cores.len());
 
     let smt = observation
         .cores
@@ -49,65 +73,102 @@ fn main() {
         .collect();
     classes.sort_unstable();
     classes.dedup();
-    println!("  cores with SMT    : {smt}");
-    println!("  efficiency classes: {classes:?}");
+    let _ = writeln!(out, "  cores with SMT    : {smt}");
+    let _ = writeln!(out, "  efficiency classes: {classes:?}");
     if classes.len() > 1 {
-        println!("  (heterogeneous: an I/O thread left unconstrained can land on an");
-        println!("   efficiency core, which is why even a single domain wants a mask)");
+        let _ = writeln!(
+            out,
+            "  (heterogeneous: an I/O thread left unconstrained can land on an"
+        );
+        let _ = writeln!(
+            out,
+            "   efficiency core, which is why even a single domain wants a mask)"
+        );
     }
 
-    println!("\ncaches:");
+    let _ = writeln!(out, "\ncaches:");
     if observation.caches.is_empty() {
-        println!("  none reported");
+        let _ = writeln!(out, "  none reported");
     }
     for cache in &observation.caches {
-        println!(
+        let _ = writeln!(
+            out,
             "  L{:<2} {:>3} domain(s), processors per domain: {:?}",
             cache.level, cache.domains, cache.processors_per_domain
         );
     }
 
     match observation.outermost_partitioning_cache() {
-        Some(cache) => println!(
-            "\noutermost cache that partitions this machine: L{} ({} domains)",
-            cache.level, cache.domains
-        ),
-        None => println!("\nno cache level partitions this machine: every level is machine-wide"),
+        Some(cache) => {
+            let _ = writeln!(
+                out,
+                "\noutermost cache that partitions this machine: L{} ({} domains)",
+                cache.level, cache.domains
+            );
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "\nno cache level partitions this machine: every level is machine-wide"
+            );
+        }
     }
     if !observation.caches.iter().any(|c| c.level == 3) {
-        println!("NOTE: this machine reports no L3 at all, so a policy keyed literally");
-        println!("on \"L3\" would find nothing here. That is the measured case behind");
-        println!("phrasing the rule as \"the outermost level that partitions\".");
+        let _ = writeln!(
+            out,
+            "NOTE: this machine reports no L3 at all, so a policy keyed literally"
+        );
+        let _ = writeln!(
+            out,
+            "on \"L3\" would find nothing here. That is the measured case behind"
+        );
+        let _ = writeln!(
+            out,
+            "phrasing the rule as \"the outermost level that partitions\"."
+        );
     }
 
-    println!("\ndomains each policy would produce:");
+    let _ = writeln!(out, "\ndomains each policy would produce:");
     for (name, count) in observation.domain_counts() {
-        println!("  {name:<34} {count}");
+        let _ = writeln!(out, "  {name:<34} {count}");
     }
 
-    println!("\ncross-check against independently read Win32 counters:");
-    println!(
+    let _ = writeln!(
+        out,
+        "\ncross-check against independently read Win32 counters:"
+    );
+    let _ = writeln!(
+        out,
         "  GetActiveProcessorCount     : {}",
         observation.raw_active_processors
     );
-    println!(
+    let _ = writeln!(
+        out,
         "  GetActiveProcessorGroupCount: {}",
         observation.raw_group_count
     );
     match observation.raw_highest_numa_node {
-        Some(highest) => println!(
-            "  GetNumaHighestNodeNumber    : {highest} (so {} nodes)",
-            highest + 1
-        ),
-        None => println!("  GetNumaHighestNodeNumber    : failed"),
+        Some(highest) => {
+            let _ = writeln!(
+                out,
+                "  GetNumaHighestNodeNumber    : {highest} (so {} nodes)",
+                highest + 1
+            );
+        }
+        None => {
+            let _ = writeln!(out, "  GetNumaHighestNodeNumber    : failed");
+        }
     }
     let complaints = observation.cross_check();
     if complaints.is_empty() {
-        println!("  => agree. windows-topology-sys parsed this machine consistently.");
+        let _ = writeln!(
+            out,
+            "  => agree. windows-topology-sys parsed this machine consistently."
+        );
     } else {
-        println!("  => DISAGREE. This is a finding, not a nuisance:");
+        let _ = writeln!(out, "  => DISAGREE. This is a finding, not a nuisance:");
         for complaint in &complaints {
-            println!("     - {complaint}");
+            let _ = writeln!(out, "     - {complaint}");
         }
     }
 
@@ -123,7 +184,8 @@ fn main() {
         .into_iter()
         .map(|(name, count)| format!(r#""{name}":{count}"#))
         .collect();
-    println!(
+    let _ = writeln!(
+        out,
         concat!(
             r#"{{"reason":"x-probe-topology","arch":"{}","processors":{},"groups":{},"#,
             r#""packages":{},"numa_domains":{},"memoryless_numa_domains":{},"cores":{},"#,
@@ -145,4 +207,5 @@ fn main() {
         policy_json.join(","),
         complaints.is_empty(),
     );
+    out
 }

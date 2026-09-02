@@ -665,7 +665,7 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   masked (their output is timing-dependent, so byte equality is not available): 38 lines and 50 lines
   respectively, **structurally identical** both times.
 
-- [ ] **SH-13.4** -- **The other twelve probes still print directly, and now there is a sink to
+- [x] **SH-13.4** -- **The other twelve probes still print directly, and now there is a sink to
   adopt.** `probe-peer-index-cache` (55 sites), `probe-request-cost` (45), `probe-topology` (32),
   `probe-queue-contention` (27), `probe-ioring` (24), `probe-completion-port` (22),
   `probe-worker-context` (22), `probe-device-map` (21), `probe-cancel-io` (19),

@@ -27,12 +27,18 @@
 //! a reader's attention. Adding a second stream here would be inventing a
 //! distinction the tools do not make.
 //!
-//! # This is not yet used by every probe
+//! # Every probe routes through this
 //!
-//! The two probes added alongside this module route through it. The other
-//! twelve predate it and still print directly; converting them is queued rather
-//! than done here, so that this change stays reviewable and each conversion can
-//! be checked against its probe's real output.
+//! All fourteen, as of SH-13.4. Each conversion was checked by capturing the
+//! probe's output before and after and requiring the two to match.
+//!
+//! **That check has to be positional**, which is worth recording because the
+//! obvious tool is not. The defect a conversion introduces is a helper that
+//! still writes to stdout while its caller composes a string: every line still
+//! appears, but the helper's lines arrive *first*, so the report is reordered.
+//! PowerShell's `Compare-Object` compares collections as sets and calls that
+//! identical -- it passed three genuinely broken probes here before the
+//! comparison was redone line-by-line.
 
 use std::fmt::Write as _;
 
