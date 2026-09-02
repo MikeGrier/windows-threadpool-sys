@@ -25,6 +25,7 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
+| M16 tenth review round | 5 of 7 open | the SH-3.1.1 diff review; **SH-16.1 is critical and open** |
 | M-inf parked | ungated | not scheduled, deliberately |
 
 **The critical path is SH-3.1.1 -> SH-3.4 -> M4, and none of it is blocked on M14 or M15.** SH-14.1
@@ -704,6 +705,95 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   identified as what actually costs at high producer counts -- so it should track `reserving_mpsc`
   closely and should **not** approach the permit claim's numbers. A wide claim that measured as fast
   as the permit claim would mean D-35's explanation is wrong.
+
+## M16: PR #56 tenth review round -- the SH-3.1.1 diff review
+
+**This round is the one [SH-3.1.1](#m3-land-the-branch) asked for**, and it is the first that read the
+branch as a *diff* rather than reacting to a reviewer's comment. Five reviewers took non-overlapping
+crate scopes across all 200 changed files; seven findings came back, listed here worst-first rather
+than by crate.
+
+**Two of them are the reason the round was worth running.** SH-16.1 is a regression this branch
+introduced *two commits ago* -- it would have failed the next `windows-ioring-sys` publish, twenty
+minutes in, with an error naming the wrong cause. SH-16.2 is a soundness hole in the crate that is
+about to freeze its API, in a shape whose selling point is that its ordering arguments are written
+down and checked.
+
+**Neither was reachable from a memory of having written the code**, which is exactly what SH-3.1.1
+predicted about a 222-commit branch.
+
+- [ ] **SH-16.1** -- **`publish-crate.yml`'s sibling-dependency wait cannot handle a `*` requirement,
+  so `windows-ioring-sys` can no longer publish.** The wait step derives a concrete version with
+  `sed -E 's/^\^//'`, which handles only a caret. Commit `f1fc4eb` on this branch made ioring's
+  topology dev-dependency path-only, so `cargo metadata` now reports `req=*` -- **verified, not
+  assumed**. `windows-topology-sys` is in `workspace_crates`, so the loop is entered, `dep_version`
+  becomes the literal `*`, and `select(.vers == "*")` can never match: 60 attempts x 20 s, then an
+  error telling the operator to re-run once the dependency is available, which will never help.
+  A versionless path dev-dependency is **stripped from the published manifest entirely**, so there is
+  nothing to wait for and the right answer is to skip it.
+  Note that `tools/check-publishable.ps1`, added in this same branch to catch "release-managed but
+  unpublishable", does **not** catch this -- ioring passes all three of its checks.
+
+- [x] **SH-16.2** -- **`reserving_mpsc::Reservation::send` wrote a slot with no happens-before edge to
+  the consumer's read of the previous occupant.** A slot is freed only by `Consumer::pop`'s
+  `head.store(Release)`, and the matching acquire lives in `has_room_beyond_reservations`.
+  `Producer::push` gets its edge from that room check; `send` deliberately has none -- the code says
+  so -- and its claim CAS is `Relaxed` on every path, so there was no release sequence to inherit
+  either. The claim proves the slot is *logically* free, which is not the same as a synchronization
+  edge, and the `SAFETY` comment cited "the room check that permitted the claim" on the one path
+  where no room check exists.
+  **The default configuration was the unsound one**: `Options::tracking_high_water()` accidentally
+  repaired it, because the metric's `head.load(Acquire)` sat just before the write. Fixed by making
+  that load unconditional, which is where it belonged.
+
+- [ ] **SH-16.3** -- **`CancelIo` does not wait, so a test frees an `OVERLAPPED` and an I/O buffer the
+  kernel may still write to.** In
+  [reopen_by_id_cannot_be_watched.rs](crates/windows-file-watcher/tests/reopen_by_id_cannot_be_watched.rs),
+  an overlapped `ReadDirectoryChangesW` is issued into a **stack-local** `OVERLAPPED` and a heap
+  buffer, then `CancelIo` is called and both are dropped immediately. `CancelIo` only *requests*
+  cancellation; the IRP still completes asynchronously and writes `Internal`/`InternalHigh` into a
+  frame that has been reclaimed. Two safety comments assert the opposite of what the code guarantees.
+  Aggravated by the helper being called twice back-to-back, so the second call's `overlapped` likely
+  lands on the same stack address the first IRP will write into.
+  **This crate has already been bitten by this exact class of corruption** -- the
+  `STATUS_STACK_BUFFER_OVERRUN` history recorded on the now-removed `reopen_via_existing_handle`.
+  Fix by calling `GetOverlappedResult(..., bWait = TRUE)` and accepting `ERROR_OPERATION_ABORTED`
+  before either buffer leaves scope.
+
+- [x] **SH-16.4** -- **`cache_partitions_at_level` counted a domain covering no processors as a
+  partition.** An empty `ProcessorSet` is not *equal* to any non-empty one, so deduplication kept it,
+  and `is_disjoint` is vacuously true on it, so the pairwise check passed it. A level with one real
+  cache plus one empty domain therefore reported two partitions and was treated as dividing a machine
+  it does not divide. `Domain` is publicly constructible and `ProcessorSet` has `empty()`, so this is
+  reachable by hand and by deserialization -- precisely the input the method promises not to trust.
+  Fixed by dropping empty domains, with the contrast against `memory_domains` (which deliberately
+  keeps a processor-less domain, D-5) recorded at the filter.
+
+- [ ] **SH-16.5** -- **`windows-placement-probe` refuses a partially-covering cache level that
+  `windows-topology-sys` deliberately hands back.** `outermost_partitioning_cache` documents that
+  "full coverage of the online processors is deliberately *not* required"; `places_from_topology`
+  treats any online processor the chosen level does not name as `MissingPlacement::CacheDomain` and
+  fails the **entire run** with `InvalidData`. Two crates state opposite rules about the same return
+  value -- a [CONTRACT INTEGRITY](.github/copilot-instructions.md) defect, not merely a bug.
+  Decide the rule **once**, in the crate that owns the topology, and have the consumer ask rather than
+  restate. Note the asymmetry that makes the NUMA arm different and correct: for NUMA, `None` has no
+  honest value, whereas `cache_domain` is already `Option<u32>`.
+
+- [ ] **SH-16.6** -- **The thread-stack NUMA spike's `deep_probe` measures the shallow end of its own
+  filler, so the discrimination it exists to make is inert.** The stack grows down, so `filler[0]` is
+  the deepest address and `filler[last]` sits immediately below the caller's frame -- but the probe
+  takes `&raw const filler[last]`, landing very likely on the same page as the shallow probe rather
+  than 64 KiB away. The spike would then report "not first touch" on a machine where placement *is*
+  by first touch: a confident wrong answer, in a file whose whole point is avoiding those. Both ends
+  are already touched, so probing `filler[0]` is a one-token change.
+
+- [ ] **SH-16.7** -- **A `windows-thread-ambient-sys` test claims a restore-failure it never
+  injects.** `release_reports_a_genuine_restore_failure_and_restores_on_drop_even_without_it` asserts
+  the *opposite*: it `expect`s the release to succeed and both closing assertions check that restore
+  worked. Its siblings in `declared/tests.rs` and `error_mode/tests.rs` do force genuine failures; this
+  one inherited the name without the failure-injection half, so `TransactionGuard::release`'s
+  error-reporting path reads as covered when it is not. Either inject the failure or rename the test
+  to what it checks.
 
 ## M-inf: parked, ungated
 
