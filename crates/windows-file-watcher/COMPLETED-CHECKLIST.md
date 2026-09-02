@@ -1028,3 +1028,34 @@ failed** before the kill, and neither is held by any single slow test. They are 
 than a defect: a mutant that breaks the queue's core makes most of the suite fail, and a suite of failures
 takes longer than a suite of passes -- so it overruns a deadline set at 3x the *passing* baseline. No
 test-side bound can reach that, and nothing is being missed.
+
+## Moved 2026-09-01 -- M16.1: close the monitor mutation-testing gaps
+
+### <a id="m161"></a>M16.1 -- Adjudicate every mutant missed by the 2026-09-01 `monitor.rs` sweep. *(completed 2026-09-01 22:39:25 -04:00)*
+
+The input sweep ran 317 default-feature tests and reported 15 missed mutants, 18 unviable mutants, and no
+timeouts. All 15 misses were genuine observability gaps, grouped into seven contracts rather than treated as
+unrelated source edits:
+
+- `Request` debug output names its variant and fields.
+- registration, transient fault detail, and permanent stop reason are observable through `Monitor`.
+- re-keying updates each routed subscription's stored `DirectoryId`, so later cancellation retires the
+  shared watcher.
+- a file target's parent-open failure retains retryable versus permanent classification.
+- a standing slot reserved only for volume confirmation does not make open-fault recovery interactive.
+- `Established` is suppressed when a new route coalesces onto a faulted watcher with no settled tier.
+- stopping the last route after a volume-change question removes both subscription and directory resident
+  state.
+
+The two duplicated boolean rules were made derived facts: `awaits_open_answer` is shared by first-attempt and
+later open retries, and `should_report_established` owns the liveness/fault predicate. Exhaustive truth-table
+tests cover both predicates, while behavioral tests prove each is bound to the monitor path rather than tested
+cosmetically. Three test-only `DirectoryWatcher` seams put an existing watcher into the transient-fault,
+permanent-stop, and volume-change states that the monitor projects or resolves; production behavior is
+unchanged.
+
+The all-feature confirming sweep tested 67 mutants in 10 minutes: 47 caught, 18 unviable, **0 missed**, and 2
+timeouts. Both timeouts are detections rather than gaps: `Core::submit -> Ok(())` produced 34 failing tests
+before the 55-second kill, and `service -> ()` produced 33. Default and all-feature crate tests (including
+doctests), default and all-feature crate Clippy, workspace Clippy, and debug/release workspace checks all
+passed.

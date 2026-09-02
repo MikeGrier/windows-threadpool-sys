@@ -1470,6 +1470,22 @@ impl DirectoryWatcher {
         lock(&self.inner.fault).as_ref().map(|state| state.detail)
     }
 
+    #[cfg(test)]
+    pub(crate) fn enter_fault_for_test(&self, detail: FaultDetail, operation: FaultOperation) {
+        self.inner.enter_fault(detail, operation);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_stop_for_test(&self, error: io::Error) {
+        self.inner.record_stop(error);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn simulate_volume_change_for_test(&self, previous: VolumeIdentity) {
+        *lock(&self.inner.volume_identity) = Some(previous);
+        self.inner.retry_reestablish();
+    }
+
     /// Which tier is currently servicing this directory (D-13/D-17).
     #[must_use]
     pub(crate) fn mode(&self) -> WatchMode {
