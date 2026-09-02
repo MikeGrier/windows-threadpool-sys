@@ -287,8 +287,13 @@ stress says nothing about memory orderings. That is measured, not cautious: weak
 D-31 says cannot be supported.
 
 - [ ] **SH-6.1** -- **The wraparound scenario, which is the one reachable correctness gap.**
-  `reserving_mpsc` packs its position into 32 bits, so it wraps after 2^32 pushes -- about two minutes
-  at measured rates, and reachable in production within hours.
+  `reserving_mpsc` packs its position into 32 bits, so it wraps after 2^32 pushes -- **between 37
+  seconds and about four minutes** at this crate's own measured rates, and reachable in production
+  within hours. The range is [D-26](crates/windows-waitable-queues/DESIGN-NOTES.md#d-26)'s isolated
+  table read as a wrap time: 8.6 ns/push with one producer is 116M/s, so 2^32 is 37 s; 28.0 ns with
+  two is 35.7M/s, so 120 s; 56.9 ns with thirty-two is 17.6M/s, so 244 s. An earlier version of this
+  item said only "about two minutes", which is the two-producer figure quoted as though it were the
+  whole story.
   **CORRECTION (review round nine).** An earlier version of this item said `spsc` and
   `slotwise_mpsc` "use `usize` positions and cannot be driven there at all", and that is **false on a
   32-bit target**, where `usize` *is* 32 bits. The claim was written from a 64-bit reading and never
@@ -698,8 +703,11 @@ counter; nothing protects the decision.
   not taken. The SAFETY comment above `publish` ("no other producer can also have claimed [this
   position]") remains true and is not the property that fails; the failing property is that the slot
   was free.
-  2^32 pushes is **about two minutes at this crate's measured rates** (SH-6.1's own figure), so the
-  window is not exotic -- it needs an unlucky stall, not an unreachable one.
+  2^32 pushes is **37 seconds to about four minutes at this crate's measured rates** (SH-6.1 carries
+  the derivation), so the window is not exotic -- it needs an unlucky stall, not an unreachable one.
+  Two producers is the relevant figure at two minutes, since the hazard needs a second producer to
+  advance the counter while the first is held; the 37-second single-producer number is the ceiling on
+  how fast this counter can be driven at all, not a rate at which the bug can fire.
 
 - [x] **SH-14.2** -- **`slotwise_mpsc` had the same hole on a 32-bit target.** Its positions were
   `AtomicUsize`, which is 32 bits there. A producer that has observed `sequence == position` -- the
@@ -779,7 +787,7 @@ decides "there is room" from a separately-read `head` and then compare-exchanges
 so a full recurrence of the 32-bit position field revalidates nothing. Every fix below closes that
 gap; the options in SH-14.3 instead make the recurrence harder to reach.
 
-- [ ] **SH-15.1** -- **Record the prior-art research as a design note before it is lost.** The survey
+- [x] **SH-15.1** -- **Record the prior-art research as a design note before it is lost.** The survey
   is the reason this milestone exists and none of it is currently written down. It must capture: that
   `crossbeam-queue::ArrayQueue`, `concurrent-queue` and `thingbuf` all use our protocol shape and none
   re-validates after its compare-exchange; that all three are saved only by putting the whole counter

@@ -57,6 +57,7 @@ preferred.
 | <a id="d-31"></a>D-31 | **0.1.0 ships without machine-checked memory orderings, and says so in its own documentation.** Model-checking gates 1.0, not 0.1.0. It would close the *demonstrated* gap -- a weakened `Acquire` survives the whole suite -- but not the dangerous one: it cannot model `SetEvent`/`ResetEvent`, so it cannot cover the doorbell, and [D-15](#d-15)'s lost wakeup, the only ordering bug this crate has had, was found by sabotage instead. The risk it addresses is mostly regression risk, which is lowest before there are consumers. The disclosure, not the deferral, is the decision. |
 | <a id="d-32"></a>D-32 | **`Reserving::Reservation<'a>` gains a bound, before the crate publishes.** The associated type is currently unbounded, so a caller generic over the trait can claim a slot and drop it but never redeem it -- the trait cannot express the operation it exists for. Both implementors already have identical `send` and `is_disconnected` signatures, so the bound is additive; adding it after publication is a breaking change to every implementor. Done as SH-1.5: the [`Claim`](src/traits.rs) trait carries `send` and `is_disconnected`, and both reservation types implement it as forwarders. `Claim` must be in scope to call those methods on a claim whose concrete type the caller has not named, which is why it is re-exported at the crate root. |
 | <a id="d-33"></a>D-33 | **`PushError` is `#[non_exhaustive]`, and the one-directional doorbell is disclosed rather than fixed before 0.1.0.** The receive-side errors already carried the attribute and the send side lacked it by omission; adding it after publication is itself breaking, so it is taken now while the crate has no external consumers. Whether a producer can *wait* for room stays open as [M32.3](../../CHECKLIST-io-domains.md) -- it is additive, so it does not gate the release -- but the absence is stated in both the crate docs and the README, because `crossbeam-channel`'s `send` blocks and a reader arriving from it will assume this one does too. |
+| <a id="d-34"></a>D-34 | **Every bounded queue surveyed is ABA-safe for one of two reasons, and this crate's `reserving_mpsc` has neither.** Either the claim counter is a whole machine word, so recurrence is unreachable -- crossbeam, concurrent-queue, thingbuf, Vyukov, SCQ's `Head`/`Tail` -- or the authorizing compare-exchange is moved onto the cell, so the decision and the write are validated together (CRQ, SCQ). Ours packs the position into a 32-bit *subfield* and authorizes with an exchange that does not cover the separately-read `head`. Nikolaev (DISC 2019, section 3) states the width assumption the field relies on and states it for **CPU-word** width, which a subfield does not satisfy; DPDK's `rte_ring` is the same protocol as ours and its published justification covers modular arithmetic only. The generalisation -- ours, unstated in any source -- is that **the atomic operation authorizing the write must cover everything the decision depended on.** Survey in [DESIGN-SESSION-2026-09-02](design-sessions/DESIGN-SESSION-2026-09-02-claim-protocol-prior-art.md); the fix is M15 in [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md). |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -1120,3 +1121,67 @@ rather than discovered later. `M31.6`'s loom verification covers both shapes or 
 `M-inf.4`'s peer-index policy is decided for both or the crate ships two different answers to one
 question. **A shape kept for others' benefit is still a shape this crate maintains**, and the moment
 that maintenance is skipped for one of them, the argument above stops being true.
+
+## D-34: what the prior art actually protects, and why this crate is outside it
+
+[SH-14.1](../../CHECKLIST-ship-topology-and-queues.md) is not a bug in an unusual design. It is the
+standard design, used below the width at which the standard correctness argument holds. That
+distinction is the whole content of this decision, and it took a survey to establish -- the full
+record, with citations and with the gaps flagged, is in
+[DESIGN-SESSION-2026-09-02](design-sessions/DESIGN-SESSION-2026-09-02-claim-protocol-prior-art.md).
+
+### The protocol is mainstream
+
+`crossbeam-queue::ArrayQueue`, `concurrent-queue` and `thingbuf` were each read at their push path.
+All three load a counter, load a second value, decide from the pair, then compare-exchange **only
+the counter** and write. None re-validates after the exchange. That is our protocol.
+
+Searching all three for `ABA`, `wraparound`, `overflow` or any statement of a counter-width bound
+returns nothing. The assumption is load-bearing in every one of them and written down in none.
+
+### What actually makes them safe
+
+Two mechanisms, and it is worth being blunt that neither is "the protocol is careful":
+
+- **By width.** The counter is a whole `usize`, so returning to a given bit pattern needs on the
+  order of 2^64 pushes. Nikolaev states this explicitly (DISC 2019, section 3, "ABA safety"): the
+  counters "will not wrap around until after the number of operations exceeds **the CPU word's
+  largest value**, a reasonable assumption made by other ABA-safe designs as well."
+- **By structure.** CRQ and SCQ advance the shared counter with an unconditional fetch-and-add that
+  authorizes nothing, and put the authorizing compare-exchange on the *cell*, where the reuse
+  decision and the write live in one word. No observation survives the exchange unvalidated.
+
+`reserving_mpsc` has neither. Its position is a 32-bit half of a packed word, not a machine word, so
+the width argument does not reach it -- and its exchange covers the claim word but not the `head`
+its room decision was computed from.
+
+### The nearest published twin defends a different property
+
+DPDK's `rte_ring` is our protocol almost exactly: 32-bit indexes, room computed against a separately
+loaded counterpart, compare-exchange to claim. Its *Programmer's Guide* (6.5.4) justifies it as "we
+can do subtractions between 2 index values in a modulo-32bit base: that's why the overflow of the
+indexes is not a problem."
+
+That defends **modular arithmetic of the difference**. It says nothing about a producer stalled
+across a full recurrence, which is the hazard. Searching DPDK's ring library for "ABA" returns
+nothing either. So the closest thing to a published defence of this design defends the wrong
+property, and the gap is undocumented industry-wide rather than something we alone missed.
+
+### The generalisation
+
+Stated once, so it is not re-derived, and flagged as **ours**: no source phrases it this way, though
+SCQ's cell compare-exchange and CRQ's double-width `CAS2` are both instances of it.
+
+> The atomic operation that authorizes the write must cover everything the decision depended on.
+> Where it does not, correctness rests entirely on the counter being too wide to recur.
+
+This is the criterion any future claim protocol in this crate is judged against, and it is more
+useful than the narrower "avoid ABA": it says *what to check*, and it explains why the same
+structural window is harmless in crossbeam (word-width counter) and dangerous here (subfield).
+
+### What this decision does not decide
+
+Which fix to adopt. That is M15, which prototypes the central-permit claim and measures it rather
+than arguing it -- necessary because [D-26](#d-26) already measured that the single shared line is
+what collapses under contention, so a protocol that touches two shared lines instead of one is not
+obviously cheaper. This decision records only the landscape and the criterion.
