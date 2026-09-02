@@ -49,7 +49,7 @@ use std::fmt;
 /// Internal to this crate and not a wire format, so the values carry no
 /// compatibility obligation; they exist so no bare literal appears in the logic.
 mod bit {
-    pub(super) const IMPERSONATION: u8 = 1 << 0;
+    pub(super) const IMPERSONATION: u8 = 1;
     pub(super) const ERROR_MODE: u8 = 1 << 1;
     pub(super) const TRANSACTION: u8 = 1 << 2;
 }
@@ -148,9 +148,7 @@ impl CaptureSet {
     /// still running. That is a hazard to opt into deliberately, not one to
     /// acquire by taking a default. Add [`TRANSACTION`](Self::TRANSACTION) when
     /// you mean it.
-    pub const DEFAULT: Self = Self {
-        bits: bit::IMPERSONATION | bit::ERROR_MODE,
-    };
+    pub const DEFAULT: Self = Self::IMPERSONATION.union(Self::ERROR_MODE);
 
     /// Every capturable aspect this version knows.
     ///

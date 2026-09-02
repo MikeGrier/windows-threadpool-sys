@@ -8,7 +8,14 @@
 //! honest shape: a caller who asked for redirection to be disabled and silently
 //! did not get it would be reading a different filesystem than it believes.
 
-use super::{BackgroundMode, Declared, DeclaredAspect, MemoryPriority, Wow64Redirection};
+use std::error::Error as _;
+use std::io;
+
+use super::{
+    BackgroundMode, Declared, DeclaredAspect, DeclaredError, DeclaredGuard, MemoryPriority,
+    Wow64Redirection,
+};
+use crate::test_injection::{self, FaultPoint};
 
 /// Is this a 64-bit process, where redirection does not exist?
 const SIXTY_FOUR_BIT: bool = cfg!(target_pointer_width = "64");
@@ -32,6 +39,139 @@ fn builders_accumulate_independently() {
         declared.wow64_redirection, None,
         "an unset aspect stays unset"
     );
+}
+
+#[test]
+fn emptiness_requires_every_declared_aspect_to_be_absent() {
+    for redirection in [None, Some(Wow64Redirection::Disabled)] {
+        for memory in [None, Some(MemoryPriority::Low)] {
+            for background in [None, Some(BackgroundMode::Begin)] {
+                let declared = Declared {
+                    wow64_redirection: redirection,
+                    memory_priority: memory,
+                    background_mode: background,
+                };
+                assert_eq!(
+                    declared.is_empty(),
+                    redirection.is_none() && memory.is_none() && background.is_none()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn declared_errors_preserve_their_aspect_code_display_and_source() {
+    const CODE: i32 = 1234;
+    for (aspect, description) in [
+        (
+            DeclaredAspect::Wow64Redirection,
+            "WOW64 filesystem redirection could not be changed",
+        ),
+        (
+            DeclaredAspect::MemoryPriority,
+            "the thread memory priority could not be read or set",
+        ),
+        (
+            DeclaredAspect::BackgroundMode,
+            "background processing mode could not be changed",
+        ),
+    ] {
+        let error = DeclaredError {
+            aspect,
+            source: Some(io::Error::from_raw_os_error(CODE)),
+        };
+
+        assert_eq!(error.aspect(), aspect);
+        assert_eq!(error.raw_os_error(), Some(CODE));
+        assert!(error.to_string().starts_with(description));
+        assert_eq!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .and_then(io::Error::raw_os_error),
+            Some(CODE)
+        );
+    }
+}
+
+#[test]
+fn declared_errors_without_an_os_error_have_no_source() {
+    let error = DeclaredError::without_os_error(DeclaredAspect::MemoryPriority);
+
+    assert_eq!(error.raw_os_error(), None);
+    assert!(error.source().is_none());
+    assert_eq!(
+        error.to_string(),
+        "the thread memory priority could not be read or set"
+    );
+}
+
+#[test]
+fn a_failed_memory_install_rolls_back_background_mode() {
+    let _faults = test_injection::fail(&[(FaultPoint::MemoryInstall, 1)]);
+    let error = Declared::none()
+        .with_background_mode(BackgroundMode::Begin)
+        .with_memory_priority(MemoryPriority::Low)
+        .install()
+        .expect_err("the injected memory install must fail");
+
+    assert_eq!(error.aspect(), DeclaredAspect::MemoryPriority);
+    assert_eq!(test_injection::calls(FaultPoint::BackgroundInstall), 2);
+    assert_eq!(test_injection::calls(FaultPoint::MemoryInstall), 1);
+}
+
+#[test]
+fn explicit_release_reports_an_injected_restore_failure() {
+    let _faults = test_injection::fail(&[(FaultPoint::RedirectionRevert, 1)]);
+    let guard = DeclaredGuard {
+        background: None,
+        memory: None,
+        redirection: Some(std::ptr::null_mut()),
+        released: false,
+    };
+
+    let error = guard
+        .release()
+        .expect_err("explicit release must report restore failure");
+    assert_eq!(error.aspect(), DeclaredAspect::Wow64Redirection);
+    assert_eq!(test_injection::calls(FaultPoint::RedirectionRevert), 1);
+}
+
+#[test]
+fn restore_attempts_every_aspect_after_the_first_failure() {
+    let _faults = test_injection::fail(&[
+        (FaultPoint::RedirectionRevert, 1),
+        (FaultPoint::MemoryInstall, 1),
+        (FaultPoint::BackgroundInstall, 1),
+    ]);
+    let guard = DeclaredGuard {
+        background: Some(BackgroundMode::Begin),
+        memory: Some(MemoryPriority::Normal),
+        redirection: Some(std::ptr::null_mut()),
+        released: false,
+    };
+
+    let error = guard
+        .release()
+        .expect_err("the first restore failure must be returned");
+    assert_eq!(error.aspect(), DeclaredAspect::Wow64Redirection);
+    assert_eq!(test_injection::calls(FaultPoint::RedirectionRevert), 1);
+    assert_eq!(test_injection::calls(FaultPoint::MemoryInstall), 1);
+    assert_eq!(test_injection::calls(FaultPoint::BackgroundInstall), 1);
+}
+
+#[test]
+fn dropping_an_unreleased_guard_attempts_best_effort_restore() {
+    let _faults = test_injection::fail(&[(FaultPoint::RedirectionRevert, 1)]);
+    drop(DeclaredGuard {
+        background: None,
+        memory: None,
+        redirection: Some(std::ptr::null_mut()),
+        released: false,
+    });
+
+    assert_eq!(test_injection::calls(FaultPoint::RedirectionRevert), 1);
 }
 
 #[test]

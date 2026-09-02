@@ -147,6 +147,11 @@ fn ktm() -> Option<&'static Ktm> {
 /// Whether this system offers the thread-transaction entry points at all.
 #[must_use]
 pub fn is_supported() -> bool {
+    #[cfg(test)]
+    if crate::test_injection::hit(crate::test_injection::FaultPoint::TransactionSupport).is_some() {
+        return false;
+    }
+
     ktm().is_some()
 }
 
@@ -198,6 +203,14 @@ pub struct TransactionError {
 }
 
 impl TransactionError {
+    #[cfg(test)]
+    pub(crate) fn for_test(failure: TransactionFailure, code: Option<i32>) -> Self {
+        Self {
+            failure,
+            source: code.map(io::Error::from_raw_os_error),
+        }
+    }
+
     /// Which stage failed.
     #[must_use]
     pub const fn failure(&self) -> TransactionFailure {
@@ -288,6 +301,16 @@ pub fn capture() -> Result<Captured<TransactionContext>, TransactionError> {
 
 /// Install `raw` as the calling thread's transaction.
 fn set_current(raw: HANDLE) -> Result<(), TransactionError> {
+    #[cfg(test)]
+    if let Some(source) =
+        crate::test_injection::hit(crate::test_injection::FaultPoint::TransactionSet)
+    {
+        return Err(TransactionError {
+            failure: TransactionFailure::Install,
+            source: Some(source),
+        });
+    }
+
     let ktm = ktm().ok_or(TransactionError {
         failure: TransactionFailure::Unsupported,
         source: None,

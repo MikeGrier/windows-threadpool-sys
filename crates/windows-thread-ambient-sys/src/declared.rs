@@ -147,6 +147,16 @@ impl MemoryPriority {
     }
 
     fn install(self) -> Result<(), DeclaredError> {
+        #[cfg(test)]
+        if let Some(source) =
+            crate::test_injection::hit(crate::test_injection::FaultPoint::MemoryInstall)
+        {
+            return Err(DeclaredError {
+                aspect: DeclaredAspect::MemoryPriority,
+                source: Some(source),
+            });
+        }
+
         let info = MEMORY_PRIORITY_INFORMATION {
             MemoryPriority: self.as_raw(),
         };
@@ -183,6 +193,16 @@ pub enum BackgroundMode {
 
 impl BackgroundMode {
     fn install(self) -> Result<(), DeclaredError> {
+        #[cfg(test)]
+        if let Some(source) =
+            crate::test_injection::hit(crate::test_injection::FaultPoint::BackgroundInstall)
+        {
+            return Err(DeclaredError {
+                aspect: DeclaredAspect::BackgroundMode,
+                source: Some(source),
+            });
+        }
+
         let value = match self {
             Self::Begin => THREAD_MODE_BACKGROUND_BEGIN,
             Self::End => THREAD_MODE_BACKGROUND_END,
@@ -238,6 +258,14 @@ pub struct DeclaredError {
 }
 
 impl DeclaredError {
+    #[cfg(test)]
+    pub(crate) fn for_test(aspect: DeclaredAspect, code: Option<i32>) -> Self {
+        Self {
+            aspect,
+            source: code.map(io::Error::from_raw_os_error),
+        }
+    }
+
     fn new(aspect: DeclaredAspect) -> Self {
         Self {
             aspect,
@@ -262,6 +290,41 @@ impl DeclaredError {
     #[must_use]
     pub fn raw_os_error(&self) -> Option<i32> {
         self.source.as_ref().and_then(io::Error::raw_os_error)
+    }
+}
+
+fn revert_redirection(old: *mut core::ffi::c_void) -> Result<(), DeclaredError> {
+    #[cfg(test)]
+    let injected = crate::test_injection::hit(crate::test_injection::FaultPoint::RedirectionRevert);
+
+    // SAFETY: `old` is the value produced by the matching disable call.
+    let ok = {
+        #[cfg(test)]
+        {
+            if injected.is_some() {
+                0
+            } else {
+                // SAFETY: `old` is the value produced by the matching disable call.
+                unsafe { Wow64RevertWow64FsRedirection(old) }
+            }
+        }
+        #[cfg(not(test))]
+        {
+            // SAFETY: `old` is the value produced by the matching disable call.
+            unsafe { Wow64RevertWow64FsRedirection(old) }
+        }
+    };
+    if ok == 0 {
+        #[cfg(test)]
+        if let Some(source) = injected {
+            return Err(DeclaredError {
+                aspect: DeclaredAspect::Wow64Redirection,
+                source: Some(source),
+            });
+        }
+        Err(DeclaredError::new(DeclaredAspect::Wow64Redirection))
+    } else {
+        Ok(())
     }
 }
 
@@ -477,12 +540,10 @@ impl DeclaredGuard {
         redirection: Option<*mut core::ffi::c_void>,
     ) -> Result<(), DeclaredError> {
         let mut failure = None;
-        if let Some(old) = redirection {
-            // SAFETY: `old` is the value the matching disable call produced.
-            let ok = unsafe { Wow64RevertWow64FsRedirection(old) };
-            if ok == 0 {
-                failure = Some(DeclaredError::new(DeclaredAspect::Wow64Redirection));
-            }
+        if let Some(old) = redirection
+            && let Err(error) = revert_redirection(old)
+        {
+            failure = Some(error);
         }
         if let Some(previous) = memory
             && let Err(error) = previous.install()

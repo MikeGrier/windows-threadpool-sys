@@ -2,14 +2,17 @@
 
 //! Tests for composite capture.
 
+use std::error::Error as _;
+
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_TOKEN, HANDLE};
 use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
-use super::AmbientState;
+use super::{AmbientState, ApplyError, ApplyFailure, CaptureError, CaptureFailure, RestoreReport};
 use crate::capture_set::{CapturableAspect, CaptureSet};
-use crate::declared::MemoryPriority;
-use crate::error_mode::ThreadErrorMode;
+use crate::declared::{DeclaredAspect, DeclaredError, MemoryPriority};
+use crate::error_mode::{RestoreError as ErrorModeRestoreError, ThreadErrorMode};
+use crate::transaction::{TransactionError, TransactionFailure};
 use crate::{Captured, Declared};
 
 /// Whether the calling thread currently carries an impersonation token.
@@ -220,7 +223,6 @@ fn capture_does_not_disturb_the_thread_it_reads() {
 // --- composition (M23.3) ---------------------------------------------------
 
 use crate::declared::{BackgroundMode, Wow64Redirection};
-use crate::state::ApplyFailure;
 
 #[test]
 fn applying_an_empty_state_runs_the_operation_and_touches_nothing() {
@@ -410,6 +412,86 @@ fn a_clean_report_says_so() {
         applied.restore().to_string(),
         "the thread was restored cleanly"
     );
+}
+
+#[test]
+fn capture_errors_preserve_aspect_code_display_and_source() {
+    const CODE: i32 = 1234;
+    let error = CaptureError {
+        failure: CaptureFailure::Transaction(TransactionError::for_test(
+            TransactionFailure::Duplicate,
+            Some(CODE),
+        )),
+    };
+
+    assert_eq!(error.aspect(), CapturableAspect::Transaction);
+    assert_eq!(error.raw_os_error(), Some(CODE));
+    assert!(error.to_string().starts_with(
+        "capturing the transaction aspect failed: the transaction handle could not be duplicated:"
+    ));
+    assert_eq!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<TransactionError>())
+            .and_then(TransactionError::raw_os_error),
+        Some(CODE)
+    );
+}
+
+#[test]
+fn apply_errors_preserve_failure_code_display_and_source() {
+    const CODE: i32 = 1234;
+    let error = ApplyError {
+        failure: ApplyFailure::Declared(DeclaredError::for_test(
+            DeclaredAspect::MemoryPriority,
+            Some(CODE),
+        )),
+    };
+
+    assert_eq!(error.raw_os_error(), Some(CODE));
+    assert!(error.to_string().starts_with(
+        "applying the ambient state failed: the thread memory priority could not be read or set:"
+    ));
+    assert_eq!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<DeclaredError>())
+            .and_then(DeclaredError::raw_os_error),
+        Some(CODE)
+    );
+}
+
+#[test]
+fn restore_report_predicates_and_accessors_cover_every_failure_combination() {
+    const CODE: i32 = 1234;
+    for has_error_mode in [false, true] {
+        for has_declared in [false, true] {
+            for has_transaction in [false, true] {
+                let report = RestoreReport {
+                    error_mode: has_error_mode.then(|| {
+                        ErrorModeRestoreError::for_test(
+                            ThreadErrorMode::FAIL_CRITICAL_ERRORS.bits(),
+                            CODE,
+                        )
+                    }),
+                    declared: has_declared.then(|| {
+                        DeclaredError::for_test(DeclaredAspect::MemoryPriority, Some(CODE))
+                    }),
+                    transaction: has_transaction.then(|| {
+                        TransactionError::for_test(TransactionFailure::Install, Some(CODE))
+                    }),
+                };
+
+                assert_eq!(
+                    report.is_clean(),
+                    !has_error_mode && !has_declared && !has_transaction
+                );
+                assert_eq!(report.error_mode().is_some(), has_error_mode);
+                assert_eq!(report.declared().is_some(), has_declared);
+                assert_eq!(report.transaction().is_some(), has_transaction);
+            }
+        }
+    }
 }
 
 #[test]

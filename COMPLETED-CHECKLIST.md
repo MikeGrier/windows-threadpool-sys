@@ -1584,3 +1584,16 @@ with the three rejected alternatives).
   `rust-version`, `channel`, or `edition`, deleting a claim's value, and planting a stale
   version in prose each produce a distinct located failure; exit 2 is reserved for
   configuration errors and the script is cwd-independent.
+
+## Moved 2026-09-01 -- Thread ambient mutation gaps
+
+### <a id="m236"></a>M23.6 -- Close mutation gaps with deterministic fault injection and exhaustive assertions. *(completed 2026-09-01 20:25:29 UTC-04:00)*
+
+Close the actionable gaps from the 2026-09-01 mutation run. Add deterministic,
+thread-local, test-only fault injection at the error-mode, declared-aspect, and transaction OS-call
+boundaries; use it to prove explicit release, best-effort drop, rollback, unsupported-platform, and
+composite cleanup behavior; add exhaustive unit assertions for error accessors, formatting, sources,
+capture-set formatting, declared emptiness, and restore reports; then rerun mutation testing and
+classify any survivors that are behaviorally equivalent.
+
+The final mutation run tested 233 mutants: 142 were caught, 91 were unviable, and none were missed.

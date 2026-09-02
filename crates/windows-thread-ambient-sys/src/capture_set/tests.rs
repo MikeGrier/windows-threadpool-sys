@@ -170,6 +170,22 @@ fn debug_names_the_aspects_rather_than_a_bit_pattern() {
 }
 
 #[test]
+fn debug_delimits_single_and_multiple_aspects_exactly() {
+    assert_eq!(
+        format!("{:?}", CaptureSet::IMPERSONATION),
+        "CaptureSet(impersonation)"
+    );
+    assert_eq!(
+        format!("{:?}", CaptureSet::DEFAULT),
+        "CaptureSet(impersonation, error mode)"
+    );
+    assert_eq!(
+        format!("{:?}", CaptureSet::ALL),
+        "CaptureSet(impersonation, error mode, transaction)"
+    );
+}
+
+#[test]
 fn an_aspect_converts_into_its_singleton_set() {
     for aspect in CapturableAspect::EVERY {
         assert_eq!(CaptureSet::from(*aspect), aspect.as_set());

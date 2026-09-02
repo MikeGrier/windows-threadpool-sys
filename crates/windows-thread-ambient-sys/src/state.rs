@@ -102,8 +102,8 @@ use crate::capture_set::{CapturableAspect, CaptureSet};
 use crate::captured::Captured;
 use crate::declared::{Declared, DeclaredError};
 use crate::error_mode::{
-    ApplyError as ErrorModeApplyError, ErrorModeGuard, RestoreError as ErrorModeRestoreError,
-    ThreadErrorMode, UnsupportedBits,
+    ApplyError as ErrorModeApplyError, RestoreError as ErrorModeRestoreError, ThreadErrorMode,
+    UnsupportedBits,
 };
 use crate::transaction::{TransactionContext, TransactionError};
 use crate::{impersonation, transaction};
@@ -350,7 +350,7 @@ impl AmbientState {
         let declared_guard = match self.declared.install() {
             Ok(guard) => guard,
             Err(error) => {
-                release_error_mode(error_mode_guard);
+                drop(error_mode_guard);
                 return Err(ApplyError {
                     failure: ApplyFailure::Declared(error),
                 });
@@ -362,7 +362,7 @@ impl AmbientState {
             Ok(guard) => guard,
             Err(error) => {
                 drop(declared_guard);
-                release_error_mode(error_mode_guard);
+                drop(error_mode_guard);
                 return Err(ApplyError {
                     failure: ApplyFailure::Transaction(error),
                 });
@@ -376,7 +376,7 @@ impl AmbientState {
             Err(error) => {
                 drop(transaction_guard);
                 drop(declared_guard);
-                release_error_mode(error_mode_guard);
+                drop(error_mode_guard);
                 return Err(ApplyError {
                     failure: ApplyFailure::Impersonation(error),
                 });
@@ -405,14 +405,6 @@ impl AmbientState {
                 transaction,
             },
         })
-    }
-}
-
-fn release_error_mode(guard: Option<ErrorModeGuard>) {
-    if let Some(guard) = guard {
-        // Best effort: an install failed, so this path already has an error to
-        // report and a second one would displace it.
-        let _ = guard.release();
     }
 }
 
