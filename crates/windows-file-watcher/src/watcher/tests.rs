@@ -11,10 +11,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{ERROR_NOT_SUPPORTED, FILETIME, HANDLE};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_IO_PENDING, ERROR_NOT_SUPPORTED, FILETIME,
+    HANDLE,
+};
 use windows_sys::Win32::Storage::FileSystem::{FILE_WRITE_ATTRIBUTES, SetFileTime};
 
-use super::{ArmGate, DirectoryWatcher, ReadBuffer, lock};
+use super::{ArmGate, DirectoryWatcher, Issued, ReadBuffer, lock};
 use crate::directory::{
     DirectoryHandle, FailureCode, FaultDetail, OpenFailure, VolumeIdentity, classify_detail,
 };
@@ -1955,4 +1958,79 @@ fn changing_a_files_permissions_is_reported_as_modified() {
 
     drop(watcher);
     dir.cleanup();
+}
+
+// --- the arming contract: which submission results mean "a packet is coming" ---
+//
+// This is the crate's most dangerous misreading, and before these tests the only
+// thing standing between getting it wrong and a green suite was whether the
+// allocator happened to notice. Telling the pool that a genuinely-pending read
+// failed makes it cancel its accounting for an I/O the kernel is still going to
+// complete, and the completion lands in a freed buffer -- so detection depended
+// on heap layout. The same mutation was recorded `MISSED` in one sweep and
+// crashed the process in another; two crashes were even scored as "caught"
+// purely because the process exited non-zero. A crash is not a test (M15.5).
+//
+// `classify_submission` exists so the contract can be asserted directly instead.
+
+#[test]
+fn a_synchronous_success_still_means_a_completion_is_coming() {
+    // The counter-intuitive half: `TRUE` says the *I/O* finished, not that the
+    // *packet* is not coming. Treating it as "done, nothing to wait for" would
+    // free a buffer the kernel has already queued a completion for.
+    let issued = super::classify_submission(1, || {
+        panic!("GetLastError must not be consulted after a success")
+    });
+    assert!(
+        matches!(issued, Ok(Issued::Pending)),
+        "a native success must still be reported as pending"
+    );
+}
+
+#[test]
+fn a_pending_submission_is_armed_rather_than_failed() {
+    // The half that corrupts the heap when it is wrong.
+    let issued = super::classify_submission(0, || {
+        std::io::Error::from_raw_os_error(ERROR_IO_PENDING as i32)
+    });
+    assert!(
+        matches!(issued, Ok(Issued::Pending)),
+        "ERROR_IO_PENDING is how a submission reports success, not failure"
+    );
+}
+
+#[test]
+fn a_genuinely_failed_submission_is_reported_as_failed() {
+    // The other direction, and the one that hangs a watcher rather than
+    // corrupting it: claiming a failed submission is pending leaves the pool
+    // waiting for a completion that will never arrive. `ERROR_INVALID_PARAMETER`
+    // is the real case -- it is what a directory handle opened by file id
+    // answers (D-80).
+    for code in [
+        ERROR_INVALID_PARAMETER as i32,
+        ERROR_ACCESS_DENIED as i32,
+        ERROR_NOT_SUPPORTED as i32,
+    ] {
+        let issued = super::classify_submission(0, || std::io::Error::from_raw_os_error(code));
+        match issued {
+            Err(error) => assert_eq!(
+                error.raw_os_error(),
+                Some(code),
+                "the failure must be reported with the code the OS gave"
+            ),
+            Ok(_) => panic!("error {code} must not be reported as armed"),
+        }
+    }
+}
+
+#[test]
+fn a_submission_failure_with_no_os_code_is_still_a_failure() {
+    // Nothing guarantees the seam only ever sees OS-coded errors, and the
+    // pending test is an equality against a code -- an error carrying none must
+    // fall through to the failure arm rather than matching anything.
+    let issued = super::classify_submission(0, || std::io::Error::other("no raw code"));
+    assert!(
+        issued.is_err(),
+        "an error with no OS code cannot be a pending submission"
+    );
 }

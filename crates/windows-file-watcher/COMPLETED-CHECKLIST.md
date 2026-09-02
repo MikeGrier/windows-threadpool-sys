@@ -858,3 +858,40 @@ operations -- the first run reported nothing firing, the second reported everyth
 harness artifacts. The fix is a fresh handle per probe plus decoding the returned records and matching by
 file name, and a built-in sanity check (a known operation under a known bit) so a broken harness announces
 itself instead of producing a plausible table.
+## Moved 2026-09-01 -- M15.5: the arming contract, asserted instead of crashed into
+
+### <a id="m155"></a>M15.5 -- Assert the arming contract in `arm_detailed_read`, so a broken one fails a test instead of *sometimes* corrupting the heap. *(completed 2026-09-01 20:45:00 -04:00)*
+
+**The shape of the problem.** The submission closure classified `ReadDirectoryChangesW`'s result inline,
+so nothing could observe that classification except by running a real watcher and seeing what the pool
+did with the result. Getting it wrong tells the pool to reclaim an I/O the kernel will still complete, and
+the completion lands in a freed buffer -- detection then depends on allocator behaviour rather than on any
+assertion. The same mutation was recorded `MISSED` in one sweep and a crash in another, and two crashes
+were scored `CaughtMutant` purely because the process exited non-zero.
+
+**The fix: make the classification a value, not a side effect.** `classify_submission` is now a free
+function taking the raw result and a lazily-taken `GetLastError`, returning `Result<Issued, io::Error>`.
+Four tests assert the whole contract -- a non-zero return is still pending (a packet is coming even though
+the I/O finished), `ERROR_IO_PENDING` is pending, a genuine failure is a failure carrying the OS code, and
+an error with no OS code falls through to failure rather than matching the pending comparison. The success
+test also passes a `last_error` closure that panics, pinning the rule that `GetLastError` must not be read
+after a success, where it holds a stale value from some unrelated call.
+
+**The detail that made the first attempt insufficient, and why it is worth recording.** The extraction
+initially took a `bool`, leaving `ok != 0` at the call site. Injecting *that* comparison was still "caught"
+only by the process dying with `STATUS_HEAP_CORRUPTION` (exit `0xC0000374`) -- the exact failure mode this
+item exists to remove, simply relocated by one operand. The function now takes the raw `BOOL` and does the
+`!= 0` itself, so the whole convention sits inside the tested surface and the call site has no comparison
+left to get wrong. Verifying the fix rather than assuming it is what surfaced this.
+
+**Result.** Every mutant in the arming classification -- `!= 0` to `== 0`, to `true`, to `false`; the
+pending equality to `!=`; and the failure arm to `Ok(Pending)` -- now fails with exit 101, a clean test
+failure, in about a second each. None crashes, so the file's mutation score stops depending on heap
+layout.
+
+**Ruled out beforehand, and left recorded so nobody repeats it: the shipping code was never at fault.**
+55 runs of the unmutated suite (25 default-feature, 30 `--all-features`, including the exact binary named
+in every crash report) produced zero failures, and all sixteen crash reports carry distinct PE timestamps,
+none equal to the clean build's -- each was its own mutant build. The test binary's filename derives from
+target and features rather than contents, which is why every report names the same `.exe` and why that
+name alone proves nothing.

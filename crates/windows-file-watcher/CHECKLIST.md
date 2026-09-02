@@ -147,29 +147,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 
 - [x] **M15.4** -- Isolated both remaining notification-filter categories. All six `ALL_NOTIFY_FILTERS` flag-pair mutants are now caught. Two of the item's own recorded claims were disproved by measurement: ATTRIBUTES does not mask a same-length rewrite, and a DACL edit *is* reported by SECURITY alone. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m154)
 
-- [ ] **M15.5** -- Assert the arming contract in `arm_detailed_read`, so a broken one fails a test
-  instead of *sometimes* corrupting the heap. **The shipping code is not at fault here** -- that was
-  checked before anything else, and the check is recorded below so nobody has to repeat it.
-  **What is wrong.** Inverting the `ERROR_IO_PENDING` test at `watcher.rs:482` makes a genuinely-pending
-  read look failed, so the thread pool cancels its accounting for an I/O the kernel is still going to
-  complete, and the completion lands in a freed buffer. Nothing asserts otherwise, so the only thing
-  standing between that mutation and a green suite is whether the allocator happens to notice.
-  **It is not reliable, and that is the point.** The same mutant was recorded `MISSED` in one sweep and
-  crashed the process in another. Sixteen crashes were logged across the runs, and cargo-mutants counted
-  two of them as `CaughtMutant` purely because the process exited non-zero -- one with
-  `STATUS_HEAP_CORRUPTION` (`0xC0000374`), one with `STATUS_STACK_BUFFER_OVERRUN` (`0xC0000409`). **A
-  crash is not a test.** Detection by memory corruption depends on allocator behaviour and heap layout,
-  so the mutation score for this file is non-deterministic run to run, and a "caught" here is a weaker
-  claim than it looks.
-  **Wanted:** a test that observes the arming *contract* rather than its wreckage -- that a read
-  reporting `ERROR_IO_PENDING` is treated as armed and its completion delivered exactly once, and that a
-  genuinely failed submission is not left accounted-for. That makes both the mutant and any future
-  regression a deterministic red test.
-  **Ruled out: a defect in the unmutated code.** 55 runs of the unmutated suite (25 default-feature, 30
-  `--all-features`, including the exact binary named in every crash report) produced zero failures. All
-  sixteen crash reports carry distinct PE timestamps, none equal to the clean build's -- each was its own
-  mutant build. The test binary's filename is derived from the target and features rather than its
-  contents, which is why every report names the same `.exe` and why that name alone proves nothing.
+- [x] **M15.5** -- Made the arming contract observable: extracted `classify_submission` (taking the raw `BOOL`, so the `!= 0` convention is inside the tested surface too) and asserted all four cases. Every mutant now fails as a deterministic red test rather than as a heap corruption. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m155)
 
 - [x] **M15.6** -- Converted `queue/tests.rs` to bounded waiting, so a broken wake fails instead of hanging. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m156)
 

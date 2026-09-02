@@ -463,16 +463,7 @@ impl WatcherInner {
                     overlapped,
                     None,
                 );
-                if ok != 0 {
-                    // A synchronous success still delivers a completion, because
-                    // the handle is not in skip-on-success mode.
-                    return Ok(Issued::Pending);
-                }
-                let error = io::Error::last_os_error();
-                if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
-                    return Ok(Issued::Pending);
-                }
-                Err(error)
+                classify_submission(ok, io::Error::last_os_error)
             })
         };
 
@@ -1586,6 +1577,47 @@ impl Drop for DirectoryWatcher {
         // and the client's receiver observes the disconnect rather than blocking
         // forever on a queue nothing can fill again.
     }
+}
+
+/// What `ReadDirectoryChangesW` reported, as the submission seam's answer to
+/// "will a completion packet arrive?".
+///
+/// Takes the raw `BOOL` rather than a `bool` on purpose: the `!= 0` convention is
+/// part of the contract being tested, and leaving it at the call site would put
+/// the most dangerous comparison in this crate back outside the reach of a test.
+///
+/// A free function rather than inline in the submission closure, so this crate's
+/// most dangerous misreading is observable by a test rather than only by its
+/// wreckage. Getting either half wrong tells the thread pool to reclaim an I/O
+/// the kernel is still going to complete, and the completion then lands in a
+/// freed buffer -- a heap corruption whose visibility depends on allocator
+/// behaviour, not a test result. That is not hypothetical: with the comparison
+/// still at the call site, inverting it was "caught" only by the process dying
+/// with `STATUS_HEAP_CORRUPTION`, and the same class of mutation was recorded
+/// `MISSED` in one sweep and a crash in another. A crash is not a test (M15.5).
+///
+/// Both of the native call's success shapes mean the same thing here, for the
+/// reason [`Issued::Pending`] spells out: a packet is coming either way. A
+/// non-zero return says the I/O is already done, not that the packet is not
+/// coming, and `ERROR_IO_PENDING` says it has not finished yet. Only a genuine
+/// failure means no packet will arrive, and only then may the caller reclaim the
+/// buffer.
+///
+/// `last_error` is taken lazily and must not be consulted after a success:
+/// `GetLastError` is not meaningful when the call succeeded, so reading it there
+/// would classify on a stale value left by some earlier, unrelated call.
+fn classify_submission<F>(returned: i32, last_error: F) -> Result<Issued, io::Error>
+where
+    F: FnOnce() -> io::Error,
+{
+    if returned != 0 {
+        return Ok(Issued::Pending);
+    }
+    let error = last_error();
+    if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+        return Ok(Issued::Pending);
+    }
+    Err(error)
 }
 
 /// Lock, recovering the guard if a previous holder panicked.
