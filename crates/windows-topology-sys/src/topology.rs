@@ -257,9 +257,24 @@ impl Topology {
     /// both survive this, so the result is a set of domains rather than a
     /// proven partition. [`Self::outermost_partitioning_cache`] is where that
     /// stronger property is required and checked.
+    ///
+    /// **A domain covering no processors is dropped**, because it partitions
+    /// nothing and every consumer of this list wants pieces of the machine. It
+    /// would otherwise survive both filters here and in
+    /// [`Self::outermost_partitioning_cache`]: it is not *equal* to any
+    /// non-empty set, so deduplication keeps it, and it is disjoint from
+    /// everything vacuously, so the pairwise check passes it. A level with one
+    /// real cache plus one empty domain would then count two partitions and be
+    /// reported as dividing a machine it does not divide. Contrast
+    /// [`Self::memory_domains`], which deliberately keeps a processor-less
+    /// domain because a memory domain with no CPUs is real hardware (D-5); a
+    /// *cache* over no processors is not.
     pub fn cache_partitions_at_level(&self, level: u8) -> Vec<&Domain> {
         let mut partitions: Vec<&Domain> = Vec::new();
-        for domain in self.caches_at_level(level) {
+        for domain in self
+            .caches_at_level(level)
+            .filter(|domain| !domain.processors.is_empty())
+        {
             if !partitions
                 .iter()
                 .any(|kept| kept.processors == domain.processors)

@@ -747,3 +747,41 @@ fn a_level_whose_domains_are_disjoint_but_incomplete_still_partitions() {
     assert_eq!(level, 2);
     assert_eq!(partitions.len(), 2);
 }
+
+#[test]
+fn a_domain_covering_nothing_is_not_a_partition() {
+    // The other end of the same threat model as the overlap test above. An
+    // empty processor set is *disjoint from everything*, vacuously, so it
+    // passes the pairwise check; and it is not equal to any non-empty set, so
+    // deduplication keeps it. A level with one real cache plus one empty domain
+    // therefore counts two "partitions" and is reported as dividing a machine
+    // it does not divide -- a caller sharding across the result gets a shard
+    // covering no processors at all.
+    //
+    // `Domain` is publicly constructible and `ProcessorSet` has `empty()`, so
+    // this is reachable by hand and by deserialization, which is precisely the
+    // input this method promises not to trust.
+    let mut topo = split_l1_machine(1, 3);
+    topo.domains.pop();
+    for (id, processors) in [
+        (400u32, ProcessorSet::from_group_mask(0, 0b111)),
+        (401, ProcessorSet::empty()),
+    ] {
+        topo.domains.push(Domain {
+            kind: DomainKind::Cache {
+                level: 2,
+                associativity: 8,
+                line_size: 64,
+                size_bytes: 1024 * 1024,
+                cache_type: CacheKind::Unified,
+            },
+            id,
+            processors,
+        });
+    }
+
+    assert!(
+        topo.outermost_partitioning_cache().is_none(),
+        "a level whose only second domain covers nothing does not divide the machine"
+    );
+}
