@@ -754,7 +754,7 @@ predicted about a 222-commit branch.
   repaired it, because the metric's `head.load(Acquire)` sat just before the write. Fixed by making
   that load unconditional, which is where it belonged.
 
-- [ ] **SH-16.3** -- **`CancelIo` does not wait, so a test frees an `OVERLAPPED` and an I/O buffer the
+- [x] **SH-16.3** -- **`CancelIo` does not wait, so a test frees an `OVERLAPPED` and an I/O buffer the
   kernel may still write to.** In
   [reopen_by_id_cannot_be_watched.rs](crates/windows-file-watcher/tests/reopen_by_id_cannot_be_watched.rs),
   an overlapped `ReadDirectoryChangesW` is issued into a **stack-local** `OVERLAPPED` and a heap
@@ -767,6 +767,11 @@ predicted about a 222-commit branch.
   `STATUS_STACK_BUFFER_OVERRUN` history recorded on the now-removed `reopen_via_existing_handle`.
   Fix by calling `GetOverlappedResult(..., bWait = TRUE)` and accepting `ERROR_OPERATION_ABORTED`
   before either buffer leaves scope.
+  **Done, and the wait is measured to be load-bearing rather than assumed.** A probe on the control
+  path returned `completed=0, err=995` -- `ERROR_OPERATION_ABORTED` -- proving an IRP really was
+  outstanding at the moment `CancelIo` returned and completed only during the wait. Without it, that
+  completion landed on a reclaimed frame. The same wait is what makes `Owned`'s later `CloseHandle`
+  safe, since closing a handle with I/O outstanding is another cancellation request and not a wait.
 
 - [x] **SH-16.4** -- **`cache_partitions_at_level` counted a domain covering no processors as a
   partition.** An empty `ProcessorSet` is not *equal* to any non-empty one, so deduplication kept it,

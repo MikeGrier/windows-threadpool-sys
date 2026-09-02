@@ -23,7 +23,8 @@ use std::path::Path;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_INVALID_PARAMETER, ERROR_OPERATION_ABORTED, GetLastError, HANDLE,
+    INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED,
@@ -31,7 +32,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdType, GetFileInformationByHandle,
     OPEN_EXISTING, OpenFileById, ReadDirectoryChangesW,
 };
-use windows_sys::Win32::System::IO::{CancelIo, OVERLAPPED};
+use windows_sys::Win32::System::IO::{CancelIo, GetOverlappedResult, OVERLAPPED};
 
 /// Closes its handle on drop, so a failing assertion cannot leak one into the
 /// rest of the suite.
@@ -118,15 +119,19 @@ fn reopen_by_id(volume_hint: HANDLE, file_id: u64) -> Owned {
 }
 
 /// Issue the exact read `watcher.rs` issues, and report whether Windows accepted
-/// it. A pending read is cancelled before returning, so nothing is left armed.
+/// it. A pending read is cancelled **and waited to completion** before
+/// returning, so nothing is left armed and nothing the kernel may still write
+/// to leaves scope.
 fn read_directory_changes_accepted(handle: HANDLE) -> Result<(), u32> {
     // `u32`-typed so the buffer is DWORD-aligned, which the API requires.
     let mut buffer = vec![0u32; 1024];
     let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
-    // SAFETY: issues one overlapped read into this test's own buffer, which the
-    // kernel owns until the operation is cancelled below. `lpBytesReturned` is
-    // null, which the SDK requires for an asynchronous call, and no completion
-    // routine is used.
+    // SAFETY: issues one overlapped read into this test's own buffer. The kernel
+    // owns both the buffer and `overlapped` until the operation *completes* --
+    // which is not the same as until it is cancelled, and is why the cancel
+    // below is followed by a blocking `GetOverlappedResult`. `lpBytesReturned`
+    // is null, which the SDK requires for an asynchronous call, and no
+    // completion routine is used.
     let ok = unsafe {
         ReadDirectoryChangesW(
             handle,
@@ -140,12 +145,52 @@ fn read_directory_changes_accepted(handle: HANDLE) -> Result<(), u32> {
         )
     };
     if ok == 0 {
+        // The call failed, so no IRP was queued and nothing is outstanding
+        // against `buffer` or `overlapped`; both may leave scope freely.
+        //
         // SAFETY: called immediately after the failing call above.
         return Err(unsafe { GetLastError() });
     }
-    // SAFETY: `handle` is live, and cancelling is what keeps the (kernel-owned)
-    // buffer from outliving this frame.
+
+    // A nonzero return here means the read was *queued*, so an IRP is
+    // outstanding against this frame's `overlapped` and this function's
+    // `buffer`.
+    //
+    // SAFETY: `handle` is live and this thread issued the read above.
     unsafe { CancelIo(handle) };
+
+    // **`CancelIo` alone would be a use-after-free.** It only *requests*
+    // cancellation, returning as soon as the request is marked rather than when
+    // the operation ends; the IRP still completes asynchronously, and on
+    // completion the kernel writes `Internal`/`InternalHigh` through the
+    // `OVERLAPPED` pointer and may copy `FILE_NOTIFY_INFORMATION` bytes into the
+    // buffer. Both would by then be reclaimed -- `overlapped` is a stack local,
+    // and the caller invokes this helper twice in a row, so the second call's
+    // frame lands where the first one's was. MSDN states the rule directly: the
+    // application must not free or reuse the `OVERLAPPED` structure until the
+    // cancelled operations have completed.
+    //
+    // Nothing else here would enforce that: `hEvent` is null, there is no
+    // completion port and no APC. So wait, explicitly. This is also what makes
+    // `Owned`'s `CloseHandle` safe later, since closing a handle with I/O still
+    // outstanding is another cancellation request rather than a wait.
+    //
+    // This crate has already paid for this exact mistake once -- see the
+    // `STATUS_STACK_BUFFER_OVERRUN` history recorded on the removed
+    // `reopen_via_existing_handle`.
+    let mut transferred: u32 = 0;
+    // SAFETY: `overlapped` still names the pending operation and both it and
+    // `buffer` are alive across this call. `bWait` is `TRUE`, so this returns
+    // only once the kernel has finished writing through both.
+    let completed = unsafe { GetOverlappedResult(handle, &overlapped, &mut transferred, 1) };
+    if completed == 0 {
+        // SAFETY: called immediately after the failing call above.
+        let err = unsafe { GetLastError() };
+        assert_eq!(
+            err, ERROR_OPERATION_ABORTED,
+            "a cancelled ReadDirectoryChangesW must complete as aborted, got {err}"
+        );
+    }
     Ok(())
 }
 
