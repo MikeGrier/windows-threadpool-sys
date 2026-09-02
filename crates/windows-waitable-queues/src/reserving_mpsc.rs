@@ -420,10 +420,40 @@ impl<T> Shared<T> {
     /// Counts slots a producer has claimed but not yet finished writing, for the
     /// reason `slotwise_mpsc`'s does: counting only published items would need a walk of
     /// the ring, and this number is a metric rather than a control-flow input.
+    ///
+    /// **Clamped to the capacity**, for the reason given on `slotwise_mpsc`'s
+    /// twin: the claim word and `head` are two loads at two instants, so a
+    /// consumer draining past the sampled position makes the wrapping
+    /// subtraction produce a number near `u32::MAX`. A bounded queue must never
+    /// report holding more than it can.
     fn len(&self) -> usize {
         let position = position_of(self.claim.0.load(Ordering::Acquire));
         let head = self.head.0.load(Ordering::Acquire);
-        position.wrapping_sub(head) as usize
+        (position.wrapping_sub(head) as usize).min(self.capacity)
+    }
+
+    /// How many further items a best-effort push could still place, as a
+    /// snapshot.
+    ///
+    /// **Not `capacity - len()`, which is what the [`Bounded`](crate::Bounded)
+    /// default computes and is wrong for this shape.** `len` deliberately
+    /// excludes outstanding reservations, so on an empty queue of four with one
+    /// slot reserved the default answers four while only three items fit -- and
+    /// a caller sizing a batch from it would be told there is room the
+    /// reservation is holding.
+    ///
+    /// The claim word is read **once**: the position and the reservation count
+    /// share it precisely so the two cannot be sampled at different instants,
+    /// and reading it twice would reintroduce the skew this shape packs them
+    /// together to avoid. `head` is still a second load, so the result is
+    /// clamped for the reason `len` is.
+    fn remaining(&self) -> usize {
+        let word = self.claim.0.load(Ordering::Acquire);
+        let head = self.head.0.load(Ordering::Acquire);
+        let capacity = self.capacity_u32();
+        let occupied = position_of(word).wrapping_sub(head).min(capacity);
+        let spoken_for = occupied.saturating_add(reserved_of(word));
+        capacity.saturating_sub(spoken_for) as usize
     }
 
     /// Whether the consumer would find an item right now.
@@ -722,7 +752,19 @@ impl<T> Producer<T> {
     /// another producer may take the last slot between this call and the push.
     #[must_use]
     pub fn is_full(&self) -> bool {
-        self.len() + self.outstanding_reservations() >= self.shared.capacity
+        self.remaining() == 0
+    }
+
+    /// How many further items a best-effort push could still place, as a
+    /// snapshot.
+    ///
+    /// **Reservations are subtracted**, unlike `capacity() - len()`: a reserved
+    /// slot is spoken for, so counting it as room would promise a push that
+    /// [`push`](Self::push) is guaranteed to refuse. Advisory only, like every
+    /// other gauge here.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.shared.remaining()
     }
 
     /// Whether the consumer has been dropped.
@@ -978,6 +1020,18 @@ impl<T> Consumer<T> {
         reserved_of(self.shared.claim.0.load(Ordering::Acquire)) as usize
     }
 
+    /// How many further items a best-effort push could still place, as a
+    /// snapshot.
+    ///
+    /// The same number [`Producer::remaining`] reports, and offered here for
+    /// the same reason `outstanding_reservations` is: a consumer deciding
+    /// whether to keep draining wants the producers' view of the room left, and
+    /// that view subtracts reservations rather than treating them as free.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.shared.remaining()
+    }
+
     /// Whether every producer and every outstanding reservation is gone.
     ///
     /// **Check this only after [`Self::pop`] has returned `None`.** A producer
@@ -1181,6 +1235,13 @@ impl<T> crate::Bounded for Producer<T> {
     fn is_empty(&self) -> bool {
         Self::is_empty(self)
     }
+
+    // Overridden, because the default `capacity - len` counts a reserved slot
+    // as room: `len` excludes reservations by design, so an empty queue of four
+    // holding one reservation would answer four while only three items fit.
+    fn remaining(&self) -> usize {
+        self.shared.remaining()
+    }
 }
 
 impl<T> crate::Bounded for Consumer<T> {
@@ -1194,6 +1255,13 @@ impl<T> crate::Bounded for Consumer<T> {
 
     fn is_empty(&self) -> bool {
         Self::is_empty(self)
+    }
+
+    // The consumer's view has to agree with the producer's: both describe the
+    // same queue, and a caller generic over `Bounded` should not get a different
+    // answer depending on which handle it holds.
+    fn remaining(&self) -> usize {
+        Self::remaining(self)
     }
 }
 

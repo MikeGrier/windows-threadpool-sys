@@ -1295,3 +1295,52 @@ fn the_debug_renderings_name_the_type_and_its_state() {
         "got {consumer}"
     );
 }
+
+#[test]
+fn len_is_clamped_when_head_has_passed_the_sampled_tail() {
+    // `len` reads `tail` and then `head`, which are two instants rather than
+    // one. If the consumer drains past the value `tail` held, `head` overtakes
+    // it and `tail.wrapping_sub(head)` yields a number near `usize::MAX` -- a
+    // four-slot queue reporting four billion items through a public metric.
+    //
+    // The skewed pair is written directly rather than raced for: it is a
+    // transient a reader observes, not a state the queue rests in, so a
+    // scheduler could only be asked to produce it by chance. Writing it makes
+    // the arithmetic the assertion is actually about deterministic.
+    let (tx, _rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+
+    tx.shared.tail.0.store(1, Ordering::Release);
+    tx.shared.head.0.store(2, Ordering::Release);
+
+    assert_eq!(
+        tx.len(),
+        tx.capacity(),
+        "a bounded queue must never report holding more than it can"
+    );
+    assert_eq!(
+        crate::Bounded::remaining(&tx),
+        0,
+        "the clamp must resolve towards full, which is the safe direction"
+    );
+
+    // **Restored before the handles drop, and this is not tidiness.** Teardown
+    // walks `head..tail` to dispose whatever the queue still holds, so leaving
+    // `head` ahead of `tail` sets that walk a `usize::MAX`-length loop and the
+    // test hangs instead of failing. Measured the hard way.
+    tx.shared.head.0.store(0, Ordering::Release);
+    tx.shared.tail.0.store(0, Ordering::Release);
+}
+
+#[test]
+fn len_is_exact_when_the_two_loads_agree() {
+    // The guard must not have been bought by clamping everything: an ordinary
+    // reading still reports the true count rather than the capacity.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+
+    assert_eq!(tx.len(), 2);
+    assert_eq!(crate::Bounded::remaining(&tx), 2);
+    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(tx.len(), 1);
+}

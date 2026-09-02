@@ -432,3 +432,25 @@ that produces no thread is otherwise invisible to the "are all comments resolved
   exists to prevent.
   Iterate the online processors so every one is placed, and refuse a topology that names memory domains
   but not this processor's, rather than inventing one.
+
+## M9: PR #56 fourth review round
+
+- [x] **SH-9.1** -- **Both bounded shapes could report a length larger than their capacity.**
+  `len` reads the producer-side position and then `head`, which are two instants; a consumer draining
+  past the sampled position makes the wrapping subtraction yield a number near the integer maximum. The
+  comment beside it claimed the overestimate was "safe in the direction that matters for a backpressure
+  gauge", which is true of a *bounded* overestimate and not of `usize::MAX`. Both are now clamped to the
+  capacity, so the skew still resolves towards full -- the safe direction -- while the impossible value
+  is gone.
+
+- [x] **SH-9.2** -- **`reserving_mpsc` inherited a `remaining()` that counted reserved slots as room.**
+  `Bounded::remaining` defaults to `capacity - len`, and this shape's `len` excludes reservations by
+  design, so an empty queue of four holding one reservation answered four while only three items fit --
+  promising room for a push guaranteed to be refused. Overridden on both handles and both trait impls,
+  reading the packed claim word **once** so the position and the reservation count cannot be sampled at
+  different instants; `is_full` is now defined in terms of it rather than restating the rule.
+
+- [x] **SH-9.3** -- **The pull request description described the release plumbing, not the product.**
+  The body framed the change as CI and provenance work and mentioned `windows-waitable-queues` only
+  under release tracking, while the majority of the diff is that crate's public API and its three
+  lock-free queue implementations. Rewritten to lead with the shipped surface.

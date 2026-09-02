@@ -306,10 +306,18 @@ impl<T> Shared<T> {
     /// matters for a backpressure gauge, and it is never used to decide whether
     /// to wait: [`Consumer::arm`] asks [`Shared::has_ready_item`] instead,
     /// which is the exact question `pop` answers.
+    ///
+    /// **Clamped to the capacity, because the two loads are not one instant.**
+    /// `tail` is read first; if the consumer then drains past the value it
+    /// held, `head` overtakes it and the wrapping subtraction yields a number
+    /// near `usize::MAX` -- a bounded queue claiming to hold more items than it
+    /// has slots. Over-reporting is the safe direction for this gauge and
+    /// under-reporting is not, so the skew is resolved towards "full" rather
+    /// than towards zero; what the clamp removes is only the impossible value.
     fn len(&self) -> usize {
         let tail = self.tail.0.load(Ordering::Acquire);
         let head = self.head.0.load(Ordering::Acquire);
-        tail.wrapping_sub(head)
+        tail.wrapping_sub(head).min(self.capacity)
     }
 
     /// Whether the consumer would find an item right now.

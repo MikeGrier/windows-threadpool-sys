@@ -1222,3 +1222,111 @@ fn the_debug_renderings_name_the_type_and_its_state() {
         "got {rendered}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The gauges: `len` under a skewed pair of loads, and `remaining` against the
+// reservations `len` deliberately excludes.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remaining_subtracts_outstanding_reservations() {
+    // The defect. `Bounded`'s default is `capacity - len`, and `len` excludes
+    // reservations by design, so an empty queue of four holding one reservation
+    // answered four -- promising room for a fourth item that `push` is
+    // guaranteed to refuse, because the reservation is holding the slot.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("an empty queue has room");
+
+    assert_eq!(tx.len(), 0, "a reservation is not an item");
+    assert_eq!(
+        tx.remaining(),
+        3,
+        "one of the four slots is spoken for by the reservation"
+    );
+    assert_eq!(
+        rx.remaining(),
+        3,
+        "both handles describe the same queue and must agree"
+    );
+
+    // And the number is honest: exactly three further pushes fit.
+    for i in 0..3 {
+        tx.push(i).expect("remaining() said there was room");
+    }
+    assert_eq!(tx.remaining(), 0);
+    assert!(tx.is_full(), "no unreserved slot is left");
+    assert!(matches!(tx.push(99), Err(PushError::Full(99))));
+
+    slot.send(7).expect("the consumer is still here");
+    assert_eq!(rx.len(), 4, "the redeemed reservation is now an item");
+}
+
+#[test]
+fn remaining_agrees_through_the_bounded_trait() {
+    // The override is on the trait impls, not only the inherent methods: a
+    // caller generic over `Bounded` is exactly who would be misled by the
+    // default, since it cannot reach `outstanding_reservations` to correct it.
+    fn room_through_trait<B: Bounded>(handle: &B) -> usize {
+        handle.remaining()
+    }
+
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let _slot = tx.reserve().expect("an empty queue has room");
+
+    assert_eq!(room_through_trait(&tx), 3);
+    assert_eq!(room_through_trait(&rx), 3);
+}
+
+#[test]
+fn the_gauges_are_clamped_when_head_has_passed_the_sampled_position() {
+    // `len` and `remaining` each read the claim word and then `head`, which are
+    // two instants rather than one. If the consumer drains past the position
+    // the claim held, `head` overtakes it and `wrapping_sub` yields a number
+    // near `u32::MAX` -- a four-slot queue reporting four billion items, and
+    // four billion slots of room, straight out of a public metric.
+    //
+    // The skewed pair is written directly rather than raced for. The CLAIM hook
+    // opens the window inside `push`, but by the time `push` returns the two
+    // values agree again, so a test that called `len()` afterwards would assert
+    // nothing -- which is exactly what an earlier version of this test did, and
+    // a sabotage run caught it doing.
+    let (tx, _rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+
+    tx.shared.claim.0.store(claim_word(0, 1), Ordering::Release);
+    tx.shared.head.0.store(2, Ordering::Release);
+
+    assert_eq!(
+        tx.len(),
+        tx.capacity(),
+        "a bounded queue must never report holding more than it can"
+    );
+    assert_eq!(
+        tx.remaining(),
+        0,
+        "the clamp must resolve towards full, which is the safe direction"
+    );
+    assert!(tx.is_full());
+
+    // **Restored before the handles drop, and this is not tidiness.** Teardown
+    // walks from `head` to the claim position to dispose whatever is still
+    // held, so leaving `head` ahead sets that walk a `u32::MAX`-length loop and
+    // the test hangs rather than fails. Measured the hard way.
+    tx.shared.head.0.store(0, Ordering::Release);
+    tx.shared.claim.0.store(claim_word(0, 0), Ordering::Release);
+}
+
+#[test]
+fn the_gauges_are_exact_when_the_two_loads_agree() {
+    // The guard must not have been bought by clamping everything: an ordinary
+    // reading still reports the true count and the true room.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+
+    assert_eq!(tx.len(), 2);
+    assert_eq!(tx.remaining(), 2);
+    assert!(!tx.is_full());
+    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(tx.len(), 1);
+    assert_eq!(tx.remaining(), 3);
+}
