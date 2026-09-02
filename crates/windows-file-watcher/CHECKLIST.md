@@ -153,24 +153,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 
 - [x] **M15.7** -- Decided and implemented: `NOTIFY_TIMEOUT` lowered 30s -> 5s across all three copies, after measuring that 45 of 46 waits finish in <=2.5ms and the whole tail is one structural ~515ms backoff, unchanged under 4x oversubscription. One previously-timing-out mutant: 93.6s -> 31.8s. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m157)
 
-- [ ] **M15.11** -- Bound the *loop* in `no_wakeup_is_lost_under_a_concurrent_burst`, not just the wait
-  inside it. **Found by M15.7's confirming sweep, and it is M15.6's defect one level up.**
-  **The measurement.** After M15.7, a `queue.rs` sweep is 121 mutants in 14 minutes with **8 timeouts, and
-  every one of the 8 is pinned by this single test** -- `Receiver::try_recv -> None`, `recv`'s `==` to
-  `!=`, `is_disconnected -> false`, `len -> 1`, `is_empty -> false` (x2), `latched -> 1`, and
-  `take -> None`. All 8 still had between 4 and 76 tests failed before the kill, so they are detections
-  rather than gaps; they just cost 67s each instead of failing.
-  **Why the budget fix did not reach it.** The test waits on the doorbell with a bounded `await_signal`,
-  then drains, then re-checks an exit condition of
-  `is_disconnected() && is_empty() && latched() == 0`. Each of those mutants makes that condition
-  permanently false while leaving the doorbell signalled, so the **outer loop** spins at full speed --
-  bounded wait, unbounded loop. Lowering `NOTIFY_TIMEOUT` cannot touch it, and no further budget reduction
-  will.
-  **What is wanted.** A deadline on the loop itself (and ideally a no-progress bound: `seen` not advancing
-  across N iterations is the real symptom), so a broken predicate fails with what it saw rather than
-  spinning. That is the same transform M15.6 applied to `recv()`, applied one level out.
-  **Worth checking while there:** whether any other loop in the suite has this shape -- a bounded wait
-  inside an unbounded `loop`. M15.6 swept for unbounded `recv()`, which would not have found this one.
+- [x] **M15.11** -- Bounded the loop in `no_wakeup_is_lost_under_a_concurrent_burst` (a bounded wait inside an unbounded loop is still an unbounded loop) and aligned `await_signal`'s budget with M15.7's. The suite-wide sweep for the same shape found no other instance. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m1511)
 
 ## M-inf -- Horizon (ungated, post-v1)
 

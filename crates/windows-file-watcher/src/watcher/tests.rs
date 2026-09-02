@@ -639,10 +639,17 @@ fn teardown_releases_the_sender_so_the_receiver_disconnects() {
         receiver.is_disconnected(),
         "dropping the watcher must release the queue sender"
     );
-    assert!(
-        receiver.recv().is_none(),
-        "a drain loop must terminate rather than block"
-    );
+    // A blocking `recv()`, bounded by a thread and a deadline rather than by
+    // swapping in `recv_timeout` -- the claim being made is about a *drain loop*
+    // terminating, and a bounded read does not test that (M15.11).
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(receiver.recv().is_none());
+    });
+    match rx.recv_timeout(NOTIFY_TIMEOUT) {
+        Ok(ended) => assert!(ended, "a drain loop must terminate rather than block"),
+        Err(_) => panic!("a blocking recv did not return once the watcher was gone"),
+    }
 
     dir.cleanup();
 }
