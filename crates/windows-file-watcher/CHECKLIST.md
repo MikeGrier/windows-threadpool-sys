@@ -145,23 +145,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 
 - [x] **M15.10** -- Tested `canonical_path`'s 512-unit retry. No junction needed: a caller's own `\\?\` path opens past `MAX_PATH` (D-85), so the retry is reachable through the crate's own API. Added a boundary walk over 508-516 units; `<=` proved equivalent by measurement. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m1510)
 
-- [ ] **M15.4** -- Isolate the last two notification-filter categories, or record that they cannot be
-  isolated from outside. Two mutants in `ALL_NOTIFY_FILTERS` survive: replacing the `|` before
-  `FILE_NOTIFY_CHANGE_CREATION` (dropping LAST_WRITE and CREATION) and before
-  `FILE_NOTIFY_CHANGE_SECURITY` (dropping CREATION and SECURITY). `&` binds tighter than `|`, so each
-  such mutant zeroes the two flags on either side of it.
-  **Why the obvious tests do not catch them, measured rather than assumed.** ATTRIBUTES and SIZE remain
-  present in both mutants, and they mask the rest: a same-length rewrite still sets the file's archive
-  bit, so ATTRIBUTES reports it; and a DACL edit via `icacls` is likewise still reported with SECURITY
-  dropped, through some filter this exercise did not identify. Both tests were written expecting to
-  isolate a category, both failed to, and both are kept with their claims corrected rather than deleted.
-  **What would work.** For LAST_WRITE, a timestamp-only change -- `SetFileTime` on an already-open
-  handle, touching neither length nor attributes. For SECURITY, first establish *which* filter currently
-  reports a DACL edit (arm a watch with a single filter bit at a time and see which one fires), because
-  the assumption that it touches nothing else is exactly what the failed test disproved.
-  **A legitimate outcome is "cannot be isolated".** If every operation that changes one of these also
-  changes an attribute or a length, then no black-box test can distinguish the mutants, and they belong
-  with the equivalent ones rather than on this list. Establishing that is as good an answer as a test.
+- [x] **M15.4** -- Isolated both remaining notification-filter categories. All six `ALL_NOTIFY_FILTERS` flag-pair mutants are now caught. Two of the item's own recorded claims were disproved by measurement: ATTRIBUTES does not mask a same-length rewrite, and a DACL edit *is* reported by SECURITY alone. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m154)
 
 - [ ] **M15.5** -- Assert the arming contract in `arm_detailed_read`, so a broken one fails a test
   instead of *sometimes* corrupting the heap. **The shipping code is not at fault here** -- that was

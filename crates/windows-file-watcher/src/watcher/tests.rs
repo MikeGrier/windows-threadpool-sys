@@ -6,11 +6,13 @@
 //! the kernel, not a model of it.
 
 use std::num::NonZeroUsize;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::ERROR_NOT_SUPPORTED;
+use windows_sys::Win32::Foundation::{ERROR_NOT_SUPPORTED, FILETIME, HANDLE};
+use windows_sys::Win32::Storage::FileSystem::{FILE_WRITE_ATTRIBUTES, SetFileTime};
 
 use super::{ArmGate, DirectoryWatcher, ReadBuffer, lock};
 use crate::directory::{
@@ -1669,25 +1671,31 @@ fn stopping_a_volume_change_removes_only_that_route() {
 // zeroes the two flags on either side of it -- `A | B & C | D` parses as
 // `A | (B & C) | D`, and disjoint flags AND to nothing -- so each such mutant
 // silently drops a whole category of change from what the kernel is asked to
-// report.
+// report. That is a real gap rather than a curiosity: a watcher that reports
+// creation and deletion but silently never reports a write is a plausible
+// defect, and for a while nothing here would have noticed.
 //
-// Three of those survived: the ones dropping ATTRIBUTES+SIZE,
-// LAST_WRITE+CREATION and CREATION+SECURITY. The mutants dropping FILE_NAME and
-// DIR_NAME were caught, which says exactly what the suite covered -- files
-// appearing, disappearing and being renamed -- and what it did not: anything
-// that happens to a file that already exists and keeps its name.
+// **All six are now caught**, each confirmed by injecting it and watching this
+// module go red. The last two to fall were the pairs LAST_WRITE+CREATION and
+// CREATION+SECURITY, closed by the two `SetFileTime` tests below.
 //
-// That is a real gap rather than a curiosity. A watcher that reports creation
-// and deletion but silently never reports a write is a plausible defect, and
-// until now nothing here would have noticed.
+// What made them closable was measuring which filter bit actually reports which
+// operation -- arming a watch with a single bit at a time -- rather than
+// reasoning about it. The result, and it corrects two claims this comment used
+// to make:
 //
-// The tests below close the ATTRIBUTES+SIZE one. **They do not close the other
-// two**, and that is recorded rather than papered over: ATTRIBUTES and SIZE stay
-// present in both of those mutants, and ordinary file operations set the archive
-// bit or change the length, so those two filters mask the dropped ones. Catching
-// LAST_WRITE needs a timestamp-only change; catching SECURITY needs an operation
-// that provably touches nothing else, which a DACL edit turns out not to be. See
-// M15.4.
+//   SetFileTime last-write only   -> LAST_WRITE alone
+//   SetFileTime creation only     -> CREATION alone
+//   SetFileTime last-access only  -> LAST_ACCESS alone
+//   DACL edit (icacls)            -> SECURITY alone
+//   same-length rewrite           -> SIZE and LAST_WRITE (not ATTRIBUTES)
+//
+// The corrections: a same-length rewrite is *not* masked by the archive bit --
+// ATTRIBUTES does not fire for it at all, and what actually reports it is SIZE,
+// because `std::fs::write` truncates before writing, so the length does change
+// on the way through. And a DACL edit *is* reported by SECURITY alone, so the
+// permissions test below does isolate that category; the earlier note saying it
+// did not was simply wrong.
 
 #[test]
 fn writing_to_an_existing_file_is_reported_as_modified() {
@@ -1768,16 +1776,20 @@ fn the_default_buffer_is_the_documented_size() {
 
 #[test]
 fn rewriting_a_file_without_changing_its_length_is_reported_as_modified() {
-    // A rewrite that leaves the length alone, so this cannot be reported
-    // through FILE_NOTIFY_CHANGE_SIZE.
+    // A rewrite whose *net* length is unchanged.
     //
-    // It was written to isolate FILE_NOTIFY_CHANGE_LAST_WRITE and it does not:
-    // dropping that flag still leaves this green, because writing to a file
-    // also sets its archive bit and FILE_NOTIFY_CHANGE_ATTRIBUTES reports the
-    // change instead. Isolating last-write needs a change that touches only the
-    // timestamp -- a `SetFileTime` call rather than a write. Kept anyway,
-    // because a same-length rewrite being reported at all is worth asserting
-    // and nothing else here does it.
+    // It was written to isolate FILE_NOTIFY_CHANGE_LAST_WRITE and it does not,
+    // but not for the reason first recorded here. Measured, one filter bit at a
+    // time: this operation fires SIZE and LAST_WRITE, and does *not* fire
+    // ATTRIBUTES -- the archive bit was a red herring. What defeats the
+    // isolation is that `std::fs::write` truncates before writing, so the length
+    // really does change on the way through and SIZE reports it. Isolating
+    // last-write needs a change that touches only the timestamp, which
+    // `changing_only_a_files_last_write_time_is_reported_as_modified` below now
+    // does.
+    //
+    // Kept anyway, because a same-length rewrite being reported at all is worth
+    // asserting and nothing else here does it.
     let dir = TempDir::new("modified-same-size");
     let path = dir.path().join("fixed-size.txt");
     std::fs::write(&path, b"aaaa").expect("seed the file");
@@ -1797,18 +1809,120 @@ fn rewriting_a_file_without_changing_its_length_is_reported_as_modified() {
 }
 
 #[test]
+fn changing_only_a_files_last_write_time_is_reported_as_modified() {
+    // Isolates FILE_NOTIFY_CHANGE_LAST_WRITE, which nothing else here does: a
+    // `SetFileTime` touching only the last-write stamp changes no name, no
+    // length, and no attribute, so no other filter in `ALL_NOTIFY_FILTERS` can
+    // account for the notification. Measured before it was written -- armed one
+    // filter bit at a time, this operation fires LAST_WRITE and nothing else.
+    //
+    // The handle is opened for `FILE_WRITE_ATTRIBUTES` alone rather than for
+    // writing, deliberately: a write-access handle can set the archive bit when
+    // it closes, which would let ATTRIBUTES report this instead and quietly undo
+    // the isolation.
+    let dir = TempDir::new("modified-timestamp");
+    let path = dir.path().join("stamped.txt");
+    std::fs::write(&path, b"unchanged").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    set_last_write_time(&path);
+
+    collected.wait_until("a Modified for stamped.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "stamped.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn changing_only_a_files_creation_time_is_reported_as_modified() {
+    // Isolates FILE_NOTIFY_CHANGE_CREATION on the same principle. Worth having
+    // separately from the last-write case because the two surviving mutants drop
+    // *pairs* of adjacent flags -- LAST_WRITE+CREATION and CREATION+SECURITY --
+    // so a creation-only change is the one operation that fails under both.
+    let dir = TempDir::new("modified-creation");
+    let path = dir.path().join("born.txt");
+    std::fs::write(&path, b"unchanged").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    set_creation_time(&path);
+
+    collected.wait_until("a Modified for born.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "born.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+/// An arbitrary fixed instant, far enough in the past that it cannot equal the
+/// stamp already on a file this test just created.
+fn a_distinct_filetime() -> FILETIME {
+    // 100ns ticks since 1601, i.e. some time in 2013.
+    const TICKS: u64 = 130_000_000_000_000_000;
+    FILETIME {
+        dwLowDateTime: (TICKS & 0xFFFF_FFFF) as u32,
+        dwHighDateTime: (TICKS >> 32) as u32,
+    }
+}
+
+/// Open for `FILE_WRITE_ATTRIBUTES` only -- see the tests above for why the
+/// narrower access matters.
+fn open_for_timestamps(path: &Path) -> std::fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .open(path)
+        .expect("open the file for its timestamps")
+}
+
+fn set_last_write_time(path: &Path) {
+    let file = open_for_timestamps(path);
+    let stamp = a_distinct_filetime();
+    // SAFETY: `file` is live for the call, and the two null pointers are the
+    // documented way to leave creation and last-access untouched.
+    let ok = unsafe {
+        SetFileTime(
+            file.as_raw_handle() as HANDLE,
+            std::ptr::null(),
+            std::ptr::null(),
+            &stamp,
+        )
+    };
+    assert!(ok != 0, "SetFileTime(last write) failed");
+}
+
+fn set_creation_time(path: &Path) {
+    let file = open_for_timestamps(path);
+    let stamp = a_distinct_filetime();
+    // SAFETY: as above, leaving last-access and last-write untouched.
+    let ok = unsafe {
+        SetFileTime(
+            file.as_raw_handle() as HANDLE,
+            &stamp,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    assert!(ok != 0, "SetFileTime(creation) failed");
+}
+
+#[test]
 fn changing_a_files_permissions_is_reported_as_modified() {
     // A DACL edit, which is a change no other test here makes.
     //
-    // It was written to isolate FILE_NOTIFY_CHANGE_SECURITY and it does not:
-    // dropping that flag leaves this green, so the notification is arriving
-    // through one of the filters that remain. Which one is not established --
-    // the assumption that a DACL edit touches nothing else is what this
-    // disproves, and guessing a replacement would repeat the error.
-    //
-    // Kept anyway: "a permission change is reported to a watcher" is a
-    // user-visible behaviour worth asserting on its own terms, whatever filter
-    // delivers it.
+    // This **does** isolate FILE_NOTIFY_CHANGE_SECURITY, and an earlier note
+    // here claiming otherwise was wrong. Measured one filter bit at a time, a
+    // DACL edit fires SECURITY and nothing else; injecting the mutant that drops
+    // SECURITY turns this test red. Whatever the earlier check did, it was not
+    // measuring this.
     //
     // `icacls` rather than a Win32 call, because the point is to make a real
     // security-descriptor change and observe that the watch reports it, not to

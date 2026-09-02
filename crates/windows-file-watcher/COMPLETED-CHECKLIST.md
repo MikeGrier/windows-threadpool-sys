@@ -814,3 +814,47 @@ excluding the NUL (needing room for it) while a too-small buffer returns the len
 was confirmed rather than argued -- an `assert_ne!` probe never fired across the whole suite, including
 the 508-516 walk that straddles the buffer size exactly. The reasoning is now a comment at the
 comparison, so the next sweep does not re-litigate it.
+## Moved 2026-09-01 -- M15.4: isolating the last notification-filter categories
+
+### <a id="m154"></a>M15.4 -- Isolate the last two notification-filter categories, or record that they cannot be isolated from outside. *(completed 2026-09-01 20:35:00 -04:00)*
+
+**They can be isolated, and the item's reasons for thinking otherwise were both wrong.** The item did the
+right thing in naming the measurement it needed -- arm a watch with a single filter bit at a time and see
+which fires -- and doing that measurement overturned its own premises.
+
+| operation | which bit reported it |
+|---|---|
+| `SetFileTime` last-write only | **LAST_WRITE alone** |
+| `SetFileTime` creation only | **CREATION alone** |
+| `SetFileTime` last-access only | LAST_ACCESS alone |
+| DACL edit (`icacls`) | **SECURITY alone** |
+| same-length rewrite | SIZE and LAST_WRITE -- **not** ATTRIBUTES |
+
+**Correction 1: the archive bit was a red herring.** The item held that a same-length rewrite is masked
+because it sets the archive bit and ATTRIBUTES reports it. ATTRIBUTES does not fire for that operation at
+all. What actually reports it is SIZE, because `std::fs::write` truncates before writing, so the length
+genuinely does change on the way through even though the net length is the same.
+
+**Correction 2: the DACL test already worked.** The item held that a DACL edit is reported through "some
+filter this exercise did not identify" with SECURITY dropped. A DACL edit fires SECURITY and nothing else,
+and injecting the SECURITY-dropping mutant turns `changing_a_files_permissions_is_reported_as_modified`
+red. That mutant was already closed; the record said otherwise because the earlier check was not
+measuring what it claimed.
+
+**What was added.** Two tests using `SetFileTime`, one touching only the last-write stamp and one only the
+creation stamp. The handle is opened for `FILE_WRITE_ATTRIBUTES` **alone**, not for writing, because a
+write-access handle can set the archive bit on close and would quietly undo the isolation. The
+creation-time test is the interesting one: the surviving mutants drop *adjacent pairs*
+(LAST_WRITE+CREATION and CREATION+SECURITY), so a creation-only change is the single operation that fails
+under both.
+
+**Result: all six flag-pair mutants in `ALL_NOTIFY_FILTERS` are now caught**, each confirmed by injecting
+it and watching the module go red -- including the four the item had assumed were already covered, which
+had never been verified individually.
+
+**A harness lesson, since the first probe produced two confidently wrong tables.** Reusing one directory
+handle across probes makes every read complete instantly against change records buffered from earlier
+operations -- the first run reported nothing firing, the second reported everything firing. Both were
+harness artifacts. The fix is a fresh handle per probe plus decoding the returned records and matching by
+file name, and a built-in sanity check (a known operation under a known bit) so a broken harness announces
+itself instead of producing a plausible table.
