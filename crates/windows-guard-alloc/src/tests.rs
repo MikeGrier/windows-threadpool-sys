@@ -445,8 +445,14 @@ fn a_seed_too_large_for_a_u64_is_refused_rather_than_wrapped() {
     // `checked_mul`/`checked_add` are what make this a refusal. Wrapping would
     // accept a value and then use a *different* one, which is the worst of the
     // three outcomes: reproducible-looking and wrong.
-    assert_eq!(super::parse_seed(&units("18446744073709551615")), Some(u64::MAX));
+    assert_eq!(
+        super::parse_seed(&units("18446744073709551615")),
+        Some(u64::MAX)
+    );
     assert_eq!(super::parse_seed(&units("18446744073709551616")), None);
-    assert_eq!(super::parse_seed(&units("0xFFFFFFFFFFFFFFFF")), Some(u64::MAX));
+    assert_eq!(
+        super::parse_seed(&units("0xFFFFFFFFFFFFFFFF")),
+        Some(u64::MAX)
+    );
     assert_eq!(super::parse_seed(&units("0x1FFFFFFFFFFFFFFFF")), None);
 }
