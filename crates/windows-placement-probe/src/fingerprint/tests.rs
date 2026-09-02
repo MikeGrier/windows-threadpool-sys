@@ -597,7 +597,7 @@ mod multi_group_conversion {
         Domain, DomainKind, Processor, ProcessorId, ProcessorSet, Topology,
     };
 
-    use crate::fingerprint::{MissingPlacement, places_from_topology};
+    use crate::fingerprint::{Fingerprint, MissingPlacement, places_from_topology};
 
     /// One processor per core, four cores per group, two groups -- with the
     /// numbers overlapping, which is how Windows really presents it.
@@ -992,5 +992,85 @@ mod multi_group_conversion {
             places_from_topology(&bare_processors(2)).expect("no cache level divides this machine");
 
         assert!(places.iter().all(|place| place.cache_domain.is_none()));
+    }
+
+    #[test]
+    fn the_processor_count_is_every_online_processor_not_every_cored_one() {
+        // The defect, and it is one this crate's own change created. The count
+        // was summed over core-domain membership, which agreed with the field's
+        // documented meaning only while every processor was guaranteed to sit in
+        // a core domain. `places_from_topology` now explicitly accepts a
+        // topology that names no cores and places every online processor -- so
+        // the banner said `0p/0c` for a machine the measurement was about to use
+        // four processors on.
+        //
+        // The two must be read off the same thing. `cores` staying zero is not
+        // the same bug: the topology genuinely named no cores, and reporting
+        // that is the honest answer rather than an invented one.
+        let topology = bare_processors(4);
+        let places = places_from_topology(&topology).expect("no core domain is a legal shape");
+        let fingerprint = Fingerprint::from_topology(&topology);
+
+        assert_eq!(
+            fingerprint.processors, 4,
+            "a processor no core mentions is still a processor"
+        );
+        assert_eq!(
+            fingerprint.processors,
+            places.len(),
+            "the summary must count what the measurement will actually use"
+        );
+        assert_eq!(fingerprint.cores, 0, "no core domain was reported");
+    }
+
+    #[test]
+    fn the_processor_count_excludes_offline_processors() {
+        // The same rule from the other side: `places_from_topology` filters on
+        // `online`, so counting every entry in `topology.processors` would swing
+        // the disagreement the other way and overstate the machine.
+        let mut topology = bare_processors(4);
+        topology.processors[2].online = false;
+
+        let places = places_from_topology(&topology).expect("no core domain is a legal shape");
+        let fingerprint = Fingerprint::from_topology(&topology);
+
+        assert_eq!(
+            fingerprint.processors, 3,
+            "an offline slot is not a processor"
+        );
+        assert_eq!(fingerprint.processors, places.len());
+    }
+    #[test]
+    fn a_bare_topology_renders_its_processors_but_claims_no_numa_nodes() {
+        // Pins the whole bare-machine render, because fixing the processor count
+        // changed two things at once and both should be deliberate.
+        //
+        // `L-[4]` improved silently: the unpartitioned branch fills the cache
+        // list with the processor count, so it used to read `L-[0]`.
+        //
+        // `numa[]` is the deliberate asymmetry. Every placement for this
+        // topology reports node 0, so the node list no longer sums to the
+        // processor count -- but `L-` marks the cache absence and nothing marks
+        // a NUMA one, so rendering `numa[4]` would be indistinguishable from a
+        // host that really did report one node of four, and the more useful fact
+        // would be lost. See the field docs and PT-6.2.
+        let fingerprint = Fingerprint::from_topology(&bare_processors(4));
+
+        // The `!!SYNTHETIC!!` prefix is load-bearing rather than noise: a
+        // hand-built topology must not render a string a real host could also
+        // produce, so it is asserted here with everything else.
+        assert_eq!(
+            fingerprint.to_string(),
+            format!(
+                "!!SYNTHETIC!! {} 4p/0c smt- L-[4] ec[] numa[]",
+                std::env::consts::ARCH
+            )
+        );
+        assert!(
+            fingerprint.numa_node_sizes.iter().sum::<usize>() < fingerprint.processors,
+            "the node list is what the topology reported, not a partition of the \
+             processors; this asymmetry is documented, so a future change that \
+             removes it should fail here and be made on purpose"
+        );
     }
 }

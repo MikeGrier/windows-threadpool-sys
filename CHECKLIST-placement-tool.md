@@ -522,6 +522,24 @@ and numbered when that has happened.
   is what a collector needing equivalence should read. Raised by review 5073245942 on pull request
   #56.
 
+- [ ] **PT-6.2** -- **Give the NUMA list an absence marker, so an unreported node set is not read as
+  one node.** [fingerprint.rs](crates/windows-placement-probe/src/fingerprint.rs) renders
+  `numa_node_sizes` as the nodes the topology *reported*, so a host naming no memory domains renders
+  `numa[]` while every processor is still counted and every placement still reports node `0` -- the
+  documented single-node default. The node list therefore does not sum to `processors` in that one
+  case.
+  The asymmetry with the cache list is deliberate, not an oversight: `cache_domain_sizes` fills itself
+  with the processor count when no level partitions the host, but it can afford to, because it renders
+  `L-` for "no partitioning level" and so `L-[16]` cannot be mistaken for a real single-domain level.
+  The NUMA list has no such marker, so `numa[16]` would be indistinguishable from a host that genuinely
+  reported one node of 16, and the more useful fact -- that the machine said nothing about NUMA --
+  would be lost.
+  The behaviour is documented on the field and pinned by
+  `a_bare_topology_renders_its_processors_but_claims_no_numa_nodes`, so nothing is currently wrong;
+  this item is the stronger fix. A marker is a serialized-field change and therefore a schema bump,
+  so like PT-6.1 it is **deliberately gated on some other reason to bump the schema**. Found while
+  fixing the processor count raised by review on pull request #56.
+
 **Not gated on the release, unlike the rest of this file.** The work is an extension of the affinity
 measurement, which today lives in [crates/windows-platform-probes](crates/windows-platform-probes) and
 moves wholesale under PT-2.1. Build it there now; it travels with everything else.

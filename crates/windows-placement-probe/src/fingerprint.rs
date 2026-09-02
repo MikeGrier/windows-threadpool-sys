@@ -277,6 +277,23 @@ pub struct Fingerprint {
     /// `(efficiency class, processor count)`, ascending by class.
     pub efficiency_classes: Vec<(u8, usize)>,
     /// Processors per NUMA node, ascending.
+    ///
+    /// The nodes the topology **reported**, so this does not necessarily sum to
+    /// [`processors`](Self::processors): a topology naming no memory domains
+    /// leaves this empty, while every processor is still counted and every
+    /// placement still reports node `0` -- the documented single-node default
+    /// for exactly that case.
+    ///
+    /// Empty is deliberately not rendered as one node covering the machine, even
+    /// though [`cache_domain_sizes`](Self::cache_domain_sizes) does exactly that
+    /// when no level partitions the host. The difference is that the cache field
+    /// has somewhere to put the absence -- it renders `L-` for "no partitioning
+    /// level", so `L-[16]` cannot be mistaken for a real single-domain level.
+    /// The NUMA list has no such marker, so `numa[16]` would be
+    /// indistinguishable from a host that genuinely reported one node of 16, and
+    /// the more useful fact -- that the machine said nothing about NUMA -- would
+    /// be lost. Adding that marker is a serialized-field change and so a schema
+    /// bump; it is tracked as `PT-6.2` rather than done here.
     pub numa_node_sizes: Vec<usize>,
     /// Where the topology behind this fingerprint came from.
     ///
@@ -328,7 +345,25 @@ impl Fingerprint {
     #[must_use]
     pub fn from_topology(topology: &Topology) -> Self {
         let cores: Vec<_> = topology.cores().collect();
-        let processors: usize = cores.iter().map(|core| core.processors.len()).sum();
+        // Read off the processor list, not off core-domain membership, and with
+        // the same `online` filter `places_from_topology` applies -- so the
+        // banner counts exactly what the measurement will use.
+        //
+        // Summing core membership agreed with this only while every processor
+        // was guaranteed to sit in a core domain, which this module stopped
+        // guaranteeing when it began accepting a topology that names no cores.
+        // The banner then read `0p` for a machine about to be measured on four
+        // processors.
+        //
+        // `cores` below is left counting core domains: zero there is the honest
+        // report that the topology named none, not an invented value. The two
+        // fields answer different questions and only one of them had a source
+        // that could disagree with the measurement.
+        let processors = topology
+            .processors
+            .iter()
+            .filter(|processor| processor.online)
+            .count();
         let smt = cores.iter().any(|core| core.processors.len() > 1);
 
         let mut efficiency_classes: Vec<(u8, usize)> = Vec::new();

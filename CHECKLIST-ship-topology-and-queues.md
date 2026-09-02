@@ -578,3 +578,31 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   `mod tests`, so the accidental filter matched all of them, and all fourteen recorded baselines
   report "0 filtered out". The defect was latent, and would have appeared on the first crate laid
   out differently.
+
+## M12: PR #56 seventh review round
+
+- [x] **SH-12.1** -- **The banner undercounted the machine it was about to measure.**
+  `Fingerprint::processors` is documented as the logical-processor count but was summed over
+  core-domain membership, which agreed with that meaning only while every processor was guaranteed to
+  sit in a core domain. SH-11.1 stopped guaranteeing it: `places_from_topology` now explicitly accepts
+  a topology naming no cores and places every online processor. The banner consequently read
+  `0p/0c` for a machine the measurement was about to use four processors on -- a defect this branch
+  created rather than inherited.
+  The count is now read off `topology.processors` with the same `online` filter the placement applies,
+  so the summary counts exactly what the measurement will use. `cores` deliberately still counts core
+  domains: zero there is the honest report that the topology named none.
+  Sabotage-verified. Two new tests pin both directions -- an uncored processor is still counted, an
+  offline slot is not -- and each asserts equality against `places_from_topology`'s own output rather
+  than a literal, so the two cannot drift apart again.
+
+- [x] **SH-12.2** -- **Two consequences of that fix, found by sweeping it rather than reported.**
+  `cache_domain_sizes` fills itself with the processor count when no cache level partitions the host,
+  so the bare-machine render silently improved from `L-[0]` to `L-[4]`.
+  `numa_node_sizes` did not, and now does not sum to `processors` in that one case: it reports the
+  nodes the topology *named*, and a bare topology names none, while every placement still reports the
+  documented node-`0` default. Keeping it that way is deliberate -- the cache list can afford to fill
+  itself because `L-` marks the absence, and `numa[4]` would be indistinguishable from a host that
+  genuinely reported one node of four. The behaviour is now documented on the field and pinned by a
+  test that asserts the whole render, including the `!!SYNTHETIC!!` provenance marker. The stronger
+  fix needs a marker, which is a serialized field and so a schema bump, tracked as
+  [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) `PT-6.2`.
