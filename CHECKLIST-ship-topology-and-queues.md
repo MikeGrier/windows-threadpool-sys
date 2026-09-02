@@ -18,21 +18,31 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 |---|---|---|
 | M1 settle the public surface | **done, archived** | -- |
 | M2 repair the release plumbing | 1 of 5 open | only SH-2.3, which needs the merge commit |
-| M3 land the branch | 4 of 5 open | **SH-3.1.1: review the diff and take the PR out of draft** |
+| M3 land the branch | 4 of 5 open | now gated on M16; SH-3.1.1 runs after the model lands |
 | M4 release | open | M3 |
 | M5 verify from outside | open | M4 |
 | M6 long-running validation | open | gates SH-4.3, so it gates the queue crate's publication |
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
-| M16 tenth review round | 4 of 10 open | 6 fixed; SH-16.5/16.8/16.9/16.10 wait on a design session |
+| M16 tenth review round | 4 of 10 open | **gates the merge**; 6 fixed, 4 wait on the design session |
 | M-inf parked | ungated | not scheduled, deliberately |
 
-**The critical path is SH-3.1.1 -> SH-3.4 -> M4, and none of it is blocked on M14 or M15.** SH-14.1
-ships disclosed rather than fixed ([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36)) and
-the disclosure -- which was the actual release blocker -- landed at SH-15.8. So M14 and M15 conclude
-after 0.1.0 without holding it up, provided the pull request **says** that is deliberate; SH-3.1.1
-owns that. What *does* block the queue crate specifically is M6.
+**The critical path is M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4.** M14 and M15 do not
+block it: SH-14.1 ships disclosed rather than fixed
+([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36)) and the disclosure -- which was the
+actual release blocker -- landed at SH-15.8, so both conclude after 0.1.0 provided the pull request
+**says** that is deliberate. SH-3.1.1 owns saying it.
+
+**M16 is different, and this was decided rather than drifted into.** Its four gated items
+(SH-16.5, SH-16.8, SH-16.9, SH-16.10) are one piece of work -- replacing the locality model,
+consuming CPU Sets, and collapsing three restatements of one rule -- and the decision is that
+**PR #56 does not merge until it lands**. They were briefly listed here as non-blocking; that is
+corrected. It is gated in turn on
+[DESIGN-SESSION-2026-09-02-cache-locality-model.md](design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md),
+which has open questions, so **design concludes before implementation starts**.
+
+What blocks the queue crate specifically, and separately, is M6.
 
 ## Before checking anything off in this file
 
@@ -204,12 +214,18 @@ opened on 2026-08-31, nine review rounds arrived while it sat open, and the merg
 happened. Review rounds are **reactive** -- they cannot be scheduled after SH-3.4, because merging
 ends the pull request they are rounds *of*.
 
-**Which of those rounds gate the merge: none of them, and that is a decision rather than an
-accident.** SH-14.1 is a real defect that ships **disclosed rather than fixed**
+**Which of those rounds gate the merge: M16 does, M14 and M15 do not.** SH-14.1 is a real defect
+that ships **disclosed rather than fixed**
 ([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36), delivered by SH-15.8), and everything
 open in M15 is follow-on work on the fix. What *did* gate the release was the disclosure, and that
 landed. So SH-3.4 may proceed with M14 and M15 still open -- but a reviewer must be told that is
-deliberate, which is SH-3.1's job below.
+deliberate, which is SH-3.1.1's job below.
+
+**M16 is the exception, by decision.** Its locality-model work (SH-16.5, SH-16.8, SH-16.9,
+SH-16.10) is a merge blocker: the model it replaces is the one `windows-topology-sys` 0.2.0 would
+publish, and shipping a public surface that is already known to be the wrong shape is what the
+milestone exists to avoid. So SH-3.4 waits on it, and the design session it depends on must
+conclude first.
 
 - [x] **SH-3.1** -- ~~Open the pull request~~ **-- already open since 2026-08-31 as a draft.** Checked
   off as *superseded by events*, not as done: the item asked for something that had already happened
@@ -227,6 +243,10 @@ deliberate, which is SH-3.1's job below.
   **The description must state what is knowingly unfinished**, so a reviewer does not read open
   milestones as oversight: SH-14.1 ships disclosed per D-36, M15 is follow-on work on its fix, and
   `permit_mpsc` is an experimental non-default module exempt from the crate's semver promise.
+  **Gated on M16's locality-model work**, which is in scope for this PR by decision. The description
+  cannot be written before then without being wrong twice over: it would omit the largest change in
+  the branch, and it would list the locality model among the deferred things when it is not deferred.
+  So this item now runs *after* SH-16.5/16.8/16.9/16.10, not before them.
 
 - [ ] **SH-3.2** -- Run the full gate on the merge result, not merely on the branch tip: `cargo fmt
   --check`, `cargo clippy --all-targets`, `cargo check --all-targets` in **both** debug and release,
@@ -368,11 +388,18 @@ that arrives while a pull request is open, so their position at the end of this 
 order and not a schedule. Reading it as a schedule would put the review of a pull request after the
 merge that closes it.
 
-**None of the open items below gates SH-3.4**, which is a decision rather than an oversight: the
-defect they concern ships **disclosed rather than fixed**
+**M14 and M15 do not gate SH-3.4; M16 does.** For M14 and M15 that is a decision rather than an
+oversight: the defect they concern ships **disclosed rather than fixed**
 ([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36)), and the disclosure -- which *was* the
 release blocker -- landed at SH-15.8. SH-3.1.1 is responsible for saying so in the pull request
-description, so a reviewer does not mistake open milestones for unfinished business.
+description, so a reviewer does not mistake those open milestones for unfinished business.
+
+**M16's locality-model work is a merge blocker**, by decision rather than by drift -- an earlier
+revision of this file listed it alongside the others as non-blocking, and that is corrected here.
+The reason it differs: M14 and M15 concern a defect in an *implementation*, which can ship
+disclosed, whereas M16 concerns the *shape of the public model* `windows-topology-sys` 0.2.0 would
+publish. A disclosed implementation defect can be fixed in 0.2.1; a published model cannot be
+reshaped without another break.
 
 ## M14: PR #56 ninth review round -- an ABA hole the wrap test would not have caught
 

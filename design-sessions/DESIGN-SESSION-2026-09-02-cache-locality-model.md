@@ -10,6 +10,12 @@ options section further down predates that direction and is kept as a record of 
 considered -- Options 1 and 2 are now insufficient on their own, because both preserve the
 `Option`-shaped absence the direction rejects.
 
+**This session is on PR #56's critical path.** The work it gates is in scope for that PR by
+decision -- #56 does not merge until the new model lands -- because the model being replaced is
+the one `windows-topology-sys` 0.2.0 would publish, and a published model cannot be reshaped
+without another break. So this session concludes before implementation starts, and
+implementation lands before the PR is described or promoted.
+
 Prompted during PR #56's tenth review round while fixing
 [SH-16.5](../CHECKLIST-ship-topology-and-queues.md). That item is **blocked on this
 session** and must not be implemented before it concludes: the primitive SH-16.5 was about
