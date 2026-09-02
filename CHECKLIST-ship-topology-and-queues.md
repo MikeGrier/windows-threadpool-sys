@@ -12,7 +12,7 @@ arrived during it, and M15 carries the largest open question in the file.
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | M1 settle the public surface | **done, archived** | -- |
-| M2 repair the release plumbing | 2 of 5 open | SH-2.2 is blocked on SH-3.4; SH-2.3 needs the merge commit; SH-2.5 needs a decision |
+| M2 repair the release plumbing | 1 of 5 open | only SH-2.3, which needs the merge commit |
 | M3 land the branch | open | the pull request is still a draft |
 | M4 release | open | M3 |
 | M5 verify from outside | open | M4 |
@@ -91,7 +91,7 @@ order is the authority and the numbers are only names.
   `windows-placement-probe` is today. Verified by removing the trigger again and watching the check
   fail with the crate named.
 
-- [ ] **SH-2.2** -- Update the three `windows-topology-sys = "0.1.0"` pins when 0.2.0 ships.
+- [x] **SH-2.2** -- Update the three `windows-topology-sys = "0.1.0"` pins when 0.2.0 ships.
   **RE-PLANNED: this item asked for a decision whose premise was false, and the decision it demanded
   does not arise.** It said `windows-ioring-sys` is published against the old topology, "so the
   breaking bump obliges updating that dependency and releasing `windows-ioring-sys` too", and that
@@ -104,52 +104,59 @@ order is the authority and the numbers are only names.
   `windows-threadpool-sys` and `windows-overlapped-io-sys`, and no topology crate. There is no
   resolution conflict to avoid and **no ioring release is obliged**, so the ordering question this
   item existed to settle is empty.
-  **BLOCKED, and the blocker is real rather than a preference: the pins cannot be updated until
-  topology 0.2.0 actually exists.** A `path` dependency carrying a `version` must be satisfied by the
-  version in the path crate's own manifest, and topology's still reads `0.1.0`. Verified rather than
-  assumed -- setting one pin to `"0.2.0"` today fails the whole workspace's resolution with
-  `error: failed to select a version for the requirement windows-topology-sys = "^0.2.0"`, naming the
-  local directory as the location searched. So this cannot be done early even as a tidy-up.
-  **GATED BY SH-3.4**, which is where release-please raises the release PR that bumps topology's
-  manifest. Nothing here can proceed before that lands.
-  **Two of the three pins no longer exist, as of 2026-09-02.** `windows-placement-probe` and
-  `windows-platform-probes` are now decided never to be published to a registry, so their workspace
-  dependencies are **path-only with no `version` at all** -- eight pins deleted between them, not
-  merely the two topology ones. A pin that names a version nobody consults, while still being able to
-  break the workspace, is pure liability. See those crates' DESIGN-NOTES and `PT-5.3` (reversed).
-  **What is left is one pin, and it is release-please's.** `release-please-config.json` enables the
-  `cargo-workspace` plugin, whose job is exactly this -- rewriting intra-workspace version
-  requirements when a member is bumped -- and `windows-ioring-sys` is in its `packages` map. The
-  other two crates never were, which is precisely why their pins were the dangerous ones.
-  **Verify rather than assume the plugin handles it**: ioring's topology pin is a `[dev-dependencies]`
-  entry, and a tool that only rewrote `[dependencies]` would skip it silently. Measured on
-  2026-09-02, this is the *only* remaining pin that breaks the workspace when topology bumps -- with
-  the other two removed, `cargo metadata` against a bumped topology fails naming `windows-ioring-sys`
-  and nothing else. So if the release PR does update it, this item is empty; if it does not, this
-  item is a one-line fix that must land in that PR.
-  **One consequence to watch for, not to pre-empt.** The `cargo-workspace` plugin also *bumps*
-  dependents of a bumped package. If it treats the dev-dependency as grounds to bump
+  **RESOLVED 2026-09-02: there are no pins left to update.** All three were deleted rather than
+  maintained, once it turned out none of them was doing anything a reader would want:
+  - `windows-placement-probe` and `windows-platform-probes` -- decided never to be published to a
+    registry, so **every** workspace dependency is path-only now. Eight version fields deleted
+    between them, not merely the two topology ones. See those crates' DESIGN-NOTES and `PT-5.3`
+    (reversed).
+  - `windows-ioring-sys` -- a `[dev-dependencies]` entry, and cargo omits a versionless
+    dev-dependency from the published manifest entirely. Deleted as SH-2.5, which also records why
+    the pin was never checked by anything.
+  **The whole hazard class is gone, verified rather than argued.** Bumping topology to 0.2.0 now
+  leaves `cargo metadata` resolving cleanly; before today it failed in three places, and
+  release-please could only have fixed one of them.
+  **The gate on SH-3.4 is therefore lifted** -- there is nothing here that had to wait for topology's
+  manifest to move, because nothing here needs a version at all.
+  **One consequence to watch for, not to pre-empt.** The `cargo-workspace` plugin bumps dependents of
+  a bumped package. If it treats the (now versionless) dev-dependency as grounds to bump
   `windows-ioring-sys`, an ioring release will happen -- not because one is obliged (it is not; see
   above) but because the tooling produced one. That is acceptable if it occurs; it is only a problem
   if it is mistaken for evidence that the obligation existed after all.
-  **The one genuine hazard the original item was reaching for is real but different**, and it is
-  SH-2.5 rather than this: ioring's examples are developed against the `path` topology and would be
-  verified against the *crates.io* one at its next publish.
 
-- [ ] **SH-2.5** -- **Nothing checks that `windows-ioring-sys`'s examples still compile against the
-  topology version its manifest pins.** Inside this workspace the `path` entry always wins, so the
-  examples are developed against whatever topology is on the branch; at `cargo publish` the
-  verification build resolves the `version` requirement from crates.io instead. The two have been
-  free to diverge and nothing would say so until a publish failed.
-  **Currently dormant, and the check is what makes that a fact rather than a hope**: the examples use
-  only `Topology`, `Domain`, `DomainKind`, `ProcessorSet` and `discover`, all of which pre-date
-  0.2.0, and none mentions `provenance`. So they would still build against `^0.1.0` today. That is
-  luck holding, not a guarantee -- the moment an example uses anything 0.2.0 added, the failure
-  appears at publish time, which is the worst moment to find it.
-  Decide between the two honest fixes rather than leaving it implicit: either keep the pin current so
-  the two never diverge (and say in the manifest that this is why), or add a CI job that builds
-  ioring's examples against the *published* topology rather than the path one. The first is cheaper;
-  the second is what actually enforces it.
+- [x] **SH-2.5** -- **Resolved by deleting the pin, and neither of the two fixes this item proposed
+  was needed -- because its premise was wrong.** It asserted that "at `cargo publish` the
+  verification build resolves the `version` requirement from crates.io", so a divergence would
+  surface as a failed publish. **Publish verification does not build examples or tests.** Measured by
+  packaging this crate: the verification step compiled the library and its real dependencies and
+  nothing else -- not even `serde_json`, which is a versioned dev-dependency the examples need. So
+  the pin was never exercised at the one moment it was supposed to matter, and no publish could ever
+  have failed for this reason.
+  **What the pin did do was break the workspace**, which is the opposite of the hazard as filed. See
+  SH-2.2: cargo enforces `path` + `version` agreement at every build regardless of dependency kind,
+  so this pin against a bumped topology failed `cargo metadata` for every crate here.
+  **The fix is to delete it, and cargo cooperates**: a versionless dev-dependency is omitted from the
+  published manifest entirely -- verified by packaging with the version removed and reading the
+  result, where `windows-topology-sys` appears nowhere. Full `cargo package` with verification then
+  succeeds. So there is no crates.io requirement left to diverge *from*, and the residual hazard the
+  item was really about disappears rather than being managed.
+  What is given up is that the examples are not buildable from the packaged tarball, which they were
+  only ever incidentally: publish never checked them, and anyone reading an example does it from a
+  checkout, where they build as before.
+  **This was the last version pin in the workspace that a topology bump could break.** Verified: with
+  it gone, `cargo metadata` against a topology bumped to 0.2.0 resolves cleanly.
+  **The workspace now holds an invariant worth naming, because it is what makes the hazard stay
+  gone:** every crate that still carries a versioned `path` dependency is one release-please manages
+  -- `windows-file-enumeration-sys`, `windows-file-watcher`, its example harness,
+  `windows-ioring-sys`, `windows-namespace-request-sys`, `windows-thread-ambient-sys` and
+  `windows-threadpool-sys`, thirteen pins between them. Those pins are genuinely needed (each is a
+  published crate depending on a published crate) *and* the `cargo-workspace` plugin exists to
+  rewrite exactly them. Every pin the plugin could **not** see is now gone.
+  A pin outside the plugin's `packages` map is the shape that breaks `main`, so if one is ever added,
+  it should be questioned rather than maintained. Checking that mechanically would suit
+  [tools/check-publishable.ps1](tools/check-publishable.ps1), which already reads both the
+  release-please config and the manifests -- **not done here**, since it adds CI surface and this
+  item was scoped to the pin.
 
 - [x] **SH-2.4** -- Clear the **eight rustdoc warnings** in `windows-waitable-queues` before it is
   published: an unresolved link to `MIN_CAPACITY`, six links from public documentation to private
@@ -199,19 +206,14 @@ order is the authority and the numbers are only names.
   **0.2.0** for the topology crate. If it proposes 0.1.1, the breaking-change marker did not take and
   the version would silently understate the break -- fix the marker rather than editing the version by
   hand, or the next break will do the same thing.
-  **GATES SH-2.2**, which cannot run before this: the three `windows-topology-sys = "0.1.0"` pins
-  cannot be raised while topology's own manifest still reads `0.1.0` -- a `path` dependency's
-  `version` must be satisfied by the path crate, and attempting it fails the workspace's resolution
-  outright.
-  **This PR must not be merged until `windows-ioring-sys`'s topology pin reads 0.2.0 in it.** Not a
-  review preference -- a `^0.1.0` requirement cannot be satisfied by a path crate at 0.2.0, so
-  merging without it lands a `main` where `cargo metadata` fails outright and every job on every
-  branch goes red. Measured, not predicted.
-  The `cargo-workspace` plugin should rewrite that requirement itself, but **verify it in the diff
-  rather than assuming**: it is a `[dev-dependencies]` entry, and a tool that only rewrote
-  `[dependencies]` would skip it without saying so. If the PR is missing it, add it to the PR.
-  It is now the **only** such pin: `windows-placement-probe` and `windows-platform-probes` had theirs
-  deleted entirely on 2026-09-02 when both were decided never to be published (SH-2.2).
+  **The gate this used to hold over SH-2.2 is lifted** -- that item is closed, having had nothing
+  left to do once the pins were deleted rather than maintained.
+  **No longer carries a pin hazard.** An earlier version of this item warned that the PR must not be
+  merged until `windows-ioring-sys`'s topology pin read 0.2.0, because a `^0.1.0` requirement against
+  a path crate at 0.2.0 fails resolution and would have landed a red `main`. That was true when
+  written and is now moot: **all three such pins were deleted on 2026-09-02** (SH-2.2, SH-2.5), and a
+  topology bump was re-verified to resolve cleanly with none of them present. Nothing in the release
+  PR needs checking beyond the version number itself.
 
 ## M4: release
 
