@@ -1,8 +1,10 @@
 # Design session: the cache-locality model
 
-**Status: OPEN. No decisions taken yet.** This file records the question, the evidence
-gathered while framing it, and the design space. It deliberately stops short of choosing,
-because the choice affects measurement output and the conclusions already drawn from it.
+**Status: OPEN, with direction settled.** The engineer has taken sides on both underlying
+questions (see "Direction taken" below); what remains is the concrete representation. The
+options section further down predates that direction and is kept as a record of what was
+considered -- Options 1 and 2 are now insufficient on their own, because both preserve the
+`Option`-shaped absence the direction rejects.
 
 Prompted during PR #56's tenth review round while fixing
 [SH-16.5](../CHECKLIST-ship-topology-and-queues.md). That item is **blocked on this
@@ -29,6 +31,119 @@ here:
 > caching. why not 1? 5? where are the write buffers modeled? i am not saying we have to
 > start over from scratch, but it is somewhat ironic that in a crate named "topology", we
 > have a network where we assume 3 members and only having 2 confuses it
+
+## Direction taken
+
+The engineer separated the subject into two questions and answered both, then gave a
+constraint on the representation. Recorded in their terms:
+
+**1. What model does the Windows API set represent?** Do we expose all the topological
+nuance that a real system, described through that API, would reveal -- "not every mechanical
+combination of representable values: a reasoned set of logical derived models that would be
+represented through the Win32 API set". So the target is completeness with respect to what
+Win32 can express about a real machine, not an arbitrary product of enum values.
+
+**2. What memory-hierarchy concepts might a system we encounter have, whether or not Win32
+exposes them?** These affect analysis regardless of API exposure, and the `-probe` crates
+exist partly to establish them by measurement.
+
+**3. The representation constraint, which is the operative decision.** Where a level of
+hierarchy may or may not be present, do **not** model it as a second-class `Option`, because
+that conflates two different facts: *Win32 did not provide data* and *the level was
+specifically found not to be present*. Instead choose a representation that is designed for
+the topology to **represent the observed connectivity**.
+
+This supersedes the framing further down that treated "collapse to one boundary" as the whole
+problem. The collapse is a symptom; the cause is that presence and observation are not
+modeled.
+
+### What this rules in and out
+
+- Out: `Option<u32>`, and equally `Option` plus a side boolean, as the way to say a level is
+  missing. Also out: the `CachePlacement` prototype from SH-16.5, whose `Unknown` arm merges
+  "not reported" with "reported, does not name this processor".
+- In: a representation where a sharing relation that was *observed not to exist* and one that
+  was *never observed* are different values, and where a measured relation can sit beside a
+  firmware-reported one.
+- Still open: the concrete shape. See "Proposed representation" below.
+
+## New evidence gathered after the direction was set
+
+**The principle is already in-house, written down, and applied inconsistently.**
+`MachineDescription::cpu_model` in `windows-placement-probe` records:
+
+> Suppression is recorded in `model_suppressed` rather than left to be inferred from absence:
+> a field withheld by the runner and a field the host would not answer are different facts,
+> and a collector that cannot tell them apart will eventually read one as the other.
+
+That is the engineer's point exactly, reached independently for a different field. It is
+solved there with `Option` plus a side boolean, which is the weaker form the direction above
+rules out -- but the *reasoning* is settled precedent in this repository, not a new claim.
+
+**Win32 is not fully consumed: CPU Sets is entirely absent.** The crate consumes seven
+`GetLogicalProcessorInformationEx` relations (`ProcessorCore`, `ProcessorPackage`,
+`ProcessorDie`, `ProcessorModule`, `Cache`, `NumaNode`, `Group`), which is essentially all of
+that API. But `GetSystemCpuSetInformation` / `SYSTEM_CPU_SET_INFORMATION` is not referenced
+anywhere in the workspace, and it is a **second, parallel topology model** Windows offers,
+carrying at least: `LastLevelCacheIndex` (Windows's own LLC grouping, which is a *different*
+answer from "outermost partitioning cache"), `SchedulingClass`, `AllocationTag`,
+`EfficiencyClass`, and per-CPU `Parked` / `Allocated` / `RealTime` state. Verify the exact
+field list against the SDK before relying on it. This is directly responsive to question 1:
+the answer today is **no**, there is a whole Win32 model unexposed.
+
+**Nothing currently infers a hierarchy level from measurement.** The engineer suspected the
+`-probe` crates might already do this and flagged uncertainty. Checked: they do not. The
+probes measure *cost per firmware-reported placement* (`core_affinity` times handoffs between
+pairs already classified from the topology), and the NUMA spikes infer *policy* -- first-touch
+versus creator affinity, per-volume versus per-file -- not structure. `Provenance` already has
+a `Measured` variant, but it qualifies a whole `Topology`, not an individual relation. So the
+capability question 2 describes is **new work, not a retrofit**, and the per-relation
+provenance it needs does not exist yet.
+
+**The "outermost partitioning cache" rule is stated three times, and two of the three
+disagree.** `Topology::outermost_partitioning_cache` requires more than one partition **and**
+pairwise disjointness. `Observation::outermost_partitioning_cache` in
+`windows-platform-probes` is `caches.iter().filter(|c| c.domains > 1).max_by_key(|c| c.level)`
+-- no disjointness check -- over a `CacheLevel` summary it builds itself, even though that
+crate does depend on `windows-topology-sys`. On a hand-built or deserialized topology with
+overlapping domains the two answer differently. `windows-placement-probe` restates it a third
+time by rebuilding the map from the partition list, which is SH-16.5. Tracked separately as
+SH-16.9.
+
+## Proposed representation, for reaction
+
+Offered as a starting shape, not a conclusion.
+
+Stop modeling a *ladder of levels with optional rungs* and model the *observed sharing
+relations* directly. A topology becomes a set of relations, each carrying:
+
+- **what is shared** -- cache at level N, module, die, package, memory domain;
+- **which processors share it** -- the `ProcessorSet` already used;
+- **how it was established** -- reported by a named Win32 source, measured by a named probe,
+  or determined absent.
+
+Presence then stops being an `Option`. A machine with no L3 has *no L3 relation in the set*,
+and that is an observation rather than a missing value; a machine whose firmware was not
+queried for L3 carries a *not-observed* record for it. The two are different members, not the
+same `None`.
+
+Connectivity queries follow from it: "at which relations do A and B share?" returns the
+observed set, and the difference between *they share nothing* (an empty answer over complete
+observations) and *we do not know* (incomplete observations) is representable rather than
+collapsed. `outermost_partitioning_cache` survives as one named projection over that set, for
+the scheduler question of "give me exactly one boundary to shard on", and is documented as a
+projection rather than as the model.
+
+Open sub-questions this raises:
+
+- Does provenance belong per-relation, or per-source with relations pointing at a source?
+  Per-relation is simpler to consume; per-source is honest about the fact that one Win32 call
+  produced many relations at once.
+- Should "determined absent" be a relation with an empty processor set, or a distinct record?
+  An empty set already means something else in this crate (`memory_domains` deliberately
+  keeps a processor-less memory domain, D-5), so overloading it looks like a trap.
+- Does `Topology`'s existing whole-object `Provenance` stay, become derived from the
+  per-relation provenances, or get superseded?
 
 ## What the code actually does, verified rather than assumed
 
@@ -140,9 +255,14 @@ stop assuming three members".
 
 ## Open questions for the session
 
-1. Is the single-boundary projection *right for the probe's purpose* and merely
-   under-documented, or is it wrong? A scheduler sharding work does want exactly one
-   boundary; a probe characterising a machine may not.
+**Settled by the direction above:** question 1 below (the projection is kept, but as a named
+projection over a connectivity model, not as the model); question 6 (the write-buffer note
+belongs with question 2's measured tier, since that is the only mechanism that could ever
+establish one).
+
+1. ~~Is the single-boundary projection right, or wrong?~~ **Settled: it survives as one
+   projection among others, and is documented as such.** A scheduler sharding work does want
+   exactly one boundary; the error was letting that answer be the model.
 2. If a row names its level, what happens to existing records and to D-28's conclusions?
    Are they re-derivable from what was recorded, or would they need re-measuring?
 3. Does the matrix hole in consequence B actually close under a per-level model, on the

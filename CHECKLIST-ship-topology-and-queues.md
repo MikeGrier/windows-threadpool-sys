@@ -25,7 +25,7 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
-| M16 tenth review round | 2 of 8 open | 6 fixed; SH-16.5 and SH-16.8 are blocked on a design session |
+| M16 tenth review round | 4 of 10 open | 6 fixed; SH-16.5/16.8/16.9/16.10 wait on a design session |
 | M-inf parked | ungated | not scheduled, deliberately |
 
 **The critical path is SH-3.1.1 -> SH-3.4 -> M4, and none of it is blocked on M14 or M15.** SH-14.1
@@ -813,6 +813,35 @@ predicted about a 222-commit branch.
   [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md) is attributed to hardware, but
   those sixteen processors do share one L3, so a per-level model would express it.
   Gated on the session above, which carries the design space and the open questions.
+  **Direction now settled** by the engineer: presence and observation must be modeled, not
+  collapsed into an `Option`. "Win32 did not report it" and "it was found not to be present" are
+  different facts, and the representation must be built for **observed connectivity** rather than
+  for a ladder of levels with optional rungs. That rules out the SH-16.5 prototype's `Unknown` arm,
+  which merges both. Shape still open.
+
+- [ ] **SH-16.9** -- **The "outermost partitioning cache" rule is stated three times, and two of the
+  three disagree.** `Topology::outermost_partitioning_cache` requires more than one partition **and**
+  pairwise disjointness. `Observation::outermost_partitioning_cache` in `windows-platform-probes` is
+  `caches.iter().filter(|c| c.domains > 1).max_by_key(|c| c.level)` -- **no disjointness check** --
+  computed over a `CacheLevel` summary that crate builds itself, even though it already depends on
+  `windows-topology-sys`. On a hand-built or deserialized topology with overlapping domains the two
+  crates give different answers to the same question. `windows-placement-probe` restates it a third
+  time by rebuilding the map from the partition list, which is SH-16.5.
+  A [CONTRACT INTEGRITY](.github/copilot-instructions.md) defect of the exact shape the rules name:
+  a rule re-encoded by a consumer rather than derived from the owner. Note the ordering -- fixing
+  this by pointing both consumers at today's method would have to be redone once SH-16.8 lands, so
+  either fix it now and accept the rework, or sequence it after the design session.
+
+- [ ] **SH-16.10** -- **`GetSystemCpuSetInformation` is not consumed anywhere, so a whole Win32
+  topology model is unexposed.** The crate consumes all seven `GetLogicalProcessorInformationEx`
+  relations, but `SYSTEM_CPU_SET_INFORMATION` is a *second, parallel* model carrying at least
+  `LastLevelCacheIndex` -- Windows's own LLC grouping, which is a **different answer** from
+  "outermost partitioning cache" and would be directly comparable against it -- plus
+  `SchedulingClass`, `AllocationTag`, `EfficiencyClass`, and per-processor `Parked` / `Allocated` /
+  `RealTime` state.
+  Raised by the engineer's question of whether we expose everything a real system would reveal
+  through the Win32 API set. Today the answer is **no**. Verify the field list against the SDK
+  before relying on it. Gated on SH-16.8, since what shape it lands in depends on the model.
 
 - [x] **SH-16.6** -- **The thread-stack NUMA spike's `deep_probe` measures the shallow end of its own
   filler, so the discrimination it exists to make is inert.** The stack grows down, so `filler[0]` is
