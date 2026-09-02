@@ -893,7 +893,7 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   right shape. Without this, every arm above is argued rather than demonstrated, and the fix that is
   adopted has no regression test that would go red if it were reverted.
 
-- [ ] **SH-15.8** -- **Disclose SH-14.1 publicly, and gate 0.1.0 on the disclosure rather than on the
+- [x] **SH-15.8** -- **Disclose SH-14.1 publicly, and gate 0.1.0 on the disclosure rather than on the
   fix.** **RELEASE BLOCKER.** The crate is days from its first publish with a known path to *silent
   data loss* -- a producer overwriting a live, unconsumed item -- documented nowhere a caller would
   see. That is not acceptable to ship in silence, and it is separable from deciding the fix: the

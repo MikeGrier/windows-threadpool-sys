@@ -75,6 +75,56 @@
 //! here has a single consumer, two of them have many *producers*, so a
 //! "there is room" signal has N waiters and is not the doorbell mirrored.
 //!
+//! # A known defect in `reserving_mpsc`, disclosed rather than fixed
+//!
+//! **[`reserving_mpsc`] can lose an item after 2^32 pushes, on every target --
+//! not only 32-bit ones.** Its claim position is a 32-bit half of a packed word
+//! by construction, so this reaches x86-64 and ARM64 exactly as it reaches
+//! i686. Read that sentence before the paragraph below, because the phrase
+//! "32-bit position" invites the opposite reading and this project has already
+//! had to correct that misreading once.
+//!
+//! **What happens.** A producer checks that there is room, is descheduled, and
+//! resumes after other producers have driven the position field through a
+//! complete wrap. Its claim then succeeds against a value that is numerically
+//! identical but a whole generation later, and it writes into a slot whose
+//! emptiness was decided long ago. If that slot now holds an item the consumer
+//! has not taken, the item is overwritten.
+//!
+//! **The failure is silent.** No error, no panic, no counter moves. The
+//! consumer receives a different item than the one that was sent, and nothing
+//! observable says so -- which is why this is documented here rather than left
+//! to a caller to discover, and why it cannot be mitigated after the fact.
+//!
+//! **The exposure, measured rather than estimated.** 2^32 pushes is 37 seconds
+//! to roughly four minutes of *sustained* pushing at this crate's own measured
+//! rates -- about two minutes at two producers, which is the smallest count
+//! that can trigger it at all. That is sustained throughput, not a total
+//! accumulated over an uptime. Reaching the wrap is necessary but not
+//! sufficient: a producer must also be stalled inside a window a few
+//! instructions wide. Rare, but a preemption is enough, and "rare" over
+//! billions of pushes is not "never".
+//!
+//! **What to do about it.** The choice is a real one, which is why the crate
+//! states the facts instead of quietly picking:
+//!
+//! - **[`slotwise_mpsc`] does not have this hazard.** Its positions are 64 bits
+//!   on every target, so the equivalent wrap needs 2^64 claims and cannot be
+//!   reached. Prefer it unless you need [`Reserving`].
+//! - **[`spsc`] never had it**, having no contended claim to race.
+//! - **[`reserving_mpsc`] is sound below the wrap.** A queue that will not push
+//!   4.3 billion items in one run, or that is not driven at sustained maximum
+//!   rate by two or more producers, is not exposed.
+//! - If you need reservations *and* those volumes, say so -- the fix is
+//!   prototyped and measured, and it is the shipping decision that is open, not
+//!   the engineering.
+//!
+//! This is disclosed on the same principle as the ordering gap below: an
+//! adopter gets the information we have rather than an assurance we cannot
+//! support. The two are not equally forgiving, though, and the difference is
+//! worth stating plainly -- an unverified ordering is a *risk* of a bug, while
+//! this is a known one with a computed exposure.
+//!
 //! # How far the memory orderings are verified, and how far they are not
 //!
 //! Stated plainly because a lock-free queue that is vague about this is asking
@@ -173,8 +223,13 @@
 //! answered at all. Both are well-studied designs in production use elsewhere,
 //! which is why this crate ships both instead of picking one for you.
 //!
+//! - **Pushing more than ~4 billion items in one run, from two or more
+//!   producers?** Use [`slotwise_mpsc`]. [`reserving_mpsc`] has a known
+//!   item-loss defect past that volume, on every target -- see the section
+//!   above, which you should read before choosing.
 //! - Need [`Reserving`]? Only [`reserving_mpsc`] has it; [`slotwise_mpsc`] structurally
-//!   cannot.
+//!   cannot. Weigh that against the defect above rather than treating the
+//!   capability as settling the choice.
 //! - Otherwise **start with [`reserving_mpsc`]**: it was the faster of the two
 //!   at every producer count above one that we measured.
 //! - One producer *and* one consumer? Use [`spsc`], which beats both.

@@ -6,6 +6,29 @@
 //! claimed in advance, so that a later delivery cannot be refused for want of
 //! room. *Reserved is guaranteed, unreserved is best-effort.*
 //!
+//! # Known defect: this shape can lose an item after 2^32 pushes
+//!
+//! **On every target, not only 32-bit ones** -- the claim position is a 32-bit
+//! half of the packed word below by construction, so this reaches x86-64 and
+//! ARM64 exactly as it reaches i686.
+//!
+//! A producer that has checked for room, been descheduled, and resumed after
+//! other producers drove the position through a full wrap will claim
+//! successfully against a numerically identical but generations-later value,
+//! and write into a slot whose emptiness was decided long ago. **The failure is
+//! silent**: the consumer receives a different item than was sent, and no error,
+//! panic, or counter reports it.
+//!
+//! 2^32 pushes is 37 seconds to about four minutes of *sustained* pushing at
+//! this crate's measured rates, roughly two minutes at two producers. The wrap
+//! alone is not enough -- a producer must also stall inside a window a few
+//! instructions wide -- but a preemption suffices.
+//!
+//! [`slotwise_mpsc`](crate::slotwise_mpsc) does not have this hazard, its
+//! positions being 64 bits on every target; [`spsc`](crate::spsc) never had it.
+//! Below the wrap this shape is sound. The full statement, and what to do about
+//! it, is in the [crate documentation](crate).
+//!
 //! # Why this is a separate shape rather than a method on `slotwise_mpsc`
 //!
 //! Because the two ask different questions to claim a slot, and only this one's
