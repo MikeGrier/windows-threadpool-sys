@@ -807,13 +807,20 @@ predicted about a 222-commit branch.
   (`0x...dff7c0` vs `0x...dff6ef` -> same page; vs `0x...def6f0` -> 16 pages), then the instrumentation
   was removed.
 
-- [ ] **SH-16.7** -- **A `windows-thread-ambient-sys` test claims a restore-failure it never
+- [x] **SH-16.7** -- **A `windows-thread-ambient-sys` test claims a restore-failure it never
   injects.** `release_reports_a_genuine_restore_failure_and_restores_on_drop_even_without_it` asserts
   the *opposite*: it `expect`s the release to succeed and both closing assertions check that restore
   worked. Its siblings in `declared/tests.rs` and `error_mode/tests.rs` do force genuine failures; this
-  one inherited the name without the failure-injection half, so `TransactionGuard::release`'s
-  error-reporting path reads as covered when it is not. Either inject the failure or rename the test
-  to what it checks.
+  one inherited the name without the failure-injection half.
+  **Done, by renaming -- and the review's stated hazard did not hold.** It reported that
+  `TransactionGuard::release`'s error path "reads as covered when it is not". Checked rather than
+  taken: the path **is** covered, by `explicit_release_reports_an_injected_restore_failure` in the
+  same file, via a `FaultPoint::TransactionSet` injection built for it. Verified by running both.
+  So the defect was only ever the name. Renamed to
+  `release_and_drop_each_restore_a_real_entry_transaction`, and the comment now records *why* the
+  sibling naming does not apply -- a transaction restore either sets a real handle or clears to
+  "none", and both succeed, so unlike a null WOW64 cookie or `SEM_NOALIGNMENTFAULTEXCEPT` there is no
+  naturally-rejecting value to provoke. Written down so the missing half is not re-attempted.
 
 ## M-inf: parked, ungated
 

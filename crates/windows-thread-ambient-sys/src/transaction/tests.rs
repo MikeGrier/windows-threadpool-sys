@@ -408,7 +408,22 @@ fn source_is_present_only_when_an_os_error_was_wrapped() {
 // not re-investigate it as a gap.
 
 #[test]
-fn release_reports_a_genuine_restore_failure_and_restores_on_drop_even_without_it() {
+fn release_and_drop_each_restore_a_real_entry_transaction() {
+    // **Named for what it checks.** Its siblings in `declared` and `error_mode`
+    // carry `release_reports_a_genuine_restore_failure_...` because those
+    // aspects have a naturally-rejecting value to restore -- a null WOW64
+    // redirection cookie, and `SEM_NOALIGNMENTFAULTEXCEPT`. A transaction has
+    // no equivalent: `restore` either sets a real handle or clears to "none",
+    // and both succeed, so there is no genuine failure to provoke here and this
+    // test never had that half. It carried the name anyway, which made
+    // `release`'s error path read as covered by *this* test.
+    //
+    // That path **is** covered, by `explicit_release_reports_an_injected_restore_failure`
+    // above, through the `FaultPoint::TransactionSet` injection built for
+    // exactly this -- so the gap was in the name, not in the suite. Do not go
+    // looking for a non-injected transaction restore failure to add here; there
+    // isn't one.
+    //
     // `TransactionGuard::release -> Ok(())`, `<impl Drop for
     // TransactionGuard>::drop -> ()`, and the `!` deleted from that same
     // `drop` all survived: an ordinary test thread starts with no transaction,
