@@ -132,16 +132,18 @@ $ErrorActionPreference = 'Stop'
 # produce the content -- the repository's one-output-sink rule.
 function Write-Report {
     param(
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Message,
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)][AllowEmptyString()][string] $Message,
         [ValidateSet('info', 'detail', 'note', 'warn')][string] $Level = 'info'
     )
-    $colour = switch ($Level) {
-        'detail' { 'DarkGray' }
-        'note' { 'Cyan' }
-        'warn' { 'Yellow' }
-        default { 'Gray' }
+    process {
+        $colour = switch ($Level) {
+            'detail' { 'DarkGray' }
+            'note' { 'Cyan' }
+            'warn' { 'Yellow' }
+            default { 'Gray' }
+        }
+        Write-Host $Message -ForegroundColor $colour
     }
-    Write-Host $Message -ForegroundColor $colour
 }
 
 $repo = (git rev-parse --show-toplevel).Replace('/', '\')
@@ -246,7 +248,7 @@ $out = Join-Path $OutputDirectory 'mutants.out'
 foreach ($name in 'caught', 'missed', 'timeout', 'unviable') {
     $path = Join-Path $out "$name.txt"
     $count = if (Test-Path $path) { (Get-Content $path | Measure-Object -Line).Lines } else { 0 }
-    "{0,-9} {1}" -f $name, $count
+    "{0,-9} {1}" -f $name, $count | Write-Report
 }
 Write-Report "results: $out" -Level detail
 

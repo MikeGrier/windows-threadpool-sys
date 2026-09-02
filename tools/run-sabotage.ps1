@@ -121,16 +121,18 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 # then exits, and is the one case where the destination is part of the meaning.
 function Write-Report {
     param(
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Message,
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)][AllowEmptyString()][string] $Message,
         [ValidateSet('info', 'note', 'good', 'bad')][string] $Level = 'info'
     )
-    $colour = switch ($Level) {
-        'note' { 'Cyan' }
-        'good' { 'Green' }
-        'bad' { 'Red' }
-        default { 'Gray' }
+    process {
+        $colour = switch ($Level) {
+            'note' { 'Cyan' }
+            'good' { 'Green' }
+            'bad' { 'Red' }
+            default { 'Gray' }
+        }
+        Write-Host $Message -ForegroundColor $colour
     }
-    Write-Host $Message -ForegroundColor $colour
 }
 
 # Writes to stderr and exits with a code, rather than Write-Error, which under
@@ -245,18 +247,33 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $package = $spec.package
 $testArgs = @('test', '-p', $package, '--locked')
 if ($spec.PSObject.Properties.Name -contains 'testArgs' -and $spec.testArgs) {
-    $testArgs = @('test') + $spec.testArgs
+    # The manifest may write the vector either way -- with the `test` subcommand
+    # or starting at the flags -- and both spellings are in use. Normalising here
+    # rather than prepending unconditionally is what keeps a manifest that does
+    # include it from producing `cargo test test ...`, in which the second word is
+    # not a subcommand but a TESTNAME filter, silently narrowing the sweep to the
+    # tests whose path happens to contain "test".
+    #
+    # That defect went unnoticed because every test in the crates swept so far
+    # lives under a `mod tests`, so the accidental filter matched all of them --
+    # every baseline recorded "0 filtered out". A crate laid out differently would
+    # have run a subset and still reported a clean sweep.
+    $supplied = @($spec.testArgs)
+    if ($supplied.Count -gt 0 -and $supplied[0] -eq 'test') {
+        $supplied = @($supplied | Select-Object -Skip 1)
+    }
+    $testArgs = @('test') + $supplied
 }
 
 $selected = @($spec.sabotages | Where-Object { $_.name -like $Name })
 
 if ($List) {
-    "Manifest : $manifestPath"
-    "Package  : $package"
-    "Command  : cargo $($testArgs -join ' ')"
-    ''
+    Write-Report "Manifest : $manifestPath"
+    Write-Report "Package  : $package"
+    Write-Report "Command  : cargo $($testArgs -join ' ')"
+    Write-Report ''
     $selected | ForEach-Object {
-        "{0,-10} {1}" -f $_.expect, $_.name
+        Write-Report ("{0,-10} {1}" -f $_.expect, $_.name)
     }
     exit 0
 }
@@ -300,7 +317,7 @@ if ($baseline.Outcome -ne 'passed') {
         ) -join "`n") 2
 }
 Write-Report 'Baseline is green. Sweeping.' -Level note
-''
+Write-Report ''
 
 $results = @()
 
@@ -376,8 +393,9 @@ foreach ($sabotage in $selected) {
     Write-Report ("{0,-58} {1}" -f $sabotage.name, $actual) -Level $level
 }
 
-''
-$results | Select-Object Sabotage, Expected, Actual, Ok | Format-Table -AutoSize -Wrap
+Write-Report ''
+$results | Select-Object Sabotage, Expected, Actual, Ok | Format-Table -AutoSize -Wrap |
+    Out-String | ForEach-Object { $_.TrimEnd("`r", "`n") } | Write-Report
 
 $unexpected = @($results | Where-Object { -not $_.Ok })
 if ($unexpected.Count -eq 0) {
@@ -385,14 +403,14 @@ if ($unexpected.Count -eq 0) {
     exit 0
 }
 
-''
+Write-Report ''
 Write-Report 'UNEXPECTED RESULTS -- read the patch before concluding the tests have a hole.' -Level bad
 Write-Report 'A sabotage that does not actually break anything will be survived for an honest reason.' -Level bad
 foreach ($result in $unexpected) {
-    ''
+    Write-Report ''
     Write-Report "  $($result.Sabotage)" -Level bad
     Write-Report "    expected $($result.Expected), got: $($result.Actual)"
-    $result.Patch
+    $result.Patch | Write-Report
 }
-''
+Write-Report ''
 Exit-WithMessage "$($unexpected.Count) of $($results.Count) sabotages did not behave as declared." 1

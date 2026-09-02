@@ -331,18 +331,52 @@ fn write_backup_with(
 /// The path is returned even when the write failed, so the caller can remove it:
 /// a temporary left behind is litter under a name a collector might not
 /// recognise, which is only marginally better than litter under one it would.
+///
+/// # Why the process id is not enough
+///
+/// A hard-killed run leaves its `.partial` behind, and Windows reuses process
+/// ids. A later run issued the same id would find the corpse under the only name
+/// it would ever try, and `create_new` would fail with `AlreadyExists` -- from
+/// *here*, before the caller's suffix loop is reached, so the whole backup would
+/// fail rather than land under a next-best name. The id still separates
+/// concurrent runs cheaply; the counter is what survives a stale one.
 fn write_temporary(
     name: &str,
     json: &str,
     write: &mut impl FnMut(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
 ) -> std::io::Result<(String, std::io::Result<()>)> {
-    // The process id keeps two concurrent runs from colliding here, and the
-    // `.partial` suffix keeps the file out of any `*.json` collection.
-    let temporary = format!("{name}.{}.partial", std::process::id());
-    let mut file = std::fs::File::create_new(&temporary)?;
-    let outcome = write(&mut file, json.as_bytes()).and_then(|()| file.sync_all());
-    drop(file);
-    Ok((temporary, outcome))
+    /// Matches the caller's final-name budget: the two loops fail for the same
+    /// reason and there is no cause to give one more patience than the other.
+    const MAX_ATTEMPTS: u32 = 100;
+
+    let id = std::process::id();
+    let mut last = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        // The `.partial` suffix keeps the file out of any `*.json` collection.
+        let temporary = if attempt == 0 {
+            format!("{name}.{id}.partial")
+        } else {
+            format!("{name}.{id}-{attempt}.partial")
+        };
+        match std::fs::File::create_new(&temporary) {
+            Ok(mut file) => {
+                let outcome = write(&mut file, json.as_bytes()).and_then(|()| file.sync_all());
+                drop(file);
+                return Ok((temporary, outcome));
+            }
+            // Taken -- by a live concurrent run, or by the remains of a dead one
+            // that held this id first. Either way the next name is untried.
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => last = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("{MAX_ATTEMPTS} temporaries starting from {name}.{id}.partial were all taken"),
+        )
+    }))
 }
 
 /// Move `temporary` onto `final_name`, failing rather than replacing.

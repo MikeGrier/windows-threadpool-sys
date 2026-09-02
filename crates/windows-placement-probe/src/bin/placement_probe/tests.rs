@@ -255,3 +255,41 @@ fn a_failed_write_never_creates_the_records_name_at_all() {
         .collect();
     assert!(left.is_empty(), "nothing at all should remain: {left:?}");
 }
+
+#[test]
+fn a_stale_temporary_from_a_recycled_pid_does_not_fail_the_backup() {
+    // The defect: the temporary's name was the record's plus this process's id
+    // and nothing else, and it was created with `create_new`. A run that is hard
+    // killed leaves that file behind, and Windows reuses process ids -- so a
+    // later run issued the same id finds the corpse under the only name it would
+    // ever try. `create_new` fails with `AlreadyExists`, and because that error
+    // left `write_temporary` before the caller's suffix loop was reached, the
+    // whole backup failed rather than landing under a next-best name.
+    //
+    // Standing in for the recycled id: this process's own id is what the code
+    // will use, so writing that exact file first is indistinguishable from
+    // having inherited it.
+    let dir = scratch("stale-partial");
+    let name = dir.join("record.json");
+    let name = name.to_str().expect("utf-8 path");
+
+    let stale = format!("{name}.{}.partial", std::process::id());
+    std::fs::write(&stale, "WRECKAGE").expect("the stale temporary must be creatable");
+
+    let written =
+        write_backup_to_new_file(name, "GOOD").expect("a stale temporary must not fail the backup");
+
+    assert_eq!(
+        written, name,
+        "the record must still get its canonical name: the collision was on the \
+         temporary, which no reader ever sees, so it must not push the record \
+         onto a suffix"
+    );
+    assert_eq!(std::fs::read_to_string(&written).expect("readable"), "GOOD");
+    assert_eq!(
+        std::fs::read_to_string(&stale).expect("readable"),
+        "WRECKAGE",
+        "the stale file belongs to whatever left it; stepping around it is the \
+         fix, overwriting it would be a second bug"
+    );
+}

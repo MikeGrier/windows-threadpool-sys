@@ -551,3 +551,30 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   `<stamp>\mutants.out\caught.txt` with 22 lines, matching the 22 caught the wrapper reported. A
   comment now records the evidence, since the path reads like a duplication and has been challenged
   once already.
+
+- [x] **SH-11.5** -- **A hard-killed run could block the next one's backup entirely.** The temporary
+  was named for the record plus this process's id and nothing else, and created with `create_new`. A
+  run killed mid-write leaves that file behind, and Windows reuses process ids -- so a later run
+  issued the same id found the corpse under the only name it would ever try. The resulting
+  `AlreadyExists` left `write_temporary` *before* the caller's suffix loop was reached, so the whole
+  backup failed rather than landing under a next-best name. The temporary now carries its own
+  attempt counter, matching the final name's budget; a stale file is stepped around rather than
+  overwritten, since it belongs to whatever left it.
+
+- [x] **SH-11.6** -- **Both tools bypassed their own single-output-sink contract.** `run-mutants.ps1`
+  emitted its per-category summary directly to the success stream, and `run-sabotage.ps1` did the
+  same for the `-List` output, every blank line, the result table, and the injected patch text --
+  each contradicting the `Write-Report` doc comment directly above them. All now route through the
+  sink, which gained pipeline binding so a formatted table can flow into it. Verified: the `-List`
+  path emits zero objects to the success stream.
+
+- [x] **SH-11.7** -- **The sabotage harness silently narrowed its own sweep.** Found while checking
+  SH-11.6's output: the harness prepends the `test` subcommand to a manifest's `testArgs`, but nine
+  of the eleven manifests already begin with `test`. The result was `cargo test test -p ...`, in
+  which the second word is not a subcommand but a TESTNAME filter -- a sweep claiming to run a
+  package's suite while running a subset of it, the same false-green this tool exists to prevent.
+  The vector is now normalised so either manifest spelling produces one `test`.
+  **No prior verification was weakened**: every crate swept so far keeps its tests under a
+  `mod tests`, so the accidental filter matched all of them, and all fourteen recorded baselines
+  report "0 filtered out". The defect was latent, and would have appeared on the first crate laid
+  out differently.
