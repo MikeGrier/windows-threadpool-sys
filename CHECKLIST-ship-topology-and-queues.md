@@ -394,3 +394,41 @@ repair from a reviewer's guess that was taken on trust.
   finding that was checked and found not to hold: `GetSystemDirectoryW` returning exactly the buffer
   length is unreachable (success excludes the terminator, failure includes it and so exceeds the
   buffer), though the guard is widened anyway so the next reader need not redo the analysis.
+
+## M8: PR #56 third review round (suppressed findings)
+
+The reviewer generated no new inline comments in these rounds and instead listed **suppressed** findings in
+the review body, so none of them arrived as a resolvable thread. They are recorded here because a finding
+that produces no thread is otherwise invisible to the "are all comments resolved?" check that gates merge.
+
+- [x] **SH-8.1** -- **The contention probe times thread creation, and lets early producers run alone.**
+  All five timed runs in `windows-platform-probes`'s `queue_contention` start the clock *before*
+  `thread::scope` spawns anything, and every worker begins pushing the moment it is spawned. At 50,000
+  pushes each, an early producer can finish a large uncontended prefix -- or finish outright -- while the
+  last threads are still being created, so a row labelled 16 or 32 producers may never have had 16 or 32
+  contenders. The measured interval also includes spawn cost. This is not a cosmetic inaccuracy: the
+  module's own header says these numbers decide whether two speculative queue shapes get written at all
+  and whether the two shipped shapes merge. Hold every participant -- producers *and*, in the drained
+  runs, the consumer -- at a start barrier, and start the clock when it releases.
+
+- [x] **SH-8.2** -- **A failed backup write leaves a truncated file under the canonical name.**
+  `write_backup_to_new_file` reserves the name with `create_new` and then `write_all`s through `?`, so a
+  disk-full or quota failure returns an error while leaving a zero-length or partial `.json` behind. That
+  file is indistinguishable from a real record to whoever collects it, and the next run's collision
+  suffix steps politely around it. Publish by rename: write the bytes to an exclusively-created temporary
+  in the same directory, flush, and move it onto the reserved name only once the write has succeeded.
+
+- [x] **SH-8.3** -- **`places_from_topology` drops processors and invents NUMA membership.**
+  Two defects in one conversion, both reachable only through a hand-built or deserialized `Topology` --
+  which is exactly the input this seam exists to accept (D-12).
+  It iterates `class_of`, which is populated only from `DomainKind::Core` domains, so an online processor
+  with no core domain is **silently absent from the result** -- and the documented core-id fallback
+  beneath it, written to keep group 1's cpu5 distinct from group 0's, is unreachable dead code as a
+  direct consequence.
+  It then defaults absent NUMA membership to `unwrap_or(0)`. That is the right answer only when the
+  topology names no memory domain at all; when it names nodes 1 and 2, it **fabricates node 0** and files
+  a processor under a node the machine does not have -- the precise failure this crate's own rule
+  ("a seam that only moves data is safe; a seam that lets fabricated labels reach real hardware is not")
+  exists to prevent.
+  Iterate the online processors so every one is placed, and refuse a topology that names memory domains
+  but not this processor's, rather than inventing one.

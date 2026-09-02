@@ -47,6 +47,7 @@
 //! contention question, and the drained one for the cost of `head`.
 
 use std::sync::Arc;
+use std::sync::Barrier;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
@@ -211,16 +212,24 @@ fn median_run(
 /// over one cache line.
 fn time_contended_atomic(producers: usize) -> Repetition {
     let counter = Arc::new(AtomicU64::new(0));
-    let started = Instant::now();
-    thread::scope(|scope| {
+    // One party per worker plus this thread. Every worker is created, then waits
+    // here; the clock starts as the barrier releases, so neither thread creation
+    // nor a solo head start by an early worker is inside the measurement. See
+    // `start_barrier`'s note for why that matters at these producer counts.
+    let gate = Arc::new(Barrier::new(producers + 1));
+    let started = thread::scope(|scope| {
         for _ in 0..producers {
             let counter = Arc::clone(&counter);
+            let gate = Arc::clone(&gate);
             scope.spawn(move || {
+                gate.wait();
                 for _ in 0..PUSHES_PER_PRODUCER {
                     counter.fetch_add(1, Ordering::Relaxed);
                 }
             });
         }
+        gate.wait();
+        Instant::now()
     });
     (started.elapsed().as_nanos() as f64, 0)
 }
@@ -230,20 +239,41 @@ fn capacity_for(producers: usize) -> usize {
     (producers * PUSHES_PER_PRODUCER).next_power_of_two()
 }
 
+/// A gate holding every participant until all of them exist.
+///
+/// **Without this the row labelled N producers need not have measured N of
+/// them.** Spawning is not instant, and each worker used to start pushing the
+/// moment it was created, so at 50,000 pushes an early producer could complete
+/// a long uncontended prefix -- or finish entirely -- before the last thread was
+/// spawned. The reported interval also began before any worker existed, folding
+/// thread-creation cost into a per-push number. The curve against N is the whole
+/// output of this probe, and both effects bend it downward exactly where it is
+/// steepest.
+///
+/// The count includes this thread: the workers arrive and block, this thread
+/// arrives last, and the clock starts as the barrier releases them together.
+fn start_barrier(participants: usize) -> Arc<Barrier> {
+    Arc::new(Barrier::new(participants + 1))
+}
+
 fn time_isolated_mpsc(producers: usize) -> Repetition {
     let (tx, rx) =
         slotwise_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
-    let started = Instant::now();
-    thread::scope(|scope| {
+    let gate = start_barrier(producers);
+    let started = thread::scope(|scope| {
         for producer in 0..producers {
             let tx = tx.clone();
+            let gate = Arc::clone(&gate);
             scope.spawn(move || {
+                gate.wait();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
                         .expect("the run fits in the capacity");
                 }
             });
         }
+        gate.wait();
+        Instant::now()
     });
     let elapsed = started.elapsed().as_nanos() as f64;
     let refusals = tx.refused();
@@ -256,17 +286,21 @@ fn time_isolated_mpsc(producers: usize) -> Repetition {
 fn time_isolated_reserving(producers: usize) -> Repetition {
     let (tx, rx) =
         reserving_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
-    let started = Instant::now();
-    thread::scope(|scope| {
+    let gate = start_barrier(producers);
+    let started = thread::scope(|scope| {
         for producer in 0..producers {
             let tx = tx.clone();
+            let gate = Arc::clone(&gate);
             scope.spawn(move || {
+                gate.wait();
                 for index in 0..PUSHES_PER_PRODUCER {
                     tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
                         .expect("the run fits in the capacity");
                 }
             });
         }
+        gate.wait();
+        Instant::now()
     });
     let elapsed = started.elapsed().as_nanos() as f64;
     let refusals = tx.refused();
@@ -282,8 +316,15 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
     let (tx, rx) = slotwise_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
+    // The consumer is a participant too: it is spawned first, but spawning is
+    // not readiness, and a consumer still starting up while producers push turns
+    // the opening of the run into an undrained regime -- the one thing this
+    // measurement is defined against.
+    let gate = start_barrier(producers + 1);
+    let consumer_gate = Arc::clone(&gate);
 
     let consumer = thread::spawn(move || {
+        consumer_gate.wait();
         // Spin rather than park: the doorbell's cost is `doorbell_cost`'s
         // question, and parking here would measure that instead of the claim.
         while !consumer_done.load(Ordering::Relaxed) {
@@ -294,11 +335,12 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
         rx.refused()
     });
 
-    let started = Instant::now();
-    thread::scope(|scope| {
+    let started = thread::scope(|scope| {
         for producer in 0..producers {
             let tx = tx.clone();
+            let gate = Arc::clone(&gate);
             scope.spawn(move || {
+                gate.wait();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
                     // Retry on a full queue, which is what a real producer
@@ -310,6 +352,8 @@ fn time_drained_mpsc(producers: usize) -> Repetition {
                 }
             });
         }
+        gate.wait();
+        Instant::now()
     });
     let elapsed = started.elapsed().as_nanos() as f64;
 
@@ -336,8 +380,13 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     let (tx, rx) = reserving_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = Arc::clone(&done);
+    // The consumer joins the gate here for the reason it does in the slotwise
+    // twin: a run whose opening is undrained is not the regime being measured.
+    let gate = start_barrier(producers + 1);
+    let consumer_gate = Arc::clone(&gate);
 
     let consumer = thread::spawn(move || {
+        consumer_gate.wait();
         while !consumer_done.load(Ordering::Relaxed) {
             while rx.pop().is_some() {}
             std::hint::spin_loop();
@@ -346,11 +395,12 @@ fn time_drained_reserving(producers: usize) -> Repetition {
         rx.refused()
     });
 
-    let started = Instant::now();
-    thread::scope(|scope| {
+    let started = thread::scope(|scope| {
         for producer in 0..producers {
             let tx = tx.clone();
+            let gate = Arc::clone(&gate);
             scope.spawn(move || {
+                gate.wait();
                 for index in 0..PUSHES_PER_PRODUCER {
                     let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
                     while let Err(error) = tx.push(item) {
@@ -360,6 +410,8 @@ fn time_drained_reserving(producers: usize) -> Repetition {
                 }
             });
         }
+        gate.wait();
+        Instant::now()
     });
     let elapsed = started.elapsed().as_nanos() as f64;
 

@@ -130,3 +130,73 @@ fn a_write_that_cannot_be_placed_reports_rather_than_loops() {
 
     assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
 }
+
+#[test]
+fn a_failed_write_leaves_no_file_behind() {
+    // The defect: the name was reserved with `create_new` and written into, so
+    // a write that failed part-way -- a full disk, a quota, a killed process --
+    // left a truncated `.json` under the name a COMPLETE record would have had.
+    // Nothing downstream can tell those apart: a collector sees a record, and
+    // the next run's collision suffix steps politely around the wreckage.
+    let dir = scratch("failed-write");
+    let name = dir.join("record.json");
+    let name = name.to_str().expect("utf-8 path");
+
+    let error = super::write_backup_with(name, "{}", |_, _| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::StorageFull,
+            "no space left on device",
+        ))
+    })
+    .expect_err("the injected write fails");
+    assert_eq!(error.kind(), std::io::ErrorKind::StorageFull);
+
+    assert!(
+        !std::path::Path::new(name).exists(),
+        "a failed write must not leave a file under the record's own name"
+    );
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .expect("readable")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "the partial file must be cleaned up too, found {left:?}"
+    );
+}
+
+#[test]
+fn a_failed_write_does_not_consume_the_name_for_the_next_run() {
+    // The consequence that makes the leftover worse than untidy. If the failed
+    // attempt kept the name, the retry would be pushed onto a `-1` suffix and
+    // the good record would sit beside a broken one that sorts first.
+    let dir = scratch("failed-then-retry");
+    let name = dir.join("record.json");
+    let name = name.to_str().expect("utf-8 path");
+
+    let _ = super::write_backup_with(name, "{}", |_, _| Err(std::io::Error::other("interrupted")))
+        .expect_err("the injected write fails");
+
+    let written = write_backup_to_new_file(name, "GOOD").expect("the name must be free again");
+
+    assert_eq!(written, name, "the retry must get the canonical name");
+    assert_eq!(std::fs::read_to_string(&written).expect("readable"), "GOOD");
+}
+
+#[test]
+fn a_successful_write_leaves_only_the_record() {
+    // Publication is by rename through a temporary, so the temporary must not
+    // survive a successful run either.
+    let dir = scratch("no-litter");
+    let name = dir.join("record.json");
+    let name = name.to_str().expect("utf-8 path");
+
+    let written = write_backup_to_new_file(name, "{}").expect("must write");
+
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .expect("readable")
+        .map(|entry| entry.expect("entry").path())
+        .collect();
+    assert_eq!(left.len(), 1, "expected only the record, found {left:?}");
+    assert_eq!(left[0].to_str().expect("utf-8 path"), written);
+}

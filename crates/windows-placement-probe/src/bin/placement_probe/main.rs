@@ -237,7 +237,34 @@ fn write_backup(record: &SubmissionRecord) {
 /// Exclusive creation makes the collision visible instead of silent, and a
 /// suffix resolves it. The suffix is only reached on a real collision, so the
 /// ordinary name stays the predictable one.
+///
+/// **The bytes are published by rename, and that is a second correction.**
+/// Reserving the name and then writing into it means a failure part-way through
+/// the write -- a full disk, a quota, a killed process -- leaves a truncated
+/// `.json` sitting under the name a *complete* record would have. Nothing
+/// downstream can tell the two apart: whoever collects the file sees a record,
+/// and the next run's collision suffix steps politely around the wreckage. So
+/// the reserved name is a placeholder, the content is written to a temporary
+/// beside it, and the temporary is moved onto the reservation only once the
+/// write has succeeded. A reader therefore sees the final name either absent or
+/// complete, never half-written.
 fn write_backup_to_new_file(name: &str, json: &str) -> std::io::Result<String> {
+    write_backup_with(name, json, |file, bytes| {
+        std::io::Write::write_all(file, bytes)
+    })
+}
+
+/// The body of [`write_backup_to_new_file`], with the write itself injectable.
+///
+/// The failure this guards is a write that fails *after* the name is taken, and
+/// no test can provoke that by filling the disk. The seam is the smallest thing
+/// that makes it reachable: a test supplies a writer that fails, and asserts
+/// that nothing is left behind under either name.
+fn write_backup_with(
+    name: &str,
+    json: &str,
+    mut write: impl FnMut(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+) -> std::io::Result<String> {
     /// Enough to outlast any plausible burst of same-second runs; past this,
     /// failing is better than looping while a caller waits.
     const MAX_ATTEMPTS: u32 = 100;
@@ -252,10 +279,21 @@ fn write_backup_to_new_file(name: &str, json: &str) -> std::io::Result<String> {
             }
         };
 
+        // Reserve the name first, so a concurrent run cannot pick it while this
+        // one is still writing. The file stays empty until the rename below.
         match std::fs::File::create_new(&candidate) {
-            Ok(mut file) => {
-                std::io::Write::write_all(&mut file, json.as_bytes())?;
-                return Ok(candidate);
+            Ok(reservation) => {
+                drop(reservation);
+                return match publish(&candidate, json, &mut write) {
+                    Ok(()) => Ok(candidate),
+                    Err(error) => {
+                        // The reservation is this function's own litter once the
+                        // write has failed, and leaving it would present an
+                        // empty file under the name of a complete record.
+                        let _ = std::fs::remove_file(&candidate);
+                        Err(error)
+                    }
+                };
             }
             // Someone else has this name. Not a failure yet: try the next.
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -267,6 +305,35 @@ fn write_backup_to_new_file(name: &str, json: &str) -> std::io::Result<String> {
         std::io::ErrorKind::AlreadyExists,
         format!("{MAX_ATTEMPTS} names starting from {name} were all taken"),
     ))
+}
+
+/// Write `json` beside `final_name` and move it there once it is complete.
+///
+/// The temporary is created exclusively too, and in the same directory, so the
+/// rename is within one volume and cannot silently become a copy.
+fn publish(
+    final_name: &str,
+    json: &str,
+    write: &mut impl FnMut(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let temporary = format!("{final_name}.{}.partial", std::process::id());
+
+    let mut file = std::fs::File::create_new(&temporary)?;
+    let written = write(&mut file, json.as_bytes()).and_then(|()| file.sync_all());
+    drop(file);
+
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+
+    // Replaces the reservation, which is what makes the publication atomic from
+    // a reader's point of view.
+    if let Err(error) = std::fs::rename(&temporary, final_name) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn parse_arguments() -> Result<Options, String> {

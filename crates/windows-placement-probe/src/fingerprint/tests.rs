@@ -439,7 +439,8 @@ mod from_topology {
 
     #[test]
     fn every_processor_is_placed() {
-        let places = places_from_topology(&two_node_host());
+        let places =
+            places_from_topology(&two_node_host()).expect("the fixture places every processor");
 
         assert_eq!(places.len(), 8);
         let mut numbers: Vec<u8> = places.iter().map(|p| p.number).collect();
@@ -452,7 +453,8 @@ mod from_topology {
         // The assertion that could not be made before this seam existed. On a
         // single-node host this passes whether the lookup works or returns the
         // fallback, so it was previously untested in the only way that matters.
-        let places = places_from_topology(&two_node_host());
+        let places =
+            places_from_topology(&two_node_host()).expect("the fixture places every processor");
 
         for place in &places {
             let expected = u32::from(place.number >= 4);
@@ -470,7 +472,8 @@ mod from_topology {
         // everything, the test above would still fail, but a future refactor
         // that collapsed the map could otherwise leave a suite that only ever
         // sees one node.
-        let places = places_from_topology(&two_node_host());
+        let places =
+            places_from_topology(&two_node_host()).expect("the fixture places every processor");
         let mut nodes: Vec<u32> = places.iter().map(|p| p.numa_node).collect();
         nodes.sort_unstable();
         nodes.dedup();
@@ -480,7 +483,8 @@ mod from_topology {
 
     #[test]
     fn smt_siblings_share_a_core_id() {
-        let places = places_from_topology(&two_node_host());
+        let places =
+            places_from_topology(&two_node_host()).expect("the fixture places every processor");
 
         for pair in places.chunks(2) {
             assert_eq!(
@@ -496,7 +500,8 @@ mod from_topology {
     fn the_partitioning_cache_level_is_the_outermost_one_that_divides() {
         // Four distinct L2 domains here, so every core sits behind its own and
         // the two siblings of a core share one.
-        let places = places_from_topology(&two_node_host());
+        let places =
+            places_from_topology(&two_node_host()).expect("the fixture places every processor");
 
         assert_eq!(places[0].cache_domain, places[1].cache_domain);
         assert_ne!(places[0].cache_domain, places[2].cache_domain);
@@ -522,7 +527,7 @@ mod from_topology {
             },
         ]);
 
-        let places = places_from_topology(&flat);
+        let places = places_from_topology(&flat).expect("the fixture places every processor");
 
         assert!(
             places.iter().all(|p| p.cache_domain.is_none()),
@@ -547,7 +552,7 @@ mod from_topology {
             },
         ]);
 
-        let places = places_from_topology(&hybrid);
+        let places = places_from_topology(&hybrid).expect("the fixture places every processor");
 
         assert_eq!(places[0].efficiency_class, 1);
         assert_eq!(places[1].efficiency_class, 1);
@@ -561,7 +566,8 @@ mod from_topology {
         // author assumed it would produce.
         use crate::core_affinity::{Placement, node_pairs, representative_pairs};
 
-        let places = places_from_topology(&two_node_host());
+        let places =
+            places_from_topology(&two_node_host()).expect("the fixture places every processor");
         let pairs = representative_pairs(&places);
 
         assert!(pairs.contains_key(&Placement::SameCoreSiblings));
@@ -661,7 +667,8 @@ mod multi_group_conversion {
         // The regression that matters. Keying the conversion's maps on the
         // processor number alone silently produced four places for an
         // eight-processor machine, and nothing in the output said so.
-        let places = places_from_topology(&two_group_topology());
+        let places = places_from_topology(&two_group_topology())
+            .expect("the fixture places every processor");
 
         assert_eq!(
             places.len(),
@@ -678,7 +685,8 @@ mod multi_group_conversion {
 
     #[test]
     fn a_cores_identity_does_not_collide_across_groups() {
-        let places = places_from_topology(&two_group_topology());
+        let places = places_from_topology(&two_group_topology())
+            .expect("the fixture places every processor");
 
         let cores: std::collections::BTreeSet<(u16, u32)> =
             places.iter().map(|p| (p.group, p.core)).collect();
@@ -688,7 +696,8 @@ mod multi_group_conversion {
 
     #[test]
     fn per_group_cache_and_node_membership_is_read_correctly() {
-        let places = places_from_topology(&two_group_topology());
+        let places = places_from_topology(&two_group_topology())
+            .expect("the fixture places every processor");
 
         for place in &places {
             assert_eq!(
@@ -702,5 +711,147 @@ mod multi_group_conversion {
                 "{place} was read into the wrong cache domain"
             );
         }
+    }
+
+    // --- Partial topologies, which this seam exists to accept (D-12) ---
+
+    /// A topology whose only domain is the group: online processors, no core,
+    /// no cache, and no memory domain at all.
+    fn bare_processors(count: u8) -> Topology {
+        let all: Vec<u8> = (0..count).collect();
+        let mask = all.iter().fold(0_usize, |mask, n| mask | (1 << n));
+        Topology {
+            processors: all
+                .iter()
+                .map(|&number| Processor {
+                    id: ProcessorId { group: 0, number },
+                    online: true,
+                    capacity: 0,
+                })
+                .collect(),
+            domains: vec![Domain {
+                kind: DomainKind::Group,
+                id: 0,
+                processors: ProcessorSet::from_group_mask(0, mask),
+            }],
+            distances: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_processor_with_no_core_domain_is_still_placed() {
+        // The conversion used to iterate the core domains, so a processor no
+        // core mentioned simply vanished -- the result described a smaller
+        // machine than the topology did, and said nothing about the omission.
+        let places = places_from_topology(&bare_processors(4))
+            .expect("no memory domain at all means the single-node default applies");
+
+        assert_eq!(places.len(), 4, "every online processor must be placed");
+        let mut numbers: Vec<u8> = places.iter().map(|p| p.number).collect();
+        numbers.sort_unstable();
+        assert_eq!(numbers, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_processor_with_no_core_domain_keeps_its_group_distinct() {
+        // The core fallback was unreachable while the iteration was over core
+        // domains: no core meant no entry to fall back *from*. It exists so
+        // group 1's cpu5 cannot collapse onto group 0's, so that is what is
+        // asserted rather than merely that some number was produced.
+        let mut topology = bare_processors(1);
+        topology.processors.push(Processor {
+            id: ProcessorId {
+                group: 1,
+                number: 0,
+            },
+            online: true,
+            capacity: 0,
+        });
+        topology.domains.push(Domain {
+            kind: DomainKind::Group,
+            id: 1,
+            processors: ProcessorSet::from_group_mask(1, 0b1),
+        });
+
+        let places = places_from_topology(&topology).expect("no memory domain, so node 0 applies");
+
+        assert_eq!(places.len(), 2);
+        assert_ne!(
+            places[0].core, places[1].core,
+            "g0/cpu0 and g1/cpu0 must not share a fabricated core id"
+        );
+    }
+
+    #[test]
+    fn an_offline_processor_is_not_placed() {
+        // Placement is about where work can run. An offline slot exists only to
+        // reserve group capacity for a processor that may be added later.
+        let mut topology = bare_processors(4);
+        topology.processors[2].online = false;
+
+        let places = places_from_topology(&topology).expect("a partial topology with no nodes");
+
+        let numbers: Vec<u8> = places.iter().map(|p| p.number).collect();
+        assert_eq!(
+            numbers,
+            vec![0, 1, 3],
+            "the offline slot must not be placed"
+        );
+    }
+
+    #[test]
+    fn node_zero_is_the_answer_only_when_no_memory_domain_exists() {
+        // The half of the default that is correct: a topology naming no memory
+        // domain describes one node, and every processor is in it.
+        let places = places_from_topology(&bare_processors(2)).expect("one implicit node");
+
+        assert!(places.iter().all(|p| p.numa_node == 0));
+    }
+
+    #[test]
+    fn a_processor_outside_every_named_memory_domain_is_refused() {
+        // The half that was not. This topology names node 1 and node 2, and
+        // says nothing about cpu2 -- so `unwrap_or(0)` filed it under a node
+        // this machine does not have, which is exactly the fabricated label the
+        // crate's own seam rule forbids.
+        let mut topology = bare_processors(3);
+        for (id, mask) in [(1_u32, 0b001_usize), (2, 0b010)] {
+            topology.domains.push(Domain {
+                kind: DomainKind::Memory { memory_bytes: None },
+                id,
+                processors: ProcessorSet::from_group_mask(0, mask),
+            });
+        }
+
+        let refused = places_from_topology(&topology)
+            .expect_err("cpu2 belongs to no named node, so it cannot be placed");
+
+        assert_eq!(refused.group, 0);
+        assert_eq!(refused.number, 2);
+        assert!(
+            refused.to_string().contains("g0/cpu2"),
+            "the message must name the processor: {refused}"
+        );
+    }
+
+    #[test]
+    fn a_fully_covered_multi_node_topology_is_still_accepted() {
+        // The guard must refuse only what it is aimed at: with every processor
+        // covered, sparse node *numbers* are a valid machine, not an error.
+        let mut topology = bare_processors(2);
+        for (id, mask) in [(1_u32, 0b01_usize), (2, 0b10)] {
+            topology.domains.push(Domain {
+                kind: DomainKind::Memory { memory_bytes: None },
+                id,
+                processors: ProcessorSet::from_group_mask(0, mask),
+            });
+        }
+
+        let places = places_from_topology(&topology).expect("every processor has a node");
+
+        let mut nodes: Vec<u32> = places.iter().map(|p| p.numa_node).collect();
+        nodes.sort_unstable();
+        assert_eq!(nodes, vec![1, 2], "the real node numbers must survive");
     }
 }

@@ -457,10 +457,42 @@ impl fmt::Display for Fingerprint {
 ///
 /// # Errors
 ///
-/// Returns whatever [`Topology::discover`] failed with.
+/// Returns whatever [`Topology::discover`] failed with, or
+/// [`ErrorKind::InvalidData`](std::io::ErrorKind::InvalidData) if the discovered
+/// topology names memory domains but leaves an online processor out of all of
+/// them. Discovery has never produced that, and it would mean the topology
+/// crate's parse had regressed rather than that the machine is unusual -- which
+/// is worth saying out loud rather than papering over with a fabricated node.
 pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
-    Ok(places_from_topology(&Topology::discover()?))
+    places_from_topology(&Topology::discover()?).map_err(|unplaceable| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, unplaceable.to_string())
+    })
 }
+
+/// An online processor whose NUMA membership a topology did not state, in a
+/// topology that stated other processors'.
+///
+/// Carried as a value rather than reported as a bare message so a caller can see
+/// which processor was at fault; the identity is the whole diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnplacedProcessor {
+    /// The processor's group.
+    pub group: u16,
+    /// The processor's number within that group.
+    pub number: u8,
+}
+
+impl fmt::Display for UnplacedProcessor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the topology names memory domains but places no NUMA node for g{}/cpu{}",
+            self.group, self.number
+        )
+    }
+}
+
+impl std::error::Error for UnplacedProcessor {}
 
 /// Work out where each logical processor sits, in any topology.
 ///
@@ -483,8 +515,23 @@ pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
 /// only ever execute against whatever machine ran the suite. The NUMA mapping
 /// in particular was unverifiable on a single-node host, where a completely
 /// broken lookup and a correct one both yield node 0.
-#[must_use]
-pub fn places_from_topology(topology: &Topology) -> Vec<ProcessorPlace> {
+///
+/// # Every online processor is placed, and none is placed on an invented node
+///
+/// The result has one entry per **online processor**, not one per processor a
+/// core domain happens to mention. Iterating the core domains instead dropped
+/// any processor without one -- silently returning a shorter machine than the
+/// topology described, and rendering the core-id fallback below unreachable.
+///
+/// # Errors
+///
+/// Returns [`UnplacedProcessor`] when the topology names memory domains but
+/// none of them contains some online processor. Defaulting that to node 0 is
+/// right only when the topology names *no* memory domain at all; where the real
+/// nodes are, say, 1 and 2, it invents a node the machine does not have and
+/// files a processor under it. A partial topology is a legitimate input to this
+/// seam (D-12), so it is refused rather than guessed at.
+pub fn places_from_topology(topology: &Topology) -> Result<Vec<ProcessorPlace>, UnplacedProcessor> {
     // Every map here is keyed by the full `(group, number)` pair. Keying on the
     // number alone is the defect this function is written against: on a machine
     // with more than 64 logical processors each group numbers from zero, so
@@ -520,20 +567,31 @@ pub fn places_from_topology(topology: &Topology) -> Vec<ProcessorPlace> {
         }
     }
 
-    // Node 0 is the correct default rather than a fallback: a machine with no
-    // NUMA partitioning has exactly one node, and every processor is in it.
     let mut numa_of = std::collections::BTreeMap::new();
+    let mut any_memory_domain = false;
     for domain in topology.memory_domains() {
+        any_memory_domain = true;
         for id in domain.processors.iter() {
             numa_of.insert(id, domain.id);
         }
     }
 
-    class_of
-        .into_iter()
-        .map(|(id, efficiency_class)| {
+    topology
+        .processors
+        .iter()
+        .filter(|processor| processor.online)
+        .map(|processor| {
+            let id = (processor.id.group, processor.id.number);
             let (group, number) = id;
-            ProcessorPlace {
+            let numa_node = match numa_of.get(&id).copied() {
+                Some(node) => node,
+                // Node 0 is the correct answer rather than a fallback *only*
+                // here: a topology naming no memory domain at all describes a
+                // machine with one node, and every processor is in it.
+                None if !any_memory_domain => 0,
+                None => return Err(UnplacedProcessor { group, number }),
+            };
+            Ok(ProcessorPlace {
                 group,
                 number,
                 // The fallback keeps distinct processors distinct across groups:
@@ -543,10 +601,13 @@ pub fn places_from_topology(topology: &Topology) -> Vec<ProcessorPlace> {
                     .get(&id)
                     .copied()
                     .unwrap_or_else(|| u32::from(group) << 8 | u32::from(number)),
-                efficiency_class,
+                // Zero is what the topology crate itself reports for a processor
+                // with no known owning core, so this agrees with `Processor`'s
+                // own `capacity` rather than inventing a separate convention.
+                efficiency_class: class_of.get(&id).copied().unwrap_or(0),
                 cache_domain: cache_of.get(&id).copied(),
-                numa_node: numa_of.get(&id).copied().unwrap_or(0),
-            }
+                numa_node,
+            })
         })
         .collect()
 }
