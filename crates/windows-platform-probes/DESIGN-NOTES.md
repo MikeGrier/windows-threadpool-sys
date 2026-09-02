@@ -138,6 +138,27 @@ test suite for this workspace's crates: a probe answers "what does Windows do?",
 never "does our code work?". A probe that starts asserting our own behaviour
 belongs in the crate that owns that behaviour.
 
+## This crate is never distributed, and its dependencies carry no versions
+
+Not to a registry, and not as a released binary either -- unlike
+`windows-placement-probe`, which ships a CI-built binary to people running it on
+hardware this workspace does not own. These probes are a development
+instrument, run from a checkout by someone who has the checkout. `publish =
+false` is the whole story, and it is permanent rather than "not yet".
+
+**The consequence is that every workspace dependency here is path-only.** A
+`version` beside a `path` exists to tell a registry what to resolve when the
+depending crate is packaged. Nothing packages this crate, so those pins named a
+version no one would ever consult -- while still having to be correct, because
+cargo requires the path crate's own version to satisfy the pin **at every
+build**, not merely at publication.
+
+That is not a theoretical tidy-up. Measured on 2026-09-02: bumping
+`windows-topology-sys` to 0.2.0 while this crate pinned `"0.1.0"` failed
+`cargo metadata` for the whole workspace. Six such pins were six standing
+chances to break `main` on someone else's release, in exchange for nothing,
+and they are gone.
+
 ## The earlier probes are migrated, and two of them corrected in the move
 
 <a id="d-migration"></a>

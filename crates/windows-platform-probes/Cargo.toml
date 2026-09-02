@@ -72,32 +72,44 @@ name = "probe-peer-index-cache"
 path = "src/bin/peer_index_cache.rs"
 
 [dependencies]
+# **Every workspace dependency below is path-only, with no `version`**, because
+# this crate is never distributed at all -- not to a registry, and not as a
+# released binary either, unlike `windows-placement-probe` next door. These
+# probes are a development instrument, run from a checkout, and `publish = false`
+# above is the whole story.
+#
+# A `version` beside a `path` is consulted only when the depending crate is
+# packaged, but cargo still requires the path crate's own version to satisfy it
+# at every build -- so a pin left behind by a bump breaks the whole workspace's
+# resolution rather than only this crate's. With six such pins, that was six
+# standing chances to break `main` in exchange for nothing.
+#
 # The pool-growth probe measures the shipping API rather than a
 # reimplementation of the SDK's inline environment helpers, so it depends on the
 # real crate.
-windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys" }
+windows-threadpool-sys = { path = "../windows-threadpool-sys" }
 # Same reason: the topology probe measures what the shipping parse produces, not
 # a second parse written here, which would only measure itself. The raw Win32
 # counters it cross-checks against are read independently through windows-sys.
-windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
+windows-topology-sys = { path = "../windows-topology-sys" }
 # The placement measurement moved out to its own crate so it could be shared
 # with people running it on hardware this workspace does not own. The probes
 # here call into it rather than keeping a second copy: two renderings of one
 # measurement disagreeing is a defect this investigation has already hit.
-windows-placement-probe = { version = "0.1.0", path = "../windows-placement-probe" }
+windows-placement-probe = { path = "../windows-placement-probe" }
 # The request-cost probe measures the real request types the design would put on
 # a queue, not a stand-in, for the same reason.
-windows-namespace-request-sys = { version = "0.2.0", path = "../windows-namespace-request-sys" }
+windows-namespace-request-sys = { path = "../windows-namespace-request-sys" }
 # The contention probe measures the shipping queue shapes rather than a
 # reimplementation, for the same reason: a stand-in would only measure itself,
 # and the whole question is what the real tail claim costs.
 # The experimental permit claim is enabled here because this probe is what
 # decides its fate (SH-15.5): it must be measured against the shipping shapes
 # on the same host, in the same run, by the same harness.
-windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", features = [
+windows-waitable-queues = { path = "../windows-waitable-queues", features = [
 	"experimental-permit-claim",
 ] }
-wtf-string = { version = "0.1.0", path = "../wtf-string" }
+wtf-string = { path = "../wtf-string" }
 
 [dependencies.windows-sys]
 version = "0.61.2"

@@ -57,8 +57,19 @@ default = ["serde"]
 serde = ["dep:serde", "windows-topology-sys/serde"]
 
 [dependencies]
-windows-topology-sys = { version = "0.1.0", path = "../windows-topology-sys" }
-windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues" }
+# Path-only, with no `version`, because this crate is never published **to a
+# registry**. It is still distributed: the tool ships as a CI-built binary
+# attached to a GitHub release, which is its canonical distribution and needs no
+# `version` here at all. Only a crates.io package would, and that was decided
+# against -- see `publish = false` above and DESIGN-NOTES.md.
+#
+# A `version` beside a `path` is consulted only when the depending crate is
+# packaged, but cargo requires the path crate's own version to satisfy it at
+# every build regardless. So a pin left behind by a bump breaks the whole
+# workspace's resolution rather than only this crate's: `windows-topology-sys`
+# at 0.2.0 against a "0.1.0" pin here fails `cargo metadata` outright.
+windows-topology-sys = { path = "../windows-topology-sys" }
+windows-waitable-queues = { path = "../windows-waitable-queues" }
 serde = { version = "1.0", features = ["derive"], optional = true }
 # The tool emits the record itself, so a serializer is not a test-only concern.
 # It is also what derives the schema golden: the archived shape comes from

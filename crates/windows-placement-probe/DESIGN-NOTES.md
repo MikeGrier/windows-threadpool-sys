@@ -5,6 +5,44 @@ a record someone can paste into a discussion thread.
 
 ## crates.io is a second path, and it must not become the first one
 
+**SUPERSEDED 2026-09-02: there is no second path. This crate is never published
+to a registry.** The GitHub release binary is the only distribution, and
+`publish = false` now states that permanently rather than temporarily. The
+reasoning below is kept because it is still correct about *why* the crates.io
+path is weaker, and because the decision it records was reversed on new
+information rather than on a change of taste.
+
+**Why the reach argument no longer holds.** It rested on crates.io adding
+reach. Measured against the path that actually exists, it subtracts: a released
+binary needs **no Rust toolchain at all**, while `cargo install` needs a
+toolchain, a compiler, and a successful build of this crate's whole dependency
+tree. The audience crates.io adds is therefore a *subset* -- Rust developers who
+would rather type a command than click a link. That is a convenience, not reach,
+and it is bought by making the weakest-provenance path the most discoverable
+one. M5's own preamble had already said the download "needs no Rust toolchain"
+and is "the provenance"; the reach premise contradicted a conclusion this
+project had already reached.
+
+**And a cost that was not known when the original decision was made.** A
+published crate cannot depend on a bare `path`, so every dependency needs a
+`version` that must be kept in lockstep with the workspace. That is not a
+publication-time chore, as the note below assumed -- **cargo enforces it at
+every build**, so a pin left stale by a bump breaks the entire workspace's
+resolution. Measured on 2026-09-02: raising `windows-topology-sys` to 0.2.0
+while this crate pinned `"0.1.0"` failed `cargo metadata` outright, and would
+have landed a broken `main` the moment the release PR merged. Publishing would
+have made that a permanent tax on a tool whose value is being re-run and
+revised; not publishing removes the pins entirely, which is what was done.
+
+**What is unchanged.** The tool still ships, still stamps its commit, and still
+marks non-CI builds `!!UNOFFICIAL!!`. Nothing about the record's provenance
+story depended on crates.io -- it only ever weakened it.
+
+---
+
+*Superseded reasoning follows, preserved for the argument it makes about
+provenance, which is why the record still marks unofficial builds.*
+
 **Decided: publish to crates.io, but not yet.** The reasoning is about which
 path a runner meets first, not about whether the reach is worth having.
 

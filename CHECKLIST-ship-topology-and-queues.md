@@ -112,20 +112,21 @@ order is the authority and the numbers are only names.
   local directory as the location searched. So this cannot be done early even as a tidy-up.
   **GATED BY SH-3.4**, which is where release-please raises the release PR that bumps topology's
   manifest. Nothing here can proceed before that lands.
-  **And two of the three pins are not ours to update.** `release-please-config.json` enables the
+  **Two of the three pins no longer exist, as of 2026-09-02.** `windows-placement-probe` and
+  `windows-platform-probes` are now decided never to be published to a registry, so their workspace
+  dependencies are **path-only with no `version` at all** -- eight pins deleted between them, not
+  merely the two topology ones. A pin that names a version nobody consults, while still being able to
+  break the workspace, is pure liability. See those crates' DESIGN-NOTES and `PT-5.3` (reversed).
+  **What is left is one pin, and it is release-please's.** `release-please-config.json` enables the
   `cargo-workspace` plugin, whose job is exactly this -- rewriting intra-workspace version
-  requirements when a member is bumped -- but it only sees packages listed in its `packages` map:
-  - `windows-ioring-sys` -- **managed**, so the plugin should update this pin itself. `kind=dev` and
-    invisible to consumers, so the update is for accuracy only. **Verify rather than assume it
-    happened**: it is a dev-dependency, and a tool that only rewrote `[dependencies]` would silently
-    skip it. Watch for this on the release PR (SH-3.4).
-  - `windows-placement-probe` -- **not managed**, so the plugin will not touch it. `kind=normal`,
-    `publish = false` today, planned for publication at
-    [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) -> `PT-5.6`, which already names this
-    pin among the three things it must not skip. Ours to update; that item is the backstop, not the
-    owner.
-  - `windows-platform-probes` -- **not managed**, `kind=normal`, never published, pin inert. Ours to
-    update, and worth doing rather than leaving a manifest that misstates what it was built against.
+  requirements when a member is bumped -- and `windows-ioring-sys` is in its `packages` map. The
+  other two crates never were, which is precisely why their pins were the dangerous ones.
+  **Verify rather than assume the plugin handles it**: ioring's topology pin is a `[dev-dependencies]`
+  entry, and a tool that only rewrote `[dependencies]` would skip it silently. Measured on
+  2026-09-02, this is the *only* remaining pin that breaks the workspace when topology bumps -- with
+  the other two removed, `cargo metadata` against a bumped topology fails naming `windows-ioring-sys`
+  and nothing else. So if the release PR does update it, this item is empty; if it does not, this
+  item is a one-line fix that must land in that PR.
   **One consequence to watch for, not to pre-empt.** The `cargo-workspace` plugin also *bumps*
   dependents of a bumped package. If it treats the dev-dependency as grounds to bump
   `windows-ioring-sys`, an ioring release will happen -- not because one is obliged (it is not; see
@@ -202,34 +203,35 @@ order is the authority and the numbers are only names.
   cannot be raised while topology's own manifest still reads `0.1.0` -- a `path` dependency's
   `version` must be satisfied by the path crate, and attempting it fails the workspace's resolution
   outright.
-  **Read the release PR's diff for the pins, not only for the version number.** The `cargo-workspace`
-  plugin should rewrite `windows-ioring-sys`'s requirement itself, but that one is a *dev*-dependency
-  and a tool that only rewrote `[dependencies]` would skip it without saying so. `windows-placement-probe`
-  and `windows-platform-probes` are outside release-please's `packages` map entirely, so their pins
-  will certainly not be touched and are SH-2.2's to update by hand. Record which of the three the PR
-  actually changed, so SH-2.2 updates the remainder rather than guessing.
+  **This PR must not be merged until `windows-ioring-sys`'s topology pin reads 0.2.0 in it.** Not a
+  review preference -- a `^0.1.0` requirement cannot be satisfied by a path crate at 0.2.0, so
+  merging without it lands a `main` where `cargo metadata` fails outright and every job on every
+  branch goes red. Measured, not predicted.
+  The `cargo-workspace` plugin should rewrite that requirement itself, but **verify it in the diff
+  rather than assuming**: it is a `[dev-dependencies]` entry, and a tool that only rewrote
+  `[dependencies]` would skip it without saying so. If the PR is missing it, add it to the PR.
+  It is now the **only** such pin: `windows-placement-probe` and `windows-platform-probes` had theirs
+  deleted entirely on 2026-09-02 when both were decided never to be published (SH-2.2).
 
 ## M4: release
 
 - [ ] **SH-4.1** -- Release `windows-topology-sys` 0.2.0 and confirm it appears on crates.io and builds
   on docs.rs. Docs.rs builds under its own configuration, so a crate that documents locally can still
   fail there.
-  **UNBLOCKS half of [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) PT-5.3 -- publishing
-  the tool to crates.io -- which needs both releases. On completing this, update that file's gate
-  bullet to record that topology has shipped**; the gate lifts only when SH-4.3 lands too, and a
-  half-lifted gate that reads as lifted is how work starts against a dependency that is not there yet.
-  **It does not gate the GitHub binaries**, which CI builds from this repository through `path`
-  dependencies.
+  **The obligation to [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) is void as of
+  2026-09-02.** This item used to half-unblock PT-5.3 -- publishing the tool to crates.io -- and that
+  decision was reversed: the tool is never published to a registry, so there is nothing here to
+  unblock and no gate bullet to edit. It never gated the tool's **GitHub binaries**, which CI builds
+  from this repository through `path` dependencies, and those remain the only distribution.
 
 - [ ] **SH-4.2** -- Update `windows-ioring-sys` to depend on the published 0.2.0 and release it, per
   the order settled in SH-2.2.
 
 - [ ] **SH-4.3** -- Release `windows-waitable-queues` 0.1.0, with SH-2.1's fix in place. Confirm the
   tag triggered a publish rather than assuming it did.
-  **LIFTS THE GATE ON [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) PT-5.3 only. On
-  completing this, edit that file's gate bullet to say the gate is lifted and name the two published
-  versions**, so a reader arriving there later does not have to reconstruct whether it still applies.
-  The tool's GitHub binaries never waited on this.
+  **The gate on [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) PT-5.3 is void as of
+  2026-09-02** -- that decision was reversed and the tool is never published to a registry, so there
+  is no gate to lift and no bullet to edit. The tool's GitHub binaries never waited on this.
   Blocked by SH-1.1, and by M31.6 as well if SH-1.2 decided that it gates.
 
 ## M5: verify from outside the workspace

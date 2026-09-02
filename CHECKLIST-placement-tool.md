@@ -457,6 +457,22 @@ build" distinction meaningful rather than decorative.
   claim something it cannot support.
   The publication itself is **PT-5.6** below; it is not part of this item, which was only ever a
   decision.
+  **REVERSED 2026-09-02: decided no, never publish to crates.io.** The GitHub release binary is the
+  only distribution, and `publish = false` is now permanent. Two reasons, the second of which was not
+  known when the above was written:
+  1. **The reach premise was backwards.** A released binary needs no Rust toolchain; `cargo install`
+     needs a toolchain, a compiler, and a build of the whole dependency tree. crates.io therefore
+     reaches a *subset* of the download path's audience -- a convenience for Rust developers, bought
+     by making the weakest-provenance path the most discoverable. M5's own preamble had already said
+     the download "needs no Rust toolchain" and is "the provenance".
+  2. **A published crate cannot use bare `path` dependencies, and cargo enforces the resulting
+     `version` pins at every build rather than at publication.** So a pin left stale by any workspace
+     bump breaks the entire workspace's resolution. Measured: topology at 0.2.0 against this crate's
+     `"0.1.0"` pin failed `cargo metadata` outright. Publishing would have made that a permanent tax;
+     not publishing let both pins be deleted.
+  Recorded in [DESIGN-NOTES.md](crates/windows-placement-probe/DESIGN-NOTES.md), which keeps the
+  superseded reasoning because its provenance argument is still why the record marks unofficial
+  builds.
 
 - [x] **PT-5.4** -- Package metadata and a statement of what is and is not covered by semver. The
   **record's schema is a compatibility surface** the moment anyone stores one; the internal measurement
@@ -471,39 +487,32 @@ build" distinction meaningful rather than decorative.
   else while looking like it had passed. The ARM64 development machine is the obvious first walker,
   and it doubles as the check that the unverified `aarch64` artifact from PT-5.1 actually runs.
 
-## M5+: crates.io, once the strong path is established
+## M5+: crates.io -- WITHDRAWN, never to be published
 
-Gated on M5, and named `M5+` rather than given a number because the gate is a
-deliverable in another checklist rather than a milestone here. Nothing in this section is an open
-obligation of M5: M5 is complete when the GitHub release path works, and this section is pulled in
-and numbered when that has happened.
+**PT-5.3's decision to publish here was reversed on 2026-09-02; this milestone will not be pulled in
+and numbered.** Kept as a heading rather than deleted, so that a reader who remembers a plan to
+publish finds the reversal instead of a gap. The reasoning is on PT-5.3 above and in
+[DESIGN-NOTES.md](crates/windows-placement-probe/DESIGN-NOTES.md): the reach premise was backwards,
+and a published crate would have owed permanent dependency-pin maintenance that cargo enforces at
+every build rather than at publication.
 
-- [ ] **PT-5.6** -- **Publish `windows-placement-probe` to crates.io**, per PT-5.3's decision.
+- [x] **PT-5.6** -- **WITHDRAWN: `windows-placement-probe` is never published to crates.io.** Checked
+  off as *decided against*, not as done. Its cross-component prerequisites on `SH-4.1` and `SH-4.3`
+  are void, and the reciprocal note in
+  [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) has been updated to
+  say so -- a prerequisite that outlives the item needing it is how work gets blocked on nothing.
+  Two of its three "must not skip" points are void with it: the dependency pins were **deleted**
+  rather than corrected (the crate is path-only now), and there is no `cargo install`ed copy to run.
+  The third survives on its own merit and is **not** lost: the README should still say that a
+  locally built copy produces records marked unofficial, because a runner can still build one from
+  source. That is **PT-5.7** below rather than a bullet inside a withdrawn item.
 
-  > **-> CROSS-COMPONENT PREREQUISITE:** blocked on
-  > [CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md) -> `M4` ->
-  > `SH-4.3` (release `windows-waitable-queues` 0.1.0), and on `SH-4.1` if
-  > `windows-topology-sys` reaches 0.2.0 first. This is a hard blocker, not a preference: a published
-  > crate cannot depend on a `path`, and `windows-waitable-queues` is not on crates.io today.
-
-  Also blocked on **PT-5.5** -- the whole point of the decision is that the download path is
-  established *first*, so publishing before someone has walked it would defeat the reasoning that
-  chose to publish at all.
-
-  Three things this must not skip, each of which is invisible until it is too late:
-  - **Update the dependency pins to what is actually published.** During local development cargo uses
-    the `path` entry and never exercises the `version` entry, so a stale pin costs nothing until the
-    moment of publication, and then decides which version a downstream user compiles against. The
-    crate currently pins `windows-topology-sys = "0.1.0"`.
-  - **Say in the README what a crates.io build costs the data** -- that it produces records marked
-    unofficial with an unknown commit, and that the release download does not. A runner choosing the
-    convenient path should know what they are giving up, rather than discovering it in their own
-    output.
-  - **Run the tool from a `cargo install`ed copy and read the record**, confirming it marks itself
-    unofficial and names no commit. This is the negative case for the path being added, and PT-5.1's
-    lesson applies unchanged: a distinction nobody has watched fail is a distinction that does not
-    work.
-
+- [ ] **PT-5.7** -- **Say in the README what a locally built copy costs the data.** Rescued from
+  PT-5.6, whose withdrawal would otherwise have taken it. The point never depended on crates.io: a
+  runner who clones and `cargo build`s gets a binary that marks its records `!!UNOFFICIAL!!` with no
+  commit, exactly as a `cargo install`ed one would have. They should learn that from the README
+  rather than from their own output, and it is the negative case that makes PT-3.5's "official build"
+  distinction mean something to a reader rather than only to CI.
 ## M6: is a set of "equivalent" processors actually equivalent?
 
 - [ ] **PT-6.1** -- **Give the fingerprint a placement signature, or keep saying it is not canonical.**
