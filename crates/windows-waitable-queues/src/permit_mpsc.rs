@@ -58,7 +58,7 @@
 use core::cell::{Cell, UnsafeCell};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::CacheAligned;
@@ -66,6 +66,25 @@ use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, validate_capacity};
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, PushError};
 use crate::metrics::Metrics;
+
+/// A ticket, and the slot sequence numbers compared against one.
+///
+/// **64 bits on every target, deliberately, rather than `usize`**, for the same
+/// reason [`slotwise_mpsc`](crate::slotwise_mpsc) made the same choice: a
+/// 32-bit counter laps in minutes at this crate's measured rates, and a shape
+/// whose soundness depends on the target's pointer width is not one this crate
+/// ships twice over.
+///
+/// It matters *less* here than there, and that difference is the point of the
+/// shape. In `slotwise_mpsc` the position is compared against a slot sequence to
+/// decide whether a slot is free, so a lap is a correctness hazard. Here the
+/// ticket carries **no decision at all** -- admission was already settled by the
+/// permit -- so its only job is to name a distinct slot, and it could wrap
+/// harmlessly. 64 bits makes it a *dumb* `fetch_add` that nobody has to reason
+/// about again: no wrap analysis, no ambiguity bound to re-derive, and a
+/// difference against `head` that stays meaningful for any queue this process
+/// could construct.
+type Position = u64;
 
 /// What this shape accepts as a capacity. See [`BOUNDS_MAX`].
 const BOUNDS: Bounds = Bounds {
@@ -75,22 +94,17 @@ const BOUNDS: Bounds = Bounds {
 
 /// The largest capacity this shape accepts.
 ///
-/// The same ceiling as [`reserving_mpsc`](crate::reserving_mpsc), so the two are
-/// measured over the same range rather than over ranges that happen to differ.
+/// The crate-wide ceiling, matching [`slotwise_mpsc`](crate::slotwise_mpsc)
+/// rather than [`reserving_mpsc`](crate::reserving_mpsc). That shape's far lower
+/// 2^31 is forced by its packing -- half a word for the position, half for the
+/// reservation count -- and this one has no packed word to be constrained by.
 ///
-/// Note what is *not* the reason for it here. In `reserving_mpsc` the ceiling is
-/// forced by the packing -- half a word for the position, half for the count.
-/// This shape has no packed word and could take the crate-wide bound directly;
-/// it takes the narrower one anyway so that a measurement at a given capacity is
-/// a measurement of the claim protocol and not of two different capacities.
-pub const BOUNDS_MAX: usize = {
-    let packed = 1_usize << 31;
-    if packed <= MAX_ADMISSIBLE_CAPACITY {
-        packed
-    } else {
-        MAX_ADMISSIBLE_CAPACITY
-    }
-};
+/// **This was 2^31 while the ticket was 32 bits**, so that a measurement against
+/// `reserving_mpsc` covered the same range on both. Widening the ticket removed
+/// the reason: the shapes are now measured at whatever capacity the harness
+/// picks, which is well below either ceiling, and matching an artificial limit
+/// would only misreport what this shape can do.
+pub const BOUNDS_MAX: usize = MAX_ADMISSIBLE_CAPACITY;
 
 const _: () = {
     assert!(
@@ -103,14 +117,34 @@ const _: () = {
         "a shape that accepts nothing would reject every capacity with a suggestion it would also \
          reject"
     );
-    // The permit count is signed and may go transiently negative by at most one
-    // per concurrent claimant (see `take_permit`), so the capacity must leave
-    // room below `i64::MAX` for every thread that could be in flight. A 2^31
-    // ceiling against a 2^63 counter leaves 2^32 threads of headroom, which is
-    // more than the process can create.
+    // The permit count starts at the capacity and never exceeds it, so the
+    // capacity is what must fit in the signed count's *positive* range.
+    //
+    // **The transient overdraft does not constrain this**, which is worth
+    // stating because an earlier version of this assertion assumed it did and
+    // reserved half the range for it. The overdraft goes *negative* -- each
+    // concurrent claimant subtracts one before undoing -- so it consumes the
+    // range below zero, of which there is a full 2^63, against a bound of one
+    // per thread in flight. It cannot meet the positive bound from below.
     assert!(
-        BOUNDS.max as i64 <= i64::MAX / 2,
-        "the permit count must hold the whole capacity with room for transient overdraft"
+        BOUNDS.max as u64 <= i64::MAX as u64,
+        "the permit count must be able to hold the whole capacity"
+    );
+    // `len` reads the queue's depth as `tail - head` in wrapping arithmetic, and
+    // that difference is unambiguous only up to half the ticket's range. So the
+    // capacity must fit below that half, not merely below `Position::MAX`.
+    //
+    // **Stated against the half rather than the maximum deliberately.** An
+    // earlier version of this assertion compared `BOUNDS.max` to `Position::MAX`,
+    // which is *tautological* on every target -- a `usize` capacity cannot exceed
+    // a `u64` maximum -- and so asserted nothing at all. That is precisely the
+    // trap `reserving_mpsc`'s own const block records having fallen into once.
+    // This form fails if `Position` is ever narrowed to `u32`, which is the
+    // change it exists to catch.
+    assert!(
+        (BOUNDS.max as u128) <= 1_u128 << (Position::BITS - 1),
+        "the ticket must be wide enough that a wrapping depth is unambiguous at any capacity this \
+         shape accepts"
     );
 };
 
@@ -129,7 +163,7 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
         slots.push(Slot {
             // Anything that is not `position + 1` for the position this slot
             // first serves. Matches `reserving_mpsc`'s initialisation exactly.
-            sequence: AtomicU32::new(index as u32),
+            sequence: AtomicU64::new(index as Position),
             value: UnsafeCell::new(MaybeUninit::uninit()),
         });
     }
@@ -139,8 +173,8 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
         slots: slots.into_boxed_slice(),
         mask: capacity - 1,
         capacity,
-        head: CacheAligned(AtomicU32::new(0)),
-        tail: CacheAligned(AtomicU32::new(0)),
+        head: CacheAligned(AtomicU64::new(0)),
+        tail: CacheAligned(AtomicU64::new(0)),
         permits: CacheAligned(AtomicI64::new(capacity as i64)),
         producers: AtomicUsize::new(1),
         consumer_live: AtomicBool::new(true),
@@ -162,7 +196,7 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
 /// One cell of the ring.
 struct Slot<T> {
     /// `position + 1` once the producer holding `position` has finished writing.
-    sequence: AtomicU32,
+    sequence: AtomicU64,
     value: UnsafeCell<MaybeUninit<T>>,
 }
 
@@ -177,12 +211,14 @@ struct Shared<T> {
     /// `reserving_mpsc` every push loads it to count free slots, and that load
     /// is both the cost D-26 measured and the stale input SH-14.1 exploits.
     /// Here it is consumer-private, kept atomic only so `len` can sample it.
-    head: CacheAligned<AtomicU32>,
+    head: CacheAligned<AtomicU64>,
     /// The ticket dispenser. Only ever `fetch_add`.
     ///
     /// Carries no decision, so it has no predicate that a recurrence could
-    /// invalidate, and it is free to wrap.
-    tail: CacheAligned<AtomicU32>,
+    /// invalidate. At [`Position`]'s width it is a *dumb* increment: it would be
+    /// sound if it wrapped, and it cannot wrap, so neither property has to be
+    /// argued at a call site again.
+    tail: CacheAligned<AtomicU64>,
     /// Slots not currently spoken for, as a signed count.
     ///
     /// Signed because the claim is an optimistic decrement that may overshoot;
@@ -254,7 +290,7 @@ impl<T> Shared<T> {
     /// The caller must hold a permit and the ticket naming `position`, so that
     /// no other producer can write this slot and the consumer has finished with
     /// whatever it held a lap ago.
-    unsafe fn publish(&self, position: u32, item: T) {
+    unsafe fn publish(&self, position: Position, item: T) {
         let slot = &self.slots[position as usize & self.mask];
         // SAFETY: the caller's ticket makes this thread the only writer, and its
         // permit means the consumer has finished with the previous occupant.

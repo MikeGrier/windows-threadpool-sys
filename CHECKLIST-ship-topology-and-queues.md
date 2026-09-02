@@ -882,9 +882,9 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   answer to SH-14.1.** On the evidence so far the permit claim dominates the wide claim on every
   axis except maturity: it fixes the hazard on *all* targets where the wide claim covers only 64-bit
   ones, it is 2.7x faster at 16-32 producers where the wide claim keeps the retry loop that costs,
-  it needs no dependency, and its 2^31 ceiling is not intrinsic -- its position carries no decision,
-  so it could take a `u64` ticket exactly as `slotwise_mpsc` did in SH-14.2 and reach 2^62 on every
-  target too.
+  it needs no dependency, and **it now reaches the same 2^62 ceiling on every target**: its ticket
+  was widened to `u64` (as `slotwise_mpsc`'s was in SH-14.2), which was the wide claim's last
+  remaining unique advantage.
   What the wide claim has instead is **risk**: it is a width change to a shape that has been through
   nine review rounds and whose behaviour is unchanged, where the permit claim is a new protocol with
   23 tests, no trait impls, no verification, and an open question about whether it reports
@@ -952,20 +952,30 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
     so SH-14.1 is unreachable rather than merely unlikely. The capacity ceiling rises from 2^31 to
     2^62, which was [D-18](crates/windows-waitable-queues/DESIGN-NOTES.md#d-18)'s original point.
 
-  **The trap this item exists to avoid, verified rather than assumed.** `rustc 1.98.0 --print cfg
-  --target x86_64-pc-windows-msvc -C target-feature=-cmpxchg16b` **still emits
-  `target_has_atomic="128"`**. The cfg tracks the target's maximum atomic width, not whether the
-  instruction is enabled -- so `#[cfg(target_has_atomic = "128")]` alone does **not** guarantee a
-  lock-free 128-bit exchange. Where the instruction is absent, `portable-atomic`'s default `fallback`
-  feature silently substitutes **a global lock**: the queue still compiles, still runs, and stops
-  being lock-free, contending with any unrelated user of the fallback in the same process. That is
-  the same silent-degradation shape as SH-14.1 itself and must not be shipped.
-  So the gate is **two** conditions, not one: the cfg, **and** a const assertion that
-  `AtomicU128::is_always_lock_free()` (a `pub const fn` in `portable-atomic`, verified). The build
-  fails rather than quietly taking a lock. This is the same standard SH-14.2 already applied when it
-  widened `slotwise_mpsc` -- it probed i686 specifically to confirm `AtomicU64` was lock-free there,
-  recording that a hidden mutex "would have made this a bad trade". `AtomicU128` on i686 *is* that
-  hidden mutex, which is why the wide shape must not exist there at all.
+  **The gate is one line of `Cargo.toml`, and this was measured rather than designed.** An earlier
+  version of this item specified `#[cfg(target_has_atomic = "128")]` plus a `const` assertion on
+  `is_always_lock_free()`. Both are unnecessary. Probing `portable-atomic` 1.15 on the pinned
+  toolchain established:
+  - With **`default-features = false`**, `portable_atomic::AtomicU128` **does not exist** on
+    `i686-pc-windows-msvc` (`error[E0432]: unresolved import ... no AtomicU128 in the root`), nor on
+    `x86_64` built with `-C target-feature=-cmpxchg16b`. It exists exactly where the target has a
+    compile-time-guaranteed native lock-free 128-bit exchange. **The `use` statement is the gate**,
+    and it fails loudly, naming the missing type.
+  - With **default features**, the `fallback` feature compiles on i686 and silently substitutes a
+    **global lock**. That -- not anything intrinsic to a 128-bit exchange -- is the whole source of
+    the silent-degradation hazard, and it is opted out of rather than guarded against.
+  - `#[cfg(target_has_atomic = "128")]` is the **wrong** gate regardless: `rustc 1.98.0 --print cfg`
+    still emits it under `-C target-feature=-cmpxchg16b`, because it tracks the target's maximum
+    atomic width and not instruction availability.
+  - `is_always_lock_free()` **is** const-evaluable (confirmed: `const X: bool =
+    AtomicU128::is_always_lock_free();` compiles, yielding `true` on x86_64). A const assertion on it
+    is nonetheless **worse than useless** here -- redundant where the type exists, and unreachable
+    where it does not, because there is nothing to compile.
+  So: depend on `portable-atomic` with `default-features = false`, and add no cfg and no assertion.
+  Note the consequence plainly in the shape's docs: **`reserving_mpsc_wide` cannot be built for
+  i686 at all**, so a caller targeting 32-bit uses `reserving_mpsc` (with SH-15.8's warnings) or the
+  permit claim. A portability cliff was chosen over a performance cliff because a compile error
+  naming `AtomicU128` is more informative than a queue that silently stops being lock-free.
 
   **[D-7](crates/windows-waitable-queues/DESIGN-NOTES.md#d-7) puts the burden of proof on adding a
   feature, and it is met here rather than waived.** D-7 rejected feature-gating shapes because the
@@ -975,9 +985,6 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   from a downstream auditor's review, or from a `cargo vet` run. A caller who does not want the
   dependency must be able to not have it. Record the discharge as a decision rather than leaving it
   to look like D-7 was ignored.
-  Verify at implementation time whether Cargo's `[target.'cfg(...)'.dependencies]` accepts
-  `target_has_atomic`; if it does not, the dependency is optional-by-feature and the module carries
-  the cfg separately.
 
 - [ ] **SH-15.10** -- **Measure the wide claim beside the narrow one, and publish the difference.**
   Same harness, same host, same run as SH-15.5. The question is narrow and worth an answer either
