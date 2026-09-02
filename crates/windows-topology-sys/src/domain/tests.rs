@@ -541,4 +541,109 @@ mod serde_tests {
             "a float below i64::MIN must be refused, not saturated"
         );
     }
+    // -----------------------------------------------------------------------
+    // Rejection.
+    //
+    // Every test above round-trips a value this crate serialized, so the
+    // deserializer only ever sees well-formed input and its refusal paths are
+    // never taken. A mutation run replaced `as_bool` with a constant `true` and
+    // loosened the cache-object guard, and neither could fail against input
+    // that was already valid.
+    //
+    // These start from hand-written JSON instead.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_false_flag_survives_the_round_trip_as_false() {
+        // `as_bool -> Ok(true)` survived because every serde test above used
+        // `simultaneous_multithreading: true`. With only that value in the
+        // suite, a deserializer that ignored its input and always answered
+        // `true` was indistinguishable from one that read it.
+        let domain = Domain {
+            kind: DomainKind::Core {
+                simultaneous_multithreading: false,
+                efficiency_class: 0,
+            },
+            id: 1,
+            processors: ProcessorSet::from_group_mask(0, 0b1),
+        };
+
+        let restored = round_trip(&domain);
+        assert_eq!(restored, domain);
+        let DomainKind::Core {
+            simultaneous_multithreading,
+            ..
+        } = restored.kind
+        else {
+            panic!("a core domain must deserialize as one");
+        };
+        assert!(
+            !simultaneous_multithreading,
+            "a machine without SMT must not be reported as having it"
+        );
+    }
+
+    #[test]
+    fn a_non_boolean_smt_flag_is_refused_rather_than_read_as_true() {
+        // The other half: a constant `true` accepts input that is not a boolean
+        // at all. Anything that decodes to a different `AttributeValue` reaches
+        // the refusal, so a string and a number are both tried.
+        // The well-formed shape is asserted first, so a later failure is
+        // attributable to the flag rather than to the rest of the description.
+        // Written after exactly that mistake: an ad-hoc `processors` literal
+        // made the refusals happen for an unrelated reason.
+        let well_formed = r#"{"kind": "core", "id": 1, "processors": [],
+                 "simultaneous_multithreading": false, "efficiency_class": 0}"#;
+        serde_json::from_str::<Domain>(well_formed)
+            .expect("the fixture must parse when only the flag is changed");
+
+        for bad in [r#""yes""#, "1", "null"] {
+            let json = well_formed.replace("false", bad);
+            let error = serde_json::from_str::<Domain>(&json)
+                .expect_err("{bad} is not a boolean and must not be read as one");
+            assert!(
+                error.to_string().contains("boolean"),
+                "the refusal must say what was expected: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cache_type_object_carrying_more_than_the_other_key_is_refused() {
+        // The `map.len() == 1` guard survived being replaced with `true`, which
+        // would accept an object with extra keys and silently ignore them. That
+        // matters more than it looks: the object form exists to carry a raw
+        // `PROCESSOR_CACHE_TYPE` this crate does not recognise, so a reader
+        // sending a *newer* shape must be told it was not understood rather
+        // than have the parts we recognise quietly taken.
+        //
+        // Built from the same helper as the accepted case below, which is what
+        // makes the refusal attributable: an ad-hoc JSON literal here was
+        // rejected for a malformed `processors` field instead, and would have
+        // passed this assertion while testing nothing about the guard.
+        let json = r#"{"kind": "cache", "id": 0, "processors": [],
+                 "level": 2, "associativity": 8, "line_size": 64,
+                 "size_bytes": 1024, "cache_type": {"other": 99, "extra": 1}}"#;
+
+        let outcome: Result<Domain, _> = serde_json::from_str(json);
+        let error = outcome.expect_err("an object with a second key must be refused");
+        assert!(
+            error.to_string().contains("cache_type"),
+            "the refusal must name the field that was not understood, or a \
+             reader cannot tell which part of their description was rejected: {error}"
+        );
+    }
+
+    #[test]
+    fn a_cache_type_object_with_exactly_the_other_key_is_accepted() {
+        // The positive case, so the test above cannot be satisfied by a guard
+        // that refuses every object -- or, as it first was, by a fixture that
+        // never reached the guard at all.
+        let domain =
+            cache_domain_with_other_type("99").expect("the single-key form is the one we emit");
+        let DomainKind::Cache { cache_type, .. } = domain.kind else {
+            panic!("a cache domain must deserialize as one");
+        };
+        assert_eq!(cache_type, CacheKind::Other(99));
+    }
 }
