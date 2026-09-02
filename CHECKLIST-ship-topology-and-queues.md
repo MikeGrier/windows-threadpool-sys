@@ -737,3 +737,23 @@ counter; nothing protects the decision.
   Whatever is chosen, the property is not observable from a test that merely crosses the wrap: it
   needs a producer *held* between its decision and its exchange, which means a deliberate seam --
   the crate's existing race hooks (`ARM`, `CLEAR`, `CLAIM`) are the shape of what is needed.
+
+- [x] **SH-14.4** -- **Every statement of the wait protocol was missing its last step.** Five findings,
+  one cause. `blocking::recv` has always had four steps -- pop, `arm`, **check disconnection and take
+  one last time**, wait -- but the trait contract, all three shapes' `arm` docs, two worked examples,
+  and the README each described the three-step form. A caller following any of them waits forever at
+  the end of the stream: the last producer's drop rings the doorbell **once**, `arm` clears precisely
+  that ring, and with no producer left nothing rings it again.
+  The root defect is a contract that overstated itself. `arm` answers exactly one question -- can a
+  later *push* be missed -- and on a producerless queue the answer is trivially no, so it returns
+  `true`. Documented flatly as "safe to wait", that is an invitation to hang. It now says what it
+  measures, and the four-step protocol is stated on `Waitable::arm` with the other statements
+  pointing at it rather than paraphrasing it again.
+  Pinned by `arm_reports_safe_to_wait_on_an_empty_disconnected_queue`, which asserts both halves --
+  `arm` returns `true`, *and* the doorbell is dark afterwards -- so the exception is bound to
+  observable behaviour rather than to prose. The final `pop` is likewise not belt-and-braces: a
+  producer may push *and then* drop between the drain and the check, which is what `Parked::finish`
+  exists for.
+  The README is now compiled as a doctest (`cfg(doctest)`, matching three sibling crates). It carries
+  no code today, so this compiles nothing -- it is there so the first example somebody adds is
+  compiled rather than trusted, this round being the demonstration that prose nothing executes rots.

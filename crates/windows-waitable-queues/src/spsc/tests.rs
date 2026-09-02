@@ -456,6 +456,45 @@ fn arm_reports_safe_to_wait_when_empty() {
 }
 
 #[test]
+fn arm_reports_safe_to_wait_on_an_empty_disconnected_queue() {
+    // **The exception `arm`'s contract has to state, and the reason the
+    // documented protocol needs a fourth step.**
+    //
+    // `arm` answers one question -- can a later *push* be missed -- and on a
+    // queue with no producers left the answer is trivially no, so it says
+    // `true`. Read as "safe to wait", which is what the contract used to say
+    // flatly, that is a permanent hang: the last producer's drop rings the
+    // doorbell exactly once, `arm` clears precisely that ring, and nothing
+    // remains to ring it again.
+    //
+    // `blocking::recv` has always had the missing step -- it checks
+    // disconnection and takes one last item before waiting. What was wrong was
+    // every *statement* of the protocol: the trait's contract, three shapes'
+    // method docs, three worked examples, and the README all described the
+    // three-step form a caller could follow into an indefinite wait.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    rx.doorbell().expect("the doorbell must be creatable");
+    drop(tx);
+
+    assert!(
+        rx.is_disconnected(),
+        "the producer is gone, so the stream has ended"
+    );
+    assert_eq!(rx.pop(), None, "and nothing is left to take");
+    assert!(
+        rx.arm().expect("arming must succeed"),
+        "arm reports on missed pushes, not on the end of the stream -- so it \
+         says `true` here, and a caller that treats that as permission to wait \
+         indefinitely never wakes"
+    );
+    assert!(
+        !doorbell_is_lit(&rx),
+        "and it has consumed the one-shot wakeup the producer's drop left, \
+         which is what makes the wait permanent rather than merely long"
+    );
+}
+
+#[test]
 fn arm_relights_the_doorbell_for_a_later_push() {
     let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
     // As above: the first push must actually SET the mirror flag, or the claim

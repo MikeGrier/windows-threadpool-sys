@@ -157,8 +157,23 @@ taken until the consumer clears it with `arm()`, and a producer's signal may
 land after the consumer has already drained -- so a wake means *there may be
 something*, never *there is something*. What the crate guarantees is the
 direction that matters: a wake is never missing. Follow the protocol the
-blocking receivers use -- pop, `arm()`, re-check -- rather than treating the
-handle as a readiness predicate.
+blocking receivers use rather than treating the handle as a readiness
+predicate. That protocol has **four** steps, and the fourth is the one that is
+easy to leave out:
+
+1. take everything available;
+2. `arm()`, and if it returns `false`, start again -- something arrived;
+3. **check `is_disconnected()`, and if the producers are gone, take one last
+   time and stop.** `arm()` reports only whether a later *push* can be missed,
+   so on a queue with no producers left it still returns `true` -- having just
+   cleared the single doorbell ring their drop left behind. Waiting on the
+   strength of that `true` never wakes. The last take is not belt-and-braces
+   either: a producer may push *and then* drop between step 1 and this check;
+4. only now, wait on the handle.
+
+`recv` already does all four. The steps matter when driving the handle
+yourself -- through a `ThreadpoolWait`, or a `WaitForMultipleObjects` across
+several queues -- because then there is nothing to delegate to.
 
 The event is created lazily, so a consumer that only polls never allocates a
 kernel object at all.

@@ -1116,11 +1116,18 @@ impl<T> Consumer<T> {
         self.shared.doorbell.owned()
     }
 
-    /// Clears the doorbell and reports whether it is safe to wait on it.
+    /// Clears the doorbell and reports whether a later push could be missed.
     ///
     /// `true` means the queue had nothing takeable after the doorbell was
-    /// cleared, so any later push is guaranteed to signal and a wait cannot be
-    /// missed. `false` means something arrived in the meantime.
+    /// cleared, so any later push is guaranteed to signal. `false` means
+    /// something arrived in the meantime.    ///
+    /// **`true` is not by itself permission to wait indefinitely.** It answers
+    /// only whether a later *push* can be missed, and says nothing about the
+    /// end of the stream: with every producer gone it still returns `true`,
+    /// having just cleared the single ring their drop left behind. See
+    /// [`Waitable::arm`](crate::Waitable::arm) for the four-step protocol an
+    /// indefinite wait needs, and the example on [`Self::doorbell`] for it
+    /// written out.
     ///
     /// Clearing must come before the check, which is the reverse of the order
     /// that reads naturally; see [D-9](../DESIGN-NOTES.md#d-9).

@@ -288,3 +288,18 @@ pub use traits::{Bounded, Claim, Consumer, Drain, Observable, Producer, Reservin
 #[cfg(windows)]
 #[repr(align(128))]
 struct CacheAligned<T>(T);
+
+// The README states this crate's wait protocol, and a review round found that
+// statement had drifted from what `blocking::recv` actually does -- it named
+// three steps where the code has four, and a caller following it would have
+// waited forever at the end of the stream. That particular drift is fixed and
+// pinned by a test, but the general risk is not: prose nothing executes can
+// only rot.
+//
+// The README carries no code today, so this compiles nothing. It is here so
+// that the first example somebody adds is compiled rather than trusted, which
+// is the cheapest moment to close the gap. `cfg(doctest)` means the item exists
+// only while rustdoc collects tests, so an ordinary build pays nothing.
+#[cfg(all(doctest, windows))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -747,6 +747,19 @@ impl<T> Consumer<T> {
     ///     if !rx.arm()? {
     ///         continue; // Something arrived; waiting now would be wrong.
     ///     }
+    ///     // The end of the stream, which arming does not report. Without
+    ///     // this the wait below never returns: the last producer's drop rang
+    ///     // the doorbell once and `arm` has just cleared that ring.
+    ///     //
+    ///     // The final `pop` is not belt-and-braces -- a producer may push and
+    ///     // then drop between the drain above and this check, and skipping it
+    ///     // discards an item that was successfully sent.
+    ///     if rx.is_disconnected() {
+    ///         while let Some(item) = rx.pop() {
+    ///             let _ = item;
+    ///         }
+    ///         return Ok(());
+    ///     }
     ///     let handle = rx.doorbell()?;
     ///     // SAFETY: a live event handle borrowed for the call.
     ///     unsafe { WaitForSingleObject(handle.as_raw_handle(), INFINITE) };
@@ -774,12 +787,19 @@ impl<T> Consumer<T> {
         self.shared.doorbell.owned()
     }
 
-    /// Clears the doorbell and reports whether it is safe to wait on it.
+    /// Clears the doorbell and reports whether a later push could be missed.
     ///
     /// `true` means the queue was still empty after the doorbell was cleared,
-    /// so any later push is guaranteed to signal and a wait cannot be missed.
-    /// `false` means something arrived in the meantime: take it instead of
-    /// waiting.
+    /// so any later push is guaranteed to signal. `false` means something
+    /// arrived in the meantime: take it instead of waiting.
+    ///
+    /// **`true` is not by itself permission to wait indefinitely.** It answers
+    /// only whether a later *push* can be missed, and says nothing about the
+    /// end of the stream: with every producer gone it still returns `true`,
+    /// having just cleared the single ring their drop left behind. See
+    /// [`Waitable::arm`](crate::Waitable::arm) for the four-step protocol an
+    /// indefinite wait needs, and the example on [`Self::doorbell`] for it
+    /// written out.
     ///
     /// The order inside this method is the whole correctness argument, and it
     /// is the reverse of the one that reads naturally. Clearing *first* and

@@ -372,18 +372,43 @@ pub trait Waitable {
     /// Returns the error from `CreateEventW` or `DuplicateHandle`.
     fn doorbell_owned(&self) -> io::Result<OwnedHandle>;
 
-    /// Clears the doorbell and reports whether it is safe to wait on it.
+    /// Clears the doorbell and reports whether a later push could be missed.
     ///
     /// `true` means the queue had nothing to take *after* the doorbell was
-    /// cleared, so any later push is guaranteed to signal and a wait cannot be
-    /// missed. `false` means something arrived in the meantime: take it instead
-    /// of waiting.
+    /// cleared, so any later push is guaranteed to signal. `false` means
+    /// something arrived in the meantime: take it instead of waiting.
     ///
     /// **Waiting without arming is a permanent hang, not an occasional missed
     /// wakeup.** The full argument is in
     /// [D-9](../DESIGN-NOTES.md#d-9); the short form is that clearing must come
     /// before the emptiness check, which is the reverse of the order that reads
     /// naturally.
+    ///
+    /// # `true` is not by itself permission to wait
+    ///
+    /// It answers exactly one question -- *can a later push be missed* -- and
+    /// says nothing about the end of the stream. On a queue whose producers are
+    /// all gone the answer to that question is trivially no, so this returns
+    /// `true`; but the last producer's drop rings the doorbell **once**, this
+    /// call clears precisely that ring, and nothing remains to ring it again. A
+    /// caller that waits indefinitely on the strength of `true` alone therefore
+    /// never wakes.
+    ///
+    /// So an indefinite wait needs four steps, not three:
+    ///
+    /// 1. take everything available;
+    /// 2. `arm`, and if it returns `false`, start again -- something arrived;
+    /// 3. **check [`Disconnectable::is_disconnected`], and if the producers are
+    ///    gone, take one last time before reporting the end of the stream.**
+    ///    That last take is not belt-and-braces: a producer may push *and then*
+    ///    drop in the window between step 1 and this check, and skipping it
+    ///    discards an item that was successfully sent;
+    /// 4. only now, wait.
+    ///
+    /// This is what [`Consumer::recv`](crate::Consumer) already does; the steps
+    /// are spelled out because a caller driving the handle itself -- through a
+    /// `ThreadpoolWait`, or a `WaitForMultipleObjects` over several queues --
+    /// cannot delegate to it.
     ///
     /// # Errors
     ///
