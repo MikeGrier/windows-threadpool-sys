@@ -285,3 +285,69 @@ fn the_civil_conversion_round_trips_across_a_long_span() {
         previous = Some((year, month, dom));
     }
 }
+
+/// An observation carrying nothing but the host it claims to have measured on.
+///
+/// The rows are empty because the splice these tests are about is between the
+/// two *hosts*; a row would only make the fixture longer without making the
+/// question sharper.
+fn observation_on(host: Fingerprint) -> crate::core_affinity::Observation {
+    crate::core_affinity::Observation {
+        host,
+        processors: Vec::new(),
+        by_class: Vec::new(),
+        measurements: Vec::new(),
+        by_node_pair: Vec::new(),
+    }
+}
+
+/// The shape a four-processor bare topology produces, as a real conversion.
+fn measured_host() -> Fingerprint {
+    Fingerprint::from_topology(&windows_topology_sys::Topology::default())
+}
+
+#[test]
+fn a_record_cannot_splice_an_announced_host_onto_another_machines_rows() {
+    // The defect. The tool announces a shape read at one instant and the
+    // measurement discovers again at another, so a processor going offline --
+    // or moving group or node -- between them yields a record whose `host`
+    // describes one machine while every row was measured on a different one.
+    // Nothing in the file says so, and the host is precisely what a reader
+    // interprets row sets *through*, so the rows get read against the wrong
+    // machine.
+    // A processor arriving, rather than leaving, purely because the fixture's
+    // bare topology has none to remove. The direction does not matter: the
+    // record is a splice either way.
+    let announced = measured_host();
+    let mut measured = announced.clone();
+    measured.processors += 1;
+
+    let error = SubmissionRecord::new(
+        &observation_on(measured),
+        announced,
+        MachineDescription::read(true),
+    )
+    .expect_err("a record spanning two machines must not be assembled");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        error.to_string().contains("two machines"),
+        "the message must say what is wrong rather than only that something is: {error}"
+    );
+}
+
+#[test]
+fn a_record_assembles_when_the_announced_and_measured_hosts_agree() {
+    // The other half, so the refusal above is known to be discriminating rather
+    // than a constructor that now always fails.
+    let host = measured_host();
+
+    let record = SubmissionRecord::new(
+        &observation_on(host.clone()),
+        host.clone(),
+        MachineDescription::read(true),
+    )
+    .expect("identical hosts are the ordinary case");
+
+    assert_eq!(record.host, host);
+}

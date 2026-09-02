@@ -606,3 +606,39 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   test that asserts the whole render, including the `!!SYNTHETIC!!` provenance marker. The stronger
   fix needs a marker, which is a serialized field and so a schema bump, tracked as
   [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) `PT-6.2`.
+
+## M13: PR #56 eighth review round
+
+- [x] **SH-13.1** -- **A record could splice two machines together.** The tool announced a shape read
+  at one instant while `core_affinity::measure` discovered again at another, so a processor going
+  offline -- or moving group or node -- between them produced a record whose `host` described one
+  machine while every row was measured on a different one. Nothing in the file said so, and the host
+  is precisely what a reader interprets row sets *through*.
+  `measure` now reports the shape it actually ran on, as `Observation::host`, which is the fix that
+  keeps the anti-synthetic boundary intact: the measurement still discovers for itself and no seam
+  accepts a fabricated shape from outside. `SubmissionRecord::new` refuses when the announced and
+  measured hosts differ, so the splice is unrepresentable rather than merely avoided at the one
+  current call site; the tool checks first anyway and reports the disagreement in terms a runner can
+  act on. Refusing rather than silently recording the measured shape, because the notice is what the
+  runner consented to.
+
+- [x] **SH-13.2** -- **The tool wrote from 54 independent print sites.** The repository's
+  one-output-sink rule requires an output abstraction at the *first* output site so the storage
+  target and the formatting stay separable from the call sites that compose content. This binary had
+  none, which is why its collection notice -- a disclosure a runner reads before agreeing to publish
+  facts about their machine -- could only be exercised by running the process and capturing stdout.
+  A `Sink` trait now carries the two streams the tool genuinely has, `print_collection_notice` and
+  `print_plan` became `render_*` functions returning a `String` (matching the idiom the record report
+  already used), and `main` is the only place that names the real streams.
+  Verified as a pure refactor by comparing the built binary's output before and after: `--preview`
+  and `--help` are **byte-identical**, and `--version` differs only by the build identity correctly
+  reporting the working tree as `DIRTY`. Eight new tests cover what was previously unreachable,
+  including that the notice shows the model rather than describing it, that a withheld model reads
+  differently from one the host would not report, and that the two streams cannot satisfy each
+  other's assertions.
+
+- [ ] **SH-13.3** -- **`probe-core-affinity` writes from 67 independent print sites.** Same rule, same
+  fix, in [core_affinity.rs](crates/windows-platform-probes/src/bin/core_affinity.rs).
+
+- [ ] **SH-13.4** -- **`probe-doorbell-cost` writes from 27 independent print sites.** Same rule, same
+  fix, in [doorbell_cost.rs](crates/windows-platform-probes/src/bin/doorbell_cost.rs).

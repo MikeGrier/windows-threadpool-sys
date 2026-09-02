@@ -5,10 +5,14 @@
 //! outputs" is friction for someone doing a favour, and invites partial
 //! submissions that cannot be compared with each other.
 
+use std::fmt::Write as _;
 use std::process::ExitCode;
 
+mod sink;
 #[cfg(test)]
 mod tests;
+
+use sink::{Sink, Stdio, emit};
 
 use windows_placement_probe::build_identity::BuildIdentity;
 use windows_placement_probe::core_affinity::{self, RunPlan};
@@ -38,17 +42,34 @@ struct Options {
 }
 
 fn main() -> ExitCode {
+    run(&mut Stdio)
+}
+
+/// The whole tool, against any [`Sink`].
+///
+/// Separate from [`main`] so the streams are a parameter rather than a global.
+/// `main` is the only place that names [`Stdio`].
+fn run(out: &mut impl Sink) -> ExitCode {
     let options = match parse_arguments() {
         Ok(options) => options,
         Err(message) => {
-            eprintln!("{message}");
+            out.problem(&message);
             return ExitCode::FAILURE;
         }
     };
 
     if options.help {
-        // stdout and success: help was asked for and was given.
-        println!("{}", help());
+        // The report stream and success: help was asked for and was given.
+        //
+        // The trailing blank line is deliberate here and was verified against
+        // the previous build: `help()` ends with a newline and the `println!`
+        // that used to print it added a second, so the output ended with a
+        // blank line. `emit` drops a trailing newline rather than yielding an
+        // empty line, so keeping the spacing takes an explicit line. Whether
+        // that blank should exist at all is a question about the help text, not
+        // about where output goes -- and this change is only about the latter.
+        emit(out, &help());
+        out.line("");
         return ExitCode::SUCCESS;
     }
 
@@ -57,7 +78,7 @@ fn main() -> ExitCode {
         // CI asserts on this line that a released artifact reports itself
         // official, and a runner can check the same thing before trusting a
         // download -- both need the commit and the source, not just "0.1.0".
-        println!("{}", BuildIdentity::current());
+        out.line(&BuildIdentity::current().to_string());
         return ExitCode::SUCCESS;
     }
 
@@ -71,7 +92,7 @@ fn main() -> ExitCode {
     let topology = match Topology::discover() {
         Ok(topology) => topology,
         Err(error) => {
-            eprintln!("could not read this machine's topology: {error}");
+            out.problem(&format!("could not read this machine's topology: {error}"));
             return ExitCode::FAILURE;
         }
     };
@@ -79,7 +100,7 @@ fn main() -> ExitCode {
     let places = match places_from_topology(&topology) {
         Ok(places) => places,
         Err(error) => {
-            eprintln!("could not read this machine's topology: {error}");
+            out.problem(&format!("could not read this machine's topology: {error}"));
             return ExitCode::FAILURE;
         }
     };
@@ -95,43 +116,82 @@ fn main() -> ExitCode {
     // whose *numbers* are valid on this host while its node labels are not, so
     // every pin would succeed and real timings would be filed under fabricated
     // labels. Its rows carry their own places, so each row says what it measured.
+    //
+    // That leaves two readings of one machine taken at different instants, which
+    // is a real hazard rather than a theoretical one -- so the measurement
+    // reports the shape it saw and the two are compared below before anything is
+    // recorded. The seam stays closed; the skew it left behind is checked.
     let host = Fingerprint::from_topology(&topology);
 
-    print_collection_notice(&machine, &host, options.suppress_model);
-    print_plan(&plan);
+    emit(
+        out,
+        &render_collection_notice(&machine, &host, options.suppress_model),
+    );
+    emit(out, &render_plan(&plan));
 
     if options.preview {
-        println!();
-        println!("Preview only -- nothing was measured and no file was written.");
-        println!("Run again without --preview to take the measurement.");
+        out.line("");
+        out.line("Preview only -- nothing was measured and no file was written.");
+        out.line("Run again without --preview to take the measurement.");
         return ExitCode::SUCCESS;
     }
 
-    println!();
-    println!("Measuring. This machine will be busy until it finishes.");
-    println!();
+    out.line("");
+    out.line("Measuring. This machine will be busy until it finishes.");
+    out.line("");
 
     let observation = match core_affinity::measure() {
         Ok(observation) => observation,
         Err(error) => {
-            eprintln!("the measurement could not run: {error}");
+            out.problem(&format!("the measurement could not run: {error}"));
             return ExitCode::FAILURE;
         }
     };
-    let record = SubmissionRecord::new(&observation, host, machine);
+    // The announced shape and the measured one must be the same shape, or the
+    // record is a splice of two machines: `host` would come from the reading
+    // above while every row came from the one `measure` took, with nothing in
+    // the file saying so and a reader interpreting the rows through the wrong
+    // machine. A processor going offline, or moving group or node, between the
+    // notice and the end of the measurement is enough to produce it.
+    //
+    // Refusing rather than quietly recording the measured shape, because the
+    // notice is what the runner read and consented to. A record that silently
+    // describes a different machine than the one they were shown is the outcome
+    // this tool's whole disclosure story exists to prevent -- and the run is
+    // cheap to repeat, whereas a wrong record in a corpus is not.
+    if observation.host != host {
+        out.problem(
+            "this machine changed while it was being measured, so the result was discarded.",
+        );
+        out.problem(&format!("  announced: {host}"));
+        out.problem(&format!("  measured:  {}", observation.host));
+        out.problem("nothing was written. Run again on an otherwise idle machine.");
+        return ExitCode::FAILURE;
+    }
+
+    // Cannot fail: the equality was just checked above. Handled rather than
+    // unwrapped anyway, because the constructor owns that invariant and a panic
+    // here would discard a measurement the runner has already paid for.
+    let record = match SubmissionRecord::new(&observation, host, machine) {
+        Ok(record) => record,
+        Err(error) => {
+            out.problem(&format!("the record could not be assembled: {error}"));
+            return ExitCode::FAILURE;
+        }
+    };
     let text = match submission::render_submission(&record) {
         Ok(text) => text,
         Err(error) => {
-            eprintln!("the record could not be written out: {error}");
+            out.problem(&format!("the record could not be written out: {error}"));
             return ExitCode::FAILURE;
         }
     };
 
     if !options.no_file {
-        write_backup(&record);
+        write_backup(out, &record);
     }
 
-    print!("{text}");
+    emit(out, &text);
     ExitCode::SUCCESS
 }
 
@@ -140,15 +200,33 @@ fn main() -> ExitCode {
 /// A person deciding whether to do this a favour should be able to decide with
 /// the real values in front of them rather than a promise about them, which is
 /// why the preview exists and why this prints what was actually read.
-fn print_collection_notice(machine: &MachineDescription, host: &Fingerprint, suppressed: bool) {
-    println!("== windows-placement-probe ==");
-    println!();
-    println!("This measures what thread placement costs on your machine, and prints");
-    println!("a result you can paste into a discussion thread. It makes no network");
-    println!("connections; sending the result is your decision and your action.");
-    println!();
-    println!("What it collects about this machine, as read just now:");
-    println!(
+fn render_collection_notice(
+    machine: &MachineDescription,
+    host: &Fingerprint,
+    suppressed: bool,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "== windows-placement-probe ==");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "This measures what thread placement costs on your machine, and prints"
+    );
+    let _ = writeln!(
+        out,
+        "a result you can paste into a discussion thread. It makes no network"
+    );
+    let _ = writeln!(
+        out,
+        "connections; sending the result is your decision and your action."
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "What it collects about this machine, as read just now:"
+    );
+    let _ = writeln!(
+        out,
         "  cpu model      {}",
         match (&machine.cpu_model, suppressed) {
             (Some(model), _) => model.as_str(),
@@ -156,11 +234,13 @@ fn print_collection_notice(machine: &MachineDescription, host: &Fingerprint, sup
             (None, false) => "(this host would not say)",
         }
     );
-    println!(
+    let _ = writeln!(
+        out,
         "  os build       {}",
         machine.os_build.as_deref().unwrap_or("(unknown)")
     );
-    println!(
+    let _ = writeln!(
+        out,
         "  virtualisation {}{}",
         machine.virtualisation,
         match &machine.virtualisation_name {
@@ -174,48 +254,80 @@ fn print_collection_notice(machine: &MachineDescription, host: &Fingerprint, sup
     // not the model is named. A runner asked to judge that could not see the
     // thing they were being asked to judge, which is the one job the preview
     // has.
-    println!("  topology       {host}");
-    println!("                 (processor, core, cache and NUMA layout)");
-    println!("  timings        how long a handoff takes at each placement");
-    println!();
-    println!("What it does NOT collect: your host name, your user name, file paths,");
-    println!("environment variables, serial numbers, or anything about installed");
-    println!("software. Read the printed record before sending it -- if you are not");
-    println!("happy with something in it, do not send it.");
+    let _ = writeln!(out, "  topology       {host}");
+    let _ = writeln!(
+        out,
+        "                 (processor, core, cache and NUMA layout)"
+    );
+    let _ = writeln!(
+        out,
+        "  timings        how long a handoff takes at each placement"
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "What it does NOT collect: your host name, your user name, file paths,"
+    );
+    let _ = writeln!(
+        out,
+        "environment variables, serial numbers, or anything about installed"
+    );
+    let _ = writeln!(
+        out,
+        "software. Read the printed record before sending it -- if you are not"
+    );
+    let _ = writeln!(out, "happy with something in it, do not send it.");
     if !suppressed {
-        println!();
-        println!("Pass --no-cpu-model to withhold the model. Note that it does not make");
-        println!("confidential hardware safe to submit: the topology describes the part");
-        println!("whether or not it is named.");
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "Pass --no-cpu-model to withhold the model. Note that it does not make"
+        );
+        let _ = writeln!(
+            out,
+            "confidential hardware safe to submit: the topology describes the part"
+        );
+        let _ = writeln!(out, "whether or not it is named.");
     }
+    out
 }
 
-fn print_plan(plan: &RunPlan) {
-    println!();
-    println!("-- what this run will do --");
-    println!("  {:>3} placement(s) on this machine", plan.placements);
-    println!("  {:>3} NUMA node pair(s)", plan.node_hops);
-    println!("  {:>3} efficiency class comparison(s)", plan.classes);
-    println!(
+fn render_plan(plan: &RunPlan) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out);
+    let _ = writeln!(out, "-- what this run will do --");
+    let _ = writeln!(out, "  {:>3} placement(s) on this machine", plan.placements);
+    let _ = writeln!(out, "  {:>3} NUMA node pair(s)", plan.node_hops);
+    let _ = writeln!(out, "  {:>3} efficiency class comparison(s)", plan.classes);
+    let _ = writeln!(
+        out,
         "  {:>3} timed handoffs in total ({} strategies x {} repetitions)",
         plan.timed_runs(),
         plan.strategies,
         plan.repetitions
     );
-    println!();
-    println!(
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
         "  Should take under {:.0} seconds, and usually much less. That is an",
         plan.estimated_seconds().ceil().max(1.0)
     );
-    println!("  upper bound taken from the slowest machine measured so far -- how long");
-    println!("  a handoff takes is the thing being measured, so it cannot be exact.");
+    let _ = writeln!(
+        out,
+        "  upper bound taken from the slowest machine measured so far -- how long"
+    );
+    let _ = writeln!(
+        out,
+        "  a handoff takes is the thing being measured, so it cannot be exact."
+    );
+    out
 }
 
 /// Write the record beside the report, as a convenience rather than a step.
 ///
 /// A failure here is reported and does not fail the run: the submission is the
 /// text on screen, and losing the backup copy costs nothing that matters.
-fn write_backup(record: &SubmissionRecord) {
+fn write_backup(out: &mut impl Sink, record: &SubmissionRecord) {
     // The same layout as the printed record, so the JSON a runner attaches and
     // the JSON embedded in the text they paste are byte-identical.
     //
@@ -227,14 +339,24 @@ fn write_backup(record: &SubmissionRecord) {
     let json = match windows_placement_probe::paste_json::to_paste_json(record) {
         Ok(json) => json,
         Err(error) => {
-            println!("(could not serialize the record to a file: {error})");
+            out.line(&format!(
+                "(could not serialize the record to a file: {error})"
+            ));
             return;
         }
     };
 
+    // The report stream, not the problem stream, and deliberately so: the
+    // backup is a convenience, the submission is the text on screen, and a
+    // failure here belongs in the narrative the runner is reading rather than
+    // on a stream they may not see.
     match write_backup_to_new_file(&submission::file_name(record), &json) {
-        Ok(name) => println!("(a copy of the record was also written to {name})"),
-        Err(error) => println!("(could not write the backup: {error} -- paste the text below)"),
+        Ok(name) => out.line(&format!(
+            "(a copy of the record was also written to {name})"
+        )),
+        Err(error) => out.line(&format!(
+            "(could not write the backup: {error} -- paste the text below)"
+        )),
     }
 }
 

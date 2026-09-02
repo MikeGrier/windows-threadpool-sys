@@ -243,8 +243,44 @@ impl From<&Measurement> for MeasurementRecord {
 
 impl SubmissionRecord {
     /// Assemble a record from a completed run.
-    #[must_use]
-    pub fn new(observation: &Observation, host: Fingerprint, machine: MachineDescription) -> Self {
+    ///
+    /// `host` is the shape the runner was *shown* before consenting. It must
+    /// equal [`Observation::host`], the shape the measurement actually ran on.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::InvalidData`](std::io::ErrorKind::InvalidData) if those two
+    /// disagree, which means the machine changed between the announcement and
+    /// the end of the measurement.
+    ///
+    /// # Why this is a refusal here rather than a check at the call site
+    ///
+    /// A record built from mismatched halves is a *splice*: its `host` describes
+    /// one machine while every row was measured on another, and nothing in the
+    /// file says so. A reader interpreting row sets through that host -- which is
+    /// what the host is for -- interprets them through the wrong machine.
+    ///
+    /// The tool does check before calling, and reports the disagreement far
+    /// better than an error type can. But a check at one call site is only as
+    /// durable as the next call site's author remembering it, and this is the
+    /// constructor every such author will reach for. Refusing here makes the
+    /// splice unrepresentable rather than merely currently-avoided.
+    pub fn new(
+        observation: &Observation,
+        host: Fingerprint,
+        machine: MachineDescription,
+    ) -> std::io::Result<Self> {
+        if host != observation.host {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "the announced host and the measured host differ, so this record would \
+                     describe two machines: announced {host}, measured {}",
+                    observation.host
+                ),
+            ));
+        }
+
         // One reading, split into the parts each consumer needs, so the record
         // and the file named after it can never describe different instants.
         let since_epoch = SystemTime::now()
@@ -252,7 +288,7 @@ impl SubmissionRecord {
             .unwrap_or_default();
         let now = since_epoch.as_secs();
 
-        Self {
+        Ok(Self {
             schema_version: SCHEMA_VERSION,
             recorded_at: iso8601_utc(now),
             recorded_at_epoch_seconds: now,
@@ -264,7 +300,7 @@ impl SubmissionRecord {
             placements: observation.measurements.iter().map(Into::into).collect(),
             node_hops: observation.by_node_pair.iter().map(Into::into).collect(),
             by_class: observation.by_class.iter().map(Into::into).collect(),
-        }
+        })
     }
 
     /// Whether every part of this record is trustworthy.

@@ -8,6 +8,8 @@
 //! mislabel a pair, because every conclusion it prints is keyed on that label.
 
 use super::{Placement, RunPlan, classify, memory_placements, node_pairs, representative_pairs};
+use windows_topology_sys::Topology;
+
 use crate::fingerprint::ProcessorPlace;
 
 /// A processor on its own physical core, which is the non-SMT case.
@@ -1092,6 +1094,10 @@ fn hop_row(
 /// An observation carrying only the given node-pair rows.
 fn observation_of(rows: Vec<super::Measurement>) -> super::Observation {
     super::Observation {
+        // These tests exercise row lookup, which never consults the host. A
+        // bare topology is the smallest shape that is a real conversion rather
+        // than a hand-built `Fingerprint` literal.
+        host: crate::fingerprint::Fingerprint::from_topology(&Topology::default()),
         processors: Vec::new(),
         by_class: Vec::new(),
         measurements: Vec::new(),

@@ -293,3 +293,160 @@ fn a_stale_temporary_from_a_recycled_pid_does_not_fail_the_backup() {
          fix, overwriting it would be a second bug"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Output.
+//
+// These are the tests the sink exists to make possible. Every one of them was
+// unwritable while the text went straight to `println!` from the site that
+// composed it: the only way to see this output was to run the process and
+// capture a stream, which is a test of the operating system rather than of the
+// wording.
+//
+// The wording is the point. The notice is a disclosure -- it is what a runner
+// reads before deciding to publish facts about their machine -- so the promises
+// it makes are exactly the thing worth pinning.
+// ---------------------------------------------------------------------------
+
+use super::sink::{Captured, Sink, emit};
+use super::{render_collection_notice, render_plan};
+use windows_placement_probe::fingerprint::Fingerprint;
+use windows_placement_probe::machine::MachineDescription;
+
+/// A description with every field known, so a test can tell "withheld" from
+/// "this host would not say" -- which the notice renders differently and which
+/// a real machine may not offer both of.
+fn described() -> MachineDescription {
+    let mut machine = MachineDescription::read(false);
+    machine.cpu_model = Some("Test CPU 9000".to_owned());
+    machine.os_build = Some("10.0.99999".to_owned());
+    machine
+}
+
+fn host() -> Fingerprint {
+    Fingerprint::from_topology(&windows_topology_sys::Topology::default())
+}
+
+#[test]
+fn the_notice_names_the_model_it_is_about_to_publish() {
+    // The disclosure's central promise: what it says it collects is what it
+    // collects. A runner judging the model has to be shown the model.
+    let notice = render_collection_notice(&described(), &host(), false);
+
+    assert!(
+        notice.contains("Test CPU 9000"),
+        "the notice must show the value, not the category: {notice}"
+    );
+}
+
+#[test]
+fn suppressing_the_model_says_so_rather_than_going_quiet() {
+    // A blank where a value was promised reads as "this host would not say",
+    // which is a different claim from "you asked me not to". Both are honest
+    // answers and the runner is owed the right one.
+    let mut machine = described();
+    machine.cpu_model = None;
+
+    let withheld = render_collection_notice(&machine, &host(), true);
+    let unknown = render_collection_notice(&machine, &host(), false);
+
+    assert!(withheld.contains("(withheld: --no-cpu-model)"));
+    assert!(unknown.contains("(this host would not say)"));
+    assert_ne!(
+        withheld, unknown,
+        "the two absences must not render identically"
+    );
+}
+
+#[test]
+fn the_notice_shows_the_topology_value_not_a_description_of_it() {
+    // A correction that is easy to undo. Every other row shows what was read;
+    // this one once named a subject instead, while the paragraph below it warns
+    // that the topology identifies the hardware whether or not the model is
+    // named. A runner asked to judge that could not see the thing being judged.
+    let host = host();
+    let notice = render_collection_notice(&described(), &host, false);
+
+    assert!(
+        notice.contains(&host.to_string()),
+        "the fingerprint itself must appear: {notice}"
+    );
+}
+
+#[test]
+fn the_suppression_hint_is_offered_only_when_it_would_do_something() {
+    // Advising --no-cpu-model to somebody who already passed it is noise that
+    // reads as though the flag did not take effect.
+    assert!(
+        render_collection_notice(&described(), &host(), false)
+            .contains("--no-cpu-model to withhold")
+    );
+    assert!(
+        !render_collection_notice(&described(), &host(), true)
+            .contains("--no-cpu-model to withhold")
+    );
+}
+
+#[test]
+fn the_notice_keeps_promising_what_it_does_not_collect() {
+    // The half of the disclosure a reader is most likely to be reassured by,
+    // and the half most likely to be quietly dropped in an edit.
+    let notice = render_collection_notice(&described(), &host(), false);
+
+    for promise in [
+        "host name",
+        "user name",
+        "file paths",
+        "environment variables",
+    ] {
+        assert!(
+            notice.contains(promise),
+            "the notice must keep naming {promise} among what it does not collect"
+        );
+    }
+}
+
+#[test]
+fn the_plan_totals_agree_with_the_multiplication_it_shows() {
+    // The plan is a consent document too: a runner decides to spend the machine
+    // on the strength of these counts, so the total must be the product it
+    // claims rather than an independently maintained number.
+    let plan = windows_placement_probe::core_affinity::RunPlan {
+        placements: 4,
+        node_hops: 8,
+        memory_placements_per_hop: 2,
+        classes: 2,
+        strategies: 2,
+        repetitions: 3,
+    };
+
+    let rendered = render_plan(&plan);
+
+    assert!(rendered.contains(&format!("{:>3} timed handoffs", plan.timed_runs())));
+    assert!(rendered.contains("2 strategies x 3 repetitions"));
+}
+
+#[test]
+fn a_captured_sink_keeps_the_two_streams_apart() {
+    // The property the whole abstraction rests on. If a problem could satisfy an
+    // assertion about the report, every test above would be checking the wrong
+    // stream and would keep passing while the tool wrote its errors into the
+    // text a runner pastes into a discussion thread.
+    let mut captured = Captured::default();
+    captured.line("report");
+    captured.problem("problem");
+
+    assert_eq!(captured.report(), "report");
+    assert_eq!(captured.problems, vec!["problem".to_owned()]);
+}
+
+#[test]
+fn emitting_a_block_gives_the_sink_one_line_at_a_time() {
+    // What makes a captured report addressable by line rather than by substring
+    // search, and what keeps a renderer free to end its block with a newline or
+    // without one.
+    let mut captured = Captured::default();
+    emit(&mut captured, "one\ntwo\n");
+
+    assert_eq!(captured.lines, vec!["one".to_owned(), "two".to_owned()]);
+}

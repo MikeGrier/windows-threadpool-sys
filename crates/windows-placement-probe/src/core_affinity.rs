@@ -77,8 +77,11 @@
 //! is the same reason the two probes this one extends are absent from CI.
 
 use std::collections::BTreeMap;
+use std::io::ErrorKind;
 
-use crate::fingerprint::{ProcessorPlace, Slice, discover_places};
+use windows_topology_sys::Topology;
+
+use crate::fingerprint::{Fingerprint, ProcessorPlace, Slice, places_from_topology};
 use crate::peer_index_cache::{ITEMS, Strategy, time_model_on, time_model_placed};
 
 /// Repetitions per placement; the median is reported.
@@ -361,6 +364,23 @@ pub struct Measurement {
 /// Everything one invocation measured.
 #[derive(Debug, Clone)]
 pub struct Observation {
+    /// The machine's shape *as this measurement read it*.
+    ///
+    /// # Why the measurement reports its own host rather than being told one
+    ///
+    /// This function discovers the topology itself, deliberately (see the note
+    /// on [`measure`] against adding an injection seam). A caller that announced
+    /// a plan therefore holds a reading taken at a different instant, and the
+    /// two can disagree: a processor going offline, or moving group or node,
+    /// between them would leave a record whose `host` describes one machine
+    /// while every row was measured on another. Nothing in the record would say
+    /// so, and a reader interpreting row sets through that host would be
+    /// interpreting them through the wrong machine.
+    ///
+    /// Reporting the shape this run actually saw lets the caller compare the two
+    /// and refuse, without a seam that would let a *fabricated* shape in -- the
+    /// exact trade [`measure`]'s own documentation is protecting.
+    pub host: Fingerprint,
     /// Every logical processor, as discovered.
     pub processors: Vec<ProcessorPlace>,
     /// One within-class, within-cache pair per efficiency class, per strategy.
@@ -603,7 +623,15 @@ pub fn memory_placements(producer: ProcessorPlace, consumer: ProcessorPlace) -> 
 ///
 /// Returns whatever [`discover_places`] failed with.
 pub fn measure() -> std::io::Result<Observation> {
-    let processors = discover_places()?;
+    // One discovery, two derivations, so the shape reported alongside the rows
+    // is the shape the rows were measured on. Calling `discover_places()` and
+    // then reading the topology again would reintroduce, inside this function,
+    // exactly the skew `Observation::host` exists to let the caller detect.
+    let topology = Topology::discover()?;
+    let processors = places_from_topology(&topology).map_err(|unplaceable| {
+        std::io::Error::new(ErrorKind::InvalidData, unplaceable.to_string())
+    })?;
+    let host = Fingerprint::from_topology(&topology);
     assert_group_support(&processors);
     let pairs = representative_pairs(&processors);
     let mut measurements = Vec::new();
@@ -706,6 +734,7 @@ pub fn measure() -> std::io::Result<Observation> {
     }
 
     Ok(Observation {
+        host,
         processors,
         by_class,
         measurements,
