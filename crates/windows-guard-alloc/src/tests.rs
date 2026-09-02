@@ -379,3 +379,74 @@ fn alloc_zeroed_still_returns_zeros_despite_the_poison() {
     // SAFETY: `ptr` came from this allocator with this layout.
     unsafe { alloc.dealloc(ptr, layout) };
 }
+
+// ---------------------------------------------------------------------------
+// Seed parsing.
+//
+// None of this was reachable before `parse_seed` was split out of
+// `seed_from_environment`: the seed came from a process-global environment
+// variable, and this workspace runs tests as threads in one process, so setting
+// it from a test would be visible to every other test. A mutation run reported
+// the prefix arm, the truncation guard, and both of its comparisons as
+// surviving -- all of them correctly, because no test could reach them.
+// ---------------------------------------------------------------------------
+
+/// The wide form the environment gives us.
+fn units(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+}
+
+#[test]
+fn a_decimal_seed_parses_in_base_ten() {
+    assert_eq!(super::parse_seed(&units("1234")), Some(1234));
+    // Leading zeros are digits, not a prefix: `0755` is seven hundred and
+    // fifty-five here, not an octal escape.
+    assert_eq!(super::parse_seed(&units("0755")), Some(755));
+}
+
+#[test]
+fn a_prefixed_seed_parses_in_base_sixteen_in_either_case() {
+    // The `0x` arm is what a mutation run deleted, and deleting it does not
+    // fail loudly: `0x10` then parses as base ten, and `0` and `x` are both
+    // rejected... except that `0x1` would silently become an error rather than
+    // 1. The values here are chosen so the two radixes disagree, which is what
+    // makes the arm's absence visible.
+    assert_eq!(super::parse_seed(&units("0x10")), Some(16));
+    assert_eq!(super::parse_seed(&units("0X10")), Some(16));
+    assert_eq!(super::parse_seed(&units("0xff")), Some(255));
+    assert_eq!(super::parse_seed(&units("0xFF")), Some(255));
+}
+
+#[test]
+fn a_prefix_with_no_digits_after_it_is_not_a_seed() {
+    // `0x` alone leaves an empty digit run. Accepting it would seed the whole
+    // process with zero while the caller believed they had asked for something.
+    assert_eq!(super::parse_seed(&units("0x")), None);
+    assert_eq!(super::parse_seed(&units("0X")), None);
+    assert_eq!(super::parse_seed(&units("")), None);
+}
+
+#[test]
+fn a_seed_that_is_not_a_number_is_refused_rather_than_partially_read() {
+    // Refusing beats guessing: a seed silently truncated at the first bad
+    // character would produce a run whose poison pattern nobody could
+    // reproduce from the value they set.
+    assert_eq!(super::parse_seed(&units("12x4")), None);
+    assert_eq!(super::parse_seed(&units("nonsense")), None);
+    // A hex digit is not a decimal one, which is the same rule read the other
+    // way round.
+    assert_eq!(super::parse_seed(&units("ff")), None);
+    // ...and `0x` makes it one.
+    assert_eq!(super::parse_seed(&units("0xff")), Some(255));
+}
+
+#[test]
+fn a_seed_too_large_for_a_u64_is_refused_rather_than_wrapped() {
+    // `checked_mul`/`checked_add` are what make this a refusal. Wrapping would
+    // accept a value and then use a *different* one, which is the worst of the
+    // three outcomes: reproducible-looking and wrong.
+    assert_eq!(super::parse_seed(&units("18446744073709551615")), Some(u64::MAX));
+    assert_eq!(super::parse_seed(&units("18446744073709551616")), None);
+    assert_eq!(super::parse_seed(&units("0xFFFFFFFFFFFFFFFF")), Some(u64::MAX));
+    assert_eq!(super::parse_seed(&units("0x1FFFFFFFFFFFFFFFF")), None);
+}

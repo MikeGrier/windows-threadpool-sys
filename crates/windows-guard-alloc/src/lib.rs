@@ -125,11 +125,31 @@ fn seed_from_environment() -> Option<u64> {
         return None;
     }
 
+    parse_seed(&value[..written as usize])
+}
+
+/// Parse a seed from the environment variable's text.
+///
+/// # Why this is separate from reading the variable
+///
+/// Everything interesting about a seed is here -- the `0x` prefix, the radix
+/// that follows from it, and the overflow that must refuse rather than wrap --
+/// and none of it can be exercised through [`seed_from_environment`], which
+/// reads a *process-global* variable. Setting one from a test would be visible
+/// to every other test in the process, because this workspace runs tests as
+/// threads rather than processes, so such a test could not be written safely
+/// even once.
+///
+/// A mutation run made that concrete: the prefix arm, the truncation check, and
+/// both comparisons in the guard above all survived, and not one of them could
+/// have been reached from a test. Splitting the pure half out is what makes
+/// them reachable; the impure half that remains is a single Win32 call with no
+/// branch of its own.
+fn parse_seed(digits: &[u16]) -> Option<u64> {
     const ZERO: u16 = b'0' as u16;
     const LOWER_X: u16 = b'x' as u16;
     const UPPER_X: u16 = b'X' as u16;
 
-    let digits = &value[..written as usize];
     let (digits, radix) = match digits {
         [ZERO, LOWER_X | UPPER_X, rest @ ..] => (rest, 16),
         _ => (digits, 10),
