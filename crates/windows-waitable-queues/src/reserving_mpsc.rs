@@ -124,7 +124,24 @@ const POSITION_MASK: u64 = (1 << POSITION_BITS) - 1;
 /// half of the packed claim word rather than a whole [`usize`]. A wrapping
 /// 32-bit difference is unambiguous only up to 2^31, and that is exactly the
 /// most items this shape can hold.
-pub const BOUNDS_MAX: usize = 1 << (POSITION_BITS - 1);
+///
+/// **Bounded by the `usize` width as well as by the packing, because on a
+/// 32-bit target the packing is the *wider* of the two.** There,
+/// [`WRAPPING_MAX_CAPACITY`] is `2^31 - 1`, so a flat `1 << 31` exceeds the
+/// crate-wide ceiling and the assertion below rejects it -- failing the build
+/// for every capacity, including the small valid ones. Taking the narrower of
+/// the two limits keeps this a power of two on every target, which matters
+/// because the value is offered to a caller as a capacity it could actually
+/// use.
+pub const BOUNDS_MAX: usize = {
+    let packed = 1_usize << (POSITION_BITS - 1);
+    let widest_usize_power_of_two = 1_usize << (usize::BITS - 2);
+    if packed <= widest_usize_power_of_two {
+        packed
+    } else {
+        widest_usize_power_of_two
+    }
+};
 
 /// The capacities this shape accepts. See [`BOUNDS_MAX`].
 const BOUNDS: Bounds = Bounds {
@@ -167,6 +184,12 @@ const _: () = {
     assert!(
         BOUNDS.max <= WRAPPING_MAX_CAPACITY,
         "a shape may be narrower than the crate-wide bound but never wider"
+    );
+    assert!(
+        BOUNDS.max.is_power_of_two(),
+        "the maximum is offered to a caller as a capacity it could use, so it must itself be one \
+         this shape would accept -- and on a 32-bit target the crate-wide ceiling is not a power \
+         of two, so clamping to it directly would have produced a suggestion that is rejected"
     );
     assert!(
         BOUNDS.min <= BOUNDS.max,

@@ -454,3 +454,30 @@ that produces no thread is otherwise invisible to the "are all comments resolved
   The body framed the change as CI and provenance work and mentioned `windows-waitable-queues` only
   under release tracking, while the majority of the diff is that crate's public API and its three
   lock-free queue implementations. Rewritten to lead with the shipped surface.
+
+## M10: PR #56 fifth review round
+
+- [x] **SH-10.1** -- **`BOUNDS_MAX` does not compile on a 32-bit target.** `reserving_mpsc`'s maximum
+  was a flat `1 << 31`, derived from the packed position's width alone. On a 32-bit target the
+  crate-wide `WRAPPING_MAX_CAPACITY` is `usize::MAX / 2`, which is `2^31 - 1` -- *narrower* than the
+  packing -- so the const assertion that no shape may exceed it fails the build outright, for every
+  capacity including the small valid ones. Now the narrower of the two limits, kept a power of two so
+  the value stays one a caller could actually pass. Verified in both directions against a real
+  `i686-pc-windows-msvc` check: the old constant fails with `E0080`, the new one compiles.
+
+- [x] **SH-10.2** -- **The backup's final name was visible empty for the whole write.** The previous
+  round reserved the destination with `create_new` and renamed onto it, which fixed the truncated-file
+  case and left a worse one: an empty file under the record's own name for the duration of the write,
+  and permanently if the process was killed in that window -- contradicting the absent-or-complete
+  guarantee its own doc comment claimed. Publication is now a single atomic no-replace `MoveFileExW`
+  from a fully-written temporary. `std::fs::rename` cannot express this: on Windows it always passes
+  `MOVEFILE_REPLACE_EXISTING`, so it would clobber a record a concurrent run had placed.
+
+- [x] **SH-10.3** -- **The tool discovered the topology three times.** The plan used one reading, the
+  fingerprint another, and `core_affinity::measure` a third, so a processor going offline mid-run could
+  have the announced plan, the recorded host, and the measured rows describing different machines with
+  nothing saying which. The plan and the fingerprint now derive from one `Topology::discover`.
+  `measure` still discovers its own, and deliberately so: its documentation refuses a
+  `measure_with(places)` seam because a supplied list's processor *numbers* stay valid on the real host
+  while its node labels need not, so every pin would succeed and real timings would be filed under
+  fabricated labels. Its rows carry their own places, so each row states what it measured.

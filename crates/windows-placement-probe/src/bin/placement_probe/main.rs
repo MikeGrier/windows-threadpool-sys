@@ -12,10 +12,11 @@ mod tests;
 
 use windows_placement_probe::build_identity::BuildIdentity;
 use windows_placement_probe::core_affinity::{self, RunPlan};
-use windows_placement_probe::fingerprint::{Fingerprint, discover_places};
+use windows_placement_probe::fingerprint::{Fingerprint, places_from_topology};
 use windows_placement_probe::machine::MachineDescription;
 use windows_placement_probe::record::SubmissionRecord;
 use windows_placement_probe::submission::{self, DISCUSSION_URL};
+use windows_topology_sys::Topology;
 
 /// What the run was asked to do.
 struct Options {
@@ -62,7 +63,20 @@ fn main() -> ExitCode {
 
     let machine = MachineDescription::read(options.suppress_model);
 
-    let places = match discover_places() {
+    // **One discovery, two derivations.** The announced plan and the recorded
+    // fingerprint used to come from separate `Topology::discover()` calls, so a
+    // processor going offline between them would have the notice describing one
+    // machine and the record another, with nothing in the output saying which
+    // was which. Both now come from this reading.
+    let topology = match Topology::discover() {
+        Ok(topology) => topology,
+        Err(error) => {
+            eprintln!("could not read this machine's topology: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let places = match places_from_topology(&topology) {
         Ok(places) => places,
         Err(error) => {
             eprintln!("could not read this machine's topology: {error}");
@@ -71,17 +85,17 @@ fn main() -> ExitCode {
     };
     let plan = RunPlan::for_processors(&places);
 
-    // Read before the notice, not after the measurement, because the notice is
-    // what a runner decides on and it cannot show a value it does not have.
-    // One reading serves both the notice and the record, so the two can never
-    // describe different machines.
-    let host = match Fingerprint::discover() {
-        Ok(host) => host,
-        Err(error) => {
-            eprintln!("could not read this machine's shape: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
+    // Derived from the same topology as the plan, and read before the notice
+    // rather than after the measurement, because the notice is what a runner
+    // decides on and it cannot show a value it does not have.
+    //
+    // `core_affinity::measure` deliberately discovers again rather than being
+    // handed these places, and that is not an oversight -- see its
+    // documentation. A `measure_with(places)` seam would accept a processor list
+    // whose *numbers* are valid on this host while its node labels are not, so
+    // every pin would succeed and real timings would be filed under fabricated
+    // labels. Its rows carry their own places, so each row says what it measured.
+    let host = Fingerprint::from_topology(&topology);
 
     print_collection_notice(&machine, &host, options.suppress_model);
     print_plan(&plan);
@@ -238,16 +252,21 @@ fn write_backup(record: &SubmissionRecord) {
 /// suffix resolves it. The suffix is only reached on a real collision, so the
 /// ordinary name stays the predictable one.
 ///
-/// **The bytes are published by rename, and that is a second correction.**
-/// Reserving the name and then writing into it means a failure part-way through
-/// the write -- a full disk, a quota, a killed process -- leaves a truncated
-/// `.json` sitting under the name a *complete* record would have. Nothing
-/// downstream can tell the two apart: whoever collects the file sees a record,
-/// and the next run's collision suffix steps politely around the wreckage. So
-/// the reserved name is a placeholder, the content is written to a temporary
-/// beside it, and the temporary is moved onto the reservation only once the
-/// write has succeeded. A reader therefore sees the final name either absent or
-/// complete, never half-written.
+/// **The record's name never exists half-written, and this is a second
+/// correction -- twice over.** Writing straight into the final name leaves a
+/// truncated `.json` behind when the write fails, indistinguishable to a
+/// collector from a complete record. Reserving the final name with an empty file
+/// and renaming onto it afterwards fixes only half of that: the empty
+/// reservation is *itself* visible under the record's name for the whole
+/// duration of the write, and a process killed in that window leaves it there
+/// permanently.
+///
+/// So the content is written to a temporary and **published with a single
+/// atomic no-replace move**. The final name comes into existence already
+/// complete, or not at all. `std::fs::rename` cannot be used for this: on
+/// Windows it always passes `MOVEFILE_REPLACE_EXISTING`, so it would silently
+/// clobber a record another run had placed while this one was writing --
+/// destroying the very collision guarantee the suffix exists to provide.
 fn write_backup_to_new_file(name: &str, json: &str) -> std::io::Result<String> {
     write_backup_with(name, json, |file, bytes| {
         std::io::Write::write_all(file, bytes)
@@ -256,10 +275,10 @@ fn write_backup_to_new_file(name: &str, json: &str) -> std::io::Result<String> {
 
 /// The body of [`write_backup_to_new_file`], with the write itself injectable.
 ///
-/// The failure this guards is a write that fails *after* the name is taken, and
+/// The failure this guards is a write that fails after the temporary exists, and
 /// no test can provoke that by filling the disk. The seam is the smallest thing
 /// that makes it reachable: a test supplies a writer that fails, and asserts
-/// that nothing is left behind under either name.
+/// that nothing is left behind under any name.
 fn write_backup_with(
     name: &str,
     json: &str,
@@ -268,6 +287,15 @@ fn write_backup_with(
     /// Enough to outlast any plausible burst of same-second runs; past this,
     /// failing is better than looping while a caller waits.
     const MAX_ATTEMPTS: u32 = 100;
+
+    // Written first and in full, so every candidate below is offered a file that
+    // is already complete. Publication is then a single move per candidate,
+    // rather than a window in which a name exists but its content does not.
+    let (temporary, outcome) = write_temporary(name, json, &mut write)?;
+    if let Err(error) = outcome {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
 
     for attempt in 0..MAX_ATTEMPTS {
         let candidate = if attempt == 0 {
@@ -279,59 +307,74 @@ fn write_backup_with(
             }
         };
 
-        // Reserve the name first, so a concurrent run cannot pick it while this
-        // one is still writing. The file stays empty until the rename below.
-        match std::fs::File::create_new(&candidate) {
-            Ok(reservation) => {
-                drop(reservation);
-                return match publish(&candidate, json, &mut write) {
-                    Ok(()) => Ok(candidate),
-                    Err(error) => {
-                        // The reservation is this function's own litter once the
-                        // write has failed, and leaving it would present an
-                        // empty file under the name of a complete record.
-                        let _ = std::fs::remove_file(&candidate);
-                        Err(error)
-                    }
-                };
-            }
+        match publish(&temporary, &candidate) {
+            Ok(()) => return Ok(candidate),
             // Someone else has this name. Not a failure yet: try the next.
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
+            Err(error) => {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(error);
+            }
         }
     }
 
+    let _ = std::fs::remove_file(&temporary);
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
         format!("{MAX_ATTEMPTS} names starting from {name} were all taken"),
     ))
 }
 
-/// Write `json` beside `final_name` and move it there once it is complete.
+/// Create a temporary beside `name` and fill it, returning its path and the
+/// write's outcome.
 ///
-/// The temporary is created exclusively too, and in the same directory, so the
-/// rename is within one volume and cannot silently become a copy.
-fn publish(
-    final_name: &str,
+/// The path is returned even when the write failed, so the caller can remove it:
+/// a temporary left behind is litter under a name a collector might not
+/// recognise, which is only marginally better than litter under one it would.
+fn write_temporary(
+    name: &str,
     json: &str,
     write: &mut impl FnMut(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
-) -> std::io::Result<()> {
-    let temporary = format!("{final_name}.{}.partial", std::process::id());
-
+) -> std::io::Result<(String, std::io::Result<()>)> {
+    // The process id keeps two concurrent runs from colliding here, and the
+    // `.partial` suffix keeps the file out of any `*.json` collection.
+    let temporary = format!("{name}.{}.partial", std::process::id());
     let mut file = std::fs::File::create_new(&temporary)?;
-    let written = write(&mut file, json.as_bytes()).and_then(|()| file.sync_all());
+    let outcome = write(&mut file, json.as_bytes()).and_then(|()| file.sync_all());
     drop(file);
+    Ok((temporary, outcome))
+}
 
-    if let Err(error) = written {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
+/// Move `temporary` onto `final_name`, failing rather than replacing.
+///
+/// # Why not `std::fs::rename`
+///
+/// On Windows it passes `MOVEFILE_REPLACE_EXISTING`, so it would overwrite a
+/// record another run had already written -- silently undoing the collision
+/// handling the caller's suffix loop exists to provide. Without that flag
+/// `MoveFileExW` fails with `ERROR_ALREADY_EXISTS` instead, which is exactly the
+/// signal the loop wants, and the move is atomic: the destination appears
+/// complete or does not appear.
+fn publish(temporary: &str, final_name: &str) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    fn wide(path: &str) -> Vec<u16> {
+        std::ffi::OsStr::new(path)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     }
 
-    // Replaces the reservation, which is what makes the publication atomic from
-    // a reader's point of view.
-    if let Err(error) = std::fs::rename(&temporary, final_name) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
+    let from = wide(temporary);
+    let to = wide(final_name);
+    // SAFETY: both pointers address NUL-terminated wide strings that outlive the
+    // call, and the flags word is zero, which is the documented "fail if the
+    // destination exists" behaviour rather than a sentinel.
+    let moved = unsafe {
+        windows_sys::Win32::Storage::FileSystem::MoveFileExW(from.as_ptr(), to.as_ptr(), 0)
+    };
+    if moved == 0 {
+        return Err(std::io::Error::last_os_error());
     }
     Ok(())
 }

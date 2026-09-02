@@ -200,3 +200,58 @@ fn a_successful_write_leaves_only_the_record() {
     assert_eq!(left.len(), 1, "expected only the record, found {left:?}");
     assert_eq!(left[0].to_str().expect("utf-8 path"), written);
 }
+
+#[test]
+fn publication_never_replaces_a_record_another_run_already_placed() {
+    // The no-replace half of the publication guarantee. `std::fs::rename` on
+    // Windows always passes MOVEFILE_REPLACE_EXISTING, so publishing with it
+    // would silently overwrite a complete record another run had written --
+    // destroying exactly what the collision suffix exists to protect, and doing
+    // it in the window where this run had not yet finished writing.
+    let dir = scratch("no-replace");
+    let name = dir.join("record.json");
+    let name = name.to_str().expect("utf-8 path");
+
+    // Stand in for a record another process completed a moment ago.
+    std::fs::write(name, "PLACED BY SOMEONE ELSE").expect("writable");
+
+    let written = write_backup_to_new_file(name, "MINE").expect("must find a free name");
+
+    assert_ne!(written, name, "the existing record's name was taken");
+    assert_eq!(
+        std::fs::read_to_string(name).expect("readable"),
+        "PLACED BY SOMEONE ELSE",
+        "the existing record must survive byte-for-byte"
+    );
+    assert_eq!(std::fs::read_to_string(&written).expect("readable"), "MINE");
+}
+
+#[test]
+fn a_failed_write_never_creates_the_records_name_at_all() {
+    // The absent-or-complete half. An earlier version reserved the final name
+    // with an empty file and renamed onto it afterwards, which left that empty
+    // file visible under the record's own name for the whole duration of the
+    // write -- and permanently, if the process was killed in that window. The
+    // name must now come into existence already complete, or not at all.
+    let dir = scratch("never-created");
+    let name = dir.join("record.json");
+    let name = name.to_str().expect("utf-8 path");
+
+    let _ = super::write_backup_with(name, "{}", |_, _| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::StorageFull,
+            "no space left on device",
+        ))
+    })
+    .expect_err("the injected write fails");
+
+    assert!(
+        !std::path::Path::new(name).exists(),
+        "the record's name must never have been created"
+    );
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .expect("readable")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert!(left.is_empty(), "nothing at all should remain: {left:?}");
+}

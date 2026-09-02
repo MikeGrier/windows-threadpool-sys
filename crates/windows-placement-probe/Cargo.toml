@@ -87,4 +87,10 @@ features = [
     # Asking is not the same as achieving, and the record reports the second.
     "Win32_System_Memory",
     "Win32_System_ProcessStatus",
+    # `MoveFileExW` *without* MOVEFILE_REPLACE_EXISTING, which is the only way to
+    # publish the backup record atomically without ever making its final name
+    # visible half-written. `std::fs::rename` cannot express it: on Windows it
+    # always passes MOVEFILE_REPLACE_EXISTING, so it would clobber a record a
+    # concurrent run had already placed.
+    "Win32_Storage_FileSystem",
 ]
