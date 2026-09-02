@@ -6,25 +6,32 @@ against and other people can run it on hardware this workspace does not own.
 
 ## Where this stands
 
-The release has not happened. Nothing below M6 is release work -- M14 and M15 are review rounds that
-arrived during it, and M15 carries the largest open question in the file.
+The release has not happened. PR #56 has been open as a **draft** since 2026-08-31 and is 221 commits
+ahead of `main`.
+
+**Milestone numbers are not a running order.** M7 through M15 are *review rounds on PR #56*, so they
+happened -- and continue to happen -- **inside M3**, between the pull request opening and a merge
+that has not occurred. Reading the file top to bottom puts the review of a pull request after the
+merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | M1 settle the public surface | **done, archived** | -- |
 | M2 repair the release plumbing | 1 of 5 open | only SH-2.3, which needs the merge commit |
-| M3 land the branch | open | the pull request is still a draft |
+| M3 land the branch | 4 of 5 open | **SH-3.1.1: review the diff and take the PR out of draft** |
 | M4 release | open | M3 |
 | M5 verify from outside | open | M4 |
 | M6 long-running validation | open | gates SH-4.3, so it gates the queue crate's publication |
 | M7-M13 review rounds | **done, archived** | -- |
-| M14 ninth review round | 1 open | SH-14.1 is the ABA defect itself; it is disclosed (SH-15.8) and its fix is M15 |
-| M15 the claim protocol | 5 open | SH-15.6 is the decision; it is gated on SH-15.5.1 |
+| M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
+| M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
 | M-inf parked | ungated | not scheduled, deliberately |
 
-**The critical path to a release is M3 -> M4, and it is not blocked on M15.** SH-14.1 ships disclosed
-rather than fixed ([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36)), so M15 can conclude
-after 0.1.0 without holding it up. What *does* block the queue crate specifically is M6.
+**The critical path is SH-3.1.1 -> SH-3.4 -> M4, and none of it is blocked on M14 or M15.** SH-14.1
+ships disclosed rather than fixed ([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36)) and
+the disclosure -- which was the actual release blocker -- landed at SH-15.8. So M14 and M15 conclude
+after 0.1.0 without holding it up, provided the pull request **says** that is deliberate; SH-3.1.1
+owns that. What *does* block the queue crate specifically is M6.
 
 ## Before checking anything off in this file
 
@@ -61,8 +68,11 @@ release-blocking rather than restating the decision itself.
 - `windows-ioring-sys` **0.2.0 is published and pins `windows-topology-sys = "0.1.0"` -- but as a
   dev-dependency**, so consumers never resolve it and the pin obliges no release. Corrected at SH-2.2,
   which was written on the opposite assumption.
-- This branch is **54 commits ahead of `main` with no pull request**, and release automation runs on
-  `main`. Nothing ships until it merges.
+- This branch was **54 commits ahead of `main` with no pull request** when this file was written.
+  **As of 2026-09-02 it is 221 commits ahead, and PR #56 has been open (as a draft) since
+  2026-08-31.** Release automation runs on `main`, so nothing ships until it merges -- but the
+  pull request itself is no longer the thing to create, and the review rounds in M7 onwards all
+  happened on it while it sat open.
 
 > **M1 -- settling the public surface before publication -- is complete and archived.** Moved to
 > [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) on 2026-09-02.
@@ -187,10 +197,35 @@ order is the authority and the numbers are only names.
 
 ## M3: land the branch
 
-- [ ] **SH-3.1** -- Open the pull request, and **review it as a diff rather than as a memory of having
-  written it**. 54 commits across the topology crate, the queue crate and the probes is more than fits
-  in a session's recollection, and the branch contains at least one deliberate breaking change plus
-  several documented reversals of earlier conclusions.
+**Read this milestone as interleaved with M7 onwards, not before them.** The file's linear order
+implies the review rounds follow the merge, which is backwards and was noticed on 2026-09-02: PR #56
+opened on 2026-08-31, nine review rounds arrived while it sat open, and the merge has still not
+happened. Review rounds are **reactive** -- they cannot be scheduled after SH-3.4, because merging
+ends the pull request they are rounds *of*.
+
+**Which of those rounds gate the merge: none of them, and that is a decision rather than an
+accident.** SH-14.1 is a real defect that ships **disclosed rather than fixed**
+([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36), delivered by SH-15.8), and everything
+open in M15 is follow-on work on the fix. What *did* gate the release was the disclosure, and that
+landed. So SH-3.4 may proceed with M14 and M15 still open -- but a reviewer must be told that is
+deliberate, which is SH-3.1's job below.
+
+- [x] **SH-3.1** -- ~~Open the pull request~~ **-- already open since 2026-08-31 as a draft.** Checked
+  off as *superseded by events*, not as done: the item asked for something that had already happened
+  by the time anyone read it, and it stated "54 commits" against a branch now **221 commits** ahead.
+  Its surviving instruction is **SH-3.1.1** below, which is the part that was never done.
+
+- [ ] **SH-3.1.1** -- **Review the PR as a diff rather than as a memory of having written it, then
+  mark it ready.** 221 commits across the topology crate, the queue crate and the probes is far more
+  than fits in a session's recollection, and the branch contains at least one deliberate breaking
+  change plus several documented reversals of earlier conclusions -- D-18 amended and then
+  superseded, PT-5.3 reversed, SH-14.3 absorbed, and a crate's version scheme changed from semver to
+  a date.
+  **Taking it out of draft is a step this file never named**, and it is the real gate on SH-3.4
+  rather than a formality: a draft cannot be merged, and nothing above says who decides it is ready.
+  **The description must state what is knowingly unfinished**, so a reviewer does not read open
+  milestones as oversight: SH-14.1 ships disclosed per D-36, M15 is follow-on work on its fix, and
+  `permit_mpsc` is an experimental non-default module exempt from the crate's semver promise.
 
 - [ ] **SH-3.2** -- Run the full gate on the merge result, not merely on the branch tip: `cargo fmt
   --check`, `cargo clippy --all-targets`, `cargo check --all-targets` in **both** debug and release,
@@ -325,6 +360,18 @@ D-31 says cannot be supported.
 > **M7 through M13 -- seven PR #56 review rounds -- are complete and archived.** Moved to
 > [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) on 2026-09-02. M14 and M15 stay below because they
 > carry open work.
+
+**Everything from here down happened, and happens, *inside* M3 rather than after it.** These are
+rounds of review on PR #56, which opened on 2026-08-31 and has not merged; they are reactive work
+that arrives while a pull request is open, so their position at the end of this file is numbering
+order and not a schedule. Reading it as a schedule would put the review of a pull request after the
+merge that closes it.
+
+**None of the open items below gates SH-3.4**, which is a decision rather than an oversight: the
+defect they concern ships **disclosed rather than fixed**
+([D-36](crates/windows-waitable-queues/DESIGN-NOTES.md#d-36)), and the disclosure -- which *was* the
+release blocker -- landed at SH-15.8. SH-3.1.1 is responsible for saying so in the pull request
+description, so a reviewer does not mistake open milestones for unfinished business.
 
 ## M14: PR #56 ninth review round -- an ABA hole the wrap test would not have caught
 
