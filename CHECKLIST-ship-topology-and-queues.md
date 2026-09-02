@@ -25,7 +25,7 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
-| M16 tenth review round | 4 of 7 open | the SH-3.1.1 diff review; SH-16.3 is the worst still open |
+| M16 tenth review round | 2 of 8 open | 6 fixed; SH-16.5 and SH-16.8 are blocked on a design session |
 | M-inf parked | ungated | not scheduled, deliberately |
 
 **The critical path is SH-3.1.1 -> SH-3.4 -> M4, and none of it is blocked on M14 or M15.** SH-14.1
@@ -791,6 +791,28 @@ predicted about a 222-commit branch.
   Decide the rule **once**, in the crate that owns the topology, and have the consumer ask rather than
   restate. Note the asymmetry that makes the NUMA arm different and correct: for NUMA, `None` has no
   honest value, whereas `cache_domain` is already `Option<u32>`.
+  **BLOCKED on
+  [DESIGN-SESSION-2026-09-02-cache-locality-model.md](design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md)
+  -- and *not* for want of a consumer.** The fix was implemented; implementing it surfaced a design
+  question the fix would have silently answered. The primitive it adds is a single "which cache domain
+  is this processor in", which **is** the single-boundary collapse that session is about, so landing it
+  would prejudge the outcome. The prototype compiled, and its topology-side tests passed and were
+  sabotage-verified; it was reverted deliberately and preserved outside the repository as
+  `sh-16.5-prototype.patch`. The contradiction is real and stays unfixed until the session concludes.
+
+- [ ] **SH-16.8** -- **The locality model collapses a seven-kind, any-depth topology onto one cache
+  boundary, and nothing records that as a choice.** Raised by the engineer during the SH-16.5 fix, and
+  confirmed: `windows-topology-sys` hardcodes no level count (`level` is a `u8`, and a regression test
+  already guards against a consumer sweeping `1..=4`) and models `Group`, `Package`, `Die`, `Module`,
+  `Core`, `Cache` and `Memory` -- but `outermost_partitioning_cache` selects one level and discards the
+  rest, `ProcessorPlace::cache_domain` is one scalar, and `Placement` carries three tiers.
+  Three consequences, all verified: "same cache" denotes **a different boundary on different machines**,
+  so a label is not portable across records; `CrossCache` conflates "different L2, same L3" with
+  "different L3" on any machine with two live boundaries; and it has already cost a row in this
+  project's own matrix -- the x64 host's "cannot express `same cache, same class`" note in
+  [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md) is attributed to hardware, but
+  those sixteen processors do share one L3, so a per-level model would express it.
+  Gated on the session above, which carries the design space and the open questions.
 
 - [x] **SH-16.6** -- **The thread-stack NUMA spike's `deep_probe` measures the shallow end of its own
   filler, so the discrimination it exists to make is inert.** The stack grows down, so `filler[0]` is
