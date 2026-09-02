@@ -859,12 +859,25 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   `capacity` items from N concurrent producers into an initially empty queue would also settle the
   narrow question of whether an overdraw can refuse while a slot is provably free.
 
-- [ ] **SH-15.6** -- **Decide: merge, or delete.** The duplicated path exists so the speculative work
-  could proceed without disturbing a working shape; leaving it to become permanent by inattention is
-  the failure mode the duplication rule warns about. On the evidence from SH-15.5, either adopt arm A
-  into `reserving_mpsc` (closing SH-14.1 and SH-14.3) or delete it and take one of SH-14.3's original
-  options, recording why. Whichever way it goes, SH-14.1's hazard must be either fixed or documented as
-  an accepted limitation with its exposure stated -- it may not simply stay open.
+- [ ] **SH-15.6** -- **Decide: merge, delete, or ship as a third peer.** **RE-PLANNED: this item was
+  written as a binary and the binary was wrong.** "Merge or delete" presumes one protocol dominates,
+  and [D-35](crates/windows-waitable-queues/DESIGN-NOTES.md#d-35) measured that none does -- the
+  permit claim wins from four producers upward and loses at one, with no configuration-free winner.
+  [D-29](crates/windows-waitable-queues/DESIGN-NOTES.md#d-29) already settled how this crate answers
+  that question for the two existing shapes: **both ship, the crate publishes what it measured, and
+  the caller decides on its own hardware.** Deleting a shape because no visible consumer wants it is
+  what the platform-integrity rule forbids; adopting one because it won most rows would be the same
+  error facing the other way.
+  So the live outcomes are three, and the third is now the most likely: adopt arm A into
+  `reserving_mpsc`; delete it and take one of SH-14.3's original options; or promote it to a named
+  peer alongside the other two, with the measurement published so a caller can choose. The
+  duplicated path still may not become permanent *by inattention* -- that is what this item guards --
+  but becoming permanent *by decision* is a legitimate outcome rather than a failure of the
+  duplication rule.
+  Whichever way it goes, SH-14.1's hazard must be either fixed or documented as an accepted
+  limitation with its exposure stated -- it may not simply stay open. **That disclosure is no longer
+  gated on this item**: see SH-15.8, which must land before 0.1.0 publishes regardless of what is
+  decided here.
   **Gated on SH-15.5.1**, not on SH-15.5: the throughput question is answered
   ([D-35](crates/windows-waitable-queues/DESIGN-NOTES.md#d-35) -- 2.7x faster at 16-32 producers,
   1.45x slower at one), but adopting a claim that reports backpressure more eagerly would be a
@@ -879,6 +892,38 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   its room decision and its exchange. The crate's existing race hooks (`ARM`, `CLEAR`, `CLAIM`) are the
   right shape. Without this, every arm above is argued rather than demonstrated, and the fix that is
   adopted has no regression test that would go red if it were reverted.
+
+- [ ] **SH-15.8** -- **Disclose SH-14.1 publicly, and gate 0.1.0 on the disclosure rather than on the
+  fix.** **RELEASE BLOCKER.** The crate is days from its first publish with a known path to *silent
+  data loss* -- a producer overwriting a live, unconsumed item -- documented nowhere a caller would
+  see. That is not acceptable to ship in silence, and it is separable from deciding the fix: the
+  limitation exists now, whatever SH-15.6 later concludes.
+  **Precedent, and the reason this is a legitimate outcome rather than a dodge.**
+  [D-31](crates/windows-waitable-queues/DESIGN-NOTES.md#d-31) already ships one known gap this way --
+  "the disclosure, not the deferral, is the decision" -- with its own README section and crate-doc
+  section stating plainly what is verified and what is not. This follows that shape exactly and sits
+  beside it.
+  **But the two are not equally forgiving, and the disclosure must say so.** An unverified memory
+  ordering is a risk of a bug; this is a *known* bug with a computed exposure. Its failure mode is
+  silent: no error, no panic, no counter -- an item is overwritten and the consumer receives the
+  wrong one, so **a caller cannot detect it and therefore cannot mitigate it after the fact.** A
+  disclosure that only a careful reader finds is not a disclosure for a fault of that shape.
+  What it must state, in the crate docs, the README, and `reserving_mpsc`'s own module docs:
+  1. **It is not a 32-bit-only concern.** `POSITION_BITS` is 32 by construction on every target, so
+     this reaches x86-64 and ARM64 exactly as it reaches i686. The sibling spelling "32-bit
+     position" invites precisely the misreading that SH-6.1 already had to be corrected for once, so
+     the words "on every target" belong in the first sentence.
+  2. **The exposure, quantified**: 2^32 pushes, which is 37 s to about 4 minutes of sustained pushing
+     at this crate's own measured rates -- roughly two minutes at two producers, the smallest count
+     that can trigger it. Sustained, not cumulative-over-uptime.
+  3. **What is required to trigger it**: the wrap *plus* a producer stalled between its room check
+     and its claim, a window a few instructions wide. Rare, not unreachable, and a preemption is
+     enough.
+  4. **The alternatives a caller has**, which is what makes this a decision they can actually take:
+     `slotwise_mpsc` does not have this hazard (SH-14.2 widened its positions to 64 bits on every
+     target); `spsc` never had it; and the queue is safe at any push volume below the wrap.
+  Sweep for consistency when writing it, per the contract-integrity rule: this fact will end up
+  stated in at least four places and they must not drift.
 
 ## M-inf: parked, ungated
 
