@@ -312,6 +312,26 @@ pub trait Observable {
     /// [`Options::tracking_high_water`](crate::Options::tracking_high_water)
     /// asked for it, because a peak has to observe every change and that is the
     /// one metric here which cannot be made free.
+    ///
+    /// # It is an upper bound on the peak, not the peak exactly
+    ///
+    /// The depth is sampled by a producer at publication, from its own position
+    /// and a load of the consumer's, and those are two readings rather than one
+    /// instant. The consumer may have drained between them, so the sample can
+    /// exceed the depth that held when the item landed.
+    ///
+    /// The error is **one-directional and bounded**: a stale read of the
+    /// consumer's position can only be *older*, which over-reports by the number
+    /// of items drained since, and the result is clamped to the capacity. So
+    /// this never reads below the true peak, and never above the queue's own
+    /// size.
+    ///
+    /// That is the useful direction for the question this answers -- whether a
+    /// capacity was ever close to exhausted -- and it is why the cheap sample is
+    /// preferred to an exact one. Counting exactly would mean a read-modify-write
+    /// on a line shared by every producer *and* the consumer, at every push and
+    /// every pop; this crate pads its positions apart specifically to keep that
+    /// line out of the hot path.
     fn high_water(&self) -> Option<usize>;
 }
 

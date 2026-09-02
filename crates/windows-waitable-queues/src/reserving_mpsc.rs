@@ -526,14 +526,36 @@ impl<T> Shared<T> {
     /// must not have published it already. A position is claimed by exactly one
     /// producer, so this is the only writer of the slot.
     unsafe fn publish(&self, position: u32, item: T) {
-        // Near-free on this shape, unlike `slotwise_mpsc`: the producer has already
-        // read `head` to decide there was room beyond the reservations, so the
-        // depth is a subtraction of two numbers it is holding. Only the
-        // counter's line is shared, and it is written rarely -- see
-        // `Metrics::record_depth` for why the load comes before the modify.
-        let head = self.head.0.load(Ordering::Relaxed);
-        self.metrics
-            .record_depth(position.wrapping_sub(head).wrapping_add(1) as usize);
+        // Gated, matching `slotwise_mpsc`: untracked, this costs one predictable
+        // branch on a field written once at construction, and the shared `head`
+        // line is not touched at all.
+        //
+        // **Before the publication below, and that placement is load-bearing.**
+        // The subtraction is only non-negative while the consumer cannot have
+        // passed `position`, and what holds it back is precisely that `position`
+        // is not published yet. Taken afterwards, the consumer is free to drain
+        // past it, the subtraction wraps, and `fetch_max` keeps a vast number
+        // forever -- the defect `slotwise_mpsc`'s twin comment records measuring.
+        //
+        // **Clamped, which its twin does not need to be.** There, the producer's
+        // acquire load of the slot's sequence synchronizes-with the consumer
+        // freeing that slot, so the `head` read here cannot be older than
+        // `position - capacity + 1` and the depth is bounded by construction.
+        // This shape has a second entry point with no such edge:
+        // [`Reservation::send`] redeems without a room check, so the only `head`
+        // its thread is ordered against is the one *`reserve`* read -- which may
+        // be arbitrarily old by the time the reservation is redeemed. A stale
+        // read can only over-report, never under-report, so clamping to the
+        // capacity keeps the value an upper bound on a depth the queue really
+        // reached rather than an unbounded one. See [`Observable::high_water`]
+        // for what that bound is contracted to mean.
+        //
+        // [`Observable::high_water`]: crate::Observable::high_water
+        if self.metrics.tracks_high_water() {
+            let head = self.head.0.load(Ordering::Acquire);
+            let depth = position.wrapping_sub(head).wrapping_add(1) as usize;
+            self.metrics.record_depth(depth.min(self.capacity));
+        }
 
         let slot = &self.slots[position as usize & self.mask];
         // SAFETY: the caller's claim makes this thread the only writer, and the

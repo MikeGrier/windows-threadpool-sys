@@ -489,3 +489,18 @@ that produces no thread is otherwise invisible to the "are all comments resolved
   to the capacity like the other two shapes', and `is_full` is defined in terms of `remaining` rather
   than restating the rule. The trait's default now documents that a `Reserving` shape must override it,
   so the next shape to reserve does not inherit the same wrong answer silently.
+
+- [x] **SH-10.5** -- **The high-water depth could record a peak the queue never reached.**
+  `reserving_mpsc`'s `publish` sampled the depth from its own position and a relaxed load of `head`,
+  ungated and unclamped. `slotwise_mpsc`'s twin is bounded by construction -- its producer's acquire
+  load of the slot's sequence synchronizes-with the consumer freeing that slot, so `head` cannot be
+  older than `position - capacity + 1` -- but this shape has a second entry point with no such edge:
+  `Reservation::send` redeems without a room check, so the only `head` its thread is ordered against is
+  the one *`reserve`* read, which may be arbitrarily old by the time the reservation is redeemed. The
+  sample is now gated on tracking (parity with the twin), read before publication, and clamped to the
+  capacity.
+  `Observable::high_water`'s contract is corrected to match what all three shapes actually deliver: an
+  **upper bound** on the true peak, never below it and never above the capacity, with the reason the
+  cheap sample is preferred to an exact count. Counting exactly would put a read-modify-write on a line
+  shared by every producer and the consumer into every push and every pop -- the line this crate pads
+  its positions apart to keep out of the hot path.

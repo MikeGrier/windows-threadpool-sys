@@ -1330,3 +1330,64 @@ fn the_gauges_are_exact_when_the_two_loads_agree() {
     assert_eq!(tx.len(), 1);
     assert_eq!(tx.remaining(), 3);
 }
+
+#[test]
+fn the_high_water_mark_never_exceeds_the_capacity() {
+    // The defect, driven directly. The depth is sampled from this producer's
+    // position and a load of the consumer's, which are two readings rather than
+    // one instant -- and `Reservation::send` is the path with no room check, so
+    // the only `head` its thread is ordered against is the one `reserve` read,
+    // which may be arbitrarily old by the time the reservation is redeemed.
+    //
+    // A stale read cannot be raced for on a coherent machine, so the state one
+    // would observe is written instead: `head` behind the claim position by more
+    // than the capacity. Without the clamp this records a peak of 12 on a
+    // four-slot queue.
+    let (tx, rx) = bounded_with::<u32>(4, Options::new().tracking_high_water())
+        .expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("an empty queue has room");
+
+    let stale_head = u32::MAX - 10;
+    tx.shared.head.0.store(stale_head, Ordering::Release);
+
+    slot.send(7).expect("the consumer is still here");
+
+    // Restored before anything walks the ring: teardown and `pop` both step from
+    // `head` to the claim position, and a head this far behind sets them a
+    // four-billion-step loop that hangs rather than fails.
+    tx.shared.head.0.store(0, Ordering::Release);
+
+    let peak = tx.high_water().expect("tracking was asked for");
+    assert!(
+        peak <= tx.capacity(),
+        "a four-slot queue reported a peak of {peak}"
+    );
+    assert_eq!(rx.pop(), Some(7), "the item itself must be unaffected");
+}
+
+#[test]
+fn the_high_water_mark_still_reaches_a_genuine_peak() {
+    // The clamp must not have been bought by flattening the answer: filling the
+    // queue must still be reported as having filled it.
+    let (tx, rx) = bounded_with::<u32>(4, Options::new().tracking_high_water())
+        .expect("4 is a valid capacity");
+
+    for i in 0..4 {
+        tx.push(i).expect("room");
+    }
+
+    assert_eq!(
+        tx.high_water(),
+        Some(4),
+        "the queue was filled, so the peak is its capacity"
+    );
+    assert_eq!(rx.pop(), Some(0));
+}
+
+#[test]
+fn the_high_water_mark_is_untracked_by_default_on_this_shape() {
+    // `None` and `Some(0)` are different answers, and the default is the former.
+    let (tx, _rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+    assert_eq!(tx.high_water(), None);
+}

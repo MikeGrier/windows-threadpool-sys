@@ -52,6 +52,12 @@ pub(crate) struct Metrics {
     refused: AtomicU64,
     /// The deepest the queue has been observed to get, if it is being tracked.
     ///
+    /// An **upper bound** on the true peak rather than the peak exactly, and
+    /// never above the queue's capacity. The reasoning, and why the cheap
+    /// sample is preferred to an exact count, is on
+    /// [`Observable::high_water`](crate::Observable::high_water); it is stated
+    /// there because that is where a caller reads it.
+    ///
     /// `Option` rather than a sentinel because "not tracked" and "never got
     /// past empty" are different answers, and a caller acting on a `0` that
     /// meant the former would be reading a number nobody recorded.
