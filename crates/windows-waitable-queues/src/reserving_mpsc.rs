@@ -588,16 +588,40 @@ impl<T> Shared<T> {
         // for what that bound is contracted to mean.
         //
         // [`Observable::high_water`]: crate::Observable::high_water
+        // **This load is unconditional because the slot write below needs it,
+        // not because the metric does.** It is the acquire half of the pair
+        // [`Consumer::pop`] describes: freeing a slot is `head.store(Release)`,
+        // and a producer may only write that slot after acquiring a `head` that
+        // has passed it. [`Producer::push`] gets that edge from the room check
+        // in [`Self::has_room_beyond_reservations`]; [`Reservation::send`]
+        // deliberately has no room check, so without this load its non-atomic
+        // write would race the consumer's non-atomic read of the previous
+        // occupant -- a data race, and undefined behaviour, however reliably a
+        // given target's codegen happens to order it today.
+        //
+        // Placing it here rather than in `send` covers every path with one
+        // load. It must follow the claim exchange, and does: the invariant
+        // `occupied + reserved <= capacity` holds at that exchange with
+        // `reserved >= 1`, so `head >= position - capacity + 1` there, and
+        // `head` never moves backwards. Reading it afterwards can therefore
+        // only be fresher, never staler, than the edge the write requires.
+        let head = self.head.0.load(Ordering::Acquire);
         if self.metrics.tracks_high_water() {
-            let head = self.head.0.load(Ordering::Acquire);
             let depth = position.wrapping_sub(head).wrapping_add(1) as usize;
             self.metrics.record_depth(depth.min(self.capacity));
         }
 
         let slot = &self.slots[position as usize & self.mask];
         // SAFETY: the caller's claim makes this thread the only writer, and the
-        // room check that permitted the claim means the consumer has finished
-        // with whatever the slot held a lap ago.
+        // acquire load of `head` above synchronizes-with the `head.store` by
+        // which the consumer freed this slot a lap ago, so its read of the
+        // previous occupant happens-before this write.
+        //
+        // The claim alone is not enough. It establishes that the slot is
+        // *logically* free -- `occupied + reserved <= capacity` with
+        // `reserved >= 1` -- but a non-atomic write racing a non-atomic read
+        // needs a happens-before edge, not merely a logical guarantee that the
+        // read is over. The load above is that edge.
         unsafe {
             (*slot.value.get()).write(item);
         }
