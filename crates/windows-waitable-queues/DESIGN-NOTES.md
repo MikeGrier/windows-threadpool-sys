@@ -41,7 +41,7 @@ preferred.
 | <a id="d-15"></a>D-15 | **`Doorbell::clear` resets the event *before* clearing the flag that mirrors it, and the original order was a lost wakeup.** A producer signalling between the two lines set the flag and issued a real `SetEvent`; the `ResetEvent` that followed erased the signal and left the flag set, wedging the doorbell dark while it claimed to be lit. **Amends [D-9](#d-9)**, whose "there is no third case" holds only for a queue whose emptiness is one position comparison. |
 | <a id="d-16"></a>D-16 | **Its cost premise is falsified by [D-26](#d-26); the conclusion stands on capability instead -- see [D-29](#d-29).** Reservation is a capability a shape may lack, so the reserving multi-producer queue ships as a peer of `slotwise_mpsc` rather than replacing it. Honouring a reservation requires counting free slots, which requires the consumer's position -- a single shared line `slotwise_mpsc`'s push deliberately never reads. The original rationale added that this made reserving the *more expensive* shape and that both should ship rather than charge every caller for it; measurement reversed that, and the split is now justified by the capability alone. **Amends [D-6](#d-6)**, which assumed one queue would carry every policy. |
 | <a id="d-17"></a>D-17 | **The reservation count and the claim position live in one word, because a check-and-claim over both must be a single atomic operation.** Two atomics cannot be made correct with any amount of fencing: the pushing producer is load-then-store and the reserving one store-then-load, so the Dekker argument does not apply and both can miss each other. The 32/32 split is forced by the arithmetic, and caps this shape at 2^31 items. |
-| <a id="d-18"></a>D-18 | **A 128-bit compare-and-swap is refused.** It would lift the 2^31 cap and nothing else -- the consumer's position still has to be read -- at the cost of a dependency, a target-feature floor not in the x86-64 baseline, and a different instruction on the ARM64 machine this workspace measures on. Revisit only for a tagged pointer, which is what [M-inf.1](../../CHECKLIST-io-domains.md)'s linked and sharded shapes would need. |
+| <a id="d-18"></a>D-18 | **A 128-bit compare-and-swap is refused -- outcome unchanged, reasoning replaced.** **Amended: three of the four reasons originally given were wrong or incomplete, and the decisive one was missing.** It would *not* lift the cap "and nothing else": a 64-bit position also collapses [SH-14.1](../../CHECKLIST-ship-topology-and-queues.md)'s ABA recurrence, which was unknown when this was written. It is *not* outside the x86-64 baseline -- `rustc 1.98.0` emits `target_feature="cmpxchg16b"` for `x86_64-pc-windows-msvc`, so there is no floor to raise and no runtime detection to pay. What stands is the dependency (`AtomicU128` is still unstable, rust-lang/rust#99069) and, decisively, that **`i686-pc-windows-msvc` has no 128-bit atomic at all**: adopting this is not "widen the word" but "widen the word *and* drop 32-bit support". Revisit for a tagged pointer, or if 32-bit support is dropped for other reasons -- not before. |
 | <a id="d-19"></a>D-19 | **The coalesced loss latch is deliberately not generalised from the file watcher.** Coalescing there is sound because a desync is *idempotent* -- two mean the same as one, and the answer to both is a re-scan. A queue of arbitrary `T` has no such property, so what generalises is a loss *count*, which is [M31.4](../../CHECKLIST-io-domains.md)'s observability rather than a policy. |
 | <a id="d-20"></a>D-20 | **Undrained items are handed to a caller-supplied sink at teardown, and the sink is chosen at construction because `Drop` has nowhere to hand them back to.** Without one they are destroyed on whichever thread released the last handle -- which may be a pool callback that must not block, and closing a handle to a dead network path can block for a long time. The default is unchanged; what changes is that it is now a named choice. |
 | <a id="d-21"></a>D-21 | **A panicking disposal sink is caught and the teardown walk continues.** The sink is caller code inside a destructor: a panic escaping it abandons every item behind it -- the exact handles the mechanism exists to account for -- and during an unwind aborts the process. Catching declines to turn a caller's bug into a much larger one. |
@@ -571,33 +571,58 @@ constraint that binds: the count's half must be wide enough to hold the whole ca
 
 ## D-18: a 128-bit compare-and-swap is refused
 
-The natural question about [D-17](#d-17)'s packing is why not use `cmpxchg16b` (or `CASP` on aarch64) and
-keep both halves full width. The answer has one decisive part and three supporting ones.
+**Amended 2026-09-02. The refusal stands; almost none of its original reasoning does.** The first
+version of this decision was written before [SH-14.1](../../CHECKLIST-ship-topology-and-queues.md)
+existed, and it asserted target facts that were never checked against the toolchain. Both faults are
+corrected below, and the correction is kept rather than silently rewritten because the *shape* of the
+error is instructive: a decision can reach the right outcome and still leave every reason a reader
+would rely on wrong.
 
-**It does not remove the cost that matters.** The expense in this shape is the shared read of the
-consumer's position, and free space is `capacity - (position - head) - reserved`. `head` belongs to the
-consumer; no width of *producer-side* compare-and-swap makes it appear in the producer's word. So a
-double-width exchange buys exactly one thing: lifting the ceiling from 2^31 to 2^62, on a ring that is
-allocated in full at construction.
+The natural question about [D-17](#d-17)'s packing is why not use `cmpxchg16b` (or `CASP` on aarch64)
+and keep both halves full width.
 
-The supporting reasons:
+### What was claimed, and what is actually true
 
-- **It is not reachable from stable Rust without a new dependency.** There is no usable `AtomicU128`, and
-  `core::arch::x86_64::cmpxchg16b` is an unstable intrinsic; the toolchain is pinned to 1.98.0 stable. It
-  would mean adding `portable-atomic` to a workspace whose only third-party dependency is `windows-sys`,
-  on a crate that is [published](#d-8).
-- **It is not in the x86-64 baseline.** `x86_64-pc-windows-msvc` does not enable the target feature by
-  default. Windows 8.1 and later require the instruction in hardware, so it is *present*, but the
-  compiler still will not emit it unless told -- so it is either raise the target-feature floor, which
-  narrows the platform, or pay runtime detection on the push path.
-- **It is not even the same instruction on the machine this workspace measures on.** The reference machine
-  is `aarch64-pc-windows-msvc`; CI is x86-64. The measuring platform and the CI platform would exercise
-  different instructions with different cost profiles, and
-  [windows-platform-probes](../windows-platform-probes/DESIGN-NOTES.md) records what ARM64-only
-  measurement has already cost once.
+**"It would lift the 2^31 cap and nothing else" -- wrong, and this is the substantive correction.**
+A 64-bit position field would also collapse SH-14.1's ABA recurrence, which is a correctness hole and
+not a capacity limit. The original decision denied the existence of what is now the option's main
+benefit, purely because the hole had not yet been found. It remains true that a wider producer word
+does nothing about *the cost that matters* -- free space is `capacity - (position - head) - reserved`,
+`head` belongs to the consumer, and no width of producer-side exchange brings it into the producer's
+word -- but "no performance benefit" was never the same claim as "no benefit".
 
-**Where it would genuinely earn its place is a tagged pointer**, which is what the linked and sharded
-shapes parked in `M-inf.1` would need. Recorded there so the question does not have to be re-derived.
+**"It is not in the x86-64 baseline" -- false on the pinned toolchain.** Checked rather than assumed:
+`rustc 1.98.0 --print cfg --target x86_64-pc-windows-msvc` emits `target_feature="cmpxchg16b"` and
+`target_has_atomic="128"`. There is no target-feature floor to raise and no runtime detection to pay
+on the push path. The original text reasoned from the generic x86-64 baseline and never checked the
+*Windows* target, which enables the feature by default.
+
+**"It is not even the same instruction on aarch64" -- true but not a cost.** `aarch64-pc-windows-msvc`
+reports `target_has_atomic="128"` with no target feature required, because `ldxp`/`stxp` is ARMv8-A
+baseline. That the instruction differs from x86-64's is what an atomics abstraction is for.
+
+**"There is no usable `AtomicU128`" -- true, verified.** Still unstable (rust-lang/rust#99069); a
+test compile on 1.98.0 fails. Reaching a double-width exchange from stable means adding
+`portable-atomic` to a workspace whose only third-party dependency is `windows-sys`, on a crate that
+is [published](#d-8). **This is the one original reason that survives.**
+
+### The reason the decision actually rests on now
+
+**`i686-pc-windows-msvc` has no 128-bit atomic at all** -- `rustc --print cfg` reports
+`target_has_atomic="64"` and no `"128"`. So this option is not "widen the claim word"; it is "widen
+the claim word **and** drop 32-bit support", which collapses
+[SH-14.3](../../CHECKLIST-ship-topology-and-queues.md)'s option 1 into its option 4. Narrowing the
+platform is the engineer's decision under the repository's platform-integrity rule, not something a
+correctness fix may take in passing.
+
+That is a stronger and simpler reason than the three it replaces, and it is the one to quote.
+
+### When to revisit
+
+For a **tagged pointer**, which is what the linked and sharded shapes parked in `M-inf.1` would need
+-- or if 32-bit support is dropped for unrelated reasons, at which point the option becomes a live
+candidate for SH-14.1 rather than a non-starter. Recorded so the question does not have to be
+re-derived a third time.
 
 ## D-19: the coalesced loss latch does not generalise
 

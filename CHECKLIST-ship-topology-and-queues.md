@@ -803,7 +803,7 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   two-producer figure and roughly four the 32-producer one; since the hazard needs at least two
   producers the headline is defensible, but the range and its basis belong in the text.
 
-- [ ] **SH-15.2** -- **Amend [D-18](crates/windows-waitable-queues/DESIGN-NOTES.md#d-18), whose stated
+- [x] **SH-15.2** -- **Amend [D-18](crates/windows-waitable-queues/DESIGN-NOTES.md#d-18), whose stated
   rationale no longer holds.** It refuses a 128-bit compare-and-swap because it "would lift the 2^31 cap
   and nothing else", which was written before SH-14.1 was known -- a 64-bit position would also collapse
   the recurrence, so the decision denies the existence of its main benefit.

@@ -262,11 +262,14 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
   `occupied + reserved` is never momentarily wrong; and the producer stops needing the slot sequence for
   the "free" direction, so this shape's `pop` is one store *shorter* than `slotwise_mpsc`'s.
   **A 128-bit compare-and-swap was raised and refused**
-  ([D-18](crates/windows-waitable-queues/DESIGN-NOTES.md#d-18)): it lifts the cap and nothing else, since
-  the consumer's position still has to be read, and it costs a new dependency, a target-feature floor not
-  in the x86-64 baseline, and a different instruction on the ARM64 machine every measurement here is
-  taken on. Recorded with the case that would revive it -- a tagged pointer, which is what M-inf.1's
-  linked and sharded shapes would need.
+  ([D-18](crates/windows-waitable-queues/DESIGN-NOTES.md#d-18)), and **that decision's reasoning was
+  amended on 2026-09-02 while its outcome stood** -- read it there rather than from this paragraph,
+  which previously restated the superseded version. In short: it does not merely lift the cap (a
+  64-bit position would also close SH-14.1's ABA hole, unknown when D-18 was written), it *is* in the
+  x86-64 baseline on this workspace's Windows target, and the reason it is refused is that
+  `i686-pc-windows-msvc` has no 128-bit atomic at all -- so adopting it would mean dropping 32-bit
+  support. Revived by a tagged pointer, which is what M-inf.1's linked and sharded shapes would need,
+  or by dropping 32-bit for unrelated reasons.
   **`spsc` reserves too, nearly free**, since one producer means `reserve` and `push` are the same
   thread. Its reservation *borrows* the producer where `reserving_mpsc`'s is owned and `Send`, because
   there the handle **is** the single-producer guarantee and an owned reservation could outlive it on

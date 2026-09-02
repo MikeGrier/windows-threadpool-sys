@@ -79,10 +79,14 @@
 //! `2^(b-1)`, and the count needs `b` bits because it can reach the capacity, so
 //! `b + b = 64` gives `b = 32`. There is no cleverer division of the word.
 //!
-//! **A 128-bit compare-and-swap would lift that cap and is deliberately not
-//! used** ([D-18](../DESIGN-NOTES.md#d-18)). It would not remove the cost that
+//! **A 128-bit compare-and-swap is deliberately not used**
+//! ([D-18](../DESIGN-NOTES.md#d-18)). It would not remove the cost that
 //! matters -- the consumer's position still has to be read -- and 2^31 slots is
-//! a ring this shape allocates in full at construction.
+//! a ring this shape allocates in full at construction. The operative reason,
+//! though, is that `i686-pc-windows-msvc` has no 128-bit atomic at all, so
+//! adopting one would mean dropping 32-bit support rather than merely widening
+//! a word. See the decision for the full reasoning, which was amended in
+//! 2026-09-02 after three of its original four reasons turned out not to hold.
 
 use core::cell::{Cell, UnsafeCell};
 use core::fmt;
