@@ -25,7 +25,7 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
-| M16 tenth review round | 4 of 10 open | **gates the merge**; 6 fixed, 4 wait on the design session |
+| M16 tenth review round | 5 of 11 open | **gates the merge**; 6 fixed, 5 wait on the design session |
 | M-inf parked | ungated | not scheduled, deliberately |
 
 **The critical path is M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4.** M14 and M15 do not
@@ -869,6 +869,21 @@ predicted about a 222-commit branch.
   Raised by the engineer's question of whether we expose everything a real system would reveal
   through the Win32 API set. Today the answer is **no**. Verify the field list against the SDK
   before relying on it. Gated on SH-16.8, since what shape it lands in depends on the model.
+  Note `Parked` and `Allocated` bear directly on **thread counts and assignments**, one of the three
+  decisions the model exists to serve, so this is a gap already costing a named use rather than
+  speculative completeness.
+
+- [ ] **SH-16.11** -- **`Topology::distances` is a field for a fact Win32 cannot supply, it is never
+  populated, and the measurement that would fill it already exists elsewhere.** `discover()`
+  hardcodes `distances: None`, every other construction sets `None`, and no consumer reads the
+  field. Windows exposes no API for NUMA node distance -- ACPI carries SLIT, Win32 does not surface
+  it -- so measurement is the only source. `windows-placement-probe` **already measures the
+  equivalent** through `node_pairs_measured()`, producing per-node-pair handoff cost with ring
+  placement, and renders it as a table that goes nowhere else.
+  This is the canonical case for the whole model: under the bar that the model must be usable
+  **without further measurement**, a consumer shaping memory allocation must today either run the
+  probe at decision time -- forbidden -- or guess. Gated on SH-16.8, and on the open question of
+  which component owns the measurement phase.
 
 - [x] **SH-16.6** -- **The thread-stack NUMA spike's `deep_probe` measures the shallow end of its own
   filler, so the discrimination it exists to make is inert.** The stack grows down, so `filler[0]` is

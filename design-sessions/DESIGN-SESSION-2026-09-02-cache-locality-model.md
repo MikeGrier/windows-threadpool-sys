@@ -202,13 +202,75 @@ test on their own merits:
 - **Trust never upgrades.** Identical derivation -- a file still cannot establish that it
   describes the machine you are on.
 
+### Provenance is a scalar, and the topology is a point in time
+
+Settled. The topology describes **a particular instance at a point in time**, not a historical
+record. There may be room for both eventually, but history is deliberately out of scope now:
+once historical record is allowed, a much wider set of sources has to be reconciled and the
+whole enterprise becomes a mess. The model works from the best data available right now.
+
+**This does not license paring the model down to what today's consumers need.** The engineer
+was explicit, and the repository's history supports it: this project has repeatedly found the
+information it had was inadequate -- the ARM64 host with no L3 that forced "outermost level
+that partitions" rather than "level 3"; the guard test against a consumer sweeping `1..=4`;
+group-awareness, where "a bare `cpu5` cannot tell a reader whether the group was considered and
+was zero, or never consulted at all"; and `machine.rs` distinguishing a withheld field from an
+unanswerable one. Foreclosing on any single moment's understanding risks losing exactly what is
+needed next.
+
+The two are not in tension, because they are different axes: **breadth in structure, narrowness
+in time.** A point-in-time snapshot can be structurally complete. History is the axis that
+drags in multiple sources and reconciliation.
+
+### How concrete: "usable without further measurement"
+
+The bar, in the engineer's words, is that the abstract model be massaged into something usable
+for shaping memory allocations, thread counts and assignments, and ring topology shapes,
+**without further measurement -- the model answers from what was already observed, with no
+probing at decision time.**
+
+Three consequences follow, and the third is architectural.
+
+**1. Measured facts must live in the model, not only in probe output.** If a decision needs a
+fact only measurement can supply, and probing at decision time is forbidden, the measurement
+has to already be there. This is why per-relation provenance is load-bearing rather than
+decorative: a consumer must be able to see whether "these share L3" came from firmware or from
+a probe, and cannot go and check.
+
+**2. The not-observed record gains a second job.** A consumer needing an unmeasured fact
+*cannot acquire it*. So the model must say "not measured" plainly and let the caller degrade
+deliberately, rather than presenting an absence the caller silently reads as a value.
+
+**3. There must be an explicit measurement phase on the real machine.** Combined with "trust
+never upgrades", this rules out shipping a pre-measured topology: a file caps at `Restored`, so
+its measurements cannot be trusted as *this* machine's. And lazy measurement on first need is
+just probing at decision time. So the model acquires a lifecycle -- observe (cheap, firmware),
+measure (expensive, on-machine), decide (no I/O) -- and something has to own the middle phase.
+
+### The canonical case, already half-built: NUMA distances
+
+`Topology::distances: Option<Distances>` exists, and every path sets it to `None`.
+`Topology::discover` hardcodes `distances: None`; no consumer reads the field. Meanwhile
+**Win32 cannot supply it** -- ACPI carries SLIT, but no Win32 API surfaces node distances -- and
+`windows-placement-probe` **already measures the equivalent**, via `node_pairs_measured()`,
+producing per-node-pair handoff cost with ring placement and rendering it as a table.
+
+So the fact is needed, the field exists, the measurement exists, and nothing connects them. A
+consumer shaping memory allocation today must either run the probe at decision time, which the
+bar above forbids, or guess. This is the whole design in one field, and it is tracked as
+SH-16.11.
+
 ### Still open
 
-- Scalar-versus-chain, and if a chain, what a consumer asks it.
+- **Who owns the measurement phase, and what does it cost?** A `discover()` that measures is
+  expensive and surprising; a separate enrich step is honest but can be skipped; lazy is ruled
+  out by the bar above.
 - Whether multiple observations per relation are held as a set, or reduced on insert with the
   reduction recorded.
 - What a query returns when observations disagree: a value plus a conflict marker, or the
   conflict itself, forcing the caller to adjudicate.
+- What a consumer does when a needed fact is `not measured` -- is degrading its choice, or does
+  the model offer a documented fallback?
 
 ## What the code actually does, verified rather than assumed
 
