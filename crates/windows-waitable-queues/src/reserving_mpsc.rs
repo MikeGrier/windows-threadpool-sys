@@ -126,13 +126,14 @@ const POSITION_MASK: u64 = (1 << POSITION_BITS) - 1;
 /// most items this shape can hold.
 ///
 /// **Bounded by the `usize` width as well as by the packing, because on a
-/// 32-bit target the packing is the *wider* of the two.** There,
-/// [`WRAPPING_MAX_CAPACITY`] is `2^31 - 1`, so a flat `1 << 31` exceeds the
-/// crate-wide ceiling and the assertion below rejects it -- failing the build
-/// for every capacity, including the small valid ones. Taking the narrower of
-/// the two limits keeps this a power of two on every target, which matters
-/// because the value is offered to a caller as a capacity it could actually
-/// use.
+/// 32-bit target the packing is the *wider* of the two.** The crate-wide
+/// ceiling below which a wrapping position difference stays unambiguous is
+/// `usize::MAX / 2`, which on a 32-bit target is `2^31 - 1` -- narrower than
+/// the packing. A flat `1 << 31` therefore exceeds it, and the const assertion
+/// below rejects it, failing the build for every capacity including the small
+/// valid ones. Taking the narrower of the two limits keeps this a power of two
+/// on every target, which matters because the value is offered to a caller as a
+/// capacity it could actually use.
 pub const BOUNDS_MAX: usize = {
     let packed = 1_usize << (POSITION_BITS - 1);
     let widest_usize_power_of_two = 1_usize << (usize::BITS - 2);

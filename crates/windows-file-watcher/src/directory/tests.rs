@@ -690,8 +690,23 @@ fn canonical_path_grows_its_buffer_when_the_path_does_not_fit() {
 }
 /// A directory whose `\\?\` spelling is exactly `target` UTF-16 units, built by
 /// padding the final component. Components stay well under the 255-unit limit.
+///
+/// **Built from the base's *canonical* spelling, not the one handed in.** A
+/// machine whose temp directory contains an 8.3 short name -- `C:\Users\RUNNER~1\...`
+/// on a GitHub-hosted runner -- canonicalizes it to the long form, so a fixture
+/// measured against the short spelling is reported *longer* than it was built to
+/// be. Measured: `RUNNER~1` expands to `runneradmin`, three units wider, and the
+/// length assertions failed on CI with `left: 511, right: 508` while passing on
+/// a developer machine whose temp path is already canonical.
 fn deep_dir_of_prefixed_len(base: &Path, target: usize) -> PathBuf {
-    let mut path = base.to_path_buf();
+    let canonical = std::fs::canonicalize(base).expect("the base directory must exist");
+    // `canonicalize` already returns the `\\?\` form on Windows, and the caller
+    // re-adds that prefix when it measures, so strip it here rather than
+    // counting it twice.
+    let mut path = match canonical.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(stripped) => PathBuf::from(stripped),
+        None => canonical.clone(),
+    };
     loop {
         let current = format!(r"\\?\{}", path.display()).len();
         assert!(
