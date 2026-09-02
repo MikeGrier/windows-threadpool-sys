@@ -398,7 +398,7 @@ pub trait Waitable {
     ///
     /// 1. take everything available;
     /// 2. `arm`, and if it returns `false`, start again -- something arrived;
-    /// 3. **check [`Disconnectable::is_disconnected`], and if the producers are
+    /// 3. **check [`Consumer::is_disconnected`], and if the producers are
     ///    gone, take one last time before reporting the end of the stream.**
     ///    That last take is not belt-and-braces: a producer may push *and then*
     ///    drop in the window between step 1 and this check, and skipping it

@@ -621,7 +621,10 @@ pub fn memory_placements(producer: ProcessorPlace, consumer: ProcessorPlace) -> 
 ///
 /// # Errors
 ///
-/// Returns whatever [`discover_places`] failed with.
+/// Returns whatever [`Topology::discover`] failed with, or
+/// [`std::io::ErrorKind::InvalidData`] if the discovered topology leaves an
+/// online processor unplaced -- the same refusal
+/// [`crate::fingerprint::discover_places`] reports, reached the same way.
 pub fn measure() -> std::io::Result<Observation> {
     // One discovery, two derivations, so the shape reported alongside the rows
     // is the shape the rows were measured on. Calling `discover_places()` and

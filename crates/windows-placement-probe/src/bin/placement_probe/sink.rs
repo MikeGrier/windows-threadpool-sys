@@ -27,8 +27,8 @@
 //! Content is composed by `render_*` functions that append to a `&mut String`
 //! and never touch a stream, matching the idiom the record report already uses.
 //! A test calls those directly and asserts on the result; only `main` holds a
-//! [`Stdio`], and [`Captured`] stands in for it where a test needs to observe
-//! what a whole path emitted rather than what one renderer returned.
+//! [`Stdio`], and the test-only `Captured` stands in for it where a test needs
+//! to observe what a whole path emitted rather than what one renderer returned.
 
 /// Somewhere this tool's output can go.
 pub trait Sink {
@@ -100,9 +100,9 @@ impl Captured {
 ///
 /// The `render_*` functions produce a whole block with embedded newlines and a
 /// [`Sink`] speaks in lines, so this is the join between them. Splitting rather
-/// than passing the block through keeps [`Captured`] line-addressable, which is
-/// what lets a test say "the third line is the topology" instead of matching a
-/// substring against the whole document.
+/// than passing the block through keeps the capturing sink line-addressable,
+/// which is what lets a test say "the third line is the topology" instead of
+/// matching a substring against the whole document.
 ///
 /// A trailing newline on `block` does not produce an extra empty line, because
 /// `str::lines` does not yield one -- so a renderer may end its block either way
