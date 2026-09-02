@@ -190,14 +190,33 @@ release-blocking rather than restating the decision itself.
   `windows-threadpool-sys` and `windows-overlapped-io-sys`, and no topology crate. There is no
   resolution conflict to avoid and **no ioring release is obliged**, so the ordering question this
   item existed to settle is empty.
-  What is actually left is mechanical -- update three pins, in one commit, releasing nothing:
-  - `windows-ioring-sys` -- `kind=dev`, invisible to consumers. Update for accuracy only.
-  - `windows-placement-probe` -- `kind=normal` but `publish = false` today, and planned for
-    publication at [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) -> `PT-5.6`, which
-    already names this pin among the three things it must not skip. Correct it here; that item is the
-    backstop, not the owner.
-  - `windows-platform-probes` -- `kind=normal`, never published, pin inert. Update it anyway rather
-    than leave a manifest that misstates what it was built against.
+  **BLOCKED, and the blocker is real rather than a preference: the pins cannot be updated until
+  topology 0.2.0 actually exists.** A `path` dependency carrying a `version` must be satisfied by the
+  version in the path crate's own manifest, and topology's still reads `0.1.0`. Verified rather than
+  assumed -- setting one pin to `"0.2.0"` today fails the whole workspace's resolution with
+  `error: failed to select a version for the requirement windows-topology-sys = "^0.2.0"`, naming the
+  local directory as the location searched. So this cannot be done early even as a tidy-up.
+  **GATED BY SH-3.4**, which is where release-please raises the release PR that bumps topology's
+  manifest. Nothing here can proceed before that lands.
+  **And two of the three pins are not ours to update.** `release-please-config.json` enables the
+  `cargo-workspace` plugin, whose job is exactly this -- rewriting intra-workspace version
+  requirements when a member is bumped -- but it only sees packages listed in its `packages` map:
+  - `windows-ioring-sys` -- **managed**, so the plugin should update this pin itself. `kind=dev` and
+    invisible to consumers, so the update is for accuracy only. **Verify rather than assume it
+    happened**: it is a dev-dependency, and a tool that only rewrote `[dependencies]` would silently
+    skip it. Watch for this on the release PR (SH-3.4).
+  - `windows-placement-probe` -- **not managed**, so the plugin will not touch it. `kind=normal`,
+    `publish = false` today, planned for publication at
+    [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) -> `PT-5.6`, which already names this
+    pin among the three things it must not skip. Ours to update; that item is the backstop, not the
+    owner.
+  - `windows-platform-probes` -- **not managed**, `kind=normal`, never published, pin inert. Ours to
+    update, and worth doing rather than leaving a manifest that misstates what it was built against.
+  **One consequence to watch for, not to pre-empt.** The `cargo-workspace` plugin also *bumps*
+  dependents of a bumped package. If it treats the dev-dependency as grounds to bump
+  `windows-ioring-sys`, an ioring release will happen -- not because one is obliged (it is not; see
+  above) but because the tooling produced one. That is acceptable if it occurs; it is only a problem
+  if it is mistaken for evidence that the obligation existed after all.
   **The one genuine hazard the original item was reaching for is real but different**, and it is
   SH-2.5 rather than this: ioring's examples are developed against the `path` topology and would be
   verified against the *crates.io* one at its next publish.
@@ -265,6 +284,16 @@ release-blocking rather than restating the decision itself.
   **0.2.0** for the topology crate. If it proposes 0.1.1, the breaking-change marker did not take and
   the version would silently understate the break -- fix the marker rather than editing the version by
   hand, or the next break will do the same thing.
+  **GATES SH-2.2**, which cannot run before this: the three `windows-topology-sys = "0.1.0"` pins
+  cannot be raised while topology's own manifest still reads `0.1.0` -- a `path` dependency's
+  `version` must be satisfied by the path crate, and attempting it fails the workspace's resolution
+  outright.
+  **Read the release PR's diff for the pins, not only for the version number.** The `cargo-workspace`
+  plugin should rewrite `windows-ioring-sys`'s requirement itself, but that one is a *dev*-dependency
+  and a tool that only rewrote `[dependencies]` would skip it without saying so. `windows-placement-probe`
+  and `windows-platform-probes` are outside release-please's `packages` map entirely, so their pins
+  will certainly not be touched and are SH-2.2's to update by hand. Record which of the three the PR
+  actually changed, so SH-2.2 updates the remainder rather than guessing.
 
 ## M4: release
 
