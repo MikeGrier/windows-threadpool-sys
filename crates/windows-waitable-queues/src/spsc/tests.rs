@@ -1685,3 +1685,113 @@ fn the_debug_renderings_name_the_type_and_its_state() {
     let rendered = format!("{reservation:?}");
     assert!(rendered.contains("spsc::Reservation"), "got {rendered}");
 }
+
+// ---------------------------------------------------------------------------
+// The gauges: reservations withdraw capacity without becoming items, and the
+// two position loads are not one instant.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remaining_subtracts_outstanding_reservations() {
+    // The defect. `Bounded`'s default is `capacity - len`, and a reservation
+    // withdraws a slot without becoming an item -- so with every slot reserved
+    // the default answered the full capacity while both `push` and `reserve`
+    // refuse. This shape reserves too, which is exactly what made it easy to
+    // miss when the sibling was fixed.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("an empty queue has room");
+
+    assert_eq!(tx.len(), 0, "a reservation is not an item");
+    assert_eq!(tx.remaining(), 3, "one of the four slots is spoken for");
+    assert_eq!(
+        crate::Bounded::remaining(&rx),
+        3,
+        "both handles describe the same queue and must agree"
+    );
+
+    for i in 0..3 {
+        tx.push(i).expect("remaining() said there was room");
+    }
+    assert_eq!(tx.remaining(), 0);
+    assert!(tx.is_full());
+    assert!(matches!(tx.push(99), Err(PushError::Full(99))));
+
+    slot.send(7).expect("the consumer is still here");
+    assert_eq!(rx.len(), 4, "the redeemed reservation is now an item");
+}
+
+#[test]
+fn remaining_is_zero_when_every_slot_is_reserved() {
+    // The case the finding named directly: reserve everything, and the queue is
+    // empty of items yet has no room at all.
+    let (tx, _rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    let _first = tx.reserve().expect("room");
+    let _second = tx.reserve().expect("room");
+
+    assert_eq!(tx.len(), 0, "no item has been sent");
+    assert_eq!(
+        tx.remaining(),
+        0,
+        "every slot is spoken for, so nothing further fits"
+    );
+    assert!(tx.is_full());
+    assert!(tx.reserve().is_none(), "and no further slot can be claimed");
+}
+
+#[test]
+fn remaining_agrees_through_the_bounded_trait() {
+    // The override is on the trait impls, not only the inherent methods: a
+    // caller generic over `Bounded` is exactly who would be misled by the
+    // default, since it cannot reach `outstanding_reservations` to correct it.
+    fn room_through_trait<B: crate::Bounded>(handle: &B) -> usize {
+        handle.remaining()
+    }
+
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let _slot = tx.reserve().expect("an empty queue has room");
+
+    assert_eq!(room_through_trait(&tx), 3);
+    assert_eq!(room_through_trait(&rx), 3);
+}
+
+#[test]
+fn len_is_clamped_when_head_has_passed_the_sampled_tail() {
+    // `len` reads `tail` and then `head`, which are two instants rather than
+    // one. If the consumer drains past the value `tail` held, `head` overtakes
+    // it and the wrapping subtraction yields a number near `usize::MAX`.
+    //
+    // The skewed pair is written directly rather than raced for: it is a
+    // transient a reader observes, not a state the queue rests in.
+    let (tx, _rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+
+    tx.shared.tail.0.store(1, Ordering::Release);
+    tx.shared.head.0.store(2, Ordering::Release);
+
+    assert_eq!(
+        tx.len(),
+        tx.capacity(),
+        "a bounded queue must never report holding more than it can"
+    );
+    assert_eq!(tx.remaining(), 0, "the clamp resolves towards full");
+
+    // Restored before the handles drop: teardown walks `head..tail`, and an
+    // inverted pair sets it a `usize::MAX`-length loop that hangs rather than
+    // fails.
+    tx.shared.head.0.store(0, Ordering::Release);
+    tx.shared.tail.0.store(0, Ordering::Release);
+}
+
+#[test]
+fn the_gauges_are_exact_when_nothing_is_reserved_or_skewed() {
+    // The guard must not have been bought by clamping or subtracting always.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("room");
+    tx.push(2).expect("room");
+
+    assert_eq!(tx.len(), 2);
+    assert_eq!(tx.remaining(), 2);
+    assert!(!tx.is_full());
+    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(tx.len(), 1);
+    assert_eq!(tx.remaining(), 3);
+}

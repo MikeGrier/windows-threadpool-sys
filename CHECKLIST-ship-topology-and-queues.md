@@ -481,3 +481,11 @@ that produces no thread is otherwise invisible to the "are all comments resolved
   `measure_with(places)` seam because a supplied list's processor *numbers* stay valid on the real host
   while its node labels need not, so every pin would succeed and real timings would be filed under
   fabricated labels. Its rows carry their own places, so each row states what it measured.
+
+- [x] **SH-10.4** -- **`spsc` had the same `remaining()` defect, and it was missed.** The previous round
+  corrected `reserving_mpsc` and stopped there, but `spsc` implements `Reserving` too -- so reserving
+  every slot left it reporting the full capacity as available while both `push` and `reserve` refused.
+  Its `Bounded` impls now override `remaining` on the producer *and* the consumer, its `len` is clamped
+  to the capacity like the other two shapes', and `is_full` is defined in terms of `remaining` rather
+  than restating the rule. The trait's default now documents that a `Reserving` shape must override it,
+  so the next shape to reserve does not inherit the same wrong answer silently.

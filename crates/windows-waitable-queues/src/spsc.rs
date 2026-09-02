@@ -260,10 +260,28 @@ impl<T> Shared<T> {
     /// consistent with the items it can actually observe. It is a snapshot the
     /// moment it is returned: the peer may push or pop immediately afterwards,
     /// which is why nothing here invites a check-then-act.
+    ///
+    /// **Clamped to the capacity**, for the reason the other shapes' gauges are:
+    /// `tail` is read before `head`, so a consumer draining past the sampled
+    /// value makes the wrapping subtraction produce a number near `usize::MAX`.
+    /// A bounded queue must never report holding more than it can.
     fn len(&self) -> usize {
         let tail = self.tail.0.load(Ordering::Acquire);
         let head = self.head.0.load(Ordering::Acquire);
-        tail.wrapping_sub(head)
+        tail.wrapping_sub(head).min(self.capacity)
+    }
+
+    /// How many further items a best-effort push could still place.
+    ///
+    /// **Not `capacity - len()`, which is what the [`Bounded`](crate::Bounded)
+    /// default computes and is wrong for this shape too.** A reservation
+    /// withdraws a slot without becoming an item, so after reserving every slot
+    /// the default still answers the full capacity while both `push` and
+    /// `reserve` refuse.
+    fn remaining(&self) -> usize {
+        let held = self.len();
+        let reserved = self.reserved.load(Ordering::Relaxed);
+        self.capacity.saturating_sub(held.saturating_add(reserved))
     }
 
     /// Write an item into the slot at `tail` and publish it.
@@ -427,7 +445,19 @@ impl<T> Producer<T> {
     /// offered for metrics rather than for control flow.
     #[must_use]
     pub fn is_full(&self) -> bool {
-        self.len() + self.outstanding_reservations() >= self.shared.capacity
+        self.remaining() == 0
+    }
+
+    /// How many further items a best-effort push could still place, as a
+    /// snapshot.
+    ///
+    /// **Reservations are subtracted**, unlike `capacity() - len()`: a reserved
+    /// slot is spoken for, so counting it as room would promise a push that
+    /// [`push`](Self::push) is guaranteed to refuse. Advisory only, like every
+    /// other gauge here.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.shared.remaining()
     }
 
     /// Slots currently claimed by a [`Reservation`] and not yet redeemed.
@@ -935,6 +965,14 @@ impl<T> crate::Bounded for Producer<T> {
     fn is_empty(&self) -> bool {
         Self::is_empty(self)
     }
+
+    // Overridden, because the default `capacity - len` counts a reserved slot as
+    // room: a reservation withdraws capacity without becoming an item, so after
+    // reserving every slot the default would answer the full capacity while both
+    // `push` and `reserve` refuse.
+    fn remaining(&self) -> usize {
+        Self::remaining(self)
+    }
 }
 
 impl<T> crate::Bounded for Consumer<T> {
@@ -948,6 +986,13 @@ impl<T> crate::Bounded for Consumer<T> {
 
     fn is_empty(&self) -> bool {
         Self::is_empty(self)
+    }
+
+    // The consumer's view has to agree with the producer's: both describe the
+    // same queue, and a caller generic over `Bounded` should not get a different
+    // answer depending on which handle it holds.
+    fn remaining(&self) -> usize {
+        self.shared.remaining()
     }
 }
 

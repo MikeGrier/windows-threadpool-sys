@@ -144,6 +144,14 @@ pub trait Bounded {
     /// Saturating rather than wrapping, because a shape may count a slot that a
     /// producer has claimed but not yet finished writing, and a momentary
     /// overshoot should read as "no room" rather than as a very large number.
+    ///
+    /// **A [`Reserving`] shape must override this.** A reservation withdraws
+    /// capacity *without* becoming an item, so it does not appear in
+    /// [`len`](Self::len) -- and this default therefore reports room that
+    /// `push` is guaranteed to refuse. Both shipped reserving shapes override
+    /// it, on the producer and the consumer alike, and a new one that forgets to
+    /// will report a queue with every slot reserved as entirely empty of
+    /// commitments.
     fn remaining(&self) -> usize {
         self.capacity().saturating_sub(self.len())
     }
