@@ -75,7 +75,7 @@ use std::time::Duration;
 
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
-use crate::capacity::{Bounds, WRAPPING_MAX_CAPACITY, validate_capacity};
+use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, validate_capacity};
 use crate::disposal::Teardown;
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
@@ -94,7 +94,7 @@ use crate::options::Options;
 /// full-width [`usize`] values with nothing packed beside them.
 const BOUNDS: Bounds = Bounds {
     min: 1,
-    max: WRAPPING_MAX_CAPACITY,
+    max: MAX_ADMISSIBLE_CAPACITY,
 };
 
 /// Creates a single-producer, single-consumer bounded ring.

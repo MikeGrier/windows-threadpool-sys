@@ -47,6 +47,49 @@ use crate::error::CapacityError;
 /// shape may be.
 pub(crate) const WRAPPING_MAX_CAPACITY: usize = usize::MAX / 2;
 
+/// The largest capacity a [`usize`]-positioned shape actually accepts.
+///
+/// # Why this exists rather than [`WRAPPING_MAX_CAPACITY`] being used directly
+///
+/// The wrapping bound is `usize::MAX / 2`, which is `2^(BITS-1) - 1` -- odd,
+/// and therefore not a power of two, and therefore **not a capacity any shape
+/// in this crate accepts**. A shape whose `Bounds::max` was the wrapping bound
+/// was reporting a ceiling it would itself refuse.
+///
+/// That is not a cosmetic difference, because the number is handed to callers:
+/// [`CapacityError::max_valid`](crate::CapacityError::max_valid) documents it
+/// as "the largest capacity the shape that rejected this request will accept",
+/// and a caller correcting a refusal by using it would have been refused again.
+///
+/// `reserving_mpsc` had already noticed the same trap from the other side --
+/// its bounds clamp against this value rather than the wrapping one, with a
+/// `const` assertion saying why -- so this is that reasoning applied to the two
+/// shapes that had not adopted it, and hoisted to one definition rather than
+/// two.
+pub(crate) const MAX_ADMISSIBLE_CAPACITY: usize = 1_usize << (usize::BITS - 2);
+
+// Facts about constants, checked by the compiler rather than by a test.
+const _: () = {
+    assert!(
+        MAX_ADMISSIBLE_CAPACITY.is_power_of_two(),
+        "a ceiling offered to a caller as a correction must itself be a capacity \
+         this crate accepts"
+    );
+    assert!(
+        MAX_ADMISSIBLE_CAPACITY <= WRAPPING_MAX_CAPACITY,
+        "the admissible ceiling must stay inside the range where a wrapping \
+         position difference is still unambiguous"
+    );
+    assert!(
+        MAX_ADMISSIBLE_CAPACITY.leading_zeros() == 1,
+        "it must be the *largest* such power of two, not merely one of them -- \
+         stated as a bit position because the arithmetic identity would be \
+         tautological, and because a mutation run showed `usize::BITS - 2` \
+         surviving replacement by `usize::BITS / 2` on a 64-bit host, where the \
+         value is not the one selected"
+    );
+};
+
 #[cfg(test)]
 mod tests;
 
@@ -79,6 +122,16 @@ pub(crate) fn validate_capacity(capacity: usize, bounds: Bounds) -> Result<(), C
     debug_assert!(
         bounds.min.is_power_of_two(),
         "a shape's minimum is suggested to callers verbatim, so it must itself be valid"
+    );
+    // The maximum needs the same guard as the minimum, and its absence is what
+    // let two shapes report `usize::MAX / 2` -- an odd number this function
+    // rejects -- as the ceiling a caller should retry with. The asymmetry was
+    // the defect: both ends of the pair are handed to callers through
+    // `CapacityError`, so both have to be capacities this function accepts.
+    debug_assert!(
+        bounds.max.is_power_of_two(),
+        "a shape's maximum is suggested to callers verbatim as the value to retry with, so it \
+         must itself be valid"
     );
     debug_assert!(
         bounds.max <= WRAPPING_MAX_CAPACITY,

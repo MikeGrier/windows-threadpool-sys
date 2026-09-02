@@ -1097,9 +1097,13 @@ What the crate owes a caller instead is honesty and equipment:
 Two justifications are available and both are refused, because a rationale that evaporates on
 inspection is worse than none:
 
-- **Not capacity.** `slotwise_mpsc` reaches 2^62 slots and `reserving_mpsc` 2^31, and that difference is
-  unreachable: it counts slots allocated at construction, not items ever pushed, and 2^31 slots is tens
-  of gigabytes before the ring holds anything useful. See [D-17](#d-17) for why the packing forces it.
+- **Not capacity.** On a 64-bit target `slotwise_mpsc` reaches 2^62 slots and `reserving_mpsc` 2^31, and
+  that difference is unreachable: it counts slots allocated at construction, not items ever pushed, and
+  2^31 slots is tens of gigabytes before the ring holds anything useful. See [D-17](#d-17) for why the
+  packing forces it. **On a 32-bit target the difference does not exist at all** -- the crate-wide
+  ceiling is 2^30 and `reserving_mpsc`'s packed 2^31 is clamped down to it, so both shapes stop in the
+  same place. Pinned by `the_shapes_ceilings_are_what_the_public_documentation_claims`, which is run
+  against `i686-pc-windows-msvc` as well as the host.
 - **Not `slotwise_mpsc` being faster somewhere.** Its one measured advantage is a single producer with a live
   consumer -- and at one producer the right shape is [`spsc`](#d-1), which is faster still and which
   this crate also ships. A shape kept for a regime already better served elsewhere is kept on

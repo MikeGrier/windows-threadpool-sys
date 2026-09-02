@@ -220,9 +220,12 @@ can run that measurement on your hardware instead of inheriting ours.
 
 Two things that look like reasons to choose and are not:
 
-- **Capacity.** `slotwise_mpsc` reaches 2^62 slots and `reserving_mpsc` 2^31, but that
-  counts slots allocated up front, not items ever pushed. A ring of 2^31 slots
-  is tens of gigabytes before it holds anything useful.
+- **Capacity.** On a 64-bit target `slotwise_mpsc` reaches 2^62 slots and
+  `reserving_mpsc` 2^31. On a 32-bit one the crate-wide ceiling is 2^30 and
+  **both** shapes land there -- `reserving_mpsc`'s packed 2^31 is clamped down
+  to it as well -- so the difference disappears and the comparison means
+  nothing. Either way it counts slots allocated up front, not items ever pushed:
+  a ring of 2^31 slots is tens of gigabytes before it holds anything useful.
 - **`slotwise_mpsc` winning at one producer.** True in one regime, and at one producer
   you want `spsc` anyway.
 

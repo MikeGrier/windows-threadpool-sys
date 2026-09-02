@@ -103,7 +103,7 @@ use std::time::Duration;
 
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
-use crate::capacity::{Bounds, WRAPPING_MAX_CAPACITY, validate_capacity};
+use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, validate_capacity};
 use crate::disposal::Teardown;
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, PushError, RecvError, RecvTimeoutError};
@@ -140,7 +140,7 @@ use crate::options::Options;
 /// and practically unreachable.
 const BOUNDS: Bounds = Bounds {
     min: 2,
-    max: WRAPPING_MAX_CAPACITY,
+    max: MAX_ADMISSIBLE_CAPACITY,
 };
 
 /// Creates a multi-producer, single-consumer bounded array queue.
@@ -871,7 +871,8 @@ impl<T> Consumer<T> {
     ///
     /// `true` means the queue had nothing takeable after the doorbell was
     /// cleared, so any later push is guaranteed to signal. `false` means
-    /// something arrived in the meantime: take it instead of waiting.    ///
+    /// something arrived in the meantime: take it instead of waiting.
+    ///
     /// **`true` is not by itself permission to wait indefinitely.** It answers
     /// only whether a later *push* can be missed, and says nothing about the
     /// end of the stream: with every producer gone it still returns `true`,

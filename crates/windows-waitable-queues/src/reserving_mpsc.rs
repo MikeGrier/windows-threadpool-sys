@@ -96,7 +96,7 @@ use std::time::Duration;
 
 use crate::CacheAligned;
 use crate::blocking::{self, Parked};
-use crate::capacity::{Bounds, WRAPPING_MAX_CAPACITY, validate_capacity};
+use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, WRAPPING_MAX_CAPACITY, validate_capacity};
 use crate::disposal::Teardown;
 use crate::doorbell::Doorbell;
 use crate::error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
@@ -136,23 +136,12 @@ const POSITION_MASK: u64 = (1 << POSITION_BITS) - 1;
 /// capacity it could actually use.
 pub const BOUNDS_MAX: usize = {
     let packed = 1_usize << (POSITION_BITS - 1);
-    if packed <= WIDEST_USIZE_POWER_OF_TWO {
+    if packed <= MAX_ADMISSIBLE_CAPACITY {
         packed
     } else {
-        WIDEST_USIZE_POWER_OF_TWO
+        MAX_ADMISSIBLE_CAPACITY
     }
 };
-
-/// The largest power of two a `usize` holds with the top bit still clear.
-///
-/// Named rather than inlined so the assertion below can reach it. A mutation
-/// run replaced its `- 2` with `/ 2` and nothing failed: on a 64-bit target the
-/// clamp is not the branch taken -- `packed` is 2^31, which is under both 2^62
-/// and the mutant's 2^32 -- so the wrong value is selected by neither. On a
-/// 32-bit target it *is* the branch taken, and the mutant would have set this
-/// shape's maximum capacity to 65,536 instead of 2^30, a factor of 16,384,
-/// without failing a single one of the assertions below.
-const WIDEST_USIZE_POWER_OF_TWO: usize = 1_usize << (usize::BITS - 2);
 
 /// The capacities this shape accepts. See [`BOUNDS_MAX`].
 const BOUNDS: Bounds = Bounds {
@@ -207,14 +196,10 @@ const _: () = {
         "a shape that accepts nothing would reject every capacity with a suggestion it would also \
          reject"
     );
-    assert!(
-        WIDEST_USIZE_POWER_OF_TWO.leading_zeros() == 1,
-        "the clamp must be the widest power of two that leaves the top bit clear, on every target. \
-         Stated as a bit position rather than as an arithmetic identity because the identity is \
-         tautological -- and because the value only *matters* on a 32-bit target, where this shape \
-         is not the one built by default, so an error here would otherwise reach a caller before it \
-         reached a build"
-    );
+    // The clamp's own shape -- that it is the *widest* such power of two -- is
+    // asserted where it is defined, in `capacity::MAX_ADMISSIBLE_CAPACITY`, so
+    // every shape that clamps against it inherits the check rather than
+    // restating it.
 };
 
 /// Reads the position out of a claim word.
@@ -1138,7 +1123,8 @@ impl<T> Consumer<T> {
     ///
     /// `true` means the queue had nothing takeable after the doorbell was
     /// cleared, so any later push is guaranteed to signal. `false` means
-    /// something arrived in the meantime.    ///
+    /// something arrived in the meantime.
+    ///
     /// **`true` is not by itself permission to wait indefinitely.** It answers
     /// only whether a later *push* can be missed, and says nothing about the
     /// end of the stream: with every producer gone it still returns `true`,
