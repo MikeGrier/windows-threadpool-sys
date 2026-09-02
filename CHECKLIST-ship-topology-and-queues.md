@@ -288,9 +288,15 @@ D-31 says cannot be supported.
 
 - [ ] **SH-6.1** -- **The wraparound scenario, which is the one reachable correctness gap.**
   `reserving_mpsc` packs its position into 32 bits, so it wraps after 2^32 pushes -- about two minutes
-  at measured rates, and reachable in production within hours. `spsc` and `slotwise_mpsc` use `usize`
-  positions and cannot be driven there at all, so this gap belongs to the shape whose position is
-  narrow by design.
+  at measured rates, and reachable in production within hours.
+  **CORRECTION (review round nine).** An earlier version of this item said `spsc` and
+  `slotwise_mpsc` "use `usize` positions and cannot be driven there at all", and that is **false on a
+  32-bit target**, where `usize` *is* 32 bits. The claim was written from a 64-bit reading and never
+  re-checked against the 32-bit support the crate otherwise takes seriously enough to have a
+  dedicated `BOUNDS_MAX` derivation and a `const` assertion for. `slotwise_mpsc` reaches the same
+  wrap on such a target; `spsc` does too, but has no compare-exchange claim to be raced, so wrapping
+  alone does not expose it. See SH-14.1 and SH-14.2, which are about the *correctness* hole this
+  testing gap was hiding.
   What exists today is *ring* wraparound (positions cycling through slots) and the packing arithmetic
   checked at the boundary; what does not is the queue actually crossing 2^32 end to end. **Tracking
   every item is impossible at that count**, so the invariants are the cheap ones: per-producer sequence
@@ -665,3 +671,69 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   Queued rather than left as a note precisely because a half-adopted abstraction is the state most
   likely to be forgotten -- the next probe author will see twelve neighbours printing directly and
   reasonably conclude that is the house style.
+
+## M14: PR #56 ninth review round -- an ABA hole the wrap test would not have caught
+
+Two findings, both verified by derivation against the source. They are **not** the wrap gap SH-6.1
+already tracked: that item is about *testing* the wrap, and its planned stress would not have found
+either of these, because neither requires the wrap alone -- each requires a producer to remain
+stalled **across** it, inside a window a few instructions wide.
+
+**The shared shape of both.** A producer decides a slot is writable, is suspended, and resumes after
+the claim counter has made a full lap back to the bit pattern it read. Its compare-exchange then
+succeeds against a value that is numerically equal but logically a whole generation later, and the
+decision it is about to act on was made against the *earlier* generation. The exchange protects the
+counter; nothing protects the decision.
+
+- [ ] **SH-14.1** -- **`reserving_mpsc` can overwrite a live slot after 2^32 pushes, on every
+  target.** `POSITION_BITS` is 32 by construction -- the claim word is a `u64` split into a 32-bit
+  reservation count and a 32-bit position -- so this does **not** depend on a 32-bit `usize` and is
+  not a 32-bit-only concern.
+  The sequence: a producer reads `word = (reserved, position)` and calls
+  `has_room_beyond_reservations`, which reads `head` and returns room. It stalls. Other producers
+  claim 2^32 positions, wrapping `position` back to the value it read; with `reserved` at its steady
+  state (commonly zero), the *whole word* recurs. The stalled producer's
+  `compare_exchange_weak(word, ...)` now succeeds, and it publishes into a slot whose room was
+  decided against a `head` that has since advanced -- so the slot may hold an item the consumer has
+  not taken. The SAFETY comment above `publish` ("no other producer can also have claimed [this
+  position]") remains true and is not the property that fails; the failing property is that the slot
+  was free.
+  2^32 pushes is **about two minutes at this crate's measured rates** (SH-6.1's own figure), so the
+  window is not exotic -- it needs an unlucky stall, not an unreachable one.
+
+- [x] **SH-14.2** -- **`slotwise_mpsc` had the same hole on a 32-bit target.** Its positions were
+  `AtomicUsize`, which is 32 bits there. A producer that has observed `sequence == position` -- the
+  slot is free -- and then stalls across a full lap resumes to find the same `tail` bits, succeeds
+  at `compare_exchange_weak(position, position + 1)`, and writes a slot that may now hold a live
+  item from the previous lap of the ring. The sequence observation that made the write safe is never
+  re-checked, and the exchange covers only `tail`.
+  This is the finding that also falsified SH-6.1's claim that this shape "cannot be driven there at
+  all" -- corrected in place.
+  **Fixed by widening the counter rather than by narrowing the platform.** Positions and slot
+  sequences are now a named `Position = u64` on every target, so the lap needs 2^64 claims and cannot
+  be reached. On 64-bit this is exactly what `usize` already was; on 32-bit the exchange becomes a
+  64-bit one. Verified on a real 32-bit target rather than argued: the suite passes under
+  `i686-pc-windows-msvc` (290 tests), and a probe there reports `target_has_atomic = "64"` with
+  `AtomicU64` **lock-free** -- so the fix costs a `cmpxchg8b`, not a hidden mutex, which is the
+  outcome that would have made this a bad trade.
+  `producers` stays `AtomicUsize`: it is a handle refcount, not a position, and nothing compares it
+  against one.
+
+- [ ] **SH-14.3** -- **Decide the fix, which is a design decision rather than a patch.** Recorded
+  here so the options are not re-derived, with what each costs:
+  1. **Widen the counter so it cannot lap.** For `slotwise_mpsc` this is `AtomicU64` instead of
+     `AtomicUsize`, which is free on 64-bit and costs a `cmpxchg8b`-class operation on 32-bit x86.
+     For `reserving_mpsc` there is **no room**: 32 position bits plus 32 reservation bits is exactly
+     the 64-bit word, and `MAX_RESERVED` must cover `BOUNDS_MAX` (2^31), so no generation field can
+     be carved out without narrowing the capacity the shape offers.
+  2. **Narrow `reserving_mpsc`'s capacity to buy generation bits.** A smaller `BOUNDS_MAX` frees
+     bits in both halves. This does not *eliminate* the lap, it lengthens it -- any finite field
+     wraps -- so it is a mitigation whose adequacy has to be argued rather than a fix.
+  3. **Re-validate after the claim.** Cheap to say, hard to do: once the exchange succeeds the
+     position is claimed, so there is no safe way to back out without a second protocol.
+  4. **Drop 32-bit support explicitly** -- resolves SH-14.2 only, and leaves SH-14.1 untouched
+     because that one is target-independent. This narrows the platform, so per the repository's
+     platform-integrity rule it is the engineer's decision and not one to take in passing.
+  Whatever is chosen, the property is not observable from a test that merely crosses the wrap: it
+  needs a producer *held* between its decision and its exchange, which means a deliberate seam --
+  the crate's existing race hooks (`ARM`, `CLEAR`, `CLAIM`) are the shape of what is needed.

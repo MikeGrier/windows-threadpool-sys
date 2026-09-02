@@ -71,7 +71,31 @@ use core::cell::{Cell, UnsafeCell};
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+/// A claim position, and the slot sequence numbers that are compared against
+/// one.
+///
+/// **64 bits on every target, deliberately, rather than `usize`.** The protocol
+/// below rests on a producer's observation of a slot's sequence still being
+/// true when its compare-exchange succeeds, and the exchange guards only the
+/// tail. A producer suspended between the two resumes safely *because* the tail
+/// cannot have returned to the value it read -- which holds only while the
+/// counter cannot lap.
+///
+/// With `usize` it can. On a 32-bit target the counter laps after 2^32 claims,
+/// which at this crate's measured rates is a matter of minutes: the stalled
+/// producer then sees the same tail bits, succeeds, and writes a slot that has
+/// since been refilled from the previous lap of the ring. Every other guard in
+/// this shape holds -- the position really is claimed by exactly one producer;
+/// what fails is the older claim that the slot was free.
+///
+/// 2^64 claims cannot be reached, so the lap cannot happen, and the argument is
+/// restored on every target rather than only on the ones where `usize` happened
+/// to be wide enough. The cost is confined to 32-bit, where the exchange becomes
+/// a 64-bit one (`cmpxchg8b` on x86); on a 64-bit target this is exactly what
+/// `usize` already was.
+type Position = u64;
 use std::io;
 use std::os::windows::io::{BorrowedHandle, OwnedHandle};
 use std::sync::Arc;
@@ -190,7 +214,7 @@ fn build<T>(
     let mut slots = Vec::with_capacity(capacity);
     for index in 0..capacity {
         slots.push(Slot {
-            sequence: AtomicUsize::new(index),
+            sequence: AtomicU64::new(index as Position),
             value: UnsafeCell::new(MaybeUninit::uninit()),
         });
     }
@@ -201,8 +225,8 @@ fn build<T>(
         slots: slots.into_boxed_slice(),
         mask: capacity - 1,
         capacity,
-        head: CacheAligned(AtomicUsize::new(0)),
-        tail: CacheAligned(AtomicUsize::new(0)),
+        head: CacheAligned(AtomicU64::new(0)),
+        tail: CacheAligned(AtomicU64::new(0)),
         producers: AtomicUsize::new(1),
         consumer_live: AtomicBool::new(true),
         doorbell: Doorbell::new(),
@@ -232,7 +256,7 @@ struct Slot<T> {
     /// neighbours, and that is intended: the contention this shape must avoid
     /// is on the two *positions*, which are padded apart below, not on the
     /// slots, which different producers touch at different indices anyway.
-    sequence: AtomicUsize,
+    sequence: AtomicU64,
     value: UnsafeCell<MaybeUninit<T>>,
 }
 
@@ -257,14 +281,14 @@ struct Shared<T> {
     /// contended one while every individual load and store stays correct. That
     /// is a cost with no symptom other than being slow, which is exactly the
     /// kind that survives a code review.
-    head: CacheAligned<AtomicUsize>,
+    head: CacheAligned<AtomicU64>,
     /// The claim counter. Advanced by a compare-and-swap, by any producer.
     ///
     /// Padded for the reason given on [`Shared::head`], and it matters more
     /// here than it does in `spsc`: this line is already the contended one, and
     /// letting the consumer's writes land on it too would add the consumer to
     /// the set of threads fighting over it.
-    tail: CacheAligned<AtomicUsize>,
+    tail: CacheAligned<AtomicU64>,
     /// How many producer handles are alive.
     ///
     /// Reaching zero is the disconnection, and it is a count rather than a flag
@@ -297,6 +321,16 @@ unsafe impl<T: Send> Sync for Shared<T> {}
 unsafe impl<T: Send> Send for Shared<T> {}
 
 impl<T> Shared<T> {
+    /// The slot a position addresses.
+    ///
+    /// The cast cannot lose anything the mask would have kept: the mask is
+    /// `capacity - 1`, and a capacity fits a `usize` by construction, so every
+    /// bit above the mask is discarded either way. Narrowing first and masking
+    /// second is the same answer as masking first and narrowing second.
+    fn slot_index(&self, position: Position) -> usize {
+        (position as usize) & self.mask
+    }
+
     /// Items currently held, as a snapshot.
     ///
     /// **Counts slots a producer has claimed but not yet finished writing.**
@@ -310,14 +344,18 @@ impl<T> Shared<T> {
     /// **Clamped to the capacity, because the two loads are not one instant.**
     /// `tail` is read first; if the consumer then drains past the value it
     /// held, `head` overtakes it and the wrapping subtraction yields a number
-    /// near `usize::MAX` -- a bounded queue claiming to hold more items than it
-    /// has slots. Over-reporting is the safe direction for this gauge and
-    /// under-reporting is not, so the skew is resolved towards "full" rather
-    /// than towards zero; what the clamp removes is only the impossible value.
+    /// near [`Position::MAX`] -- a bounded queue claiming to hold more items
+    /// than it has slots. Over-reporting is the safe direction for this gauge
+    /// and under-reporting is not, so the skew is resolved towards "full"
+    /// rather than towards zero; what the clamp removes is only the impossible
+    /// value.
+    ///
+    /// The clamp is also what makes the narrowing cast exact: the result is at
+    /// most the capacity, which is a `usize` by construction.
     fn len(&self) -> usize {
         let tail = self.tail.0.load(Ordering::Acquire);
         let head = self.head.0.load(Ordering::Acquire);
-        tail.wrapping_sub(head).min(self.capacity)
+        tail.wrapping_sub(head).min(self.capacity as Position) as usize
     }
 
     /// Whether the consumer would find an item right now.
@@ -338,7 +376,7 @@ impl<T> Shared<T> {
     /// from returning stale values.
     fn has_ready_item(&self) -> bool {
         let position = self.head.0.load(Ordering::Relaxed);
-        let slot = &self.slots[position & self.mask];
+        let slot = &self.slots[self.slot_index(position)];
         slot.sequence.load(Ordering::Acquire) == position.wrapping_add(1)
     }
 }
@@ -366,7 +404,7 @@ impl<T> Drop for Shared<T> {
         let mut position = head;
         while position != tail {
             let published = position.wrapping_add(1);
-            let slot = &mut self.slots[position & mask];
+            let slot = &mut self.slots[(position as usize) & mask];
             if *slot.sequence.get_mut() == published {
                 // SAFETY: the slot's sequence says the producer finished
                 // writing it and the consumer never took it, so it holds an
@@ -410,7 +448,7 @@ impl<T> Producer<T> {
         // stale, so a stale read costs a retry rather than correctness.
         let mut position = self.shared.tail.0.load(Ordering::Relaxed);
         loop {
-            let slot = &self.shared.slots[position & self.shared.mask];
+            let slot = &self.shared.slots[self.shared.slot_index(position)];
             // Acquire: pairs with the consumer's release store when it frees a
             // slot, so a slot it has finished with is visible as free here.
             let sequence = slot.sequence.load(Ordering::Acquire);
@@ -476,7 +514,7 @@ impl<T> Producer<T> {
             }
         }
 
-        let slot = &self.shared.slots[position & self.shared.mask];
+        let slot = &self.shared.slots[self.shared.slot_index(position)];
         // SAFETY: this thread's compare-and-swap claimed `position`, and a
         // position is claimed by exactly one producer. The consumer will not
         // read the slot until the release store below publishes it, and the
@@ -526,12 +564,19 @@ impl<T> Producer<T> {
             // push raced, in every test that tracks high water, with the
             // offending value in hand.
             debug_assert!(
-                depth <= self.shared.capacity,
+                depth <= self.shared.capacity as Position,
                 "depth {depth} exceeds capacity {}: the head was read after the \
                  publication and the consumer drained past this position",
                 self.shared.capacity
             );
-            self.shared.metrics.record_depth(depth);
+            // The assertion above is a `debug_assert`, so the cast must be
+            // sound in release too. Saturating rather than `as`: a wrapped
+            // subtraction on a 32-bit target would otherwise truncate to an
+            // arbitrary small number and record a *lower* depth than the true
+            // one, which is the direction this gauge must never err in.
+            self.shared
+                .metrics
+                .record_depth(usize::try_from(depth).unwrap_or(usize::MAX));
         }
 
         // Release, and this is the publication: it must come after the write,
@@ -675,7 +720,7 @@ impl<T> Consumer<T> {
     pub fn pop(&self) -> Option<T> {
         // Relaxed: this thread is the only writer of `head`.
         let position = self.shared.head.0.load(Ordering::Relaxed);
-        let slot = &self.shared.slots[position & self.shared.mask];
+        let slot = &self.shared.slots[self.shared.slot_index(position)];
         // Acquire: pairs with the producer's release store, so an item it
         // published is visible here.
         let sequence = slot.sequence.load(Ordering::Acquire);
@@ -711,7 +756,7 @@ impl<T> Consumer<T> {
         // that saw it early would overwrite an item this thread had not
         // finished taking.
         slot.sequence.store(
-            position.wrapping_add(self.shared.capacity),
+            position.wrapping_add(self.shared.capacity as Position),
             Ordering::Release,
         );
         Some(item)
