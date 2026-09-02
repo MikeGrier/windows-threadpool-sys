@@ -757,3 +757,113 @@ counter; nothing protects the decision.
   The README is now compiled as a doctest (`cfg(doctest)`, matching three sibling crates). It carries
   no code today, so this compiles nothing -- it is there so the first example somebody adds is
   compiled rather than trusted, this round being the demonstration that prose nothing executes rots.
+
+## M15: the claim protocol, prototyped rather than argued (SH-14.3's decision)
+
+**This milestone exists to answer SH-14.3 with a measurement.** SH-14.1 is a real correctness hole
+and SH-14.3 lists four ways out, all of which either lengthen the lap or narrow the platform. Prior-art
+research (recorded in the design note item below) found a fifth shape that removes the hazard by
+construction, and a sixth that additionally changes the queue's progress condition. Neither can be
+chosen on reasoning alone, because [D-26](crates/windows-waitable-queues/DESIGN-NOTES.md#d-26)
+already measured that the single shared line is what collapses under contention -- so an "obviously
+cheaper" claim protocol that touches two shared lines instead of one may well be slower.
+
+**Built as duplicated paths, per the repository's platform-integrity rule.** Neither arm modifies
+`reserving_mpsc`. The shipping shape keeps working and keeps its tests green while the speculative
+ones are proven or discarded, and the merge-or-delete decision is SH-15.6 rather than something that
+happens by drift.
+
+**The principle both arms are instances of**, stated once so it is not re-derived: *the atomic
+operation that authorizes the write must cover everything the decision depended on.* Today's protocol
+decides "there is room" from a separately-read `head` and then compare-exchanges only the claim word,
+so a full recurrence of the 32-bit position field revalidates nothing. Every fix below closes that
+gap; the options in SH-14.3 instead make the recurrence harder to reach.
+
+- [ ] **SH-15.1** -- **Record the prior-art research as a design note before it is lost.** The survey
+  is the reason this milestone exists and none of it is currently written down. It must capture: that
+  `crossbeam-queue::ArrayQueue`, `concurrent-queue` and `thingbuf` all use our protocol shape and none
+  re-validates after its compare-exchange; that all three are saved only by putting the whole counter
+  in one `usize`, so all three carry the identical exposure on a 32-bit target; that Nikolaev's SCQ
+  (DISC 2019, open access, DOI `10.4230/LIPIcs.DISC.2019.28`, section 3 "ABA safety") states the width
+  assumption the field relies on and states it for **CPU-word width**, which a 32-bit subfield does not
+  satisfy; that DPDK's `rte_ring` is the closest published twin of our exact protocol and its published
+  justification (Programmer's Guide 6.5.4) covers modular *arithmetic* only, not lap recurrence; and
+  that SCQ and CRQ both fix it structurally by making the counter an unconditional fetch-and-add and
+  moving the authorizing compare-exchange onto the cell.
+  Also correct the exposure figure, which is currently wrong in both SH-6.1 and SH-14.1: at the crate's
+  own measured 8.6 ns/push the wrap is **37 seconds**, not "about two minutes". Two minutes is the
+  two-producer figure and roughly four the 32-producer one; since the hazard needs at least two
+  producers the headline is defensible, but the range and its basis belong in the text.
+
+- [ ] **SH-15.2** -- **Amend [D-18](crates/windows-waitable-queues/DESIGN-NOTES.md#d-18), whose stated
+  rationale no longer holds.** It refuses a 128-bit compare-and-swap because it "would lift the 2^31 cap
+  and nothing else", which was written before SH-14.1 was known -- a 64-bit position would also collapse
+  the recurrence, so the decision denies the existence of its main benefit.
+  **Checked against the pinned toolchain rather than against documentation**, because two of its three
+  supporting costs turned out to disagree with it. `rustc 1.98.0 --print cfg` reports, per target:
+  `x86_64-pc-windows-msvc` emits `target_feature="cmpxchg16b"` **and** `target_has_atomic="128"`;
+  `aarch64-pc-windows-msvc` emits `target_has_atomic="128"` with no target feature required;
+  `i686-pc-windows-msvc` emits `target_has_atomic="64"` and **no** `"128"`.
+  So: the claim "`x86_64-pc-windows-msvc` does not enable the target feature by default" is **false**
+  on 1.98 -- there is no floor to raise and no runtime detection to pay. The claim "there is no usable
+  `AtomicU128`" is **true** and verified (still unstable, rust-lang/rust#99069), so the dependency cost
+  stands. And the decisive new fact D-18 never had: **a 128-bit claim word cannot work on `i686` at
+  all**, so that option is not "widen the word", it is "widen the word *and* drop 32-bit support" --
+  which collapses SH-14.3 option 1 into option 4 and makes it the engineer's call under the
+  platform-integrity rule. Amend rather than reverse: the refusal may well stand, but every reason
+  currently given for it is either wrong or incomplete.
+
+- [ ] **SH-15.3** -- **Arm A: the central-permit claim, as a duplicated shape.** Admission becomes a
+  single atomic on one `permits` counter initialised to the capacity, and the position degrades to a
+  pure ticket (`fetch_add`, which has no predicate and therefore cannot be revalidated wrongly). A
+  producer holding a permit and taking ticket `p` has `p - head <= capacity - 1` by counting, so its
+  slot is provably free and the position may wrap freely. This satisfies `reserving_mpsc`'s own stated
+  requirement -- "two independent claimants on one resource must synchronise on one location" -- with
+  the permit counter as that location, so it strengthens the existing argument rather than contradicting
+  it. Reservations map directly: a reservation is a permit held across time, still taking no position,
+  so an outstanding one reduces capacity without head-of-line blocking the stream.
+  **Not claimed to be non-blocking.** A preempted ticket-holder still stalls the consumer at its
+  position; this arm fixes the ABA hole and nothing about the progress condition.
+
+- [ ] **SH-15.5** -- **Measure arm A against the shipping shape in `probe-queue-contention`.** The
+  probe deliberately measures the real shapes rather than stand-ins ("a stand-in would only measure
+  itself"), so the arm must be a real module in the queue crate for this to mean anything. Report both
+  regimes: isolated for the claim cost alone, drained for what the shared line costs when a consumer is
+  writing it. The question this answers is narrow -- does removing the room-decision race cost
+  throughput, given that arm A touches two shared lines on the push path where today's shape touches
+  one plus a read.
+
+- [ ] **SH-15.6** -- **Decide: merge, or delete.** The duplicated path exists so the speculative work
+  could proceed without disturbing a working shape; leaving it to become permanent by inattention is
+  the failure mode the duplication rule warns about. On the evidence from SH-15.5, either adopt arm A
+  into `reserving_mpsc` (closing SH-14.1 and SH-14.3) or delete it and take one of SH-14.3's original
+  options, recording why. Whichever way it goes, SH-14.1's hazard must be either fixed or documented as
+  an accepted limitation with its exposure stated -- it may not simply stay open.
+
+- [ ] **SH-15.7** -- **Build the stall seam that can actually witness the bug.** SH-14.3 already notes
+  the property is invisible to a test that merely crosses the wrap: it needs a producer *held* between
+  its room decision and its exchange. The crate's existing race hooks (`ARM`, `CLEAR`, `CLAIM`) are the
+  right shape. Without this, every arm above is argued rather than demonstrated, and the fix that is
+  adopted has no regression test that would go red if it were reverted.
+
+## M-inf: parked, ungated
+
+- [ ] **SH-inf.1** -- **The per-cell cycle claim (SCQ's shape), which is the non-blocking one.** The
+  shared counter becomes an unconditional fetch-and-add authorizing nothing, and the reuse decision plus
+  the write are validated together by a compare-exchange on the slot's own `{cycle, safe}` word --
+  removing the shared decision rather than moving it, and making the queue genuinely lock-free rather
+  than merely ABA-free.
+  **Parked deliberately, and the reason is a real constraint rather than scheduling.** In-order delivery,
+  inline item storage, and non-blocking progress are over-constrained together: storing `T` in the ring
+  forces a producer to claim a slot and then write it, so a preemption between the two necessarily stalls
+  in-order consumption. SCQ escapes this only because it queues *indices* -- the payload is written
+  outside the queue protocol -- which is a different data structure from the one this crate offers. So
+  this is not an improvement to today's shapes but a fourth shape with different semantics, and it is
+  worth having only alongside a decision that some caller wants non-blocking progress more than it wants
+  inline storage.
+  Related: the whole family this crate belongs to is **technically blocking**, which is worth stating
+  plainly somewhere public. wCQ (Nikolaev and Ravindran, SPAA 2022) says so of exactly this shape --
+  queues that "require a thread to reserve a ring buffer slot prior to writing new data ... are
+  technically blocking since one stalled (e.g., preempted) thread in the middle of an operation can
+  adversely affect other threads" -- and names DPDK's ring as a case "erroneously dubbed as 'lock-free'".
+  This crate should not repeat that error by implication; see SH-15.1, which records the survey.
