@@ -58,6 +58,7 @@ preferred.
 | <a id="d-32"></a>D-32 | **`Reserving::Reservation<'a>` gains a bound, before the crate publishes.** The associated type is currently unbounded, so a caller generic over the trait can claim a slot and drop it but never redeem it -- the trait cannot express the operation it exists for. Both implementors already have identical `send` and `is_disconnected` signatures, so the bound is additive; adding it after publication is a breaking change to every implementor. Done as SH-1.5: the [`Claim`](src/traits.rs) trait carries `send` and `is_disconnected`, and both reservation types implement it as forwarders. `Claim` must be in scope to call those methods on a claim whose concrete type the caller has not named, which is why it is re-exported at the crate root. |
 | <a id="d-33"></a>D-33 | **`PushError` is `#[non_exhaustive]`, and the one-directional doorbell is disclosed rather than fixed before 0.1.0.** The receive-side errors already carried the attribute and the send side lacked it by omission; adding it after publication is itself breaking, so it is taken now while the crate has no external consumers. Whether a producer can *wait* for room stays open as [M32.3](../../CHECKLIST-io-domains.md) -- it is additive, so it does not gate the release -- but the absence is stated in both the crate docs and the README, because `crossbeam-channel`'s `send` blocks and a reader arriving from it will assume this one does too. |
 | <a id="d-34"></a>D-34 | **Every bounded queue surveyed is ABA-safe for one of two reasons, and this crate's `reserving_mpsc` has neither.** Either the claim counter is a whole machine word, so recurrence is unreachable -- crossbeam, concurrent-queue, thingbuf, Vyukov, SCQ's `Head`/`Tail` -- or the authorizing compare-exchange is moved onto the cell, so the decision and the write are validated together (CRQ, SCQ). Ours packs the position into a 32-bit *subfield* and authorizes with an exchange that does not cover the separately-read `head`. Nikolaev (DISC 2019, section 3) states the width assumption the field relies on and states it for **CPU-word** width, which a subfield does not satisfy; DPDK's `rte_ring` is the same protocol as ours and its published justification covers modular arithmetic only. The generalisation -- ours, unstated in any source -- is that **the atomic operation authorizing the write must cover everything the decision depended on.** Survey in [DESIGN-SESSION-2026-09-02](design-sessions/DESIGN-SESSION-2026-09-02-claim-protocol-prior-art.md); the fix is M15 in [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md). |
+| <a id="d-35"></a>D-35 | **Measured: the permit claim is 2.7x faster than `reserving_mpsc` at 16-32 producers, and 1.45x slower at one.** The safer claim is also the faster one everywhere contention exists, which was not the expected result -- it touches *two* shared lines where the shipping shape touches one plus a read, and [D-26](#d-26) had established that the shared line is what collapses. The mechanism is that both of its operations are unconditional read-modify-writes that never retry, where the shipping shape's compare-exchange retries once per lost race; the retries dominate long before the second line does. It is the only shape measured that gets *faster* per push as producers are added (42.8 ns at two to 19.5 at thirty-two) and the only one that stays within 1.5x of a bare contended `fetch_add`. **This decides the shape of the fix but not the fix**: the drained regime's refusal counts differ by orders of magnitude in a way this harness cannot attribute, which SH-15.5.1 exists to settle before SH-15.6 adopts anything. |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -1210,3 +1211,93 @@ Which fix to adopt. That is M15, which prototypes the central-permit claim and m
 than arguing it -- necessary because [D-26](#d-26) already measured that the single shared line is
 what collapses under contention, so a protocol that touches two shared lines instead of one is not
 obviously cheaper. This decision records only the landscape and the criterion.
+
+## D-35: the permit claim measured, and the result that inverts the expectation
+
+Run by `probe-queue-contention` on the reference host (x86-64, 16 logical / 8 physical, SMT on),
+release build, five repetitions per configuration with the median kept. The whole run was repeated
+three times; the isolated numbers reproduced within noise except one outlier noted below.
+
+### Isolated regime -- producers only, nothing ever refused
+
+The cleanest measurement of the claim, because nothing else touches the queue. Nanoseconds per push:
+
+| producers | `slotwise_mpsc` | `reserving_mpsc` | `permit_mpsc` | contended `fetch_add` |
+|---|---|---|---|---|
+| 1 | 6.3 | 5.5 | 8.0 | 2.4 |
+| 2 | 58.6 | 33.9 | 42.8 | 12.7 |
+| 4 | 89.6 | 33.5 | 31.5 | 14.7 |
+| 8 | 143.4 | 37.9 | 26.1 | 15.9 |
+| 16 | 225.1 | 56.1 | 20.5 | 14.6 |
+| 32 | 234.3 | 53.1 | 19.5 | 13.4 |
+
+`permit_mpsc` against `reserving_mpsc`, as a cost ratio: **1.45x, 1.26x, 0.94x, 0.69x, 0.37x,
+0.37x**. The crossover is between two and four producers.
+
+### The result, and why it was not expected
+
+**The safer claim is also the faster one everywhere contention exists.** At sixteen and thirty-two
+producers it is 2.7x cheaper per push than the shape it would replace, and 12x cheaper than
+`slotwise_mpsc`.
+
+That is the opposite of what the design predicted. `permit_mpsc` touches **two** shared lines on the
+push path -- the permit count and the ticket -- where `reserving_mpsc` touches one plus a read of
+`head`, and [D-26](#d-26) had already established that the single shared line is what collapses
+under contention. The expectation was therefore that adding a second one would cost.
+
+**The mechanism is retries, not lines.** Both of `permit_mpsc`'s operations are unconditional
+read-modify-writes: `fetch_sub` on the permits and `fetch_add` on the ticket. Neither can fail, so
+neither retries. `reserving_mpsc`'s claim is a `compare_exchange_weak` that retries once per lost
+race, and at thirty-two producers almost every race is lost. The retry loop dominates the second
+cache line long before the second cache line matters.
+
+Two corroborating observations, both from the same table:
+
+- **It is the only shape that gets *faster* per push as producers are added** -- 42.8 ns at two down
+  to 19.5 at thirty-two. Every other shape, and the bare atomic floor, degrades monotonically. A
+  claim that cannot fail has no retry storm to suffer, so added producers buy parallelism in the
+  slot writes without adding claim work.
+- **It is the only shape that stays close to the floor.** At thirty-two producers it costs 19.5 ns
+  against a bare contended `fetch_add`'s 13.4 -- 1.46x, while doing two of them plus a slot write
+  plus a doorbell ring. `reserving_mpsc` is 4.0x the floor there and `slotwise_mpsc` 17x.
+
+### Where it loses, and why that is the honest reading
+
+**At one producer it is 1.45x slower** (8.0 ns against 5.5). Uncontended, `reserving_mpsc` pays one
+compare-exchange that always succeeds plus a load of an uncontended line -- and a load is far
+cheaper than a read-modify-write. `permit_mpsc` pays two read-modify-writes regardless. The permit
+claim converts a shared *read* into a shared *read-modify-write*, which is the wrong trade when
+there is no contention and the right one when there is.
+
+A single-producer queue is a real configuration, so this is a genuine cost and not a rounding error.
+It is also exactly the regime in which [D-16](#d-16)'s surviving half already says `spsc` is the
+right shape.
+
+### What this does NOT decide
+
+**The drained regime is not clean enough to read.** Its refusal counts differ between shapes by two
+to five orders of magnitude and are unstable across runs -- `reserving_mpsc` recorded 0 refusals at
+eight producers in one run and 2,363 in the next, and `permit_mpsc` recorded roughly 460,000 and
+490,000. There are at least two candidate explanations, and this harness cannot separate them: the
+permit shape is genuinely faster, so it attempts more pushes against a full queue; or its optimistic
+overdraw refuses near-full more readily than the shipping shape's re-read does. Since the probe's own
+caution is that a run with many refusals was waiting for the consumer rather than for the claim,
+those rows price backpressure rather than admission.
+
+The drained ratios are recorded for completeness -- 2.19x, 0.85x, 0.94x, 0.75x, 0.92x, 0.66x -- but
+the isolated regime is the one that answers the question asked, and the refusal question is queued as
+`SH-15.5.1` rather than resolved here.
+
+**One outlier, recorded rather than dropped.** In the second of the three runs, `permit_mpsc` at
+eight producers measured 56.7 ns against 26.1 and 26.8 in the other two, breaking an otherwise
+monotone trend. Eight producers is exactly this host's physical core count, so scheduling variance
+there is plausible; two of three runs agree closely and the trend either side of that point is
+unambiguous. It is noted because a reader re-running this will likely see it too.
+
+### What it means for SH-14.1
+
+The ABA hole and the contention cost turn out to be **the same load**. `reserving_mpsc`'s read of the
+consumer's `head` is simultaneously the stale input that SH-14.1 exploits and the shared access D-26
+measured. Removing it for correctness removes it for performance as well, which is why this
+measurement came out the way it did -- and why "closing the hole will cost throughput" was the wrong
+thing to have worried about.

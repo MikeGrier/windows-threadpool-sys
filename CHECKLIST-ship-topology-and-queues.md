@@ -833,7 +833,7 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   **Not claimed to be non-blocking.** A preempted ticket-holder still stalls the consumer at its
   position; this arm fixes the ABA hole and nothing about the progress condition.
 
-- [ ] **SH-15.5** -- **Measure arm A against the shipping shape in `probe-queue-contention`.** The
+- [x] **SH-15.5** -- **Measure arm A against the shipping shape in `probe-queue-contention`.** The
   probe deliberately measures the real shapes rather than stand-ins ("a stand-in would only measure
   itself"), so the arm must be a real module in the queue crate for this to mean anything. Report both
   regimes: isolated for the claim cost alone, drained for what the shared line costs when a consumer is
@@ -841,12 +841,38 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   throughput, given that arm A touches two shared lines on the push path where today's shape touches
   one plus a read.
 
+- [ ] **SH-15.5.1** -- **Settle why the two shapes' refusal counts differ by orders of magnitude,
+  because SH-15.6 cannot be decided without it.** In the drained regime `permit_mpsc` recorded
+  roughly 460,000 refusals at eight producers where `reserving_mpsc` recorded 0, and the counts are
+  unstable across runs (`reserving_mpsc` itself recorded 0 and then 2,363 for the same
+  configuration). Two candidate explanations, which the current harness cannot separate: the permit
+  shape is genuinely faster, so it attempts more pushes against a full queue and is refused more
+  often as a consequence; **or** its optimistic overdraw refuses near-full more readily than the
+  shipping shape's re-read of the claim does, in which case adopting it would change how eagerly a
+  caller sees backpressure.
+  The distinction matters and is not cosmetic. `reserving_mpsc` re-reads the claim and retries before
+  reporting `Full`, so it refuses only when the queue was genuinely full at an instant it observed.
+  If the permit shape refuses more eagerly, that is a **behavioural change to a public contract**,
+  and per D-34's own criterion it must be stated rather than discovered by a caller.
+  Measure refusals per *attempt* rather than per run, at a fixed attempt count with the consumer's
+  drain rate pinned, so throughput and refusal rate are separated. A test that admits exactly
+  `capacity` items from N concurrent producers into an initially empty queue would also settle the
+  narrow question of whether an overdraw can refuse while a slot is provably free.
+
 - [ ] **SH-15.6** -- **Decide: merge, or delete.** The duplicated path exists so the speculative work
   could proceed without disturbing a working shape; leaving it to become permanent by inattention is
   the failure mode the duplication rule warns about. On the evidence from SH-15.5, either adopt arm A
   into `reserving_mpsc` (closing SH-14.1 and SH-14.3) or delete it and take one of SH-14.3's original
   options, recording why. Whichever way it goes, SH-14.1's hazard must be either fixed or documented as
   an accepted limitation with its exposure stated -- it may not simply stay open.
+  **Gated on SH-15.5.1**, not on SH-15.5: the throughput question is answered
+  ([D-35](crates/windows-waitable-queues/DESIGN-NOTES.md#d-35) -- 2.7x faster at 16-32 producers,
+  1.45x slower at one), but adopting a claim that reports backpressure more eagerly would be a
+  behavioural change to a public contract, and that is not yet known either way.
+  Note also what the measurement did **not** cover, so adoption does not quietly assume it: the
+  permit shape has no `Waitable`/`Observable`/`Reserving` trait impls, no `Options`/disposal
+  integration, no high-water tracking, no race hooks, and no 32-bit run. Merging means writing all of
+  those, so the merge is a milestone rather than a rename.
 
 - [ ] **SH-15.7** -- **Build the stall seam that can actually witness the bug.** SH-14.3 already notes
   the property is invisible to a test that merely crosses the wrap: it needs a producer *held* between

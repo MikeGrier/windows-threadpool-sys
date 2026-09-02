@@ -33,19 +33,21 @@ fn main() {
     // Question 1: does the claim collapse as producers are added?
     println!("  1. tail-claim contention (isolated regime)\n");
     println!(
-        "     {:<18} {:>12} {:>12} {:>14}",
-        "producers", "slotwise x1thr", "reserving", "atomic floor"
+        "     {:<18} {:>12} {:>12} {:>12} {:>14}",
+        "producers", "slotwise x1thr", "reserving", "permit", "atomic floor"
     );
     for &producers in PRODUCER_COUNTS {
         let mpsc = observation.scaling(&observation.isolated, shapes::SLOTWISE_MPSC, producers);
         let reserving =
             observation.scaling(&observation.isolated, shapes::RESERVING_MPSC, producers);
+        let permit = observation.scaling(&observation.isolated, shapes::PERMIT_MPSC, producers);
         let floor =
             observation.scaling(&observation.isolated, shapes::BASELINE_FETCH_ADD, producers);
         println!(
-            "     {producers:<18} {:>12} {:>12} {:>14}",
+            "     {producers:<18} {:>12} {:>12} {:>12} {:>14}",
             format_scaling(mpsc),
             format_scaling(reserving),
+            format_scaling(permit),
             format_scaling(floor)
         );
     }
@@ -58,29 +60,37 @@ fn main() {
     // Question 2: what does reserving_mpsc's read of `head` actually cost?
     println!("\n  2. the price of reservation (drained regime, where `head` is written)\n");
     println!(
-        "     {:<18} {:>14} {:>14} {:>10}",
-        "producers", "slotwise ns/pu", "reserving", "ratio"
+        "     {:<18} {:>14} {:>14} {:>10} {:>14} {:>16}",
+        "producers", "slotwise ns/pu", "reserving", "ratio", "permit", "permit/reserving"
     );
     for &producers in PRODUCER_COUNTS {
         let plain = observation.find(&observation.drained, shapes::SLOTWISE_MPSC, producers);
         let reserving = observation.find(&observation.drained, shapes::RESERVING_MPSC, producers);
-        let ratio = match (plain, reserving) {
-            (Some(plain), Some(reserving)) if plain.nanos_per_push > 0.0 => {
-                format!("{:.2}x", reserving.nanos_per_push / plain.nanos_per_push)
-            }
-            _ => "--".to_owned(),
-        };
+        let permit = observation.find(&observation.drained, shapes::PERMIT_MPSC, producers);
+        let ratio = format_ratio(reserving, plain);
+        // The column SH-15.5 exists to fill: the experimental claim against the
+        // shipping shape it would replace. Below 1.00 means the permit claim is
+        // cheaper; above means removing the room-decision race costs throughput.
+        let permit_ratio = format_ratio(permit, reserving);
         println!(
-            "     {producers:<18} {:>14} {:>14} {:>10}",
+            "     {producers:<18} {:>14} {:>14} {:>10} {:>14} {:>16}",
             format_nanos(plain),
             format_nanos(reserving),
-            ratio
+            ratio,
+            format_nanos(permit),
+            permit_ratio
         );
     }
     println!("\n     `reserving_mpsc` reads the consumer's position on every push and");
     println!("     `mpsc` does not, which is the entire reason they ship as two");
     println!("     shapes. This regime is the one that can price that read, because");
     println!("     a consumer is writing the line being read.");
+    println!("\n     `permit_mpsc` is experimental and is the candidate replacement");
+    println!("     for `reserving_mpsc`: it removes that read entirely, and with it");
+    println!("     the stale room decision behind SH-14.1, by making admission a");
+    println!("     read-modify-write on a permit count instead. The last column is");
+    println!("     the trade -- below 1.00 and the safer claim is also the cheaper");
+    println!("     one; above 1.00 and closing the hole costs throughput.");
 
     println!("\n  CAUTION: the drained regime has ONE consumer, because that is what");
     println!("  MPSC means. At high producer counts it is expected to become");
@@ -104,6 +114,23 @@ fn print_table(runs: &[Run]) {
 
 fn format_scaling(scaling: Option<f64>) -> String {
     scaling.map_or_else(|| "--".to_owned(), |value| format!("{value:.2}x"))
+}
+
+/// `numerator / denominator` as a cost ratio, or `--` when either is missing.
+///
+/// Guards the denominator rather than trusting it: a shape that failed to run
+/// reports zero, and a division by it would print `inf` or `NaN` in a column a
+/// reader would otherwise take for a measurement.
+fn format_ratio(numerator: Option<Run>, denominator: Option<Run>) -> String {
+    match (numerator, denominator) {
+        (Some(numerator), Some(denominator)) if denominator.nanos_per_push > 0.0 => {
+            format!(
+                "{:.2}x",
+                numerator.nanos_per_push / denominator.nanos_per_push
+            )
+        }
+        _ => "--".to_owned(),
+    }
 }
 
 fn format_nanos(run: Option<Run>) -> String {

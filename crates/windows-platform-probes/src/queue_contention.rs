@@ -52,7 +52,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use windows_waitable_queues::{reserving_mpsc, slotwise_mpsc};
+use windows_waitable_queues::{permit_mpsc, reserving_mpsc, slotwise_mpsc};
 
 /// How many pushes each producer thread performs in one timed run.
 const PUSHES_PER_PRODUCER: usize = 50_000;
@@ -85,6 +85,9 @@ pub mod shapes {
     pub const SLOTWISE_MPSC: &str = "slotwise_mpsc";
     /// The reservation-based MPSC.
     pub const RESERVING_MPSC: &str = "reserving_mpsc";
+    /// The experimental permit-claiming MPSC, measured against
+    /// [`RESERVING_MPSC`] because it is a candidate replacement for it.
+    pub const PERMIT_MPSC: &str = "permit_mpsc";
     /// The uncontended-atomic floor the queues are measured against.
     pub const BASELINE_FETCH_ADD: &str = "baseline_fetch_add";
 }
@@ -157,12 +160,18 @@ pub fn measure() -> Observation {
         isolated.push(median_run(shapes::RESERVING_MPSC, producers, |count| {
             time_isolated_reserving(count)
         }));
+        isolated.push(median_run(shapes::PERMIT_MPSC, producers, |count| {
+            time_isolated_permit(count)
+        }));
 
         drained.push(median_run(shapes::SLOTWISE_MPSC, producers, |count| {
             time_drained_mpsc(count)
         }));
         drained.push(median_run(shapes::RESERVING_MPSC, producers, |count| {
             time_drained_reserving(count)
+        }));
+        drained.push(median_run(shapes::PERMIT_MPSC, producers, |count| {
+            time_drained_permit(count)
         }));
     }
 
@@ -308,6 +317,37 @@ fn time_isolated_reserving(producers: usize) -> Repetition {
     (elapsed, refusals)
 }
 
+/// The experimental permit claim, in the regime that isolates the claim itself.
+///
+/// A line-for-line twin of [`time_isolated_reserving`] with one shape
+/// substituted. Deliberately not factored into a generic over the two, which
+/// would need a trait both implement and would put a dynamic or monomorphised
+/// indirection inside the timed region -- in a measurement whose whole output is
+/// a difference of a few nanoseconds per push.
+fn time_isolated_permit(producers: usize) -> Repetition {
+    let (tx, rx) = permit_mpsc::bounded::<u64>(capacity_for(producers)).expect("a valid capacity");
+    let gate = start_barrier(producers);
+    let started = thread::scope(|scope| {
+        for producer in 0..producers {
+            let tx = tx.clone();
+            let gate = Arc::clone(&gate);
+            scope.spawn(move || {
+                gate.wait();
+                for index in 0..PUSHES_PER_PRODUCER {
+                    tx.push((producer * PUSHES_PER_PRODUCER + index) as u64)
+                        .expect("the run fits in the capacity");
+                }
+            });
+        }
+        gate.wait();
+        Instant::now()
+    });
+    let elapsed = started.elapsed().as_nanos() as f64;
+    let refusals = tx.refused();
+    while rx.pop().is_some() {}
+    (elapsed, refusals)
+}
+
 /// A capacity a real system would choose, so the drained regime exercises
 /// backpressure the way a real one would.
 const DRAINED_CAPACITY: usize = 1024;
@@ -382,6 +422,58 @@ fn time_drained_reserving(producers: usize) -> Repetition {
     let consumer_done = Arc::clone(&done);
     // The consumer joins the gate here for the reason it does in the slotwise
     // twin: a run whose opening is undrained is not the regime being measured.
+    let gate = start_barrier(producers + 1);
+    let consumer_gate = Arc::clone(&gate);
+
+    let consumer = thread::spawn(move || {
+        consumer_gate.wait();
+        while !consumer_done.load(Ordering::Relaxed) {
+            while rx.pop().is_some() {}
+            std::hint::spin_loop();
+        }
+        while rx.pop().is_some() {}
+        rx.refused()
+    });
+
+    let started = thread::scope(|scope| {
+        for producer in 0..producers {
+            let tx = tx.clone();
+            let gate = Arc::clone(&gate);
+            scope.spawn(move || {
+                gate.wait();
+                for index in 0..PUSHES_PER_PRODUCER {
+                    let mut item = (producer * PUSHES_PER_PRODUCER + index) as u64;
+                    while let Err(error) = tx.push(item) {
+                        item = error.into_inner();
+                        std::hint::spin_loop();
+                    }
+                }
+            });
+        }
+        gate.wait();
+        Instant::now()
+    });
+    let elapsed = started.elapsed().as_nanos() as f64;
+
+    done.store(true, Ordering::Relaxed);
+    drop(tx);
+    let refusals = consumer.join().expect("the consumer must not panic");
+    (elapsed, refusals)
+}
+
+/// The experimental permit claim, against a continuously draining consumer.
+///
+/// The regime that can price the claim honestly, for the same reason the
+/// reserving twin needs it: the shared line a producer touches is only
+/// expensive when a consumer is writing it. Measured in isolation, an
+/// uncontended line looks free -- which would be a confident wrong answer, and
+/// this shape has more riding on that answer than the others, because it trades
+/// `reserving_mpsc`'s *load* of the consumer's position for a read-modify-write
+/// on a count the consumer also writes.
+fn time_drained_permit(producers: usize) -> Repetition {
+    let (tx, rx) = permit_mpsc::bounded::<u64>(DRAINED_CAPACITY).expect("a valid capacity");
+    let done = Arc::new(AtomicBool::new(false));
+    let consumer_done = Arc::clone(&done);
     let gate = start_barrier(producers + 1);
     let consumer_gate = Arc::clone(&gate);
 

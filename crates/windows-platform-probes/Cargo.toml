@@ -91,7 +91,12 @@ windows-namespace-request-sys = { version = "0.2.0", path = "../windows-namespac
 # The contention probe measures the shipping queue shapes rather than a
 # reimplementation, for the same reason: a stand-in would only measure itself,
 # and the whole question is what the real tail claim costs.
-windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues" }
+# The experimental permit claim is enabled here because this probe is what
+# decides its fate (SH-15.5): it must be measured against the shipping shapes
+# on the same host, in the same run, by the same harness.
+windows-waitable-queues = { version = "0.1.0", path = "../windows-waitable-queues", features = [
+	"experimental-permit-claim",
+] }
 wtf-string = { version = "0.1.0", path = "../wtf-string" }
 
 [dependencies.windows-sys]

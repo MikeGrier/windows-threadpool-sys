@@ -491,6 +491,17 @@ impl<T> Consumer<T> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// How many pushes have been refused for want of room.
+    ///
+    /// Readable from this side as well as the producer's, matching the shipping
+    /// shapes: a measurement harness drops its producers before reading the
+    /// count, so a producer-only accessor would be unreachable exactly when the
+    /// number is wanted.
+    #[must_use]
+    pub fn refused(&self) -> u64 {
+        self.shared.metrics.refused()
+    }
 }
 
 #[cfg(test)]
