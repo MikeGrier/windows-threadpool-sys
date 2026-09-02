@@ -787,3 +787,30 @@ over-escaped -- eight backslashes reached Rust where four were needed -- so ever
 23 tests failed instead of 5. The over-broad result is what exposed it; a subtler mis-escape would have
 read as a real finding. Redone with a direct file edit and a Rust raw string, which removes the escaping
 layer entirely. This is the same multi-layer escaping trap recorded earlier in this sweep.
+## Moved 2026-09-01 -- M15.10: covering canonical_path's regrow
+
+### <a id="m1510"></a>M15.10 -- Test `canonical_path`'s 512-unit retry through the junction back door. *(completed 2026-09-01 20:25:00 -04:00)*
+
+**The item's own premise was wrong, and checking it first saved the whole fixture.** M15.10 (and M15.3
+before it) held that the retry was unreachable through the crate's API, so a junction pointing at a deep
+target was the only way in. But D-85's pass-through means a caller's own `\\?\` path opens past
+`MAX_PATH` *without* the host carrying a `longPathAware` manifest -- which M15.3's own probe had already
+shown. So `DirectoryHandle::open` on a long `\\?\` path reaches the retry directly: no junction, no
+reparse-point plumbing, no spawned `mklink`, and no question about elevation.
+
+**Two tests.** One drives a ~560-unit path through `open` and asserts the grown buffer carries the whole
+path rather than a truncated one. The second walks **every length from 508 to 516 units**, sizing each
+fixture exactly by padding its final component, so the boundary itself is pinned: 511 units is the last
+that fits one call and 512 the first that needs the regrow, and an off-by-one on either side would leave
+a path truncated or looping.
+
+**The branch really was uncovered.** Verified by making the regrow return an error: **exactly one test
+failed and 38 passed.** Nothing else in the module reaches that code.
+
+**Two claims from M15.3 corrected by measurement.** Its `<` -> `>` mutant does *not* loop forever -- it
+is caught and fails fast. And `<` -> `<=` is not a gap but a genuinely **equivalent** mutant: Win32's
+two-call convention makes `written == buffer.len()` unreachable, because success returns the length
+excluding the NUL (needing room for it) while a too-small buffer returns the length including it. That
+was confirmed rather than argued -- an `assert_ne!` probe never fired across the whole suite, including
+the 508-516 walk that straddles the buffer size exactly. The reasoning is now a comment at the
+comparison, so the next sweep does not re-litigate it.

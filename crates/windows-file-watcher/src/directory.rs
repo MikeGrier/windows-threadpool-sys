@@ -640,6 +640,14 @@ fn canonical_path(handle: HANDLE) -> Result<PathBuf, OpenError> {
             return Err(OpenError::new(classify(&source), source));
         }
         let written = written as usize;
+        // Win32's two-call convention makes `written == buffer.len()` unreachable,
+        // which is why this is `<` and why a `<=` here would be equivalent rather
+        // than wrong: on success the call returns the length *excluding* the NUL
+        // and needs room for it, so `written < buffer.len()`; when the buffer is
+        // too small it returns the length *including* the NUL, which by
+        // definition exceeds `buffer.len()`. Confirmed empirically -- an
+        // `assert_ne!` here never fired across the suite, including a walk of
+        // every path length from 508 to 516 units.
         if written < buffer.len() {
             buffer.truncate(written);
             return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));

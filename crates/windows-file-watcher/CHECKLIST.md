@@ -143,16 +143,7 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 
 - [x] **M15.9** -- Guarded D-85's pass-through with five identity-asserting tests. Measured worth: with a blanket prefix injected into `wide_path`, exactly those five fail and the other 33 in the module pass. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m159)
 
-- [ ] **M15.10** -- Test `canonical_path`'s 512-unit retry through the junction back door. **The back
-  door is confirmed to work, so this is now a fixture to build rather than a question to answer.**
-  **Measured:** `mklink /J` needs no elevation, and a **53-character** junction path resolving to a
-  **578-character** target is enough -- `GetFinalPathNameByHandleW` returns the resolved target, so
-  `open` only ever sees the short path while `canonical_path` must grow its buffer. Setup creates the
-  deep target through an explicitly `\\?\`-prefixed string, so the fixture does not depend on any
-  library prefixing on its behalf.
-  **Why it is worth doing:** the retry is the last untested branch in `canonical_path`, and its `<` ->
-  `>` mutant does not merely fail, it **loops forever** -- a defect that would surface as a hung suite
-  rather than a red test. `<` -> `<=` currently survives (verified by injection in M15.8).
+- [x] **M15.10** -- Tested `canonical_path`'s 512-unit retry. No junction needed: a caller's own `\\?\` path opens past `MAX_PATH` (D-85), so the retry is reachable through the crate's own API. Added a boundary walk over 508-516 units; `<=` proved equivalent by measurement. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m1510)
 
 - [ ] **M15.4** -- Isolate the last two notification-filter categories, or record that they cannot be
   isolated from outside. Two mutants in `ALL_NOTIFY_FILTERS` survive: replacing the `|` before

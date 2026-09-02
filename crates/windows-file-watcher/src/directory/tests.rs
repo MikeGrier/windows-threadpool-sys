@@ -644,3 +644,100 @@ fn a_caller_supplied_verbatim_prefix_is_forwarded_and_honoured() {
     drop(handle);
     dir.cleanup();
 }
+
+#[test]
+fn canonical_path_grows_its_buffer_when_the_path_does_not_fit() {
+    // `canonical_path` sizes a 512-unit buffer and retries on the documented
+    // two-call convention. Reaching that retry needs a resolved path of 512+
+    // units, which needs a directory deeper than `MAX_PATH` -- and D-85's
+    // pass-through is what makes that openable without the host executable
+    // carrying a `longPathAware` manifest: the caller's own `\\?\` path is
+    // forwarded unchanged, and Win32 honours it.
+    //
+    // This corrects the note that opened M15.10: the retry is reachable through
+    // this crate's own API, so it needs no junction/reparse-point fixture and no
+    // spawned `mklink`.
+    use std::os::windows::ffi::OsStrExt;
+
+    let dir = TempDir::new("canonical-long");
+    let mut deep = dir.path().to_path_buf();
+    while format!(r"\\?\{}", deep.display()).len() < 560 {
+        deep.push("segment-0123456789abcdef");
+    }
+    // Created through an explicitly prefixed string, so the fixture does not
+    // depend on any library prefixing on its behalf.
+    let prefixed = format!(r"\\?\{}", deep.display());
+    std::fs::create_dir_all(&prefixed).expect("create the deep directory");
+
+    let handle = DirectoryHandle::open(Path::new(&prefixed))
+        .expect("a caller's own `\\?\\` path opens past MAX_PATH (D-85)");
+    let reported = handle.canonical_path().expect("canonical path");
+
+    let units = reported.as_os_str().encode_wide().count();
+    assert!(
+        units > 512,
+        "the fixture must actually overflow the first buffer, got {units} units"
+    );
+    assert_eq!(
+        reported,
+        std::fs::canonicalize(&prefixed).expect("std canonicalize"),
+        "the grown buffer must carry the whole path, not a truncated one"
+    );
+
+    drop(handle);
+    let _ = std::fs::remove_dir_all(&prefixed);
+    dir.cleanup();
+}
+/// A directory whose `\\?\` spelling is exactly `target` UTF-16 units, built by
+/// padding the final component. Components stay well under the 255-unit limit.
+fn deep_dir_of_prefixed_len(base: &Path, target: usize) -> PathBuf {
+    let mut path = base.to_path_buf();
+    loop {
+        let current = format!(r"\\?\{}", path.display()).len();
+        assert!(
+            current + 2 <= target,
+            "the base path is already too long to hit {target}"
+        );
+        let remaining = target - current - 1;
+        if remaining <= 200 {
+            path.push("x".repeat(remaining));
+            return path;
+        }
+        path.push("x".repeat(200));
+    }
+}
+
+#[test]
+fn canonical_path_is_exact_on_both_sides_of_its_first_buffer() {
+    // The first buffer is 512 units and the two-call convention's success test
+    // is `written < buffer.len()`, so 511 units is the last length that fits in
+    // one call and 512 is the first that needs the regrow. Walking both sides
+    // pins that boundary: an off-by-one in either the success test or the
+    // regrow would leave one of these lengths truncated or looping.
+    use std::os::windows::ffi::OsStrExt;
+
+    let dir = TempDir::new("canon-bound");
+    for target in 508..=516 {
+        let deep = deep_dir_of_prefixed_len(dir.path(), target);
+        let prefixed = format!(r"\\?\{}", deep.display());
+        assert_eq!(prefixed.len(), target, "the fixture must be exactly sized");
+        std::fs::create_dir_all(&prefixed).expect("create the sized directory");
+
+        let handle = DirectoryHandle::open(Path::new(&prefixed)).expect("open the sized directory");
+        let reported = handle.canonical_path().expect("canonical path");
+        assert_eq!(
+            reported.as_os_str().encode_wide().count(),
+            target,
+            "a {target}-unit path must be reported whole"
+        );
+        assert_eq!(
+            reported,
+            std::fs::canonicalize(&prefixed).expect("std canonicalize"),
+            "a {target}-unit path must be reported correctly"
+        );
+
+        drop(handle);
+        let _ = std::fs::remove_dir_all(&prefixed);
+    }
+    dir.cleanup();
+}
