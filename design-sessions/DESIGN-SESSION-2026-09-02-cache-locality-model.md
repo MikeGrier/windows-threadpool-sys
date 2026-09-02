@@ -1,7 +1,11 @@
 # Design session: the cache-locality model
 
-**Status: OPEN, with direction settled.** The engineer has taken sides on both underlying
-questions (see "Direction taken" below); what remains is the concrete representation. The
+**Status: OPEN, with direction settled and the representation converging.** The engineer has
+taken sides on both underlying questions (see "Direction taken" below) and settled three
+sub-questions about the proposed shape: provenance is **per-relation**, "determined absent"
+is a **distinct record**, and the whole-object `Provenance` is **superseded** rather than
+re-derived. Nothing is carried over from the old model for its own sake; two of its
+properties are kept only because they re-derive independently. The
 options section further down predates that direction and is kept as a record of what was
 considered -- Options 1 and 2 are now insufficient on their own, because both preserve the
 `Option`-shaped absence the direction rejects.
@@ -134,16 +138,71 @@ collapsed. `outermost_partitioning_cache` survives as one named projection over 
 the scheduler question of "give me exactly one boundary to shard on", and is documented as a
 projection rather than as the model.
 
-Open sub-questions this raises:
+### Sub-questions, answered
 
-- Does provenance belong per-relation, or per-source with relations pointing at a source?
-  Per-relation is simpler to consume; per-source is honest about the fact that one Win32 call
-  produced many relations at once.
-- Should "determined absent" be a relation with an empty processor set, or a distinct record?
-  An empty set already means something else in this crate (`memory_domains` deliberately
-  keeps a processor-less memory domain, D-5), so overloading it looks like a trap.
-- Does `Topology`'s existing whole-object `Provenance` stay, become derived from the
-  per-relation provenances, or get superseded?
+**Provenance is per-relation.** Asked for a case where it could differ per *source*; there
+is none worth having. Any per-source fact is expressible per-relation by repetition, and the
+reverse is not true -- so per-relation strictly subsumes it. The case that decides it runs the
+other way: **two sources describing the same relation**. Win32 reporting that A and B share
+L3 while a probe measures otherwise is expressible only if one relation can hold both
+observations; per-source would force two whole topologies and a diff.
+
+What the per-source instinct was actually reaching for is not provenance but **completeness
+of an observation attempt** -- "source S was queried about dies and said nothing" cannot
+attach to a relation, because there is no relation. That is the absence record, settled
+below.
+
+**"Determined absent" is a distinct record**, not a relation with an empty processor set. An
+empty set already means something else here (`memory_domains` deliberately keeps a
+processor-less memory domain, D-5), so overloading it would be a trap.
+
+**The whole-object `Provenance` is superseded, and should not be replaced by another
+whole-object scalar.** Derivation: with trust per-relation, an object-level scalar can only be
+the minimum (a topology with ninety-nine measured relations and one synthetic reads
+`SYNTHETIC`, which is useless) or the maximum (which is dishonest). Trust belongs to an
+**answer** -- "A and B share L3, established by these observations" carries its own -- and that
+falls directly out of modeling observed connectivity, since a connectivity model exists to
+answer queries and the query result is the thing needing a label.
+
+### Two questions those answers open
+
+**Is provenance a scalar or a chain?** Today it is a scalar, and deserialization is a *lossy*
+downgrade: `downgraded_to` is `min` against a `Restored` ceiling. A measured relation that
+round-trips through a file loses "originally measured, on this machine, at this time", which
+matters more per-relation because a measured relation is expensive to establish. From base
+principles these are two things one scalar was forced to conflate: **trust assertable now**
+(never upgradeable) and **origin history** (recorded, conferring no trust).
+
+**Can one relation hold more than one observation?** It probably must, and the project already
+reasons this way. From `file-handle-numa-spike.rs`:
+
+> **Agreement is consistent with volume locality; it does not establish it.** A genuinely
+> per-file answer may equal its volume's node ... so one file agreeing rules nothing out. Only
+> disagreement is decisive, because a per-volume answer cannot differ from itself.
+
+That is an asymmetric adjudication rule over two independent observations of one underlying
+fact, and it only works if the observations coexist. A model storing one winning value per
+relation cannot express it -- and detecting a hypervisor that misreports topology is exactly
+this shape.
+
+### Two principles that re-derive rather than being inherited
+
+The direction is explicitly to find the right model rather than carry anything over. Two
+properties of the old `Provenance` are principles rather than model, and both survive that
+test on their own merits:
+
+- **The default is the untrusted value.** Under per-relation provenance this argument is
+  *stronger*, not weaker: there are far more places to forget.
+- **Trust never upgrades.** Identical derivation -- a file still cannot establish that it
+  describes the machine you are on.
+
+### Still open
+
+- Scalar-versus-chain, and if a chain, what a consumer asks it.
+- Whether multiple observations per relation are held as a set, or reduced on insert with the
+  reduction recorded.
+- What a query returns when observations disagree: a value plus a conflict marker, or the
+  conflict itself, forcing the caller to adjudicate.
 
 ## What the code actually does, verified rather than assumed
 
