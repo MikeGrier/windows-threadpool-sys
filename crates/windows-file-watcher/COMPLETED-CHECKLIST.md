@@ -960,3 +960,71 @@ notification budget: every one is pinned by a single test,
 it is not**. Each of those mutants breaks that loop's exit condition, so it spins at full speed rather than
 failing. That is M15.6's shape one level up, and M15.6 missed it because the bound sits on the wait rather
 than on the loop -- lowering the budget further would not have touched it.
+## Moved 2026-09-01 -- M15.11: a bounded wait inside an unbounded loop
+
+### <a id="m1511"></a>M15.11 -- Bound the *loop* in `no_wakeup_is_lost_under_a_concurrent_burst`, not just the wait inside it. *(completed 2026-09-01 21:25:00 -04:00)*
+
+**The shape, which is the transferable part.** The test waited on the doorbell with a bounded
+`await_signal`, drained, then re-checked an exit condition of
+`is_disconnected() && is_empty() && latched() == 0`. Every one of those calls is an answer a defect can
+pin -- and a pinned answer leaves the doorbell *signalled*, so the bounded wait returns immediately and
+the loop spins at full speed. **A bounded wait inside an unbounded loop is still an unbounded loop**, and
+that is exactly why M15.6 did not find this: it swept for unbounded `recv()`, and here the `recv` was
+already bounded.
+
+**What it cost.** All 8 timeouts in M15.7's confirming sweep were this one test, held open by eight
+different mutants (`try_recv -> None`, `recv`'s `==` to `!=`, `is_disconnected -> false`, `len -> 1`,
+`is_empty -> false` twice, `latched -> 1`, `take -> None`). Each was a detection -- between 4 and 76 tests
+had already failed -- filed as a timeout because the run was killed before it could finish.
+
+**The fix.** A deadline on the loop itself, whose failure message names `seen`, `TOTAL`, and all three
+predicate values, so a future instance says which answer got pinned rather than just that time ran out.
+Measured on four of the eight mutants: each now fails in seconds where it previously cost the full 67s
+kill.
+
+**Also aligned:** `await_signal` still waited 30s, the budget M15.7 had just lowered everywhere else. It
+is now 5s, with the reasoning cross-referenced rather than restated.
+
+**The suite-wide sweep the item asked for found no second instance.** Ten candidate loops were flagged
+mechanically and all but this one are sound: three in `watch/tests.rs` bound themselves with a
+`!remaining.is_zero()` assertion (an idiom the first heuristic did not recognise), one terminates because
+the bounded helper it calls *panics* rather than returning, two are path-construction loops that terminate
+by growth, and the rest are drain loops or stop-flag threads the test controls.
+
+**Worth recording about the search itself:** the first heuristic -- "a loop with no deadline in its body"
+-- returned a false negative on *this very test*, because `await_signal` appears in the body and looked
+like a bound. The check that works is narrower: does the loop assert against a **deadline it owns**, as
+opposed to merely calling something that is itself bounded.
+**A near-miss worth recording, because only injection caught it.** The first fix for the remaining
+`Receiver::recv` timeout was to replace the three bare `assert!(receiver.recv().is_none())` sites with
+`recv_timeout`. The suite stayed green and the hang went away -- and the mutant went from `timeout` to
+**SURVIVED**. Those assertions are the only thing that exercises `recv`'s *own* disconnect check, so
+bounding them by swapping the call stopped testing the very path they existed for: a detection had been
+traded for a gap, invisibly, while every surface signal said the change was an improvement.
+
+The correct bound keeps the blocking `recv()` and puts the *deadline outside it* -- run it on its own
+thread and collect the answer through an `mpsc::recv_timeout` -- which is the idiom
+`a_blocked_receiver_is_woken_when_the_last_sender_drops` already used a few hundred lines away. Applied to
+all three sites (`session/tests.rs`, `watcher/tests.rs`, `tests/consumer_test_surface.rs`), the mutant is
+**caught in ~11s** instead of costing a 67s kill.
+
+The general rule: **when a test asserts that a blocking call returns, bounding it by making the call
+non-blocking tests something weaker.** Bound the wait *around* it instead.
+
+(Also caught by this: a first injection run reported SURVIVED because the test filter was the package name
+rather than a test-name substring, so no tests ran at all. A filter that matches nothing looks exactly
+like a mutant that nothing catches.)
+**The final sweep, and where the floor is.** `queue.rs` across the three items:
+
+| | after M15.6 | after M15.7 | after M15.11 |
+|---|---|---|---|
+| caught | 78 | 89 | **95** |
+| missed | 8 | 0 | **0** |
+| timeout | 14 | 8 | **2** |
+| wall clock | 20 min | 14 min | **11 min** |
+
+The two that remain (`Receiver::recv_timeout -> None` and `take -> None`) had **44 and 70 tests already
+failed** before the kill, and neither is held by any single slow test. They are the inherent floor rather
+than a defect: a mutant that breaks the queue's core makes most of the suite fail, and a suite of failures
+takes longer than a suite of passes -- so it overruns a deadline set at 3x the *passing* baseline. No
+test-side bound can reach that, and nothing is being missed.

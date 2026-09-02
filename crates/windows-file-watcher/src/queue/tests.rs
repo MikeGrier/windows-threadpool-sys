@@ -1115,9 +1115,15 @@ fn is_signalled(handle: BorrowedHandle<'_>) -> bool {
 }
 
 /// Wait for a handle to become signalled, failing rather than hanging.
+///
+/// 5s, matching `NOTIFY_TIMEOUT` in `src/watcher/tests.rs` and lowered from 30s
+/// for the reason recorded there (M15.7): a budget only spent when something is
+/// already broken still has to be paid before the failure is reported, and at
+/// 30s a suite full of them overruns cargo-mutants' deadline and is filed as a
+/// timeout instead of a red test.
 fn await_signal(handle: BorrowedHandle<'_>) -> bool {
     // SAFETY: as above, with a bounded timeout.
-    unsafe { WaitForSingleObject(handle.as_raw_handle(), 30_000) == WAIT_OBJECT_0 }
+    unsafe { WaitForSingleObject(handle.as_raw_handle(), 5_000) == WAIT_OBJECT_0 }
 }
 
 #[test]
@@ -1288,7 +1294,26 @@ fn no_wakeup_is_lost_under_a_concurrent_burst() {
     });
 
     let mut seen = 0_usize;
+    // The wait below is bounded, but that is not enough on its own: every one of
+    // this loop's exit conditions is a call whose answer a defect can pin, and a
+    // pinned answer leaves the doorbell signalled, so `await_signal` returns
+    // immediately and the loop spins at full speed rather than blocking. Eight
+    // separate mutants did exactly that -- `try_recv` returning `None`,
+    // `is_disconnected`/`is_empty` returning `false`, `len`/`latched` returning
+    // `1`, `take` returning `None`, and `recv`'s own comparison inverted -- and
+    // each was detected only by cargo-mutants killing the run, i.e. filed as a
+    // timeout rather than a failure (M15.11). A bounded wait inside an unbounded
+    // loop is still an unbounded loop.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stream never ended: saw {seen} of {TOTAL}, disconnected={}, \
+             empty={}, latched={}",
+            receiver.is_disconnected(),
+            receiver.is_empty(),
+            receiver.latched()
+        );
         assert!(
             await_signal(doorbell.as_handle()),
             "the doorbell stopped ringing after {seen} notifications"
