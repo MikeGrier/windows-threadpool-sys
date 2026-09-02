@@ -320,3 +320,53 @@ fn a_verbatim_root_needs_a_letter_before_its_colon_not_merely_a_colon() {
     let prepared = prepare_str(r"\\?\Ca\dir").expect("a colonless root is not a drive at all");
     assert_eq!(text(&prepared), r"\\?\Ca\dir");
 }
+
+#[test]
+fn every_path_failure_describes_itself_distinctly() {
+    // `PathFailure::description -> "xyzzy"` survived: the tests above assert
+    // which *failure* was reported, never what it says, so a description that
+    // collapsed every variant onto one string would go unnoticed.
+    //
+    // Distinctness is the assertion that matters. A description exists to tell
+    // one failure from another, so it catches every constant substitution at
+    // once rather than one string at a time -- and non-emptiness alone would
+    // not, because a constant is non-empty too.
+    let cases = [
+        ("EmptyPath", PathFailure::EmptyPath),
+        ("InteriorNul", PathFailure::InteriorNul),
+        ("PathTooLong", PathFailure::PathTooLong),
+        ("NotFullyQualified", PathFailure::NotFullyQualified),
+        ("PathResolution", PathFailure::PathResolution),
+    ];
+
+    for (name, failure) in cases {
+        assert!(
+            !failure.description().is_empty(),
+            "{name} has no description, so a reader learns nothing from it"
+        );
+    }
+    for (index, (name, failure)) in cases.iter().enumerate() {
+        for (other_name, other) in &cases[index + 1..] {
+            assert_ne!(
+                failure.description(),
+                other.description(),
+                "{name} and {other_name} describe themselves identically, so the \
+                 description cannot tell them apart"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_failure_decided_here_carries_no_os_error_and_renders_as_its_description() {
+    // The half of `PathError` that has no Win32 call behind it. Asserting the
+    // exact rendering -- rather than merely that it is non-empty -- is what
+    // binds `Display` to `description`: without it the formatter could drop the
+    // description entirely and nothing would fail.
+    let error = prepare_str("").expect_err("an empty path names nothing");
+
+    assert_eq!(error.failure(), PathFailure::EmptyPath);
+    assert_eq!(error.raw_os_error(), None);
+    assert!(std::error::Error::source(&error).is_none());
+    assert_eq!(error.to_string(), PathFailure::EmptyPath.description());
+}
