@@ -878,6 +878,19 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   limitation with its exposure stated -- it may not simply stay open. **That disclosure is no longer
   gated on this item**: see SH-15.8, which must land before 0.1.0 publishes regardless of what is
   decided here.
+  **One comparison to make explicitly rather than leave implied, now that SH-15.9 adds a third
+  answer to SH-14.1.** On the evidence so far the permit claim dominates the wide claim on every
+  axis except maturity: it fixes the hazard on *all* targets where the wide claim covers only 64-bit
+  ones, it is 2.7x faster at 16-32 producers where the wide claim keeps the retry loop that costs,
+  it needs no dependency, and its 2^31 ceiling is not intrinsic -- its position carries no decision,
+  so it could take a `u64` ticket exactly as `slotwise_mpsc` did in SH-14.2 and reach 2^62 on every
+  target too.
+  What the wide claim has instead is **risk**: it is a width change to a shape that has been through
+  nine review rounds and whose behaviour is unchanged, where the permit claim is a new protocol with
+  23 tests, no trait impls, no verification, and an open question about whether it reports
+  backpressure more eagerly (SH-15.5.1). Those are genuinely different products -- conservative fix
+  versus better fix -- which is the argument for shipping both rather than the argument for choosing.
+  Do not let this comparison be settled by whichever is finished first.
   **Gated on SH-15.5.1**, not on SH-15.5: the throughput question is answered
   ([D-35](crates/windows-waitable-queues/DESIGN-NOTES.md#d-35) -- 2.7x faster at 16-32 producers,
   1.45x slower at one), but adopting a claim that reports backpressure more eagerly would be a
@@ -924,6 +937,58 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
      target); `spsc` never had it; and the queue is safe at any push volume below the wrap.
   Sweep for consistency when writing it, per the contract-integrity rule: this fact will end up
   stated in at least four places and they must not drift.
+
+- [ ] **SH-15.9** -- **Ship the claim word in two widths: the narrow one everywhere, the wide one where
+  the hardware allows.** The engineer's decision, and it follows
+  [D-29](crates/windows-waitable-queues/DESIGN-NOTES.md#d-29): publish what we measured and let the
+  caller choose, rather than picking one tradeoff for everyone.
+  - **`reserving_mpsc` is unchanged and always ships**, on every target, with SH-15.8's warnings. It
+    is never silently swapped for the wide one on targets that could support it: a shape whose
+    contract changes with the target is exactly what
+    [PLATFORM INTEGRITY](../.github/copilot-instructions.md) rule 2 forbids, and a caller reading
+    "2^32" in the docs must get 2^32.
+  - **`reserving_mpsc_wide` is new**: the same claim protocol with a `u128` word split 64/64. The
+    position then needs 2^64 pushes to recur -- about 16,000 years at this crate's measured rates --
+    so SH-14.1 is unreachable rather than merely unlikely. The capacity ceiling rises from 2^31 to
+    2^62, which was [D-18](crates/windows-waitable-queues/DESIGN-NOTES.md#d-18)'s original point.
+
+  **The trap this item exists to avoid, verified rather than assumed.** `rustc 1.98.0 --print cfg
+  --target x86_64-pc-windows-msvc -C target-feature=-cmpxchg16b` **still emits
+  `target_has_atomic="128"`**. The cfg tracks the target's maximum atomic width, not whether the
+  instruction is enabled -- so `#[cfg(target_has_atomic = "128")]` alone does **not** guarantee a
+  lock-free 128-bit exchange. Where the instruction is absent, `portable-atomic`'s default `fallback`
+  feature silently substitutes **a global lock**: the queue still compiles, still runs, and stops
+  being lock-free, contending with any unrelated user of the fallback in the same process. That is
+  the same silent-degradation shape as SH-14.1 itself and must not be shipped.
+  So the gate is **two** conditions, not one: the cfg, **and** a const assertion that
+  `AtomicU128::is_always_lock_free()` (a `pub const fn` in `portable-atomic`, verified). The build
+  fails rather than quietly taking a lock. This is the same standard SH-14.2 already applied when it
+  widened `slotwise_mpsc` -- it probed i686 specifically to confirm `AtomicU64` was lock-free there,
+  recording that a hidden mutex "would have made this a bad trade". `AtomicU128` on i686 *is* that
+  hidden mutex, which is why the wide shape must not exist there at all.
+
+  **[D-7](crates/windows-waitable-queues/DESIGN-NOTES.md#d-7) puts the burden of proof on adding a
+  feature, and it is met here rather than waived.** D-7 rejected feature-gating shapes because the
+  only benefit was compile time, which dead-code elimination already provides. That reasoning does
+  not reach this case: the wide shape's cost is a **new third-party dependency** on a crate whose
+  only current one is `windows-sys`, and dead-code elimination removes nothing from `Cargo.lock`,
+  from a downstream auditor's review, or from a `cargo vet` run. A caller who does not want the
+  dependency must be able to not have it. Record the discharge as a decision rather than leaving it
+  to look like D-7 was ignored.
+  Verify at implementation time whether Cargo's `[target.'cfg(...)'.dependencies]` accepts
+  `target_has_atomic`; if it does not, the dependency is optional-by-feature and the module carries
+  the cfg separately.
+
+- [ ] **SH-15.10** -- **Measure the wide claim beside the narrow one, and publish the difference.**
+  Same harness, same host, same run as SH-15.5. The question is narrow and worth an answer either
+  way: does a 128-bit exchange cost anything measurable against a 64-bit one on this hardware? If it
+  does not, the wide shape is strictly better wherever it builds, and the guidance should say so. If
+  it does, that number is what a caller needs to choose between reach and speed.
+  Note the expected shape of the result, so a surprise is recognisable: the wide claim keeps the
+  compare-exchange **retry loop**, which [D-35](crates/windows-waitable-queues/DESIGN-NOTES.md#d-35)
+  identified as what actually costs at high producer counts -- so it should track `reserving_mpsc`
+  closely and should **not** approach the permit claim's numbers. A wide claim that measured as fast
+  as the permit claim would mean D-35's explanation is wrong.
 
 ## M-inf: parked, ungated
 
