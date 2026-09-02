@@ -36,7 +36,9 @@ release-blocking rather than restating the decision itself.
 - `windows-waitable-queues` **is not published**. First release, and its packaging is already complete:
   description, keywords, categories, README, documentation link and a workspace license are all
   present. Packaging is not a blocker; do not re-investigate it.
-- `windows-ioring-sys` **0.2.0 is published and depends on `windows-topology-sys = "0.1.0"`.**
+- `windows-ioring-sys` **0.2.0 is published and pins `windows-topology-sys = "0.1.0"` -- but as a
+  dev-dependency**, so consumers never resolve it and the pin obliges no release. Corrected at SH-2.2,
+  which was written on the opposite assumption.
 - This branch is **54 commits ahead of `main` with no pull request**, and release automation runs on
   `main`. Nothing ships until it merges.
 
@@ -175,21 +177,45 @@ release-blocking rather than restating the decision itself.
   `windows-placement-probe` is today. Verified by removing the trigger again and watching the check
   fail with the crate named.
 
-- [ ] **SH-2.2** -- Plan the **`windows-topology-sys` 0.2.0 ripple**. `windows-ioring-sys` is published
-  and pins `windows-topology-sys = "0.1.0"`, so the breaking bump obliges updating that dependency and
-  releasing `windows-ioring-sys` too. Decide the order and whether ioring's release is part of this
-  push or follows it -- but decide it, because a workspace that builds locally via `path` dependencies
-  will not reveal this and the first symptom is a consumer unable to resolve the two together.
-  **Three crates pin `"0.1.0"`, not one**, and they carry different obligations. Swept the workspace's
-  manifests rather than trusting the one that prompted this:
-  - `windows-ioring-sys` -- published, so the pin obliges a release, as above.
-  - `windows-placement-probe` -- to be published later
-    ([CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) -> `PT-5.6`). Its pin obliges no
-    release now, but must be corrected before that publication or it would ship depending on a
-    topology version it was never developed against. This is the nastiest of the three: the `path`
-    entry means it keeps building perfectly all the way to the moment of publish.
-  - `windows-platform-probes` -- never published, so its pin is inert. Update it with the others
-    anyway rather than leaving a manifest that misstates what it was built against.
+- [ ] **SH-2.2** -- Update the three `windows-topology-sys = "0.1.0"` pins when 0.2.0 ships.
+  **RE-PLANNED: this item asked for a decision whose premise was false, and the decision it demanded
+  does not arise.** It said `windows-ioring-sys` is published against the old topology, "so the
+  breaking bump obliges updating that dependency and releasing `windows-ioring-sys` too", and that
+  "the first symptom is a consumer unable to resolve the two together". Neither holds.
+  **`windows-ioring-sys`'s topology dependency is a dev-dependency.** Cargo reports
+  `kind=dev`, and the crate's `src/` never names it -- only four files under `examples/` do. Cargo
+  does not resolve dev-dependencies *of* dependencies, so a consumer of `windows-ioring-sys` never
+  sees `windows-topology-sys` at all. **Verified rather than reasoned**: a scratch crate depending on
+  the published `windows-ioring-sys 0.2.0` resolves `windows-sys`, `windows-link`,
+  `windows-threadpool-sys` and `windows-overlapped-io-sys`, and no topology crate. There is no
+  resolution conflict to avoid and **no ioring release is obliged**, so the ordering question this
+  item existed to settle is empty.
+  What is actually left is mechanical -- update three pins, in one commit, releasing nothing:
+  - `windows-ioring-sys` -- `kind=dev`, invisible to consumers. Update for accuracy only.
+  - `windows-placement-probe` -- `kind=normal` but `publish = false` today, and planned for
+    publication at [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) -> `PT-5.6`, which
+    already names this pin among the three things it must not skip. Correct it here; that item is the
+    backstop, not the owner.
+  - `windows-platform-probes` -- `kind=normal`, never published, pin inert. Update it anyway rather
+    than leave a manifest that misstates what it was built against.
+  **The one genuine hazard the original item was reaching for is real but different**, and it is
+  SH-2.5 rather than this: ioring's examples are developed against the `path` topology and would be
+  verified against the *crates.io* one at its next publish.
+
+- [ ] **SH-2.5** -- **Nothing checks that `windows-ioring-sys`'s examples still compile against the
+  topology version its manifest pins.** Inside this workspace the `path` entry always wins, so the
+  examples are developed against whatever topology is on the branch; at `cargo publish` the
+  verification build resolves the `version` requirement from crates.io instead. The two have been
+  free to diverge and nothing would say so until a publish failed.
+  **Currently dormant, and the check is what makes that a fact rather than a hope**: the examples use
+  only `Topology`, `Domain`, `DomainKind`, `ProcessorSet` and `discover`, all of which pre-date
+  0.2.0, and none mentions `provenance`. So they would still build against `^0.1.0` today. That is
+  luck holding, not a guarantee -- the moment an example uses anything 0.2.0 added, the failure
+  appears at publish time, which is the worst moment to find it.
+  Decide between the two honest fixes rather than leaving it implicit: either keep the pin current so
+  the two never diverge (and say in the manifest that this is why), or add a CI job that builds
+  ioring's examples against the *published* topology rather than the path one. The first is cheaper;
+  the second is what actually enforces it.
 
 - [x] **SH-2.4** -- Clear the **eight rustdoc warnings** in `windows-waitable-queues` before it is
   published: an unresolved link to `MIN_CAPACITY`, six links from public documentation to private
