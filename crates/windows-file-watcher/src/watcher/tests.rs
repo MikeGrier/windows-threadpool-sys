@@ -29,7 +29,26 @@ use crate::testing::TempDir;
 use crate::watch::{RetryMode, VolumeChangeDecision, VolumeChangePolicy};
 
 /// Upper bound for waiting on a notification the kernel really should deliver.
-const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// 5s, lowered from 30s once the cost was measured (M15.7). Instrumenting every
+/// wait in this suite: 45 of 46 complete in **2.5ms or less**, and the entire
+/// tail is one test gated on the retry *backoff timer* at ~515ms -- structural,
+/// not notification latency. None of it moved under 4x oversubscription (three
+/// concurrent suites plus a full release build), so the budget was absorbing no
+/// contention it needed to.
+///
+/// Why lower it rather than leave it generous: when a mutation breaks delivery,
+/// dozens of these waits each burn the full budget on the way to failing, and
+/// the suite then overruns cargo-mutants' kill deadline -- so the mutant is
+/// filed as `timeout` rather than `caught`, detected but recorded as though it
+/// were not. Measured on one such mutant: **93.6s at 30s (killed) against 31.8s
+/// at 5s (a clean red test)**.
+///
+/// The residual risk, stated because it is real: that was one 12-core developer
+/// machine. 5s is ~10x the structural outlier and ~2000x the p95, but a much
+/// slower runner is unmeasured. If this ever flakes, that is the reason, and the
+/// answer is to raise it -- not to conclude the tests are wrong.
+const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The subscription every test in this module watches under.
 fn test_watch() -> WatchId {

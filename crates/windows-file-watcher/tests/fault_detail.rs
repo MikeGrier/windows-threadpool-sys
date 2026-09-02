@@ -12,7 +12,10 @@ use windows_file_watcher::{
 };
 
 /// Upper bound for waiting on something the monitor really should deliver.
-const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// 5s, matching `NOTIFY_TIMEOUT` in `src/watcher/tests.rs`, which carries the
+/// measurement that justifies the number (M15.7).
+const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A uniquely named temp path, removed when the test passes.
 struct TempPath {

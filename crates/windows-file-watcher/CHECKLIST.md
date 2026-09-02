@@ -151,25 +151,26 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----
 
 - [x] **M15.6** -- Converted `queue/tests.rs` to bounded waiting, so a broken wake fails instead of hanging. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m156)
 
-- [ ] **M15.7** -- Decide the test-side wait budget, so a mutation sweep is not dominated by tests that
-  correctly fail slowly. **This is a throughput decision, not a test gap -- do not close it by writing tests.**
-  **The measurement.** After M15.6, a full `queue.rs` sweep is 124 mutants in 20 minutes, and **14 x 67s =
-  15.6 minutes of that is mutants scored `timeout`**. Every one of those 14 was already detected: between 4
-  and 132 tests had `FAILED` before cargo-mutants killed the run. The kill happens because the suite exceeds
-  3x the baseline, and it exceeds it because dozens of bounded waits each burn their full budget on the way
-  to failing.
-  **Where the budget lives.** `NOTIFY_TIMEOUT` in [src/watcher/tests.rs](src/watcher/tests.rs) is
-  `Duration::from_secs(30)`, plus several 5s and one 20s bound. Those numbers are generous on purpose --
-  they are what keeps the suite from flaking on a loaded machine -- so lowering them trades sweep throughput
-  against exactly that robustness. That trade is the decision, and it is the engineer's.
-  **The options, none free.** (a) Lower `NOTIFY_TIMEOUT` and accept more flake risk under load. (b) Raise
-  `--timeout-multiplier` in [tools/run-mutants.ps1](../../tools/run-mutants.ps1) so a suite full of slow
-  failures still fits, which makes a genuine wedge cost proportionally more. (c) Leave it, and read
-  `timeout` as "detected" rather than "unknown" -- correct today, but only because it was checked by hand,
-  and nothing keeps it true.
-  **Read `missed` as the gap column.** After M15.6, `timeout` no longer distinguishes a wedge from a slow
-  detection, so a sweep's `timeout` list has to be adjudicated by counting `FAILED` lines in each log before
-  it means anything.
+- [x] **M15.7** -- Decided and implemented: `NOTIFY_TIMEOUT` lowered 30s -> 5s across all three copies, after measuring that 45 of 46 waits finish in <=2.5ms and the whole tail is one structural ~515ms backoff, unchanged under 4x oversubscription. One previously-timing-out mutant: 93.6s -> 31.8s. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m157)
+
+- [ ] **M15.11** -- Bound the *loop* in `no_wakeup_is_lost_under_a_concurrent_burst`, not just the wait
+  inside it. **Found by M15.7's confirming sweep, and it is M15.6's defect one level up.**
+  **The measurement.** After M15.7, a `queue.rs` sweep is 121 mutants in 14 minutes with **8 timeouts, and
+  every one of the 8 is pinned by this single test** -- `Receiver::try_recv -> None`, `recv`'s `==` to
+  `!=`, `is_disconnected -> false`, `len -> 1`, `is_empty -> false` (x2), `latched -> 1`, and
+  `take -> None`. All 8 still had between 4 and 76 tests failed before the kill, so they are detections
+  rather than gaps; they just cost 67s each instead of failing.
+  **Why the budget fix did not reach it.** The test waits on the doorbell with a bounded `await_signal`,
+  then drains, then re-checks an exit condition of
+  `is_disconnected() && is_empty() && latched() == 0`. Each of those mutants makes that condition
+  permanently false while leaving the doorbell signalled, so the **outer loop** spins at full speed --
+  bounded wait, unbounded loop. Lowering `NOTIFY_TIMEOUT` cannot touch it, and no further budget reduction
+  will.
+  **What is wanted.** A deadline on the loop itself (and ideally a no-progress bound: `seen` not advancing
+  across N iterations is the real symptom), so a broken predicate fails with what it saw rather than
+  spinning. That is the same transform M15.6 applied to `recv()`, applied one level out.
+  **Worth checking while there:** whether any other loop in the suite has this shape -- a bounded wait
+  inside an unbounded `loop`. M15.6 swept for unbounded `recv()`, which would not have found this one.
 
 ## M-inf -- Horizon (ungated, post-v1)
 

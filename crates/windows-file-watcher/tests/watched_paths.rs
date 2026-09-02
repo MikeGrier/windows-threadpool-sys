@@ -17,10 +17,14 @@ use windows_file_watcher::{
     WatchOptions,
 };
 
-/// Upper bound for waiting on something the kernel really should deliver. Long
-/// enough that a loaded CI runner does not fail spuriously; short enough that a
-/// genuine wedge fails the run rather than stalling it.
-const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Upper bound for waiting on something the kernel really should deliver. Short
+/// enough that a genuine wedge fails the run rather than stalling it, and --
+/// since M15.7 measured what these waits actually cost -- short enough that a
+/// mutation-breaking-delivery run stays inside cargo-mutants' kill deadline
+/// instead of being filed as a timeout. See `NOTIFY_TIMEOUT` in
+/// `src/watcher/tests.rs` for the measurements, including the residual risk that
+/// they came from a single 12-core machine.
+const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What teardown is allowed to take. Cancellation retires an outstanding read at
 /// once, so this only fires if teardown waited for a change instead.

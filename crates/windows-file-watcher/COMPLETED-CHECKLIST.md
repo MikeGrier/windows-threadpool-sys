@@ -895,3 +895,68 @@ in every crash report) produced zero failures, and all sixteen crash reports car
 none equal to the clean build's -- each was its own mutant build. The test binary's filename derives from
 target and features rather than contents, which is why every report names the same `.exe` and why that
 name alone proves nothing.
+## Moved 2026-09-01 -- M15.7: the test-side wait budget
+
+### <a id="m157"></a>M15.7 -- Decide the test-side wait budget, so a mutation sweep is not dominated by tests that correctly fail slowly. *(completed 2026-09-01 21:05:00 -04:00)*
+
+**Decision: `NOTIFY_TIMEOUT` lowered from 30s to 5s**, in all three copies (`src/watcher/tests.rs`,
+`tests/fault_detail.rs`, `tests/watched_paths.rs`). The item framed this as a trade against flake
+resistance that only the engineer could make, and it is -- but it was being made without any measurement
+of what the budget was actually absorbing. Getting that first turned a taste call into an arithmetic one.
+
+**What the waits cost.** Every `wait_until` was instrumented and the suite run three ways:
+
+| condition | median | p95 | max |
+|---|---|---|---|
+| idle | 0 ms | 2.5 ms | 506 ms |
+| + a full release build | 25 ms | 94 ms | 509 ms |
+| 3x concurrent suites + a build | 0 ms | 2.5 ms | 508 ms |
+
+**45 of 46 waits complete in 2.5ms or less**, and the entire tail is a single test gated on the retry
+*backoff timer* at ~515ms -- structural, not notification latency. The numbers barely move under 4x
+oversubscription on a 12-core machine, which is the finding that mattered: the 30s budget was absorbing
+no contention it needed to.
+
+**What lowering it buys, measured on one of the mutants that had been scored `timeout`** (changing only
+`NOTIFY_TIMEOUT`; a first attempt also raised the unrelated 5s bounds and had to be redone):
+
+| budget | suite time | cargo-mutants verdict (67s kill) |
+|---|---|---|
+| 30s (as shipped) | 93.6s | TIMEOUT -- killed |
+| 10s | 42.1s | caught, a clean red test |
+| 5s | 31.8s | caught, a clean red test |
+
+That is the whole of the item's 15.6-minutes-of-20 problem: 14 mutants x 67s, every one already detected
+(between 4 and 132 tests had failed before the kill) but filed as `timeout` rather than `caught`.
+
+**Stability check, since margin was deliberately traded away.** Six consecutive full-suite runs under
+sustained concurrent release builds: 6/6 green.
+
+**The residual risk, recorded rather than smoothed over.** All of this came from one 12-core developer
+machine. 5s is ~10x the structural outlier and ~2000x the p95, but a slower runner -- a 2-core CI box, or
+one with antivirus scanning temp directories -- is unmeasured. The constant's doc comment says so, and
+says the answer to a flake there is to raise the number, not to doubt the tests.
+
+**An option the item did not list, and why it was not taken.** An environment-variable override (default
+30s, sweeps opting into 5s) would have avoided transferring any risk to CI. It was offered and declined in
+favour of the simpler global change -- worth recording, because it is the fallback if the residual risk
+above ever materialises.
+**Confirmed end to end by a real sweep of `queue.rs`**, against the run that motivated the item:
+
+| | before (30s budget) | after (5s budget) |
+|---|---|---|
+| caught | 78 | **89** |
+| missed | 8 | **0** |
+| timeout | 14 | **8** |
+| wall clock | 20 min | **14 min** |
+
+(`missed` reaching 0 is M15.1 and M15.8's doing, not this item's.) The six mutants that stopped timing out
+moved into `caught`, exactly as the arithmetic predicted.
+
+**What the remaining 8 turned out to be -- a different defect, now M15.11.** All 8 still had between 4 and
+76 tests failed before the kill, so they remain detections rather than gaps. But none is held by a
+notification budget: every one is pinned by a single test,
+`queue::tests::no_wakeup_is_lost_under_a_concurrent_burst`, whose *wait* is bounded while the **loop around
+it is not**. Each of those mutants breaks that loop's exit condition, so it spins at full speed rather than
+failing. That is M15.6's shape one level up, and M15.6 missed it because the bound sits on the wait rather
+than on the loop -- lowering the budget further would not have touched it.

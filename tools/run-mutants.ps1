@@ -75,23 +75,30 @@
     Fixed per-mutant test timeout, in seconds. Leave at 0 to derive it from the
     measured baseline instead, which is the default and the better option.
 
-    **Timeouts, not crashes, dominate the wall clock here.** Measured on
-    `queue.rs`: 14 of 101 mutants timed out, and at a fixed 120s that is 28
-    minutes of budget in a 28-minute run -- roughly half the elapsed time at
-    `-j 2`. They are all in blocking paths (`Drop` for `Sender`, `recv`,
-    `is_empty`, `latch`), which is exactly what a queue's mutants do: break the
-    disconnect accounting and a receiver waits forever rather than failing.
+    **Timeouts used to dominate the wall clock here, and no longer do.** Two
+    changes removed that, both driven by measurement rather than by tuning this
+    knob. M15.6 converted the queue tests to bounded waiting, so a broken wake
+    fails instead of hanging. M15.7 then found the budget those bounded waits
+    spend was 30s while 45 of 46 waits complete in 2.5ms or less -- so a mutation
+    that broke delivery made dozens of tests each burn 30s, overrunning the
+    deadline. Lowering `NOTIFY_TIMEOUT` to 5s took one such mutant from 93.6s
+    (killed, filed `timeout`) to 31.8s (a clean red test).
 
-    A fixed number is the wrong shape for that. `--timeout-multiplier` scales
-    the deadline from the baseline test time cargo-mutants already measures, so
-    it adapts to the machine instead of encoding one. The baseline here is about
-    30s for the full `--all-features` suite, so the default multiplier of 3
-    gives ~90s: comfortably above any legitimate run, and it shrinks
-    automatically on a faster host.
+    The lesson generalises: when mutants pile up in the `timeout` column, suspect
+    the *suite's* wait budget before reaching for this parameter. A timeout is
+    usually a detection that was not allowed to finish.
+
+    A fixed number is still the wrong shape. `--timeout-multiplier` scales the
+    deadline from the baseline test time cargo-mutants already measures, so it
+    adapts to the machine instead of encoding one. The baseline here is about 30s
+    for the full `--all-features` suite, so the default multiplier of 3 gives
+    ~90s: comfortably above any legitimate run, and it shrinks automatically on a
+    faster host.
 
     Lower it only with the false-timeout risk in mind. A mutant that is recorded
     `timeout` because the deadline was too tight is misattributed twice over --
-    it is not a hang, and it is not necessarily caught either.
+    it is not a hang, and it is not necessarily caught either. Adjudicate any
+    `timeout` by counting `FAILED` lines in its log before treating it as a gap.
 
 .PARAMETER TimeoutMultiplier
     Test timeout as a multiple of the measured baseline. Ignored when
