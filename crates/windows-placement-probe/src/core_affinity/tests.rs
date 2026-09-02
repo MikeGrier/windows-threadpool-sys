@@ -8,6 +8,7 @@
 //! mislabel a pair, because every conclusion it prints is keyed on that label.
 
 use super::{Placement, RunPlan, classify, memory_placements, node_pairs, representative_pairs};
+use crate::peer_index_cache::ITEMS;
 use windows_topology_sys::Topology;
 
 use crate::fingerprint::ProcessorPlace;
@@ -1155,4 +1156,104 @@ fn a_node_pair_lookup_distinguishes_rows_that_share_a_requested_node() {
 
     assert!((baseline.nanos_per_item - 30.0).abs() < f64::EPSILON);
     assert!((cached.nanos_per_item - 40.0).abs() < f64::EPSILON);
+}
+
+// ---------------------------------------------------------------------------
+// The plan's arithmetic.
+//
+// `every_timed_handoff_the_run_performs_is_in_the_plan` ties the count to the
+// loops, which is the right shape -- but it recomputes it on a fixture whose
+// numbers happen to make the operators agree, so a mutation run replaced the
+// hop multiplication with an addition and nothing failed. And
+// `a_longer_run_is_never_promised_as_shorter` compares with `>=` starting from
+// zero, which a constant estimate satisfies trivially.
+//
+// These use numbers chosen so that no two operators agree.
+// ---------------------------------------------------------------------------
+
+/// A plan whose six fields are distinct and mutually non-commuting, so that
+/// replacing any operator with another changes the answer.
+fn distinguishing_plan() -> RunPlan {
+    RunPlan {
+        placements: 3,
+        node_hops: 5,
+        memory_placements_per_hop: 2,
+        classes: 7,
+        strategies: 2,
+        repetitions: 3,
+    }
+}
+
+#[test]
+fn the_handoff_count_multiplies_the_hops_by_their_placements() {
+    // 5 hops at 2 placements each is 10, not 7. The fixture the existing test
+    // uses has two hops and two placements, where the product and the sum are
+    // both 4 -- which is exactly why the mutant survived it.
+    let plan = distinguishing_plan();
+
+    let selections =
+        plan.placements + plan.classes + plan.node_hops * plan.memory_placements_per_hop;
+    assert_eq!(selections, 3 + 7 + 10, "the fixture must separate * from +");
+    assert_eq!(
+        plan.timed_runs(),
+        selections * plan.strategies * plan.repetitions
+    );
+    assert_eq!(plan.timed_runs(), 20 * 2 * 3);
+
+    // Stated so a later edit to the fixture that made two operators agree again
+    // would fail here rather than silently weakening the test above.
+    assert_ne!(
+        plan.node_hops * plan.memory_placements_per_hop,
+        plan.node_hops + plan.memory_placements_per_hop,
+        "the hop fields must not make the product and the sum coincide"
+    );
+    assert_ne!(
+        plan.strategies * plan.repetitions,
+        plan.strategies + plan.repetitions,
+        "nor the strategy and repetition fields"
+    );
+}
+
+#[test]
+fn the_estimate_is_proportional_to_the_work_rather_than_a_constant() {
+    // `estimated_seconds -> 0.0` and `-> 1.0` both survived, because the only
+    // test of it compares successive machines with `>=` from a zero floor --
+    // which any constant satisfies. Tying it to `timed_runs` is what makes it a
+    // measurement of the plan rather than a number beside it.
+    let plan = distinguishing_plan();
+
+    let seconds = plan.estimated_seconds();
+    assert!(seconds > 0.0, "a plan with work in it takes time");
+    assert!(
+        (seconds - (plan.timed_runs() * ITEMS) as f64 * 220e-9).abs() < f64::EPSILON,
+        "the estimate must be the run's own item count at the measured rate, \
+         not an independent number that happens to look plausible: {seconds}"
+    );
+
+    // Doubling the repetitions doubles the work, so it must double the promise.
+    // A constant estimate fails here whatever constant it chose.
+    let mut doubled = plan;
+    doubled.repetitions = plan.repetitions * 2;
+    assert!(
+        (doubled.estimated_seconds() - seconds * 2.0).abs() < 1e-9,
+        "twice the work must be promised as twice the time"
+    );
+}
+
+#[test]
+fn an_empty_plan_promises_no_time_at_all() {
+    // The other end, which is what stops the test above from being satisfied by
+    // an estimate that merely scales *something*. A machine that can express no
+    // measurement is not a machine that takes 220 nanoseconds to measure it.
+    let empty = RunPlan {
+        placements: 0,
+        node_hops: 0,
+        memory_placements_per_hop: 0,
+        classes: 0,
+        strategies: 2,
+        repetitions: 3,
+    };
+
+    assert_eq!(empty.timed_runs(), 0);
+    assert!((empty.estimated_seconds() - 0.0).abs() < f64::EPSILON);
 }

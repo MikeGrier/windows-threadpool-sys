@@ -362,3 +362,149 @@ fn a_failed_consumer_pin_stops_the_run_rather_than_hanging_it() {
         started.elapsed()
     );
 }
+
+// ---------------------------------------------------------------------------
+// The median, and the rates derived from it.
+//
+// `median` takes its timer as a closure, so all of this is reachable offline --
+// but nothing exercised it, and a mutation run replaced every division in it
+// with a multiplication or a remainder without a single failure.
+//
+// A fake timer is what makes the arithmetic checkable: with real timings the
+// expected value is whatever the machine did, so `nanos / ITEMS` and
+// `nanos * ITEMS` are equally plausible.
+// ---------------------------------------------------------------------------
+
+/// A sample carrying only the fields the median's arithmetic reads.
+fn sample_of(nanos: f64) -> super::Sample {
+    super::Sample {
+        memory_node: None,
+        nanos,
+        consumer_refreshes: 0,
+        producer_refreshes: 0,
+    }
+}
+
+#[test]
+fn the_median_is_the_middle_sample_not_the_first_or_the_last() {
+    // Deliberately fed in an order where the first, last, and middle values are
+    // all different, and where the *arrival* order differs from the sorted
+    // order -- so a median that forgot to sort, or that indexed either end,
+    // picks a different answer than the one asserted.
+    //
+    // The untimed warm-up pass is why there are six values for five
+    // repetitions: the first is consumed and must not reach the result.
+    let mut supplied = [900.0, 500.0, 100.0, 400.0, 300.0, 200.0].into_iter();
+    let run = super::median("under test", || {
+        sample_of(
+            supplied
+                .next()
+                .expect("the median takes REPETITIONS + 1 samples"),
+        )
+    });
+
+    // Timed samples are 500, 100, 400, 300, 200 -> sorted 100, 200, 300, 400,
+    // 500 -> median 300.
+    let median_nanos = 300.0;
+    assert!(
+        (run.nanos_per_item - median_nanos / super::ITEMS as f64).abs() < f64::EPSILON,
+        "expected the middle sample, got {} ns/item",
+        run.nanos_per_item
+    );
+}
+
+#[test]
+fn the_warm_up_pass_is_discarded_rather_than_measured() {
+    // The untimed first call exists because a fresh allocation's first touch
+    // faults pages in, which belongs to the allocator rather than to the ring.
+    // If it were counted, the median of six values would be taken over a set
+    // including one wildly slow outlier.
+    //
+    // An absurd first value makes that visible: it must not move the answer.
+    let mut supplied = [1e12, 100.0, 200.0, 300.0, 400.0, 500.0].into_iter();
+    let run = super::median("under test", || {
+        sample_of(supplied.next().expect("six samples"))
+    });
+
+    assert!(
+        (run.nanos_per_item - 300.0 / super::ITEMS as f64).abs() < f64::EPSILON,
+        "the discarded warm-up leaked into the median: {} ns/item",
+        run.nanos_per_item
+    );
+}
+
+#[test]
+fn the_two_rates_are_reciprocal_views_of_the_same_sample() {
+    // `nanos_per_item` divides and `items_per_second` divides the other way
+    // round; a mutation that multiplied either would still produce a number,
+    // and one that looks entirely plausible in a report.
+    //
+    // Asserting the relationship between them is what catches that: they are
+    // two views of one duration, so their product is fixed no matter what the
+    // machine did.
+    let nanos = 4_000_000.0;
+    let mut supplied = std::iter::repeat_n(nanos, super::REPETITIONS + 1);
+    let run = super::median("under test", || {
+        sample_of(supplied.next().expect("enough samples"))
+    });
+
+    assert!(
+        (run.nanos_per_item - nanos / super::ITEMS as f64).abs() < f64::EPSILON,
+        "ns/item must be the sample divided by the item count: {}",
+        run.nanos_per_item
+    );
+    assert!(
+        (run.items_per_second - super::ITEMS as f64 / (nanos / 1e9)).abs() < 1e-6,
+        "items/s must be the item count divided by the sample in seconds: {}",
+        run.items_per_second
+    );
+    // One item per nanosecond is one billion items per second, whatever the
+    // constants are -- so this holds without restating either formula.
+    assert!(
+        (run.nanos_per_item * run.items_per_second - 1e9).abs() < 1e-3,
+        "the two rates must describe the same duration: {} and {}",
+        run.nanos_per_item,
+        run.items_per_second
+    );
+}
+
+#[test]
+fn every_strategy_names_and_labels_itself_distinctly() {
+    // Both `label` and `name` survived replacement by a constant. Nothing
+    // asserted either, and distinctness is what catches every constant at once.
+    //
+    // The two are also asserted to differ from *each other*, which is the point
+    // of their being separate: `name` is a token a stored record is keyed on and
+    // `label` is prose for a terminal table, so a refactor that collapsed them
+    // would let a reworded table silently rekey every collected record.
+    let strategies = [
+        ("Baseline", super::Strategy::Baseline),
+        ("Cached", super::Strategy::Cached),
+        ("Warmed", super::Strategy::Warmed),
+    ];
+
+    for (variant, strategy) in strategies {
+        assert!(!strategy.label().is_empty(), "{variant} has no label");
+        assert!(!strategy.name().is_empty(), "{variant} has no name");
+        assert_ne!(
+            strategy.label(),
+            strategy.name(),
+            "{variant}'s prose label and its record key must stay separable"
+        );
+    }
+    for (index, (variant, strategy)) in strategies.iter().enumerate() {
+        for (other_variant, other) in &strategies[index + 1..] {
+            assert_ne!(
+                strategy.label(),
+                other.label(),
+                "{variant} and {other_variant} share a label"
+            );
+            assert_ne!(
+                strategy.name(),
+                other.name(),
+                "{variant} and {other_variant} share a record key, so a collector \
+                 would pool two different measurements"
+            );
+        }
+    }
+}
