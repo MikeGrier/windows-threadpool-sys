@@ -35,6 +35,38 @@ pub const MINIMUM_BUFFER_CAPACITY: usize = 1024;
 /// to it.
 pub(crate) const RECORD_ALIGNMENT: usize = 8;
 
+// The relationships these capacities depend on, checked by the compiler rather
+// than by a test -- they are facts about constants, so a test could only report
+// after the fact, on a build somebody chose to run.
+//
+// A mutation run replaced `64 * 1024` with `64 + 1024`, and every test passed:
+// 1088 is still above the minimum and still a legal capacity, so nothing that
+// merely enumerates a directory can tell the difference. What it is *not* is a
+// whole number of records' worth of aligned buffer, which is the property the
+// default is chosen for.
+const _: () = {
+    assert!(
+        DEFAULT_BUFFER_CAPACITY.is_power_of_two(),
+        "the default is sized to whole pages and record alignments; a value that \
+         is merely 'big enough' would pass every functional test while making \
+         each refill straddle a boundary"
+    );
+    assert!(
+        DEFAULT_BUFFER_CAPACITY > MINIMUM_BUFFER_CAPACITY,
+        "the default must leave real headroom over the floor, or the two serve \
+         the same purpose and one of them is a lie"
+    );
+    assert!(
+        MINIMUM_BUFFER_CAPACITY.is_multiple_of(RECORD_ALIGNMENT),
+        "every capacity is handed to Win32 as a buffer length, and a length that \
+         is not a whole number of alignments cannot hold a whole final record"
+    );
+    assert!(
+        DEFAULT_BUFFER_CAPACITY.is_multiple_of(RECORD_ALIGNMENT),
+        "as above, for the capacity almost every caller actually uses"
+    );
+};
+
 /// One directory to enumerate, with the predicate and bounds that apply to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnumerationRequest {
