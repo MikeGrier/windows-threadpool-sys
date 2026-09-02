@@ -25,7 +25,7 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
-| M16 tenth review round | 5 of 7 open | the SH-3.1.1 diff review; **SH-16.1 is critical and open** |
+| M16 tenth review round | 4 of 7 open | the SH-3.1.1 diff review; SH-16.3 is the worst still open |
 | M-inf parked | ungated | not scheduled, deliberately |
 
 **The critical path is SH-3.1.1 -> SH-3.4 -> M4, and none of it is blocked on M14 or M15.** SH-14.1
@@ -722,7 +722,7 @@ down and checked.
 **Neither was reachable from a memory of having written the code**, which is exactly what SH-3.1.1
 predicted about a 222-commit branch.
 
-- [ ] **SH-16.1** -- **`publish-crate.yml`'s sibling-dependency wait cannot handle a `*` requirement,
+- [x] **SH-16.1** -- **`publish-crate.yml`'s sibling-dependency wait cannot handle a `*` requirement,
   so `windows-ioring-sys` can no longer publish.** The wait step derives a concrete version with
   `sed -E 's/^\^//'`, which handles only a caret. Commit `f1fc4eb` on this branch made ioring's
   topology dev-dependency path-only, so `cargo metadata` now reports `req=*` -- **verified, not
@@ -733,6 +733,14 @@ predicted about a 222-commit branch.
   nothing to wait for and the right answer is to skip it.
   Note that `tools/check-publishable.ps1`, added in this same branch to catch "release-managed but
   unpublishable", does **not** catch this -- ioring passes all three of its checks.
+  **Done:** `*` is skipped with the reason stated, and any requirement that does not reduce to a
+  comparable version (`~1.2`, `>=1, <2`, `=1.2.3`) now fails **immediately** naming the requirement,
+  rather than reaching the same twenty-minute timeout by a different route. Verified by extracting the
+  `run:` block and exercising it under `bash` against real `cargo metadata` output: ioring's seven
+  dependencies now resolve to two waits, four skips and one versionless skip, and the step exits 0.
+  A side benefit worth recording, found by getting the harness wrong first: the new check also
+  catches a returning CR corruption -- the failure the `tr -d '\r'` above was added for -- because
+  `0.1.3\r` is no longer a comparable version. That failure used to be a silent timeout too.
 
 - [x] **SH-16.2** -- **`reserving_mpsc::Reservation::send` wrote a slot with no happens-before edge to
   the consumer's read of the previous occupant.** A slot is freed only by `Consumer::pop`'s
