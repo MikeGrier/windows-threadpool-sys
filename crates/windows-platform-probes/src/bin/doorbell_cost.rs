@@ -12,55 +12,100 @@
 //! adequate and the more delicate protocol -- publish intent, re-check, park --
 //! can wait for evidence that it is worth its lost-wakeup risk.
 
-use windows_platform_probes::doorbell_cost::{measure, measure_park_and_wake};
+use std::fmt::Write as _;
+use windows_platform_probes::doorbell_cost::{Observation, measure, measure_park_and_wake};
+
+use windows_platform_probes::report::{Stdout, emit};
 
 fn main() {
-    println!("== what does a doorbell cost, against the syscall it guards? ==\n");
+    // The only place that names the real stream. Everything above composes
+    // text; nothing above knows where it goes.
+    emit(
+        &mut Stdout,
+        &render(&measure(), measure_park_and_wake(20_000)),
+    );
+}
 
-    let observation = measure();
+/// The probe's whole report, as text.
+fn render(observation: &Observation, park: Option<f64>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "== what does a doorbell cost, against the syscall it guards? ==\n"
+    );
 
-    println!("{:<30} {:>12}", "operation", "ns/op");
+    let _ = writeln!(out, "{:<30} {:>12}", "operation", "ns/op");
     for timing in &observation.timings {
-        println!("{:<30} {:>12.1}", timing.label, timing.nanos_per_op);
+        let _ = writeln!(out, "{:<30} {:>12.1}", timing.label, timing.nanos_per_op);
     }
 
-    let park = measure_park_and_wake(20_000);
     match park {
-        Some(ns) => println!("{:<30} {:>12.1}", "park_and_wake round trip", ns),
-        None => println!("{:<30} {:>12}", "park_and_wake round trip", "TIMED OUT"),
+        Some(ns) => {
+            let _ = writeln!(out, "{:<30} {:>12.1}", "park_and_wake round trip", ns);
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "{:<30} {:>12}",
+                "park_and_wake round trip", "TIMED OUT"
+            );
+        }
     }
 
-    println!("\ninterpretation:");
+    let _ = writeln!(out, "\ninterpretation:");
 
     if let Some(atomic) = observation.get("atomic_fetch_add")
         && let Some(doorbell) = observation.get("set_reset_event")
         && atomic > 0.0
     {
-        println!(
+        let _ = writeln!(
+            out,
             "  a doorbell cycle costs {:.0}x an uncontended atomic ({:.0} ns vs {:.1} ns).",
             doorbell / atomic,
             doorbell,
             atomic
         );
         if let Some(park) = park {
-            println!(
+            let _ = writeln!(
+                out,
                 "  an actual park-and-wake round trip costs {:.0}x that again ({:.0} ns),",
                 park / doorbell,
                 park
             );
-            println!("  which is what is paid when the consumer genuinely sleeps.");
+            let _ = writeln!(
+                out,
+                "  which is what is paid when the consumer genuinely sleeps."
+            );
         }
     }
 
     // Deliberately NOT expressed as a share of the empty submit. See below.
     if let Some(submit) = observation.submit_nanos {
-        println!("\n  CAUTION: an empty SubmitIoRing measured {submit:.0} ns, which is far too");
-        println!("  cheap for a kernel transition -- it is almost certainly short-");
-        println!("  circuiting in user mode when there is nothing queued. It is");
-        println!("  therefore NOT a fair denominator, and any 'doorbell is N% of a");
-        println!("  syscall' figure derived from it would be a confident wrong answer.");
-        println!("  The honest denominator is the cost of the real work a submission");
-        println!("  carries, which this probe does not measure.");
+        let _ = writeln!(
+            out,
+            "\n  CAUTION: an empty SubmitIoRing measured {submit:.0} ns, which is far too"
+        );
+        let _ = writeln!(
+            out,
+            "  cheap for a kernel transition -- it is almost certainly short-"
+        );
+        let _ = writeln!(
+            out,
+            "  circuiting in user mode when there is nothing queued. It is"
+        );
+        let _ = writeln!(
+            out,
+            "  therefore NOT a fair denominator, and any 'doorbell is N% of a"
+        );
+        let _ = writeln!(
+            out,
+            "  syscall' figure derived from it would be a confident wrong answer."
+        );
+        let _ = writeln!(
+            out,
+            "  The honest denominator is the cost of the real work a submission"
+        );
+        let _ = writeln!(out, "  carries, which this probe does not measure.");
     }
 
     // What can be said without a denominator: how much batching it takes for
@@ -69,25 +114,44 @@ fn main() {
         && let Some(atomic) = observation.get("atomic_fetch_add")
         && atomic > 0.0
     {
-        println!("\n  batching is the lever, and it is a strong one. One doorbell per");
-        println!("  drained batch costs, per operation:");
+        let _ = writeln!(
+            out,
+            "\n  batching is the lever, and it is a strong one. One doorbell per"
+        );
+        let _ = writeln!(out, "  drained batch costs, per operation:");
         for batch in [1_u32, 8, 32, 128] {
-            println!(
+            let _ = writeln!(
+                out,
                 "    batch of {batch:>4}: {:>7.1} ns/op ({:.1}x an atomic)",
                 doorbell / f64::from(batch),
                 doorbell / f64::from(batch) / atomic
             );
         }
         let break_even = (doorbell / atomic).ceil() as u32;
-        println!("  so at a batch of about {break_even}, the doorbell costs less per");
-        println!("  operation than the atomic push it accompanies.");
+        let _ = writeln!(
+            out,
+            "  so at a batch of about {break_even}, the doorbell costs less per"
+        );
+        let _ = writeln!(out, "  operation than the atomic push it accompanies.");
     }
 
-    println!("\n  => The skip-when-busy rule is a refinement, not a prerequisite.");
-    println!("     Batching alone drives the doorbell below the cost of the push,");
-    println!("     so a first implementation can always-signal and stay honest.");
-    println!("     Adopt the eventcount when a measurement against real work");
-    println!("     justifies its lost-wakeup risk -- not before.");
+    let _ = writeln!(
+        out,
+        "\n  => The skip-when-busy rule is a refinement, not a prerequisite."
+    );
+    let _ = writeln!(
+        out,
+        "     Batching alone drives the doorbell below the cost of the push,"
+    );
+    let _ = writeln!(
+        out,
+        "     so a first implementation can always-signal and stay honest."
+    );
+    let _ = writeln!(
+        out,
+        "     Adopt the eventcount when a measurement against real work"
+    );
+    let _ = writeln!(out, "     justifies its lost-wakeup risk -- not before.");
 
     let atomic = observation.get("atomic_fetch_add").unwrap_or(f64::NAN);
     let already = observation
@@ -95,7 +159,8 @@ fn main() {
         .unwrap_or(f64::NAN);
     let cycle = observation.get("set_reset_event").unwrap_or(f64::NAN);
     let wait0 = observation.get("wait_zero_signalled").unwrap_or(f64::NAN);
-    println!(
+    let _ = writeln!(
+        out,
         concat!(
             r#"{{"reason":"x-probe-doorbell-cost","arch":"{}","atomic_ns":{:.1},"#,
             r#""set_event_already_signalled_ns":{:.1},"set_reset_event_ns":{:.1},"#,
@@ -115,4 +180,5 @@ fn main() {
             .doorbell_share_of_submit()
             .map_or("null".to_string(), |s| format!("{s:.4}")),
     );
+    out
 }

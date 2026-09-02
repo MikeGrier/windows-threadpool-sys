@@ -2,17 +2,39 @@
 
 //! Prints whether it matters where the two ends of a queue run.
 
+use std::fmt::Write as _;
+
 use windows_placement_probe::core_affinity::{Observation, Placement, measure};
 use windows_placement_probe::peer_index_cache::Strategy;
+use windows_platform_probes::report::{Stdout, emit};
 
 fn main() -> std::io::Result<()> {
-    windows_placement_probe::fingerprint::print_banner();
-    println!("== does it matter where the two ends of a queue run? ==\n");
+    // The only place that names the real stream. Everything below composes
+    // text; nothing below knows where it goes.
+    emit(&mut Stdout, &render(&measure()?));
+    Ok(())
+}
 
-    let observation = measure()?;
+/// The probe's whole report, as text.
+fn render(observation: &Observation) -> String {
+    let mut out = String::new();
+    // `banner_line`, not `print_banner`: the latter writes to stdout itself,
+    // which would put a line on the terminal that the returned report does not
+    // contain -- so a captured report would be missing the one line that says
+    // which machine produced it, and the taint marker with it.
+    let _ = writeln!(
+        out,
+        "{}",
+        windows_placement_probe::fingerprint::banner_line()
+    );
+    let _ = writeln!(
+        out,
+        "== does it matter where the two ends of a queue run? ==\n"
+    );
 
-    println!("processors, as discovered:");
-    println!(
+    let _ = writeln!(out, "processors, as discovered:");
+    let _ = writeln!(
+        out,
         "  {:>8}  {:>16}  {:>13}",
         "cpu", "efficiency class", "cache domain"
     );
@@ -20,7 +42,8 @@ fn main() -> std::io::Result<()> {
         // Group and number together: a number is unique only within its group,
         // so two distinct processors on a machine with more than 64 of them
         // would otherwise both render as `cpu5`.
-        println!(
+        let _ = writeln!(
+            out,
             "  {:>8}  {:>16}  {:>13}",
             format!("g{}/cpu{}", place.group, place.number),
             place.efficiency_class,
@@ -40,7 +63,8 @@ fn main() -> std::io::Result<()> {
         seen.dedup();
         seen
     };
-    println!(
+    let _ = writeln!(
+        out,
         "\n  {} efficiency class(es), {} cache domain(s)",
         classes.len(),
         {
@@ -56,8 +80,12 @@ fn main() -> std::io::Result<()> {
     );
 
     if !observation.by_class.is_empty() {
-        println!("\n-- the same handoff, within each efficiency class --");
-        println!(
+        let _ = writeln!(
+            out,
+            "\n-- the same handoff, within each efficiency class --"
+        );
+        let _ = writeln!(
+            out,
             "{:<12} {:>8} {:>8} {:>12} {:>12} {:>10}",
             "class", "prod", "cons", "base ns/it", "cached ns/it", "cach depth"
         );
@@ -78,7 +106,8 @@ fn main() -> std::io::Result<()> {
                 .iter()
                 .find(|m| m.producer.efficiency_class == class && m.strategy == Strategy::Cached);
             if let (Some(base), Some(cached)) = (base, cached) {
-                println!(
+                let _ = writeln!(
+                    out,
                     "{:<12} {:>8} {:>8} {:>12.1} {:>12.1} {:>10.1}",
                     format!("class {class}"),
                     format!("g{}/cpu{}", base.producer.group, base.producer.number),
@@ -89,14 +118,16 @@ fn main() -> std::io::Result<()> {
                 );
             }
         }
-        println!(
+        let _ = writeln!(
+            out,
             "  (Windows numbers efficiency classes with the FASTER cores higher, so\n   \
              the highest class here is the performance one.)"
         );
     }
 
-    println!("\n-- the handoff, by placement --");
-    println!(
+    let _ = writeln!(out, "\n-- the handoff, by placement --");
+    let _ = writeln!(
+        out,
         "{:<26} {:>8} {:>8} {:>12} {:>12} {:>10} {:>10}",
         "placement", "prod", "cons", "base ns/it", "cached ns/it", "base depth", "cach depth"
     );
@@ -121,7 +152,8 @@ fn main() -> std::io::Result<()> {
         ) else {
             // Absent is a finding, not a gap: it means this machine cannot
             // express the placement at all.
-            println!(
+            let _ = writeln!(
+                out,
                 "{:<26} {:>8} {:>8} {:>12} {:>12} {:>10} {:>10}",
                 placement.label(),
                 "-",
@@ -133,7 +165,8 @@ fn main() -> std::io::Result<()> {
             );
             continue;
         };
-        println!(
+        let _ = writeln!(
+            out,
             "{:<26} {:>8} {:>8} {:>12.1} {:>12.1} {:>10.1} {:>10.1}",
             placement.label(),
             format!("g{}/cpu{}", base.producer.group, base.producer.number),
@@ -145,16 +178,17 @@ fn main() -> std::io::Result<()> {
         );
     }
 
-    println!("\nthe slice each row was measured on:");
+    let _ = writeln!(out, "\nthe slice each row was measured on:");
     for placement in all {
         if let Some(base) = observation.get(placement, Strategy::Baseline) {
-            println!("  {:<26} {}", placement.label(), base.slice);
+            let _ = writeln!(out, "  {:<26} {}", placement.label(), base.slice);
         }
     }
 
-    print_node_distances(&observation);
+    render_node_distances(&mut out, observation);
 
-    println!(
+    let _ = writeln!(
+        out,
         "
 interpretation:
 "
@@ -162,11 +196,20 @@ interpretation:
 
     let expressible = observation.placements();
     if expressible.len() < 2 {
-        println!("  This machine expresses only one placement, so it cannot answer");
-        println!("  the question. That is a fact about the host, not a null result:");
-        println!("  a homogeneous single-cache machine has nowhere else to put the");
-        println!("  two threads.");
-        return Ok(());
+        let _ = writeln!(
+            out,
+            "  This machine expresses only one placement, so it cannot answer"
+        );
+        let _ = writeln!(
+            out,
+            "  the question. That is a fact about the host, not a null result:"
+        );
+        let _ = writeln!(
+            out,
+            "  a homogeneous single-cache machine has nowhere else to put the"
+        );
+        let _ = writeln!(out, "  two threads.");
+        return out;
     }
 
     // Whether the two factors can be told apart at all on this host. If every
@@ -176,13 +219,31 @@ interpretation:
     let confounded = !expressible.contains(&Placement::SameCacheCrossClass)
         && !expressible.contains(&Placement::CrossCacheSameClass);
     if confounded {
-        println!("  CAUTION: on this machine the efficiency classes and the cache");
-        println!("  domains coincide exactly, so every cross-class pair is also a");
-        println!("  cross-cache pair. The two effects are perfectly CONFOUNDED here");
-        println!("  and nothing below separates them. Read the rows as 'within a");
-        println!("  domain' versus 'across domains', and do not attribute the");
-        println!("  difference to core speed or to cache without a machine whose");
-        println!("  classes and caches cut differently.\n");
+        let _ = writeln!(
+            out,
+            "  CAUTION: on this machine the efficiency classes and the cache"
+        );
+        let _ = writeln!(
+            out,
+            "  domains coincide exactly, so every cross-class pair is also a"
+        );
+        let _ = writeln!(
+            out,
+            "  cross-cache pair. The two effects are perfectly CONFOUNDED here"
+        );
+        let _ = writeln!(
+            out,
+            "  and nothing below separates them. Read the rows as 'within a"
+        );
+        let _ = writeln!(
+            out,
+            "  domain' versus 'across domains', and do not attribute the"
+        );
+        let _ = writeln!(
+            out,
+            "  difference to core speed or to cache without a machine whose"
+        );
+        let _ = writeln!(out, "  classes and caches cut differently.\n");
     }
 
     // Batch depth is read from the CACHED runs, never the baseline ones.
@@ -240,36 +301,89 @@ interpretation:
         } else {
             "cross-class "
         };
-        println!("  batch depth with caching on, {within}: {same:.1} items per shared read");
-        println!("  batch depth with caching on, {across}: {cross:.1} items per shared read");
+        let _ = writeln!(
+            out,
+            "  batch depth with caching on, {within}: {same:.1} items per shared read"
+        );
+        let _ = writeln!(
+            out,
+            "  batch depth with caching on, {across}: {cross:.1} items per shared read"
+        );
         if cross > same * 2.0 {
-            println!("\n  SEPARATION DEEPENS THE BATCH. The two sides decouple: one runs");
-            println!("  ahead, a real backlog forms, and each shared read is amortised");
-            println!("  over it. That is the condition peer-index caching needs, and it");
-            println!("  is a property of PLACEMENT -- not of the architecture.");
+            let _ = writeln!(
+                out,
+                "\n  SEPARATION DEEPENS THE BATCH. The two sides decouple: one runs"
+            );
+            let _ = writeln!(
+                out,
+                "  ahead, a real backlog forms, and each shared read is amortised"
+            );
+            let _ = writeln!(
+                out,
+                "  over it. That is the condition peer-index caching needs, and it"
+            );
+            let _ = writeln!(
+                out,
+                "  is a property of PLACEMENT -- not of the architecture."
+            );
         } else if same > cross * 2.0 {
-            println!("\n  THE HYPOTHESIS IS REFUTED, AND BACKWARDS. Threads placed");
-            println!(
+            let _ = writeln!(
+                out,
+                "\n  THE HYPOTHESIS IS REFUTED, AND BACKWARDS. Threads placed"
+            );
+            let _ = writeln!(
+                out,
                 "  TOGETHER batch {:.0}x deeper than threads placed apart, where the",
                 same / cross.max(0.001)
             );
-            println!("  prediction was the reverse -- that mismatched cores would");
-            println!("  decouple and batch deeply.");
-            println!("  A coherent reading: a cheap handoff lets the producer race ahead");
-            println!("  and build a backlog, while an expensive one throttles it into");
-            println!("  lockstep, so each side arrives to find exactly one item. Cost");
-            println!("  drives depth, rather than depth being set by core speed.");
-            println!("  That is a hypothesis this run does not test, and it must not be");
-            println!("  recorded as a finding -- what IS established is that the");
-            println!("  original prediction is wrong.");
+            let _ = writeln!(
+                out,
+                "  prediction was the reverse -- that mismatched cores would"
+            );
+            let _ = writeln!(out, "  decouple and batch deeply.");
+            let _ = writeln!(
+                out,
+                "  A coherent reading: a cheap handoff lets the producer race ahead"
+            );
+            let _ = writeln!(
+                out,
+                "  and build a backlog, while an expensive one throttles it into"
+            );
+            let _ = writeln!(
+                out,
+                "  lockstep, so each side arrives to find exactly one item. Cost"
+            );
+            let _ = writeln!(
+                out,
+                "  drives depth, rather than depth being set by core speed."
+            );
+            let _ = writeln!(
+                out,
+                "  That is a hypothesis this run does not test, and it must not be"
+            );
+            let _ = writeln!(
+                out,
+                "  recorded as a finding -- what IS established is that the"
+            );
+            let _ = writeln!(out, "  original prediction is wrong.");
         } else {
-            println!(
+            let _ = writeln!(
+                out,
                 "\n  Placement does NOT move batch depth here ({:.2}x).",
                 cross / same
             );
-            println!("  The hypothesis that unequal core speeds drive the batching is");
-            println!("  not supported, and the difference between hosts needs another");
-            println!("  explanation. Recording a refutation is the point of running it.");
+            let _ = writeln!(
+                out,
+                "  The hypothesis that unequal core speeds drive the batching is"
+            );
+            let _ = writeln!(
+                out,
+                "  not supported, and the difference between hosts needs another"
+            );
+            let _ = writeln!(
+                out,
+                "  explanation. Recording a refutation is the point of running it."
+            );
         }
     }
 
@@ -285,17 +399,22 @@ interpretation:
             .get(Placement::CrossCacheCrossClass, Strategy::Baseline)
             .or_else(|| observation.get(Placement::CrossCacheSameClass, Strategy::Baseline)),
     ) {
-        println!(
+        let _ = writeln!(
+            out,
             "\n  the unoptimised handoff costs {:.1} ns/item together and {:.1} ns/item",
             near.nanos_per_item, far.nanos_per_item
         );
-        println!(
+        let _ = writeln!(
+            out,
             "  apart -- {:.1}x for crossing the boundary, with no code change.",
             far.nanos_per_item / near.nanos_per_item
         );
     }
 
-    println!("\n  does the verdict on caching depend on placement?\n");
+    let _ = writeln!(
+        out,
+        "\n  does the verdict on caching depend on placement?\n"
+    );
     let mut verdicts = Vec::new();
     for placement in expressible {
         let (Some(base), Some(cached)) = (
@@ -312,7 +431,8 @@ interpretation:
         } else {
             "no effect"
         };
-        println!(
+        let _ = writeln!(
+            out,
             "    {:<26} {:>7.2}x   {verdict}",
             placement.label(),
             speedup
@@ -323,35 +443,51 @@ interpretation:
     verdicts.dedup();
 
     if verdicts.len() > 1 {
-        println!("\n  THE VERDICT FLIPS WITHIN ONE MACHINE. A technique whose sign");
-        println!("  depends on where two threads are scheduled cannot be adopted or");
-        println!("  rejected by a fixed decision. Any answer has to name the");
-        println!("  placement it holds for.");
+        let _ = writeln!(
+            out,
+            "\n  THE VERDICT FLIPS WITHIN ONE MACHINE. A technique whose sign"
+        );
+        let _ = writeln!(
+            out,
+            "  depends on where two threads are scheduled cannot be adopted or"
+        );
+        let _ = writeln!(
+            out,
+            "  rejected by a fixed decision. Any answer has to name the"
+        );
+        let _ = writeln!(out, "  placement it holds for.");
     } else {
-        println!("\n  The verdict is the same at every placement on this host, so");
-        println!("  placement alone does not explain the disagreement between hosts.");
+        let _ = writeln!(
+            out,
+            "\n  The verdict is the same at every placement on this host, so"
+        );
+        let _ = writeln!(
+            out,
+            "  placement alone does not explain the disagreement between hosts."
+        );
     }
 
-    Ok(())
+    out
 }
 
 /// Print the per-node-pair handoff cost, when the host has nodes to cross.
 ///
 /// Silent on a single-node machine: there is nothing to say, and a header over
 /// an empty table invites the reader to wonder what went wrong.
-fn print_node_distances(observation: &Observation) {
+fn render_node_distances(out: &mut String, observation: &Observation) {
     let pairs = observation.node_pairs_measured();
     if pairs.is_empty() {
         return;
     }
 
-    println!("\n-- the handoff, by NUMA node pair --");
+    let _ = writeln!(out, "\n-- the handoff, by NUMA node pair --");
     // A ring-placement column, because a pair and a strategy no longer identify
     // one row: every hop is measured once with the ring on the producer's node
     // and once on the consumer's. Rendering one of them would drop half the
     // measurements and, worse, could pair a baseline taken at one placement
     // against a cached run taken at the other.
-    println!(
+    let _ = writeln!(
+        out,
         "{:<14} {:>8} {:>8} {:>8} {:>12} {:>12} {:>10}",
         "prod -> cons", "ring on", "prod", "cons", "base ns/it", "cached ns/it", "cach depth"
     );
@@ -359,7 +495,10 @@ fn print_node_distances(observation: &Observation) {
     // run asked for, since that is what identifies the row; a `!` means the
     // memory did not land there, so that row does not measure the placement it
     // names.
-    println!("  (`ring on` is the node requested; `!` means it landed elsewhere)");
+    let _ = writeln!(
+        out,
+        "  (`ring on` is the node requested; `!` means it landed elsewhere)"
+    );
 
     let mut slowest: Option<(f64, (u32, u32))> = None;
     let mut fastest: Option<(f64, (u32, u32))> = None;
@@ -379,7 +518,8 @@ fn print_node_distances(observation: &Observation) {
             else {
                 continue;
             };
-            println!(
+            let _ = writeln!(
+                out,
                 "{:<14} {:>8} {:>8} {:>8} {:>12.1} {:>12.1} {:>10.1}",
                 // `->`, not `<->`: hops are directed, because the producer
                 // writes and the consumer reads. The probe crate's own report
@@ -413,7 +553,8 @@ fn print_node_distances(observation: &Observation) {
     }
 
     if pairs.len() == 1 {
-        println!(
+        let _ = writeln!(
+            out,
             "\n  One node pair, so this restates the `cross NUMA node` row above\n  \
              rather than adding to it. The table earns its place from three\n  \
              nodes upward, where the hops stop being interchangeable."
@@ -424,7 +565,8 @@ fn print_node_distances(observation: &Observation) {
     let (Some((worst, worst_pair)), Some((best, best_pair))) = (slowest, fastest) else {
         return;
     };
-    println!(
+    let _ = writeln!(
+        out,
         "\n  {} node pairs. Cheapest hop {} <-> {} at {:.1} ns/item; dearest\n  \
          {} <-> {} at {:.1} ns/item -- a spread of {:.1}x.",
         pairs.len(),
@@ -437,19 +579,22 @@ fn print_node_distances(observation: &Observation) {
         worst / best
     );
     if worst / best < 1.2 {
-        println!(
+        let _ = writeln!(
+            out,
             "  That spread is small enough that this host's nodes are close to\n  \
              equidistant, so the single `cross NUMA node` row above is a fair\n  \
              summary of it."
         );
     } else {
-        println!(
+        let _ = writeln!(
+            out,
             "  The hops are NOT interchangeable, so the single `cross NUMA node`\n  \
              row above reports whichever one was enumerated first and should not\n  \
              be read as 'the' cost of leaving a node."
         );
     }
-    println!(
+    let _ = writeln!(
+        out,
         "  This measures the handoff between two nodes; it is not a distance\n  \
          matrix read from firmware. Windows exposes no NUMA distance table, so\n  \
          these numbers are the observable rather than a restatement of ACPI."

@@ -637,8 +637,31 @@ mutation wrapper. The conversion's three silent fallbacks are replaced by one ru
   differently from one the host would not report, and that the two streams cannot satisfy each
   other's assertions.
 
-- [ ] **SH-13.3** -- **`probe-core-affinity` writes from 67 independent print sites.** Same rule, same
-  fix, in [core_affinity.rs](crates/windows-platform-probes/src/bin/core_affinity.rs).
+- [x] **SH-13.3** -- **The two new probes wrote from 94 independent print sites between them.** Same
+  rule as SH-13.2, in [core_affinity.rs](crates/windows-platform-probes/src/bin/core_affinity.rs)
+  (67 sites) and [doorbell_cost.rs](crates/windows-platform-probes/src/bin/doorbell_cost.rs) (27).
+  A `Report` sink now lives in [report.rs](crates/windows-platform-probes/src/report.rs), shared by
+  both. One stream, not two: unlike the placement probe these have only ever written to stdout, and
+  inventing a diagnostic stream they do not use would be adding a distinction the tools do not make.
+  Each `main` is now three lines -- measure, render, emit -- and is the only place naming the real
+  stream.
+  One find during the conversion that the mechanical part would have missed: `render` called
+  `fingerprint::print_banner()`, which writes to stdout *itself*. Left alone it would have put the
+  identifying line on the terminal while leaving it out of the returned report, so a captured report
+  would be missing the one line saying which machine produced it -- and the `!!SYNTHETIC!!` taint
+  marker with it. `banner_line()` already existed for exactly this and is now used.
+  Verified as a pure refactor by running both probes before and after and comparing with numerals
+  masked (their output is timing-dependent, so byte equality is not available): 38 lines and 50 lines
+  respectively, **structurally identical** both times.
 
-- [ ] **SH-13.4** -- **`probe-doorbell-cost` writes from 27 independent print sites.** Same rule, same
-  fix, in [doorbell_cost.rs](crates/windows-platform-probes/src/bin/doorbell_cost.rs).
+- [ ] **SH-13.4** -- **The other twelve probes still print directly, and now there is a sink to
+  adopt.** `probe-peer-index-cache` (55 sites), `probe-request-cost` (45), `probe-topology` (32),
+  `probe-queue-contention` (27), `probe-ioring` (24), `probe-completion-port` (22),
+  `probe-worker-context` (22), `probe-device-map` (21), `probe-cancel-io` (19),
+  `probe-pool-growth` (16), `probe-handle-state` (14), `probe-error-mode` (10) -- 307 sites.
+  Deliberately **not** done in the review round that introduced the sink: those probes predate it and
+  are outside that round's scope, and each conversion needs its own before/after comparison against
+  the probe's real output, which is what makes it a refactor rather than a rewrite.
+  Queued rather than left as a note precisely because a half-adopted abstraction is the state most
+  likely to be forgotten -- the next probe author will see twelve neighbours printing directly and
+  reasonably conclude that is the house style.
