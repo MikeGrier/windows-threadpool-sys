@@ -136,6 +136,8 @@ namespace operation is.
   is theirs to make deliberately; and that an impersonation restore failure is fail-fast, which on a shared
   pool means a process abort rather than one failed operation.
 
+- [x] **M23.6** -- Close mutation gaps with deterministic fault injection and exhaustive assertions. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m236)
+
 ## M24 -- `windows-namespace-request-sys`: foundations
 
 A sibling crate, not a layer above M22-M23: a request carries no ambient context, and a context is useful

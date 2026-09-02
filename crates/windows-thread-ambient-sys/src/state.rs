@@ -105,8 +105,8 @@ use crate::capture_set::{CapturableAspect, CaptureSet};
 use crate::captured::Captured;
 use crate::declared::{Declared, DeclaredError};
 use crate::error_mode::{
-    ApplyError as ErrorModeApplyError, ErrorModeGuard, RestoreError as ErrorModeRestoreError,
-    ThreadErrorMode, UnsupportedBits,
+    ApplyError as ErrorModeApplyError, RestoreError as ErrorModeRestoreError, ThreadErrorMode,
+    UnsupportedBits,
 };
 use crate::transaction::{TransactionContext, TransactionError};
 use crate::{impersonation, transaction};
@@ -362,7 +362,7 @@ impl AmbientState {
         let declared_guard = match self.declared.install() {
             Ok(guard) => guard,
             Err(error) => {
-                release_error_mode(error_mode_guard);
+                drop(error_mode_guard);
                 return Err(ApplyError {
                     failure: ApplyFailure::Declared(error),
                 });
@@ -374,7 +374,7 @@ impl AmbientState {
             Ok(guard) => guard,
             Err(error) => {
                 drop(declared_guard);
-                release_error_mode(error_mode_guard);
+                drop(error_mode_guard);
                 return Err(ApplyError {
                     failure: ApplyFailure::Transaction(error),
                 });
@@ -388,7 +388,7 @@ impl AmbientState {
             Err(error) => {
                 drop(transaction_guard);
                 drop(declared_guard);
-                release_error_mode(error_mode_guard);
+                drop(error_mode_guard);
                 return Err(ApplyError {
                     failure: ApplyFailure::Impersonation(error),
                 });
@@ -417,24 +417,6 @@ impl AmbientState {
                 transaction,
             },
         })
-    }
-}
-
-fn release_error_mode(guard: Option<ErrorModeGuard>) {
-    // A mutation run will report this whole body as removable, and it is
-    // right in substance though not in spelling: `ErrorModeGuard`'s own
-    // `Drop` restores exactly what `release` does whenever the guard was
-    // never released, and the result is discarded either way -- so replacing
-    // this body with a bare `let _ = guard;` still restores the mode via the
-    // guard's fallback the instant it is dropped at the end of that
-    // statement. Kept as an explicit call rather than relying on the
-    // fallback because saying "release this now" at the point the rollback
-    // happens is worth more than leaving it to be re-derived from a Drop impl
-    // this function never mentions.
-    if let Some(guard) = guard {
-        // Best effort: an install failed, so this path already has an error to
-        // report and a second one would displace it.
-        let _ = guard.release();
     }
 }
 

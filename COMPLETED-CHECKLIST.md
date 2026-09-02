@@ -1704,3 +1704,15 @@ Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is wh
   the tests, which is why the patch is now printed on every unexpected result; and a **too-short
   timeout manufactures a false "caught"**, crediting tests with catching a defect they never ran
   against, so the bound errs generous.
+## Moved 2026-09-01 -- Thread ambient mutation gaps
+
+### <a id="m236"></a>M23.6 -- Close mutation gaps with deterministic fault injection and exhaustive assertions. *(completed 2026-09-01 20:25:29 UTC-04:00)*
+
+Close the actionable gaps from the 2026-09-01 mutation run. Add deterministic,
+thread-local, test-only fault injection at the error-mode, declared-aspect, and transaction OS-call
+boundaries; use it to prove explicit release, best-effort drop, rollback, unsupported-platform, and
+composite cleanup behavior; add exhaustive unit assertions for error accessors, formatting, sources,
+capture-set formatting, declared emptiness, and restore reports; then rerun mutation testing and
+classify any survivors that are behaviorally equivalent.
+
+The final mutation run tested 233 mutants: 142 were caught, 91 were unviable, and none were missed.

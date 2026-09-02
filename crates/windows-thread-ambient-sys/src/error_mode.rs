@@ -58,15 +58,29 @@ use windows_sys::Win32::System::Diagnostics::Debug::{
     SetThreadErrorMode, THREAD_ERROR_MODE,
 };
 
+fn set_thread_error_mode(mode: THREAD_ERROR_MODE) -> Result<THREAD_ERROR_MODE, io::Error> {
+    #[cfg(test)]
+    if let Some(error) = crate::test_injection::hit(crate::test_injection::FaultPoint::ErrorModeSet)
+    {
+        return Err(error);
+    }
+
+    let mut previous: THREAD_ERROR_MODE = 0;
+    // SAFETY: `previous` is a valid writable destination. Callers provide only
+    // typed values or values previously returned by Windows.
+    let ok = unsafe { SetThreadErrorMode(mode, &mut previous) };
+    if ok == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(previous)
+    }
+}
+
 /// Every bit this crate will place in a [`ThreadErrorMode`].
-///
-/// `SEM_FAILCRITICALERRORS` (0x0001), `SEM_NOGPFAULTERRORBOX` (0x0002) and
-/// `SEM_NOOPENFILEERRORBOX` (0x8000) are pairwise disjoint bits, so combining
-/// them with `^` instead of `|` produces the identical value. A mutation run
-/// will report both swaps surviving; that is correct rather than a gap, and
-/// is recorded here so it is not re-investigated.
-const SUPPORTED: THREAD_ERROR_MODE =
-    SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX;
+const SUPPORTED: THREAD_ERROR_MODE = ThreadErrorMode::FAIL_CRITICAL_ERRORS
+    .union(ThreadErrorMode::NO_GP_FAULT_ERROR_BOX)
+    .union(ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX)
+    .0;
 
 /// A thread error mode, restricted to the bits Windows accepts per thread.
 ///
@@ -170,16 +184,10 @@ impl ThreadErrorMode {
     /// Returns [`ApplyError`] if Windows refuses the value, in which case
     /// nothing was installed and the thread is untouched.
     pub fn apply(self) -> Result<ErrorModeGuard, ApplyError> {
-        let mut previous: THREAD_ERROR_MODE = 0;
-        // SAFETY: `previous` is a valid writable destination, and `self.0`
-        // cannot contain a bit the call rejects.
-        let ok = unsafe { SetThreadErrorMode(self.0, &mut previous) };
-        if ok == 0 {
-            return Err(ApplyError {
-                requested: self,
-                source: io::Error::last_os_error(),
-            });
-        }
+        let previous = set_thread_error_mode(self.0).map_err(|source| ApplyError {
+            requested: self,
+            source,
+        })?;
         Ok(ErrorModeGuard {
             previous,
             released: false,
@@ -277,6 +285,14 @@ pub struct RestoreError {
 }
 
 impl RestoreError {
+    #[cfg(test)]
+    pub(crate) fn for_test(unrestored: THREAD_ERROR_MODE, code: i32) -> Self {
+        Self {
+            unrestored,
+            source: io::Error::from_raw_os_error(code),
+        }
+    }
+
     /// The value the thread should have been returned to.
     #[must_use]
     pub const fn unrestored_bits(&self) -> THREAD_ERROR_MODE {
@@ -366,17 +382,12 @@ impl ErrorModeGuard {
     }
 
     fn restore(previous: THREAD_ERROR_MODE) -> Result<(), RestoreError> {
-        let mut ignored: THREAD_ERROR_MODE = 0;
-        // SAFETY: `ignored` is a valid writable destination, and `previous` is a
-        // value Windows itself reported for this thread.
-        let ok = unsafe { SetThreadErrorMode(previous, &mut ignored) };
-        if ok == 0 {
-            return Err(RestoreError {
+        set_thread_error_mode(previous)
+            .map(|_| ())
+            .map_err(|source| RestoreError {
                 unrestored: previous,
-                source: io::Error::last_os_error(),
-            });
-        }
-        Ok(())
+                source,
+            })
     }
 }
 

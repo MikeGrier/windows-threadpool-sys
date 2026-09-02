@@ -7,11 +7,15 @@
 //! test ran next on that thread, which is exactly the contamination this aspect
 //! exists to prevent.
 
+use std::error::Error as _;
+use std::io;
+
 use windows_sys::Win32::System::Diagnostics::Debug::{
     GetThreadErrorMode, SEM_NOALIGNMENTFAULTEXCEPT,
 };
 
 use super::{ApplyError, ErrorModeGuard, RestoreError, ThreadErrorMode, UnsupportedBits};
+use crate::test_injection::{self, FaultPoint};
 
 /// The live thread error mode, read straight from Win32.
 fn live() -> u32 {
@@ -95,6 +99,91 @@ fn unsupported_bits_names_the_offending_value() {
         bits: SEM_NOALIGNMENTFAULTEXCEPT,
     };
     assert!(error.to_string().contains("0x0004"));
+}
+
+#[test]
+fn thread_error_mode_display_is_fixed_width_hexadecimal() {
+    assert_eq!(ThreadErrorMode::NONE.to_string(), "0x0000");
+    assert_eq!(ThreadErrorMode::FAIL_CRITICAL_ERRORS.to_string(), "0x0001");
+    assert_eq!(
+        ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX.to_string(),
+        "0x8000"
+    );
+}
+
+#[test]
+fn apply_errors_preserve_the_requested_mode_code_display_and_source() {
+    const CODE: i32 = 1234;
+    let error = ApplyError {
+        requested: ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX,
+        source: io::Error::from_raw_os_error(CODE),
+    };
+
+    assert_eq!(error.requested(), ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX);
+    assert_eq!(error.raw_os_error(), Some(CODE));
+    assert!(
+        error
+            .to_string()
+            .starts_with("could not install thread error mode 0x8000:")
+    );
+    assert_eq!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .and_then(io::Error::raw_os_error),
+        Some(CODE)
+    );
+}
+
+#[test]
+fn restore_errors_preserve_the_unrestored_mode_code_display_and_source() {
+    const CODE: i32 = 1234;
+    let error = RestoreError {
+        unrestored: ThreadErrorMode::NO_GP_FAULT_ERROR_BOX.bits(),
+        source: io::Error::from_raw_os_error(CODE),
+    };
+
+    assert_eq!(
+        error.unrestored_bits(),
+        ThreadErrorMode::NO_GP_FAULT_ERROR_BOX.bits()
+    );
+    assert_eq!(error.raw_os_error(), Some(CODE));
+    assert!(error.to_string().starts_with(
+        "could not restore thread error mode 0x0002; the thread is left contaminated:"
+    ));
+    assert_eq!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .and_then(io::Error::raw_os_error),
+        Some(CODE)
+    );
+}
+
+#[test]
+fn explicit_release_reports_an_injected_restore_failure() {
+    let _faults = test_injection::fail(&[(FaultPoint::ErrorModeSet, 1)]);
+    let guard = ErrorModeGuard {
+        previous: ThreadErrorMode::NONE.bits(),
+        released: false,
+    };
+
+    let error = guard
+        .release()
+        .expect_err("explicit release must report restore failure");
+    assert_eq!(error.unrestored_bits(), ThreadErrorMode::NONE.bits());
+    assert_eq!(test_injection::calls(FaultPoint::ErrorModeSet), 1);
+}
+
+#[test]
+fn dropping_an_unreleased_guard_attempts_best_effort_restore() {
+    let _faults = test_injection::fail(&[(FaultPoint::ErrorModeSet, 1)]);
+    drop(ErrorModeGuard {
+        previous: ThreadErrorMode::NONE.bits(),
+        released: false,
+    });
+
+    assert_eq!(test_injection::calls(FaultPoint::ErrorModeSet), 1);
 }
 
 #[test]

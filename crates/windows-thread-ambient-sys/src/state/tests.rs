@@ -2,6 +2,8 @@
 
 //! Tests for composite capture.
 
+use std::error::Error as _;
+
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_TOKEN, HANDLE};
 use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
@@ -9,7 +11,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 use super::{AmbientState, ApplyError, ApplyFailure, CaptureError, CaptureFailure, RestoreReport};
 use crate::capture_set::{CapturableAspect, CaptureSet};
 use crate::declared::{DeclaredAspect, DeclaredError, MemoryPriority};
-use crate::error_mode::ThreadErrorMode;
+use crate::error_mode::{RestoreError as ErrorModeRestoreError, ThreadErrorMode};
 use crate::transaction::{TransactionError, TransactionFailure};
 use crate::{Captured, Declared};
 
@@ -413,6 +415,86 @@ fn a_clean_report_says_so() {
 }
 
 #[test]
+fn capture_errors_preserve_aspect_code_display_and_source() {
+    const CODE: i32 = 1234;
+    let error = CaptureError {
+        failure: CaptureFailure::Transaction(TransactionError::for_test(
+            TransactionFailure::Duplicate,
+            Some(CODE),
+        )),
+    };
+
+    assert_eq!(error.aspect(), CapturableAspect::Transaction);
+    assert_eq!(error.raw_os_error(), Some(CODE));
+    assert!(error.to_string().starts_with(
+        "capturing the transaction aspect failed: the transaction handle could not be duplicated:"
+    ));
+    assert_eq!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<TransactionError>())
+            .and_then(TransactionError::raw_os_error),
+        Some(CODE)
+    );
+}
+
+#[test]
+fn apply_errors_preserve_failure_code_display_and_source() {
+    const CODE: i32 = 1234;
+    let error = ApplyError {
+        failure: ApplyFailure::Declared(DeclaredError::for_test(
+            DeclaredAspect::MemoryPriority,
+            Some(CODE),
+        )),
+    };
+
+    assert_eq!(error.raw_os_error(), Some(CODE));
+    assert!(error.to_string().starts_with(
+        "applying the ambient state failed: the thread memory priority could not be read or set:"
+    ));
+    assert_eq!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<DeclaredError>())
+            .and_then(DeclaredError::raw_os_error),
+        Some(CODE)
+    );
+}
+
+#[test]
+fn restore_report_predicates_and_accessors_cover_every_failure_combination() {
+    const CODE: i32 = 1234;
+    for has_error_mode in [false, true] {
+        for has_declared in [false, true] {
+            for has_transaction in [false, true] {
+                let report = RestoreReport {
+                    error_mode: has_error_mode.then(|| {
+                        ErrorModeRestoreError::for_test(
+                            ThreadErrorMode::FAIL_CRITICAL_ERRORS.bits(),
+                            CODE,
+                        )
+                    }),
+                    declared: has_declared.then(|| {
+                        DeclaredError::for_test(DeclaredAspect::MemoryPriority, Some(CODE))
+                    }),
+                    transaction: has_transaction.then(|| {
+                        TransactionError::for_test(TransactionFailure::Install, Some(CODE))
+                    }),
+                };
+
+                assert_eq!(
+                    report.is_clean(),
+                    !has_error_mode && !has_declared && !has_transaction
+                );
+                assert_eq!(report.error_mode().is_some(), has_error_mode);
+                assert_eq!(report.declared().is_some(), has_declared);
+                assert_eq!(report.transaction().is_some(), has_transaction);
+            }
+        }
+    }
+}
+
+#[test]
 fn a_state_applies_on_the_worker_it_was_carried_to() {
     // The composite's whole purpose, end to end: capture here, apply there, and
     // leave the worker as it was found.
@@ -558,36 +640,14 @@ fn display_and_source_forward_through_the_failing_aspect() {
     assert!(std::error::Error::source(&error).is_some());
 }
 
-// --- release_error_mode ------------------------------------------------------
-
-#[test]
-fn release_error_mode_restores_a_real_guard() {
-    // Not a mutation-kill: `release_error_mode -> ()` is a documented
-    // equivalent mutant (see the function itself) because `ErrorModeGuard`'s
-    // own `Drop` restores identically the instant an unreleased guard is
-    // discarded. This test still pins the function's real, intended
-    // behaviour -- calling it explicitly restores the mode -- rather than
-    // leaving it unverified because the alternate route happens to agree.
-    let entry = ThreadErrorMode::capture().expect("representable");
-    let guard = ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX
-        .apply()
-        .expect("install");
-    assert_eq!(
-        ThreadErrorMode::capture().expect("representable"),
-        ThreadErrorMode::NO_OPEN_FILE_ERROR_BOX
-    );
-
-    super::release_error_mode(Some(guard));
-    assert_eq!(
-        ThreadErrorMode::capture().expect("representable"),
-        entry,
-        "release_error_mode did not restore the entry mode"
-    );
-
-    // The `None` branch is a real no-op, not merely untested.
-    super::release_error_mode(None);
-    assert_eq!(ThreadErrorMode::capture().expect("representable"), entry);
-}
+// The `release_error_mode` helper this file used to test no longer exists: the
+// merge from `main` replaced it with a bare `drop(error_mode_guard)`, which is
+// exactly the equivalence its own comment had recorded -- the guard's `Drop`
+// restores identically. Its test went with it rather than being rewritten,
+// because `error_mode`'s own suite now covers both routes more thoroughly than
+// this one did: `apply_installs_the_mode_and_release_restores_it`,
+// `dropping_the_guard_also_restores`, and
+// `explicit_release_reports_an_injected_restore_failure`.
 
 // --- RestoreReport -----------------------------------------------------------
 //

@@ -101,6 +101,9 @@ pub mod impersonation;
 pub mod state;
 pub mod transaction;
 
+#[cfg(test)]
+mod test_injection;
+
 pub use capture_set::{CapturableAspect, CaptureSet};
 pub use captured::Captured;
 pub use declared::Declared;

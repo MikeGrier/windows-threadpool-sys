@@ -9,12 +9,17 @@
 //! explicitly and say so, rather than passing silently on a machine that
 //! measured nothing.
 
+use std::error::Error as _;
+use std::io;
+use std::marker::PhantomData;
+
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 
 use super::{
-    Captured, TransactionContext, TransactionError, TransactionFailure, capture, install,
-    is_supported, system_proc, with_applied,
+    Captured, TransactionContext, TransactionError, TransactionFailure, TransactionGuard, capture,
+    install, is_supported, system_proc, with_applied,
 };
+use crate::test_injection::{self, FaultPoint};
 
 type CreateTransactionFn = unsafe extern "system" fn(
     *mut core::ffi::c_void,
@@ -90,6 +95,104 @@ fn the_entry_points_resolve_on_this_system() {
         is_supported(),
         "ktmw32.dll did not offer the thread-transaction entry points"
     );
+}
+
+#[test]
+fn support_probe_reports_an_injected_missing_platform() {
+    let _faults = test_injection::fail(&[(FaultPoint::TransactionSupport, 1)]);
+
+    assert!(!is_supported());
+    assert_eq!(test_injection::calls(FaultPoint::TransactionSupport), 1);
+}
+
+#[test]
+fn transaction_errors_preserve_failure_code_display_and_source() {
+    const CODE: i32 = 1234;
+    for (failure, description) in [
+        (
+            TransactionFailure::Unsupported,
+            "ktmw32.dll does not offer the thread-transaction entry points",
+        ),
+        (
+            TransactionFailure::Duplicate,
+            "the transaction handle could not be duplicated",
+        ),
+        (
+            TransactionFailure::Install,
+            "the thread transaction could not be set",
+        ),
+    ] {
+        let error = TransactionError {
+            failure,
+            source: Some(io::Error::from_raw_os_error(CODE)),
+        };
+
+        assert_eq!(error.failure(), failure);
+        assert_eq!(error.raw_os_error(), Some(CODE));
+        assert!(error.to_string().starts_with(description));
+        assert_eq!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .and_then(io::Error::raw_os_error),
+            Some(CODE)
+        );
+    }
+}
+
+#[test]
+fn unsupported_transaction_errors_can_have_no_os_source() {
+    let error = TransactionError {
+        failure: TransactionFailure::Unsupported,
+        source: None,
+    };
+
+    assert_eq!(error.raw_os_error(), None);
+    assert!(error.source().is_none());
+    assert_eq!(
+        error.to_string(),
+        "ktmw32.dll does not offer the thread-transaction entry points"
+    );
+}
+
+#[test]
+fn explicit_release_reports_an_injected_restore_failure() {
+    let _faults = test_injection::fail(&[(FaultPoint::TransactionSet, 1)]);
+    let guard = TransactionGuard {
+        previous: Some(std::ptr::null_mut()),
+        released: false,
+        captured: PhantomData,
+    };
+
+    let error = guard
+        .release()
+        .expect_err("explicit release must report restore failure");
+    assert_eq!(error.failure(), TransactionFailure::Install);
+    assert_eq!(test_injection::calls(FaultPoint::TransactionSet), 1);
+}
+
+#[test]
+fn dropping_an_unreleased_guard_attempts_best_effort_restore() {
+    let _faults = test_injection::fail(&[(FaultPoint::TransactionSet, 1)]);
+    drop(TransactionGuard {
+        previous: Some(std::ptr::null_mut()),
+        released: false,
+        captured: PhantomData,
+    });
+
+    assert_eq!(test_injection::calls(FaultPoint::TransactionSet), 1);
+}
+
+#[test]
+fn dropping_a_released_guard_does_not_restore_twice() {
+    let _faults = test_injection::fail(&[(FaultPoint::TransactionSet, 1)]);
+    drop(TransactionGuard {
+        previous: Some(std::ptr::null_mut()),
+        released: true,
+        captured: PhantomData,
+    });
+
+    assert_eq!(test_injection::calls(FaultPoint::TransactionSet), 0);
 }
 
 #[test]

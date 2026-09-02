@@ -49,13 +49,7 @@ use std::fmt;
 /// Internal to this crate and not a wire format, so the values carry no
 /// compatibility obligation; they exist so no bare literal appears in the logic.
 mod bit {
-    // `IMPERSONATION`'s shift is by zero, which makes `<<` and `>>` produce
-    // the identical value -- a mutation run will report the swap surviving,
-    // correctly: no test can distinguish a no-op from its own inverse. The
-    // other two shifts are by a nonzero amount and are not equivalent; the
-    // same mutation on either of them changes the bit position and is caught
-    // by every test that checks the three aspects occupy distinct bits.
-    pub(super) const IMPERSONATION: u8 = 1 << 0;
+    pub(super) const IMPERSONATION: u8 = 1;
     pub(super) const ERROR_MODE: u8 = 1 << 1;
     pub(super) const TRANSACTION: u8 = 1 << 2;
 }
@@ -154,14 +148,7 @@ impl CaptureSet {
     /// still running. That is a hazard to opt into deliberately, not one to
     /// acquire by taking a default. Add [`TRANSACTION`](Self::TRANSACTION) when
     /// you mean it.
-    pub const DEFAULT: Self = Self {
-        // `|` is provably equivalent to `^` here: `bit::IMPERSONATION` and
-        // `bit::ERROR_MODE` occupy distinct bit positions by construction, and
-        // every bitwise combinator agrees on disjoint operands. A mutation run
-        // will report the swap surviving; that is correct rather than a gap,
-        // and is recorded here so it is not re-investigated.
-        bits: bit::IMPERSONATION | bit::ERROR_MODE,
-    };
+    pub const DEFAULT: Self = Self::IMPERSONATION.union(Self::ERROR_MODE);
 
     /// Every capturable aspect this version knows.
     ///
