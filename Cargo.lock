@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "windows-placement-probe"
-version = "0.1.0"
+version = "2026.902.0"
 dependencies = [
  "serde",
  "serde_json",

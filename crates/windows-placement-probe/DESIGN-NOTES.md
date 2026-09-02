@@ -89,6 +89,46 @@ later: the record schema becomes a semver surface the moment anyone stores one
 build produces records marked unofficial, so nobody chooses that path without
 knowing what it costs the data.
 
+## The crate version is a date, because semver has nothing here to describe
+
+**`YYYY.MMDD.N`** -- the release date, plus a counter for a second release on
+the same day. Leading zeros are illegal in a semver numeric identifier, so
+September 2 is `2026.902.0` rather than `2026.0902.0`; that still orders
+correctly within a year, since January 5 is `105` and December 25 is `1225`.
+
+Semver would be the wrong scheme, not merely an unhelpful one. Semver's job is
+to communicate **compatibility**, and this crate offers nothing for it to
+describe:
+
+- It is **never published to a registry**, so no dependency resolver ever reads
+  the number.
+- Nothing **depends on it as a library**. The package metadata already says the
+  measurement code is an instrument rather than a surface to build on, and the
+  workspace's own probes now depend on it by `path` with no version at all.
+- The one thing that genuinely *is* a compatibility surface -- the record's
+  shape -- **has its own version**. `SCHEMA_VERSION` is a linearly increasing
+  integer with an append-only golden per version, deliberately independent of
+  the crate's. That separation is what frees this field.
+
+A version that describes no compatibility can only be arbitrary, and an
+arbitrary version is bumped on a whim or not at all. Neither serves the reader.
+
+**What a reader of a record actually needs from this field is which build
+produced it.** The commit answers that exactly and is stamped beside it; the
+date answers it *legibly*, telling someone at a glance whether a record in a
+discussion thread is from last week or from last year. `0.1.0` answered
+neither, and would have gone on answering neither indefinitely, because nothing
+would ever have forced it to move.
+
+**Nothing automated fights this.** Release-please does not manage this crate --
+it is absent from both `release-please-config.json`'s `packages` map and
+`.release-please-manifest.json`, and carries no `x-release-please-version`
+marker -- so the version is maintained by hand, which is the only way a date
+could be correct anyway. The release workflow's tag check needed no change: it
+parses `${GITHUB_REF_NAME##*-v}`, which yields `2026.902.0` from
+`placement-probe-v2026.902.0`, and still rejects a stale tag. Verified against
+the workflow's own logic rather than assumed.
+
 ## The schema freezes at the first release, not before
 
 **Decided: regenerate `schema/v1.txt` in place while the tool is unreleased, and

@@ -6,7 +6,7 @@ use super::{BuildIdentity, BuildSource};
 /// An official build: CI, known commit, clean tree.
 fn official() -> BuildIdentity {
     BuildIdentity {
-        crate_version: "0.1.0",
+        crate_version: "2026.902.0",
         commit: Some("abcdef123456"),
         dirty: Some(false),
         source: BuildSource::Ci,
@@ -83,7 +83,7 @@ fn an_official_build_renders_without_a_marker() {
     let rendered = official().to_string();
 
     assert!(!rendered.contains("!!"), "got {rendered}");
-    assert!(rendered.contains("v0.1.0"), "got {rendered}");
+    assert!(rendered.contains("v2026.902.0"), "got {rendered}");
     assert!(rendered.contains("abcdef123456"), "got {rendered}");
 }
 

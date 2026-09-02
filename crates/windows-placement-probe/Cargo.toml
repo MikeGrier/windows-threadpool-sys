@@ -2,15 +2,36 @@
 
 [package]
 name = "windows-placement-probe"
-version = "0.1.0"
-# Publishing to crates.io is decided -- yes, but not yet (PT-5.3 in
-# CHECKLIST-placement-tool.md, reasoning in DESIGN-NOTES.md). The distribution
-# that matters is the CI-built binary attached to a GitHub release, because the
-# download is the provenance: a binary built here is traceable to the commit
-# that produced it in a way a local build of identical source is not. Publishing
-# only after that path exists and has been walked end to end keeps the strong
-# path the one a runner meets first. `false` until PT-5.6 performs the
-# publication, so the crate cannot go out early by accident.
+# **Calendar-versioned: `YYYY.MMDD.N`.** Today's date, plus a fourth-digit
+# counter for a second release on the same day. Leading zeros are illegal in a
+# semver numeric identifier, so September 2 is `902` rather than `0902`; that
+# still orders correctly within a year, since January 5 is `105` and December 25
+# is `1225`.
+#
+# Semver would be the wrong scheme here, not merely an unhelpful one. Semver
+# communicates *compatibility*, and this crate has no compatibility surface for
+# it to describe: nothing depends on it as a library (see below), it is never
+# published to a registry, and the one thing that genuinely is a compatibility
+# surface -- the record's shape -- has its own `SCHEMA_VERSION` that moves
+# independently. A semver here could only ever be arbitrary, which in practice
+# means it is bumped on a whim or never bumped at all.
+#
+# What a reader of a record actually needs from this field is *which build
+# produced it*. The commit already answers that precisely and is stamped
+# alongside; the date answers it legibly, and tells them at a glance whether the
+# record is from last week or last year. `0.1.0` answered neither.
+version = "2026.902.0"
+# **Never published to a registry.** Reversed from "yes, but not yet" on
+# 2026-09-02; see PT-5.3 in CHECKLIST-placement-tool.md and DESIGN-NOTES.md for
+# both reasons. The short form: `cargo install` reaches a *subset* of the people
+# a downloadable binary reaches, because the binary needs no Rust toolchain --
+# so crates.io would have added no reach while making the weakest-provenance
+# path the most discoverable one.
+#
+# The distribution that matters is the CI-built binary attached to a GitHub
+# release, because the download is the provenance: a binary built there is
+# traceable to the commit that produced it in a way a local build of identical
+# source is not.
 publish = false
 authors.workspace = true
 edition.workspace = true
@@ -21,7 +42,9 @@ homepage.workspace = true
 description = "Measures what thread placement costs on a Windows machine -- SMT siblings, cache domains, efficiency classes and NUMA hops -- and produces one structured record to send back."
 readme = "README.md"
 
-# What semver covers here, stated because the two halves differ sharply.
+# What versioning covers here, stated because the two halves differ sharply --
+# and this split is the reason the crate version itself is a date rather than a
+# semver.
 #
 # **The record's schema is a compatibility surface** the moment anyone stores a
 # result, and it has its own versioning that does not move with the crate's:

@@ -55,7 +55,7 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
         recorded_at_epoch_seconds: 1_788_177_600,
         recorded_at_subsecond_millis: 250,
         build: BuildIdentity {
-            crate_version: "0.1.0",
+            crate_version: "2026.902.0",
             commit: Some("abcdef123456"),
             dirty: Some(false),
             source: BuildSource::Ci,
