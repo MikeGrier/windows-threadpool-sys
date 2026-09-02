@@ -792,13 +792,20 @@ predicted about a 222-commit branch.
   restate. Note the asymmetry that makes the NUMA arm different and correct: for NUMA, `None` has no
   honest value, whereas `cache_domain` is already `Option<u32>`.
 
-- [ ] **SH-16.6** -- **The thread-stack NUMA spike's `deep_probe` measures the shallow end of its own
+- [x] **SH-16.6** -- **The thread-stack NUMA spike's `deep_probe` measures the shallow end of its own
   filler, so the discrimination it exists to make is inert.** The stack grows down, so `filler[0]` is
   the deepest address and `filler[last]` sits immediately below the caller's frame -- but the probe
   takes `&raw const filler[last]`, landing very likely on the same page as the shallow probe rather
   than 64 KiB away. The spike would then report "not first touch" on a machine where placement *is*
   by first touch: a confident wrong answer, in a file whose whole point is avoiding those. Both ends
   are already touched, so probing `filler[0]` is a one-token change.
+  **Done, and the defect was worse than reported.** Printing the three addresses on all three spike
+  threads showed the old probe was not merely *likely* on the shallow probe's page -- it was on the
+  **same page every time**, 209 bytes away, where the review had estimated "at worst adjacent". So
+  `shallow.node != deep.node` compared one page against itself and could not fire even in principle.
+  After the change the two probes are 16 pages apart on every thread. Measured on all three threads
+  (`0x...dff7c0` vs `0x...dff6ef` -> same page; vs `0x...def6f0` -> 16 pages), then the instrumentation
+  was removed.
 
 - [ ] **SH-16.7** -- **A `windows-thread-ambient-sys` test claims a restore-failure it never
   injects.** `release_reports_a_genuine_restore_failure_and_restores_on_drop_even_without_it` asserts

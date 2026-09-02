@@ -162,6 +162,17 @@ struct Slot {
 /// Forces a page deeper in the stack to be committed, then probes it. The
 /// array is written to, because a page that is merely reserved is not resident
 /// and its reported node would be meaningless.
+///
+/// **Probes `filler[0]`, and which end is used decides whether this function
+/// measures anything at all.** The stack grows downward, so `filler[0]` is the
+/// array's *lowest* address -- unconditionally 65,535 bytes below `filler[last]`
+/// however the compiler arranges the rest of the frame -- while `filler[last]`
+/// sits just under the caller's own frame, very likely on the same page as the
+/// shallow probe. Taking the shallow end would leave the two probes
+/// indistinguishable, so `slot.shallow.node != slot.deep.node` could essentially
+/// never fire and the spike would report "not first touch" on a machine where
+/// placement *is* by first touch. Both ends are touched above, so the deep end
+/// is resident and costs nothing extra to read.
 #[inline(never)]
 fn deep_probe() -> Probe {
     let mut filler = [0_u8; 64 * 1024];
@@ -171,7 +182,7 @@ fn deep_probe() -> Probe {
     let last = filler.len() - 1;
     filler[last] = 1;
     std::hint::black_box(&filler);
-    Probe::take((&raw const filler[last]).cast::<c_void>())
+    Probe::take((&raw const filler[0]).cast::<c_void>())
 }
 
 unsafe extern "system" fn entry(param: *mut c_void) -> u32 {
