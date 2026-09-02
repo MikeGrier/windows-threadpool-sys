@@ -86,6 +86,23 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const THREAD_TOKEN_CAPTURE_ACCESS: TOKEN_ACCESS_MASK = TOKEN_DUPLICATE | TOKEN_QUERY;
+
+// A mutation run reports the `|` above as replaceable by `^`, and it is an
+// equivalent mutant rather than a gap: these are single-bit access rights, so
+// the operands share no set bit and `|` and `^` agree. No test can distinguish
+// them.
+//
+// The assertion is what makes that argument checkable rather than merely
+// stated. If a future access mask were folded in that overlapped -- a composite
+// right such as `TOKEN_READ`, which includes `TOKEN_QUERY` -- the equivalence
+// would quietly stop holding and `^` would start *clearing* a bit the capture
+// needs. That failure is invisible at the call site and would surface as a
+// permission error much later, so it is caught here at compile time instead.
+const _: () = assert!(
+    TOKEN_DUPLICATE & TOKEN_QUERY == 0,
+    "the capture mask combines single-bit rights; overlapping bits would make \
+     the combinator load-bearing rather than a spelling choice"
+);
 const PROCESS_TOKEN_CAPTURE_ACCESS: TOKEN_ACCESS_MASK = TOKEN_DUPLICATE;
 const CAPTURED_TOKEN_ACCESS: TOKEN_ACCESS_MASK = TOKEN_IMPERSONATE;
 

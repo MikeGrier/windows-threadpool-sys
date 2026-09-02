@@ -488,3 +488,45 @@ fn the_debug_rendering_names_the_registration_and_its_identity() {
         "the operation's identity must appear: {rendering}"
     );
 }
+
+#[test]
+fn windows_refuses_an_empty_buffer_registration() {
+    // Written while chasing `RegisteredBuffers::is_empty -> false`, which a
+    // mutation run reports as surviving. It survives because the state it would
+    // misreport **cannot be reached**: nothing in this crate rejects an empty
+    // vector -- `register_buffers` only checks that the count fits a `u32` and
+    // that the ring has no prior table -- but the kernel refuses the submission
+    // with `E_INVALIDARG`, so no caller ever holds an empty registration and
+    // `is_empty` never has occasion to return `true`.
+    //
+    // That makes the mutant unreachable rather than untested, and manufacturing
+    // an in-crate struct literal to kill it would assert a shape the API cannot
+    // produce. What is worth pinning is the platform behaviour itself, because
+    // it is undocumented, it is the reason the accessor looks untested, and a
+    // future version that started accepting empty registrations would change
+    // which states this crate can be in.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(Vec::<Vec<u8>>::new())
+        .expect("this crate queues it; the refusal comes from the kernel");
+    let user_data = pending.user_data();
+    batch.submit_and_wait(1, 5_000).expect("submit");
+
+    let completion = ring
+        .try_pop()
+        .expect("pop")
+        .expect("the registration completion is ready");
+    assert_eq!(completion.user_data(), user_data);
+
+    let Err(error) = pending
+        .claim_if(&completion)
+        .expect("its own completion is accepted")
+    else {
+        panic!("Windows accepted an empty buffer registration; is_empty is now reachable");
+    };
+    assert!(
+        error.to_string().contains("0x80070057"),
+        "expected E_INVALIDARG, got {error}"
+    );
+}
