@@ -258,6 +258,14 @@ mod error;
 mod metrics;
 #[cfg(windows)]
 mod options;
+/// **Experimental, and not covered by this crate's semver promise.**
+///
+/// A duplicate of [`reserving_mpsc`] differing only in its claim protocol,
+/// built to be measured against it so that the ABA hole recorded as `SH-14.1`
+/// can be closed on evidence rather than on judgement. It will either be merged
+/// into `reserving_mpsc` or deleted.
+#[cfg(all(windows, feature = "experimental-permit-claim"))]
+pub mod permit_mpsc;
 #[cfg(all(windows, test))]
 mod race_hooks;
 #[cfg(windows)]

@@ -821,7 +821,7 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
   platform-integrity rule. Amend rather than reverse: the refusal may well stand, but every reason
   currently given for it is either wrong or incomplete.
 
-- [ ] **SH-15.3** -- **Arm A: the central-permit claim, as a duplicated shape.** Admission becomes a
+- [x] **SH-15.3** -- **Arm A: the central-permit claim, as a duplicated shape.** Admission becomes a
   single atomic on one `permits` counter initialised to the capacity, and the position degrades to a
   pure ticket (`fetch_add`, which has no predicate and therefore cannot be revalidated wrongly). A
   producer holding a permit and taking ticket `p` has `p - head <= capacity - 1` by counting, so its

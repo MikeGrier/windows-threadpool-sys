@@ -29,6 +29,14 @@ publish = true
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
 
+[features]
+# An experimental claim protocol, measured against the shipping one by
+# `probe-queue-contention` so that SH-14.3 can be decided on evidence. Not
+# covered by this crate's semver promise; it will either be merged into
+# `reserving_mpsc` or deleted (SH-15.6). Non-default so nothing depends on it
+# by accident.
+experimental-permit-claim = []
+
 [lib]
 path = "src/lib.rs"
 
