@@ -136,13 +136,23 @@ const POSITION_MASK: u64 = (1 << POSITION_BITS) - 1;
 /// capacity it could actually use.
 pub const BOUNDS_MAX: usize = {
     let packed = 1_usize << (POSITION_BITS - 1);
-    let widest_usize_power_of_two = 1_usize << (usize::BITS - 2);
-    if packed <= widest_usize_power_of_two {
+    if packed <= WIDEST_USIZE_POWER_OF_TWO {
         packed
     } else {
-        widest_usize_power_of_two
+        WIDEST_USIZE_POWER_OF_TWO
     }
 };
+
+/// The largest power of two a `usize` holds with the top bit still clear.
+///
+/// Named rather than inlined so the assertion below can reach it. A mutation
+/// run replaced its `- 2` with `/ 2` and nothing failed: on a 64-bit target the
+/// clamp is not the branch taken -- `packed` is 2^31, which is under both 2^62
+/// and the mutant's 2^32 -- so the wrong value is selected by neither. On a
+/// 32-bit target it *is* the branch taken, and the mutant would have set this
+/// shape's maximum capacity to 65,536 instead of 2^30, a factor of 16,384,
+/// without failing a single one of the assertions below.
+const WIDEST_USIZE_POWER_OF_TWO: usize = 1_usize << (usize::BITS - 2);
 
 /// The capacities this shape accepts. See [`BOUNDS_MAX`].
 const BOUNDS: Bounds = Bounds {
@@ -196,6 +206,14 @@ const _: () = {
         BOUNDS.min <= BOUNDS.max,
         "a shape that accepts nothing would reject every capacity with a suggestion it would also \
          reject"
+    );
+    assert!(
+        WIDEST_USIZE_POWER_OF_TWO.leading_zeros() == 1,
+        "the clamp must be the widest power of two that leaves the top bit clear, on every target. \
+         Stated as a bit position rather than as an arithmetic identity because the identity is \
+         tautological -- and because the value only *matters* on a 32-bit target, where this shape \
+         is not the one built by default, so an error here would otherwise reach a caller before it \
+         reached a build"
     );
 };
 
