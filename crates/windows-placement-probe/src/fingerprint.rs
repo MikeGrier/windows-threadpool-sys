@@ -469,25 +469,58 @@ pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
     })
 }
 
-/// An online processor whose NUMA membership a topology did not state, in a
-/// topology that stated other processors'.
+/// An online processor a topology could not place, and which attribute was
+/// missing.
 ///
 /// Carried as a value rather than reported as a bare message so a caller can see
-/// which processor was at fault; the identity is the whole diagnostic.
+/// which processor was at fault and why; the identity is the whole diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnplacedProcessor {
     /// The processor's group.
     pub group: u16,
     /// The processor's number within that group.
     pub number: u8,
+    /// Which part of its position the topology did not state.
+    pub missing: MissingPlacement,
+}
+
+/// Which attribute of a processor's position a topology left unstated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MissingPlacement {
+    /// No core domain covers it, though the topology names core domains.
+    ///
+    /// Covers the efficiency class too, and deliberately has no separate
+    /// variant for it: [`Topology::cores`] yields only `DomainKind::Core`
+    /// domains, and every one of those carries a class, so a processor's core
+    /// and its class are known or unknown together. A variant no input could
+    /// produce would be dead public API.
+    Core,
+    /// No cache domain covers it at the level that partitions the machine.
+    CacheDomain,
+    /// No memory domain covers it, though the topology names memory domains.
+    NumaNode,
+}
+
+impl MissingPlacement {
+    /// What the topology failed to state, for a message.
+    fn what(self) -> &'static str {
+        match self {
+            Self::Core => "core domains but places no core for",
+            Self::CacheDomain => "a partitioning cache level that omits",
+            Self::NumaNode => "memory domains but places no NUMA node for",
+        }
+    }
 }
 
 impl fmt::Display for UnplacedProcessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the topology names memory domains but places no NUMA node for g{}/cpu{}",
-            self.group, self.number
+            "the topology names {} g{}/cpu{}",
+            self.missing.what(),
+            self.group,
+            self.number
         )
     }
 }
@@ -525,12 +558,26 @@ impl std::error::Error for UnplacedProcessor {}
 ///
 /// # Errors
 ///
-/// Returns [`UnplacedProcessor`] when the topology names memory domains but
-/// none of them contains some online processor. Defaulting that to node 0 is
-/// right only when the topology names *no* memory domain at all; where the real
-/// nodes are, say, 1 and 2, it invents a node the machine does not have and
-/// files a processor under it. A partial topology is a legitimate input to this
-/// seam (D-12), so it is refused rather than guessed at.
+/// Returns [`UnplacedProcessor`] when the topology states an attribute of a
+/// processor's position for *other* processors but not for this one --
+/// [`MissingPlacement`] says which. The rule is one sentence: an absence that is
+/// **uniform** across the machine is a real answer, and an absence that singles
+/// one processor out is a gap.
+///
+/// A topology naming no memory domain describes a single-node machine, so node
+/// zero is correct for everyone; a topology naming nodes 1 and 2 and omitting a
+/// processor has not said where it is, and answering zero invents a node the
+/// machine does not have. The same holds for cores, efficiency classes, and the
+/// cache level that partitions the machine.
+///
+/// **The invented value is worse than a lost one**, which is why this refuses
+/// rather than substituting a sentinel: a synthetic core id can equal a real
+/// core domain's id, class zero is a genuine Windows class, and a `None` cache
+/// domain already means "no level partitions this machine". Each would compare
+/// *equal* to a real value, and
+/// [`classify`](crate::core_affinity::classify) would then report a shared core,
+/// class or cache that is not there. A partial topology is a legitimate input to
+/// this seam (D-12), so it is refused rather than guessed at.
 pub fn places_from_topology(topology: &Topology) -> Result<Vec<ProcessorPlace>, UnplacedProcessor> {
     // Every map here is keyed by the full `(group, number)` pair. Keying on the
     // number alone is the defect this function is written against: on a machine
@@ -539,7 +586,9 @@ pub fn places_from_topology(topology: &Topology) -> Result<Vec<ProcessorPlace>, 
     // silently shrink to one group's worth of processors.
     let mut class_of = std::collections::BTreeMap::new();
     let mut core_of = std::collections::BTreeMap::new();
+    let mut any_core_domain = false;
     for core in topology.cores() {
+        any_core_domain = true;
         for id in core.processors.iter() {
             core_of.insert(id, core.id);
         }
@@ -559,7 +608,9 @@ pub fn places_from_topology(topology: &Topology) -> Result<Vec<ProcessorPlace>, 
     // the rule, so the two cannot disagree about which level partitions the
     // host or about how many partitions it has.
     let mut cache_of = std::collections::BTreeMap::new();
+    let mut any_cache_partition = false;
     if let Some((_, partitions)) = topology.outermost_partitioning_cache() {
+        any_cache_partition = true;
         for domain in partitions {
             for id in domain.processors.iter() {
                 cache_of.insert(id, domain.id);
@@ -583,29 +634,70 @@ pub fn places_from_topology(topology: &Topology) -> Result<Vec<ProcessorPlace>, 
         .map(|processor| {
             let id = (processor.id.group, processor.id.number);
             let (group, number) = id;
+            let refuse = |missing| {
+                Err(UnplacedProcessor {
+                    group,
+                    number,
+                    missing,
+                })
+            };
+
+            // Each attribute below follows one rule: an absence that is
+            // **uniform** across the machine is a real answer, and an absence
+            // that singles this processor out is a gap that must not be filled
+            // in. Inventing a value in the second case does not merely lose
+            // information -- it produces a value that compares *equal* to a
+            // real one, and `classify` then reports a shared core, class or
+            // cache that the machine does not have.
+            let core = match core_of.get(&id).copied() {
+                Some(core) => core,
+                // Synthetic, and collision-free precisely because no core
+                // domain exists to collide with: `group << 8 | number` is
+                // distinct per processor, which is what keeps group 1's cpu5
+                // off group 0's. Reached only when the topology names no core
+                // at all, so no real core id shares the namespace.
+                None if !any_core_domain => u32::from(group) << 8 | u32::from(number),
+                None => return refuse(MissingPlacement::Core),
+            };
+            let efficiency_class = match class_of.get(&id).copied() {
+                Some(class) => class,
+                // Zero is what the topology crate reports for a processor with
+                // no known owning core, so a machine with no core domains at
+                // all is uniformly class zero rather than partly unknown.
+                //
+                // No `MissingPlacement::EfficiencyClass` arm, because there is
+                // no input that reaches one: `cores()` yields only
+                // `DomainKind::Core` domains and each carries a class, so this
+                // map has exactly `core_of`'s keys and the refusal above has
+                // already returned.
+                None if !any_core_domain => 0,
+                None => return refuse(MissingPlacement::Core),
+            };
+            let cache_domain = match cache_of.get(&id).copied() {
+                Some(domain) => Some(domain),
+                // `None` means "no level partitions this machine", which is a
+                // real and uniform answer. It must not also mean "this
+                // processor was left out of the level that does": two omitted
+                // processors would then compare equal and be reported as
+                // sharing a cache.
+                None if !any_cache_partition => None,
+                None => return refuse(MissingPlacement::CacheDomain),
+            };
             let numa_node = match numa_of.get(&id).copied() {
                 Some(node) => node,
-                // Node 0 is the correct answer rather than a fallback *only*
-                // here: a topology naming no memory domain at all describes a
-                // machine with one node, and every processor is in it.
+                // The same rule again: a topology naming no memory domain
+                // describes a machine with one node, and every processor is in
+                // it.
                 None if !any_memory_domain => 0,
-                None => return Err(UnplacedProcessor { group, number }),
+                None => return refuse(MissingPlacement::NumaNode),
             };
+
             Ok(ProcessorPlace {
                 group,
                 number,
-                // The fallback keeps distinct processors distinct across groups:
-                // a topology that reports no core for this processor must not
-                // collapse group 1's cpu5 onto group 0's.
-                core: core_of
-                    .get(&id)
-                    .copied()
-                    .unwrap_or_else(|| u32::from(group) << 8 | u32::from(number)),
-                // Zero is what the topology crate itself reports for a processor
-                // with no known owning core, so this agrees with `Processor`'s
-                // own `capacity` rather than inventing a separate convention.
-                efficiency_class: class_of.get(&id).copied().unwrap_or(0),
-                cache_domain: cache_of.get(&id).copied(),
+                core,
+                efficiency_class,
+                cache_domain,
                 numa_node,
             })
         })

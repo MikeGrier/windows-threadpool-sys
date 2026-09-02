@@ -597,7 +597,7 @@ mod multi_group_conversion {
         Domain, DomainKind, Processor, ProcessorId, ProcessorSet, Topology,
     };
 
-    use crate::fingerprint::places_from_topology;
+    use crate::fingerprint::{MissingPlacement, places_from_topology};
 
     /// One processor per core, four cores per group, two groups -- with the
     /// numbers overlapping, which is how Windows really presents it.
@@ -853,5 +853,144 @@ mod multi_group_conversion {
         let mut nodes: Vec<u32> = places.iter().map(|p| p.numa_node).collect();
         nodes.sort_unstable();
         assert_eq!(nodes, vec![1, 2], "the real node numbers must survive");
+    }
+
+    // --- Unknown must never masquerade as known -------------------------------
+    //
+    // Placing every online processor (rather than only those a core domain
+    // mentions) made three fallbacks reachable that had previously been dead:
+    // a synthetic core id, class zero, and a `None` cache domain. Each compares
+    // *equal* to a real value, so `classify` would report a shared core, class
+    // or cache the machine does not have. Each is now refused instead, and each
+    // test below pins the false sharing that would otherwise be reported.
+
+    /// `bare_processors`, plus a real core domain covering the given numbers.
+    fn with_core_domain(count: u8, id: u32, members: &[u8]) -> Topology {
+        let mut topology = bare_processors(count);
+        let mask = members.iter().fold(0_usize, |m, n| m | (1 << n));
+        topology.domains.push(Domain {
+            kind: DomainKind::Core {
+                simultaneous_multithreading: members.len() > 1,
+                efficiency_class: 0,
+            },
+            id,
+            processors: ProcessorSet::from_group_mask(0, mask),
+        });
+        topology
+    }
+
+    #[test]
+    fn a_synthetic_core_id_that_would_collide_with_a_real_one_is_refused() {
+        // The collision, concretely. cpu2 has no core domain, so the old
+        // fallback gave it `group << 8 | number` == 2 -- and core domain id 2
+        // genuinely exists here, covering cpu0 and cpu1. `classify` compares
+        // group and core, so it would have called cpu0 and cpu2 SMT siblings
+        // and attributed a shared L1 that does not exist.
+        let topology = with_core_domain(3, 2, &[0, 1]);
+
+        let refused = places_from_topology(&topology)
+            .expect_err("cpu2 has no core, and core id 2 is already taken by a real domain");
+
+        assert_eq!((refused.group, refused.number), (0, 2));
+        assert_eq!(refused.missing, MissingPlacement::Core);
+        assert!(refused.to_string().contains("g0/cpu2"), "{refused}");
+    }
+
+    #[test]
+    fn a_machine_with_no_core_domains_at_all_still_gets_distinct_synthetic_cores() {
+        // The other side of that rule: with no core domain anywhere there is no
+        // real id to collide with, so the synthetic namespace is safe and the
+        // fallback stays. It must still keep processors apart across groups,
+        // which is the reason it exists.
+        let mut topology = bare_processors(1);
+        topology.processors.push(Processor {
+            id: ProcessorId {
+                group: 1,
+                number: 0,
+            },
+            online: true,
+            capacity: 0,
+        });
+        topology.domains.push(Domain {
+            kind: DomainKind::Group,
+            id: 1,
+            processors: ProcessorSet::from_group_mask(1, 0b1),
+        });
+
+        let places =
+            places_from_topology(&topology).expect("no core domain exists to collide with");
+
+        assert_eq!(places.len(), 2);
+        assert_ne!(
+            places[0].core, places[1].core,
+            "g0/cpu0 and g1/cpu0 must not share a synthetic core id"
+        );
+    }
+
+    #[test]
+    fn an_unknown_efficiency_class_is_not_reported_as_class_zero() {
+        // Zero is a genuine Windows efficiency class, so an uncovered processor
+        // defaulting to it becomes indistinguishable from a real class-0 core --
+        // and `within_class_pair` would pair them as a same-class measurement.
+        // The class travels with the core, so this is the same refusal.
+        let topology = with_core_domain(2, 7, &[0]);
+
+        let refused = places_from_topology(&topology)
+            .expect_err("cpu1 has no core, so its class is unknown rather than zero");
+
+        assert_eq!((refused.group, refused.number), (0, 1));
+        assert_eq!(refused.missing, MissingPlacement::Core);
+    }
+
+    #[test]
+    fn a_processor_omitted_from_the_partitioning_cache_level_is_refused() {
+        // `None` already means "no level partitions this machine". Letting it
+        // also mean "this processor was left out of the level that does" makes
+        // two omitted processors compare equal, and `classify` reports them as
+        // sharing a cache -- a confident same-cache row for a pair whose cache
+        // membership nobody knows.
+        //
+        // Three processors, each its own core so the level genuinely divides
+        // them, and an L2 partition covering only two.
+        let mut topology = bare_processors(3);
+        for (id, member) in [(10_u32, 0_u8), (11, 1), (12, 2)] {
+            topology.domains.push(Domain {
+                kind: DomainKind::Core {
+                    simultaneous_multithreading: false,
+                    efficiency_class: 0,
+                },
+                id,
+                processors: ProcessorSet::from_group_mask(0, 1 << member),
+            });
+        }
+        for (id, mask) in [(20_u32, 0b001_usize), (21, 0b010)] {
+            topology.domains.push(Domain {
+                kind: DomainKind::Cache {
+                    level: 2,
+                    associativity: 8,
+                    line_size: 64,
+                    size_bytes: 1024 * 1024,
+                    cache_type: windows_topology_sys::CacheKind::Unified,
+                },
+                id,
+                processors: ProcessorSet::from_group_mask(0, mask),
+            });
+        }
+
+        let refused = places_from_topology(&topology)
+            .expect_err("cpu2 is in no cache domain at the partitioning level");
+
+        assert_eq!((refused.group, refused.number), (0, 2));
+        assert_eq!(refused.missing, MissingPlacement::CacheDomain);
+    }
+
+    #[test]
+    fn no_partitioning_cache_at_all_is_reported_as_none_rather_than_refused() {
+        // The uniform absence, which is a real answer: a machine no cache level
+        // divides has `None` for every processor, and that must keep working.
+        let places =
+            places_from_topology(&bare_processors(2)).expect("no cache level divides this machine");
+
+        assert!(places.iter().all(|place| place.cache_domain.is_none()));
     }
 }

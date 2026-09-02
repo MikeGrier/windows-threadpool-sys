@@ -150,14 +150,29 @@ if (-not $OutputDirectory) {
     # Stamped per run, not merely per scope. A path derived from the package or
     # file alone is the same path every time, so a second run of the same scope
     # overwrites the analysis this parameter promises to preserve -- and two
-    # concurrent runs write into one directory. The stamp sorts chronologically,
-    # so the most recent run is the last one listed.
+    # concurrent runs write into one directory.
+    #
+    # The timestamp sorts chronologically so the most recent run reads last, and
+    # the short random suffix is what actually makes it unique: the stamp has
+    # one-second resolution, so two runs launched inside the same second -- a
+    # script starting several scopes at once, which is the case that most wants
+    # separate output -- would otherwise select the same directory and interleave
+    # their results.
     $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
-    $OutputDirectory = Join-Path $repo ".scratch\mutants-$leaf-$stamp"
+    $unique = [guid]::NewGuid().ToString('N').Substring(0, 6)
+    $OutputDirectory = Join-Path $repo ".scratch\mutants-$leaf-$stamp-$unique"
 }
 
 $werKey = 'HKCU:\Software\Microsoft\Windows\Windows Error Reporting'
 $hadKey = Test-Path $werKey
+# Anything WER or the JIT debugger is already holding when this starts belongs
+# to somebody else -- an unrelated crash report the user is reading, or a live
+# debugging session. Recording them now is what lets the cleanup below kill only
+# what this run produced. Matching by name alone would terminate those too.
+$preexistingFaultHandlers = @(
+    Get-Process -Name 'WerFault', 'WerFaultSecure', 'vsjitdebugger' -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Id }
+)
 # `.GetValue(name, $null)` rather than `Get-ItemProperty -Name`: under
 # `Set-StrictMode -Version Latest` the latter throws when the property is absent
 # (which is the default state of this one), so the wrapper died before it could
@@ -197,8 +212,17 @@ finally {
     # the dialog suppressed these should not appear at all; killing them is
     # insurance against a stale one pinning a target file and failing the next
     # build with a confusing "access denied".
+    #
+    # **Only the ones this run produced.** An earlier version matched by name,
+    # which also terminated a crash report the user was reading or a debugger
+    # they had attached to something else entirely -- a wrapper for a mutation
+    # sweep has no business doing that. Processes alive before this started are
+    # excluded by id, and a pid recorded then cannot be confused with a later
+    # one: Windows will not reuse it while the process object is still open,
+    # and these are all still running when the snapshot is taken.
     foreach ($name in 'WerFault', 'WerFaultSecure', 'vsjitdebugger') {
         Get-Process -Name $name -ErrorAction SilentlyContinue |
+            Where-Object { $preexistingFaultHandlers -notcontains $_.Id } |
             ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
     }
 
@@ -212,6 +236,12 @@ finally {
     Write-Report "WER dialog setting restored." -Level note
 }
 
+# cargo-mutants treats `--output` as the PARENT and creates `mutants.out` inside
+# it, so this join is correct rather than a doubled path. Verified on this
+# workspace: a run with `--output .scratch\mutants-encoding-<stamp>` produced
+# `.scratch\mutants-encoding-<stamp>\mutants.out\caught.txt` with 22 lines, and
+# the summary below reported 22. Written down because the path reads like a
+# duplication and has already been challenged once.
 $out = Join-Path $OutputDirectory 'mutants.out'
 foreach ($name in 'caught', 'missed', 'timeout', 'unviable') {
     $path = Join-Path $out "$name.txt"

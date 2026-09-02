@@ -504,3 +504,50 @@ that produces no thread is otherwise invisible to the "are all comments resolved
   cheap sample is preferred to an exact count. Counting exactly would put a read-modify-write on a line
   shared by every producer and the consumer into every push and every pop -- the line this crate pads
   its positions apart to keep out of the hot path.
+
+## M11: PR #56 sixth review round
+
+Three findings against `places_from_topology`, all of the same shape, plus three against the
+mutation wrapper. The conversion's three silent fallbacks are replaced by one rule.
+
+- [x] **SH-11.1** -- **Three fallbacks each invented an answer that reads as a real one.**
+  `places_from_topology` accepted a topology whose domains do not cover every processor, and filled
+  each gap with a value indistinguishable from a measured one. A processor absent from every core
+  domain was given a synthetic core id derived from its group and number, which can equal a real
+  core domain's id -- `classify` then reports two processors as SMT siblings when one's core is
+  merely unknown. Its efficiency class became `0`, which is also a genuine Windows class, so
+  `within_class_pair` reports a same-class pair against a real class-0 core. Its cache domain became
+  `None`, which the type already means "no cache level partitions this machine" -- so two processors
+  omitted from an incomplete partition compare equal and serialize a confident same-cache
+  measurement.
+  The three share one cause: an absence was read as a value. The rule now distinguishes *uniform*
+  absence from a *gap*. A machine that reports no core domains at all, or no partitioning cache
+  level, has told us something true about itself and still converts. A machine that places every
+  other processor but not this one has told us nothing about this one, and the conversion refuses:
+  `places_from_topology` returns `Err(UnplacedProcessor)` naming the processor and, in a new
+  `MissingPlacement` field, which of core / cache domain / NUMA node was missing.
+  `MissingPlacement` is `#[non_exhaustive]`.
+  Core and efficiency class are two spellings of one rule -- `Topology::cores()` filters to
+  `DomainKind::Core`, so a processor's class is known exactly when its core is -- and an
+  `EfficiencyClass` variant written for the second was removed on discovering it is unreachable.
+  Sabotage confirms the pair behaves that way: removing either refusal alone leaves the suite green,
+  because the other still fires; removing both fails two tests.
+
+- [x] **SH-11.2** -- **The mutation wrapper's output directory could collide.** The stamp has
+  one-second resolution, so two runs launched in the same second -- a script starting several scopes
+  at once, which is exactly the case that wants separate output -- selected the same directory and
+  interleaved their results. A short random suffix now follows the stamp, which still sorts
+  chronologically.
+
+- [x] **SH-11.3** -- **The wrapper terminated fault handlers it did not start.** Cleanup matched
+  `WerFault` / `WerFaultSecure` / `vsjitdebugger` by name across the whole session, so a crash report
+  the user was reading or a debugger attached to an unrelated process was killed by a mutation sweep.
+  The wrapper now records the ones already running at startup and skips them.
+
+- [x] **SH-11.4** -- **The `mutants.out` nesting finding does not hold; documented in place.**
+  The report was that `Join-Path $OutputDirectory 'mutants.out'` doubles a path cargo-mutants already
+  appends. It does not: cargo-mutants treats `--output` as the parent and creates `mutants.out`
+  inside it. Verified on disk -- a run with `--output .scratch\mutants-encoding-<stamp>` produced
+  `<stamp>\mutants.out\caught.txt` with 22 lines, matching the 22 caught the wrapper reported. A
+  comment now records the evidence, since the path reads like a duplication and has been challenged
+  once already.
