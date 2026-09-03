@@ -505,6 +505,60 @@ mod serde_tests {
             vec![Observation::new(Source::CpuSets, 5)]
         );
     }
+    // --- M3+.2: the two Provenance properties, re-derived at the relation level ---
+
+    #[test]
+    fn a_relation_nobody_reported_claims_no_source() {
+        // "The default is the untrusted value", carried down a level. A
+        // hand-built relation has an empty observation list, which says nobody
+        // reported it -- rather than defaulting to a source and asserting
+        // something no API said. The argument is STRONGER here than for the
+        // object, because there are far more places to forget.
+        let domain = core_domain(0, &[0, 1], 0);
+        assert_eq!(domain.observations.len(), 1, "the helper states its source");
+
+        let silent = Domain {
+            observations: Vec::new(),
+            ..core_domain(0, &[0, 1], 0)
+        };
+        assert!(
+            silent.observations.is_empty(),
+            "nothing fills this in on a caller's behalf"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn relation_level_trust_never_upgrades_across_a_file() {
+        // "Trust never upgrades", carried down a level. A description asserting
+        // the relationship walk observed something cannot establish that it
+        // did, so the claim does not survive deserialization -- the same rule
+        // `Provenance::downgraded_to` applies to the object (D-12).
+        let json = r#"{
+            "processors": [
+                {"id": {"group": 0, "number": 0}, "online": true, "capacity": 0}
+            ],
+            "domains": [
+                {"kind": "core", "id": 0, "processors": [{"group":0,"number":0}],
+                 "simultaneous_multithreading": false, "efficiency_class": 0}
+            ],
+            "provenance": "measured"
+        }"#;
+        let topology: MachineMemoryTopology = serde_json::from_str(json).expect("parse");
+
+        assert_eq!(
+            topology.provenance,
+            Provenance::Restored,
+            "the object's claim is capped"
+        );
+        assert!(
+            topology
+                .domains
+                .iter()
+                .all(|domain| domain.observations.is_empty()),
+            "and no relation claims a platform source either"
+        );
+    }
     #[test]
     fn a_hand_written_synthetic_topology_parses() {
         let json = r#"{

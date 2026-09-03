@@ -455,10 +455,18 @@ item against the code before planning work from it.**
     **Not observable on this host** -- every efficiency class reads `0` here -- so it is testable only
     synthetically, per [D-17](DESIGN-NOTES.md#d-17).
 
-- [ ] **M3+.2** -- Keep two properties of the old `Provenance` **because they re-derive**, not
+- [x] **M3+.2** -- Keep two properties of the old `Provenance` **because they re-derive**, not
   because they were there: the default is the untrusted value (a *stronger* argument per-relation,
   since there are more places to forget), and trust never upgrades (a file still cannot establish it
   describes the machine you are on).
+  **Done, and both turned out to be already satisfied by `M3+.1.1` rather than needing new
+  mechanism** -- which is the item's own claim vindicated: they *re-derive*.
+  The untrusted default is an **empty** observation list. A relation nobody reported says exactly
+  that, rather than defaulting to a source and asserting something no API said; nothing fills it in
+  on a caller's behalf.
+  Never-upgrade is deserialization dropping platform observations, so a description claiming the
+  relationship walk observed something cannot establish that it did. Both now have named tests
+  asserting them at the relation level, beside the object-level ones D-12 already had.
 
 - [x] **M3+.3** -- ~~Supersede the whole-object `Provenance` **without replacing it with another
   whole-object scalar**. With trust per relation, an object-level scalar can only be the minimum --
