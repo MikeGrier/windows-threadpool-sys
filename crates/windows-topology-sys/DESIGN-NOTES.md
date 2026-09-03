@@ -304,7 +304,7 @@ shape.
 
 The retry is bounded. Exhausting the bound is not a failure to collect -- it is the **conclusion**
 that the disagreement is genuine, and the point at which the conflict representation
-([MMT-1.2](CHECKLIST.md)'s shapes A and B) applies. The two are one mechanism: retry to remove the
+([MMT-1.2](CHECKLIST.md)'s partition and attribute shapes) applies. The two are one mechanism: retry to remove the
 transient cases, then represent whatever is left.
 
 ## D-17: incoherence in the field, and what it demands

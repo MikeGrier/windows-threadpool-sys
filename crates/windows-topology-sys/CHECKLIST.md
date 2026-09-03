@@ -137,9 +137,9 @@ wrongly after code exists.
      scope would genuinely have been a knob. `D-16` removed the knob.
 
   2. **The bound**, and what exhausting it *means* -- not a failure to collect, but the **conclusion**
-     that the disagreement is genuine, and the point at which shapes A and B apply. The *meaning* is
-     settled by [D-16](DESIGN-NOTES.md#d-16); only the number is open, and it is small -- a couple of
-     passes failing to find a coherent set is not plausible.
+     that the disagreement is genuine, and the point at which the partition and attribute shapes
+     apply. The *meaning* is settled by [D-16](DESIGN-NOTES.md#d-16); only the number is open, and it
+     is small -- a couple of passes failing to find a coherent set is not plausible.
 
   3. **How a topology records its coherence.** *Records*, not reports -- an earlier draft of this item
      said "precisely enough to file a bug", which put a downstream concern in the crate that states
@@ -156,12 +156,12 @@ wrongly after code exists.
      Only possible because [D-15](DESIGN-NOTES.md#d-15) keeps both observations: a disagreement cannot
      be reported after it has been collapsed.
 
-  4. **Shape B still has no representation.** `(kind, membership)` identity does not reach a
+  4. **The attribute shape has no representation.** `(kind, membership)` identity does not reach a
      per-processor scalar disagreement, and that gap is untouched by any of the above.
 
   ### Closed by [D-18](DESIGN-NOTES.md#d-18)
 
-  **Shape B (4):** an observation is `(subject, claim, source)`, and a **subject** is either a relation
+  **The attribute shape (4):** an observation is `(subject, claim, source)`, and a **subject** is either a relation
   identity `(kind, membership)` or a processor attribute `(processor, attribute)`. The mechanism above
   it is unchanged -- observations of one subject are a set, agreement is one subject observed twice,
   disagreement is a set with more than one distinct claim. So the second shape needs no second
