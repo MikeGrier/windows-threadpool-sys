@@ -270,13 +270,28 @@ be wrong and breaking again later.
 **Ready.** M1 is closed, and [D-21](DESIGN-NOTES.md#d-21) makes every item here a refinement of what
 Windows reports rather than something a planner asked for.
 
-- [ ] **M2+.1** -- Model **observed sharing relations**, not a ladder of levels with optional rungs.
+**Re-planned 2026-09-03, on execution.** Checking these six against the code they reshape found two
+that already describe the status quo and three that are one deliverable. Recorded rather than
+quietly worked around, per the re-plan rule.
+
+- [x] **M2+.1** -- Model **observed sharing relations**, not a ladder of levels with optional rungs.
   A machine with no L3 has no L3 relation, which is an observation rather than a missing value.
+  **Already satisfied; this item described the existing design.** `Domain` *is* a relation over a
+  `ProcessorSet`; `DomainKind` is open with seven kinds (D-4); `Cache { level: u8 }` has no fixed
+  rungs; and `cache_levels()` is documented as "derived from what the topology actually contains
+  rather than from a fixed ceiling", with a regression test guarding the exact hazard this item
+  names. A machine with no L3 simply has no `Cache { level: 3 }` domain today.
+  Not absorbed silently: separating *relation identity* `(kind, membership)` from the **label**
+  `Domain::id`, which [D-15](DESIGN-NOTES.md#d-15) requires, is real remaining work -- but it is
+  observation work and belongs to **M3**, not here.
 
 - [ ] **M2+.2** -- Derive the order from **observed set inclusion**, never from firmware level
   numbers. Inclusion is checkable; numbering is asserted, and this crate has been bitten by asserted
   structure before -- the ARM64 host with no L3, and the guard test against a consumer sweeping
   `1..=4`.
+  **The concrete target:** `cache_levels()` sorts by firmware `level`, and
+  `outermost_partitioning_cache()` walks it with `.rev()` -- so today's only ordering *is* firmware
+  numbering, which is what this item forbids.
 
 - [ ] **M2+.3** -- Give the order an explicit **top** ("the machine"), so a pairwise query is total.
   Two processors always share one address space, one scheduler and one memory system; without a top,
@@ -286,18 +301,39 @@ Windows reports rather than something a planner asked for.
   granularities may not nest, and the honest answer to "tightest shared" is then a set of minimal
   elements -- almost always one, but not by construction.
 
+  > **M2+.2, M2+.3 and M2+.4 are one deliverable and land in one commit citing all three.** They are
+  > not independently implementable: an inclusion-derived order cannot be defined without deciding
+  > what its top is and what happens when two elements do not nest, and a type that answered only one
+  > of the three would not compile into anything coherent. This is the acknowledged-coupling case,
+  > named rather than disguised by splitting the commits.
+  >
+  > **Shape:** the order is over *relations*, compared by processor-set inclusion, with a synthetic
+  > `Machine` top that is **not** inserted into `domains` -- putting it there would claim the platform
+  > observed it. The operation the order exists to support is "the minimal relations containing this
+  > set of processors", which returns a `Vec` precisely because M2+.4 says minimality need not be
+  > unique. The *pairwise* query built on it, with membership and the upper-bound flag, is `M4+.1`.
+
 - [ ] **M2+.5** -- Make absence first-class per [D-13](DESIGN-NOTES.md#d-13): **not observed**,
   **observed and absent**, and **a negative result** are three different facts that an `Option`
   spells identically. Per [D-19](DESIGN-NOTES.md#d-19) this also carries the contested case -- a
   subject the sources genuinely disagreed on is one the unified view does not cover, which is *not
   observed*, so no fourth state is added.
+  **Deliverable: the vocabulary type**, which `M5+.2` and `M5+.4` then consume -- M5+.4 already says
+  "M2+.5 gives it the vocabulary to accept one". Independent of M2+.2/.3/.4, so it lands separately.
 
-- [ ] **M2+.6** -- **Relations carry attributes, not only memberships.** Required by
+- [x] **M2+.6** -- **Relations carry attributes, not only memberships.** Required by
   [D-19](DESIGN-NOTES.md#d-19): once the relation set *is* the unified model,
   `DomainKind::Memory { memory_bytes }` and `Core { efficiency_class, simultaneous_multithreading }`
-  have nowhere to live unless a relation holds a payload alongside its processor set. Nothing else in
-  M2 provides this, and it was noticed only when the unified view was written down -- the
-  membership-only framing had quietly assumed relations were bare sets.
+  have nowhere to live unless a relation holds a payload alongside its processor set.
+  **Already satisfied, and the premise was wrong.** `DomainKind` has carried per-kind attributes
+  since D-4: `Memory { memory_bytes }`, `Core { simultaneous_multithreading, efficiency_class }`,
+  `Cache { level, associativity, line_size, size_bytes, cache_type }`, and `Other { name, attributes
+  }` for a kind this crate cannot interpret. Nothing had "nowhere to live".
+  The item was written from the abstract `(kind, membership)` framing while recording D-19, without
+  checking it against the type -- which had solved this two decisions earlier. Kept rather than
+  deleted because it is the second time in this milestone that an item asserted a gap the code did
+  not have, and once is a slip while twice is a method problem: **check the item against the code
+  before planning work from it.**
 
 ## M3: observation and provenance
 
