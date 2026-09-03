@@ -86,9 +86,9 @@ pub use cpu_set::CpuSet;
 #[cfg(windows)]
 pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorId};
 #[cfg(windows)]
-pub use granularity::Granularity;
+pub use granularity::{Granularity, Proximity};
 #[cfg(windows)]
-pub use observation::{Observation, Source};
+pub use observation::{AttributeObservation, Observation, ProcessorAttribute, Source};
 pub use observed::Observed;
 pub use processor_set::ProcessorSet;
 pub use provenance::Provenance;

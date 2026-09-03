@@ -1128,6 +1128,131 @@ fn a_split_instruction_and_data_cache_is_one_partition_not_two() {
     assert_eq!(topo.cache_partitions_at_level(1).len(), 8);
 }
 
+// --- M4+.4: "outermost" is inclusion, not the level number ---
+
+/// A cache relation over `numbers`, labelled by the relationship walk.
+fn cache_at(level: u8, label: u32, numbers: &[u8]) -> Domain {
+    let mut processors = ProcessorSet::empty();
+    for &n in numbers {
+        processors.insert(0, n);
+    }
+    Domain {
+        kind: DomainKind::Cache {
+            level,
+            associativity: 8,
+            line_size: 64,
+            size_bytes: 32 * 1024,
+            cache_type: CacheKind::Unified,
+        },
+        processors,
+        observations: vec![Observation::new(Source::RelationshipWalk, label)],
+    }
+}
+
+fn machine_of(count: u8, domains: Vec<Domain>) -> MachineMemoryTopology {
+    MachineMemoryTopology {
+        processors: (0..count)
+            .map(|number| Processor {
+                id: ProcessorId { group: 0, number },
+                online: true,
+                capacity: 0,
+            })
+            .collect(),
+        domains,
+        cpu_sets: None,
+        processor_attributes: Vec::new(),
+        provenance: Provenance::Synthetic,
+    }
+}
+
+#[test]
+fn the_outermost_partition_is_the_coarsest_one_not_the_highest_level() {
+    // The discriminating case, which no fixture built from real hardware has:
+    // the LOWER level number forms the COARSER partition. Ordering by level
+    // would answer L2 (four blocks of two); ordering by inclusion answers L1
+    // (two blocks of four), which is the outer boundary.
+    //
+    // Every pre-existing test passes under either rule, so without this one the
+    // change from `.rev()` over level numbers to a refinement order would be
+    // invisible.
+    let topo = machine_of(
+        8,
+        vec![
+            cache_at(1, 0, &[0, 1, 2, 3]),
+            cache_at(1, 1, &[4, 5, 6, 7]),
+            cache_at(2, 2, &[0, 1]),
+            cache_at(2, 3, &[2, 3]),
+            cache_at(2, 4, &[4, 5]),
+            cache_at(2, 5, &[6, 7]),
+        ],
+    );
+
+    let (level, blocks) = topo
+        .outermost_partitioning_cache()
+        .expect("both levels partition");
+    assert_eq!(
+        level, 1,
+        "the coarser partition wins even though its level number is lower"
+    );
+    assert_eq!(blocks.len(), 2);
+}
+
+#[test]
+fn the_usual_ordering_is_unchanged_where_the_two_rules_agree() {
+    // Ordinary hardware: the higher level is also the coarser one, so the
+    // answer must not move.
+    let topo = machine_of(
+        8,
+        vec![
+            cache_at(1, 0, &[0, 1]),
+            cache_at(1, 1, &[2, 3]),
+            cache_at(1, 2, &[4, 5]),
+            cache_at(1, 3, &[6, 7]),
+            cache_at(3, 4, &[0, 1, 2, 3]),
+            cache_at(3, 5, &[4, 5, 6, 7]),
+        ],
+    );
+
+    let (level, blocks) = topo.outermost_partitioning_cache().expect("both partition");
+    assert_eq!(level, 3);
+    assert_eq!(blocks.len(), 2);
+}
+
+#[test]
+fn a_level_that_partitions_nothing_is_still_never_a_candidate() {
+    // A fully shared cache is one block, so it cannot be the boundary however
+    // coarse it is -- the rule this projection must not lose.
+    let topo = machine_of(
+        4,
+        vec![
+            cache_at(2, 0, &[0, 1]),
+            cache_at(2, 1, &[2, 3]),
+            cache_at(3, 2, &[0, 1, 2, 3]),
+        ],
+    );
+
+    let (level, blocks) = topo.outermost_partitioning_cache().expect("L2 divides");
+    assert_eq!(level, 2, "the shared L3 partitions nothing");
+    assert_eq!(blocks.len(), 2);
+}
+
+#[test]
+fn overlapping_blocks_still_disqualify_a_level() {
+    // Pairwise disjointness is not weakened by the reordering: a hand-built
+    // topology whose blocks overlap would make a caller double-count.
+    let topo = machine_of(
+        4,
+        vec![
+            cache_at(2, 0, &[0, 1]),
+            cache_at(2, 1, &[1, 2]),
+            cache_at(3, 2, &[0, 1]),
+            cache_at(3, 3, &[2, 3]),
+        ],
+    );
+
+    let (level, _) = topo.outermost_partitioning_cache().expect("L3 divides");
+    assert_eq!(level, 3, "the overlapping L2 is refused");
+}
 #[test]
 fn cache_partitions_keep_the_first_domain_for_each_processor_set() {
     let topo = split_l1_machine(2, 3);

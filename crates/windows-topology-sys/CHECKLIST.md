@@ -542,7 +542,7 @@ They remain cross-referenced to [topology-planner](../topology-planner/DESIGN-NO
 **evidence** the shape is right rather than as its justification -- stating those requirements found
 the `Processor::capacity` sentinel collision that reviewing the model alone had not.
 
-- [ ] **M4+.1** -- **The ordered relations are the query surface; pairwise proximity is a method on
+- [x] **M4+.1** -- **The ordered relations are the query surface; pairwise proximity is a method on
   them.** The requirement arrived from [EP-D-2](../topology-planner/DESIGN-NOTES.md#ep-d-2) as a
   *pairwise* query returning the minimal shared granularities, **their membership**, and whether a
   finer granularity went **unobserved** so the answer can be an upper bound and say so. All three
@@ -561,6 +561,21 @@ the `Processor::capacity` sentinel collision that reviewing the model alone had 
   *Terminology:* it is a **poset with a top**, not a lattice -- M2+.4's incomparable granularities
   mean meets need not be unique, which is also why a pairwise function has to return a *set* and is
   an awkward face on an ordered collection.
+  **Done.** `Proximity { shared, finer_unobserved }` and
+  `MachineMemoryTopology::proximity(&[ProcessorId])`, whose body is `minimal_shared` plus the
+  coverage check -- so there is one implementation of the grouping, not one per caller.
+  Generalised past a pair, because nothing in the query is specific to two: the same call sizes an
+  MPSC fan-in over a whole block.
+  **The third requirement is the one that needed building.** `finer_unobserved` says the answer is an
+  **upper bound**: some kind the machine reports covers one of these processors in no instance, so the
+  platform has said nothing about whether they share it. The distinction that makes it honest is
+  [D-13](DESIGN-NOTES.md#d-13)'s -- absence of a *kind* describes a machine without it, while absence
+  of a processor *from* a kind that exists is a gap. `Memory` is excluded because a processor in no
+  memory domain is `M4+.3`'s unplaced case, which has its own answer.
+  `Proximity::only()` returns `None` on a tie rather than taking the first, so a caller that cannot
+  handle M2+.4's multi-element answer has to say so.
+  Sabotage-verified: dropping the kind-exists guard -- which would make a machine with no caches look
+  incomplete -- fails three tests, including the D-13 conflation case.
 
 - [ ] **M4+.2** -- The **shard-set** surface (EP-D-1): identity as `(group, number)`, online, core
   membership and SMT, efficiency class **without a sentinel**, and availability.
@@ -569,9 +584,26 @@ the `Processor::capacity` sentinel collision that reviewing the model alone had 
   distinguishable rather than defaulted -- an unknown cache domain costs an optimisation, an unknown
   memory domain has no honest fallback.
 
-- [ ] **M4+.4** -- Reduce `outermost_partitioning_cache` to a **named projection** over the order --
+- [x] **M4+.4** -- Reduce `outermost_partitioning_cache` to a **named projection** over the order --
   "the coarsest granularity with more than one group" -- so it is a query rather than a rule, and
   cannot be restated wrongly because there is nothing to restate.
+  **Note on what "over the order" can and cannot mean here.** M2's order is over *relations*, and a
+  partition is a *set* of relations, so the projection needs both: a **grouping** key to say which
+  relations form one candidate partition, and an **order** to say which candidate is coarsest. Level
+  is used for the first and must not be used for the second -- grouping by level reads what the
+  source said, whereas ordering by level asserts that a higher number is always coarser, which is the
+  structure `M2+.2` forbids and this host's ARM64 sibling disproves.
+  **Done.** The projection now collects every level that forms a partition, then picks the one no
+  other **refines** -- checkable against the memberships Windows reported, where "a higher number is
+  coarser" is asserted.
+  **Every pre-existing test passed under both rules**, so the change would have been invisible: the
+  discriminating case is a machine whose *lower* level forms the *coarser* partition, which no
+  fixture built from real hardware has. Reverting to the old `.rev()` over level numbers now fails
+  exactly one test, and it is the one written for that case.
+
+**Overlap noticed on reading, not deferred:** `M4+.2`'s "efficiency class **without a sentinel**" and
+`M5+.1`'s `Processor::capacity` collision are the same defect from two sides. They land together, in
+`M4+.2`, and `M5+.1` records that rather than repeating the work.
 
 ## M5: the defects this subsumes
 

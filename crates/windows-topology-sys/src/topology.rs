@@ -562,15 +562,63 @@ impl MachineMemoryTopology {
     /// the firmware said, not evidence that the domains which *were* reported
     /// overlap, and rejecting the level would discard a true boundary over it.
     ///
+    /// # "Outermost" is decided by inclusion, not by the level number
+    ///
+    /// Level groups the relations into candidate partitions -- that is reading
+    /// what the source said. It does **not** order them, because "a higher
+    /// number is coarser" is asserted structure of the kind `M2+.2` forbids,
+    /// and a machine that reports L2 over six processors and no L3 at all is
+    /// the counterexample this crate has actually measured.
+    ///
+    /// A candidate is coarser than another when **every block of the other is
+    /// contained in one of its blocks**, which is checkable against the very
+    /// memberships Windows reported. On ordinary hardware the two agree; where
+    /// they disagree, the firmware numbering is the one that is wrong.
+    ///
     /// Defined here, in the crate that owns the topology, so that every
     /// consumer asks the same question rather than restating the rule and
     /// drifting from it.
     pub fn outermost_partitioning_cache(&self) -> Option<(u8, Vec<&Domain>)> {
-        self.cache_levels().into_iter().rev().find_map(|level| {
-            let partitions = self.cache_partitions_at_level(level);
-            (partitions.len() > 1 && Self::are_pairwise_disjoint(&partitions))
-                .then_some((level, partitions))
-        })
+        let candidates: Vec<(u8, Vec<&Domain>)> = self
+            .cache_levels()
+            .into_iter()
+            .filter_map(|level| {
+                let blocks = self.cache_partitions_at_level(level);
+                (blocks.len() > 1 && Self::are_pairwise_disjoint(&blocks))
+                    .then_some((level, blocks))
+            })
+            .collect();
+
+        // Coarsest by inclusion: the candidate no other candidate is coarser
+        // than. Ties -- two candidates refining each other, which means equal
+        // block memberships under different levels -- keep the first, matching
+        // `cache_partitions_at_level`'s own first-wins rule.
+        candidates
+            .iter()
+            .find(|candidate| {
+                !candidates
+                    .iter()
+                    .any(|other| Self::refines(&candidate.1, &other.1))
+            })
+            .map(|(level, blocks)| (*level, blocks.clone()))
+    }
+
+    /// Whether every block of `finer` sits inside some block of `coarser`, and
+    /// the two are not the same partition.
+    ///
+    /// The refinement order over candidate partitions, derived from the same
+    /// membership inclusion the granularity order uses.
+    fn refines(finer: &[&Domain], coarser: &[&Domain]) -> bool {
+        let all_contained = finer.iter().all(|block| {
+            coarser
+                .iter()
+                .any(|outer| block.processors.is_subset(&outer.processors))
+        });
+        let same = finer.len() == coarser.len()
+            && finer
+                .iter()
+                .all(|block| coarser.iter().any(|o| o.processors == block.processors));
+        all_contained && !same
     }
 
     /// Whether no two of these domains claim the same processor.

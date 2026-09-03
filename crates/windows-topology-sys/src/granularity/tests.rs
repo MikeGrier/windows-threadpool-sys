@@ -364,3 +364,119 @@ fn relation_and_is_machine_agree() {
     assert!(Granularity::Machine.is_machine());
     assert!(Granularity::Machine.relation().is_none());
 }
+
+// --- M4+.1: the pairwise helper and its upper-bound flag ---
+
+fn id(number: u8) -> ProcessorId {
+    ProcessorId { group: 0, number }
+}
+
+#[test]
+fn proximity_is_the_pairwise_face_of_minimal_shared() {
+    // The helper must not be a second implementation of the grouping -- that
+    // is the SH-16.9 defect one level up -- so it must agree with the
+    // collection exactly.
+    let t = topology(4, vec![core(&[0, 1]), memory(&[0, 1, 2, 3])]);
+    assert_eq!(
+        t.proximity(&[id(0), id(1)]).shared,
+        t.minimal_shared(&set(&[0, 1]))
+    );
+    assert_eq!(
+        t.proximity(&[id(0), id(3)]).shared,
+        t.minimal_shared(&set(&[0, 3]))
+    );
+}
+
+#[test]
+fn proximity_generalises_past_two_processors() {
+    // Nothing in the query is specific to a pair; the same call sizes a fan-in
+    // over a whole block.
+    let t = topology(4, vec![core(&[0, 1]), memory(&[0, 1, 2, 3])]);
+    let over_three = t.proximity(&[id(0), id(1), id(2)]);
+    assert_eq!(over_three.shared.len(), 1);
+    assert!(matches!(
+        over_three.shared[0].relation().expect("a relation").kind,
+        DomainKind::Memory { .. }
+    ));
+}
+
+#[test]
+fn a_pair_no_relation_covers_is_the_machine_and_the_query_stays_total() {
+    let t = topology(4, vec![memory(&[0, 1]), memory(&[2, 3])]);
+    assert_eq!(
+        t.proximity(&[id(0), id(3)]).shared,
+        vec![Granularity::Machine]
+    );
+}
+
+#[test]
+fn a_complete_machine_reports_no_unobserved_finer_granularity() {
+    // Every processor is covered by every kind this machine reports, so the
+    // answer is the answer -- not an upper bound.
+    let t = topology(
+        4,
+        vec![
+            core(&[0, 1]),
+            core(&[2, 3]),
+            cache(2, &[0, 1], CacheKind::Unified),
+            cache(2, &[2, 3], CacheKind::Unified),
+        ],
+    );
+    assert!(!t.proximity(&[id(0), id(1)]).finer_unobserved);
+}
+
+#[test]
+fn a_processor_in_no_relation_of_a_reported_kind_makes_the_answer_an_upper_bound() {
+    // Processor 3 is in no core, while cores exist. The platform has said
+    // nothing about whether 0 and 3 share one, so "the tightest shared thing is
+    // the machine" is at most true -- and a caller told otherwise would pick a
+    // slower channel than the hardware can support and never learn why.
+    let t = topology(4, vec![core(&[0, 1]), core(&[2])]);
+    let answer = t.proximity(&[id(0), id(3)]);
+    assert!(
+        answer.finer_unobserved,
+        "partial coverage at a reported kind is a gap, not a fact: {answer:?}"
+    );
+}
+
+#[test]
+fn a_machine_that_reports_no_caches_is_complete_not_incomplete() {
+    // The conflation D-13 exists to remove, at the query level: absence of a
+    // KIND is a complete description of a machine without it, whereas absence
+    // of a processor FROM a kind that exists is a gap. Counting the first as a
+    // gap would make every answer on such a machine an upper bound.
+    let t = topology(2, vec![core(&[0, 1])]);
+    assert!(!t.proximity(&[id(0), id(1)]).finer_unobserved);
+}
+
+#[test]
+fn a_memory_gap_is_not_an_unobserved_finer_granularity() {
+    // A processor in no memory domain is M4+.3's *unplaced* case, which has its
+    // own answer. Treating it as evidence of unreported finer sharing would
+    // conflate two different absences.
+    let t = topology(4, vec![core(&[0, 1]), core(&[2, 3]), memory(&[0, 1])]);
+    assert!(!t.proximity(&[id(0), id(2)]).finer_unobserved);
+}
+
+#[test]
+fn only_reports_a_tie_rather_than_hiding_it() {
+    let t = topology(
+        4,
+        vec![
+            cache(1, &[0, 1], CacheKind::Data),
+            cache(1, &[0, 1], CacheKind::Instruction),
+        ],
+    );
+    let answer = t.proximity(&[id(0), id(1)]);
+    assert_eq!(answer.shared.len(), 2);
+    assert_eq!(answer.only(), None, "a caller must not silently take one");
+
+    let single = topology(2, vec![core(&[0, 1])]);
+    assert!(single.proximity(&[id(0), id(1)]).only().is_some());
+}
+
+#[test]
+fn an_unknown_processor_yields_an_empty_answer_not_the_machine() {
+    let t = topology(2, vec![core(&[0, 1])]);
+    assert!(t.proximity(&[id(0), id(7)]).shared.is_empty());
+}
