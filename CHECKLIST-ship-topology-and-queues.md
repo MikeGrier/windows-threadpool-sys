@@ -25,7 +25,7 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
-| M16 tenth review round | 6 of 13 open | **gates the merge**; CPU Sets landed, 6 wait on the session |
+| M16 tenth review round | 7 done, 6 superseded | its own findings are fixed; the model work moved to `MMT-*` |
 | M-inf parked | ungated | not scheduled, deliberately |
 
 **The critical path is M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4.** M14 and M15 do not
@@ -735,6 +735,16 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
 
 ## M16: PR #56 tenth review round -- the SH-3.1.1 diff review
 
+> **Six of these items are superseded.** SH-16.5, SH-16.8, SH-16.9, SH-16.11, SH-16.12 and SH-16.13
+> are all the same piece of work seen from different angles -- reshaping the machine memory topology
+> -- and they now live in
+> [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) as a plan of
+> their own, numbered `MMT-*`. They are left here, unchecked and marked, rather than deleted: each
+> records how the defect was *found*, which the new plan does not repeat.
+>
+> **Read the new plan for what to do; read these for why.** The six that remain live here are the
+> review round's own findings, already fixed.
+
 **This round is the one [SH-3.1.1](#m3-land-the-branch) asked for**, and it is the first that read the
 branch as a *diff* rather than reacting to a reviewer's comment. Five reviewers took non-overlapping
 crate scopes across all 200 changed files; seven findings came back, listed here worst-first rather
@@ -809,7 +819,7 @@ predicted about a 222-commit branch.
   Fixed by dropping empty domains, with the contrast against `memory_domains` (which deliberately
   keeps a processor-less domain, D-5) recorded at the filter.
 
-- [ ] **SH-16.5** -- **`windows-placement-probe` refuses a partially-covering cache level that
+- [ ] **SH-16.5** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **`windows-placement-probe` refuses a partially-covering cache level that
   `windows-topology-sys` deliberately hands back.** `outermost_partitioning_cache` documents that
   "full coverage of the online processors is deliberately *not* required"; `places_from_topology`
   treats any online processor the chosen level does not name as `MissingPlacement::CacheDomain` and
@@ -827,7 +837,7 @@ predicted about a 222-commit branch.
   sabotage-verified; it was reverted deliberately and preserved outside the repository as
   `sh-16.5-prototype.patch`. The contradiction is real and stays unfixed until the session concludes.
 
-- [ ] **SH-16.8** -- **The locality model collapses a seven-kind, any-depth topology onto one cache
+- [ ] **SH-16.8** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **The locality model collapses a seven-kind, any-depth topology onto one cache
   boundary, and nothing records that as a choice.** Raised by the engineer during the SH-16.5 fix, and
   confirmed: `windows-topology-sys` hardcodes no level count (`level` is a `u8`, and a regression test
   already guards against a consumer sweeping `1..=4`) and models `Group`, `Package`, `Die`, `Module`,
@@ -852,7 +862,7 @@ predicted about a 222-commit branch.
   for a ladder of levels with optional rungs. That rules out the SH-16.5 prototype's `Unknown` arm,
   which merges both. Shape still open.
 
-- [ ] **SH-16.9** -- **The "outermost partitioning cache" rule is stated three times, and two of the
+- [ ] **SH-16.9** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **The "outermost partitioning cache" rule is stated three times, and two of the
   three disagree.** `MachineMemoryTopology::outermost_partitioning_cache` requires more than one partition **and**
   pairwise disjointness. `Observation::outermost_partitioning_cache` in `windows-platform-probes` is
   `caches.iter().filter(|c| c.domains > 1).max_by_key(|c| c.level)` -- **no disjointness check** --
@@ -914,7 +924,7 @@ predicted about a 222-commit branch.
   checks the decode is self-consistent, not that it matches the OS. Confirm against a parked
   processor or an explicit `SetProcessDefaultCpuSets` before relying on the flags.
 
-- [ ] **SH-16.13** -- **Reconcile the CPU-set observation with the relationship walk.** `CoreIndex`,
+- [ ] **SH-16.13** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **Reconcile the CPU-set observation with the relationship walk.** `CoreIndex`,
   `NumaNodeIndex` and `EfficiencyClass` **duplicate** facts `GetLogicalProcessorInformationEx`
   already reports, from a different kernel path -- so this is not redundancy to remove, it is a
   **second independent observer of the same relations**, and the two can disagree under a hypervisor
@@ -931,7 +941,7 @@ predicted about a 222-commit branch.
   sentinel**, so it is a cleaner source for the field whose `capacity` encoding collides with
   "unknown".
 
-- [ ] **SH-16.11** -- **`MachineMemoryTopology::distances` is a field for a fact Win32 cannot supply, it is never
+- [ ] **SH-16.11** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **`MachineMemoryTopology::distances` is a field for a fact Win32 cannot supply, it is never
   populated, and the measurement that would fill it already exists elsewhere.** `discover()`
   hardcodes `distances: None`, every other construction sets `None`, and no consumer reads the
   field. Windows exposes no API for NUMA node distance -- ACPI carries SLIT, Win32 does not surface
@@ -965,7 +975,7 @@ predicted about a 222-commit branch.
   THIS MACHINE". Take that measurement on multi-node hardware before reopening D-9 on asymmetry
   grounds, not after.
 
-- [ ] **SH-16.12** -- **`Processor::capacity` uses `0` as both a legitimate efficiency class and a
+- [ ] **SH-16.12** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **`Processor::capacity` uses `0` as both a legitimate efficiency class and a
   sentinel for "not known", and the two collide on the common case.** It is computed
   `online.then(|| find the owning Core domain).flatten().unwrap_or(0)`, so `0` means the processor is
   offline, *or* is online but named by no `Core` domain, *or* genuinely has efficiency class zero.
