@@ -38,6 +38,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-16"></a>D-16 | **Collection retries until coherent, and what survives a retry is a genuine disagreement.** There is no transactional way to read the two Win32 sources together, so `discover()` validates them against each other and, on incoherence, **re-collects** -- bounded, and cheap because both are whole-machine enumerations. Transient incoherence from a hot-add resolves on the next pass; incoherence that survives is not transience and must be represented. Retry is therefore the *discriminator* between the two, which no single observation can be. And because the data can change while it is being collected, a topology states plainly whether it was collected coherently, so a reader knows how far its parts may be correlated. |
 | <a id="d-17"></a>D-17 | **Persistent incoherence between two Win32 sources is expected in the field, not exotic -- so the crate *records* it and never refuses over it.** No documented guarantee of cross-API coherence has been found, the two enumerations plausibly derive by different paths, and the firmware tables behind them are populated incrementally against scenarios that do not necessarily include ours. The likely places to meet it are hardware we do not have and prerelease hardware with defective UEFI tables -- exactly where refusing would make the crate useless. **Recording is this crate's job; reporting is the probe tools'**, and the identifying provenance an actionable report needs lives there too, behind the review the probe already applies. Orthogonal to [D-16](#d-16), which is about data shifting *while* it is collected. Only testable synthetically. |
 | <a id="d-18"></a>D-18 | **An observation is `(subject, claim, source)`, where a subject is either a relation identity or a processor attribute -- which closes the last gap in [D-15](#d-15).** Membership identity reaches partition disagreements but not per-processor scalars like efficiency class; generalising the *subject* rather than inventing a second mechanism covers both with one rule. Two smaller answers ride along: a topology records **that** collection concluded incoherently **and which subjects disagreed** -- the latter because a consumer forced to re-derive the comparison is the SH-16.9 failure repeating -- and the retry bound is a small documented constant whose exhaustion is a *conclusion*, not a failure. |
+| <a id="d-19"></a>D-19 | **When the sources align -- which is the usual case -- a *unified* view is presented, in addition to the individual per-source ones.** A design that made every answer carry a coherence state was the sentinel mistake in another form: it let a case that essentially never happens shape every caller on every machine, and it made a *local* defect global, presenting a machine with one contested core as entirely uncertain. [D-15](#d-15) had already concluded the opposite and was simply not applied. Under `(kind, membership)` identity the unification is **free** -- agreeing sources have observed one relation, so there is no merge step -- and a contradiction contests only those processors at that kind. A contested subject needs no new vocabulary: it is a relation the unified view does not cover, which is [D-13](#d-13)'s *not observed*, so a consumer implements one degradation path rather than three. Requires that relations carry **attributes** as well as memberships. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -436,6 +437,71 @@ a few extra whole-machine enumerations per `discover()`.
 Its *meaning* is the part worth writing down, and [D-16](#d-16) already did: exhausting the bound is
 not a failure to collect, it is the **conclusion** that the disagreement is genuine. `discover()`
 still returns a topology. The bound is where transience stops being a possible explanation.
+
+## D-19: the unified view, presented in addition to the individual ones
+
+*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.3. Corrects a pessimistic reading of
+[D-15](#d-15) that had been carried into the M2/M4 plan.*
+
+### The error this corrects
+
+Asked what the planner needs from this layer, the design being assembled had every answer carry a
+coherence state -- clean, not observed, or contested -- so that a caller could never read a value
+without considering that the sources might have disagreed about it.
+
+That is the sentinel mistake in another form. It lets a case that essentially never happens dictate
+the shape every caller sees on every machine, and it does something worse than cost ergonomics: **it
+makes a local defect global.** If two sources disagree about one core's membership, that says
+nothing about the NUMA partition, the other cores, or any efficiency class -- yet a coherence state
+threaded through the API would present a machine with one firmware quirk as entirely uncertain.
+
+**Usually the data aligns.** When it does, a unified model can be presented, *in addition to* the
+individual per-source ones rather than instead of them.
+
+### D-15 had already concluded this
+
+The correction did not need new evidence, because [D-15](#d-15) states it outright: "A set costs
+nothing in the common case. Agreement means one relation carrying two observations, not two competing
+relations. The feared duplication does not materialise where the sources agree, which is the usual
+case."
+
+So the pessimistic surface was built on top of a decision that had already taken the optimistic view.
+This is [restatement drift](../../DESIGN-NOTES.md#restatement-drift) in its cheapest-to-avoid form -- not a
+restatement that went stale, but a conclusion already reached and then not applied.
+
+### The unification is free, because it happens at identification
+
+Under `(kind, membership)` identity there is **no merge step**. Two sources that agree have observed
+*one* relation, by construction. So:
+
+- **The unified model is the relation set.** In the usual case it is already the clean model a
+  consumer wants; nothing had to be reconciled to produce it.
+- **The individual views hang off it** as each relation's observations, available for provenance and
+  diagnosis without standing in the common path. The raw per-source list (`cpu_sets`) stays for a
+  caller that wants a source verbatim.
+- **A contradiction is local.** Two relations of the same kind whose memberships overlap without
+  being equal contest *those* processors at *that* kind, and nothing else.
+
+This answers a question M3+.4 had left open -- whether a second observer stays a parallel list or
+becomes observations attached to relations -- with **both**, which is what "a unified model in
+addition to the individual ones" means concretely.
+
+### A contested subject needs no new vocabulary
+
+The unified view is total and clean except over the subjects [D-16](#d-16)'s retry has already named
+as genuinely contested. Asking about one of those is asking about a relation the unified view does
+not cover, and "not covered" is [D-13](#d-13)'s *not observed* -- not a fourth kind of absence.
+
+So a consumer implements **one** degradation path, for a fact it needed and did not get, which it
+requires anyway for facts no source reported. Whether that path degrades, refuses, or marks the
+answer is MMT-1.3's question, and it is one decision rather than three.
+
+### What this asks of the model
+
+One thing that is not otherwise provided: **relations carry attributes.** Once the relation set *is*
+the unified model, `DomainKind::Memory { memory_bytes }` has nowhere to live unless a relation can
+hold a payload as well as a membership. `Core { efficiency_class, simultaneous_multithreading }` is
+the same requirement.
 
 ## What was deliberately excluded (D-9)
 

@@ -30,7 +30,7 @@ Presence and observation are facts to represent, not shapes to infer from.
 |---|---|---|
 | M1 settle what is still open | 2 of 5 done | nothing -- these are decisions, and they gate the rest |
 | M2 the granularity model | parked | M1 |
-| M3 observation and provenance | parked | M1 |
+| M3 observation and provenance | parked | M1 (1 of 4 answered early, by D-19) |
 | M4 the queries | parked | M2, M3 |
 | M5 the defects this subsumes | parked | M4 |
 
@@ -206,6 +206,11 @@ wrongly after code exists.
 - [ ] **MMT-1.3** -- **What a consumer does when a needed fact was not observed**, given the bar that
   the model answers without further measurement. Degrade to a documented weaker policy, refuse, or
   answer with an explicit "chosen without knowing X" marker.
+  **Narrowed by [D-19](DESIGN-NOTES.md#d-19), which is worth noting because it removes two thirds of
+  the item.** A contested subject was going to need its own answer beside "not observed"; it does
+  not. The unified view simply does not cover it, and *not covered* is [D-13](DESIGN-NOTES.md#d-13)'s
+  not-observed. So this is **one** decision about one degradation path -- a fact the consumer needed
+  and did not get -- rather than a separate answer per reason the fact is missing.
   > **-> CROSS-COMPONENT PREREQUISITE:** this is the same decision as `EP-1.4` in
   > [windows-execution-plan](../windows-execution-plan/CHECKLIST.md), seen from the model's side
   > rather than the consumer's. They were filed independently before anyone noticed. **Take them
@@ -248,7 +253,16 @@ Parked on M1. Shape recorded so it is not lost.
 
 - [ ] **M2+.5** -- Make absence first-class per [D-13](DESIGN-NOTES.md#d-13): **not observed**,
   **observed and absent**, and **a negative result** are three different facts that an `Option`
-  spells identically.
+  spells identically. Per [D-19](DESIGN-NOTES.md#d-19) this also carries the contested case -- a
+  subject the sources genuinely disagreed on is one the unified view does not cover, which is *not
+  observed*, so no fourth state is added.
+
+- [ ] **M2+.6** -- **Relations carry attributes, not only memberships.** Required by
+  [D-19](DESIGN-NOTES.md#d-19): once the relation set *is* the unified model,
+  `DomainKind::Memory { memory_bytes }` and `Core { efficiency_class, simultaneous_multithreading }`
+  have nowhere to live unless a relation holds a payload alongside its processor set. Nothing else in
+  M2 provides this, and it was noticed only when the unified view was written down -- the
+  membership-only framing had quietly assumed relations were bare sets.
 
 ## M3: observation and provenance
 
@@ -268,9 +282,14 @@ Parked on M1.
   ninety-nine measured relations and one synthetic reading `SYNTHETIC` -- or the maximum, which is
   dishonest. Trust belongs to an *answer*.
 
-- [ ] **M3+.4** -- Carry both observers without merging, per MMT-1.1's decision. `Topology::cpu_sets`
+- [x] **M3+.4** -- Carry both observers without merging, per MMT-1.1's decision. `Topology::cpu_sets`
   already lands this way; this item is whether that stays a parallel list or becomes observations
   attached to relations.
+  **Answered by [D-19](DESIGN-NOTES.md#d-19): both.** The question presented the two as alternatives,
+  and they are not. Observations attach to relations, which is what makes the *unified* view exist at
+  all; the raw per-source list stays for a caller that wants what one source said, verbatim. That is
+  what "a unified model in addition to the individual ones" means concretely. No implementation is
+  owed here -- M2+.6 and M4 carry the surface -- so this item is closed as a decision, not as code.
 
 ## M4: the queries
 
@@ -278,11 +297,25 @@ Parked on M2 and M3. Each is a requirement from
 [windows-execution-plan](../windows-execution-plan/DESIGN-NOTES.md), stated there against a real
 caller rather than invented here.
 
-- [ ] **M4+.1** -- **Pairwise proximity**, over an **unordered** pair, returning the minimal shared
-  granularities, **their membership** (so a caller can size an MPSC fan-in without re-deriving the
-  grouping), and whether a finer granularity went **unobserved** so the answer can be an upper bound
-  and say so. This is the query with no equivalent today, and its absence is why the partitioning
-  rule got re-derived three times.
+- [ ] **M4+.1** -- **The ordered relations are the query surface; pairwise proximity is a method on
+  them.** The requirement arrived from [EP-D-2](../windows-execution-plan/DESIGN-NOTES.md#ep-d-2) as a
+  *pairwise* query returning the minimal shared granularities, **their membership**, and whether a
+  finer granularity went **unobserved** so the answer can be an upper bound and say so. All three
+  requirements stand. The **shape** does not, and the requirement says so itself: it asks the answer
+  to carry the whole block containing both processors, "or the planner asks O(n^2) times and
+  reconstructs the grouping". An answer that must carry the block is not about the pair -- the pair is
+  an index into a partition.
+  Everything the planner does is an operation on the partitions: choosing domain granularity is
+  *selecting one*, sizing an MPSC fan-in is *a block's cardinality*, choosing a channel is *the finest
+  block containing both*. Pairwise is three lines over that. The reverse is derivable too, but only by
+  union-find over O(n^2) queries -- which is exactly the reconstruction `SH-16.9` records three
+  consumers performing, two of them differently. Building pairwise as the primary surface would ship
+  the stated requirement and re-create the defect one level up.
+  Both are provided; **the collection is primary and the pairwise helper is derived from it**, so
+  there is one implementation of the grouping.
+  *Terminology:* it is a **poset with a top**, not a lattice -- M2+.4's incomparable granularities
+  mean meets need not be unique, which is also why a pairwise function has to return a *set* and is
+  an awkward face on an ordered collection.
 
 - [ ] **M4+.2** -- The **shard-set** surface (EP-D-1): identity as `(group, number)`, online, core
   membership and SMT, efficiency class **without a sentinel**, and availability.

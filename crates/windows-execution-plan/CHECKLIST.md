@@ -112,6 +112,11 @@ whether the topology can answer it today -- so the model is designed against a r
   filed independently before anyone noticed. Taken separately they can disagree: a planner that
   degrades in a way the model does not support, or a model offering a fallback no consumer wants.
   Answer them together, in the session.
+  **Narrowed by [D-19](../windows-topology-sys/DESIGN-NOTES.md#d-19).** The item says "decide per
+  query", and that is now more work than the model requires. A subject the two sources genuinely
+  contested is one the unified view does not cover, which is indistinguishable from not-observed to a
+  consumer -- so this is one decision about one degradation path, not one per reason a fact is
+  missing. The three candidate behaviours are unchanged.
 
 - [ ] **EP-1.5** -- **Hand the resulting requirements to the design session** as the consumer-side
   input it asked for, and record in the session which of them the settled model answers and which
@@ -121,6 +126,12 @@ whether the topology can answer it today -- so the model is designed against a r
   follow from them -- a pairwise query must exist, the order must be total, an answer must be able to
   be an upper bound, and a measured number must carry what it measured. That was the part the model
   designer needs in front of them, and it did not depend on the model existing.
+  **One of the four has since been corrected**, and it is recorded here rather than rewritten in the
+  session, which is an append-only record of what was handed over. "A pairwise query must exist" is
+  right about the requirement and wrong about the shape: per
+  [windows-topology-sys](../windows-topology-sys/CHECKLIST.md) `M4+.1` the ordered collection is the
+  surface and the pairwise query is derived from it, because an answer obliged to carry the block
+  containing both processors is a question about the partition rather than about the pair.
   The *coverage* half -- recording which requirements the settled model answers and which it
   deliberately does not -- can only be written once there is a settled model. It stays open here.
   > **-> CROSS-COMPONENT HANDOFF:** next work is in the repository root ->

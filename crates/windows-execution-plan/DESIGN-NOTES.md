@@ -208,7 +208,12 @@ this query is the cause of that defect, not a separate problem.
 
 - A granularity order derived from **observed set inclusion**, not firmware level numbers, so a
   measured-only tier and a machine with no L3 both have positions.
-- A pairwise query over it, returning minimal shared granularities plus their membership.
+- Access to that order **as a collection**, with a pairwise helper derived from it, returning minimal
+  shared granularities plus their membership. Stated here first as a pairwise query, which
+  [windows-topology-sys](../windows-topology-sys/CHECKLIST.md) `M4+.1` corrected: requiring the answer
+  to carry the block containing both processors makes it a question about the partition, not the pair,
+  and a pairwise-primary surface would force the planner into the O(n^2) reconstruction that `SH-16.9`
+  records going wrong three times. The three *requirements* below are unchanged; only the shape is.
 - Unobserved granularities represented, so an answer can be an upper bound and say so.
 - A top element, so the query is total.
 
