@@ -391,7 +391,9 @@ mod from_topology {
         }
         for (id, members) in node_members {
             domains.push(Domain {
-                kind: DomainKind::Memory { memory_bytes: None },
+                kind: DomainKind::Memory {
+                    memory_bytes: windows_topology_sys::Observed::NotObserved,
+                },
                 processors: set_of(&members),
                 observations: vec![windows_topology_sys::Observation::new(
                     windows_topology_sys::Source::RelationshipWalk,
@@ -543,7 +545,7 @@ mod from_topology {
         let places = places_from_topology(&flat).expect("the fixture places every processor");
 
         assert!(
-            places.iter().all(|p| p.cache_domain.is_none()),
+            places.iter().all(|p| p.cache_domain.known().is_none()),
             "an undivided machine reported a partitioning cache domain"
         );
     }
@@ -670,7 +672,9 @@ mod multi_group_conversion {
                 )],
             });
             domains.push(Domain {
-                kind: DomainKind::Memory { memory_bytes: None },
+                kind: DomainKind::Memory {
+                    memory_bytes: windows_topology_sys::Observed::NotObserved,
+                },
                 processors: ProcessorSet::from_group_mask(group, mask),
                 observations: vec![windows_topology_sys::Observation::new(
                     windows_topology_sys::Source::RelationshipWalk,
@@ -732,7 +736,7 @@ mod multi_group_conversion {
             );
             assert_eq!(
                 place.cache_domain,
-                Some(100 + u32::from(place.group)),
+                windows_topology_sys::Observed::Known(100 + u32::from(place.group)),
                 "{place} was read into the wrong cache domain"
             );
         }
@@ -849,7 +853,9 @@ mod multi_group_conversion {
         let mut topology = bare_processors(3);
         for (id, mask) in [(1_u32, 0b001_usize), (2, 0b010)] {
             topology.domains.push(Domain {
-                kind: DomainKind::Memory { memory_bytes: None },
+                kind: DomainKind::Memory {
+                    memory_bytes: windows_topology_sys::Observed::NotObserved,
+                },
                 processors: ProcessorSet::from_group_mask(0, mask),
                 observations: vec![windows_topology_sys::Observation::new(
                     windows_topology_sys::Source::RelationshipWalk,
@@ -876,7 +882,9 @@ mod multi_group_conversion {
         let mut topology = bare_processors(2);
         for (id, mask) in [(1_u32, 0b01_usize), (2, 0b10)] {
             topology.domains.push(Domain {
-                kind: DomainKind::Memory { memory_bytes: None },
+                kind: DomainKind::Memory {
+                    memory_bytes: windows_topology_sys::Observed::NotObserved,
+                },
                 processors: ProcessorSet::from_group_mask(0, mask),
                 observations: vec![windows_topology_sys::Observation::new(
                     windows_topology_sys::Source::RelationshipWalk,
@@ -986,7 +994,7 @@ mod multi_group_conversion {
     }
 
     #[test]
-    fn a_processor_omitted_from_the_partitioning_cache_level_is_refused() {
+    fn a_processor_omitted_from_the_partitioning_cache_level_is_recorded_not_refused() {
         // `None` already means "no level partitions this machine". Letting it
         // also mean "this processor was left out of the level that does" makes
         // two omitted processors compare equal, and `classify` reports them as
@@ -1026,11 +1034,32 @@ mod multi_group_conversion {
             });
         }
 
-        let refused = places_from_topology(&topology)
-            .expect_err("cpu2 is in no cache domain at the partitioning level");
+        // M5+.4 removed this refusal. The topology crate deliberately hands
+        // back a partially-covering cache level, and failing an entire
+        // measurement run over one is the defect, not the guard.
+        //
+        // What replaced it: cpu2 reports `NotObserved`, which is neither
+        // "no level partitions this machine" (`Absent`) nor a fabricated
+        // domain -- and `Slice::same_cache_domain` answers *unknown* for it,
+        // so the hazard this refusal existed to prevent is still closed.
+        let places = places_from_topology(&topology)
+            .expect("a partial cache level must not fail the whole run");
 
-        assert_eq!((refused.group, refused.number), (0, 2));
-        assert_eq!(refused.missing, MissingPlacement::CacheDomain);
+        let cpu2 = places
+            .iter()
+            .find(|p| p.number == 2)
+            .expect("cpu2 is still placed");
+        assert_eq!(
+            cpu2.cache_domain,
+            windows_topology_sys::Observed::NotObserved
+        );
+        assert!(
+            places
+                .iter()
+                .filter(|p| p.number != 2)
+                .all(|p| p.cache_domain.was_observed()),
+            "only the uncovered processor is unobserved"
+        );
     }
 
     #[test]
@@ -1040,7 +1069,11 @@ mod multi_group_conversion {
         let places =
             places_from_topology(&bare_processors(2)).expect("no cache level divides this machine");
 
-        assert!(places.iter().all(|place| place.cache_domain.is_none()));
+        assert!(
+            places
+                .iter()
+                .all(|place| place.cache_domain.known().is_none())
+        );
     }
 
     #[test]
@@ -1121,5 +1154,120 @@ mod multi_group_conversion {
              processors; this asymmetry is documented, so a future change that \
              removes it should fail here and be made on purpose"
         );
+    }
+
+    // --- M5+.4: a partially-covering cache level no longer fails the run ---
+
+    mod partial_cache_coverage {
+        use super::*;
+        use crate::fingerprint::Slice;
+        use windows_topology_sys::Observed;
+
+        /// Four processors, an L2 that partitions but names only three of them.
+        /// This crate deliberately hands such a topology back; the probe used to
+        /// refuse the whole measurement over it.
+        fn partially_covered() -> MachineMemoryTopology {
+            covering(4, &[0b0011, 0b0100])
+        }
+
+        /// Six processors, an L2 that partitions but names only four of them,
+        /// so *two* are left uncovered and can be compared against each other.
+        fn two_uncovered() -> MachineMemoryTopology {
+            covering(6, &[0b000_011, 0b001_100])
+        }
+
+        fn covering(count: u8, masks: &[usize]) -> MachineMemoryTopology {
+            let all = (1_usize << count) - 1;
+            let mut topology = bare_processors(count);
+            topology.domains.push(Domain {
+                kind: DomainKind::Memory {
+                    memory_bytes: Observed::NotObserved,
+                },
+                processors: ProcessorSet::from_group_mask(0, all),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    0,
+                )],
+            });
+            for (label, mask) in masks.iter().copied().enumerate() {
+                topology.domains.push(Domain {
+                    kind: DomainKind::Cache {
+                        level: 2,
+                        associativity: 8,
+                        line_size: 64,
+                        size_bytes: 512 * 1024,
+                        cache_type: windows_topology_sys::CacheKind::Unified,
+                    },
+                    processors: ProcessorSet::from_group_mask(0, mask),
+                    observations: vec![windows_topology_sys::Observation::new(
+                        windows_topology_sys::Source::RelationshipWalk,
+                        label as u32,
+                    )],
+                });
+            }
+            topology
+        }
+
+        #[test]
+        fn the_run_proceeds_instead_of_being_refused() {
+            let places = places_from_topology(&partially_covered())
+                .expect("a partial cache level must not fail the whole measurement");
+            assert_eq!(places.len(), 4);
+        }
+
+        #[test]
+        fn the_uncovered_processor_is_not_observed_not_absent() {
+            let places = places_from_topology(&partially_covered()).expect("places");
+            let by_number = |n: u8| {
+                places
+                    .iter()
+                    .find(|p| p.number == n)
+                    .expect("processor")
+                    .cache_domain
+            };
+
+            assert_eq!(by_number(0), Observed::Known(0));
+            assert_eq!(by_number(2), Observed::Known(1));
+            assert_eq!(
+                by_number(3),
+                Observed::NotObserved,
+                "left out of a level that does partition -- a gap, not an answer"
+            );
+        }
+
+        #[test]
+        fn two_uncovered_processors_are_not_reported_as_sharing_a_cache() {
+            // The hazard the refusal existed to prevent. It must still be closed:
+            // the answer is "unknown", never "same".
+            let places = places_from_topology(&two_uncovered()).expect("places");
+            let uncovered: Vec<_> = places
+                .iter()
+                .filter(|p| p.cache_domain == Observed::NotObserved)
+                .collect();
+            assert_eq!(
+                uncovered.len(),
+                2,
+                "the fixture must leave exactly two processors uncovered: {places:?}"
+            );
+
+            let slice = Slice::pair(*uncovered[0], *uncovered[1]);
+            assert_eq!(
+                slice.same_cache_domain(),
+                None,
+                "two unobserved domains must answer unknown, never same"
+            );
+        }
+
+        #[test]
+        fn a_machine_where_no_level_partitions_still_answers_same_cache() {
+            // `Absent` is uniform across the machine and is a real answer, so it
+            // must keep comparing equal -- otherwise removing the refusal would
+            // have broken the ordinary single-domain case.
+            let places = places_from_topology(&bare_processors(2)).expect("places");
+            assert!(places.iter().all(|p| p.cache_domain == Observed::Absent));
+
+            let slice = Slice::pair(places[0], places[1]);
+            assert_eq!(slice.same_cache_domain(), Some(true));
+        }
     }
 }

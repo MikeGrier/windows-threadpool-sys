@@ -38,7 +38,7 @@ the **adapter's** problem and must not be filed here as a gap.
 | M2 the granularity model | **6 of 6 done** | nothing -- complete |
 | M3 observation and provenance | **4 of 4 done** | nothing -- complete |
 | M4 the queries | **5 of 5 done** | nothing -- complete |
-| M5 the defects this subsumes | parked | M4, **except M5+.5 (done)** |
+| M5 the defects this subsumes | **5 of 5 done** | nothing -- complete |
 
 **M1 was decision work, not implementation**, and it is complete. Each item was a question the
 session left open, and each would have changed the shape of everything below it.
@@ -664,9 +664,13 @@ separately and then re-fixed.
   it -- removing a published field is a second breaking change with no additional benefit once the
   honest answer exists beside it.
 
-- [ ] **M5+.2** -- `DomainKind::Memory::memory_bytes` is unambiguous from `discover` but ambiguous
+- [x] **M5+.2** -- `DomainKind::Memory::memory_bytes` is unambiguous from `discover` but ambiguous
   from a **description**, where "the field was omitted" and "this node's capacity is unknown" are the
   same value. The [D-13](DESIGN-NOTES.md#d-13) audit found this and documentation cannot fix it.
+  **Done**: the field is now `Observed<u64>`, and serde carries all three states distinctly -- a
+  number for `Known`, an explicit `null` for `Absent` ("this node has no memory of its own"), and
+  **omission** for `NotObserved`. The two that used to collide are now different bytes on the wire,
+  so a description round-trips through the distinction rather than losing it.
 
 - [x] **M5+.3** -- The partitioning rule is stated **three times in two crates**, and two of the
   three differ: `windows-platform-probes` omits the pairwise-disjointness check this crate requires.
@@ -681,9 +685,16 @@ separately and then re-fixed.
   one also owns. Ties between *identical* partitions now take the higher level, which reads the
   source's own labelling of one boundary rather than ordering distinct partitions by number.
 
-- [ ] **M5+.4** -- `windows-placement-probe` **refuses a partially-covering cache level** that this
+- [x] **M5+.4** -- `windows-placement-probe` **refuses a partially-covering cache level** that this
   crate deliberately hands back, failing an entire measurement run over a topology this crate
   considers describable. M2+.5 gives it the vocabulary to accept one.
+  **Done**: `ProcessorPlace::cache_domain` is `Observed<u32>`, the `MissingPlacement::CacheDomain`
+  refusal is gone, and an uncovered processor reports `NotObserved` -- which is neither `Absent`
+  ("no level partitions this machine", the ordinary single-domain case) nor a fabricated domain.
+  **The hazard the refusal existed to prevent is closed one level down instead**:
+  `Slice::same_cache_domain` answers `None` when any participant is `NotObserved`, so two uncovered
+  processors are never reported as sharing a cache. Verified by sabotage -- deleting that guard turns
+  the answer into `Some(true)` and exactly one test goes red.
 
 - [x] **M5+.5** -- **Delete `MachineMemoryTopology::distances` and the `Distances` type**, per
   [D-20](DESIGN-NOTES.md#d-20). **Not gated on M4**: the reshape does not fix this one, deletion

@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use windows_placement_probe::core_affinity::{Observation, Placement, measure};
 use windows_placement_probe::peer_index_cache::Strategy;
 use windows_platform_probes::report::{Stdout, emit};
+use windows_topology_sys::Observed;
 
 fn main() -> std::io::Result<()> {
     // The only place that names the real stream. Everything below composes
@@ -47,9 +48,11 @@ fn render(observation: &Observation) -> String {
             "  {:>8}  {:>16}  {:>13}",
             format!("g{}/cpu{}", place.group, place.number),
             place.efficiency_class,
-            place
-                .cache_domain
-                .map_or_else(|| "none".to_owned(), |id| id.to_string())
+            match place.cache_domain {
+                Observed::Known(id) => id.to_string(),
+                Observed::Absent => "none".to_owned(),
+                Observed::NotObserved => "unknown".to_owned(),
+            }
         );
     }
 

@@ -915,9 +915,7 @@ fn the_survey_reports_the_topology_crates_partitioning_level_not_its_own() {
     observation.partitioning_cache_level = Some(2);
 
     assert_eq!(
-        observation
-            .outermost_partitioning_cache()
-            .map(|c| c.level),
+        observation.outermost_partitioning_cache().map(|c| c.level),
         Some(2),
         "the survey must not re-derive; it looks up what the crate decided"
     );

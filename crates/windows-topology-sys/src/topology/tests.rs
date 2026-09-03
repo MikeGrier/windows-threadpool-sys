@@ -67,7 +67,9 @@ fn synthetic() -> MachineMemoryTopology {
                 observations: Vec::new(),
             },
             Domain {
-                kind: DomainKind::Memory { memory_bytes: None },
+                kind: DomainKind::Memory {
+                    memory_bytes: Observed::NotObserved,
+                },
                 processors: ProcessorSet::empty(),
                 observations: Vec::new(),
             },
@@ -481,7 +483,9 @@ mod serde_tests {
         // A memory domain covering the same processors as a core must not
         // absorb the core's CPU-sets observation.
         let mut memory = core_domain(0, &[0, 1], 0);
-        memory.kind = DomainKind::Memory { memory_bytes: None };
+        memory.kind = DomainKind::Memory {
+            memory_bytes: Observed::NotObserved,
+        };
         let mut topology = MachineMemoryTopology {
             processors: Vec::new(),
             domains: vec![memory],
@@ -1133,7 +1137,9 @@ fn a_split_instruction_and_data_cache_is_one_partition_not_two() {
 #[test]
 fn a_processor_in_a_memory_domain_reports_it() {
     let mut node = core_domain_at(0, &[0, 1]);
-    node.kind = DomainKind::Memory { memory_bytes: None };
+    node.kind = DomainKind::Memory {
+        memory_bytes: Observed::NotObserved,
+    };
     let topo = machine_of(4, vec![node]);
 
     assert!(
@@ -1152,7 +1158,9 @@ fn an_unplaced_processor_is_not_observed_rather_than_node_zero() {
     // fallback, because the pool must be allocated somewhere and guessing means
     // quietly allocating remote memory for the life of the process.
     let mut node = core_domain_at(0, &[0, 1]);
-    node.kind = DomainKind::Memory { memory_bytes: None };
+    node.kind = DomainKind::Memory {
+        memory_bytes: Observed::NotObserved,
+    };
     let topo = machine_of(4, vec![node]);
 
     let unplaced = topo.memory_domain_of(ProcessorId {
@@ -1179,7 +1187,9 @@ fn an_unplaced_processor_is_not_observed_rather_than_node_zero() {
 #[test]
 fn a_fully_covered_machine_has_no_unplaced_processors() {
     let mut node = core_domain_at(0, &[0, 1, 2, 3]);
-    node.kind = DomainKind::Memory { memory_bytes: None };
+    node.kind = DomainKind::Memory {
+        memory_bytes: Observed::NotObserved,
+    };
     assert!(machine_of(4, vec![node]).unplaced_processors().is_empty());
 }
 

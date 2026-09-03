@@ -304,7 +304,9 @@ pub fn measure() -> io::Result<Observation> {
 
     // Asked once, here, rather than restated: the crate that owns the topology
     // owns the rule (D-21).
-    let partitioning_cache_level = topology.outermost_partitioning_cache().map(|(level, _)| level);
+    let partitioning_cache_level = topology
+        .outermost_partitioning_cache()
+        .map(|(level, _)| level);
 
     Ok(Observation {
         online_processors,

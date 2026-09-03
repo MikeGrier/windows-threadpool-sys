@@ -25,7 +25,7 @@ fn a_memory_domain_may_have_no_processors() {
     // discovery.
     let domain = Domain {
         kind: DomainKind::Memory {
-            memory_bytes: Some(64 * 1024 * 1024 * 1024),
+            memory_bytes: Observed::Known(64 * 1024 * 1024 * 1024),
         },
         processors: ProcessorSet::empty(),
         observations: Vec::new(),
@@ -34,7 +34,7 @@ fn a_memory_domain_may_have_no_processors() {
     let DomainKind::Memory { memory_bytes } = domain.kind else {
         panic!("expected Memory")
     };
-    assert_eq!(memory_bytes, Some(64 * 1024 * 1024 * 1024));
+    assert_eq!(memory_bytes, Observed::Known(64 * 1024 * 1024 * 1024));
 }
 
 #[test]
@@ -43,14 +43,16 @@ fn a_discovered_memory_domain_has_no_known_size() {
     // node memory capacity at all, so that arm must stay `None` rather than
     // guessing `Some(0)`, which would be indistinguishable from "no memory".
     let domain = Domain {
-        kind: DomainKind::Memory { memory_bytes: None },
+        kind: DomainKind::Memory {
+            memory_bytes: Observed::NotObserved,
+        },
         processors: ProcessorSet::empty(),
         observations: Vec::new(),
     };
     let DomainKind::Memory { memory_bytes } = domain.kind else {
         panic!("expected Memory")
     };
-    assert_eq!(memory_bytes, None);
+    assert_eq!(memory_bytes, Observed::NotObserved);
 }
 
 #[test]
@@ -95,6 +97,7 @@ mod serde_tests {
     use std::collections::BTreeMap;
 
     use super::super::*;
+    use crate::observed::Observed;
     use crate::processor_set::ProcessorSet;
 
     fn round_trip(domain: &Domain) -> Domain {
@@ -192,7 +195,7 @@ mod serde_tests {
         // no processors at all.
         let domain = Domain {
             kind: DomainKind::Memory {
-                memory_bytes: Some(64 * 1024 * 1024 * 1024),
+                memory_bytes: Observed::Known(64 * 1024 * 1024 * 1024),
             },
             processors: ProcessorSet::empty(),
             observations: Vec::new(),
@@ -208,7 +211,9 @@ mod serde_tests {
     #[test]
     fn a_memory_domain_with_unknown_size_omits_memory_bytes_rather_than_writing_null() {
         let domain = Domain {
-            kind: DomainKind::Memory { memory_bytes: None },
+            kind: DomainKind::Memory {
+                memory_bytes: Observed::NotObserved,
+            },
             processors: ProcessorSet::empty(),
             observations: Vec::new(),
         };
@@ -282,7 +287,7 @@ mod serde_tests {
         let precise: u64 = (1u64 << 53) + 1;
         let domain = Domain {
             kind: DomainKind::Memory {
-                memory_bytes: Some(precise),
+                memory_bytes: Observed::Known(precise),
             },
             processors: ProcessorSet::empty(),
             observations: Vec::new(),
@@ -291,7 +296,7 @@ mod serde_tests {
         let DomainKind::Memory { memory_bytes } = restored.kind else {
             panic!("expected Memory")
         };
-        assert_eq!(memory_bytes, Some(precise));
+        assert_eq!(memory_bytes, Observed::Known(precise));
     }
 
     #[test]
@@ -332,7 +337,7 @@ mod serde_tests {
         assert_eq!(
             domain.kind,
             DomainKind::Memory {
-                memory_bytes: Some(549_755_813_888)
+                memory_bytes: Observed::Known(549_755_813_888)
             }
         );
     }
@@ -422,7 +427,7 @@ mod serde_tests {
         assert_eq!(
             domain.kind,
             DomainKind::Memory {
-                memory_bytes: Some(1024)
+                memory_bytes: Observed::Known(1024)
             },
             "a generator emitting a whole number as a float is ordinary JSON"
         );
@@ -464,7 +469,7 @@ mod serde_tests {
         assert_eq!(
             domain.kind,
             DomainKind::Memory {
-                memory_bytes: Some(0)
+                memory_bytes: Observed::Known(0)
             }
         );
     }
@@ -477,7 +482,7 @@ mod serde_tests {
         assert_eq!(
             domain.kind,
             DomainKind::Memory {
-                memory_bytes: Some(4096)
+                memory_bytes: Observed::Known(4096)
             }
         );
     }
@@ -635,4 +640,74 @@ mod serde_tests {
         };
         assert_eq!(cache_type, CacheKind::Other(99));
     }
+}
+
+// --- M5+.2: omitted and explicit-null stop being the same value ---
+
+#[cfg(feature = "serde")]
+#[test]
+fn an_omitted_memory_bytes_and_an_explicit_null_are_different_values() {
+    // The defect: both used to parse to `None`, so a description that never
+    // addressed the field and one that addressed it and had no answer were
+    // indistinguishable.
+    let omitted: Domain =
+        serde_json::from_str(r#"{"kind": "memory", "id": 0, "processors": []}"#).expect("parse");
+    let explicit_null: Domain = serde_json::from_str(
+        r#"{"kind": "memory", "id": 0, "processors": [], "memory_bytes": null}"#,
+    )
+    .expect("parse");
+
+    let DomainKind::Memory {
+        memory_bytes: from_omission,
+    } = omitted.kind
+    else {
+        panic!("memory");
+    };
+    let DomainKind::Memory {
+        memory_bytes: from_null,
+    } = explicit_null.kind
+    else {
+        panic!("memory");
+    };
+
+    assert_eq!(from_omission, Observed::NotObserved, "nobody addressed it");
+    assert_eq!(from_null, Observed::Absent, "addressed, and no value");
+    assert_ne!(from_omission, from_null);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn the_three_memory_bytes_states_round_trip_distinctly() {
+    // A wire format that collapsed any two would put the ambiguity back where
+    // the type just removed it.
+    for state in [
+        Observed::Known(4096_u64),
+        Observed::Absent,
+        Observed::NotObserved,
+    ] {
+        let domain = Domain {
+            kind: DomainKind::Memory {
+                memory_bytes: state,
+            },
+            processors: ProcessorSet::empty(),
+            observations: Vec::new(),
+        };
+        let json = serde_json::to_string(&domain).expect("serialize");
+        let back: Domain = serde_json::from_str(&json).expect("deserialize");
+        let DomainKind::Memory { memory_bytes } = back.kind else {
+            panic!("memory");
+        };
+        assert_eq!(memory_bytes, state, "round trip changed {json}");
+    }
+}
+
+#[test]
+fn a_node_with_genuinely_no_memory_is_known_zero_not_an_absence() {
+    // D-11's point, preserved: `Known(0)` is the CXL-shaped node that really
+    // has no memory, and it must not be confusable with an unknown capacity.
+    // This was already true of `Some(0)`; the change must not lose it.
+    let zero = Observed::Known(0_u64);
+    assert!(zero.was_observed());
+    assert_ne!(zero, Observed::Absent);
+    assert_ne!(zero, Observed::NotObserved);
 }

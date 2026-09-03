@@ -76,7 +76,7 @@
 
 use std::fmt;
 
-use windows_topology_sys::{DomainKind, MachineMemoryTopology, Provenance, Source};
+use windows_topology_sys::{DomainKind, MachineMemoryTopology, Observed, Provenance, Source};
 
 /// One logical processor's position in the machine.
 ///
@@ -111,7 +111,7 @@ pub struct ProcessorPlace {
     pub efficiency_class: u8,
     /// Which cache domain it sits behind, at the outermost level that
     /// partitions the machine, or `None` if no level does.
-    pub cache_domain: Option<u32>,
+    pub cache_domain: Observed<u32>,
     /// Which NUMA node it belongs to.
     ///
     /// Carried even though every host measured so far reports a single node,
@@ -151,9 +151,13 @@ impl fmt::Display for ProcessorPlace {
             "g{}/cpu{}/core{}/ec{}",
             self.group, self.number, self.core, self.efficiency_class
         )?;
+        // Three states get three renderings, so a fingerprint cannot read as
+        // "no level partitions this machine" when the truth is "this processor
+        // was left out of the level that does".
         match self.cache_domain {
-            Some(id) => write!(f, "/cd{id}")?,
-            None => write!(f, "/cd-")?,
+            Observed::Known(id) => write!(f, "/cd{id}")?,
+            Observed::Absent => write!(f, "/cd-")?,
+            Observed::NotObserved => write!(f, "/cd?")?,
         }
         write!(f, "/n{}", self.numa_node)
     }
@@ -207,9 +211,24 @@ impl Slice {
         let Self::Pinned { participants } = self else {
             return None;
         };
+        // `None` when any participant's domain was never observed: two
+        // unobserved processors must not compare equal and be reported as
+        // sharing a cache. That is the hazard the old refusal existed to
+        // prevent, moved from "refuse the whole run" to "answer the one
+        // question that cannot be answered".
         let mut domains = participants.iter().map(|(_, place)| place.cache_domain);
         let first = domains.next()?;
-        Some(domains.all(|domain| domain == first))
+        if first == Observed::NotObserved {
+            return None;
+        }
+        let mut same = true;
+        for domain in domains {
+            if domain == Observed::NotObserved {
+                return None;
+            }
+            same &= domain == first;
+        }
+        Some(same)
     }
 
     /// Whether every participant is of the same efficiency class.
@@ -729,15 +748,21 @@ pub fn places_from_topology(
                 None if !any_core_domain => 0,
                 None => return refuse(MissingPlacement::Core),
             };
+            // Three states, three answers, and no refusal (M5+.4). The old code
+            // refused a processor missing from a level that DOES partition,
+            // because `None` had to serve as both "no level partitions this
+            // machine" and "this processor was left out" -- and two omitted
+            // processors would then compare equal and be reported as sharing a
+            // cache they do not.
+            //
+            // `Observed` separates them, so the run continues over a topology
+            // this crate deliberately hands back. The comparison in
+            // `Slice::same_cache_domain` is what makes that safe: it answers
+            // "unknown" rather than "same" when either side is NotObserved.
             let cache_domain = match cache_of.get(&id).copied() {
-                Some(domain) => Some(domain),
-                // `None` means "no level partitions this machine", which is a
-                // real and uniform answer. It must not also mean "this
-                // processor was left out of the level that does": two omitted
-                // processors would then compare equal and be reported as
-                // sharing a cache.
-                None if !any_cache_partition => None,
-                None => return refuse(MissingPlacement::CacheDomain),
+                Some(domain) => Observed::Known(domain),
+                None if !any_cache_partition => Observed::Absent,
+                None => Observed::NotObserved,
             };
             let numa_node = match numa_of.get(&id).copied() {
                 Some(node) => node,

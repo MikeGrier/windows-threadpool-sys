@@ -91,14 +91,32 @@ pub enum DomainKind {
     /// A memory locality domain -- a NUMA node modelled as a memory domain
     /// that may contain no processors at all (D-5), because CXL expanders,
     /// persistent memory, HBM tiers, and coherent GPU memory all present that
-    /// way. `memory_bytes` is `None` when the size is not known: Windows's
-    /// own enumeration (`GetLogicalProcessorInformationEx`) does not report a
-    /// NUMA node's capacity at all, so a domain discovered by this crate
-    /// always has `memory_bytes: None`; a hand-written or fed-in description
-    /// may supply it.
+    /// way.
     Memory {
-        /// The domain's memory capacity, if known.
-        memory_bytes: Option<u64>,
+        /// The domain's memory capacity.
+        ///
+        /// [`Observed::NotObserved`] from `discover`: Windows's own enumeration
+        /// (`GetLogicalProcessorInformationEx`) does not report a NUMA node's
+        /// capacity at all, so this crate never learns it. A hand-written or
+        /// fed-in description may supply one.
+        ///
+        /// # Why this is an `Observed` and not an `Option`
+        ///
+        /// So that a description **omitting** the field and one writing
+        /// `"memory_bytes": null` stop being the same value: the first is
+        /// `NotObserved` (nobody addressed it) and the second is `Absent` (the
+        /// writer addressed it and had no value). Both still mean "the capacity
+        /// is unknown" to a planner, so the distinction is one of **provenance
+        /// of the description**, not of planning -- recorded plainly because
+        /// `M5+.2` framed it as more than that.
+        ///
+        /// The distinction that actually matters was already available and is
+        /// preserved: `Known(0)` is a node with genuinely no memory -- the
+        /// CXL-expander shape [D-5](../DESIGN-NOTES.md) exists to represent --
+        /// and is not confusable with an unknown capacity. That is
+        /// [D-11](../DESIGN-NOTES.md)'s point, and it is why `Some(0)` was
+        /// rejected as a stand-in in the first place.
+        memory_bytes: Observed<u64>,
     },
     /// A domain kind this crate does not have a name for, carrying its raw
     /// name and whatever attributes came with it, so a description this
@@ -491,8 +509,18 @@ mod serde_impl {
                     map.serialize_entry("cache_type", cache_type)?;
                 }
                 DomainKind::Memory { memory_bytes } => {
-                    if let Some(bytes) = memory_bytes {
-                        map.serialize_entry("memory_bytes", bytes)?;
+                    // Three states, three wire shapes: a number, an explicit
+                    // `null` for "addressed and unknown", and omission for
+                    // "nobody said". Writing `null` for both would put the
+                    // ambiguity back on the wire that the type just removed.
+                    match memory_bytes {
+                        crate::observed::Observed::Known(bytes) => {
+                            map.serialize_entry("memory_bytes", bytes)?;
+                        }
+                        crate::observed::Observed::Absent => {
+                            map.serialize_entry("memory_bytes", &Option::<u64>::None)?;
+                        }
+                        crate::observed::Observed::NotObserved => {}
                     }
                 }
                 DomainKind::Other { attributes, .. } => {
@@ -568,8 +596,9 @@ mod serde_impl {
                 },
                 "memory" => DomainKind::Memory {
                     memory_bytes: match fields.remove("memory_bytes") {
-                        None | Some(AttributeValue::Null) => None,
-                        Some(value) => Some(as_u64(value)?),
+                        None => crate::observed::Observed::NotObserved,
+                        Some(AttributeValue::Null) => crate::observed::Observed::Absent,
+                        Some(value) => crate::observed::Observed::Known(as_u64(value)?),
                     },
                 },
                 other => DomainKind::Other {

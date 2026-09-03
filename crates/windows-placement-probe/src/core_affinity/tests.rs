@@ -17,7 +17,11 @@ use crate::fingerprint::ProcessorPlace;
 ///
 /// Single-node, matching every host measured so far; use [`on_node`] to move
 /// one onto another NUMA node.
-fn place(number: u8, efficiency_class: u8, cache_domain: Option<u32>) -> ProcessorPlace {
+fn place(
+    number: u8,
+    efficiency_class: u8,
+    cache_domain: windows_topology_sys::Observed<u32>,
+) -> ProcessorPlace {
     ProcessorPlace {
         group: 0,
         number,
@@ -47,7 +51,7 @@ fn sibling(
     number: u8,
     core: u32,
     efficiency_class: u8,
-    cache_domain: Option<u32>,
+    cache_domain: windows_topology_sys::Observed<u32>,
 ) -> ProcessorPlace {
     ProcessorPlace {
         group: 0,
@@ -61,29 +65,29 @@ fn sibling(
 
 #[test]
 fn same_cache_and_same_class_is_classified_as_such() {
-    let a = place(0, 1, Some(0));
-    let b = place(1, 1, Some(0));
+    let a = place(0, 1, windows_topology_sys::Observed::Known(0));
+    let b = place(1, 1, windows_topology_sys::Observed::Known(0));
     assert_eq!(classify(a, b), Placement::SameCacheSameClass);
 }
 
 #[test]
 fn a_differing_class_alone_is_cross_class() {
-    let a = place(0, 1, Some(0));
-    let b = place(1, 0, Some(0));
+    let a = place(0, 1, windows_topology_sys::Observed::Known(0));
+    let b = place(1, 0, windows_topology_sys::Observed::Known(0));
     assert_eq!(classify(a, b), Placement::SameCacheCrossClass);
 }
 
 #[test]
 fn a_differing_cache_alone_is_cross_cache() {
-    let a = place(0, 1, Some(0));
-    let b = place(6, 1, Some(1));
+    let a = place(0, 1, windows_topology_sys::Observed::Known(0));
+    let b = place(6, 1, windows_topology_sys::Observed::Known(1));
     assert_eq!(classify(a, b), Placement::CrossCacheSameClass);
 }
 
 #[test]
 fn differing_in_both_is_cross_cross() {
-    let a = place(0, 1, Some(0));
-    let b = place(6, 0, Some(1));
+    let a = place(0, 1, windows_topology_sys::Observed::Known(0));
+    let b = place(6, 0, windows_topology_sys::Observed::Known(1));
     assert_eq!(classify(a, b), Placement::CrossCacheCrossClass);
 }
 
@@ -93,8 +97,8 @@ fn classification_is_symmetric_in_the_two_ends() {
     // not change it. The measurement may well differ by direction -- a fast
     // producer feeding a slow consumer is not the same experiment as the
     // reverse -- but that is a difference in the result, not in the label.
-    let a = place(0, 1, Some(0));
-    let b = place(6, 0, Some(1));
+    let a = place(0, 1, windows_topology_sys::Observed::Known(0));
+    let b = place(6, 0, windows_topology_sys::Observed::Known(1));
     assert_eq!(classify(a, b), classify(b, a));
 }
 
@@ -102,14 +106,16 @@ fn classification_is_symmetric_in_the_two_ends() {
 fn a_machine_with_no_partitioning_cache_still_classifies() {
     // Both `None`, which compares equal: a machine whose caches do not divide
     // it has every pair in the "same cache" category rather than in none.
-    let a = place(0, 1, None);
-    let b = place(1, 0, None);
+    let a = place(0, 1, windows_topology_sys::Observed::Absent);
+    let b = place(1, 0, windows_topology_sys::Observed::Absent);
     assert_eq!(classify(a, b), Placement::SameCacheCrossClass);
 }
 
 #[test]
 fn a_homogeneous_single_cache_machine_offers_only_one_placement() {
-    let places: Vec<_> = (0..4).map(|n| place(n, 0, Some(0))).collect();
+    let places: Vec<_> = (0..4)
+        .map(|n| place(n, 0, windows_topology_sys::Observed::Known(0)))
+        .collect();
     let pairs = representative_pairs(&places);
 
     assert_eq!(
@@ -131,7 +137,11 @@ fn a_heterogeneous_two_cache_machine_offers_all_four() {
     for cache in 0..2_u32 {
         for class in 0..2_u8 {
             for _ in 0..2 {
-                places.push(place(number, class, Some(cache)));
+                places.push(place(
+                    number,
+                    class,
+                    windows_topology_sys::Observed::Known(cache),
+                ));
                 number += 1;
             }
         }
@@ -158,7 +168,11 @@ fn a_machine_whose_classes_follow_its_caches_offers_only_two() {
     let mut places = Vec::new();
     for number in 0..12_u8 {
         let side = u32::from(number) / 6;
-        places.push(place(number, side as u8, Some(side)));
+        places.push(place(
+            number,
+            side as u8,
+            windows_topology_sys::Observed::Known(side),
+        ));
     }
     let pairs = representative_pairs(&places);
 
@@ -177,7 +191,13 @@ fn a_machine_whose_classes_follow_its_caches_offers_only_two() {
 #[test]
 fn a_pair_never_puts_both_ends_on_one_processor() {
     let places: Vec<_> = (0..4)
-        .map(|n| place(n, n % 2, Some(u32::from(n) / 2)))
+        .map(|n| {
+            place(
+                n,
+                n % 2,
+                windows_topology_sys::Observed::Known(u32::from(n) / 2),
+            )
+        })
         .collect();
     for (_, (producer, consumer)) in representative_pairs(&places) {
         assert_ne!(
@@ -190,7 +210,13 @@ fn a_pair_never_puts_both_ends_on_one_processor() {
 #[test]
 fn every_expressible_placement_is_chosen_exactly_once() {
     let places: Vec<_> = (0..8)
-        .map(|n| place(n, n % 2, Some(u32::from(n) / 4)))
+        .map(|n| {
+            place(
+                n,
+                n % 2,
+                windows_topology_sys::Observed::Known(u32::from(n) / 4),
+            )
+        })
         .collect();
     let pairs = representative_pairs(&places);
 
@@ -208,15 +234,15 @@ fn smt_siblings_are_their_own_placement() {
     // and a two-core pair behind one cache landed in the same bucket, and the
     // probe reported whichever it happened to select first -- on an SMT host,
     // which is exactly where the distinction matters.
-    let a = sibling(0, 0, 0, Some(0));
-    let b = sibling(1, 0, 0, Some(0));
+    let a = sibling(0, 0, 0, windows_topology_sys::Observed::Known(0));
+    let b = sibling(1, 0, 0, windows_topology_sys::Observed::Known(0));
     assert_eq!(classify(a, b), Placement::SameCoreSiblings);
 }
 
 #[test]
 fn siblings_outrank_the_cache_and_class_they_also_share() {
-    let a = sibling(0, 0, 1, Some(3));
-    let b = sibling(1, 0, 1, Some(3));
+    let a = sibling(0, 0, 1, windows_topology_sys::Observed::Known(3));
+    let b = sibling(1, 0, 1, windows_topology_sys::Observed::Known(3));
     assert_ne!(
         classify(a, b),
         Placement::SameCacheSameClass,
@@ -233,7 +259,12 @@ fn an_smt_host_expresses_a_placement_a_non_smt_host_cannot() {
     let mut places = Vec::new();
     for core in 0..8_u32 {
         for lane in 0..2_u8 {
-            places.push(sibling(core as u8 * 2 + lane, core, 0, Some(0)));
+            places.push(sibling(
+                core as u8 * 2 + lane,
+                core,
+                0,
+                windows_topology_sys::Observed::Known(0),
+            ));
         }
     }
     let pairs = representative_pairs(&places);
@@ -250,7 +281,13 @@ fn an_smt_host_expresses_a_placement_a_non_smt_host_cannot() {
 #[test]
 fn a_non_smt_host_cannot_express_the_sibling_placement() {
     let places: Vec<_> = (0..12)
-        .map(|n| place(n, u8::from(n >= 6), Some(u32::from(n) / 6)))
+        .map(|n| {
+            place(
+                n,
+                u8::from(n >= 6),
+                windows_topology_sys::Observed::Known(u32::from(n) / 6),
+            )
+        })
         .collect();
     let pairs = representative_pairs(&places);
 
@@ -262,8 +299,8 @@ fn a_non_smt_host_cannot_express_the_sibling_placement() {
 
 #[test]
 fn different_numa_nodes_are_classified_as_a_node_crossing() {
-    let a = place(0, 1, Some(0));
-    let b = on_node(place(1, 1, Some(1)), 1);
+    let a = place(0, 1, windows_topology_sys::Observed::Known(0));
+    let b = on_node(place(1, 1, windows_topology_sys::Observed::Known(1)), 1);
 
     assert_eq!(classify(a, b), Placement::CrossNumaNode);
 }
@@ -274,8 +311,8 @@ fn a_node_crossing_outranks_the_cache_and_class_it_also_crosses() {
     // `CrossCacheCrossClass` and the node crossing is invisible, so an
     // expensive run on a real NUMA machine would be recorded as a cache
     // effect.
-    let a = place(0, 1, Some(0));
-    let b = on_node(place(1, 0, Some(1)), 1);
+    let a = place(0, 1, windows_topology_sys::Observed::Known(0));
+    let b = on_node(place(1, 0, windows_topology_sys::Observed::Known(1)), 1);
 
     assert_eq!(classify(a, b), Placement::CrossNumaNode);
 }
@@ -286,8 +323,8 @@ fn a_node_crossing_is_reported_even_when_cache_and_class_match() {
     // configuration real hardware offers, but the classifier must not depend on
     // that: it decides on the node, not on the fields the node happens to
     // correlate with.
-    let a = place(0, 1, Some(0));
-    let b = on_node(place(1, 1, Some(0)), 1);
+    let a = place(0, 1, windows_topology_sys::Observed::Known(0));
+    let b = on_node(place(1, 1, windows_topology_sys::Observed::Known(0)), 1);
 
     assert_eq!(classify(a, b), Placement::CrossNumaNode);
 }
@@ -299,8 +336,11 @@ fn siblings_outrank_a_node_crossing_because_one_core_cannot_span_nodes() {
     // sibling relationship would win. Pinning the order down here means a later
     // reordering of `classify` is caught by a test rather than by a confusing
     // table on a machine nobody has yet run.
-    let a = sibling(0, 0, 1, Some(0));
-    let b = on_node(sibling(1, 0, 1, Some(0)), 1);
+    let a = sibling(0, 0, 1, windows_topology_sys::Observed::Known(0));
+    let b = on_node(
+        sibling(1, 0, 1, windows_topology_sys::Observed::Known(0)),
+        1,
+    );
 
     assert_eq!(classify(a, b), Placement::SameCoreSiblings);
 }
@@ -311,7 +351,13 @@ fn a_single_node_machine_never_produces_a_node_crossing() {
     // the case that must stay quiet: the new variant must not appear where it
     // cannot apply.
     let places: Vec<_> = (0..8)
-        .map(|number| place(number, u8::from(number < 4), Some(u32::from(number) / 2)))
+        .map(|number| {
+            place(
+                number,
+                u8::from(number < 4),
+                windows_topology_sys::Observed::Known(u32::from(number) / 2),
+            )
+        })
         .collect();
 
     let pairs = representative_pairs(&places);
@@ -327,7 +373,11 @@ fn a_single_node_machine_never_produces_a_node_crossing() {
 fn a_two_node_machine_expresses_the_node_crossing() {
     let places: Vec<_> = (0..8)
         .map(|number| {
-            let base = place(number, 1, Some(u32::from(number) / 2));
+            let base = place(
+                number,
+                1,
+                windows_topology_sys::Observed::Known(u32::from(number) / 2),
+            );
             on_node(base, u32::from(number) / 4)
         })
         .collect();
@@ -390,7 +440,7 @@ fn synthesize(spec: &HostSpec) -> Vec<ProcessorPlace> {
                         number,
                         core,
                         efficiency_class: 0,
-                        cache_domain: Some(cache_domain),
+                        cache_domain: windows_topology_sys::Observed::Known(cache_domain),
                         numa_node: node,
                     });
                     number += 1;
@@ -791,7 +841,7 @@ mod processor_groups {
         for group in 0..2_u16 {
             for number in 0..4_u8 {
                 let domain = u32::from(group) * 2 + u32::from(number) / 2;
-                let base = place(number, 0, Some(domain));
+                let base = place(number, 0, windows_topology_sys::Observed::Known(domain));
                 places.push(in_group(base, group));
             }
         }
@@ -831,9 +881,9 @@ mod processor_groups {
         // why this is not tested through `two_groups`, and why the defect
         // survived the group work: it is invisible unless the discarded pair is
         // the only representative of its placement.
-        let mut here = place(0, 0, Some(0));
+        let mut here = place(0, 0, windows_topology_sys::Observed::Known(0));
         here.numa_node = 0;
-        let mut there = in_group(place(0, 0, Some(1)), 1);
+        let mut there = in_group(place(0, 0, windows_topology_sys::Observed::Known(1)), 1);
         there.numa_node = 1;
 
         let pairs = representative_pairs(&[here, there]);
@@ -857,7 +907,7 @@ mod processor_groups {
         // The slice string is how a measurement's provenance travels into a
         // checklist or a submitted record. If it omits the group, two different
         // processors render identically and the record cannot be read back.
-        let zero = place(5, 0, Some(0));
+        let zero = place(5, 0, windows_topology_sys::Observed::Known(0));
         let one = in_group(zero, 1);
 
         assert_ne!(zero.to_string(), one.to_string());
@@ -871,7 +921,7 @@ mod processor_groups {
         // core id were derived from the number alone, two processors in
         // different groups would be classified as SMT siblings -- physically
         // impossible, since a core cannot span a group.
-        let zero = sibling(5, 5, 0, Some(0));
+        let zero = sibling(5, 5, 0, windows_topology_sys::Observed::Known(0));
         let one = in_group(zero, 1);
 
         assert_ne!(
@@ -1074,8 +1124,8 @@ fn hop_row(
     achieved: Option<u32>,
     nanos: f64,
 ) -> super::Measurement {
-    let mut producer = place(0, 0, Some(0));
-    let mut consumer = place(1, 0, Some(0));
+    let mut producer = place(0, 0, windows_topology_sys::Observed::Known(0));
+    let mut consumer = place(1, 0, windows_topology_sys::Observed::Known(0));
     producer.numa_node = pair.0;
     consumer.numa_node = pair.1;
     super::Measurement {

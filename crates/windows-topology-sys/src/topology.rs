@@ -173,7 +173,9 @@ impl MachineMemoryTopology {
         self.fold_memberships(
             &nodes,
             |kind| matches!(kind, DomainKind::Memory { .. }),
-            |_| DomainKind::Memory { memory_bytes: None },
+            |_| DomainKind::Memory {
+                memory_bytes: Observed::NotObserved,
+            },
         );
 
         // The attribute subject, which relation unification cannot reach: both
@@ -361,7 +363,9 @@ impl MachineMemoryTopology {
         }
         for node in &relations.numa_nodes {
             domains.push(Domain {
-                kind: DomainKind::Memory { memory_bytes: None },
+                kind: DomainKind::Memory {
+                    memory_bytes: Observed::NotObserved,
+                },
                 processors: node.processors.clone(),
                 observations: vec![Observation::new(Source::RelationshipWalk, node.node_number)],
             });

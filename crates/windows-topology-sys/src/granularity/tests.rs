@@ -3,6 +3,7 @@
 
 use super::Granularity;
 use crate::domain::{Domain, DomainKind, Processor, ProcessorId};
+use crate::observed::Observed;
 use crate::processor_set::ProcessorSet;
 use crate::provenance::Provenance;
 use crate::relation::CacheKind;
@@ -54,7 +55,9 @@ fn core(numbers: &[u8]) -> Domain {
 
 fn memory(numbers: &[u8]) -> Domain {
     Domain {
-        kind: DomainKind::Memory { memory_bytes: None },
+        kind: DomainKind::Memory {
+            memory_bytes: Observed::NotObserved,
+        },
         processors: set(numbers),
         observations: Vec::new(),
     }
@@ -245,7 +248,9 @@ fn the_order_holds_across_processor_groups() {
     let mut spanning = set(&[0, 1]);
     spanning.insert(1, 0);
     t.domains.push(Domain {
-        kind: DomainKind::Memory { memory_bytes: None },
+        kind: DomainKind::Memory {
+            memory_bytes: Observed::NotObserved,
+        },
         processors: spanning,
         observations: Vec::new(),
     });
