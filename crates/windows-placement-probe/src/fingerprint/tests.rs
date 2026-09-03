@@ -352,6 +352,7 @@ mod from_topology {
                 },
                 id: index as u32,
                 processors: set_of(&members),
+                observations: Vec::new(),
             });
 
             push_members(&mut cache_members, core.cache_domain, &members);
@@ -364,6 +365,7 @@ mod from_topology {
                 kind: DomainKind::Group,
                 id: 0,
                 processors: set_of(&all),
+                observations: Vec::new(),
             },
         );
 
@@ -378,6 +380,7 @@ mod from_topology {
                 },
                 id,
                 processors: set_of(&members),
+                observations: Vec::new(),
             });
         }
         for (id, members) in node_members {
@@ -385,6 +388,7 @@ mod from_topology {
                 kind: DomainKind::Memory { memory_bytes: None },
                 id,
                 processors: set_of(&members),
+                observations: Vec::new(),
             });
         }
 
@@ -624,6 +628,7 @@ mod multi_group_conversion {
                     },
                     id: core_id,
                     processors: ProcessorSet::from_group_mask(group, 1_usize << number),
+                    observations: Vec::new(),
                 });
                 core_id += 1;
             }
@@ -633,6 +638,7 @@ mod multi_group_conversion {
                 kind: DomainKind::Group,
                 id: u32::from(group),
                 processors: ProcessorSet::from_group_mask(group, mask),
+                observations: Vec::new(),
             });
             // A cache domain per group, because a cache is never shared across
             // one, and a memory domain per group so this stays a two-node
@@ -647,11 +653,13 @@ mod multi_group_conversion {
                 },
                 id: 100 + u32::from(group),
                 processors: ProcessorSet::from_group_mask(group, mask),
+                observations: Vec::new(),
             });
             domains.push(Domain {
                 kind: DomainKind::Memory { memory_bytes: None },
                 id: u32::from(group),
                 processors: ProcessorSet::from_group_mask(group, mask),
+                observations: Vec::new(),
             });
         }
 
@@ -734,6 +742,7 @@ mod multi_group_conversion {
                 kind: DomainKind::Group,
                 id: 0,
                 processors: ProcessorSet::from_group_mask(0, mask),
+                observations: Vec::new(),
             }],
             cpu_sets: None,
             ..Default::default()
@@ -773,6 +782,7 @@ mod multi_group_conversion {
             kind: DomainKind::Group,
             id: 1,
             processors: ProcessorSet::from_group_mask(1, 0b1),
+            observations: Vec::new(),
         });
 
         let places = places_from_topology(&topology).expect("no memory domain, so node 0 applies");
@@ -822,6 +832,7 @@ mod multi_group_conversion {
                 kind: DomainKind::Memory { memory_bytes: None },
                 id,
                 processors: ProcessorSet::from_group_mask(0, mask),
+                observations: Vec::new(),
             });
         }
 
@@ -846,6 +857,7 @@ mod multi_group_conversion {
                 kind: DomainKind::Memory { memory_bytes: None },
                 id,
                 processors: ProcessorSet::from_group_mask(0, mask),
+                observations: Vec::new(),
             });
         }
 
@@ -876,6 +888,7 @@ mod multi_group_conversion {
             },
             id,
             processors: ProcessorSet::from_group_mask(0, mask),
+            observations: Vec::new(),
         });
         topology
     }
@@ -916,6 +929,7 @@ mod multi_group_conversion {
             kind: DomainKind::Group,
             id: 1,
             processors: ProcessorSet::from_group_mask(1, 0b1),
+            observations: Vec::new(),
         });
 
         let places =
@@ -962,6 +976,7 @@ mod multi_group_conversion {
                 },
                 id,
                 processors: ProcessorSet::from_group_mask(0, 1 << member),
+                observations: Vec::new(),
             });
         }
         for (id, mask) in [(20_u32, 0b001_usize), (21, 0b010)] {
@@ -975,6 +990,7 @@ mod multi_group_conversion {
                 },
                 id,
                 processors: ProcessorSet::from_group_mask(0, mask),
+                observations: Vec::new(),
             });
         }
 

@@ -395,9 +395,21 @@ item against the code before planning work from it.**
   an additive change, a behavioural one, and a cross-crate breaking one. Each sub-step below compiles
   and is testable on its own, and the breaking change is last and isolated.
 
-  - [ ] **M3+.1.1** -- Introduce `Source` and `Observation`, and give `Domain` its observations,
+  - [x] **M3+.1.1** -- Introduce `Source` and `Observation`, and give `Domain` its observations,
     populated by `from_relations` with the label it currently puts in `id`. **Additive**: `id` stays,
     nothing downstream changes, and the unified view has somewhere to record what it unifies.
+    **"Nothing downstream changes" was wrong** -- the fourth item in this reshape to assert something
+    the code contradicts. `Domain` has public fields and is not `#[non_exhaustive]`, so a new field
+    breaks every struct literal: **59 of them across five crates**, 17 outside this one. rustc
+    enumerated each site; test literals take `Vec::new()` (a hand-built relation nobody reported,
+    which is honest) and the seven real builders in `from_relations` take a genuine
+    `Source::RelationshipWalk` observation carrying the label they already used.
+    **Deserialization drops platform observations, and that is the point.** The wire shape does not
+    encode them and no `Description` observation is synthesized. Carrying "the relationship walk
+    observed this" out of a file would be exactly the forgery [D-12](DESIGN-NOTES.md#d-12) refuses,
+    and synthesizing `Description` would restate what the object's `Provenance::Restored` already
+    says -- which [D-22](DESIGN-NOTES.md#d-22) had just finished separating. Twelve round-trip tests
+    failed on this and were right to: the question was real, not a test defect.
 
   - [ ] **M3+.1.2** -- Fold CPU Sets into the relation set. For a `Core` or `Memory` membership that
     matches an existing relation, add an observation; otherwise add a relation observed only by CPU

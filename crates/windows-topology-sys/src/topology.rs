@@ -5,6 +5,7 @@ use std::io;
 
 use crate::cpu_set::CpuSet;
 use crate::domain::{Domain, DomainKind, Processor, ProcessorId};
+use crate::observation::{Observation, Source};
 use crate::provenance::Provenance;
 use crate::relation::{self, Relations};
 
@@ -95,6 +96,10 @@ impl MachineMemoryTopology {
                 kind: DomainKind::Group,
                 id: u32::from(group.group),
                 processors: group.active_processors.clone(),
+                observations: vec![Observation::new(
+                    Source::RelationshipWalk,
+                    u32::from(group.group),
+                )],
             });
         }
         for (index, package) in relations.packages.iter().enumerate() {
@@ -102,6 +107,7 @@ impl MachineMemoryTopology {
                 kind: DomainKind::Package,
                 id: index as u32,
                 processors: package.processors.clone(),
+                observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
         }
         for (index, die) in relations.dies.iter().enumerate() {
@@ -109,6 +115,7 @@ impl MachineMemoryTopology {
                 kind: DomainKind::Die,
                 id: index as u32,
                 processors: die.processors.clone(),
+                observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
         }
         for (index, module) in relations.modules.iter().enumerate() {
@@ -116,6 +123,7 @@ impl MachineMemoryTopology {
                 kind: DomainKind::Module,
                 id: index as u32,
                 processors: module.processors.clone(),
+                observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
         }
         for (index, core) in relations.cores.iter().enumerate() {
@@ -126,6 +134,7 @@ impl MachineMemoryTopology {
                 },
                 id: index as u32,
                 processors: core.processors.clone(),
+                observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
         }
         for (index, cache) in relations.caches.iter().enumerate() {
@@ -139,6 +148,7 @@ impl MachineMemoryTopology {
                 },
                 id: index as u32,
                 processors: cache.processors.clone(),
+                observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
         }
         for node in &relations.numa_nodes {
@@ -146,6 +156,7 @@ impl MachineMemoryTopology {
                 kind: DomainKind::Memory { memory_bytes: None },
                 id: node.node_number,
                 processors: node.processors.clone(),
+                observations: vec![Observation::new(Source::RelationshipWalk, node.node_number)],
             });
         }
 

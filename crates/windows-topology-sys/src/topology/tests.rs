@@ -30,11 +30,13 @@ fn synthetic() -> MachineMemoryTopology {
                 kind: DomainKind::Group,
                 id: 0,
                 processors: group0.clone(),
+                observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Package,
                 id: 0,
                 processors: group0.clone(),
+                observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Core {
@@ -43,6 +45,7 @@ fn synthetic() -> MachineMemoryTopology {
                 },
                 id: 0,
                 processors: group0.clone(),
+                observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Cache {
@@ -54,6 +57,7 @@ fn synthetic() -> MachineMemoryTopology {
                 },
                 id: 0,
                 processors: group0.clone(),
+                observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Cache {
@@ -65,11 +69,13 @@ fn synthetic() -> MachineMemoryTopology {
                 },
                 id: 1,
                 processors: group0,
+                observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Memory { memory_bytes: None },
                 id: 0,
                 processors: ProcessorSet::empty(),
+                observations: Vec::new(),
             },
         ],
         cpu_sets: None,
@@ -178,29 +184,70 @@ mod serde_tests {
         // are on", and once written to a file it can no longer assert that.
         // Reloading yields `Restored`.
         //
+        // Two things are downgraded across the boundary, for one reason. The
+        // provenance drops to `Restored`, and every relation's platform
+        // observations are dropped -- because a file saying "the relationship
+        // walk observed this" cannot establish that it did, and carrying the
+        // claim would be exactly the forgery D-12 refuses.
+        //
         // The assertion is deliberately not weakened to "the parts I still
-        // expect to match". Everything except the provenance must survive
-        // verbatim, so this compares against the original with only that field
-        // adjusted -- a second corruption would still fail here.
+        // expect to match". Everything else must survive verbatim, so this
+        // compares against the original with only those two adjusted -- a
+        // second corruption would still fail here.
         let topology = MachineMemoryTopology::discover().expect("discover");
         assert!(
             topology.provenance.is_measured(),
             "discover must claim the machine it read"
+        );
+        assert!(
+            topology
+                .domains
+                .iter()
+                .all(|domain| !domain.observations.is_empty()),
+            "a discovered relation must record which source reported it"
         );
 
         let json = serde_json::to_string(&topology).expect("serialize");
         let back: MachineMemoryTopology = serde_json::from_str(&json).expect("deserialize");
 
         assert_eq!(back.provenance, Provenance::Restored);
-        assert_eq!(
-            back,
-            MachineMemoryTopology {
-                provenance: Provenance::Restored,
-                ..topology
-            }
+        assert!(
+            back.domains
+                .iter()
+                .all(|domain| domain.observations.is_empty()),
+            "a restored relation must not claim a platform source observed it"
         );
+
+        let mut expected = topology;
+        expected.provenance = Provenance::Restored;
+        for domain in &mut expected.domains {
+            domain.observations.clear();
+        }
+        assert_eq!(back, expected);
     }
 
+    #[test]
+    fn every_discovered_relation_names_the_relationship_walk_as_its_source() {
+        // M3+.1.1: the walk is the only source folded into `domains` today, so
+        // every relation must carry exactly its observation and no other. When
+        // M3+.1.2 folds CPU Sets in, the relations both sources describe gain a
+        // second observation -- and this test is what will show that happening
+        // rather than it arriving unnoticed.
+        let topology = MachineMemoryTopology::discover().expect("discover");
+
+        for domain in &topology.domains {
+            assert_eq!(
+                domain.observations.len(),
+                1,
+                "one source has been folded in, so one observation: {domain:?}"
+            );
+            assert_eq!(domain.observations[0].source, Source::RelationshipWalk);
+            assert_eq!(
+                domain.observations[0].label, domain.id,
+                "the observation must carry the label the walk used"
+            );
+        }
+    }
     #[test]
     fn a_hand_written_synthetic_topology_parses() {
         let json = r#"{
@@ -463,6 +510,7 @@ fn heterogeneous_relations() -> (crate::relation::Relations, Vec<Domain>) {
             },
             id: 0,
             processors: cpu0,
+            observations: Vec::new(),
         },
         Domain {
             kind: DomainKind::Core {
@@ -471,6 +519,7 @@ fn heterogeneous_relations() -> (crate::relation::Relations, Vec<Domain>) {
             },
             id: 1,
             processors: cpu1,
+            observations: Vec::new(),
         },
     ];
 
@@ -546,6 +595,7 @@ fn an_offline_processor_reports_no_capacity_even_when_a_core_claims_it() {
         },
         id: 0,
         processors: both,
+        observations: Vec::new(),
     }];
 
     let processors = MachineMemoryTopology::processors_from(&relations, &domains);
@@ -584,6 +634,7 @@ fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
                 },
                 id,
                 processors: processors.clone(),
+                observations: Vec::new(),
             });
             id += 1;
         }
@@ -598,6 +649,7 @@ fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
         },
         id,
         processors: ProcessorSet::from_group_mask(0, all),
+        observations: Vec::new(),
     });
 
     MachineMemoryTopology {
@@ -676,6 +728,7 @@ fn a_partitioning_cache_above_level_four_is_found() {
             },
             id,
             processors: ProcessorSet::from_group_mask(0, mask),
+            observations: Vec::new(),
         });
     }
     let (level, partitions) = topo.outermost_partitioning_cache().expect("L5 divides");
@@ -719,6 +772,7 @@ fn a_level_whose_domains_overlap_is_not_a_partition() {
             },
             id,
             processors: ProcessorSet::from_group_mask(0, mask),
+            observations: Vec::new(),
         });
     }
 
@@ -750,6 +804,7 @@ fn a_level_whose_domains_are_disjoint_but_incomplete_still_partitions() {
             },
             id,
             processors: ProcessorSet::from_group_mask(0, mask),
+            observations: Vec::new(),
         });
     }
 
@@ -789,6 +844,7 @@ fn a_domain_covering_nothing_is_not_a_partition() {
             },
             id,
             processors,
+            observations: Vec::new(),
         });
     }
 

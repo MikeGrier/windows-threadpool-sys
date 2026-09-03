@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use crate::CacheKind;
+use crate::observation::Observation;
 use crate::processor_set::ProcessorSet;
 
 /// The identity of one logical processor: its group and its number within
@@ -170,10 +171,24 @@ pub struct Domain {
     /// `kind`. Where Windows reports a natural number (a NUMA node number, a
     /// group number) that number is used; otherwise domains are numbered in
     /// the order they were discovered.
+    ///
+    /// **Superseded by [`Self::observations`] and removed in `M3+.1.3`.** A
+    /// relation two sources label differently has no single canonical id --
+    /// measured as `[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]` for the same
+    /// core partition -- so the label belongs to the observation that carries
+    /// it (D-15). Read the label off an observation instead.
     pub id: u32,
     /// The logical processors this domain covers. Empty for a memory-only
     /// domain (D-5).
     pub processors: ProcessorSet,
+    /// Which sources reported this relation, and what each called it.
+    ///
+    /// Empty for a relation nobody reported -- one built by hand, which is
+    /// honest rather than a gap: no platform API said anything about it. A
+    /// relation both Windows APIs describe carries **two** observations, which
+    /// is what makes agreement visible without either label being discarded
+    /// (D-15, D-19).
+    pub observations: Vec<Observation>,
 }
 
 /// Manual `Serialize`/`Deserialize` for the open-kinded types.
@@ -475,6 +490,21 @@ mod serde_impl {
             };
             let id = as_u32(take::<D::Error>(&mut fields, "id")?)?;
             let processors = processors_from_value(take::<D::Error>(&mut fields, "processors")?)?;
+            // A described relation carries NO platform observation, and the
+            // wire shape does not encode them.
+            //
+            // This is the same downgrade `Provenance::downgraded_to` performs
+            // one level up (D-12): a file saying "the relationship walk
+            // observed this" cannot establish that it did, so the claim is not
+            // carried across the boundary. Serializing observations faithfully
+            // would carry exactly the claim D-12 refuses.
+            //
+            // Nor is a `Source::Description` observation synthesized here. That
+            // would restate what the object already says -- a deserialized
+            // topology's `Provenance` is capped at `Restored` -- and D-22 has
+            // just established these two are different questions that should
+            // not duplicate each other.
+            let observations = Vec::new();
 
             let kind = match kind_name.as_str() {
                 "group" => DomainKind::Group,
@@ -511,6 +541,7 @@ mod serde_impl {
                 kind,
                 id,
                 processors,
+                observations,
             })
         }
     }

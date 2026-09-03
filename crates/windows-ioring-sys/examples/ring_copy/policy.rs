@@ -100,6 +100,7 @@ impl Policy {
                 kind,
                 id: 0,
                 processors,
+                observations: Vec::new(),
             }],
             degraded,
         )

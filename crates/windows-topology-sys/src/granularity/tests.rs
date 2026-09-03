@@ -38,6 +38,7 @@ fn cache(level: u8, id: u32, numbers: &[u8], cache_type: CacheKind) -> Domain {
         },
         id,
         processors: set(numbers),
+        observations: Vec::new(),
     }
 }
 
@@ -49,6 +50,7 @@ fn core(id: u32, numbers: &[u8]) -> Domain {
         },
         id,
         processors: set(numbers),
+        observations: Vec::new(),
     }
 }
 
@@ -57,6 +59,7 @@ fn memory(id: u32, numbers: &[u8]) -> Domain {
         kind: DomainKind::Memory { memory_bytes: None },
         id,
         processors: set(numbers),
+        observations: Vec::new(),
     }
 }
 
@@ -250,6 +253,7 @@ fn the_order_holds_across_processor_groups() {
         kind: DomainKind::Memory { memory_bytes: None },
         id: 0,
         processors: spanning,
+        observations: Vec::new(),
     });
     t.domains.push(core(0, &[0, 1]));
 

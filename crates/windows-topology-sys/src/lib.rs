@@ -66,6 +66,8 @@ mod cpu_set;
 mod domain;
 #[cfg(windows)]
 mod granularity;
+#[cfg(windows)]
+mod observation;
 /// Absence with its reason attached.
 mod observed;
 #[cfg(windows)]
@@ -85,6 +87,8 @@ pub use cpu_set::CpuSet;
 pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorId};
 #[cfg(windows)]
 pub use granularity::Granularity;
+#[cfg(windows)]
+pub use observation::{Observation, Source};
 pub use observed::Observed;
 pub use processor_set::ProcessorSet;
 pub use provenance::Provenance;

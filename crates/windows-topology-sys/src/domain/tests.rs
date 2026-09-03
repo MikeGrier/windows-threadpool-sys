@@ -29,6 +29,7 @@ fn a_memory_domain_may_have_no_processors() {
         },
         id: 9,
         processors: ProcessorSet::empty(),
+        observations: Vec::new(),
     };
     assert!(domain.processors.is_empty());
     let DomainKind::Memory { memory_bytes } = domain.kind else {
@@ -46,6 +47,7 @@ fn a_discovered_memory_domain_has_no_known_size() {
         kind: DomainKind::Memory { memory_bytes: None },
         id: 0,
         processors: ProcessorSet::empty(),
+        observations: Vec::new(),
     };
     let DomainKind::Memory { memory_bytes } = domain.kind else {
         panic!("expected Memory")
@@ -64,6 +66,7 @@ fn an_unrecognised_domain_kind_carries_its_attributes() {
         },
         id: 0,
         processors: ProcessorSet::empty(),
+        observations: Vec::new(),
     };
     let DomainKind::Other {
         name,
@@ -108,6 +111,7 @@ mod serde_tests {
             kind: DomainKind::Group,
             id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b11),
+            observations: Vec::new(),
         };
         assert_eq!(round_trip(&domain), domain);
     }
@@ -121,6 +125,7 @@ mod serde_tests {
             },
             id: 3,
             processors: ProcessorSet::from_group_mask(0, 0b1),
+            observations: Vec::new(),
         };
         assert_eq!(round_trip(&domain), domain);
     }
@@ -137,6 +142,7 @@ mod serde_tests {
             },
             id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b1111),
+            observations: Vec::new(),
         };
         assert_eq!(round_trip(&domain), domain);
     }
@@ -153,6 +159,7 @@ mod serde_tests {
             },
             id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b1),
+            observations: Vec::new(),
         };
         let json = serde_json::to_string(&domain).expect("serialize");
         assert!(
@@ -177,6 +184,7 @@ mod serde_tests {
             },
             id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b1),
+            observations: Vec::new(),
         };
         let json = serde_json::to_string(&domain).expect("serialize");
         assert!(
@@ -196,6 +204,7 @@ mod serde_tests {
             },
             id: 9,
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         let json = serde_json::to_string(&domain).expect("serialize");
         assert!(
@@ -211,6 +220,7 @@ mod serde_tests {
             kind: DomainKind::Memory { memory_bytes: None },
             id: 0,
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         let json = serde_json::to_string(&domain).expect("serialize");
         assert!(!json.contains("memory_bytes"), "unexpected JSON: {json}");
@@ -229,6 +239,7 @@ mod serde_tests {
             },
             id: 2,
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         assert_eq!(round_trip(&domain), domain);
     }
@@ -258,6 +269,7 @@ mod serde_tests {
             },
             id: 3,
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         let restored = round_trip(&domain);
         assert_eq!(restored, domain);
@@ -286,6 +298,7 @@ mod serde_tests {
             },
             id: 4,
             processors: ProcessorSet::empty(),
+            observations: Vec::new(),
         };
         let restored = round_trip(&domain);
         let DomainKind::Memory { memory_bytes } = restored.kind else {
@@ -306,6 +319,7 @@ mod serde_tests {
                 },
                 id: 2,
                 processors: ProcessorSet::empty(),
+                observations: Vec::new(),
             };
             serde_json::to_string(&domain).expect_err(&format!(
                 "an attribute named {reserved:?} must not silently overwrite the reserved field"
@@ -552,6 +566,7 @@ mod serde_tests {
             },
             id: 1,
             processors: ProcessorSet::from_group_mask(0, 0b1),
+            observations: Vec::new(),
         };
 
         let restored = round_trip(&domain);
