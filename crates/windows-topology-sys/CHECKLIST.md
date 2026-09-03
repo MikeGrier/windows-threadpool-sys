@@ -88,28 +88,35 @@ wrongly after code exists.
     `Core { efficiency_class }` against CPU Sets' `EfficiencyClass`. This is not a membership
     question and D-15 does not reach it, which the item as first written did not notice.
 
-  **A third case that is not a source conflict at all: the two calls are not atomic** -- though this
-  was first written far too strongly, and the correction matters more than the original claim.
+  **A third case was raised here and then removed, because it is not this item's problem.** Recorded
+  rather than deleted, since the reasoning that disposed of it is the useful part.
 
-  It is **not a torn read**. Nothing tears: each Win32 call returns its own self-consistent snapshot,
-  and the buffers are process-private. The accurate description is a **non-atomic composite** -- two
-  individually-consistent reads taken at different instants.
+  The claim was that `discover()`'s two calls are not atomic, so a change between them leaves the two
+  halves describing different machines. Two corrections and then a dismissal:
 
-  **And parking cannot cause it**, which was the example first given here. Parking changes a
-  CPU-Sets-only field; GLPIE does not report parked state at all, and none of the three overlapping
-  facts move when a core parks -- `CoreIndex` and `NumaNodeIndex` are unchanged, and
-  `EfficiencyClass` is a static property of the core's design.
+  - **It is not a torn read.** Nothing tears -- each call returns a self-consistent snapshot and the
+    buffers are process-private. The accurate term is a *non-atomic composite*.
+  - **Parking cannot cause it**, which was the example first given. Parking changes a CPU-Sets-only
+    field; GLPIE does not report parked state, and none of the three overlapping facts move when a
+    core parks -- `CoreIndex` and `NumaNodeIndex` are unchanged, `EfficiencyClass` is static.
+  - **And the concern proves too much.** Even a perfectly atomic `discover()` returns a topology that
+    is stale the instant it returns. A hot-add one microsecond *afterwards* leaves it equally wrong,
+    and no internal atomicity fixes that. The two-call window is a marginally larger instance of an
+    unavoidable problem, not a distinct one.
 
-  What actually remains is **processor hot-add or hot-remove** between the two calls, which needs
-  dynamic partitioning and is rare. The window is microseconds. Its signature is also distinctive
-  rather than ambiguous: CPU Sets naming a processor that has no `Processor` entry, or the reverse --
-  which is neither shape A nor shape B, but a third thing, one source knowing a processor the other
-  does not.
+  So the right question is not "were our two reads mutually consistent" but "is the machine still
+  what we planned against, when we act" -- which belongs to the executor and is **already owned**:
+  `M-inf.1` in [windows-execution-plan](../windows-execution-plan/CHECKLIST.md), filed explicitly as
+  "a different problem". The severity agrees: on an add we merely fail to use a new processor, and on
+  a remove pinning fails loudly where it happens. Neither corrupts a decision silently.
 
-  So this case is **real but rare**, and it should not carry weight it cannot bear. In particular it
-  is a weak argument against detecting conflicts, and the better argument against *refusing* on one
-  stands without it: a genuine inconsistency from a defective hypervisor is something a caller would
-  rather be told about and route around than be unable to run at all.
+  **What this item keeps** is the two shapes above, which arise from sources disagreeing *about the
+  same moment* -- a defective hypervisor, malformed firmware, a hand-built description -- and which no
+  amount of atomicity would fix.
+
+  The argument against *refusing* on a conflict does not depend on any of this: a genuine
+  inconsistency is something a caller would rather be told about and route around than be unable to
+  run at all.
 
   **A finding that came out of checking it:** `online` (GLPIE, from `active_processors`) and `parked`
   (CPU Sets) are **complementary, not overlapping**. Parked is not offline -- a parked processor is
@@ -129,12 +136,11 @@ wrongly after code exists.
      unusable over a discrepancy that may be benign), **record and continue** (consistent with this
      crate's posture of representing the awkward case), or **prefer a source** -- which is
      reduce-on-insert wearing a different hat, and D-15 rejected it.
-  3. Whether to record that a topology is a **composite of two instants** regardless of conflict.
-     Cheap and true either way. The follow-on -- spending a third call re-reading the first source to
-     tell a stale composite from a real inconsistency -- is now hard to justify: the case it detects
-     needs processor hot-add inside a microsecond window, it would not be airtight anyway since the
-     machine can change during the third read too, and `discover()` is currently cheap enough that
-     callers may reasonably call it often.
+  3. ~~Whether to record that a topology is a composite of two instants.~~ **Dropped**, along with the
+     third call that would have distinguished a stale composite from a real inconsistency. Both were
+     answers to the question retired above. If staleness is worth addressing, what a snapshot wants is
+     *a notion of when it was taken* -- one fact, not a count of reads -- and that is a question for
+     whoever needs it, not a consequence of `discover()` making two calls.
 
 - [ ] **MMT-1.3** -- **What a consumer does when a needed fact was not observed**, given the bar that
   the model answers without further measurement. Degrade to a documented weaker policy, refuse, or
