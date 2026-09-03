@@ -614,3 +614,36 @@ so this is not a corner case there, it is the common one.
   a real result here** -- "the sets behaved equivalently under both interference models, and here are
   the migration counts showing the scheduler was genuinely exercised" retires a long-standing doubt,
   and is worth as much as a difference would be.
+
+## M7: report what Windows contradicts about itself
+
+Opened by [D-17](crates/windows-topology-sys/DESIGN-NOTES.md) in the topology crate, which establishes
+that two Win32 topology sources can be **stably** inconsistent -- and that this is expected on hardware
+we do not have and on prerelease firmware, rather than being exotic.
+
+The division of labour is deliberate and follows the same facts-versus-policy line the rest of this
+workspace uses. **`windows-topology-sys` records the disagreement**; it does not report it, because a
+crate that states facts should not be in the business of producing bug reports. **This tool reports
+it**, because reporting is what this tool is for, and because the provenance that makes such a report
+actionable is identifying and therefore belongs behind the review this tool already applies.
+
+- [ ] **PT-7.1** -- **Surface the topology's recorded inconsistencies**, in the tool's output and in
+  the submission record. This is the only place they become visible to anyone: the topology crate keeps
+  what each source said, and nothing in the workspace currently looks at it.
+  Report what disagreed and what each source claimed, not merely that something did -- "incoherent" is
+  not actionable, and the point of collecting from strangers' machines is to learn something specific
+  about hardware nobody here can buy.
+  An inconsistent machine is **still a valid submission**, and should be marked rather than rejected;
+  it is arguably a *more* valuable one, since it is evidence of something no local run can produce.
+
+- [ ] **PT-7.2** -- **Add the firmware provenance an inconsistency report needs to be actionable** --
+  mainboard and BIOS version at minimum -- suppressible by the runner, with the suppression recorded
+  rather than merely absent, exactly as `MachineDescription`'s model handling already does.
+  **Weigh it against the existing honesty about what suppression buys.** This checklist already
+  establishes that the flag "must not be oversold", that a pre-release part "is identified at least as
+  well by its topology", and that the tool "cannot make an NDA-covered machine safe to submit from, and
+  must not imply that it can". Firmware provenance sits under that same caveat and arguably deepens it:
+  a BIOS version can pin a specific board revision more precisely than a CPU model names a part.
+  So the honest framing is unchanged rather than weakened -- if the hardware is confidential, the right
+  answer remains not to send it -- but the README's list of what is collected must grow to match, per
+  `PT-4.3`, and the runner must still see the real values before deciding, per `PT-4.5`.

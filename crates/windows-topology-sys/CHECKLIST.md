@@ -141,16 +141,20 @@ wrongly after code exists.
      settled by [D-16](DESIGN-NOTES.md#d-16); only the number is open, and it is small -- a couple of
      passes failing to find a coherent set is not plausible.
 
-  3. **How a topology states its coherence** -- and [D-17](DESIGN-NOTES.md#d-17) raises the bar on
-     this from "say whether" to "say what, precisely enough to act on". Persistent disagreement is
-     expected on hardware we do not have and on prerelease firmware, so the report is not a corner
-     case: it is the crate's output on exactly the machines a user most needs to understand.
-     "Incoherent" is not actionable. *"These two sources disagree about which core processor 6 belongs
-     to, one saying X and the other Y"* is a bug report against a firmware table or an OS enumeration.
-     A reader also needs it to know how far the parts may be **correlated**, which is a different
-     question from whether any one part is accurate.
-     Note this is only possible because [D-15](DESIGN-NOTES.md#d-15) keeps both observations: a
-     disagreement cannot be reported after it has been collapsed.
+  3. **How a topology records its coherence.** *Records*, not reports -- an earlier draft of this item
+     said "precisely enough to file a bug", which put a downstream concern in the crate that states
+     facts, the same layering error as `outermost_partitioning_cache`.
+     What is required is what each source said, kept rather than collapsed, so a reader can tell how
+     far the parts may be **correlated** -- a different question from whether any one part is accurate.
+     Turning that into something actionable, with the identifying provenance an actionable report
+     needs, is the probe tools' job and is tracked as **M7** in
+     [CHECKLIST-placement-tool.md](../../CHECKLIST-placement-tool.md).
+     > **-> CROSS-COMPONENT HANDOFF:** the reporting half is `PT-7.1` and `PT-7.2` in
+     > [CHECKLIST-placement-tool.md](../../CHECKLIST-placement-tool.md). That tool already carries the
+     > review this needs -- the runner sees real values before sending (`PT-4.5`), the README lists what
+     > is collected (`PT-4.3`), and suppression is recorded rather than merely absent.
+     Only possible because [D-15](DESIGN-NOTES.md#d-15) keeps both observations: a disagreement cannot
+     be reported after it has been collapsed.
 
   4. **Shape B still has no representation.** `(kind, membership)` identity does not reach a
      per-processor scalar disagreement, and that gap is untouched by any of the above.

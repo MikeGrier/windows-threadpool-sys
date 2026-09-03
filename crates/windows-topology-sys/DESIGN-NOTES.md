@@ -36,7 +36,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-14"></a>D-14 | **Windows's `LastLevelCacheIndex` is not `MachineMemoryTopology::outermost_partitioning_cache`, and neither is wrong.** Measured on the x64 development host: CPU Sets reports **one** LLC group over all sixteen processors, while the derivation reports **eight** partitions at L2. Windows names the *last* level; the derivation names the outermost level that *divides*. They answer different questions, so neither may be substituted for the other, and a consumer treating the CPU-set value as "the cache domain" would collapse eight groups into one on that machine. |
 | <a id="d-15"></a>D-15 | **A relation is identified by its `(kind, membership)`, not by any source's label -- so several observations of one relation are held as a *set*, never reduced on insert.** Measured, not assumed: the two Win32 sources agree exactly on the core partition (eight groups each) while labelling it completely differently (`[0,2,4,...,14]` against `[0,1,...,7]`). The "disagreement" a reduction would resolve is between *dictionaries*, not about the machine, and reducing would have to pick a label arbitrarily while discarding the other source's. Under membership identity the common case costs nothing -- one relation, two observations -- and a genuine contradiction stays representable. See the detail section below. |
 | <a id="d-16"></a>D-16 | **Collection retries until coherent, and what survives a retry is a genuine disagreement.** There is no transactional way to read the two Win32 sources together, so `discover()` validates them against each other and, on incoherence, **re-collects** -- bounded, and cheap because both are whole-machine enumerations. Transient incoherence from a hot-add resolves on the next pass; incoherence that survives is not transience and must be represented. Retry is therefore the *discriminator* between the two, which no single observation can be. And because the data can change while it is being collected, a topology states plainly whether it was collected coherently, so a reader knows how far its parts may be correlated. |
-| <a id="d-17"></a>D-17 | **Persistent incoherence between two Win32 sources is expected in the field, not exotic -- so the crate reports it precisely and never refuses over it.** No documented guarantee of cross-API coherence has been found, the two enumerations plausibly derive by different paths, and the firmware tables behind them are populated incrementally against scenarios that do not necessarily include ours. The likely places to meet it are therefore hardware we do not have and prerelease hardware with defective UEFI tables -- exactly where refusing would make the crate useless, and exactly where a precise report is worth more than a correct-looking answer. It is also **only testable synthetically**, which is what the hand-built and deserialized paths are for. |
+| <a id="d-17"></a>D-17 | **Persistent incoherence between two Win32 sources is expected in the field, not exotic -- so the crate *records* it and never refuses over it.** No documented guarantee of cross-API coherence has been found, the two enumerations plausibly derive by different paths, and the firmware tables behind them are populated incrementally against scenarios that do not necessarily include ours. The likely places to meet it are hardware we do not have and prerelease hardware with defective UEFI tables -- exactly where refusing would make the crate useless. **Recording is this crate's job; reporting is the probe tools'**, and the identifying provenance an actionable report needs lives there too, behind the review the probe already applies. Orthogonal to [D-16](#d-16), which is about data shifting *while* it is collected. Only testable synthetically. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -343,23 +343,44 @@ None of those are transient, so [D-16](#d-16)'s retry will not clear them. They 
 in the bucket of things the model must represent -- and that bucket is likely to be populated on
 exactly the machines a user cares most about getting right.
 
-### What that demands
+### What that demands, and of whom
 
 **Refusing is out**, and not merely as a preference. The places this is most likely to occur are the
 places where the crate refusing would make it useless -- new hardware, being brought up, by someone
 who needs to know what the machine looks like. A library that declines to describe a machine because
 two of Windows's own APIs disagree has converted a report into an outage.
 
-**A report has to be precise enough to act on.** "Incoherent" is not actionable; "these two sources
-disagree about which core processor 6 belongs to, one saying X and the other Y" is a bug report
-against a firmware table or an OS enumeration. That is a genuinely useful thing for this crate to
-produce, and it is only possible because [D-15](#d-15) keeps both observations rather than reconciling
-them -- **a disagreement cannot be reported after it has been collapsed.**
+**This crate records the inconsistency. It does not report it.** An earlier draft of this decision
+said the crate should produce something "precise enough to file a bug", which is the same layering
+error as `outermost_partitioning_cache`: a downstream concern written into the crate that states
+facts. Recording is what is required here, and it is adequate -- what each source said, kept as
+[D-15](#d-15)'s set, because **a disagreement cannot be reported after it has been collapsed.**
+
+**Reporting belongs to the probe tools**, which already exist for turning a machine into something a
+person can act on. That is also where the *provenance* an actionable report needs -- mainboard,
+firmware version, and the like -- belongs, and it must stay there: those fields are potentially
+identifying, so they are subject to the same review the probe already applies.
+
+That review is not new machinery to build. `windows-placement-probe`'s submission path is built on
+"the paste is the channel" -- a human copies the output and pastes it deliberately, so they see what
+they are sending -- and `MachineDescription::read` already takes a `suppress_model` flag, recording
+in `model_suppressed` *that* a field was withheld rather than leaving it inferred from absence, which
+is [D-13](#d-13) again. New provenance follows that pattern rather than inventing one.
 
 **And it is testable only synthetically.** By definition this arises on hardware we do not have, so
 the hand-built and deserialized construction paths are how the incoherent cases get exercised at all.
 That is a second, unanticipated justification for a facility this crate already has and already
 documents as a feature.
+
+### Orthogonal to D-16, and worth keeping separate
+
+[D-16](#d-16) is about data **shifting while it is collected** -- transient, resolved by collecting
+again. This decision is about data that is **stably inconsistent** -- no retry helps, and the model
+records it.
+
+They share a detection mechanism and nothing else. Conflating them would make one look like a
+special case of the other, and the responses are opposite: one is fixed by asking again, the other by
+writing down what was seen.
 
 ## What was deliberately excluded (D-9)
 
