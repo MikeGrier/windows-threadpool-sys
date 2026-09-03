@@ -124,14 +124,28 @@ wrongly after code exists.
 
   Retry removes the transient cases, so what reaches representation is proved genuine. Remaining:
 
-  1. **What is compared**, to call a collection coherent. The processor sets naming each other is the
-     hot-add signature; core and NUMA partitions and per-processor efficiency class are shapes A and B.
+  1. ~~What is compared, to call a collection coherent.~~ **Not a decision -- an inventory, and it
+     falls out of the implementation.** What *can* be compared is fixed by the data: whatever both
+     sources report about the same thing, which is the processor sets naming each other, the core and
+     NUMA groupings, and per-processor efficiency class. The one trap -- comparing *labels* rather than
+     memberships, which would flag `[0, 2, 4, ...]` against `[0, 1, 2, ...]` as a conflict when the
+     sources fully agree -- is already closed by [D-15](DESIGN-NOTES.md#d-15).
+     And under [D-16](DESIGN-NOTES.md#d-16) a *partial* comparison is actively wrong: an incoherence in
+     an uncompared fact survives the retry and is never classified, defeating the mechanism. So retry
+     forces comparing everything, which makes the scope determined rather than chosen.
+     It was listed as a decision while the question was still "detect or not, and how much", where
+     scope would genuinely have been a knob. `D-16` removed the knob.
+
   2. **The bound**, and what exhausting it *means* -- not a failure to collect, but the **conclusion**
-     that the disagreement is genuine, and the point at which shapes A and B apply.
+     that the disagreement is genuine, and the point at which shapes A and B apply. The *meaning* is
+     settled by [D-16](DESIGN-NOTES.md#d-16); only the number is open, and it is small -- a couple of
+     passes failing to find a coherent set is not plausible.
+
   3. **How a topology states its coherence.** Per [D-16](DESIGN-NOTES.md#d-16) it must say plainly
      whether it was collected coherently and, where it was not, what disagreed -- so a reader knows how
      far the parts may be **correlated**, which is a different question from whether any one part is
      accurate.
+
   4. **Shape B still has no representation.** `(kind, membership)` identity does not reach a
      per-processor scalar disagreement, and that gap is untouched by any of the above.
 
