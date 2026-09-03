@@ -20,17 +20,21 @@ everything depends on and that depends on nothing.
 *requirements* milestone rather than an implementation one: its output is the concrete statement
 of what the model must answer, which the open design session needs in order to settle it.
 
-> **-> CROSS-COMPONENT PREREQUISITE:** M2 onwards cannot begin until
-> [DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md)
-> concludes and `SH-16.8` lands in
-> [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md). The
-> planner's central query has no answer in the current model.
+**Deferred past PR #56, by direction.** This component contributes only planning documents to that
+PR and no code. `windows-topology-sys`'s reshape lands there without it: per
+[D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21) that crate publishes a refined view of what the
+platform publishes, and an **adapter** absorbs whatever this component needs beyond it, so the two
+are no longer coupled.
+
+The design session that gated M2 onward **has concluded** -- its questions were answered as `D-13`
+through `D-21`, and the `MMT-*` plan is what it produced. M2+ is now gated on this component's own
+prerequisites rather than on someone else's decision.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| M1 the input contract | 3 done, 2 blocked | as far as it can go before the model exists |
+| M1 the input contract | 4 done, 1 open | `EP-1.5`'s coverage half, which wants a settled model |
 | M1+ scenario and naming | **partly answered** | the name is settled (EP-D-4); the goal input is deferred for litigation, by direction |
-| M2+ the plan as a value | parked, **and needs re-cutting** | the layout decision, then M1 |
+| M2+ the plan as a value | parked, **and needs re-cutting** | re-cut against EP-D-4/EP-D-5, then the topology reshape landing |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
 
@@ -126,6 +130,12 @@ whether the topology can answer it today -- so the model is designed against a r
   contested is one the unified view does not cover, which is indistinguishable from not-observed to a
   consumer -- so this is one decision about one degradation path, not one per reason a fact is
   missing. The three candidate behaviours are unchanged.
+  **And it is no longer a duplicate**, per [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21).
+  `windows-topology-sys` publishes a refined view of what the platform publishes; what a consumer
+  *does* with an unobserved fact is not a question about that view. That crate owes only that the
+  absence be representable and distinguishable, which its `M2+.5` implements. `MMT-1.3` is closed on
+  those grounds, so **this item is now this component's decision alone** -- there is nothing left to
+  take jointly, and it no longer blocks anything in the model crate.
 
 - [ ] **EP-1.5** -- **Hand the resulting requirements to the design session** as the consumer-side
   input it asked for, and record in the session which of them the settled model answers and which

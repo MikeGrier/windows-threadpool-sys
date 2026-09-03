@@ -224,8 +224,23 @@ deliberate, which is SH-3.1.1's job below.
 **M16 is the exception, by decision.** Its locality-model work (SH-16.5, SH-16.8, SH-16.9,
 SH-16.10) is a merge blocker: the model it replaces is the one `windows-topology-sys` 0.2.0 would
 publish, and shipping a public surface that is already known to be the wrong shape is what the
-milestone exists to avoid. So SH-3.4 waits on it, and the design session it depends on must
-conclude first.
+milestone exists to avoid. So SH-3.4 waits on it.
+
+**Updated 2026-09-03 -- what that work now is, and what discharges the gate.** All six of those items
+are superseded into the `MMT-*` plan in
+[crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md), so the gate is
+discharged by **MMT M2 through M5 landing in this PR**, which is the engineer's direction. Two things
+that previously stood in the way are gone:
+
+- **The design session no longer gates it.** The session's open questions were answered as `D-13`
+  through `D-21` in
+  [crates/windows-topology-sys/DESIGN-NOTES.md](crates/windows-topology-sys/DESIGN-NOTES.md); the
+  `MMT-*` plan is what it produced. Read "the MMT plan concludes" wherever the earlier wording said
+  "the session concludes".
+- **The reshape no longer waits on the planner.** [D-21](crates/windows-topology-sys/DESIGN-NOTES.md#d-21)
+  establishes that `windows-topology-sys` publishes a refined view of what the platform publishes,
+  with an adapter absorbing the planner's needs -- so the reshape is self-justified. `topology-planner`
+  contributes only planning documents to this PR and is deliberately deferred past it.
 
 - [x] **SH-3.1** -- ~~Open the pull request~~ **-- already open since 2026-08-31 as a draft.** Checked
   off as *superseded by events*, not as done: the item asked for something that had already happened
@@ -835,7 +850,13 @@ predicted about a 222-commit branch.
   is this processor in", which **is** the single-boundary collapse that session is about, so landing it
   would prejudge the outcome. The prototype compiled, and its topology-side tests passed and were
   sabotage-verified; it was reverted deliberately and preserved outside the repository as
-  `sh-16.5-prototype.patch`. The contradiction is real and stays unfixed until the session concludes.
+  `sh-16.5-prototype.patch`.
+  **Unblocked 2026-09-03, and superseded rather than resumed.** The session's questions were answered
+  as `D-13` through `D-21`, and the answer is *not* the primitive this item prototyped: under
+  [D-19](crates/windows-topology-sys/DESIGN-NOTES.md#d-19) the unified relation set with its
+  inclusion order replaces a single per-processor cache-domain lookup, so the prototype would have
+  landed the collapse the session existed to remove. The contradiction is fixed by `MMT` **M2+.5** and
+  **M5+.4** instead. The patch is kept as the record of what was tried and why it was not taken.
 
 - [ ] **SH-16.8** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **The locality model collapses a seven-kind, any-depth topology onto one cache
   boundary, and nothing records that as a choice.** Raised by the engineer during the SH-16.5 fix, and

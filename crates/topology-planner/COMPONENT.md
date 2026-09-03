@@ -105,10 +105,18 @@ runtime.
 
 ## Status and gating
 
-Blocked on
-[DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md).
-The planner's central query -- "how close are these two processors?" -- has no answer in the
-current topology model, and what shape it takes is the subject of that session.
+**Deferred past PR #56, by the engineer's direction.** This component contributes only planning
+documents to that PR and no code. The topology reshape it fed requirements into is landing there
+without it, because [D-21](../windows-topology-sys/DESIGN-NOTES.md#d-21) establishes that
+`windows-topology-sys` publishes a refined view of what the platform publishes and an **adapter**
+absorbs whatever this component needs beyond that -- so the reshape is self-justified and the two are
+no longer coupled.
+
+The design session that previously blocked this component has concluded: its questions were answered
+as `D-13` through `D-21` in
+[windows-topology-sys/DESIGN-NOTES.md](../windows-topology-sys/DESIGN-NOTES.md), and the central
+query -- "how close are these two processors?" -- is answered by the ordered relation set that `MMT`
+M2 and M4 build. What remains here is this component's own work, not a wait on someone else's.
 
 The name is settled; the crate does not exist yet. It is deliberately absent from
 `release-please-config.json`, the publish workflow's tag patterns, and the workspace manifest until

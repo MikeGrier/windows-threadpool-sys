@@ -15,28 +15,39 @@ Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIS
 
 ## What this is for
 
-The current model describes a machine as a list of domains, and answers questions about it with one
-global projection (`outermost_partitioning_cache`) that three consumers have independently
-re-derived, two of them differently. It cannot say whether a fact was observed or merely absent, it
-cannot answer anything about a *pair* of processors, and it collapses a seven-kind, any-depth
-locality graph onto a single cache boundary.
+This crate publishes a **refined view of what the platform publishes**
+([D-21](DESIGN-NOTES.md#d-21)). The current model does that badly: it describes a machine as a list
+of domains and answers questions with one global projection (`outermost_partitioning_cache`) that
+three consumers have independently re-derived, two of them differently. It cannot say whether a fact
+was observed or merely absent, it cannot answer anything about a *pair* of processors, and it
+collapses a seven-kind, any-depth locality graph onto a single cache boundary.
 
 The reshape has one governing idea, settled with the engineer: **model the observed connectivity.**
 Presence and observation are facts to represent, not shapes to infer from.
+
+**The scope test is "is this a refinement of what Windows reports?"** -- never "does the planner need
+it?". [D-20](DESIGN-NOTES.md#d-20) draws the lower bound (the crate does not go below the Win32
+topology APIs); D-21 draws the upper one. A planner requirement with no platform correspondence is
+the **adapter's** problem and must not be filed here as a gap.
 
 ## Where this stands
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| M1 settle what is still open | 4 of 5 done | MMT-1.3, which is joint with the planner's `EP-1.4` |
-| M2 the granularity model | parked | M1 |
-| M3 observation and provenance | parked | M1 (1 of 4 answered early, by D-19) |
+| M1 settle what is still open | **5 of 5 done** | nothing -- complete |
+| M2 the granularity model | **ready** | nothing; M1 is closed and D-21 makes it self-justified |
+| M3 observation and provenance | **ready** | nothing (1 of 4 answered early, by D-19) |
 | M4 the queries | parked | M2, M3 |
-| M5 the defects this subsumes | parked | M4 |
+| M5 the defects this subsumes | parked | M4, **except M5+.5 (done)** |
 
-**M1 is decision work, not implementation.** Each item is a question the session left open, and each
-would change the shape of everything below it. They are cheap to answer and expensive to answer
-wrongly after code exists.
+**M1 was decision work, not implementation**, and it is complete. Each item was a question the
+session left open, and each would have changed the shape of everything below it.
+
+**M2 onward is implementation, and it is in scope for PR #56.** Per
+[D-21](DESIGN-NOTES.md#d-21) the reshape is self-justified as the refined view rather than waiting on
+a consumer, so nothing here is gated on the planner. Taking it into the current PR means
+`windows-topology-sys` 0.2.0 ships the shape once, instead of publishing a surface already known to
+be wrong and breaking again later.
 
 ## M1: settle what is still open
 
@@ -203,19 +214,25 @@ wrongly after code exists.
   (**no** -- [D-15](DESIGN-NOTES.md#d-15) rejected reduce-on-insert, and preferring is that by another
   name). What remains is listed above.
 
-- [ ] **MMT-1.3** -- **What a consumer does when a needed fact was not observed**, given the bar that
+- [x] **MMT-1.3** -- **What a consumer does when a needed fact was not observed**, given the bar that
   the model answers without further measurement. Degrade to a documented weaker policy, refuse, or
   answer with an explicit "chosen without knowing X" marker.
-  **Narrowed by [D-19](DESIGN-NOTES.md#d-19), which is worth noting because it removes two thirds of
-  the item.** A contested subject was going to need its own answer beside "not observed"; it does
-  not. The unified view simply does not cover it, and *not covered* is [D-13](DESIGN-NOTES.md#d-13)'s
-  not-observed. So this is **one** decision about one degradation path -- a fact the consumer needed
-  and did not get -- rather than a separate answer per reason the fact is missing.
-  > **-> CROSS-COMPONENT PREREQUISITE:** this is the same decision as `EP-1.4` in
-  > [topology-planner](../topology-planner/CHECKLIST.md), seen from the model's side
-  > rather than the consumer's. They were filed independently before anyone noticed. **Take them
-  > together** -- answering either alone risks a planner that degrades in a way the model does not
-  > support, or a model offering a fallback no consumer wants.
+  **Narrowed by [D-19](DESIGN-NOTES.md#d-19), then resolved as not-this-crate's by
+  [D-21](DESIGN-NOTES.md#d-21).** D-19 removed two thirds of it: a contested subject is one the
+  unified view does not cover, which is D-13's not-observed, so there is one degradation path rather
+  than one per reason a fact is missing.
+  D-21 then places the remainder. This crate publishes a **refined view of what the platform
+  publishes**; what a consumer *does* with an unobserved fact is not a question about that view. The
+  model owes only that the absence be **representable and distinguishable** -- which is
+  [D-13](DESIGN-NOTES.md#d-13), implemented by **M2+.5**. The behavioural decision is the consumer's
+  and stays with `EP-1.4`.
+  **This item was gating M2, and through it M3, M4 and M5** -- a decision that was never the model's
+  to make was holding the whole reshape. Recorded as a planning defect rather than quietly fixed: it
+  landed in a "decisions that shape everything below" milestone because it *looked* foundational, and
+  foundational-looking is not the same as being about this component.
+  > **-> CROSS-COMPONENT HANDOFF:** the behavioural half is `EP-1.4` in
+  > [topology-planner](../topology-planner/CHECKLIST.md). It no longer has a counterpart here, so it
+  > is that component's decision alone rather than a joint one.
 
 - [x] **MMT-1.4** -- **Does `distances` survive at all?** The two-component architecture says the
   *synthesizer* measures, with the caller's permission, for its own scenario -- so a measured number
@@ -250,7 +267,8 @@ wrongly after code exists.
 
 ## M2: the granularity model
 
-Parked on M1. Shape recorded so it is not lost.
+**Ready.** M1 is closed, and [D-21](DESIGN-NOTES.md#d-21) makes every item here a refinement of what
+Windows reports rather than something a planner asked for.
 
 - [ ] **M2+.1** -- Model **observed sharing relations**, not a ladder of levels with optional rungs.
   A machine with no L3 has no L3 relation, which is an observation rather than a missing value.
@@ -283,7 +301,7 @@ Parked on M1. Shape recorded so it is not lost.
 
 ## M3: observation and provenance
 
-Parked on M1.
+**Ready.** M1 is closed.
 
 - [ ] **M3+.1** -- Provenance is **per relation**, not per source. Per-relation subsumes per-source
   by repetition, and the reverse fails on the case that matters: two sources describing the *same*
@@ -310,9 +328,21 @@ Parked on M1.
 
 ## M4: the queries
 
-Parked on M2 and M3. Each is a requirement from
-[topology-planner](../topology-planner/DESIGN-NOTES.md), stated there against a real
-caller rather than invented here.
+Parked on M2 and M3.
+
+**Each is a refinement of what Windows reports**, per [D-21](DESIGN-NOTES.md#d-21) -- not a planner
+requirement, which is how they were first justified. The change matters because it changes what is
+in scope: a query the platform's data supports belongs here whether or not any planner wants it, and
+a planner requirement with no platform correspondence belongs to the adapter.
+
+Read on their own terms, most of these were never planner-shaped. `M4+.2` and `M4+.3` are ordinary
+facts about processors and memory stated without sentinels; `M4+.4` fixes a rule the **probes** have
+restated three times in two crates. Only `M4+.1`'s pairwise helper is consumer-flavoured, and the
+ordered collection it derives from is what stops that restatement recurring.
+
+They remain cross-referenced to [topology-planner](../topology-planner/DESIGN-NOTES.md) as
+**evidence** the shape is right rather than as its justification -- stating those requirements found
+the `Processor::capacity` sentinel collision that reviewing the model alone had not.
 
 - [ ] **M4+.1** -- **The ordered relations are the query surface; pairwise proximity is a method on
   them.** The requirement arrived from [EP-D-2](../topology-planner/DESIGN-NOTES.md#ep-d-2) as a

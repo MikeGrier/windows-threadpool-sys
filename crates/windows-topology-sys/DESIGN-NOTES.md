@@ -40,6 +40,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-18"></a>D-18 | **An observation is `(subject, claim, source)`, where a subject is either a relation identity or a processor attribute -- which closes the last gap in [D-15](#d-15).** Membership identity reaches partition disagreements but not per-processor scalars like efficiency class; generalising the *subject* rather than inventing a second mechanism covers both with one rule. Two smaller answers ride along: a topology records **that** collection concluded incoherently **and which subjects disagreed** -- the latter because a consumer forced to re-derive the comparison is the SH-16.9 failure repeating -- and the retry bound is a small documented constant whose exhaustion is a *conclusion*, not a failure. |
 | <a id="d-19"></a>D-19 | **When the sources align -- which is the usual case -- a *unified* view is presented, in addition to the individual per-source ones.** A design that made every answer carry a coherence state was the sentinel mistake in another form: it let a case that essentially never happens shape every caller on every machine, and it made a *local* defect global, presenting a machine with one contested core as entirely uncertain. [D-15](#d-15) had already concluded the opposite and was simply not applied. Under `(kind, membership)` identity the unification is **free** -- agreeing sources have observed one relation, so there is no merge step -- and a contradiction contests only those processors at that kind. A contested subject needs no new vocabulary: it is a relation the unified view does not cover, which is [D-13](#d-13)'s *not observed*, so a consumer implements one degradation path rather than three. Requires that relations carry **attributes** as well as memberships. |
 | <a id="d-20"></a>D-20 | **This crate does not go below the Win32 topology APIs, so if they do not report a fact, the crate does not have it -- and `distances` is therefore deleted rather than filled.** The engineer's ruling, and it is a **scope boundary** rather than a judgement about the field: ACPI carries SLIT, no Win32 API surfaces it, and reading firmware directly would be going below the boundary. Two supporting findings, neither of which is the reason: `distances` could never carry `Measured` provenance **by construction** (its only inputs are hand-construction, which is `Synthetic`, and deserialization, which per [D-12](#d-12) can only downgrade), and it has **zero read sites** -- `windows-platform-probes`' `render_node_distances` reads the probe's own measured `Observation`, not this field. What is lost is named rather than skated past: [D-10](#d-10)'s platform-neutral description can no longer carry Linux SLIT data. That capability was real, and it is given up because the two-component split routes distance through the synthesizer's *measurement*, which a fed-in description cannot substitute for. |
+| <a id="d-21"></a>D-21 | **This crate publishes a *refined view of what the platform publishes* -- it is not shaped by the planner.** The model was originally expected to couple tightly to the solver, which is why its reshape was planned against the planner's requirements; the **adapter** between the platform data model and the planner relieves that tension, and the engineer's clarification makes the refinement the crate's whole job. The scope test is therefore "is this a refinement of what Windows reports?", never "does the planner need it?" -- and a planner requirement with **no platform correspondence is the adapter's problem**, not a gap here. Two consequences: the reshape (M2-M5) is **self-justified** and no longer waits on a planner, and `MMT-1.3` stops gating it, because what a consumer *does* with an unobserved fact is not a question about a refined view of platform data. The model owes only that the absence be representable and distinguishable, which is [D-13](#d-13) and `M2+.5`. `EP-D-1`..`EP-D-3` survive as **evidence** the shape is right rather than as its justification -- a shape that answers a real caller's questions is better validated than one invented in the abstract. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -562,6 +563,70 @@ the Conventional Commits `!` marker. Deserialization is unaffected: nothing in t
 It does mean such a description no longer **round-trips** -- the value is dropped on read and absent
 on write. That is a silent drop, which this crate has objected to elsewhere, so it is documented at
 the site rather than left to be discovered.
+
+## D-21: a refined view of what the platform publishes
+
+*The engineer's clarification, 2026-09-03. It re-justifies the whole `MMT-*` reshape and unblocks
+it.*
+
+### What this crate is for
+
+**A refined view of what the platform publishes.** That is the whole job. Windows reports processor
+and memory structure through two APIs, in overlapping and differently-labelled shapes; this crate
+turns that into one coherent, honestly-qualified statement of what was observed.
+
+[D-20](#d-20) already drew the *lower* bound -- the crate does not go below the Win32 topology APIs.
+D-21 draws the *upper* one: it does not go above them either. It refines; it does not serve a
+particular consumer.
+
+### What changed, and why it was worth saying
+
+The reshape was planned against the planner's requirements, because the model was expected to couple
+tightly to the solver. Under that expectation the coupling was not a mistake -- if the planner reads
+this crate directly, then the planner's questions *are* the specification.
+
+The **adapter** relieves it. With a translation layer between the platform data model and the
+planner, the planner's questions are the adapter's problem, and this crate goes back to answering
+only "what does the platform say, refined".
+
+### The scope test, and what it moves
+
+The test becomes **"is this a refinement of what Windows reports?"** -- never "does the planner need
+it?". So:
+
+- A planner requirement with **no platform correspondence** belongs to the adapter. It is not a gap
+  here, and it must not be filed as one.
+- A refinement Windows's data supports is in scope **whether or not any planner wants it**, which is
+  the PRIME DIRECTIVE applied to the model's own contents.
+
+### Two things this settles
+
+**The reshape is self-justified.** M2 through M5 stop being "what the planner needs" and become "the
+refined view, stated properly". Read that way, every milestone survives on its own evidence: the
+relation model and inclusion order come from the two sources' own disagreement about labels
+([D-15](#d-15)); absence-honesty from [D-13](#d-13)'s audit; the named projection from the
+partitioning rule being restated three times in two crates, **among the probes**, with no planner
+involved.
+
+**`MMT-1.3` stops gating it.** What a consumer *does* with an unobserved fact -- degrade, refuse, or
+mark -- is not a question about a refined view of platform data. This crate owes only that the
+absence be **representable and distinguishable**, which is D-13 and `M2+.5`. The behavioural half is
+the consumer's and lives with `EP-1.4`.
+
+That item had gated M2, which gated M3, M4 and M5 in turn -- so a decision that was never the model's
+to make was holding the entire reshape. Worth naming as a planning defect rather than quietly
+fixing: an item lands in a "decisions that shape everything below" milestone by looking foundational,
+and foundational-looking is not the same as being about *this* component.
+
+### What the planner's requirements are still good for
+
+`EP-D-1` through `EP-D-3` remain valuable as **evidence**, and are cited that way rather than deleted.
+A shape that demonstrably answers a real caller's questions is better validated than one invented in
+the abstract, and stating them found defects nothing else had: the `Processor::capacity` sentinel
+collision (`SH-16.12`) came out of checking the shard-set query against the model, not out of
+reviewing the model on its own.
+
+They are no longer the *justification*, and nothing in this crate waits on them.
 
 ## What was deliberately excluded (D-9)
 
