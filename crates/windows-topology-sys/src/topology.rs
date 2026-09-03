@@ -3,6 +3,7 @@
 
 use std::io;
 
+use crate::cpu_set::CpuSet;
 use crate::domain::{Distances, Domain, DomainKind, Processor, ProcessorId};
 use crate::provenance::Provenance;
 use crate::relation::{self, Relations};
@@ -26,6 +27,30 @@ pub struct Topology {
     pub domains: Vec<Domain>,
     /// An optional scalar distance matrix.
     pub distances: Option<Distances>,
+    /// What `GetSystemCpuSetInformation` reported, as **its own observation**.
+    ///
+    /// Windows describes processors through two APIs, and this is the second
+    /// one. It is not a more convenient spelling of [`Self::domains`]: it
+    /// carries facts the relationship walk has no equivalent for -- whether a
+    /// processor is parked, whether it is allocated to *this* process, the
+    /// scheduler's own last-level-cache grouping, a scheduling class and an
+    /// allocation tag.
+    ///
+    /// It also **duplicates** some facts, deliberately and without
+    /// reconciliation. `CoreIndex`, `NumaNodeIndex` and `EfficiencyClass` also
+    /// appear, derived differently, in `domains` and [`Self::processors`]. The
+    /// two paths can disagree -- under a hypervisor, or where one is stale --
+    /// and merging them here would silently pick a winner and destroy the
+    /// disagreement, which is the only thing a second observer is *for*. Which
+    /// of them a consumer should believe, and what to do when they differ, is a
+    /// decision that has not been taken.
+    ///
+    /// `None` means **not observed**, which is not the same as observed-and-
+    /// empty: a hand-built or deserialized topology has not asked the running
+    /// system, and a consumer must be able to tell that from a machine that
+    /// genuinely reported nothing.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub cpu_sets: Option<Vec<CpuSet>>,
     /// Where this content came from.
     ///
     /// **Defaults to [`Provenance::Synthetic`]**, so a topology built by hand
@@ -49,10 +74,15 @@ impl Topology {
     /// # Errors
     ///
     /// Returns any error from the underlying `GetLogicalProcessorInformationEx`
-    /// call.
+    /// or `GetSystemCpuSetInformation` calls.
     pub fn discover() -> io::Result<Self> {
         let relations = relation::discover()?;
         let mut topology = Self::from_relations(relations);
+        // The second observation, kept beside the first rather than folded into
+        // it. Both are cheap reads of the running system, so both belong to
+        // discovery -- neither is a measurement in the sense that would make it
+        // expensive or optional.
+        topology.cpu_sets = Some(crate::cpu_set::enumerate()?);
         // The one place in the crate that may claim this is the machine you are
         // on, because it is the one place that asked the operating system.
         topology.provenance = Provenance::Measured;
@@ -126,6 +156,7 @@ impl Topology {
             processors,
             domains,
             distances: None,
+            cpu_sets: None,
             // Synthetic, not measured: this is a pure transform of whatever
             // relations it was handed, and cannot know where they came from.
             // `discover` stamps the claim because `discover` is what read the

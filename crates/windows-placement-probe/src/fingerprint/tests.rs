@@ -391,6 +391,7 @@ mod from_topology {
             processors,
             domains,
             distances: None,
+            cpu_sets: None,
             ..Default::default()
         }
     }
@@ -658,6 +659,7 @@ mod multi_group_conversion {
             processors,
             domains,
             distances: None,
+            cpu_sets: None,
             ..Default::default()
         }
     }
@@ -735,6 +737,7 @@ mod multi_group_conversion {
                 processors: ProcessorSet::from_group_mask(0, mask),
             }],
             distances: None,
+            cpu_sets: None,
             ..Default::default()
         }
     }

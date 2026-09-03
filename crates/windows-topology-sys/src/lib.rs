@@ -61,6 +61,8 @@
 #![warn(missing_docs)]
 
 #[cfg(windows)]
+mod cpu_set;
+#[cfg(windows)]
 mod domain;
 #[cfg(windows)]
 mod processor_set;
@@ -74,8 +76,9 @@ mod topology;
 mod walk;
 
 #[cfg(windows)]
-pub use domain::{AttributeValue, Distances, Domain, DomainKind, Processor, ProcessorId};
+pub use cpu_set::CpuSet;
 #[cfg(windows)]
+pub use domain::{AttributeValue, Distances, Domain, DomainKind, Processor, ProcessorId};
 pub use processor_set::ProcessorSet;
 pub use provenance::Provenance;
 #[cfg(windows)]

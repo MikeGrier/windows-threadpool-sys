@@ -73,6 +73,7 @@ fn synthetic() -> Topology {
             },
         ],
         distances: None,
+        cpu_sets: None,
         // Named rather than defaulted, so this fixture states what it is. The
         // helper is called `synthetic` and now says so in the value too.
         provenance: Provenance::Synthetic,
@@ -304,6 +305,7 @@ fn struct_update_syntax_from_default_stays_untrusted() {
     // nobody thinks to name.
     let topology = Topology {
         distances: None,
+        cpu_sets: None,
         ..Default::default()
     };
 
@@ -592,6 +594,7 @@ fn split_l1_machine(cores: u32, last_level: u8) -> Topology {
         processors: Vec::new(),
         domains,
         distances: None,
+        cpu_sets: None,
         provenance: Provenance::Synthetic,
     }
 }
@@ -608,6 +611,7 @@ fn cache_levels_are_empty_when_no_cache_is_reported() {
         processors: Vec::new(),
         domains: Vec::new(),
         distances: None,
+        cpu_sets: None,
         provenance: Provenance::Synthetic,
     };
     assert!(topo.cache_levels().is_empty());

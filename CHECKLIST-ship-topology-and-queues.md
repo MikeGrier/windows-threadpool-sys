@@ -25,7 +25,7 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
-| M16 tenth review round | 7 of 13 open | **gates the merge**; SH-16.10 is ungated and next |
+| M16 tenth review round | 6 of 13 open | **gates the merge**; CPU Sets landed, 6 wait on the session |
 | M-inf parked | ungated | not scheduled, deliberately |
 
 **The critical path is M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4.** M14 and M15 do not
@@ -859,7 +859,7 @@ predicted about a 222-commit branch.
   this by pointing both consumers at today's method would have to be redone once SH-16.8 lands, so
   either fix it now and accept the rework, or sequence it after the design session.
 
-- [ ] **SH-16.10** -- **`GetSystemCpuSetInformation` is not consumed anywhere, so a whole Win32
+- [x] **SH-16.10** -- **`GetSystemCpuSetInformation` is not consumed anywhere, so a whole Win32
   topology model is unexposed.** The crate consumes all seven `GetLogicalProcessorInformationEx`
   relations, but `SYSTEM_CPU_SET_INFORMATION` is a *second, parallel* model carrying at least
   `LastLevelCacheIndex` -- Windows's own LLC grouping, which is a **different answer** from
@@ -884,6 +884,29 @@ predicted about a 222-commit branch.
   (`GetSystemCpuSetInformation`, `GetThreadSelectedCpuSets`, `SetThreadSelectedCpuSets`,
   `SetThreadSelectedCpuSetMasks`, `SetProcessDefaultCpuSets`) and `Win32_System_SystemInformation`
   is already an enabled feature, so there is no manifest change and no blocker.
+  **Done.** `src/cpu_set.rs` walks the records with the same buffer discipline the relationship walk
+  uses -- size first, advance by each record's own `Size`, read every field unaligned -- and
+  `Topology::discover` now populates `Topology::cpu_sets`. Carried as
+  `Option<Vec<CpuSet>>` where `None` means **not observed**, which a hand-built or deserialized
+  topology genuinely is; that is the honest use of `Option`, one absence rather than two collapsed
+  together. `#[serde(default)]` so descriptions written before the field still load.
+  **Nothing is reconciled**, per duplicate-then-decide. SH-16.13 owns that.
+  **The live dump justified the caution.** On the x64 host, CPU Sets reports **one** distinct
+  `LastLevelCacheIndex` across all sixteen processors, while `outermost_partitioning_cache` reports
+  **eight** partitions at L2. Both are right -- Windows names the *last* level, the derivation names
+  the outermost level that *divides* -- so a merge treating `LastLevelCacheIndex` as "the cache
+  domain" would have collapsed eight shard groups into one on this machine. Kept as a test asserting
+  the *relationship* (Windows's grouping is never finer) rather than the host's numbers.
+  It also confirms the matrix-hole argument from
+  [DESIGN-SESSION-2026-09-02-cache-locality-model.md](design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md):
+  this is the host recorded as unable to express `same cache, same class`, and a second source now
+  says all sixteen share an LLC, so that row is real rather than inferred.
+  **One thing is verified only against the SDK's documented bitfield order, not against Windows:**
+  the four flag bit positions. Every processor on this host reads `parked=false, allocated=false,
+  allocated_to_target_process=false, real_time=false`, which is consistent with a process that has
+  requested no CPU-set allocation but confirms no bit position. `each_flag_is_read_from_its_own_bit`
+  checks the decode is self-consistent, not that it matches the OS. Confirm against a parked
+  processor or an explicit `SetProcessDefaultCpuSets` before relying on the flags.
 
 - [ ] **SH-16.13** -- **Reconcile the CPU-set observation with the relationship walk.** `CoreIndex`,
   `NumaNodeIndex` and `EfficiencyClass` **duplicate** facts `GetLogicalProcessorInformationEx`
