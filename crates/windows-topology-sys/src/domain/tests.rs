@@ -88,20 +88,6 @@ fn attribute_value_supports_nested_structures() {
     );
 }
 
-#[test]
-fn distances_is_expected_to_be_square() {
-    let distances = Distances {
-        over: "memory".to_string(),
-        matrix: vec![vec![10, 21], vec![21, 10]],
-    };
-    assert!(
-        distances
-            .matrix
-            .iter()
-            .all(|row| row.len() == distances.matrix.len())
-    );
-}
-
 // --- serde (M3.3) ---
 
 #[cfg(feature = "serde")]

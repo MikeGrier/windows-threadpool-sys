@@ -391,7 +391,6 @@ mod from_topology {
         MachineMemoryTopology {
             processors,
             domains,
-            distances: None,
             cpu_sets: None,
             ..Default::default()
         }
@@ -659,7 +658,6 @@ mod multi_group_conversion {
         MachineMemoryTopology {
             processors,
             domains,
-            distances: None,
             cpu_sets: None,
             ..Default::default()
         }
@@ -737,7 +735,6 @@ mod multi_group_conversion {
                 id: 0,
                 processors: ProcessorSet::from_group_mask(0, mask),
             }],
-            distances: None,
             cpu_sets: None,
             ..Default::default()
         }

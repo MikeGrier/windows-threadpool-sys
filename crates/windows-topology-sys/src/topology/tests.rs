@@ -72,7 +72,6 @@ fn synthetic() -> MachineMemoryTopology {
                 processors: ProcessorSet::empty(),
             },
         ],
-        distances: None,
         cpu_sets: None,
         // Named rather than defaulted, so this fixture states what it is. The
         // helper is called `synthetic` and now says so in the value too.
@@ -225,11 +224,18 @@ mod serde_tests {
 
     /// A description shaped like what a Linux system would produce: a
     /// single processor group (Linux has no group concept), a memory-only
-    /// node, and a populated scalar distance matrix -- all things Windows
-    /// itself never reports through this crate's own discovery, but that a
-    /// fed-in description can legitimately carry (D-10).
+    /// node, and a populated scalar distance matrix.
+    ///
+    /// The matrix is **ignored** as of D-20 in `DESIGN-NOTES.md`: this crate does not go below
+    /// the Win32 topology APIs, so inter-node distance is not a fact it
+    /// states, and the field it used to be read into is gone. The test keeps
+    /// the populated matrix rather than dropping it, because what needs
+    /// proving is that such a description still *parses* -- nothing here sets
+    /// `deny_unknown_fields`, so an existing Linux-shaped description does not
+    /// become unreadable. It does not round-trip: the value is dropped on read
+    /// and absent on write.
     #[test]
-    fn a_linux_shaped_description_with_a_memory_only_node_and_distances_parses() {
+    fn a_linux_shaped_description_parses_and_its_distances_are_ignored() {
         let json = r#"{
             "processors": [
                 {"id": {"group": 0, "number": 0}, "online": true, "capacity": 1024},
@@ -249,9 +255,14 @@ mod serde_tests {
             topology.memory_domains().any(|d| d.processors.is_empty()),
             "the CXL-shaped node must survive"
         );
-        let distances = topology.distances.expect("distances present");
-        assert_eq!(distances.over, "memory");
-        assert_eq!(distances.matrix, vec![vec![10, 40], vec![40, 10]]);
+
+        // The half that D-20 changed: re-serializing does not carry the matrix
+        // back out, so the drop is silent and is asserted rather than assumed.
+        let round_tripped = serde_json::to_string(&topology).expect("serialize");
+        assert!(
+            !round_tripped.contains("distances"),
+            "distances must not reappear on write: {round_tripped}"
+        );
     }
 
     /// The other half of D-10: a single "group" holding more than 64
@@ -304,7 +315,6 @@ fn struct_update_syntax_from_default_stays_untrusted() {
     // only the fields they care about, and provenance is exactly the field
     // nobody thinks to name.
     let topology = MachineMemoryTopology {
-        distances: None,
         cpu_sets: None,
         ..Default::default()
     };
@@ -389,7 +399,7 @@ mod serde_provenance {
 
         assert_eq!(reloaded.processors, measured.processors);
         assert_eq!(reloaded.domains, measured.domains);
-        assert_eq!(reloaded.distances, measured.distances);
+        assert_eq!(reloaded.cpu_sets, measured.cpu_sets);
     }
 }
 
@@ -593,7 +603,6 @@ fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
     MachineMemoryTopology {
         processors: Vec::new(),
         domains,
-        distances: None,
         cpu_sets: None,
         provenance: Provenance::Synthetic,
     }
@@ -610,7 +619,6 @@ fn cache_levels_are_empty_when_no_cache_is_reported() {
     let topo = MachineMemoryTopology {
         processors: Vec::new(),
         domains: Vec::new(),
-        distances: None,
         cpu_sets: None,
         provenance: Provenance::Synthetic,
     };

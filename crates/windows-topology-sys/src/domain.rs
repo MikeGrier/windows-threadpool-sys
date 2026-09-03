@@ -176,29 +176,6 @@ pub struct Domain {
     pub processors: ProcessorSet,
 }
 
-/// A scalar relative-distance matrix over one domain kind.
-///
-/// Deliberately not the HMAT attributed-relation model (per-initiator,
-/// per-target read/write latency and bandwidth): that was considered and
-/// declined for now, see D-9 in `DESIGN-NOTES.md`. Windows exposes no
-/// user-mode SLIT reader, so a [`crate::MachineMemoryTopology`] this crate discovers never
-/// populates this; it exists for a fed-in description sourced from a system
-/// that does report it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Distances {
-    /// Which domain kind the matrix's rows and columns index. Kept as a
-    /// plain string, naming a [`DomainKind`] the way its JSON `kind` tag
-    /// reads (with the `serde` feature), because domain kinds are themselves
-    /// open (D-4).
-    pub over: String,
-    /// The distance matrix, in the order those domains appear in
-    /// [`crate::MachineMemoryTopology::domains`] filtered to `over`. Square;
-    /// `matrix[i][i]` is conventionally `10`, Windows's and ACPI SLIT's own
-    /// "local" value.
-    pub matrix: Vec<Vec<u32>>,
-}
-
 /// Manual `Serialize`/`Deserialize` for the open-kinded types.
 ///
 /// `AttributeValue` and `Domain` cannot be `#[derive(Serialize, Deserialize)]`:

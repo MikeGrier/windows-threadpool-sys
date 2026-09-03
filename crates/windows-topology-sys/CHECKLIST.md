@@ -357,7 +357,7 @@ separately and then re-fixed.
   crate deliberately hands back, failing an entire measurement run over a topology this crate
   considers describable. M2+.5 gives it the vocabulary to accept one.
 
-- [ ] **M5+.5** -- **Delete `MachineMemoryTopology::distances` and the `Distances` type**, per
+- [x] **M5+.5** -- **Delete `MachineMemoryTopology::distances` and the `Distances` type**, per
   [D-20](DESIGN-NOTES.md#d-20). **Not gated on M4**: the reshape does not fix this one, deletion
   does, so it does not wait for the rest of M5.
   A **breaking change to a published crate** (0.1.0), so the commit takes the Conventional Commits
@@ -368,3 +368,12 @@ separately and then re-fixed.
   in the doc comment that round-tripping such a description no longer preserves it, since that is a
   real if small behaviour change and a silent drop is exactly what this crate has objected to
   elsewhere.
+  **Done.** Field, type, and re-export removed; three call sites in `windows-placement-probe`'s
+  fingerprint fixtures updated. The Linux-shaped test survives as
+  `a_linux_shaped_description_parses_and_its_distances_are_ignored`, keeping the **populated** matrix
+  so what it proves is that an existing description still parses, and gaining an assertion that the
+  value does **not** reappear on re-serialize -- the silent drop asserted rather than assumed.
+  `distances_is_expected_to_be_square` was deleted with the type it tested (125 tests to 124).
+  Two stale statements sweeps found and fixed: the [D-13](DESIGN-NOTES.md#d-13) audit row, and the
+  Linux-comparison summary, which had recorded optional distances as a decision that *held up* --
+  sound about the schema, and reversed by a ruling about scope.

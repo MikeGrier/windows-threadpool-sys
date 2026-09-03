@@ -4,7 +4,7 @@
 use std::io;
 
 use crate::cpu_set::CpuSet;
-use crate::domain::{Distances, Domain, DomainKind, Processor, ProcessorId};
+use crate::domain::{Domain, DomainKind, Processor, ProcessorId};
 use crate::provenance::Provenance;
 use crate::relation::{self, Relations};
 
@@ -25,8 +25,6 @@ pub struct MachineMemoryTopology {
     pub processors: Vec<Processor>,
     /// Every domain.
     pub domains: Vec<Domain>,
-    /// An optional scalar distance matrix.
-    pub distances: Option<Distances>,
     /// What `GetSystemCpuSetInformation` reported, as **its own observation**.
     ///
     /// Windows describes processors through two APIs, and this is the second
@@ -155,7 +153,6 @@ impl MachineMemoryTopology {
         Self {
             processors,
             domains,
-            distances: None,
             cpu_sets: None,
             // Synthetic, not measured: this is a pure transform of whatever
             // relations it was handed, and cannot know where they came from.

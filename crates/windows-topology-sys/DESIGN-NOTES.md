@@ -114,7 +114,7 @@ argument carried up from "do not use a sentinel" to "say which absence you mean"
 
 | Site | Which absence | Notes |
 |---|---|---|
-| `MachineMemoryTopology::distances` | **not observed**, and unobservable here | Windows exposes no user-mode SLIT reader, so `discover` can never fill it. Populated only by a fed-in description. |
+| `MachineMemoryTopology::distances` | ~~**not observed**, and unobservable here~~ | **Removed by [D-20](#d-20).** The row is kept because it is what made the field's position clear: an `Option` that could only ever be "not observed" was describing a fact outside the crate's Win32 boundary, and the honest answer turned out to be deleting the field rather than documenting which absence it meant. |
 | `MachineMemoryTopology::cpu_sets` | **not observed** | `Some(v)` means the CPU-set API answered, and `v` may legitimately be empty; `None` means nothing asked, which is what a hand-built or deserialized topology is. |
 | `DomainKind::Memory::memory_bytes` | **not observed** from `discover` | See below: a *description's* `None` is currently ambiguous, and that is the one gap this audit found. |
 | `MachineMemoryTopology::processor` | lookup miss | Ordinary "no such element", not a fact about the machine. |
@@ -610,3 +610,9 @@ genuinely violated -- memory-only nodes (D-5), fixed domain kinds (D-4), and mis
 -- while three decisions held up unchanged: processor identity as `(group, number)` (D-7),
 reference-don't-nest (D-6), and treating distances as optional, which Linux vindicated by actually having
 SLIT where Windows does not.
+
+**The third of those has since been reversed by [D-20](#d-20).** Optional distances held up against
+Linux, and that finding was sound on its own terms -- but it was a conclusion about the *schema*, and
+D-20 is a ruling about the crate's *scope*: this crate does not go below the Win32 topology APIs, so a
+fact only firmware reports is not one it carries at all. The field is deleted, and the capability the
+Linux comparison vindicated is knowingly given up.

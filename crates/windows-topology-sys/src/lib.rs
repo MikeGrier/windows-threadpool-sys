@@ -78,7 +78,7 @@ mod walk;
 #[cfg(windows)]
 pub use cpu_set::CpuSet;
 #[cfg(windows)]
-pub use domain::{AttributeValue, Distances, Domain, DomainKind, Processor, ProcessorId};
+pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorId};
 pub use processor_set::ProcessorSet;
 pub use provenance::Provenance;
 #[cfg(windows)]
