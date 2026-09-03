@@ -11,8 +11,8 @@ satisfies them and not what they require.
 
 [EP-D-4](#ep-d-4) is the first genuine **choice** here, and it re-scopes the component: the planner
 is `topology-planner`, it plans against an abstracted idealized machine, and adapters bracket it on
-both sides. **The component's own name and directory still say `windows-execution-plan`** and are
-pending the layout decision EP-D-4 leaves open.
+both sides. [EP-D-5](#ep-d-5) then settles the layout EP-D-4 left open, and the directory has been
+renamed to match.
 
 ## Decision index
 
@@ -22,6 +22,7 @@ pending the layout decision EP-D-4 leaves open.
 | <a id="ep-d-2"></a>EP-D-2 | **The proximity query**: how close two processors are, which selects the channel between their domains. Takes an **unordered** pair; the model has no answer today. |
 | <a id="ep-d-3"></a>EP-D-3 | **The residency query**: where a domain's pool lives, and which side of a cross-domain pair should host a shared ring. **Ordered**, and the half the model cannot answer is structurally unanswerable rather than merely unpopulated. |
 | <a id="ep-d-4"></a>EP-D-4 | **The four-part architecture, and the planner's name.** The engineer's position: the planner is **`topology-planner`** (no `windows-` prefix); it takes a **goal** description (shape deferred for litigation), queries an **abstracted idealized** model covering processors, memory, storage, interconnects, distances and bottlenecks, and emits a **JSON-serializable, platform-neutral** plan. Two kinds of **adapter** bracket it: one exposing the planner's traits over the Windows topology objects, one **realizing** a plan as buffers, rings and threads with the user's code inserted at the right steps. Settles `MMT-1.5` (the facts crate keeps its `-sys` name), the "two graphs, one word" ambiguity, and where distance lives -- the attributed interconnect shape D-9 sketched goes in the abstract model, so D-9's deferral in the facts crate stands unreopened. |
+| <a id="ep-d-5"></a>EP-D-5 | **The component layout: `topology-model` is its own crate, and dependencies point one way.** The abstract model and the traits the planner queries live in `topology-model`, which the planner and both adapters depend on; nothing depends on `topology-planner`. Putting the traits in the planner would make a crate whose job is to *describe a machine* depend on one that applies *policy* -- the same defect as `outermost_partitioning_cache`, arriving as a dependency edge instead of an API. Two consequences derived from the same rule rather than decided separately: **the plan type also lives in `topology-model`** (otherwise the realizer depends on the planner), and the inward adapter and the realizer are **separate crates** (their dependency sets barely overlap, and fusing them would make reading a topology pull in the whole runtime). |
 
 ## EP-D-1: the shard-set query
 
@@ -412,3 +413,65 @@ processor topology.
 survive a change of binding. Each stated what the planner must know and why; what changes is that
 they are now satisfied by traits over an abstract model rather than by methods on a Windows type.
 They were written against a real caller, which is what makes them portable in this way.
+
+## EP-D-5: the component layout, and which way dependencies point
+
+*The engineer's choice, following [EP-D-4](#ep-d-4). Recorded separately because EP-D-4 explicitly
+left it open.*
+
+### The decision
+
+**The abstract model and the traits the planner queries live in their own crate, `topology-model`,
+which both the planner and the adapters depend on.**
+
+| Component | Platform | Depends on |
+|---|---|---|
+| `topology-model` | neutral | nothing |
+| `topology-planner` | neutral | `topology-model` |
+| inward adapter | Windows | `topology-model`, `windows-topology-sys` |
+| outward adapter (realizer) | Windows | `topology-model`, the runtime crates |
+
+Everything depends on `topology-model`; **nothing depends on `topology-planner`** except a caller
+that actually wants to plan.
+
+### Why not put the traits in the planner
+
+Because the arrow points the wrong way. An adapter whose job is to describe a machine would have to
+depend on a planner in order to describe it, and anyone wanting to read a topology would pull in
+planning policy they did not ask for. That is the same defect
+[COMPONENT.md](COMPONENT.md) already records in a different place -- `outermost_partitioning_cache`,
+a policy answer sitting where facts are stated -- arriving as a dependency edge rather than as an
+API.
+
+### The same rule decides where the plan type goes, one level down
+
+This is a **derived** consequence rather than a separately-taken decision, and it is called out
+because it is easy to miss: the realizer consumes a plan. If the plan type lived in
+`topology-planner`, the realizer would depend on the planner -- policy dragged in by a component
+whose only job is to execute.
+
+So **the plan type lives in `topology-model` too**, alongside the machine vocabulary. The crate is
+"the shared vocabulary", not merely "the machine description". This is consistent with
+[COMPONENT.md](COMPONENT.md)'s existing argument that a plan is a **value** -- inspectable,
+comparable, reviewable before anything is pinned or allocated. A value type belongs with the
+vocabulary, not with the policy that produced it.
+
+### Two Windows adapters, not one
+
+Also derived. They are both Windows adapters and it is tempting to fuse them, but their dependency
+sets barely overlap: the inward one needs `windows-topology-sys`, the realizer needs the runtime
+(`windows-ioring-sys`, `windows-waitable-queues`, `windows-thread-ambient-sys`). Fusing them would
+mean anyone reading a topology pulls in the whole runtime, which is the same "do not drag in what
+the caller did not ask for" rule that decided the layout in the first place.
+
+### What is still open
+
+- **The adapters' names.** Deliberately not settled here; naming has been getting decided by
+  whoever writes the first type, and this component has already been renamed once.
+- **Who measures.** Carried forward from [EP-D-4](#ep-d-4) and not resolved by the layout: if
+  distance is a property of the abstract model, measurement plausibly belongs to whatever populates
+  that model. `topology-model` depends on nothing, so it cannot measure; that puts the measurement in
+  an adapter or in a fifth thing.
+- **Whether `topology-model` is one crate or eventually two.** The machine description and the plan
+  vocabulary are different enough that they might separate later. They are together now because
+  splitting on speculation costs more than merging on evidence.

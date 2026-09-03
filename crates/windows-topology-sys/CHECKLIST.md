@@ -7,7 +7,7 @@ point here.
 Design decisions live in [DESIGN-NOTES.md](DESIGN-NOTES.md). The session that produced this plan is
 [DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md);
 the consumer whose requirements shaped it is
-[windows-execution-plan](../windows-execution-plan/DESIGN-NOTES.md).
+[topology-planner](../topology-planner/DESIGN-NOTES.md).
 
 The crate's *original* design session, which produced the model this plan reshapes, is
 [DESIGN-SESSION-2026-08-22-topology-schema.md](design-sessions/DESIGN-SESSION-2026-08-22-topology-schema.md).
@@ -113,7 +113,7 @@ wrongly after code exists.
     `discover()` returns a topology stale the instant it returns, so the two-call window is only a
     larger instance of an unavoidable problem. True, and **not a reason to do nothing**: the two are
     not equally addressable. Staleness after the fact is the executor's to validate, and is already
-    owned as `M-inf.1` in [windows-execution-plan](../windows-execution-plan/CHECKLIST.md).
+    owned as `M-inf.1` in [topology-planner](../topology-planner/CHECKLIST.md).
     Incoherence *during* collection is ours, detectable, and cheap to fix.
 
   The framing is what caused the miss. Asking "what do we **store** when sources disagree" admits
@@ -212,7 +212,7 @@ wrongly after code exists.
   not-observed. So this is **one** decision about one degradation path -- a fact the consumer needed
   and did not get -- rather than a separate answer per reason the fact is missing.
   > **-> CROSS-COMPONENT PREREQUISITE:** this is the same decision as `EP-1.4` in
-  > [windows-execution-plan](../windows-execution-plan/CHECKLIST.md), seen from the model's side
+  > [topology-planner](../topology-planner/CHECKLIST.md), seen from the model's side
   > rather than the consumer's. They were filed independently before anyone noticed. **Take them
   > together** -- answering either alone risks a planner that degrades in a way the model does not
   > support, or a model offering a fallback no consumer wants.
@@ -233,12 +233,12 @@ wrongly after code exists.
 
 - [x] **MMT-1.5** -- **Does the synthesizer live in this crate, and therefore what is this crate
   called?** Recorded as open rather than settled: see
-  [windows-execution-plan/COMPONENT.md](../windows-execution-plan/COMPONENT.md). The naming follows
+  [topology-planner/COMPONENT.md](../topology-planner/COMPONENT.md). The naming follows
   the merge rather than leading it -- while this crate is only a Win32 wrapper, `-sys` is correct
   for it; if it gains a synthesizer that measures, it stops being one and the name should change
   then.
   **Answered by the engineer's architectural shift, recorded as
-  [EP-D-4](../windows-execution-plan/DESIGN-NOTES.md#ep-d-4): no.** The planner is a separate
+  [EP-D-4](../topology-planner/DESIGN-NOTES.md#ep-d-4): no.** The planner is a separate
   component named **`topology-planner`** -- with no `windows-` prefix, because it plans against an
   abstracted idealized machine and emits a platform-neutral plan. So this crate does not gain the
   synthesizer, remains a pure Win32 wrapper, and **keeps its name**.
@@ -311,11 +311,11 @@ Parked on M1.
 ## M4: the queries
 
 Parked on M2 and M3. Each is a requirement from
-[windows-execution-plan](../windows-execution-plan/DESIGN-NOTES.md), stated there against a real
+[topology-planner](../topology-planner/DESIGN-NOTES.md), stated there against a real
 caller rather than invented here.
 
 - [ ] **M4+.1** -- **The ordered relations are the query surface; pairwise proximity is a method on
-  them.** The requirement arrived from [EP-D-2](../windows-execution-plan/DESIGN-NOTES.md#ep-d-2) as a
+  them.** The requirement arrived from [EP-D-2](../topology-planner/DESIGN-NOTES.md#ep-d-2) as a
   *pairwise* query returning the minimal shared granularities, **their membership**, and whether a
   finer granularity went **unobserved** so the answer can be an upper bound and say so. All three
   requirements stand. The **shape** does not, and the requirement says so itself: it asks the answer

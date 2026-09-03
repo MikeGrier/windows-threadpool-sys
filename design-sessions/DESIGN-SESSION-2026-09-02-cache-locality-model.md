@@ -265,7 +265,7 @@ SH-16.11.
 "Most useful for consumers" was answered by naming one: a Seastar-style shard-per-core runtime
 building SPSC/MPSC rings between pinned threads over NUMA-local buffers. Walking that construction
 produced a requirements list, and it is now owned by
-[crates/windows-execution-plan](../crates/windows-execution-plan/CHECKLIST.md) M1 rather than being
+[crates/topology-planner](../crates/topology-planner/CHECKLIST.md) M1 rather than being
 carried in this session as prose.
 
 The walk found the load-bearing query is **pairwise proximity** -- "how close are these two
@@ -286,7 +286,7 @@ presupposes a plan naming which thread, which node and which shard. That is now 
 ### The consumer's requirements, stated
 
 Three queries, recorded in full as EP-D-1, EP-D-2 and EP-D-3 in
-[the planner's design notes](../crates/windows-execution-plan/DESIGN-NOTES.md). Summarised here
+[the planner's design notes](../crates/topology-planner/DESIGN-NOTES.md). Summarised here
 because a model designed without them in view is what produced the current one.
 
 | Query | Shape | What the model must answer |

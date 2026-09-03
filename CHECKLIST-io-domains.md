@@ -571,7 +571,7 @@ it now lists five, and the count is dropped rather than maintained.)
   M33+.1 opens with "one pinned thread, its `IoRing`, its node-local registered pool, its shard",
   which presupposes a mapping naming which thread, which node and which shard -- and that mapping was
   unowned: M32's other four contracts are all about the queue, and no item anywhere computed the plan.
-  It is now [crates/windows-execution-plan](crates/windows-execution-plan/COMPONENT.md), a component
+  It is now [crates/topology-planner](crates/topology-planner/COMPONENT.md), a component
   of its own, because it applies **policy** over the topology's facts and reasonable clients will
   choose differently. Nothing here needs to decide it; this item exists so a reader of M33+ does not
   conclude the mapping is obvious, which is how it went missing.
@@ -581,7 +581,7 @@ it now lists five, and the count is dropped rather than maintained.)
 > [CHECKLIST.md](CHECKLIST.md); the items are held here until M32 settles, then move to the component that owns them.
 >
 > **The plan M33+ executes comes from
-> [crates/windows-execution-plan/CHECKLIST.md](crates/windows-execution-plan/CHECKLIST.md)**, which is
+> [crates/topology-planner/CHECKLIST.md](crates/topology-planner/CHECKLIST.md)**, which is
 > itself gated on the locality-model design session. So M33+ has two prerequisites, not one.
 
 ## M33+ -- The domain runtime (gated on M32)
@@ -774,7 +774,7 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   `(producer.numa_node, consumer.numa_node)` and its comment states that "both *directions* are
   kept", with `by_node_pair` adding that "each hop is measured once per ring placement, so there are
   two". Four measurements per undirected edge, not one. Found while stating
-  [EP-D-3](crates/windows-execution-plan/DESIGN-NOTES.md#ep-d-3), whose whole subject is that
+  [EP-D-3](crates/topology-planner/DESIGN-NOTES.md#ep-d-3), whose whole subject is that
   residency is directional, so a parked item asserting the opposite would have been read as evidence
   against it. The probe prints the resulting table, names the
   cheapest and dearest hop, and says outright whether the spread is small enough for the single

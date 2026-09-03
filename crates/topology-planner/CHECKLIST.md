@@ -5,12 +5,14 @@ description of a machine. See [COMPONENT.md](COMPONENT.md) for what this crate i
 separate from both the topology crate and the runtime, and
 [EP-D-4](DESIGN-NOTES.md#ep-d-4) for the architecture it now sits in.
 
-**The component is being re-scoped**, per [EP-D-4](DESIGN-NOTES.md#ep-d-4). It is named
-`topology-planner`; it queries an abstract model covering processors, memory, storage, interconnects,
-distances and bottlenecks rather than `MachineMemoryTopology` directly; and **adapters** bracket it
--- one exposing its traits over the Windows topology objects, one realizing a plan as buffers, rings
-and threads. The directory is still `windows-execution-plan` pending the layout decision that
-EP-D-4 leaves open. **M2+ onward are written against the superseded shape and are not yet re-cut.**
+**The component has been re-scoped**, per [EP-D-4](DESIGN-NOTES.md#ep-d-4) and
+[EP-D-5](DESIGN-NOTES.md#ep-d-5). It is named `topology-planner` and the directory now matches; it
+queries an abstract model covering processors, memory, storage, interconnects, distances and
+bottlenecks rather than `MachineMemoryTopology` directly; and **adapters** bracket it -- one exposing
+the model's traits over the Windows topology objects, one realizing a plan as buffers, rings and
+threads. The model, its traits, and the plan type live in a separate `topology-model` crate that
+everything depends on and that depends on nothing.
+**M2+ onward are written against the superseded shape and are not yet re-cut.**
 
 ## Where this stands
 

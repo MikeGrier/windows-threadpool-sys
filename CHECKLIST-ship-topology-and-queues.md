@@ -958,7 +958,7 @@ predicted about a 222-commit branch.
   **without further measurement**, a consumer shaping memory allocation must today either run the
   probe at decision time -- forbidden -- or guess. Gated on SH-16.8, and on the open question of
   which component owns the measurement phase.
-  **Corrected while stating [EP-D-3](crates/windows-execution-plan/DESIGN-NOTES.md#ep-d-3): the
+  **Corrected while stating [EP-D-3](crates/topology-planner/DESIGN-NOTES.md#ep-d-3): the
   wording above reads as an oversight, and it is not one.** The field is documented as being for a
   fed-in description, because Windows exposes no user-mode SLIT reader -- accurate, and deliberate.
   Two sharper problems replace the one this item claimed.
@@ -987,7 +987,7 @@ predicted about a 222-commit branch.
   offline, *or* is online but named by no `Core` domain, *or* genuinely has efficiency class zero.
   The third is **every processor on every non-hybrid machine**, so the sentinel is not a rare
   collision -- it is the usual value.
-  Found by [crates/windows-execution-plan](crates/windows-execution-plan/DESIGN-NOTES.md#ep-d-1)
+  Found by [crates/topology-planner](crates/topology-planner/DESIGN-NOTES.md#ep-d-1)
   EP-1.1 while checking what a shard planner can rely on, and it is worse for that consumer than for
   most: Windows orders efficiency class with `0` as **least** performant, so on a hybrid part an
   unknown processor is indistinguishable from an efficiency core. A policy excluding efficiency cores
