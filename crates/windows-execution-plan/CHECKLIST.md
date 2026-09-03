@@ -20,6 +20,7 @@ the model.
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | M1 the input contract | 3 done, 2 blocked | as far as it can go before the model exists |
+| M1+ scenario and naming | open | the session; neither is a model question |
 | M2+ the plan as a value | parked | M1, and the topology model landing |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
@@ -126,6 +127,31 @@ whether the topology can answer it today -- so the model is designed against a r
   > [DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md)
   > -> `SH-16.8` in
   > [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md).
+
+## M1+: the scenario input, and the naming
+
+Raised when the engineer described this component's function, which turned out to be richer than
+"takes a topology, applies policy". Both are gated on the locality-model session, but neither is a
+model question -- they are this component's own.
+
+- [ ] **EP-1+.1** -- **Describe the scenario input.** The synthesizer takes *two* inputs and only one
+  is described anywhere. The scenario says what the caller intends to run, and it is what makes a
+  measurement meaningful: [EP-D-3](DESIGN-NOTES.md#ep-d-3) established that a measured number means
+  nothing without knowing what it measured, so at minimum the scenario must distinguish small-message
+  handoff from large-buffer streaming. Its absence is why "what is most useful for consumers" was
+  hard to answer in the abstract for so long.
+
+- [ ] **EP-1+.2** -- **Decide what the caller-callback traits ask.** Planning is a negotiation: the
+  component may call back for clarification the scenario did not settle. Enumerating those questions
+  is what decides whether this is one trait or several, and it cannot be done before EP-1+.1 says
+  what the scenario already answers.
+
+- [ ] **EP-1+.3** -- **Settle the naming, before any type is written.** Both inputs and the output
+  are graphs of processors and their relations, so "topology" fits all of them and distinguishes
+  none -- and a reader seeing the word twice will eventually take one for the other. Decide whether
+  the observed machine keeps the bare name (qualified only by its crate), gains a qualifier, or is
+  renamed outright, and what the synthesized arrangement is called. Cheap now; expensive once either
+  name is public. This one blocks nothing but should not be settled by whoever writes the first type.
 
 ## M2+: the plan as a value
 

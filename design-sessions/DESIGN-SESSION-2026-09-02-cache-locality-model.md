@@ -312,11 +312,72 @@ leaving implicit in three separate documents:
 what it should *do* when the answer is "not observed" -- that is this session's fourth open question
 and the planner's EP-1.4, which are the same decision seen from two ends and must be taken together.
 
+### The two-component architecture, and who measures
+
+Settled by the engineer, and it answers the measurement question below rather than adding to it.
+
+There are **two** things, and both are graphs of processors and their relations, which is why
+calling both "topology" has been confusing:
+
+1. **What the machine *is*.** Read from the Windows data model, plus whatever else is trivially
+   available. Observed, never chosen. This is today's `Topology`, and it is **mockable** -- a
+   description of a machine nobody has is a first-class input, which is what makes the second
+   component testable.
+
+2. **What we are going to *build* on it.** A concrete description of the arrangement to construct:
+   which processors host domains, which threads pin where, which rings connect them, where each
+   buffer lives.
+
+The second component synthesizes the second from the first, and it takes **two** inputs, not one:
+
+- the observed machine, and
+- **a description of the desired function** -- the scenario. This is the input the design has been
+  missing, and its absence is why "what is most useful for consumers" kept being hard to answer in
+  the abstract.
+
+It may also **call back to its caller** through traits, to ask for clarifying information the
+scenario did not settle. So planning is a negotiation rather than a pure function.
+
+**And it is the component that measures, with the caller's permission**, to determine the optimal
+arrangement *for that scenario*.
+
+### What this resolves
+
+**Who owns the measurement phase: the synthesizer, permissioned.** Not `discover()`, and not an
+enrich step on the topology. This is better than either, for a reason the session had already found
+without drawing the conclusion: EP-D-3 established that a measured number is only meaningful
+alongside *what it measured* -- the probe's figures are nanoseconds for one ring-handoff pattern at
+one message size. A component that knows the scenario can measure the right thing; a `discover()`
+that measures cannot, because it does not know what the caller intends to do.
+
+**The no-probing bar survives, sharpened.** The *observed* topology never measures, so it remains
+usable without further measurement. The synthesizer may measure, but that is a distinct,
+permissioned, scenario-specific activity producing a **plan**. The plan, once produced, is consumed
+without further measurement. Three stages, each honest about its cost: observe (cheap), synthesize
+(may measure, with permission), execute (no I/O).
+
+### A consequence that needs confirming
+
+If the synthesizer measures for its own scenario, then **measured facts may not belong in the
+observed topology at all.** The session earlier concluded they must, on the grounds that a consumer
+forbidden from probing needs them present -- but that reasoning assumed one component. With two, the
+measurement is the synthesizer's working state and its justification for a choice, not a property of
+the machine.
+
+That would make the observed topology purely what Windows reports, and it would mean
+`Topology::distances` is **deleted rather than filled** -- which is a cleaner answer than SH-16.11's,
+and the opposite of what that item currently proposes. Flagged rather than acted on, because it
+reverses a conclusion this session reached earlier and should be confirmed before anything is
+removed.
+
 ### Still open
 
-- **Who owns the measurement phase, and what does it cost?** A `discover()` that measures is
-  expensive and surprising; a separate enrich step is honest but can be skipped; lazy is ruled
-  out by the bar above.
+- ~~Who owns the measurement phase?~~ **Answered above: the synthesizer, with permission.**
+- **What shape is the scenario input?** It is the newly-named second input and nothing describes it
+  yet. EP-D-3's finding constrains it: it must carry enough for a measurement to be meaningful,
+  which at minimum distinguishes small-message handoff from large-buffer streaming.
+- **What do the caller-callback traits ask?** Knowing which questions cannot be answered from the
+  scenario alone is what decides whether this is one trait or several.
 - Whether multiple observations per relation are held as a set, or reduced on insert with the
   reduction recorded.
 - What a query returns when observations disagree: a value plus a conflict marker, or the

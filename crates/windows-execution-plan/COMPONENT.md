@@ -6,14 +6,46 @@ place, rather than living as an assumption inside somebody else's milestone.
 
 ## What it is
 
-Takes a `Topology` and produces a **plan for execution domains**: which processors get a domain,
-where each domain's thread is pinned, which memory node each domain allocates from, what channel
-connects each pair of domains, and where each channel's buffer lives.
+A **synthesizer**. It takes two inputs and produces a third thing:
 
-The shape it plans for is the one
+- **the observed machine** -- what Windows reports, plus whatever else is trivially available. This
+  is `windows_topology_sys::Topology`, and it is **mockable**: a description of a machine nobody has
+  is a first-class input, which is what makes this component testable without the hardware it plans
+  for.
+- **a description of the desired function** -- the scenario. What the caller intends to run, in
+  enough detail that a measurement taken on its behalf means something.
+
+From those it synthesizes **a concrete description of the arrangement to construct**: which
+processors host domains, where each thread pins, which memory node each allocates from, what channel
+connects each pair, and where each channel's buffer lives.
+
+Two things follow that a "takes a topology, returns a plan" description would miss.
+
+**It may ask.** Planning is a negotiation, not a pure function: the component may call back to its
+caller through traits, for clarifying information the scenario did not settle. Which questions those
+are is not yet known, and knowing them is what decides whether that is one trait or several.
+
+**It may measure, with permission.** This is the component that probes, and it is the right one --
+because a measured number is only meaningful alongside *what it measured*. The probe's existing
+figures are nanoseconds for one ring-handoff pattern at one message size; a component that knows the
+scenario can measure the right thing, where a `Topology::discover` that measured could not, having
+no idea what the caller intends.
+
+So there are three stages, each honest about its cost: **observe** (cheap, no choices), **synthesize**
+(may measure, with permission), **execute** (no I/O, no probing).
+
+The arrangement it plans for is the one
 [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) M33+ describes -- "one pinned thread, its
 `IoRing`, its node-local registered pool, its shard" -- which is a Seastar-style shard-per-core
 runtime.
+
+## Two graphs, one word
+
+Both inputs and the output are graphs of processors and their relations, so "topology" fits all of
+them and distinguishes none. That ambiguity is live and unresolved: what the machine **is** and what
+we intend to **build on it** are different enough that a reader seeing `Topology` twice will
+eventually take one for the other. Naming is tracked as an open decision rather than settled by
+whoever writes the first type.
 
 ## Why it is separate
 
