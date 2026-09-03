@@ -5,6 +5,27 @@ use std::fmt;
 
 /// Where a [`MachineMemoryTopology`](crate::MachineMemoryTopology)'s content came from.
 ///
+/// # What this records: the construction act
+///
+/// **How the object was obtained, not a summary of what is in it.** `discover`
+/// stamps [`Self::Measured`], deserialization is capped at [`Self::Restored`],
+/// and anything built by hand defaults to [`Self::Synthetic`]. The question it
+/// answers is "was this collection performed, on this machine?", which is a
+/// property of the act and not a roll-up of any per-part value.
+///
+/// That distinction is worth stating because it is easy to get backwards, and
+/// getting it backwards leads somewhere wrong. A plan to supersede this type
+/// once argued that an object-level value "can only be the minimum or the
+/// maximum" of its parts' trust, and therefore had to go. It is neither: it is
+/// a different fact, orthogonal to where any individual relation came from, and
+/// it survives per-relation provenance untouched. See D-22 in
+/// `DESIGN-NOTES.md`.
+///
+/// The two compose rather than compete. A `Measured` topology with a
+/// hand-inserted relation is a real hazard -- public fields allow it -- and the
+/// answer is that the *relation* says where it came from, while this value goes
+/// on saying, correctly, that the collection was performed here.
+///
 /// # Why this exists
 ///
 /// This crate deliberately lets a topology be built three ways: read from the
@@ -19,6 +40,10 @@ use std::fmt;
 /// selection logic; the whole point of a probe is that its output is believed.
 /// A number produced against fabricated topology and quoted without a label is
 /// worse than no number, because nothing downstream can tell.
+///
+/// `windows-placement-probe` is that consumer today: its record gates on
+/// [`Self::is_measured`] to decide whether a measurement counts, and carries
+/// the value at the record's top level so a collector need not reach inside.
 ///
 /// # Ordering is trust
 ///

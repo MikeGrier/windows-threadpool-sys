@@ -395,7 +395,7 @@ item against the code before planning work from it.**
   since there are more places to forget), and trust never upgrades (a file still cannot establish it
   describes the machine you are on).
 
-- [ ] **M3+.3** -- ~~Supersede the whole-object `Provenance` **without replacing it with another
+- [x] **M3+.3** -- ~~Supersede the whole-object `Provenance` **without replacing it with another
   whole-object scalar**. With trust per relation, an object-level scalar can only be the minimum --
   ninety-nine measured relations and one synthetic reading `SYNTHETIC` -- or the maximum, which is
   dishonest. Trust belongs to an *answer*.~~
@@ -413,6 +413,9 @@ item against the code before planning work from it.**
   **Revised deliverable:** keep the type, and make its documentation say what it actually means --
   the construction act, orthogonal to per-relation provenance -- so the next reader does not repeat
   this item's mistake.
+  **Done.** `Provenance`'s documentation now opens with "what this records: the construction act",
+  states the orthogonality, and names the superseded argument so it is not re-proposed. No type or
+  behaviour change: the correct outcome here was *not* changing the code.
 
 - [x] **M3+.4** -- Carry both observers without merging, per MMT-1.1's decision. `Topology::cpu_sets`
   already lands this way; this item is whether that stays a parallel list or becomes observations
