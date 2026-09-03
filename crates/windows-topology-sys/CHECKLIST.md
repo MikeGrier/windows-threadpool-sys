@@ -436,12 +436,27 @@ item against the code before planning work from it.**
     the two rules coincide. Four synthetic fold tests -- built to disagree on purpose -- now catch it,
     and the sabotage had to be injected in the semantically plausible direction to be meaningful.
 
-  - [ ] **M3+.1.3** -- Remove `Domain::id`, now that observations carry the labels, and update the
+  - [x] **M3+.1.3** -- Remove `Domain::id`, now that observations carry the labels, and update the
     three downstream crates and the wire shape. **Breaking**, and correct: there is no single
     canonical id once two sources label the same relation differently -- measured as
     `[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]` -- and a relation observed only by CPU Sets has no
     walk label at all. Keeping `id` beside the observations would be two statements of one fact, which
     is the restatement drift this repository has a rule about.
+    **Done.** `Domain::label_from(source)` and `observed_by(source)` replace it; the accessor takes a
+    source *because there is no answer without one*. 59 literals and 14 call sites across four crates,
+    all located by rustc rather than by a regex guessing at them.
+    The wire `"id"` survives as an informational field: written when the walk labelled the relation,
+    and **optional on read and discarded**, since a file cannot establish which source observed
+    anything (D-12). Making it optional was forced by the change -- serialization stops writing it for
+    a relation no source labelled, so requiring it would have rejected descriptions this crate itself
+    produces.
+    **A real bug, caught by the tests and not by review.** Replacing `domain.id` with a positional
+    index in `windows-placement-probe` is fine for the cache and core maps, which only need an
+    equivalence class -- but `numa_of`'s value reaches **`VirtualAllocExNuma`**, so a position would
+    allocate on the wrong node on any machine whose nodes are not numbered `0..n`. It now takes the
+    walk's label, which is the real node number. The fixture's nodes happen to be `0` and `1`, so the
+    NUMA assertion passed by coincidence and only the cache assertion failed -- the bug was one
+    coincidence away from shipping.
 
   - [ ] **M3+.1.4** -- **Record a per-processor attribute conflict**, which relation unification
     cannot reach. `M3+.1.2` matches relations by `(kind, membership)`, so two sources describing one

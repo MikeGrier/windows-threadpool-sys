@@ -197,7 +197,6 @@ impl MachineMemoryTopology {
                 // not evidence the relation is not there.
                 None => self.domains.push(Domain {
                     kind: make_kind(members),
-                    id: label,
                     processors,
                     observations: vec![observation],
                 }),
@@ -211,7 +210,6 @@ impl MachineMemoryTopology {
         for group in &relations.groups {
             domains.push(Domain {
                 kind: DomainKind::Group,
-                id: u32::from(group.group),
                 processors: group.active_processors.clone(),
                 observations: vec![Observation::new(
                     Source::RelationshipWalk,
@@ -222,7 +220,6 @@ impl MachineMemoryTopology {
         for (index, package) in relations.packages.iter().enumerate() {
             domains.push(Domain {
                 kind: DomainKind::Package,
-                id: index as u32,
                 processors: package.processors.clone(),
                 observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
@@ -230,7 +227,6 @@ impl MachineMemoryTopology {
         for (index, die) in relations.dies.iter().enumerate() {
             domains.push(Domain {
                 kind: DomainKind::Die,
-                id: index as u32,
                 processors: die.processors.clone(),
                 observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
@@ -238,7 +234,6 @@ impl MachineMemoryTopology {
         for (index, module) in relations.modules.iter().enumerate() {
             domains.push(Domain {
                 kind: DomainKind::Module,
-                id: index as u32,
                 processors: module.processors.clone(),
                 observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
@@ -249,7 +244,6 @@ impl MachineMemoryTopology {
                     simultaneous_multithreading: core.simultaneous_multithreading,
                     efficiency_class: core.efficiency_class,
                 },
-                id: index as u32,
                 processors: core.processors.clone(),
                 observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
@@ -263,7 +257,6 @@ impl MachineMemoryTopology {
                     size_bytes: cache.cache_size,
                     cache_type: cache.cache_type,
                 },
-                id: index as u32,
                 processors: cache.processors.clone(),
                 observations: vec![Observation::new(Source::RelationshipWalk, index as u32)],
             });
@@ -271,7 +264,6 @@ impl MachineMemoryTopology {
         for node in &relations.numa_nodes {
             domains.push(Domain {
                 kind: DomainKind::Memory { memory_bytes: None },
-                id: node.node_number,
                 processors: node.processors.clone(),
                 observations: vec![Observation::new(Source::RelationshipWalk, node.node_number)],
             });

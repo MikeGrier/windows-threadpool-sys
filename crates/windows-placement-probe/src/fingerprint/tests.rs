@@ -350,9 +350,11 @@ mod from_topology {
                     simultaneous_multithreading: core.threads > 1,
                     efficiency_class: core.efficiency_class,
                 },
-                id: index as u32,
                 processors: set_of(&members),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    index as u32,
+                )],
             });
 
             push_members(&mut cache_members, core.cache_domain, &members);
@@ -363,9 +365,11 @@ mod from_topology {
             0,
             Domain {
                 kind: DomainKind::Group,
-                id: 0,
                 processors: set_of(&all),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    0,
+                )],
             },
         );
 
@@ -378,17 +382,21 @@ mod from_topology {
                     size_bytes: 512 * 1024,
                     cache_type: windows_topology_sys::CacheKind::Unified,
                 },
-                id,
                 processors: set_of(&members),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    id,
+                )],
             });
         }
         for (id, members) in node_members {
             domains.push(Domain {
                 kind: DomainKind::Memory { memory_bytes: None },
-                id,
                 processors: set_of(&members),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    id,
+                )],
             });
         }
 
@@ -626,9 +634,11 @@ mod multi_group_conversion {
                         simultaneous_multithreading: false,
                         efficiency_class: 0,
                     },
-                    id: core_id,
                     processors: ProcessorSet::from_group_mask(group, 1_usize << number),
-                    observations: Vec::new(),
+                    observations: vec![windows_topology_sys::Observation::new(
+                        windows_topology_sys::Source::RelationshipWalk,
+                        core_id,
+                    )],
                 });
                 core_id += 1;
             }
@@ -636,9 +646,11 @@ mod multi_group_conversion {
             let mask = members.iter().fold(0_usize, |mask, n| mask | (1 << n));
             domains.push(Domain {
                 kind: DomainKind::Group,
-                id: u32::from(group),
                 processors: ProcessorSet::from_group_mask(group, mask),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    u32::from(group),
+                )],
             });
             // A cache domain per group, because a cache is never shared across
             // one, and a memory domain per group so this stays a two-node
@@ -651,15 +663,19 @@ mod multi_group_conversion {
                     size_bytes: 32 * 1024 * 1024,
                     cache_type: windows_topology_sys::CacheKind::Unified,
                 },
-                id: 100 + u32::from(group),
                 processors: ProcessorSet::from_group_mask(group, mask),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    100 + u32::from(group),
+                )],
             });
             domains.push(Domain {
                 kind: DomainKind::Memory { memory_bytes: None },
-                id: u32::from(group),
                 processors: ProcessorSet::from_group_mask(group, mask),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    u32::from(group),
+                )],
             });
         }
 
@@ -740,9 +756,11 @@ mod multi_group_conversion {
                 .collect(),
             domains: vec![Domain {
                 kind: DomainKind::Group,
-                id: 0,
                 processors: ProcessorSet::from_group_mask(0, mask),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    0,
+                )],
             }],
             cpu_sets: None,
             ..Default::default()
@@ -780,9 +798,11 @@ mod multi_group_conversion {
         });
         topology.domains.push(Domain {
             kind: DomainKind::Group,
-            id: 1,
             processors: ProcessorSet::from_group_mask(1, 0b1),
-            observations: Vec::new(),
+            observations: vec![windows_topology_sys::Observation::new(
+                windows_topology_sys::Source::RelationshipWalk,
+                1,
+            )],
         });
 
         let places = places_from_topology(&topology).expect("no memory domain, so node 0 applies");
@@ -830,9 +850,11 @@ mod multi_group_conversion {
         for (id, mask) in [(1_u32, 0b001_usize), (2, 0b010)] {
             topology.domains.push(Domain {
                 kind: DomainKind::Memory { memory_bytes: None },
-                id,
                 processors: ProcessorSet::from_group_mask(0, mask),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    id,
+                )],
             });
         }
 
@@ -855,9 +877,11 @@ mod multi_group_conversion {
         for (id, mask) in [(1_u32, 0b01_usize), (2, 0b10)] {
             topology.domains.push(Domain {
                 kind: DomainKind::Memory { memory_bytes: None },
-                id,
                 processors: ProcessorSet::from_group_mask(0, mask),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    id,
+                )],
             });
         }
 
@@ -886,9 +910,11 @@ mod multi_group_conversion {
                 simultaneous_multithreading: members.len() > 1,
                 efficiency_class: 0,
             },
-            id,
             processors: ProcessorSet::from_group_mask(0, mask),
-            observations: Vec::new(),
+            observations: vec![windows_topology_sys::Observation::new(
+                windows_topology_sys::Source::RelationshipWalk,
+                id,
+            )],
         });
         topology
     }
@@ -927,9 +953,11 @@ mod multi_group_conversion {
         });
         topology.domains.push(Domain {
             kind: DomainKind::Group,
-            id: 1,
             processors: ProcessorSet::from_group_mask(1, 0b1),
-            observations: Vec::new(),
+            observations: vec![windows_topology_sys::Observation::new(
+                windows_topology_sys::Source::RelationshipWalk,
+                1,
+            )],
         });
 
         let places =
@@ -974,9 +1002,11 @@ mod multi_group_conversion {
                     simultaneous_multithreading: false,
                     efficiency_class: 0,
                 },
-                id,
                 processors: ProcessorSet::from_group_mask(0, 1 << member),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    id,
+                )],
             });
         }
         for (id, mask) in [(20_u32, 0b001_usize), (21, 0b010)] {
@@ -988,9 +1018,11 @@ mod multi_group_conversion {
                     size_bytes: 1024 * 1024,
                     cache_type: windows_topology_sys::CacheKind::Unified,
                 },
-                id,
                 processors: ProcessorSet::from_group_mask(0, mask),
-                observations: Vec::new(),
+                observations: vec![windows_topology_sys::Observation::new(
+                    windows_topology_sys::Source::RelationshipWalk,
+                    id,
+                )],
             });
         }
 

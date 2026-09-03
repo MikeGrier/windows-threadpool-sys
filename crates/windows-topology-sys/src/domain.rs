@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use crate::CacheKind;
-use crate::observation::Observation;
+use crate::observation::{Observation, Source};
 use crate::processor_set::ProcessorSet;
 
 /// The identity of one logical processor: its group and its number within
@@ -150,10 +150,15 @@ pub enum AttributeValue {
 /// already violate assumptions like that, and Linux's own levels do not form
 /// a strict hierarchy either.
 ///
-/// With the `serde` feature, serializes as `{"kind": <string>, "id": <u32>,
-/// "processors": [...], ...fields specific to that kind}` -- an internally
-/// tagged shape, implemented by hand rather than derived, because `kind` is
-/// open (D-4) and an unrecognised one must still round-trip its attributes.
+/// With the `serde` feature, serializes as `{"kind": <string>, "processors":
+/// [...], ...fields specific to that kind}` -- an internally tagged shape,
+/// implemented by hand rather than derived, because `kind` is open (D-4) and
+/// an unrecognised one must still round-trip its attributes.
+///
+/// An `"id"` is written when the relationship walk labelled this relation, and
+/// is **optional on read and discarded**. It carries no model meaning: a label
+/// belongs to the observation that issued it (D-15), and a file cannot
+/// establish which source observed anything (D-12).
 ///
 /// **This JSON shape is explicitly not covered by this crate's semver
 /// contract (D-8 in `DESIGN-NOTES.md`).** The Rust API above (`Domain`,
@@ -167,17 +172,7 @@ pub enum AttributeValue {
 pub struct Domain {
     /// What this domain represents.
     pub kind: DomainKind,
-    /// An identifier for this domain, unique among domains of the same
-    /// `kind`. Where Windows reports a natural number (a NUMA node number, a
-    /// group number) that number is used; otherwise domains are numbered in
-    /// the order they were discovered.
-    ///
-    /// **Superseded by [`Self::observations`] and removed in `M3+.1.3`.** A
-    /// relation two sources label differently has no single canonical id --
-    /// measured as `[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]` for the same
-    /// core partition -- so the label belongs to the observation that carries
-    /// it (D-15). Read the label off an observation instead.
-    pub id: u32,
+
     /// The logical processors this domain covers. Empty for a memory-only
     /// domain (D-5).
     pub processors: ProcessorSet,
@@ -189,6 +184,38 @@ pub struct Domain {
     /// is what makes agreement visible without either label being discarded
     /// (D-15, D-19).
     pub observations: Vec<Observation>,
+}
+
+impl Domain {
+    /// What `source` called this relation, if `source` reported it.
+    ///
+    /// The replacement for the removed `id` field, and it takes a source
+    /// because there is no single answer without one: the two Windows APIs
+    /// agree on the core partition while labelling it `[0, 2, 4, ..., 14]` and
+    /// `[0, 1, ..., 7]`, so "the id" was never well defined once both were
+    /// consulted (D-15).
+    ///
+    /// A caller wanting a *stable* handle for grouping should use the
+    /// relation's position in [`MachineMemoryTopology::domains`][domains]
+    /// instead: an observation label is meaningful only to the source that
+    /// issued it, and a relation may have none at all.
+    ///
+    /// [domains]: crate::MachineMemoryTopology::domains
+    #[must_use]
+    pub fn label_from(&self, source: Source) -> Option<u32> {
+        self.observations
+            .iter()
+            .find(|observation| observation.source == source)
+            .map(|observation| observation.label)
+    }
+
+    /// Whether `source` reported this relation.
+    #[must_use]
+    pub fn observed_by(&self, source: Source) -> bool {
+        self.observations
+            .iter()
+            .any(|observation| observation.source == source)
+    }
 }
 
 /// Manual `Serialize`/`Deserialize` for the open-kinded types.
@@ -429,7 +456,14 @@ mod serde_impl {
                 DomainKind::Other { name, .. } => name.as_str(),
             };
             map.serialize_entry("kind", kind_name)?;
-            map.serialize_entry("id", &self.id)?;
+            // The wire shape keeps an "id" because a description is written by
+            // hand and a human-meaningful number is worth having. It is the
+            // relationship walk's label where there is one -- not "the id",
+            // which stopped being well defined once two sources labelled the
+            // same relation differently (D-15).
+            if let Some(label) = self.label_from(crate::observation::Source::RelationshipWalk) {
+                map.serialize_entry("id", &label)?;
+            }
             map.serialize_entry("processors", &self.processors)?;
             match &self.kind {
                 DomainKind::Core {
@@ -488,7 +522,13 @@ mod serde_impl {
                 AttributeValue::String(s) => s,
                 _ => return Err(D::Error::custom("domain \"kind\" must be a string")),
             };
-            let id = as_u32(take::<D::Error>(&mut fields, "id")?)?;
+            // Read and discarded, and OPTIONAL. The wire "id" is one source's
+            // label; a file cannot establish which source observed the relation
+            // (D-12), so it never becomes an observation. Since it carries no
+            // model meaning, requiring it would reject a description that is
+            // otherwise complete -- including one this crate itself writes for a
+            // relation no source labelled.
+            let _ = fields.remove("id");
             let processors = processors_from_value(take::<D::Error>(&mut fields, "processors")?)?;
             // A described relation carries NO platform observation, and the
             // wire shape does not encode them.
@@ -539,7 +579,6 @@ mod serde_impl {
 
             Ok(Domain {
                 kind,
-                id,
                 processors,
                 observations,
             })

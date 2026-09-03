@@ -27,7 +27,7 @@ fn set(numbers: &[u8]) -> ProcessorSet {
     s
 }
 
-fn cache(level: u8, id: u32, numbers: &[u8], cache_type: CacheKind) -> Domain {
+fn cache(level: u8, numbers: &[u8], cache_type: CacheKind) -> Domain {
     Domain {
         kind: DomainKind::Cache {
             level,
@@ -36,28 +36,25 @@ fn cache(level: u8, id: u32, numbers: &[u8], cache_type: CacheKind) -> Domain {
             size_bytes: 32 * 1024,
             cache_type,
         },
-        id,
         processors: set(numbers),
         observations: Vec::new(),
     }
 }
 
-fn core(id: u32, numbers: &[u8]) -> Domain {
+fn core(numbers: &[u8]) -> Domain {
     Domain {
         kind: DomainKind::Core {
             simultaneous_multithreading: numbers.len() > 1,
             efficiency_class: 0,
         },
-        id,
         processors: set(numbers),
         observations: Vec::new(),
     }
 }
 
-fn memory(id: u32, numbers: &[u8]) -> Domain {
+fn memory(numbers: &[u8]) -> Domain {
     Domain {
         kind: DomainKind::Memory { memory_bytes: None },
-        id,
         processors: set(numbers),
         observations: Vec::new(),
     }
@@ -93,7 +90,7 @@ fn machine_processors_includes_offline_slots() {
 fn a_pair_no_relation_covers_answers_the_machine_rather_than_nothing() {
     // Two NUMA nodes, nothing spanning them: exactly the cross-node case the
     // top exists for.
-    let t = topology(4, vec![memory(0, &[0, 1]), memory(1, &[2, 3])]);
+    let t = topology(4, vec![memory(&[0, 1]), memory(&[2, 3])]);
     assert_eq!(t.minimal_shared(&set(&[0, 3])), vec![Granularity::Machine]);
 }
 
@@ -101,7 +98,7 @@ fn a_pair_no_relation_covers_answers_the_machine_rather_than_nothing() {
 fn the_machine_never_appears_beside_an_observed_relation() {
     // It is the fallback that makes the query total, not an element competing
     // with what the platform reported.
-    let t = topology(4, vec![memory(0, &[0, 1, 2, 3])]);
+    let t = topology(4, vec![memory(&[0, 1, 2, 3])]);
     let answer = t.minimal_shared(&set(&[0, 3]));
     assert_eq!(answer.len(), 1);
     assert!(!answer[0].is_machine());
@@ -120,9 +117,9 @@ fn the_tightest_covering_relation_wins_regardless_of_level_number() {
     let t = topology(
         4,
         vec![
-            cache(3, 0, &[0, 1, 2, 3], CacheKind::Unified),
-            cache(2, 0, &[0, 1], CacheKind::Unified),
-            cache(2, 1, &[2, 3], CacheKind::Unified),
+            cache(3, &[0, 1, 2, 3], CacheKind::Unified),
+            cache(2, &[0, 1], CacheKind::Unified),
+            cache(2, &[2, 3], CacheKind::Unified),
         ],
     );
     let answer = t.minimal_shared(&set(&[0, 1]));
@@ -140,8 +137,8 @@ fn a_lower_level_number_does_not_win_when_it_covers_more() {
     let t = topology(
         4,
         vec![
-            cache(1, 0, &[0, 1, 2, 3], CacheKind::Unified),
-            cache(2, 0, &[0, 1], CacheKind::Unified),
+            cache(1, &[0, 1, 2, 3], CacheKind::Unified),
+            cache(2, &[0, 1], CacheKind::Unified),
         ],
     );
     let answer = t.minimal_shared(&set(&[0, 1]));
@@ -157,7 +154,7 @@ fn a_lower_level_number_does_not_win_when_it_covers_more() {
 fn kinds_that_share_no_numbering_are_still_ordered() {
     // A core against a memory domain: no level number relates them, and
     // inclusion does.
-    let t = topology(4, vec![core(0, &[0, 1]), memory(0, &[0, 1, 2, 3])]);
+    let t = topology(4, vec![core(&[0, 1]), memory(&[0, 1, 2, 3])]);
     let answer = t.minimal_shared(&set(&[0, 1]));
     assert_eq!(answer.len(), 1);
     assert!(matches!(
@@ -175,9 +172,9 @@ fn two_relations_over_the_same_processors_both_survive() {
     let t = topology(
         4,
         vec![
-            cache(1, 0, &[0, 1], CacheKind::Data),
-            cache(1, 1, &[0, 1], CacheKind::Instruction),
-            cache(3, 0, &[0, 1, 2, 3], CacheKind::Unified),
+            cache(1, &[0, 1], CacheKind::Data),
+            cache(1, &[0, 1], CacheKind::Instruction),
+            cache(3, &[0, 1, 2, 3], CacheKind::Unified),
         ],
     );
     let answer = t.minimal_shared(&set(&[0, 1]));
@@ -195,10 +192,7 @@ fn genuinely_incomparable_relations_both_survive() {
     // that makes the answer a set by construction rather than by accident.
     let t = topology(
         4,
-        vec![
-            memory(0, &[0, 1, 2]),
-            cache(2, 0, &[0, 1, 3], CacheKind::Unified),
-        ],
+        vec![memory(&[0, 1, 2]), cache(2, &[0, 1, 3], CacheKind::Unified)],
     );
     let answer = t.minimal_shared(&set(&[0, 1]));
     assert_eq!(answer.len(), 2, "{answer:?}");
@@ -209,9 +203,9 @@ fn a_relation_strictly_inside_another_excludes_it() {
     let t = topology(
         4,
         vec![
-            memory(0, &[0, 1, 2, 3]),
-            core(0, &[0, 1]),
-            cache(2, 0, &[0, 1, 2], CacheKind::Unified),
+            memory(&[0, 1, 2, 3]),
+            core(&[0, 1]),
+            cache(2, &[0, 1, 2], CacheKind::Unified),
         ],
     );
     let answer = t.minimal_shared(&set(&[0, 1]));
@@ -228,7 +222,7 @@ fn a_relation_strictly_inside_another_excludes_it() {
 fn a_processor_the_topology_does_not_know_answers_empty_not_the_machine() {
     // Claiming the machine contains a processor it has never heard of would be
     // an invention. Totality holds over what the topology knows.
-    let t = topology(2, vec![memory(0, &[0, 1])]);
+    let t = topology(2, vec![memory(&[0, 1])]);
     assert!(t.minimal_shared(&set(&[0, 7])).is_empty());
 }
 
@@ -251,11 +245,10 @@ fn the_order_holds_across_processor_groups() {
     spanning.insert(1, 0);
     t.domains.push(Domain {
         kind: DomainKind::Memory { memory_bytes: None },
-        id: 0,
         processors: spanning,
         observations: Vec::new(),
     });
-    t.domains.push(core(0, &[0, 1]));
+    t.domains.push(core(&[0, 1]));
 
     // Within group 0 the core is tighter than the spanning domain.
     let within = t.minimal_shared(&set(&[0, 1]));
@@ -279,7 +272,7 @@ fn the_order_holds_across_processor_groups() {
 
 #[test]
 fn a_single_processor_answers_its_tightest_relation() {
-    let t = topology(4, vec![core(0, &[0, 1]), memory(0, &[0, 1, 2, 3])]);
+    let t = topology(4, vec![core(&[0, 1]), memory(&[0, 1, 2, 3])]);
     let answer = t.minimal_shared(&set(&[0]));
     assert_eq!(answer.len(), 1);
     assert_eq!(
@@ -291,7 +284,7 @@ fn a_single_processor_answers_its_tightest_relation() {
 #[test]
 fn the_empty_set_is_covered_by_everything_so_the_smallest_wins() {
     // Not a case a caller has reason to ask, but it must not panic or invent.
-    let t = topology(4, vec![core(0, &[0, 1]), memory(0, &[0, 1, 2, 3])]);
+    let t = topology(4, vec![core(&[0, 1]), memory(&[0, 1, 2, 3])]);
     let answer = t.minimal_shared(&ProcessorSet::empty());
     assert_eq!(answer.len(), 1);
     assert_eq!(
@@ -304,7 +297,7 @@ fn the_empty_set_is_covered_by_everything_so_the_smallest_wins() {
 fn a_memory_only_domain_never_covers_anything_but_does_not_break_the_order() {
     // D-5's CXL-shaped node has no processors, so it covers no non-empty
     // query. It must not become a spurious minimum.
-    let t = topology(2, vec![memory(1, &[]), core(0, &[0, 1])]);
+    let t = topology(2, vec![memory(&[]), core(&[0, 1])]);
     let answer = t.minimal_shared(&set(&[0, 1]));
     assert_eq!(answer.len(), 1);
     assert!(matches!(
@@ -317,7 +310,7 @@ fn a_memory_only_domain_never_covers_anything_but_does_not_break_the_order() {
 
 #[test]
 fn is_finer_than_is_strict() {
-    let t = topology(4, vec![core(0, &[0, 1]), memory(0, &[0, 1, 2, 3])]);
+    let t = topology(4, vec![core(&[0, 1]), memory(&[0, 1, 2, 3])]);
     let core_g = Granularity::Relation(&t.domains[0]);
     let memory_g = Granularity::Relation(&t.domains[1]);
 
@@ -331,7 +324,7 @@ fn is_finer_than_is_strict() {
 
 #[test]
 fn every_relation_is_finer_than_the_machine_unless_it_spans_it() {
-    let t = topology(4, vec![core(0, &[0, 1]), memory(0, &[0, 1, 2, 3])]);
+    let t = topology(4, vec![core(&[0, 1]), memory(&[0, 1, 2, 3])]);
     assert!(t.is_finer_than(Granularity::Relation(&t.domains[0]), Granularity::Machine));
     assert!(
         !t.is_finer_than(Granularity::Relation(&t.domains[1]), Granularity::Machine),
@@ -343,10 +336,7 @@ fn every_relation_is_finer_than_the_machine_unless_it_spans_it() {
 fn incomparable_granularities_are_finer_in_neither_direction() {
     let t = topology(
         4,
-        vec![
-            memory(0, &[0, 1, 2]),
-            cache(2, 0, &[0, 1, 3], CacheKind::Unified),
-        ],
+        vec![memory(&[0, 1, 2]), cache(2, &[0, 1, 3], CacheKind::Unified)],
     );
     let left = Granularity::Relation(&t.domains[0]);
     let right = Granularity::Relation(&t.domains[1]);
@@ -356,7 +346,7 @@ fn incomparable_granularities_are_finer_in_neither_direction() {
 
 #[test]
 fn the_machine_covers_every_processor_as_a_granularity() {
-    let t = topology(3, vec![core(0, &[0, 1])]);
+    let t = topology(3, vec![core(&[0, 1])]);
     assert_eq!(Granularity::Machine.processors(&t), set(&[0, 1, 2]));
     assert_eq!(
         Granularity::Relation(&t.domains[0]).processors(&t),
@@ -366,7 +356,7 @@ fn the_machine_covers_every_processor_as_a_granularity() {
 
 #[test]
 fn relation_and_is_machine_agree() {
-    let t = topology(2, vec![core(0, &[0, 1])]);
+    let t = topology(2, vec![core(&[0, 1])]);
     let relation = Granularity::Relation(&t.domains[0]);
     assert!(!relation.is_machine());
     assert!(relation.relation().is_some());

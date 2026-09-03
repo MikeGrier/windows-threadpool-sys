@@ -38,7 +38,7 @@ use windows_sys::Win32::System::Threading::{
     GetNumaHighestNodeNumber,
 };
 
-use windows_topology_sys::{DomainKind, MachineMemoryTopology};
+use windows_topology_sys::{DomainKind, MachineMemoryTopology, Source};
 
 /// One cache level, summarised across the machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,8 +224,14 @@ pub fn measure() -> io::Result<Observation> {
             DomainKind::Package => packages += 1,
             DomainKind::Memory { .. } => {
                 numa_domains += 1;
-                highest_numa_node =
-                    Some(highest_numa_node.map_or(domain.id, |seen: u32| seen.max(domain.id)));
+                // The NUMA *node number*, which is specifically what the
+                // relationship walk reports. Not "the id": a relation may now
+                // carry a second label from CPU Sets that numbers nodes its own
+                // way (D-15), so the source is named rather than assumed.
+                if let Some(node) = domain.label_from(Source::RelationshipWalk) {
+                    highest_numa_node =
+                        Some(highest_numa_node.map_or(node, |seen: u32| seen.max(node)));
+                }
                 if domain.processors.is_empty() {
                     memoryless_numa_domains += 1;
                 }

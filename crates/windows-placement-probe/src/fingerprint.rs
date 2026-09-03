@@ -76,7 +76,7 @@
 
 use std::fmt;
 
-use windows_topology_sys::{DomainKind, MachineMemoryTopology, Provenance};
+use windows_topology_sys::{DomainKind, MachineMemoryTopology, Provenance, Source};
 
 /// One logical processor's position in the machine.
 ///
@@ -624,10 +624,18 @@ pub fn places_from_topology(
     let mut class_of = std::collections::BTreeMap::new();
     let mut core_of = std::collections::BTreeMap::new();
     let mut any_core_domain = false;
-    for core in topology.cores() {
+    // The relationship walk's label where there is one, which is exactly what
+    // the removed `Domain::id` carried; a position only as a fallback, for a
+    // relation no source labelled. This map needs processors in one relation to
+    // share a value, nothing more -- unlike `numa_of` below, whose value leaves
+    // the topology and reaches `VirtualAllocExNuma`.
+    for (index, core) in topology.cores().enumerate() {
         any_core_domain = true;
+        let core_id = core
+            .label_from(Source::RelationshipWalk)
+            .unwrap_or(index as u32);
         for id in core.processors.iter() {
-            core_of.insert(id, core.id);
+            core_of.insert(id, core_id);
         }
         let DomainKind::Core {
             efficiency_class, ..
@@ -648,9 +656,12 @@ pub fn places_from_topology(
     let mut any_cache_partition = false;
     if let Some((_, partitions)) = topology.outermost_partitioning_cache() {
         any_cache_partition = true;
-        for domain in partitions {
+        for (index, domain) in partitions.iter().enumerate() {
+            let cache_id = domain
+                .label_from(Source::RelationshipWalk)
+                .unwrap_or(index as u32);
             for id in domain.processors.iter() {
-                cache_of.insert(id, domain.id);
+                cache_of.insert(id, cache_id);
             }
         }
     }
@@ -659,8 +670,16 @@ pub fn places_from_topology(
     let mut any_memory_domain = false;
     for domain in topology.memory_domains() {
         any_memory_domain = true;
+        // The relationship walk's label, which is the real Windows NUMA node
+        // number -- NOT a position. This value reaches `VirtualAllocExNuma`,
+        // so a positional index would allocate on the wrong node on any machine
+        // whose nodes are not numbered `0..n`. Unlike `cache_of` and `core_of`
+        // above, this identifier has meaning outside the topology.
+        let Some(node) = domain.label_from(Source::RelationshipWalk) else {
+            continue;
+        };
         for id in domain.processors.iter() {
-            numa_of.insert(id, domain.id);
+            numa_of.insert(id, node);
         }
     }
 

@@ -4,7 +4,7 @@
 
 use std::io;
 
-use windows_topology_sys::{Domain, DomainKind, MachineMemoryTopology, ProcessorSet};
+use windows_topology_sys::{Domain, DomainKind, MachineMemoryTopology, ProcessorSet, Source};
 
 /// What one execution domain needs to run: a single-group affinity mask and,
 /// if known, the NUMA node its registered buffer should prefer.
@@ -70,19 +70,25 @@ pub fn build_plan(
 }
 
 fn label_for(domain: &Domain) -> String {
+    // The relationship walk's label, which is what the NUMA node number and
+    // the group number are. A relation has no single "id" now that two sources
+    // may label it differently, so the source is named rather than assumed.
+    let id = domain
+        .label_from(Source::RelationshipWalk)
+        .map_or_else(|| "?".to_string(), |label| label.to_string());
     match &domain.kind {
-        DomainKind::Cache { level, .. } => format!("L{level} cache #{}", domain.id),
-        DomainKind::Memory { .. } => format!("NUMA node {}", domain.id),
-        DomainKind::Package => format!("package #{}", domain.id),
-        DomainKind::Core { .. } => format!("core #{}", domain.id),
-        DomainKind::Group => format!("group #{}", domain.id),
-        DomainKind::Die => format!("die #{}", domain.id),
-        DomainKind::Module => format!("module #{}", domain.id),
+        DomainKind::Cache { level, .. } => format!("L{level} cache #{}", id),
+        DomainKind::Memory { .. } => format!("NUMA node {}", id),
+        DomainKind::Package => format!("package #{}", id),
+        DomainKind::Core { .. } => format!("core #{}", id),
+        DomainKind::Group => format!("group #{}", id),
+        DomainKind::Die => format!("die #{}", id),
+        DomainKind::Module => format!("module #{}", id),
         DomainKind::Other { name, .. } => name.clone(),
         // `DomainKind` is `#[non_exhaustive]`: a future variant this sample
         // does not yet know falls back to a generic label rather than
         // failing to build.
-        _ => format!("domain #{}", domain.id),
+        _ => format!("domain #{}", id),
     }
 }
 
@@ -94,7 +100,7 @@ fn numa_node_for(topology: &MachineMemoryTopology, processors: &ProcessorSet) ->
         .iter()
         .find_map(|domain| match domain.kind {
             DomainKind::Memory { .. } if !domain.processors.is_disjoint(processors) => {
-                Some(domain.id)
+                domain.label_from(Source::RelationshipWalk)
             }
             _ => None,
         })
@@ -108,7 +114,7 @@ pub fn remote_numa_node(topology: &MachineMemoryTopology, local: Option<u32>) ->
         .domains
         .iter()
         .filter_map(|domain| match domain.kind {
-            DomainKind::Memory { .. } => Some(domain.id),
+            DomainKind::Memory { .. } => domain.label_from(Source::RelationshipWalk),
             _ => None,
         })
         .find(|&id| Some(id) != local)

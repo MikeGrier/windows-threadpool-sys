@@ -98,7 +98,6 @@ impl Policy {
         (
             vec![Domain {
                 kind,
-                id: 0,
                 processors,
                 observations: Vec::new(),
             }],

@@ -28,13 +28,11 @@ fn synthetic() -> MachineMemoryTopology {
         domains: vec![
             Domain {
                 kind: DomainKind::Group,
-                id: 0,
                 processors: group0.clone(),
                 observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Package,
-                id: 0,
                 processors: group0.clone(),
                 observations: Vec::new(),
             },
@@ -43,7 +41,6 @@ fn synthetic() -> MachineMemoryTopology {
                     simultaneous_multithreading: true,
                     efficiency_class: 10,
                 },
-                id: 0,
                 processors: group0.clone(),
                 observations: Vec::new(),
             },
@@ -55,7 +52,6 @@ fn synthetic() -> MachineMemoryTopology {
                     size_bytes: 32 * 1024 * 1024,
                     cache_type: CacheKind::Unified,
                 },
-                id: 0,
                 processors: group0.clone(),
                 observations: Vec::new(),
             },
@@ -67,13 +63,11 @@ fn synthetic() -> MachineMemoryTopology {
                     size_bytes: 512 * 1024,
                     cache_type: CacheKind::Unified,
                 },
-                id: 1,
                 processors: group0,
                 observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Memory { memory_bytes: None },
-                id: 0,
                 processors: ProcessorSet::empty(),
                 observations: Vec::new(),
             },
@@ -339,7 +333,7 @@ mod serde_tests {
         }
     }
 
-    fn core_domain(id: u32, members: &[u8], efficiency_class: u8) -> Domain {
+    fn core_domain(label: u32, members: &[u8], efficiency_class: u8) -> Domain {
         let mut processors = ProcessorSet::empty();
         for &m in members {
             processors.insert(0, m);
@@ -349,9 +343,8 @@ mod serde_tests {
                 simultaneous_multithreading: members.len() > 1,
                 efficiency_class,
             },
-            id,
             processors,
-            observations: vec![Observation::new(Source::RelationshipWalk, id)],
+            observations: vec![Observation::new(Source::RelationshipWalk, label)],
         }
     }
 
@@ -819,7 +812,6 @@ fn heterogeneous_relations() -> (crate::relation::Relations, Vec<Domain>) {
                 simultaneous_multithreading: false,
                 efficiency_class: 0,
             },
-            id: 0,
             processors: cpu0,
             observations: Vec::new(),
         },
@@ -828,7 +820,6 @@ fn heterogeneous_relations() -> (crate::relation::Relations, Vec<Domain>) {
                 simultaneous_multithreading: false,
                 efficiency_class: 1,
             },
-            id: 1,
             processors: cpu1,
             observations: Vec::new(),
         },
@@ -904,7 +895,6 @@ fn an_offline_processor_reports_no_capacity_even_when_a_core_claims_it() {
             simultaneous_multithreading: false,
             efficiency_class: 7,
         },
-        id: 0,
         processors: both,
         observations: Vec::new(),
     }];
@@ -943,9 +933,11 @@ fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
                     size_bytes: 32 * 1024,
                     cache_type,
                 },
-                id,
                 processors: processors.clone(),
-                observations: Vec::new(),
+                // The fixture stands in for a discovered machine, so its
+                // relations say who reported them and carry the walk's own
+                // numbering -- which is what the partitioning rule reads back.
+                observations: vec![Observation::new(Source::RelationshipWalk, id)],
             });
             id += 1;
         }
@@ -958,7 +950,6 @@ fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
             size_bytes: 32 * 1024 * 1024,
             cache_type: CacheKind::Unified,
         },
-        id,
         processors: ProcessorSet::from_group_mask(0, all),
         observations: Vec::new(),
     });
@@ -1004,7 +995,11 @@ fn cache_partitions_keep_the_first_domain_for_each_processor_set() {
     let ids: Vec<u32> = topo
         .cache_partitions_at_level(1)
         .iter()
-        .map(|domain| domain.id)
+        .map(|domain| {
+            domain
+                .label_from(Source::RelationshipWalk)
+                .expect("the fixture records a walk observation")
+        })
         .collect();
     // 0 and 2 are the `data` domains; 1 and 3 are the `instruction` domains
     // covering the same processors, and are the ones dropped.
@@ -1028,7 +1023,7 @@ fn a_partitioning_cache_above_level_four_is_found() {
     // Replace the shared last level with two L5 partitions, so the dividing
     // level is one a fixed `1..=4` ceiling cannot reach.
     topo.domains.pop();
-    for (id, mask) in [(100u32, 0b01usize), (101, 0b10)] {
+    for (_id, mask) in [(100u32, 0b01usize), (101, 0b10)] {
         topo.domains.push(Domain {
             kind: DomainKind::Cache {
                 level: 5,
@@ -1037,7 +1032,6 @@ fn a_partitioning_cache_above_level_four_is_found() {
                 size_bytes: 64 * 1024 * 1024,
                 cache_type: CacheKind::Unified,
             },
-            id,
             processors: ProcessorSet::from_group_mask(0, mask),
             observations: Vec::new(),
         });
@@ -1072,7 +1066,7 @@ fn a_level_whose_domains_overlap_is_not_a_partition() {
     // work on processor 1 twice and overwrites its domain assignment.
     let mut topo = split_l1_machine(1, 3);
     topo.domains.pop(); // the shared last level, which divides nothing
-    for (id, mask) in [(200u32, 0b011usize), (201, 0b110)] {
+    for (_id, mask) in [(200u32, 0b011usize), (201, 0b110)] {
         topo.domains.push(Domain {
             kind: DomainKind::Cache {
                 level: 2,
@@ -1081,7 +1075,6 @@ fn a_level_whose_domains_overlap_is_not_a_partition() {
                 size_bytes: 1024 * 1024,
                 cache_type: CacheKind::Unified,
             },
-            id,
             processors: ProcessorSet::from_group_mask(0, mask),
             observations: Vec::new(),
         });
@@ -1104,7 +1097,7 @@ fn a_level_whose_domains_are_disjoint_but_incomplete_still_partitions() {
     // discarding the level over the gap would throw away a true boundary.
     let mut topo = split_l1_machine(1, 3);
     topo.domains.pop();
-    for (id, mask) in [(300u32, 0b0001usize), (301, 0b0010)] {
+    for (_id, mask) in [(300u32, 0b0001usize), (301, 0b0010)] {
         topo.domains.push(Domain {
             kind: DomainKind::Cache {
                 level: 2,
@@ -1113,7 +1106,6 @@ fn a_level_whose_domains_are_disjoint_but_incomplete_still_partitions() {
                 size_bytes: 1024 * 1024,
                 cache_type: CacheKind::Unified,
             },
-            id,
             processors: ProcessorSet::from_group_mask(0, mask),
             observations: Vec::new(),
         });
@@ -1141,7 +1133,7 @@ fn a_domain_covering_nothing_is_not_a_partition() {
     // input this method promises not to trust.
     let mut topo = split_l1_machine(1, 3);
     topo.domains.pop();
-    for (id, processors) in [
+    for (_id, processors) in [
         (400u32, ProcessorSet::from_group_mask(0, 0b111)),
         (401, ProcessorSet::empty()),
     ] {
@@ -1153,7 +1145,6 @@ fn a_domain_covering_nothing_is_not_a_partition() {
                 size_bytes: 1024 * 1024,
                 cache_type: CacheKind::Unified,
             },
-            id,
             processors,
             observations: Vec::new(),
         });

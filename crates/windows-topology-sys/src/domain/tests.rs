@@ -27,7 +27,6 @@ fn a_memory_domain_may_have_no_processors() {
         kind: DomainKind::Memory {
             memory_bytes: Some(64 * 1024 * 1024 * 1024),
         },
-        id: 9,
         processors: ProcessorSet::empty(),
         observations: Vec::new(),
     };
@@ -45,7 +44,6 @@ fn a_discovered_memory_domain_has_no_known_size() {
     // guessing `Some(0)`, which would be indistinguishable from "no memory".
     let domain = Domain {
         kind: DomainKind::Memory { memory_bytes: None },
-        id: 0,
         processors: ProcessorSet::empty(),
         observations: Vec::new(),
     };
@@ -64,7 +62,6 @@ fn an_unrecognised_domain_kind_carries_its_attributes() {
             name: "power".to_string(),
             attributes: attributes.clone(),
         },
-        id: 0,
         processors: ProcessorSet::empty(),
         observations: Vec::new(),
     };
@@ -109,7 +106,6 @@ mod serde_tests {
     fn a_group_domain_round_trips() {
         let domain = Domain {
             kind: DomainKind::Group,
-            id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b11),
             observations: Vec::new(),
         };
@@ -123,7 +119,6 @@ mod serde_tests {
                 simultaneous_multithreading: true,
                 efficiency_class: 7,
             },
-            id: 3,
             processors: ProcessorSet::from_group_mask(0, 0b1),
             observations: Vec::new(),
         };
@@ -140,7 +135,6 @@ mod serde_tests {
                 size_bytes: 32 * 1024 * 1024,
                 cache_type: CacheKind::Unified,
             },
-            id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b1111),
             observations: Vec::new(),
         };
@@ -157,7 +151,6 @@ mod serde_tests {
                 size_bytes: 32 * 1024,
                 cache_type: CacheKind::Other(99),
             },
-            id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b1),
             observations: Vec::new(),
         };
@@ -182,7 +175,6 @@ mod serde_tests {
                 size_bytes: 32 * 1024,
                 cache_type: CacheKind::Other(-7),
             },
-            id: 0,
             processors: ProcessorSet::from_group_mask(0, 0b1),
             observations: Vec::new(),
         };
@@ -202,7 +194,6 @@ mod serde_tests {
             kind: DomainKind::Memory {
                 memory_bytes: Some(64 * 1024 * 1024 * 1024),
             },
-            id: 9,
             processors: ProcessorSet::empty(),
             observations: Vec::new(),
         };
@@ -218,7 +209,6 @@ mod serde_tests {
     fn a_memory_domain_with_unknown_size_omits_memory_bytes_rather_than_writing_null() {
         let domain = Domain {
             kind: DomainKind::Memory { memory_bytes: None },
-            id: 0,
             processors: ProcessorSet::empty(),
             observations: Vec::new(),
         };
@@ -237,7 +227,6 @@ mod serde_tests {
                 name: "power".to_string(),
                 attributes,
             },
-            id: 2,
             processors: ProcessorSet::empty(),
             observations: Vec::new(),
         };
@@ -267,7 +256,6 @@ mod serde_tests {
                 name: "precision".to_string(),
                 attributes,
             },
-            id: 3,
             processors: ProcessorSet::empty(),
             observations: Vec::new(),
         };
@@ -296,7 +284,6 @@ mod serde_tests {
             kind: DomainKind::Memory {
                 memory_bytes: Some(precise),
             },
-            id: 4,
             processors: ProcessorSet::empty(),
             observations: Vec::new(),
         };
@@ -317,7 +304,6 @@ mod serde_tests {
                     name: "power".to_string(),
                     attributes,
                 },
-                id: 2,
                 processors: ProcessorSet::empty(),
                 observations: Vec::new(),
             };
@@ -338,7 +324,10 @@ mod serde_tests {
             "memory_bytes": 549755813888
         }"#;
         let domain: Domain = serde_json::from_str(json).expect("parse");
-        assert_eq!(domain.id, 5);
+        // The wire "id" is read as the relationship walk's label, since that is
+        // what serialization writes there. It is not evidence the walk observed
+        // this -- deserialization records no observation at all (D-12).
+        assert!(domain.observations.is_empty());
         assert!(domain.processors.is_empty());
         assert_eq!(
             domain.kind,
@@ -564,7 +553,6 @@ mod serde_tests {
                 simultaneous_multithreading: false,
                 efficiency_class: 0,
             },
-            id: 1,
             processors: ProcessorSet::from_group_mask(0, 0b1),
             observations: Vec::new(),
         };
