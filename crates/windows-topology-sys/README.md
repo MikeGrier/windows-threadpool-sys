@@ -8,9 +8,9 @@ empty shell on other platforms.
 ## Example
 
 ```rust,no_run
-use windows_topology_sys::Topology;
+use windows_topology_sys::MachineMemoryTopology;
 
-let topology = Topology::discover()?;
+let topology = MachineMemoryTopology::discover()?;
 println!(
     "{} logical processor(s), {} domain(s)",
     topology.processors.len(),
@@ -40,8 +40,8 @@ This crate does that walk once, safely, and hands back owned records.
 
 ## Scope
 
-**What this is:** safe enumeration ([`Topology::discover`]), plus a plain-data
-description ([`Topology`], [`Domain`]) that needs no Windows API to construct
+**What this is:** safe enumeration ([`MachineMemoryTopology::discover`]), plus a plain-data
+description ([`MachineMemoryTopology`], [`Domain`]) that needs no Windows API to construct
 -- build one by hand, or (with the `serde` feature) deserialize one from JSON
 written for a machine you do not have.
 
@@ -62,8 +62,8 @@ Run `cargo run --example print_topology --features serde` to see the host's
 own topology as JSON -- the shape a hand-written or synthetic description
 takes.
 
-[`Topology::discover`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Topology.html#method.discover
-[`Topology`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Topology.html
+[`MachineMemoryTopology::discover`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.MachineMemoryTopology.html#method.discover
+[`MachineMemoryTopology`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.MachineMemoryTopology.html
 [`Domain`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Domain.html
 
 ## License

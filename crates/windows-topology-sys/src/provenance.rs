@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-/// Where a [`Topology`](crate::Topology)'s content came from.
+/// Where a [`MachineMemoryTopology`](crate::MachineMemoryTopology)'s content came from.
 ///
 /// # Why this exists
 ///
@@ -28,7 +28,7 @@ use std::fmt;
 ///
 /// # The default is the untrusted value, on purpose
 ///
-/// [`Self::Synthetic`] is [`Default`], so a `Topology` built by
+/// [`Self::Synthetic`] is [`Default`], so a `MachineMemoryTopology` built by
 /// [`Default::default`], completed with `..Default::default()`, or otherwise
 /// assembled without a thought about provenance comes out **tainted**. A caller
 /// must do work to claim data is real, rather than work to admit it is not.
@@ -55,7 +55,7 @@ pub enum Provenance {
     /// machine -- but not necessarily *this* one, and nothing in the file can
     /// establish which.
     Restored,
-    /// Read from the running system by [`Topology::discover`](crate::Topology::discover).
+    /// Read from the running system by [`MachineMemoryTopology::discover`](crate::MachineMemoryTopology::discover).
     /// The only variant that asserts "this is the machine you are on".
     Measured,
 }
@@ -104,7 +104,7 @@ impl fmt::Display for Provenance {
 
 /// Deserialize a provenance, refusing any claim above [`Provenance::Restored`].
 ///
-/// Wired onto [`Topology::provenance`](crate::Topology::provenance) so the rule
+/// Wired onto [`MachineMemoryTopology::provenance`](crate::MachineMemoryTopology::provenance) so the rule
 /// holds for every description, including one hand-edited to claim it was
 /// measured.
 ///

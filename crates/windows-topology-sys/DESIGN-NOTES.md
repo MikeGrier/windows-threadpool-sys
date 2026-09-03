@@ -30,14 +30,14 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-8"></a>D-8 | **The JSON schema is explicitly not covered by this crate's semver contract**, following the precedent set by `windows-file-watcher`'s D-71 for its scenario schema. This is load-bearing rather than incidental: it is precisely what makes D-9's deferrals safe rather than merely convenient. A schema v2 when HMAT-class hardware matters is permitted, so the cost of *not* pre-building for it is bounded. The Rust API is covered by semver as always. |
 | <a id="d-9"></a>D-9 | **Deliberately excluded, with reasons.** See the detail section below. **No work is scheduled against any of it** -- the absence of checklist items is intentional, not an oversight. |
 | <a id="d-10"></a>D-10 | **The description is platform-neutral; platform constraints live in the planner.** A description sourced from Linux will have one group possibly containing more than 64 processors, which is unrepresentable as a Windows affinity mask. The schema does not enforce the Windows limit. A Windows planner consuming such a description must reject or split it rather than silently emitting an affinity mask that cannot exist. Keeping the constraint in the planner is what allows a description of a machine to be written on, and for, a different platform. |
-| <a id="d-11"></a>D-11 | **A `Memory` domain's `memory_bytes` is `Option<u64>`, not a bare `u64`, because Windows's own enumeration cannot report it.** `GetLogicalProcessorInformationEx`'s NUMA-node relationship carries a processor set and a node number, never a capacity; measuring node memory would mean a different API entirely. A `Topology` this crate discovers therefore always sets `memory_bytes: None` for every memory domain it produces from `RelationNumaNode`/`RelationNumaNodeEx`. Using `Some(0)` as a stand-in would be indistinguishable from "this node genuinely has no memory," which is exactly the CXL-expander case D-5 exists to represent honestly; `None` is the only choice that does not silently invent data. A hand-written or fed-in description may still supply a real value. |
+| <a id="d-11"></a>D-11 | **A `Memory` domain's `memory_bytes` is `Option<u64>`, not a bare `u64`, because Windows's own enumeration cannot report it.** `GetLogicalProcessorInformationEx`'s NUMA-node relationship carries a processor set and a node number, never a capacity; measuring node memory would mean a different API entirely. A `MachineMemoryTopology` this crate discovers therefore always sets `memory_bytes: None` for every memory domain it produces from `RelationNumaNode`/`RelationNumaNodeEx`. Using `Some(0)` as a stand-in would be indistinguishable from "this node genuinely has no memory," which is exactly the CXL-expander case D-5 exists to represent honestly; `None` is the only choice that does not silently invent data. A hand-written or fed-in description may still supply a real value. |
 | <a id="d-12"></a>D-12 | **A topology carries its own provenance, and the untrusted value is the default.** This crate deliberately lets a topology be discovered, built by hand, or deserialized from a description written for a machine you do not have -- and until now the three were indistinguishable once built. [`Provenance`] is `Synthetic` by `Default`, so forgetting is safe and claiming is deliberate; only `discover` yields `Measured`; and deserialization can only ever *downgrade*, so a file cannot assert it is the machine you are on. |
 | <a id="d-13"></a>D-13 | **Every `Option` in this crate must say *which* absence it means.** "Not observed", "observed and absent", and "a computed answer that is negative" are three different facts, and an `Option` spells all three identically. Each one is documented at its site, and no field may mean more than one. See the detail section below, which audits every `Option` the crate has. |
-| <a id="d-14"></a>D-14 | **Windows's `LastLevelCacheIndex` is not `Topology::outermost_partitioning_cache`, and neither is wrong.** Measured on the x64 development host: CPU Sets reports **one** LLC group over all sixteen processors, while the derivation reports **eight** partitions at L2. Windows names the *last* level; the derivation names the outermost level that *divides*. They answer different questions, so neither may be substituted for the other, and a consumer treating the CPU-set value as "the cache domain" would collapse eight groups into one on that machine. |
+| <a id="d-14"></a>D-14 | **Windows's `LastLevelCacheIndex` is not `MachineMemoryTopology::outermost_partitioning_cache`, and neither is wrong.** Measured on the x64 development host: CPU Sets reports **one** LLC group over all sixteen processors, while the derivation reports **eight** partitions at L2. Windows names the *last* level; the derivation names the outermost level that *divides*. They answer different questions, so neither may be substituted for the other, and a consumer treating the CPU-set value as "the cache domain" would collapse eight groups into one on that machine. |
 
 ## D-12: provenance, and why the default points at distrust
 
-Three ways to obtain a `Topology` are supported on purpose, and the crate's own front page advertises
+Three ways to obtain a `MachineMemoryTopology` are supported on purpose, and the crate's own front page advertises
 the third: "deserialize one from JSON written for a machine you do not have". That is a feature -- it
 is how a consumer tests against hardware it lacks, and this workspace needs it right now, because
 `probe-core-affinity` must exercise NUMA selection logic on hosts that have exactly one NUMA node.
@@ -49,7 +49,7 @@ running on.
 
 Three decisions make the marker hard to lose.
 
-**`Synthetic` is `Default`.** This is the load-bearing one. `Topology::default()`,
+**`Synthetic` is `Default`.** This is the load-bearing one. `MachineMemoryTopology::default()`,
 `..Default::default()`, and every construction that simply does not think about provenance come out
 tainted. A caller must do work to claim data is real, rather than work to admit it is not. The reverse
 default would mean every forgetful construction silently asserts it read the machine -- which is
@@ -108,11 +108,11 @@ argument carried up from "do not use a sentinel" to "say which absence you mean"
 
 | Site | Which absence | Notes |
 |---|---|---|
-| `Topology::distances` | **not observed**, and unobservable here | Windows exposes no user-mode SLIT reader, so `discover` can never fill it. Populated only by a fed-in description. |
-| `Topology::cpu_sets` | **not observed** | `Some(v)` means the CPU-set API answered, and `v` may legitimately be empty; `None` means nothing asked, which is what a hand-built or deserialized topology is. |
+| `MachineMemoryTopology::distances` | **not observed**, and unobservable here | Windows exposes no user-mode SLIT reader, so `discover` can never fill it. Populated only by a fed-in description. |
+| `MachineMemoryTopology::cpu_sets` | **not observed** | `Some(v)` means the CPU-set API answered, and `v` may legitimately be empty; `None` means nothing asked, which is what a hand-built or deserialized topology is. |
 | `DomainKind::Memory::memory_bytes` | **not observed** from `discover` | See below: a *description's* `None` is currently ambiguous, and that is the one gap this audit found. |
-| `Topology::processor` | lookup miss | Ordinary "no such element", not a fact about the machine. |
-| `Topology::outermost_partitioning_cache` | **negative result** (category 3) | `None` is the real answer "no level divides this machine", already documented as such. Not an absence, and must not be read as one. |
+| `MachineMemoryTopology::processor` | lookup miss | Ordinary "no such element", not a fact about the machine. |
+| `MachineMemoryTopology::outermost_partitioning_cache` | **negative result** (category 3) | `None` is the real answer "no level divides this machine", already documented as such. Not an absence, and must not be read as one. |
 
 ### The one gap this audit found
 
@@ -139,7 +139,7 @@ sentinel and is the interim answer.
 ## D-14: Windows's last-level cache is a different question
 
 `SYSTEM_CPU_SET_INFORMATION::LastLevelCacheIndex` and
-[`Topology::outermost_partitioning_cache`](crate::Topology::outermost_partitioning_cache) both look
+[`MachineMemoryTopology::outermost_partitioning_cache`](crate::MachineMemoryTopology::outermost_partitioning_cache) both look
 like "which cache groups these processors", and they are not the same question.
 
 Measured on the x64 development host, sixteen processors:
@@ -157,7 +157,7 @@ The consequence worth stating plainly: **a consumer must not substitute one for 
 produces eight, and nothing about the value would have looked wrong.
 
 This is also the first concrete instance of two Win32 sources describing overlapping facts, which is
-why `Topology::cpu_sets` is carried beside the domains rather than merged into them. Deciding what a
+why `MachineMemoryTopology::cpu_sets` is carried beside the domains rather than merged into them. Deciding what a
 consumer should do when the two disagree -- as opposed to answering different questions, which is
 this case -- is `SH-16.13`.
 

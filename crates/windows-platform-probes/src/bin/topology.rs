@@ -34,7 +34,7 @@ fn render() -> String {
     let observation = match measure() {
         Ok(observation) => observation,
         Err(error) => {
-            let _ = writeln!(out, "Topology::discover failed: {error}");
+            let _ = writeln!(out, "MachineMemoryTopology::discover failed: {error}");
             let _ = writeln!(
                 out,
                 "(Reported rather than measured: a probe that cannot read its"

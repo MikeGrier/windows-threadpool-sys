@@ -181,7 +181,7 @@ pub struct Domain {
 /// Deliberately not the HMAT attributed-relation model (per-initiator,
 /// per-target read/write latency and bandwidth): that was considered and
 /// declined for now, see D-9 in `DESIGN-NOTES.md`. Windows exposes no
-/// user-mode SLIT reader, so a [`crate::Topology`] this crate discovers never
+/// user-mode SLIT reader, so a [`crate::MachineMemoryTopology`] this crate discovers never
 /// populates this; it exists for a fed-in description sourced from a system
 /// that does report it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,7 +193,7 @@ pub struct Distances {
     /// open (D-4).
     pub over: String,
     /// The distance matrix, in the order those domains appear in
-    /// [`crate::Topology::domains`] filtered to `over`. Square;
+    /// [`crate::MachineMemoryTopology::domains`] filtered to `over`. Square;
     /// `matrix[i][i]` is conventionally `10`, Windows's and ACPI SLIT's own
     /// "local" value.
     pub matrix: Vec<Vec<u32>>,

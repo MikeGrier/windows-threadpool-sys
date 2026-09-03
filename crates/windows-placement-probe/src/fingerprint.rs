@@ -76,7 +76,7 @@
 
 use std::fmt;
 
-use windows_topology_sys::{DomainKind, Provenance, Topology};
+use windows_topology_sys::{DomainKind, MachineMemoryTopology, Provenance};
 
 /// One logical processor's position in the machine.
 ///
@@ -331,9 +331,9 @@ impl Fingerprint {
     ///
     /// # Errors
     ///
-    /// Returns whatever [`Topology::discover`] failed with.
+    /// Returns whatever [`MachineMemoryTopology::discover`] failed with.
     pub fn discover() -> std::io::Result<Self> {
-        Ok(Self::from_topology(&Topology::discover()?))
+        Ok(Self::from_topology(&MachineMemoryTopology::discover()?))
     }
 
     /// Read a shape from any topology, discovered or not.
@@ -343,7 +343,7 @@ impl Fingerprint {
     /// from is what the fingerprint reports, and there is no path here that
     /// invents the answer.
     #[must_use]
-    pub fn from_topology(topology: &Topology) -> Self {
+    pub fn from_topology(topology: &MachineMemoryTopology) -> Self {
         let cores: Vec<_> = topology.cores().collect();
         // Read off the processor list, not off core-domain membership, and with
         // the same `online` filter `places_from_topology` applies -- so the
@@ -386,7 +386,7 @@ impl Fingerprint {
         efficiency_classes.sort_unstable();
 
         // The outermost level that actually divides the machine, asked of the
-        // topology rather than recomputed here: `Topology` owns that rule, and
+        // topology rather than recomputed here: `MachineMemoryTopology` owns that rule, and
         // a second statement of it drifts. It also deduplicates a level
         // reported once per cache -- an L1 arriving as separate `data` and
         // `instruction` domains over the same processors is two relationships
@@ -492,14 +492,14 @@ impl fmt::Display for Fingerprint {
 ///
 /// # Errors
 ///
-/// Returns whatever [`Topology::discover`] failed with, or
+/// Returns whatever [`MachineMemoryTopology::discover`] failed with, or
 /// [`ErrorKind::InvalidData`](std::io::ErrorKind::InvalidData) if the discovered
 /// topology names memory domains but leaves an online processor out of all of
 /// them. Discovery has never produced that, and it would mean the topology
 /// crate's parse had regressed rather than that the machine is unusual -- which
 /// is worth saying out loud rather than papering over with a fabricated node.
 pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
-    places_from_topology(&Topology::discover()?).map_err(|unplaceable| {
+    places_from_topology(&MachineMemoryTopology::discover()?).map_err(|unplaceable| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, unplaceable.to_string())
     })
 }
@@ -526,7 +526,7 @@ pub enum MissingPlacement {
     /// No core domain covers it, though the topology names core domains.
     ///
     /// Covers the efficiency class too, and deliberately has no separate
-    /// variant for it: [`Topology::cores`] yields only `DomainKind::Core`
+    /// variant for it: [`MachineMemoryTopology::cores`] yields only `DomainKind::Core`
     /// domains, and every one of those carries a class, so a processor's core
     /// and its class are known or unknown together. A variant no input could
     /// produce would be dead public API.
@@ -613,7 +613,9 @@ impl std::error::Error for UnplacedProcessor {}
 /// [`classify`](crate::core_affinity::classify) would then report a shared core,
 /// class or cache that is not there. A partial topology is a legitimate input to
 /// this seam (D-12), so it is refused rather than guessed at.
-pub fn places_from_topology(topology: &Topology) -> Result<Vec<ProcessorPlace>, UnplacedProcessor> {
+pub fn places_from_topology(
+    topology: &MachineMemoryTopology,
+) -> Result<Vec<ProcessorPlace>, UnplacedProcessor> {
     // Every map here is keyed by the full `(group, number)` pair. Keying on the
     // number alone is the defect this function is written against: on a machine
     // with more than 64 logical processors each group numbers from zero, so
@@ -639,7 +641,7 @@ pub fn places_from_topology(topology: &Topology) -> Result<Vec<ProcessorPlace>, 
     }
 
     // The outermost cache level that actually divides the machine. This calls
-    // the same `Topology` method the fingerprint does, rather than repeating
+    // the same `MachineMemoryTopology` method the fingerprint does, rather than repeating
     // the rule, so the two cannot disagree about which level partitions the
     // host or about how many partitions it has.
     let mut cache_of = std::collections::BTreeMap::new();

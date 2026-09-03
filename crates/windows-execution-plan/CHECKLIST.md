@@ -1,6 +1,6 @@
 # Checklist: the execution-domain planner
 
-Plans the mapping from a `Topology` to a set of execution domains. See
+Plans the mapping from a `MachineMemoryTopology` to a set of execution domains. See
 [COMPONENT.md](COMPONENT.md) for what this crate is and why it is separate from both the topology
 crate and the runtime.
 
@@ -73,7 +73,7 @@ whether the topology can answer it today -- so the model is designed against a r
 
 - [x] **EP-1.3** -- **The residency query.** Which memory domain each processor belongs to, and --
   for a pair spanning two of them -- what it costs to place a shared buffer on one side rather than
-  the other. **Gap already identified:** `Topology::distances` exists, is never populated, and Win32
+  the other. **Gap already identified:** `MachineMemoryTopology::distances` exists, is never populated, and Win32
   cannot populate it; the measurement exists in `windows-placement-probe` and reaches nothing.
   Tracked as `SH-16.11`. The probe measures this per node pair with a dedicated ring-placement
   column precisely because it was found to matter.

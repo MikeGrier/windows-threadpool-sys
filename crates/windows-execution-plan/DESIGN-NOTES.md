@@ -54,7 +54,7 @@ sized against it.
 
 Points 1 through 3 cleanly. `ProcessorId` is `(group, number)` by construction and documents why
 (D-7). `Processor::online` is exactly the distinction in point 2. `DomainKind::Core` carries
-`simultaneous_multithreading` and the sibling set, so point 3 is a walk of `Topology::cores()`.
+`simultaneous_multithreading` and the sibling set, so point 3 is a walk of `MachineMemoryTopology::cores()`.
 
 Point 4 is answered, but **twice, in two shapes, and one of them is unsafe to use** -- see below.
 
@@ -196,7 +196,7 @@ repository has been bitten specifically by structure that was assumed rather tha
 
 ### What today's model answers: nothing
 
-`Topology::outermost_partitioning_cache` reports **one level for the whole machine**, and
+`MachineMemoryTopology::outermost_partitioning_cache` reports **one level for the whole machine**, and
 `Slice::same_cache_domain` reduces that to a boolean at that one level. Neither is pairwise. There
 is no query anywhere in `windows-topology-sys` that takes two processors.
 
@@ -230,7 +230,7 @@ link and is symmetric; residency is the hop and is not.
 
 ### The first half is answered, with one asymmetry worth keeping
 
-`Topology::memory_domains()` yields the memory domains with their processor sets, so
+`MachineMemoryTopology::memory_domains()` yields the memory domains with their processor sets, so
 processor-to-domain is a lookup.
 
 Partial coverage exists here as it does for caches -- a processor may be named by no memory domain
@@ -245,13 +245,13 @@ node-local pool, and the difference has to be visible in the plan rather than as
 
 ### The second half is not merely unpopulated -- it cannot be measured, by construction
 
-`Topology::distances` exists, and it is easy to read its permanent `None` as an oversight. It is
+`MachineMemoryTopology::distances` exists, and it is easy to read its permanent `None` as an oversight. It is
 not. The field is documented as being for a fed-in description, because "Windows exposes no
 user-mode SLIT reader", and that is accurate.
 
 The sharper problem is what follows from it. `distances` has exactly two input paths: hand
 construction, which defaults to `Provenance::Synthetic`, and deserialization, which
-`downgraded_to(Provenance::Restored)` caps. `Topology::discover` hardcodes `None`. So **no path
+`downgraded_to(Provenance::Restored)` caps. `MachineMemoryTopology::discover` hardcodes `None`. So **no path
 exists by which `distances` can ever carry `Measured` provenance** -- not because nobody wrote the
 code, but because the only sources are a literal and a file, and a file cannot establish that it
 describes the machine you are on.

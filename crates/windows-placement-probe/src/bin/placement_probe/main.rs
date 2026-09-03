@@ -20,7 +20,7 @@ use windows_placement_probe::fingerprint::{Fingerprint, places_from_topology};
 use windows_placement_probe::machine::MachineDescription;
 use windows_placement_probe::record::SubmissionRecord;
 use windows_placement_probe::submission::{self, DISCUSSION_URL};
-use windows_topology_sys::Topology;
+use windows_topology_sys::MachineMemoryTopology;
 
 /// What the run was asked to do.
 struct Options {
@@ -85,11 +85,11 @@ fn run(out: &mut impl Sink) -> ExitCode {
     let machine = MachineDescription::read(options.suppress_model);
 
     // **One discovery, two derivations.** The announced plan and the recorded
-    // fingerprint used to come from separate `Topology::discover()` calls, so a
+    // fingerprint used to come from separate `MachineMemoryTopology::discover()` calls, so a
     // processor going offline between them would have the notice describing one
     // machine and the record another, with nothing in the output saying which
     // was which. Both now come from this reading.
-    let topology = match Topology::discover() {
+    let topology = match MachineMemoryTopology::discover() {
         Ok(topology) => topology,
         Err(error) => {
             out.problem(&format!("could not read this machine's topology: {error}"));

@@ -79,7 +79,7 @@
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
 
-use windows_topology_sys::Topology;
+use windows_topology_sys::MachineMemoryTopology;
 
 use crate::fingerprint::{Fingerprint, ProcessorPlace, Slice, places_from_topology};
 use crate::peer_index_cache::{ITEMS, Strategy, time_model_on, time_model_placed};
@@ -621,7 +621,7 @@ pub fn memory_placements(producer: ProcessorPlace, consumer: ProcessorPlace) -> 
 ///
 /// # Errors
 ///
-/// Returns whatever [`Topology::discover`] failed with, or
+/// Returns whatever [`MachineMemoryTopology::discover`] failed with, or
 /// [`std::io::ErrorKind::InvalidData`] if the discovered topology leaves an
 /// online processor unplaced -- the same refusal
 /// [`crate::fingerprint::discover_places`] reports, reached the same way.
@@ -630,7 +630,7 @@ pub fn measure() -> std::io::Result<Observation> {
     // is the shape the rows were measured on. Calling `discover_places()` and
     // then reading the topology again would reintroduce, inside this function,
     // exactly the skew `Observation::host` exists to let the caller detect.
-    let topology = Topology::discover()?;
+    let topology = MachineMemoryTopology::discover()?;
     let processors = places_from_topology(&topology).map_err(|unplaceable| {
         std::io::Error::new(ErrorKind::InvalidData, unplaceable.to_string())
     })?;

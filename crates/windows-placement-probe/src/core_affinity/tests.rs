@@ -9,7 +9,7 @@
 
 use super::{Placement, RunPlan, classify, memory_placements, node_pairs, representative_pairs};
 use crate::peer_index_cache::ITEMS;
-use windows_topology_sys::Topology;
+use windows_topology_sys::MachineMemoryTopology;
 
 use crate::fingerprint::ProcessorPlace;
 
@@ -1098,7 +1098,7 @@ fn observation_of(rows: Vec<super::Measurement>) -> super::Observation {
         // These tests exercise row lookup, which never consults the host. A
         // bare topology is the smallest shape that is a real conversion rather
         // than a hand-built `Fingerprint` literal.
-        host: crate::fingerprint::Fingerprint::from_topology(&Topology::default()),
+        host: crate::fingerprint::Fingerprint::from_topology(&MachineMemoryTopology::default()),
         processors: Vec::new(),
         by_class: Vec::new(),
         measurements: Vec::new(),

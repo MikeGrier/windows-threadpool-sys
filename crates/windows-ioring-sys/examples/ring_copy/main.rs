@@ -21,7 +21,7 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
 };
-use windows_topology_sys::Topology;
+use windows_topology_sys::MachineMemoryTopology;
 
 const DEFAULT_CHUNK_LEN: usize = 1024 * 1024;
 
@@ -141,13 +141,13 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
-fn load_topology(path: Option<&PathBuf>) -> io::Result<Topology> {
+fn load_topology(path: Option<&PathBuf>) -> io::Result<MachineMemoryTopology> {
     match path {
         Some(path) => {
             let file = std::fs::File::open(path)?;
             serde_json::from_reader(file).map_err(io::Error::other)
         }
-        None => Topology::discover(),
+        None => MachineMemoryTopology::discover(),
     }
 }
 

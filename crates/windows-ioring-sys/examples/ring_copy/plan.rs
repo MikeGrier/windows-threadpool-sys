@@ -4,7 +4,7 @@
 
 use std::io;
 
-use windows_topology_sys::{Domain, DomainKind, ProcessorSet, Topology};
+use windows_topology_sys::{Domain, DomainKind, MachineMemoryTopology, ProcessorSet};
 
 /// What one execution domain needs to run: a single-group affinity mask and,
 /// if known, the NUMA node its registered buffer should prefer.
@@ -27,7 +27,10 @@ pub struct DomainPlan {
 /// representable plan. This does not silently narrow it to a subset; the
 /// fed-in (or discovered) topology described something the platform cannot
 /// do, and that is reported rather than papered over.
-pub fn build_plan(topology: &Topology, domains: &[Domain]) -> io::Result<Vec<DomainPlan>> {
+pub fn build_plan(
+    topology: &MachineMemoryTopology,
+    domains: &[Domain],
+) -> io::Result<Vec<DomainPlan>> {
     domains
         .iter()
         .enumerate()
@@ -85,7 +88,7 @@ fn label_for(domain: &Domain) -> String {
 
 /// The NUMA node whose processors overlap `processors`, if any domain
 /// reports one -- `None` on a machine that reports no NUMA nodes at all.
-fn numa_node_for(topology: &Topology, processors: &ProcessorSet) -> Option<u32> {
+fn numa_node_for(topology: &MachineMemoryTopology, processors: &ProcessorSet) -> Option<u32> {
     topology
         .domains
         .iter()
@@ -100,7 +103,7 @@ fn numa_node_for(topology: &Topology, processors: &ProcessorSet) -> Option<u32> 
 /// A NUMA node other than `local`, for the sample's `--placement remote`
 /// switch -- deliberately the wrong node, so the buffer-placement effect
 /// (M7.4) is measurable rather than assumed.
-pub fn remote_numa_node(topology: &Topology, local: Option<u32>) -> Option<u32> {
+pub fn remote_numa_node(topology: &MachineMemoryTopology, local: Option<u32>) -> Option<u32> {
     topology
         .domains
         .iter()

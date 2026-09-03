@@ -9,7 +9,7 @@ place, rather than living as an assumption inside somebody else's milestone.
 A **synthesizer**. It takes two inputs and produces a third thing:
 
 - **the observed machine** -- what Windows reports, plus whatever else is trivially available. This
-  is `windows_topology_sys::Topology`, and it is **mockable**: a description of a machine nobody has
+  is `windows_topology_sys::MachineMemoryTopology`, and it is **mockable**: a description of a machine nobody has
   is a first-class input, which is what makes this component testable without the hardware it plans
   for.
 - **a description of the desired function** -- the scenario. What the caller intends to run, in
@@ -28,7 +28,7 @@ are is not yet known, and knowing them is what decides whether that is one trait
 **It may measure, with permission.** This is the component that probes, and it is the right one --
 because a measured number is only meaningful alongside *what it measured*. The probe's existing
 figures are nanoseconds for one ring-handoff pattern at one message size; a component that knows the
-scenario can measure the right thing, where a `Topology::discover` that measured could not, having
+scenario can measure the right thing, where a `MachineMemoryTopology::discover` that measured could not, having
 no idea what the caller intends.
 
 So there are three stages, each honest about its cost: **observe** (cheap, no choices), **synthesize**
@@ -43,7 +43,7 @@ runtime.
 
 Both inputs and the output are graphs of processors and their relations, so "topology" fits all of
 them and distinguishes none. That ambiguity is live and unresolved: what the machine **is** and what
-we intend to **build on it** are different enough that a reader seeing `Topology` twice will
+we intend to **build on it** are different enough that a reader seeing `MachineMemoryTopology` twice will
 eventually take one for the other. Naming is tracked as an open decision rather than settled by
 whoever writes the first type.
 

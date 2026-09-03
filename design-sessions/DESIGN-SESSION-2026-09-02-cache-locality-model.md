@@ -106,12 +106,12 @@ the answer today is **no**, there is a whole Win32 model unexposed.
 probes measure *cost per firmware-reported placement* (`core_affinity` times handoffs between
 pairs already classified from the topology), and the NUMA spikes infer *policy* -- first-touch
 versus creator affinity, per-volume versus per-file -- not structure. `Provenance` already has
-a `Measured` variant, but it qualifies a whole `Topology`, not an individual relation. So the
+a `Measured` variant, but it qualifies a whole `MachineMemoryTopology`, not an individual relation. So the
 capability question 2 describes is **new work, not a retrofit**, and the per-relation
 provenance it needs does not exist yet.
 
 **The "outermost partitioning cache" rule is stated three times, and two of the three
-disagree.** `Topology::outermost_partitioning_cache` requires more than one partition **and**
+disagree.** `MachineMemoryTopology::outermost_partitioning_cache` requires more than one partition **and**
 pairwise disjointness. `Observation::outermost_partitioning_cache` in
 `windows-platform-probes` is `caches.iter().filter(|c| c.domains > 1).max_by_key(|c| c.level)`
 -- no disjointness check -- over a `CacheLevel` summary it builds itself, even though that
@@ -249,8 +249,8 @@ measure (expensive, on-machine), decide (no I/O) -- and something has to own the
 
 ### The canonical case, already half-built: NUMA distances
 
-`Topology::distances: Option<Distances>` exists, and every path sets it to `None`.
-`Topology::discover` hardcodes `distances: None`; no consumer reads the field. Meanwhile
+`MachineMemoryTopology::distances: Option<Distances>` exists, and every path sets it to `None`.
+`MachineMemoryTopology::discover` hardcodes `distances: None`; no consumer reads the field. Meanwhile
 **Win32 cannot supply it** -- ACPI carries SLIT, but no Win32 API surfaces node distances -- and
 `windows-placement-probe` **already measures the equivalent**, via `node_pairs_measured()`,
 producing per-node-pair handoff cost with ring placement and rendering it as a table.
@@ -320,7 +320,7 @@ There are **two** things, and both are graphs of processors and their relations,
 calling both "topology" has been confusing:
 
 1. **What the machine *is*.** Read from the Windows data model, plus whatever else is trivially
-   available. Observed, never chosen. This is today's `Topology`, and it is **mockable** -- a
+   available. Observed, never chosen. This is today's `MachineMemoryTopology`, and it is **mockable** -- a
    description of a machine nobody has is a first-class input, which is what makes the second
    component testable.
 
@@ -365,7 +365,7 @@ measurement is the synthesizer's working state and its justification for a choic
 the machine.
 
 That would make the observed topology purely what Windows reports, and it would mean
-`Topology::distances` is **deleted rather than filled** -- which is a cleaner answer than SH-16.11's,
+`MachineMemoryTopology::distances` is **deleted rather than filled** -- which is a cleaner answer than SH-16.11's,
 and the opposite of what that item currently proposes. Flagged rather than acted on, because it
 reverses a conclusion this session reached earlier and should be confirmed before anything is
 removed.
@@ -395,7 +395,7 @@ removed.
 The objection is half right, and the halves point at different files.
 
 **The base model hardcodes no level count, and that was deliberate.** `DomainKind::Cache`
-carries `level: u8`; `Topology::cache_levels()` returns whatever the firmware reported,
+carries `level: u8`; `MachineMemoryTopology::cache_levels()` returns whatever the firmware reported,
 sorted and deduplicated; `caches_at_level` takes any `u8`. There is already a regression
 test, `a_partitioning_cache_above_level_four_is_found`, whose comment reads: "`level` is a
 `u8`. A consumer sweeping a hard-coded `1..=4` reports this machine as having no
@@ -414,7 +414,7 @@ So the crate named "topology" does model a network. The collapse is downstream o
 
 Three sites, in increasing severity:
 
-1. **`Topology::outermost_partitioning_cache()`** -- selects exactly one level (outermost
+1. **`MachineMemoryTopology::outermost_partitioning_cache()`** -- selects exactly one level (outermost
    first, requiring more than one pairwise-disjoint domain) and discards every other level.
    This one sits *inside* the topology crate, which is where the engineer's irony lands
    squarely: the crate offers a rich model and then a lossy convenience view that consumers

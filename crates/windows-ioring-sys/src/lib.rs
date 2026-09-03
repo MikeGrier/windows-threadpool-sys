@@ -111,7 +111,7 @@
 //! construction is also the expensive one. "Durability on the ring" in
 //! `DESIGN-NOTES.md` has the full shape and the three ways to pay for it.
 //!
-//! # Topology guidance
+//! # MachineMemoryTopology guidance
 //!
 //! This crate does not partition anything for you (D-8 in `DESIGN-NOTES.md`):
 //! it makes a ring cheap and correct, makes its affinity explicit, and leaves

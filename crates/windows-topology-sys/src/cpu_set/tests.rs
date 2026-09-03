@@ -214,7 +214,7 @@ fn windows_llc_grouping_is_not_the_derived_partitioning_cache() {
     // known, Windows's LLC grouping is never finer than the derived one, since
     // the last level is at or outside whatever level first divides the machine.
     let records = enumerate().expect("cpu sets");
-    let topo = crate::Topology::discover().expect("discover");
+    let topo = crate::MachineMemoryTopology::discover().expect("discover");
 
     let mut llc: Vec<u8> = records.iter().map(|r| r.last_level_cache_index).collect();
     llc.sort_unstable();

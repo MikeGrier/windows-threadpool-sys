@@ -6,10 +6,10 @@
 //!
 //! Two things, deliberately separated:
 //!
-//! - **[`Topology::discover`]** reads the running system's processor groups,
+//! - **[`MachineMemoryTopology::discover`]** reads the running system's processor groups,
 //!   cores, caches, and NUMA nodes safely, via
 //!   [`GetLogicalProcessorInformationEx`][gpi].
-//! - **[`Topology`]**, [`Domain`], and friends are plain data. They do not
+//! - **[`MachineMemoryTopology`]**, [`Domain`], and friends are plain data. They do not
 //!   need Windows to construct: build one by hand, or (with the `serde`
 //!   feature) deserialize one from JSON written for a machine you do not
 //!   have. See [`examples/print_topology.rs`] for the shape a description
@@ -44,13 +44,13 @@
 //! # Availability
 //!
 //! `GetLogicalProcessorInformationEx` is documented back to Windows Vista /
-//! Server 2008, so [`Topology::discover`] works on every version this
+//! Server 2008, so [`MachineMemoryTopology::discover`] works on every version this
 //! repository's shared baseline supports; nothing here is gated on a runtime
 //! capability probe the way `windows-ioring-sys` needs one.
 //!
 //! # The JSON schema is not semver-covered
 //!
-//! With the `serde` feature, [`Topology`] and [`Domain`] serialize to and
+//! With the `serde` feature, [`MachineMemoryTopology`] and [`Domain`] serialize to and
 //! deserialize from a JSON shape documented on [`Domain`] itself. That shape
 //! is **not** covered by this crate's semver contract (D-8 in
 //! `DESIGN-NOTES.md`), even though the Rust types that produce it are, as
@@ -87,4 +87,4 @@ pub use relation::{
     Relations, discover,
 };
 #[cfg(windows)]
-pub use topology::Topology;
+pub use topology::MachineMemoryTopology;

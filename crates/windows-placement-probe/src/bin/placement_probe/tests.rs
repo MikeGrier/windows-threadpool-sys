@@ -324,7 +324,7 @@ fn described() -> MachineDescription {
 }
 
 fn host() -> Fingerprint {
-    Fingerprint::from_topology(&windows_topology_sys::Topology::default())
+    Fingerprint::from_topology(&windows_topology_sys::MachineMemoryTopology::default())
 }
 
 #[test]

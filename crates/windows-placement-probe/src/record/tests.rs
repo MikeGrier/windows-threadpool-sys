@@ -303,7 +303,7 @@ fn observation_on(host: Fingerprint) -> crate::core_affinity::Observation {
 
 /// The shape a four-processor bare topology produces, as a real conversion.
 fn measured_host() -> Fingerprint {
-    Fingerprint::from_topology(&windows_topology_sys::Topology::default())
+    Fingerprint::from_topology(&windows_topology_sys::MachineMemoryTopology::default())
 }
 
 #[test]

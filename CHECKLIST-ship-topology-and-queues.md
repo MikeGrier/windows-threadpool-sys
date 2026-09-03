@@ -300,7 +300,7 @@ conclude first.
   an unexported type, or a feature that only resolves inside the workspace will show up.
 
 - [ ] **SH-5.2** -- Confirm the published `windows-topology-sys` still reports `Provenance::Measured`
-  from `discover()` when consumed as a dependency, and that a `Topology::default()` is `Synthetic`.
+  from `discover()` when consumed as a dependency, and that a `MachineMemoryTopology::default()` is `Synthetic`.
   The provenance rules are the newest thing in the crate and the least exercised outside it.
 
 ## M6: long-running validation
@@ -853,7 +853,7 @@ predicted about a 222-commit branch.
   which merges both. Shape still open.
 
 - [ ] **SH-16.9** -- **The "outermost partitioning cache" rule is stated three times, and two of the
-  three disagree.** `Topology::outermost_partitioning_cache` requires more than one partition **and**
+  three disagree.** `MachineMemoryTopology::outermost_partitioning_cache` requires more than one partition **and**
   pairwise disjointness. `Observation::outermost_partitioning_cache` in `windows-platform-probes` is
   `caches.iter().filter(|c| c.domains > 1).max_by_key(|c| c.level)` -- **no disjointness check** --
   computed over a `CacheLevel` summary that crate builds itself, even though it already depends on
@@ -892,7 +892,7 @@ predicted about a 222-commit branch.
   is already an enabled feature, so there is no manifest change and no blocker.
   **Done.** `src/cpu_set.rs` walks the records with the same buffer discipline the relationship walk
   uses -- size first, advance by each record's own `Size`, read every field unaligned -- and
-  `Topology::discover` now populates `Topology::cpu_sets`. Carried as
+  `MachineMemoryTopology::discover` now populates `MachineMemoryTopology::cpu_sets`. Carried as
   `Option<Vec<CpuSet>>` where `None` means **not observed**, which a hand-built or deserialized
   topology genuinely is; that is the honest use of `Option`, one absence rather than two collapsed
   together. `#[serde(default)]` so descriptions written before the field still load.
@@ -931,7 +931,7 @@ predicted about a 222-commit branch.
   sentinel**, so it is a cleaner source for the field whose `capacity` encoding collides with
   "unknown".
 
-- [ ] **SH-16.11** -- **`Topology::distances` is a field for a fact Win32 cannot supply, it is never
+- [ ] **SH-16.11** -- **`MachineMemoryTopology::distances` is a field for a fact Win32 cannot supply, it is never
   populated, and the measurement that would fill it already exists elsewhere.** `discover()`
   hardcodes `distances: None`, every other construction sets `None`, and no consumer reads the
   field. Windows exposes no API for NUMA node distance -- ACPI carries SLIT, Win32 does not surface

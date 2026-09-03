@@ -249,7 +249,7 @@ fn the_marker_is_the_only_difference_an_untrusted_host_renders() {
 #[test]
 fn a_fingerprint_read_from_this_machine_reports_itself_as_measured() {
     // Ties the rendering to the real path: `discover` goes through
-    // `Topology::discover`, which is the only thing entitled to claim the
+    // `MachineMemoryTopology::discover`, which is the only thing entitled to claim the
     // machine. If provenance ever stopped flowing, every probe banner would
     // quietly start printing a taint marker -- or worse, stop printing one.
     let fingerprint = Fingerprint::discover().expect("this machine must be discoverable");
@@ -260,10 +260,11 @@ fn a_fingerprint_read_from_this_machine_reports_itself_as_measured() {
 
 #[test]
 fn a_fingerprint_built_from_a_hand_made_topology_is_not_measured() {
-    // The path a synthetic host takes. `Topology::default` is untrusted by
+    // The path a synthetic host takes. `MachineMemoryTopology::default` is untrusted by
     // construction, and `from_topology` must carry that through rather than
     // inventing an answer.
-    let fingerprint = Fingerprint::from_topology(&windows_topology_sys::Topology::default());
+    let fingerprint =
+        Fingerprint::from_topology(&windows_topology_sys::MachineMemoryTopology::default());
 
     assert!(!fingerprint.provenance.is_measured());
     assert!(
@@ -304,7 +305,7 @@ fn the_banner_carries_whatever_the_fingerprint_says() {
 
 mod from_topology {
     use windows_topology_sys::{
-        Domain, DomainKind, Processor, ProcessorId, ProcessorSet, Topology,
+        Domain, DomainKind, MachineMemoryTopology, Processor, ProcessorId, ProcessorSet,
     };
 
     use crate::fingerprint::places_from_topology;
@@ -320,7 +321,7 @@ mod from_topology {
     /// Assemble a topology from a list of cores, the way Windows would report
     /// one: a group domain, a core domain per core, a cache domain per distinct
     /// cache id, and a memory domain per distinct node.
-    fn topology_of(cores: &[CoreSpec]) -> Topology {
+    fn topology_of(cores: &[CoreSpec]) -> MachineMemoryTopology {
         let mut processors = Vec::new();
         let mut domains = Vec::new();
         let mut next_number = 0_u8;
@@ -387,7 +388,7 @@ mod from_topology {
             });
         }
 
-        Topology {
+        MachineMemoryTopology {
             processors,
             domains,
             distances: None,
@@ -409,7 +410,7 @@ mod from_topology {
     }
 
     /// Two nodes, two cores each, two threads per core.
-    fn two_node_host() -> Topology {
+    fn two_node_host() -> MachineMemoryTopology {
         topology_of(&[
             CoreSpec {
                 efficiency_class: 0,
@@ -562,7 +563,7 @@ mod from_topology {
 
     #[test]
     fn a_synthetic_topology_drives_the_classifier_end_to_end() {
-        // The whole point of routing through `Topology`: selection now runs on
+        // The whole point of routing through `MachineMemoryTopology`: selection now runs on
         // positions the real conversion produced, not on positions a test
         // author assumed it would produce.
         use crate::core_affinity::{Placement, node_pairs, representative_pairs};
@@ -595,14 +596,14 @@ mod from_topology {
 
 mod multi_group_conversion {
     use windows_topology_sys::{
-        Domain, DomainKind, Processor, ProcessorId, ProcessorSet, Topology,
+        Domain, DomainKind, MachineMemoryTopology, Processor, ProcessorId, ProcessorSet,
     };
 
     use crate::fingerprint::{Fingerprint, MissingPlacement, places_from_topology};
 
     /// One processor per core, four cores per group, two groups -- with the
     /// numbers overlapping, which is how Windows really presents it.
-    fn two_group_topology() -> Topology {
+    fn two_group_topology() -> MachineMemoryTopology {
         let mut processors = Vec::new();
         let mut domains = Vec::new();
         let mut core_id = 0_u32;
@@ -655,7 +656,7 @@ mod multi_group_conversion {
             });
         }
 
-        Topology {
+        MachineMemoryTopology {
             processors,
             domains,
             distances: None,
@@ -719,10 +720,10 @@ mod multi_group_conversion {
 
     /// A topology whose only domain is the group: online processors, no core,
     /// no cache, and no memory domain at all.
-    fn bare_processors(count: u8) -> Topology {
+    fn bare_processors(count: u8) -> MachineMemoryTopology {
         let all: Vec<u8> = (0..count).collect();
         let mask = all.iter().fold(0_usize, |mask, n| mask | (1 << n));
-        Topology {
+        MachineMemoryTopology {
             processors: all
                 .iter()
                 .map(|&number| Processor {
@@ -868,7 +869,7 @@ mod multi_group_conversion {
     // test below pins the false sharing that would otherwise be reported.
 
     /// `bare_processors`, plus a real core domain covering the given numbers.
-    fn with_core_domain(count: u8, id: u32, members: &[u8]) -> Topology {
+    fn with_core_domain(count: u8, id: u32, members: &[u8]) -> MachineMemoryTopology {
         let mut topology = bare_processors(count);
         let mask = members.iter().fold(0_usize, |m, n| m | (1 << n));
         topology.domains.push(Domain {

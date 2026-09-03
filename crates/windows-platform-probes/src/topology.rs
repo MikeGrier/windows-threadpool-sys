@@ -24,7 +24,7 @@
 //!
 //! # It measures the shipping crate, deliberately
 //!
-//! The parse comes from [`windows_topology_sys::Topology::discover`] rather
+//! The parse comes from [`windows_topology_sys::MachineMemoryTopology::discover`] rather
 //! than from a reimplementation here, for the same reason the pool-growth probe
 //! uses the real thread-pool crate: a reimplementation would measure the
 //! reimplementation. The raw counters below are then read *independently*
@@ -38,7 +38,7 @@ use windows_sys::Win32::System::Threading::{
     GetNumaHighestNodeNumber,
 };
 
-use windows_topology_sys::{DomainKind, Topology};
+use windows_topology_sys::{DomainKind, MachineMemoryTopology};
 
 /// One cache level, summarised across the machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,9 +204,9 @@ impl Observation {
 ///
 /// # Errors
 ///
-/// Propagates a failure from [`Topology::discover`].
+/// Propagates a failure from [`MachineMemoryTopology::discover`].
 pub fn measure() -> io::Result<Observation> {
-    let topology = Topology::discover()?;
+    let topology = MachineMemoryTopology::discover()?;
 
     let online_processors = topology.processors.iter().filter(|p| p.online).count();
 

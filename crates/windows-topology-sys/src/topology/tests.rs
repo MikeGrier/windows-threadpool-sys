@@ -4,9 +4,9 @@ use crate::domain::{Domain, DomainKind};
 use crate::processor_set::ProcessorSet;
 use crate::relation::CacheKind;
 
-fn synthetic() -> Topology {
+fn synthetic() -> MachineMemoryTopology {
     let group0 = ProcessorSet::from_group_mask(0, 0b11);
-    Topology {
+    MachineMemoryTopology {
         processors: vec![
             Processor {
                 id: ProcessorId {
@@ -137,7 +137,7 @@ fn processor_looks_up_by_id() {
 
 #[test]
 fn discover_succeeds_and_every_online_processor_is_in_some_group() {
-    let topo = Topology::discover().expect("discover");
+    let topo = MachineMemoryTopology::discover().expect("discover");
     assert!(!topo.processors.is_empty());
     assert!(topo.groups().count() >= 1);
 
@@ -155,7 +155,7 @@ fn discover_succeeds_and_every_online_processor_is_in_some_group() {
 
 #[test]
 fn discover_reports_a_processor_entry_for_every_slot_up_to_each_groups_maximum() {
-    let topo = Topology::discover().expect("discover");
+    let topo = MachineMemoryTopology::discover().expect("discover");
     let relations = crate::relation::discover().expect("discover relations");
     let expected: usize = relations
         .groups
@@ -183,19 +183,19 @@ mod serde_tests {
         // expect to match". Everything except the provenance must survive
         // verbatim, so this compares against the original with only that field
         // adjusted -- a second corruption would still fail here.
-        let topology = Topology::discover().expect("discover");
+        let topology = MachineMemoryTopology::discover().expect("discover");
         assert!(
             topology.provenance.is_measured(),
             "discover must claim the machine it read"
         );
 
         let json = serde_json::to_string(&topology).expect("serialize");
-        let back: Topology = serde_json::from_str(&json).expect("deserialize");
+        let back: MachineMemoryTopology = serde_json::from_str(&json).expect("deserialize");
 
         assert_eq!(back.provenance, Provenance::Restored);
         assert_eq!(
             back,
-            Topology {
+            MachineMemoryTopology {
                 provenance: Provenance::Restored,
                 ..topology
             }
@@ -215,7 +215,7 @@ mod serde_tests {
             ],
             "distances": null
         }"#;
-        let topology: Topology = serde_json::from_str(json).expect("parse");
+        let topology: MachineMemoryTopology = serde_json::from_str(json).expect("parse");
         assert_eq!(topology.processors.len(), 2);
         assert_eq!(topology.groups().count(), 1);
         let memory: Vec<_> = topology.memory_domains().collect();
@@ -243,7 +243,7 @@ mod serde_tests {
             ],
             "distances": {"over": "memory", "matrix": [[10, 40], [40, 10]]}
         }"#;
-        let topology: Topology = serde_json::from_str(json).expect("parse");
+        let topology: MachineMemoryTopology = serde_json::from_str(json).expect("parse");
         assert_eq!(topology.memory_domains().count(), 2);
         assert!(
             topology.memory_domains().any(|d| d.processors.is_empty()),
@@ -269,7 +269,7 @@ mod serde_tests {
             ],
             "distances": null
         }"#;
-        let error = serde_json::from_str::<Topology>(json)
+        let error = serde_json::from_str::<MachineMemoryTopology>(json)
             .expect_err("processor number 100 is out of range");
         assert!(
             error.to_string().contains("100"),
@@ -289,10 +289,10 @@ fn a_hand_built_topology_is_not_measured() {
 
 #[test]
 fn a_defaulted_topology_is_not_measured() {
-    // `Topology::default()` is the easiest way to obtain one and must be the
+    // `MachineMemoryTopology::default()` is the easiest way to obtain one and must be the
     // safe one. If this ever reports measured, every forgetful construction in
     // every dependent silently starts asserting it read the machine.
-    let topology = Topology::default();
+    let topology = MachineMemoryTopology::default();
 
     assert_eq!(topology.provenance, Provenance::Synthetic);
     assert!(!topology.provenance.is_measured());
@@ -303,7 +303,7 @@ fn struct_update_syntax_from_default_stays_untrusted() {
     // `..Default::default()` is how a caller builds a topology while naming
     // only the fields they care about, and provenance is exactly the field
     // nobody thinks to name.
-    let topology = Topology {
+    let topology = MachineMemoryTopology {
         distances: None,
         cpu_sets: None,
         ..Default::default()
@@ -316,7 +316,7 @@ fn struct_update_syntax_from_default_stays_untrusted() {
 mod serde_provenance {
     use super::*;
 
-    fn load(provenance_field: &str) -> Topology {
+    fn load(provenance_field: &str) -> MachineMemoryTopology {
         let json =
             format!(r#"{{"processors": [], "domains": [], "distances": null{provenance_field}}}"#);
         serde_json::from_str(&json).expect("the description must parse")
@@ -372,7 +372,7 @@ mod serde_provenance {
             "the marker is not visible in the persisted form: {json}"
         );
 
-        let reloaded: Topology = serde_json::from_str(&json).expect("must parse");
+        let reloaded: MachineMemoryTopology = serde_json::from_str(&json).expect("must parse");
         assert_eq!(reloaded.provenance, Provenance::Restored);
         assert!(!reloaded.provenance.is_measured());
     }
@@ -385,7 +385,7 @@ mod serde_provenance {
         measured.provenance = Provenance::Measured;
 
         let json = serde_json::to_string(&measured).expect("must serialize");
-        let reloaded: Topology = serde_json::from_str(&json).expect("must parse");
+        let reloaded: MachineMemoryTopology = serde_json::from_str(&json).expect("must parse");
 
         assert_eq!(reloaded.processors, measured.processors);
         assert_eq!(reloaded.domains, measured.domains);
@@ -470,7 +470,7 @@ fn heterogeneous_relations() -> (crate::relation::Relations, Vec<Domain>) {
 #[test]
 fn each_processor_takes_the_efficiency_class_of_its_own_core() {
     let (relations, domains) = heterogeneous_relations();
-    let processors = Topology::processors_from(&relations, &domains);
+    let processors = MachineMemoryTopology::processors_from(&relations, &domains);
 
     assert_eq!(processors.len(), 2);
     assert_eq!(
@@ -491,7 +491,7 @@ fn a_processor_with_no_matching_core_domain_reports_no_capacity() {
     // class. Windows reports relations only for active processors, so this is
     // the inactive-slot path.
     let (relations, _) = heterogeneous_relations();
-    let processors = Topology::processors_from(&relations, &[]);
+    let processors = MachineMemoryTopology::processors_from(&relations, &[]);
 
     assert_eq!(processors.len(), 2);
     for processor in &processors {
@@ -538,7 +538,7 @@ fn an_offline_processor_reports_no_capacity_even_when_a_core_claims_it() {
         processors: both,
     }];
 
-    let processors = Topology::processors_from(&relations, &domains);
+    let processors = MachineMemoryTopology::processors_from(&relations, &domains);
 
     assert!(processors[0].online);
     assert_eq!(processors[0].capacity, 7);
@@ -555,7 +555,7 @@ fn an_offline_processor_reports_no_capacity_even_when_a_core_claims_it() {
 /// The split L1 is the point: Windows reports one relationship per *cache*, so
 /// a core contributes an L1 `data` domain **and** an L1 `instruction` domain
 /// covering exactly the same two processors.
-fn split_l1_machine(cores: u32, last_level: u8) -> Topology {
+fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
     let mut domains = Vec::new();
     let mut all = 0usize;
     let mut id = 0u32;
@@ -590,7 +590,7 @@ fn split_l1_machine(cores: u32, last_level: u8) -> Topology {
         processors: ProcessorSet::from_group_mask(0, all),
     });
 
-    Topology {
+    MachineMemoryTopology {
         processors: Vec::new(),
         domains,
         distances: None,
@@ -607,7 +607,7 @@ fn cache_levels_are_ascending_and_without_repeats() {
 
 #[test]
 fn cache_levels_are_empty_when_no_cache_is_reported() {
-    let topo = Topology {
+    let topo = MachineMemoryTopology {
         processors: Vec::new(),
         domains: Vec::new(),
         distances: None,
@@ -693,7 +693,7 @@ fn a_machine_with_no_cache_at_all_has_no_partitioning_cache() {
 
 #[test]
 fn a_level_whose_domains_overlap_is_not_a_partition() {
-    // `Topology` is deliberately constructible by hand and by deserialization,
+    // `MachineMemoryTopology` is deliberately constructible by hand and by deserialization,
     // so `outermost_partitioning_cache` cannot assume hardware produced its
     // input. Two L2 domains that share processor 1 are distinct sets, so
     // deduplication keeps both -- and a caller told they are partitions places

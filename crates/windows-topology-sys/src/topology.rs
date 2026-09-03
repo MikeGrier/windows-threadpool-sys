@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Mike Grier
-//! Assembling a [`Topology`] from discovered relations.
+//! Assembling a [`MachineMemoryTopology`] from discovered relations.
 
 use std::io;
 
@@ -11,7 +11,7 @@ use crate::relation::{self, Relations};
 /// A processor, cache, and memory topology: a set of processors and the
 /// domains that relate them.
 ///
-/// Built either by [`Topology::discover`] from the running system, by hand,
+/// Built either by [`MachineMemoryTopology::discover`] from the running system, by hand,
 /// or (with the `serde` feature) by deserializing a fed-in description.
 ///
 /// The JSON shape this produces and accepts is explicitly not covered by this
@@ -19,7 +19,7 @@ use crate::relation::{self, Relations};
 /// `DESIGN-NOTES.md`.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Topology {
+pub struct MachineMemoryTopology {
     /// Every logical processor, including one for each inactive slot up to a
     /// group's maximum processor count.
     pub processors: Vec<Processor>,
@@ -68,7 +68,7 @@ pub struct Topology {
     pub provenance: Provenance,
 }
 
-impl Topology {
+impl MachineMemoryTopology {
     /// Discover the running system's topology.
     ///
     /// # Errors
@@ -335,7 +335,7 @@ impl Topology {
     /// which is what the measured case needs (L1i and L1d cover identical
     /// sets). That alone does **not** make the result a partition: two distinct
     /// sets can still overlap. Real hardware does not do this, but a
-    /// `Topology` is deliberately constructible by hand and by deserialization
+    /// `MachineMemoryTopology` is deliberately constructible by hand and by deserialization
     /// (see [`Provenance`](crate::Provenance)), so this method cannot assume
     /// hardware produced it -- and a caller splitting work across overlapping
     /// "partitions" double-counts the processors in the intersection and
