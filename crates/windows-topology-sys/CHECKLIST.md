@@ -217,12 +217,19 @@ wrongly after code exists.
   > together** -- answering either alone risks a planner that degrades in a way the model does not
   > support, or a model offering a fallback no consumer wants.
 
-- [ ] **MMT-1.4** -- **Does `distances` survive at all?** The two-component architecture says the
+- [x] **MMT-1.4** -- **Does `distances` survive at all?** The two-component architecture says the
   *synthesizer* measures, with the caller's permission, for its own scenario -- so a measured number
   is its working state and its justification for a choice, not a property of the machine. That
   reverses this session's earlier conclusion that measured facts must live in the model, which
   assumed a single component. If it holds, `distances` is **deleted rather than filled**, which is
   the opposite of what the release checklist proposed. Decide before removing anything.
+  **Decided by the engineer, and the ruling is a scope boundary rather than a judgement about the
+  field: this crate does not go below the Win32 topology APIs, so if they do not provide distance
+  data, we do not have distance data.** Recorded as [D-20](DESIGN-NOTES.md#d-20). `distances` is
+  deleted.
+  **What the check found:** zero read sites. `render_node_distances` in `windows-platform-probes`
+  reads the *probe's own* measured `Observation`, not this field, so the one thing that looked like a
+  consumer is not one. Removal is spawned as **M5+.5** and is not gated on the reshape.
 
 - [ ] **MMT-1.5** -- **Does the synthesizer live in this crate, and therefore what is this crate
   called?** Recorded as open rather than settled: see
@@ -330,8 +337,9 @@ caller rather than invented here.
 
 ## M5: the defects this subsumes
 
-Parked on M4. Each already exists as a defect; the reshape is what fixes them, so they are listed
-here rather than fixed separately and then re-fixed.
+Parked on M4, **except M5+.5, which is independent and ready now**. Each of the others already
+exists as a defect that the reshape is what fixes, so they are listed here rather than fixed
+separately and then re-fixed.
 
 - [ ] **M5+.1** -- `Processor::capacity` uses `0` as both a legitimate efficiency class and a "not
   known" sentinel, and the two collide on **every non-hybrid machine**. Worse than an ambiguous
@@ -348,3 +356,15 @@ here rather than fixed separately and then re-fixed.
 - [ ] **M5+.4** -- `windows-placement-probe` **refuses a partially-covering cache level** that this
   crate deliberately hands back, failing an entire measurement run over a topology this crate
   considers describable. M2+.5 gives it the vocabulary to accept one.
+
+- [ ] **M5+.5** -- **Delete `MachineMemoryTopology::distances` and the `Distances` type**, per
+  [D-20](DESIGN-NOTES.md#d-20). **Not gated on M4**: the reshape does not fix this one, deletion
+  does, so it does not wait for the rest of M5.
+  A **breaking change to a published crate** (0.1.0), so the commit takes the Conventional Commits
+  `!` marker. It is not a *parse* break -- the crate does not `deny_unknown_fields`, so a description
+  carrying `"distances"` still deserializes and the field is ignored.
+  Two things to do rather than skip: keep the Linux-shaped description test, retargeted to assert the
+  field is now **ignored** rather than deleting the evidence that such a description parses; and note
+  in the doc comment that round-tripping such a description no longer preserves it, since that is a
+  real if small behaviour change and a silent drop is exactly what this crate has objected to
+  elsewhere.

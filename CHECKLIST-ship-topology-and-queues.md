@@ -941,7 +941,13 @@ predicted about a 222-commit branch.
   sentinel**, so it is a cleaner source for the field whose `capacity` encoding collides with
   "unknown".
 
-- [ ] **SH-16.11** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **`MachineMemoryTopology::distances` is a field for a fact Win32 cannot supply, it is never
+- [ ] **SH-16.11** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.**
+  **And now ANSWERED, in the opposite direction to what this item proposed.**
+  [D-20](crates/windows-topology-sys/DESIGN-NOTES.md#d-20) rules that the crate does not go below the
+  Win32 topology APIs, so a fact Win32 does not report is not one the crate has: `distances` is
+  **deleted, not filled**. The removal is `M5+.5` in
+  [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md). Everything
+  below is the reasoning that led there and is kept for that; it no longer describes work. **`MachineMemoryTopology::distances` is a field for a fact Win32 cannot supply, it is never
   populated, and the measurement that would fill it already exists elsewhere.** `discover()`
   hardcodes `distances: None`, every other construction sets `None`, and no consumer reads the
   field. Windows exposes no API for NUMA node distance -- ACPI carries SLIT, Win32 does not surface

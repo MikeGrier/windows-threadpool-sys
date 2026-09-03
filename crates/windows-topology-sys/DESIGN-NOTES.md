@@ -39,6 +39,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-17"></a>D-17 | **Persistent incoherence between two Win32 sources is expected in the field, not exotic -- so the crate *records* it and never refuses over it.** No documented guarantee of cross-API coherence has been found, the two enumerations plausibly derive by different paths, and the firmware tables behind them are populated incrementally against scenarios that do not necessarily include ours. The likely places to meet it are hardware we do not have and prerelease hardware with defective UEFI tables -- exactly where refusing would make the crate useless. **Recording is this crate's job; reporting is the probe tools'**, and the identifying provenance an actionable report needs lives there too, behind the review the probe already applies. Orthogonal to [D-16](#d-16), which is about data shifting *while* it is collected. Only testable synthetically. |
 | <a id="d-18"></a>D-18 | **An observation is `(subject, claim, source)`, where a subject is either a relation identity or a processor attribute -- which closes the last gap in [D-15](#d-15).** Membership identity reaches partition disagreements but not per-processor scalars like efficiency class; generalising the *subject* rather than inventing a second mechanism covers both with one rule. Two smaller answers ride along: a topology records **that** collection concluded incoherently **and which subjects disagreed** -- the latter because a consumer forced to re-derive the comparison is the SH-16.9 failure repeating -- and the retry bound is a small documented constant whose exhaustion is a *conclusion*, not a failure. |
 | <a id="d-19"></a>D-19 | **When the sources align -- which is the usual case -- a *unified* view is presented, in addition to the individual per-source ones.** A design that made every answer carry a coherence state was the sentinel mistake in another form: it let a case that essentially never happens shape every caller on every machine, and it made a *local* defect global, presenting a machine with one contested core as entirely uncertain. [D-15](#d-15) had already concluded the opposite and was simply not applied. Under `(kind, membership)` identity the unification is **free** -- agreeing sources have observed one relation, so there is no merge step -- and a contradiction contests only those processors at that kind. A contested subject needs no new vocabulary: it is a relation the unified view does not cover, which is [D-13](#d-13)'s *not observed*, so a consumer implements one degradation path rather than three. Requires that relations carry **attributes** as well as memberships. |
+| <a id="d-20"></a>D-20 | **This crate does not go below the Win32 topology APIs, so if they do not report a fact, the crate does not have it -- and `distances` is therefore deleted rather than filled.** The engineer's ruling, and it is a **scope boundary** rather than a judgement about the field: ACPI carries SLIT, no Win32 API surfaces it, and reading firmware directly would be going below the boundary. Two supporting findings, neither of which is the reason: `distances` could never carry `Measured` provenance **by construction** (its only inputs are hand-construction, which is `Synthetic`, and deserialization, which per [D-12](#d-12) can only downgrade), and it has **zero read sites** -- `windows-platform-probes`' `render_node_distances` reads the probe's own measured `Observation`, not this field. What is lost is named rather than skated past: [D-10](#d-10)'s platform-neutral description can no longer carry Linux SLIT data. That capability was real, and it is given up because the two-component split routes distance through the synthesizer's *measurement*, which a fed-in description cannot substitute for. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -502,6 +503,65 @@ One thing that is not otherwise provided: **relations carry attributes.** Once t
 the unified model, `DomainKind::Memory { memory_bytes }` has nowhere to live unless a relation can
 hold a payload as well as a membership. `Core { efficiency_class, simultaneous_multithreading }` is
 the same requirement.
+
+## D-20: the Win32 boundary, and the deletion of `distances`
+
+*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.4. Supersedes `SH-16.11` in
+[CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md), which proposed
+filling the field.*
+
+### The ruling is about scope, not about the field
+
+**This crate does not go below the Win32 topology APIs.** What they report, it reports; what they do
+not, it does not have. ACPI carries SLIT, and reading firmware to recover it would be going below
+that boundary -- so inter-node distance is not a fact this crate can state, and
+`MachineMemoryTopology::distances` is deleted rather than filled.
+
+Stating it as a boundary matters more than the field it disposes of, because the boundary answers the
+next instance too. Any future "Windows does not expose X, but the firmware does" question is already
+settled: not here.
+
+### Two findings that support it, and are not the reason
+
+Both were established before the ruling, and neither would have been sufficient on its own:
+
+- **`distances` could never carry `Measured` provenance, by construction.** Its only two input paths
+  are hand-construction, which is [D-12](#d-12)'s `Synthetic` default, and deserialization, which
+  D-12 permits only to *downgrade*. So every value it could ever hold is one the crate's own
+  provenance rule says not to trust as describing the machine you are on.
+- **It has zero read sites.** The one thing that looked like a consumer is not one:
+  `windows-platform-probes`' `render_node_distances` reads the *probe's own* measured `Observation`,
+  which is its handoff-cost measurement, not this field.
+
+The second is deliberately not offered as a justification. "Nothing reads it" is never on its own a
+reason to remove a capability; it is evidence about cost, and the cost here is zero.
+
+### What is given up
+
+[D-10](#d-10) made a description deliberately platform-neutral, and the Linux comparison specifically
+vindicated optional distances -- "Linux *has* SLIT where Windows does not". A description sourced
+from Linux can no longer carry that matrix. **That capability was real and it is being given up.**
+
+What makes it acceptable is the two-component split, which changed the premise it rode in on. A
+description exists so a planner can be tested against hardware nobody owns; but distance now reaches
+a planner through the *synthesizer's measurement*, taken with the caller's permission for its own
+scenario. A fed-in description cannot substitute for that, because it is not a measurement of the
+machine the plan will run on -- so a fixture supplying distance through the topology would be feeding
+a channel the planner does not read.
+
+The fallback that would have justified keeping it -- measurement refused, so inherit a distance from
+the description -- is exactly what this decision rules out. On a real machine, permission denied
+means no distance data.
+
+### The deletion is breaking but not a parse break
+
+The crate is published at 0.1.0, so removing a public field is a breaking change and its commit takes
+the Conventional Commits `!` marker. Deserialization is unaffected: nothing in the crate sets
+`deny_unknown_fields`, so a description carrying `"distances"` still parses and the field is ignored.
+
+It does mean such a description no longer **round-trips** -- the value is dropped on read and absent
+on write. That is a silent drop, which this crate has objected to elsewhere, so it is documented at
+the site rather than left to be discovered.
 
 ## What was deliberately excluded (D-9)
 
