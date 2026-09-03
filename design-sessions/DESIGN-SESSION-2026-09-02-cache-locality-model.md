@@ -283,6 +283,35 @@ The walk also found the mapping itself was **unowned**: `CHECKLIST-io-domains.md
 contracts "the runtime cannot be written without" and all four concern the queue, while M33+.1
 presupposes a plan naming which thread, which node and which shard. That is now a component.
 
+### The consumer's requirements, stated
+
+Three queries, recorded in full as EP-D-1, EP-D-2 and EP-D-3 in
+[the planner's design notes](../crates/windows-execution-plan/DESIGN-NOTES.md). Summarised here
+because a model designed without them in view is what produced the current one.
+
+| Query | Shape | What the model must answer |
+|---|---|---|
+| **Shard set** (EP-D-1) | per processor | identity as `(group, number)`; online; core membership and SMT; efficiency class **without a sentinel**; and availability -- parked, and allocated to *this* process |
+| **Proximity** (EP-D-2) | **unordered** pair | the minimal granularities the two share, **their membership** (to size an MPSC fan-in without re-deriving the grouping), and whether a **finer granularity went unobserved**, so an answer can be an upper bound and say so |
+| **Residency** (EP-D-3) | **ordered** pair | processor-to-memory-domain with the unplaced case distinguishable, and a **directed** cost between memory domains, which SLIT's symmetric scalar cannot express |
+
+Four properties of the model follow from those and are worth stating as requirements rather than
+leaving implicit in three separate documents:
+
+1. **A pairwise query must exist.** No query in `windows-topology-sys` takes two processors today,
+   and that absence is the direct cause of `SH-16.9`'s three inconsistent reconstructions.
+2. **The order must be total**, which needs an explicit "the machine" top granularity -- otherwise
+   every caller writes the same empty-case branch for a cross-node pair.
+3. **An answer must be able to be an upper bound.** "Tightest shared is L3" and "at most L3, finer
+   not observed" are different answers, and under the no-probing bar the planner cannot go and check.
+4. **A measured number must carry what it measured.** The probe's figures are nanoseconds for one
+   ring-handoff pattern at one message size; promoting them as "the distance" would bake one
+   workload into a model other consumers share.
+
+**Where the requirements stop.** They say what the planner must be able to *ask*. They do not say
+what it should *do* when the answer is "not observed" -- that is this session's fourth open question
+and the planner's EP-1.4, which are the same decision seen from two ends and must be taken together.
+
 ### Still open
 
 - **Who owns the measurement phase, and what does it cost?** A `discover()` that measures is
@@ -294,6 +323,11 @@ presupposes a plan naming which thread, which node and which shard. That is now 
   conflict itself, forcing the caller to adjudicate.
 - What a consumer does when a needed fact is `not measured` -- is degrading its choice, or does
   the model offer a documented fallback?
+  **This is the same decision as the planner's EP-1.4**, seen from the model's side rather than the
+  consumer's, and the two were filed independently before anyone noticed. They must be taken
+  together: answering either alone risks a planner that degrades in a way the model does not
+  support, or a model offering a fallback no consumer wants. EP-1.4 is blocked on this question
+  rather than on the model as a whole.
 
 ## What the code actually does, verified rather than assumed
 

@@ -19,7 +19,7 @@ the model.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| M1 the input contract | 3 of 5 done | nothing -- it is what unblocks the others |
+| M1 the input contract | 3 done, 2 blocked | as far as it can go before the model exists |
 | M2+ the plan as a value | parked | M1, and the topology model landing |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
@@ -101,10 +101,27 @@ whether the topology can answer it today -- so the model is designed against a r
   refuses to plan, or emits a plan carrying an explicit "this was chosen without knowing X" marker.
   The third is the only one that survives review of a plan by a human, which is one of the reasons
   a plan is a value.
+  **BLOCKED, and not merely because it is downstream.** EP-1.1 through EP-1.3 push requirements
+  *into* the model's design, which is why they were worth doing against today's model and found real
+  defects in it. This item reads behaviour *out* of the model -- it asks what the planner does when
+  the answer is "not observed", a state the model cannot currently express reliably -- so doing it
+  now would be analysing a shape that does not exist yet.
+  **It is also a duplicate.** The design session's fourth open question, "what a consumer does when a
+  needed fact is `not measured`", is this same decision seen from the model's side; the two were
+  filed independently before anyone noticed. Taken separately they can disagree: a planner that
+  degrades in a way the model does not support, or a model offering a fallback no consumer wants.
+  Answer them together, in the session.
 
 - [ ] **EP-1.5** -- **Hand the resulting requirements to the design session** as the consumer-side
   input it asked for, and record in the session which of them the settled model answers and which
   it deliberately does not.
+  **Half done, and split because the halves have different prerequisites.** The *handover* is
+  complete: the session now carries the three queries in a table, plus the four model properties that
+  follow from them -- a pairwise query must exist, the order must be total, an answer must be able to
+  be an upper bound, and a measured number must carry what it measured. That was the part the model
+  designer needs in front of them, and it did not depend on the model existing.
+  The *coverage* half -- recording which requirements the settled model answers and which it
+  deliberately does not -- can only be written once there is a settled model. It stays open here.
   > **-> CROSS-COMPONENT HANDOFF:** next work is in the repository root ->
   > [DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md)
   > -> `SH-16.8` in
