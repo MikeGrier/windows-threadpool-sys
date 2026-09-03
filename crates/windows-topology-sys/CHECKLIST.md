@@ -88,12 +88,34 @@ wrongly after code exists.
     `Core { efficiency_class }` against CPU Sets' `EfficiencyClass`. This is not a membership
     question and D-15 does not reach it, which the item as first written did not notice.
 
-  **A third case that is not a source conflict at all: the two calls are not atomic.** A processor
-  parked, unparked, hot-added or hot-removed between them means the two halves describe **different
-  instants**. That is not Windows contradicting itself -- it is us sampling twice -- and **from a
-  single observation a torn read is indistinguishable from a genuine inconsistency.** So the topology
-  is already a composite of two moments and nothing records that, which is true even when nothing
-  conflicts.
+  **A third case that is not a source conflict at all: the two calls are not atomic** -- though this
+  was first written far too strongly, and the correction matters more than the original claim.
+
+  It is **not a torn read**. Nothing tears: each Win32 call returns its own self-consistent snapshot,
+  and the buffers are process-private. The accurate description is a **non-atomic composite** -- two
+  individually-consistent reads taken at different instants.
+
+  **And parking cannot cause it**, which was the example first given here. Parking changes a
+  CPU-Sets-only field; GLPIE does not report parked state at all, and none of the three overlapping
+  facts move when a core parks -- `CoreIndex` and `NumaNodeIndex` are unchanged, and
+  `EfficiencyClass` is a static property of the core's design.
+
+  What actually remains is **processor hot-add or hot-remove** between the two calls, which needs
+  dynamic partitioning and is rare. The window is microseconds. Its signature is also distinctive
+  rather than ambiguous: CPU Sets naming a processor that has no `Processor` entry, or the reverse --
+  which is neither shape A nor shape B, but a third thing, one source knowing a processor the other
+  does not.
+
+  So this case is **real but rare**, and it should not carry weight it cannot bear. In particular it
+  is a weak argument against detecting conflicts, and the better argument against *refusing* on one
+  stands without it: a genuine inconsistency from a defective hypervisor is something a caller would
+  rather be told about and route around than be unable to run at all.
+
+  **A finding that came out of checking it:** `online` (GLPIE, from `active_processors`) and `parked`
+  (CPU Sets) are **complementary, not overlapping**. Parked is not offline -- a parked processor is
+  active and the scheduler is merely avoiding it. So the two sources together give a *fuller*
+  availability picture than either alone, which is an argument for consuming both that has nothing to
+  do with conflict.
 
   **And a fourth, within a single source:** a processor named by two `Core` domains, from malformed
   firmware or a hand-built description. Unchecked today.
@@ -107,8 +129,12 @@ wrongly after code exists.
      unusable over a discrepancy that may be benign), **record and continue** (consistent with this
      crate's posture of representing the awkward case), or **prefer a source** -- which is
      reduce-on-insert wearing a different hat, and D-15 rejected it.
-  3. Whether to record that a topology is a **composite of two instants** regardless of conflict, and
-     whether to spend a third call re-reading the first source to tell a torn read from a real one.
+  3. Whether to record that a topology is a **composite of two instants** regardless of conflict.
+     Cheap and true either way. The follow-on -- spending a third call re-reading the first source to
+     tell a stale composite from a real inconsistency -- is now hard to justify: the case it detects
+     needs processor hot-add inside a microsecond window, it would not be airtight anyway since the
+     machine can change during the third read too, and `discover()` is currently cheap enough that
+     callers may reasonably call it often.
 
 - [ ] **MMT-1.3** -- **What a consumer does when a needed fact was not observed**, given the bar that
   the model answers without further measurement. Degrade to a documented weaker policy, refuse, or
