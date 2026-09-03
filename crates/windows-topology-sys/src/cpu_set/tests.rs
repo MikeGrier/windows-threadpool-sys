@@ -231,3 +231,32 @@ fn windows_llc_grouping_is_not_the_derived_partitioning_cache() {
         llc.len()
     );
 }
+
+/// D-23: the `AllFlags` byte is measured constant zero on this build.
+///
+/// Not asserted as a property of Windows -- it is a property of the machine the
+/// suite runs on, and the point is to **notice if it changes**. A build that
+/// populates the byte would make the availability fields meaningful and would
+/// let `M4+.5` finally verify the bit positions, which cannot be done while
+/// every bit reads zero.
+#[test]
+fn the_availability_flags_are_all_clear_on_this_host() {
+    let Ok(sets) = super::enumerate() else {
+        return;
+    };
+    if sets.is_empty() {
+        return;
+    }
+
+    let any_set = sets
+        .iter()
+        .any(|s| s.parked || s.allocated || s.allocated_to_target_process || s.real_time);
+    assert!(
+        !any_set,
+        "a flag is populated on this build -- D-23 no longer holds, and the bit \
+         positions in `flags` can now be verified rather than assumed: {:?}",
+        sets.iter()
+            .filter(|s| s.parked || s.allocated || s.allocated_to_target_process || s.real_time)
+            .collect::<Vec<_>>()
+    );
+}

@@ -642,12 +642,14 @@ pub struct ProcessorFacts<'a> {
     /// A planner ignoring it places work on processors the process may not use,
     /// which is a wrong plan rather than a slow one.
     ///
-    /// **Reads `false` for every processor on the development host**, which is
-    /// not obviously right for a process that is plainly running on them. The
-    /// CPU-set flag *bit positions* are transcribed from the SDK's bitfield
-    /// order and have never been verified against a machine where they differ,
-    /// so this may be reporting the wrong bit. Tracked as `M4+.5`; treat the
-    /// value as unconfirmed until it is.
+    /// **Measured to carry no information on Windows 11 25H2** (D-23): the
+    /// whole `AllFlags` byte reads `0x00` for every processor even after CPU
+    /// sets are successfully allocated to this process, so `Known(false)` here
+    /// reports a byte the kernel did not write.
+    ///
+    /// It also does not mean what its name suggests -- allocation is the
+    /// explicit `SetProcessDefaultCpuSets` kind, not "may we run here". Do not
+    /// branch on it; see [`CpuSet::allocated_to_target_process`].
     pub allocated_to_this_process: Observed<bool>,
     /// The memory domain this processor allocates from, or
     /// [`Observed::NotObserved`] for the **unplaced** case, which has no honest

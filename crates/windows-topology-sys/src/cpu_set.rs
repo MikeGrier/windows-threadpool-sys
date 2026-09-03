@@ -69,14 +69,42 @@ pub struct CpuSet {
     /// both "class zero" and "not known".
     pub efficiency_class: u8,
     /// The processor is parked, so the scheduler is currently avoiding it.
+    ///
+    /// **Measured to carry no information on Windows 11 25H2** -- see
+    /// [`Self::allocated_to_target_process`] and D-23 in `DESIGN-NOTES.md`.
     pub parked: bool,
-    /// The processor is allocated.
+    /// The processor is allocated to some process through the CPU-set API.
+    ///
+    /// **Measured to carry no information on Windows 11 25H2** -- see
+    /// [`Self::allocated_to_target_process`].
     pub allocated: bool,
-    /// The processor is allocated **to this process**. A planner that ignores
-    /// this places work on processors the process may not use, which is a wrong
-    /// plan rather than a slow one.
+    /// The processor is allocated **to this process** through the CPU-set API.
+    ///
+    /// # This is not "may we run here", and it is not populated
+    ///
+    /// Two corrections, both established by experiment rather than reasoning
+    /// (D-23 in `DESIGN-NOTES.md`).
+    ///
+    /// It does not mean the process may use the processor. It means the CPU set
+    /// was explicitly allocated through `SetProcessDefaultCpuSets` or
+    /// `SetThreadSelectedCpuSets`, which a process that never called them has
+    /// not done -- so `false` is the ordinary answer for an ordinary process on
+    /// every processor it is perfectly free to run on.
+    ///
+    /// And on Windows 11 25H2 (10.0.26200.9168, AMD64) it is not populated at
+    /// all. Calling `SetProcessDefaultCpuSets` successfully, and confirming
+    /// with `GetProcessDefaultCpuSets` that the allocation stuck, still leaves
+    /// the whole `AllFlags` byte reading `0x00` for every processor -- under a
+    /// null handle, the current-process pseudo-handle, and a real `OpenProcess`
+    /// handle alike.
+    ///
+    /// **So do not branch on this.** A reader of `false` is reading a byte the
+    /// kernel did not write, not a fact about the machine.
     pub allocated_to_target_process: bool,
     /// The processor is marked real-time.
+    ///
+    /// **Measured to carry no information on Windows 11 25H2** -- see
+    /// [`Self::allocated_to_target_process`].
     pub real_time: bool,
     /// The scheduling class, which shares its union with a reserved `u32`, so
     /// confirm its meaning against current SDK documentation before relying on
@@ -90,6 +118,16 @@ pub struct CpuSet {
 ///
 /// Changing any value is a breaking change: these mirror the SDK's bitfield
 /// order, which is part of the ABI rather than this crate's choice.
+///
+/// # These are unverified, and cannot be verified from this machine
+///
+/// `AllFlags` reads `0x00` for every processor on the build measured (D-23),
+/// even after allocating CPU sets to this process -- so no bit has ever been
+/// observed set, and nothing here distinguishes a correct transcription from a
+/// wrong one. They stand on the SDK's declared order alone.
+///
+/// That is survivable only because nothing branches on them. If a consumer ever
+/// does, these need a machine that populates the byte first.
 mod flags {
     pub(super) const PARKED: u8 = 1 << 0;
     pub(super) const ALLOCATED: u8 = 1 << 1;
@@ -99,9 +137,9 @@ mod flags {
 
 /// Enumerate the CPU sets the current process can see.
 ///
-/// Passing a null process handle asks about the calling process, so
-/// `allocated_to_target_process` answers "may *we* use it" rather than "does it
-/// exist".
+/// A null process handle asks about the calling process. It makes **no
+/// difference to the flags** on the build this was measured against -- see
+/// [`CpuSet::allocated_to_target_process`] and D-23 in `DESIGN-NOTES.md`.
 ///
 /// # Errors
 ///

@@ -37,7 +37,7 @@ the **adapter's** problem and must not be filed here as a gap.
 | M1 settle what is still open | **5 of 5 done** | nothing -- complete |
 | M2 the granularity model | **6 of 6 done** | nothing -- complete |
 | M3 observation and provenance | **4 of 4 done** | nothing -- complete |
-| M4 the queries | **4 of 5 done** | `M4+.5`, which the work itself uncovered |
+| M4 the queries | **5 of 5 done** | nothing -- complete |
 | M5 the defects this subsumes | parked | M4, **except M5+.5 (done)** |
 
 **M1 was decision work, not implementation**, and it is complete. Each item was a question the
@@ -619,7 +619,7 @@ the `Processor::capacity` sentinel collision that reviewing the model alone had 
 `M5+.1`'s `Processor::capacity` collision are the same defect from two sides. They land together, in
 `M4+.2`, and `M5+.1` records that rather than repeating the work.
 
-- [ ] **M4+.5** -- **Verify the CPU-set flag bit positions against the SDK**, which `M4+.2`'s
+- [x] **M4+.5** -- **Verify the CPU-set flag bit positions against the SDK**, which `M4+.2`'s
   measurement gave evidence are wrong. `allocated_to_this_process` reads **false for every processor**
   on the development host -- for a process plainly running on them, which is not a credible answer.
   `parked` reads false everywhere too, so neither has ever been observed true and nothing distinguishes
@@ -631,6 +631,23 @@ the `Processor::capacity` sentinel collision that reviewing the model alone had 
   **Until it is verified, no behaviour may depend on these flags.** That is why `M4+.2` ships the
   values as facts and no judgement over them; a `usable()` helper written against them refused every
   processor on this machine.
+  **Investigated, and the answer is neither of the two the item expected.** Recorded as
+  [D-23](DESIGN-NOTES.md#d-23).
+  The bit positions are **not** wrong -- and cannot be shown right either. The whole `AllFlags` byte
+  reads `0x00` for every processor, so no bit has ever been observed set and nothing distinguishes a
+  correct transcription from a wrong one. They stand on the SDK's declared order alone.
+  The byte is **not populated on this build**, which is the actual finding and was established by
+  experiment rather than argued: `SetProcessDefaultCpuSets` succeeded, `GetProcessDefaultCpuSets`
+  confirmed the allocation stuck (`[0x100, 0x101]`), and the byte still read zero -- under a null
+  handle, the pseudo-handle, and a real `OpenProcess` handle alike. Windows 11 25H2
+  (10.0.26200.9168, AMD64).
+  **And the field's own documentation was wrong**, which the experiment exposed on the way:
+  `allocated_to_target_process` does not mean "may we run here". It means the CPU set was explicitly
+  allocated via `SetProcessDefaultCpuSets`, which an ordinary process never does -- so `false` is the
+  ordinary answer for a processor it is entirely free to run on. The old doc said the opposite.
+  A regression test pins the measurement, so a build that *does* populate the byte is noticed rather
+  than silently changing what these fields mean. That build is also the only thing that could finish
+  verifying the bit positions.
 
 ## M5: the defects this subsumes
 
