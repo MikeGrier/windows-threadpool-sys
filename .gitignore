@@ -21,3 +21,9 @@ target
 placement-probe-v*.json
 .vs
 .vscode/settings.json
+
+# tpu-mcp writes <file>.bak beside any file it repairs. Those are transient
+# backups of a repair that has already been verified and committed, so they are
+# never wanted in history -- and being adjacent to the file they back up, they
+# are easy to sweep up with `git add -A` without noticing.
+*.bak
