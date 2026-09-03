@@ -28,7 +28,7 @@ Presence and observation are facts to represent, not shapes to infer from.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| M1 settle what is still open | 1 of 5 done | nothing -- these are decisions, and they gate the rest |
+| M1 settle what is still open | 2 of 5 done | nothing -- these are decisions, and they gate the rest |
 | M2 the granularity model | parked | M1 |
 | M3 observation and provenance | parked | M1 |
 | M4 the queries | parked | M2, M3 |
@@ -60,7 +60,7 @@ wrongly after code exists.
   matchable and the exact value `Processor::capacity`'s sentinel is indistinguishable from, so that
   row confirms nothing. A hybrid, multi-node machine would test all three; none is available.
 
-- [ ] **MMT-1.2** -- **What a query returns when observations differ.** ~~And there are three cases,
+- [x] **MMT-1.2** -- **What a query returns when observations differ.** ~~And there are three cases,
   not two~~ -- **the third case dissolved.** [D-14](DESIGN-NOTES.md#d-14) found that CPU Sets reports
   one last-level-cache group where the derivation reports eight L2 partitions, neither wrong because
   they answer **different questions**, and this item was going to have to invent vocabulary for it.
@@ -158,6 +158,33 @@ wrongly after code exists.
 
   4. **Shape B still has no representation.** `(kind, membership)` identity does not reach a
      per-processor scalar disagreement, and that gap is untouched by any of the above.
+
+  ### Closed by [D-18](DESIGN-NOTES.md#d-18)
+
+  **Shape B (4):** an observation is `(subject, claim, source)`, and a **subject** is either a relation
+  identity `(kind, membership)` or a processor attribute `(processor, attribute)`. The mechanism above
+  it is unchanged -- observations of one subject are a set, agreement is one subject observed twice,
+  disagreement is a set with more than one distinct claim. So the second shape needs no second
+  mechanism. D-15 had simply described the subject too narrowly, having been derived from the one case
+  that was measurable at the time.
+
+  **Recording coherence (3):** two facts, one derivable and one not. *That* collection concluded
+  incoherently is a fact about the process -- the retry ran, the bound was exhausted, the sources still
+  disagreed -- and nothing in the data says so, so it is recorded. *Which* subjects disagreed is
+  derivable, and is recorded anyway: leaving it to be re-derived is exactly the arrangement `SH-16.9`
+  documents going wrong three times in two different ways. A rendered report is **not** recorded; per
+  [D-17](DESIGN-NOTES.md#d-17) that belongs to the probe tools.
+
+  **The bound (2):** a small documented constant, cheap even when exhausted, since a persistently
+  inconsistent machine pays only a few extra whole-machine enumerations. Its meaning was already
+  settled by [D-16](DESIGN-NOTES.md#d-16) -- exhaustion is the **conclusion** that the disagreement is
+  genuine, not a failure to collect, and `discover()` still returns a topology.
+
+  **What made this closable** was not one insight but the arsenal accumulating: D-15 gave the identity,
+  D-16 removed the transient cases so only proved-genuine ones needed representing, D-17 moved
+  reporting out of the crate, and D-18 widened D-15's subject. Three of the item's four questions
+  dissolved rather than being answered -- one already covered by a prior decision, one forced by the
+  retry mechanism, one a constant with a rationale.
 
   Refusing outright remains rejected on its own merits: a genuine inconsistency is something a caller
   would rather be told about and route around than be unable to run at all.

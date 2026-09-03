@@ -633,8 +633,14 @@ actionable is identifying and therefore belongs behind the review this tool alre
   Report what disagreed and what each source claimed, not merely that something did -- "incoherent" is
   not actionable, and the point of collecting from strangers' machines is to learn something specific
   about hardware nobody here can buy.
-  An inconsistent machine is **still a valid submission**, and should be marked rather than rejected;
-  it is arguably a *more* valuable one, since it is evidence of something no local run can produce.
+  An inconsistent machine is **still a valid submission**, and should be marked rather than rejected.
+  **Its value is genuinely two-sided, and the tool should not pretend otherwise.** In the long run it
+  is the more valuable submission -- evidence of something no local run can produce, and potentially a
+  bug report against a firmware table. In the short run it is an **annoyance**: a run whose numbers a
+  reader must qualify, from a machine whose description cannot be taken at face value.
+  So mark it plainly enough that a runner is not left wondering whether their machine is broken or
+  their run is wasted, and plainly enough that a reader of the submission knows which parts to trust --
+  without dressing up a nuisance as a prize.
 
 - [ ] **PT-7.2** -- **Add the firmware provenance an inconsistency report needs to be actionable** --
   mainboard and BIOS version at minimum -- suppressible by the runner, with the suppression recorded

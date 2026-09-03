@@ -37,6 +37,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-15"></a>D-15 | **A relation is identified by its `(kind, membership)`, not by any source's label -- so several observations of one relation are held as a *set*, never reduced on insert.** Measured, not assumed: the two Win32 sources agree exactly on the core partition (eight groups each) while labelling it completely differently (`[0,2,4,...,14]` against `[0,1,...,7]`). The "disagreement" a reduction would resolve is between *dictionaries*, not about the machine, and reducing would have to pick a label arbitrarily while discarding the other source's. Under membership identity the common case costs nothing -- one relation, two observations -- and a genuine contradiction stays representable. See the detail section below. |
 | <a id="d-16"></a>D-16 | **Collection retries until coherent, and what survives a retry is a genuine disagreement.** There is no transactional way to read the two Win32 sources together, so `discover()` validates them against each other and, on incoherence, **re-collects** -- bounded, and cheap because both are whole-machine enumerations. Transient incoherence from a hot-add resolves on the next pass; incoherence that survives is not transience and must be represented. Retry is therefore the *discriminator* between the two, which no single observation can be. And because the data can change while it is being collected, a topology states plainly whether it was collected coherently, so a reader knows how far its parts may be correlated. |
 | <a id="d-17"></a>D-17 | **Persistent incoherence between two Win32 sources is expected in the field, not exotic -- so the crate *records* it and never refuses over it.** No documented guarantee of cross-API coherence has been found, the two enumerations plausibly derive by different paths, and the firmware tables behind them are populated incrementally against scenarios that do not necessarily include ours. The likely places to meet it are hardware we do not have and prerelease hardware with defective UEFI tables -- exactly where refusing would make the crate useless. **Recording is this crate's job; reporting is the probe tools'**, and the identifying provenance an actionable report needs lives there too, behind the review the probe already applies. Orthogonal to [D-16](#d-16), which is about data shifting *while* it is collected. Only testable synthetically. |
+| <a id="d-18"></a>D-18 | **An observation is `(subject, claim, source)`, where a subject is either a relation identity or a processor attribute -- which closes the last gap in [D-15](#d-15).** Membership identity reaches partition disagreements but not per-processor scalars like efficiency class; generalising the *subject* rather than inventing a second mechanism covers both with one rule. Two smaller answers ride along: a topology records **that** collection concluded incoherently **and which subjects disagreed** -- the latter because a consumer forced to re-derive the comparison is the SH-16.9 failure repeating -- and the retry bound is a small documented constant whose exhaustion is a *conclusion*, not a failure. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -381,6 +382,60 @@ records it.
 They share a detection mechanism and nothing else. Conflating them would make one look like a
 special case of the other, and the responses are opposite: one is fixed by asking again, the other by
 writing down what was seen.
+
+## D-18: what an observation is, and the last of MMT-1.2
+
+*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.2, which this closes.*
+
+### The gap D-15 left
+
+[D-15](#d-15) identified a relation by `(kind, membership)` and held several observations of one
+relation as a set. That reaches a **partition** disagreement -- two sources grouping processors
+differently under the same kind -- and it does not reach the other shape at all.
+
+Efficiency class is the example. `GetLogicalProcessorInformationEx` reports it on the owning core
+domain; CPU Sets reports it per processor. If they differ, there is no membership to compare: the
+subject is one processor and one attribute, not a set of processors.
+
+### Generalise the subject, not the mechanism
+
+An **observation is `(subject, claim, source)`**, where a subject is either
+
+- a **relation identity** -- `(kind, membership)`, per D-15 -- or
+- a **processor attribute** -- `(processor, attribute)`.
+
+The mechanism above it does not change. Observations of one subject are held as a set; agreement is
+one subject observed twice; disagreement is a set with more than one distinct claim. So the second
+shape needs no second mechanism, and a query answers both the same way.
+
+This is what "hold a set" always meant; D-15 simply described the subject too narrowly, having been
+derived from the one case that was measurable at the time.
+
+### A topology records that it concluded incoherently, and which subjects disagreed
+
+Two facts, and only one of them is derivable.
+
+**That collection concluded incoherently is not derivable.** It is a fact about the *process* -- the
+retry ran, the bound was exhausted, and the sources still disagreed -- and nothing in the data says
+so. It has to be recorded.
+
+**Which subjects disagreed is derivable, and is recorded anyway.** A consumer could find them by
+comparing the observations itself. That is precisely the arrangement `SH-16.9` documents going wrong:
+a fact left to be re-derived was re-derived three times, in two different ways. Recording the list
+costs almost nothing and removes the reason to reconstruct it.
+
+What is *not* recorded is a rendered report. [D-17](#d-17) puts that in the probe tools, along with
+the identifying provenance that makes a report actionable.
+
+### The bound is a constant with a rationale
+
+The retry bound is small -- a couple of passes failing to find a coherent set is not plausible for a
+transient -- and it is cheap even when exhausted, since a persistently inconsistent machine pays only
+a few extra whole-machine enumerations per `discover()`.
+
+Its *meaning* is the part worth writing down, and [D-16](#d-16) already did: exhausting the bound is
+not a failure to collect, it is the **conclusion** that the disagreement is genuine. `discover()`
+still returns a topology. The bound is where transience stops being a possible explanation.
 
 ## What was deliberately excluded (D-9)
 
