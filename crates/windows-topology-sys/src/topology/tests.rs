@@ -1128,6 +1128,187 @@ fn a_split_instruction_and_data_cache_is_one_partition_not_two() {
     assert_eq!(topo.cache_partitions_at_level(1).len(), 8);
 }
 
+// --- M4+.3: residency, with the unplaced case distinguishable ---
+
+#[test]
+fn a_processor_in_a_memory_domain_reports_it() {
+    let mut node = core_domain_at(0, &[0, 1]);
+    node.kind = DomainKind::Memory { memory_bytes: None };
+    let topo = machine_of(4, vec![node]);
+
+    assert!(
+        topo.memory_domain_of(ProcessorId {
+            group: 0,
+            number: 0
+        })
+        .was_observed()
+    );
+}
+
+#[test]
+fn an_unplaced_processor_is_not_observed_rather_than_node_zero() {
+    // The asymmetry `windows-placement-probe` already encodes: an unknown cache
+    // domain costs an optimisation, an unknown memory domain has no honest
+    // fallback, because the pool must be allocated somewhere and guessing means
+    // quietly allocating remote memory for the life of the process.
+    let mut node = core_domain_at(0, &[0, 1]);
+    node.kind = DomainKind::Memory { memory_bytes: None };
+    let topo = machine_of(4, vec![node]);
+
+    let unplaced = topo.memory_domain_of(ProcessorId {
+        group: 0,
+        number: 3,
+    });
+    assert!(!unplaced.was_observed());
+    assert_eq!(unplaced.known(), None);
+    assert_eq!(
+        topo.unplaced_processors(),
+        vec![
+            ProcessorId {
+                group: 0,
+                number: 2
+            },
+            ProcessorId {
+                group: 0,
+                number: 3
+            }
+        ]
+    );
+}
+
+#[test]
+fn a_fully_covered_machine_has_no_unplaced_processors() {
+    let mut node = core_domain_at(0, &[0, 1, 2, 3]);
+    node.kind = DomainKind::Memory { memory_bytes: None };
+    assert!(machine_of(4, vec![node]).unplaced_processors().is_empty());
+}
+
+// --- M4+.2: the shard-set surface, without sentinels ---
+
+#[test]
+fn an_unknown_efficiency_class_is_not_observed_rather_than_zero() {
+    // The M5+.1 collision, from the other side. `Processor::capacity` spells
+    // "in no core" and "class zero" as the same 0, and class zero is every
+    // processor on every non-hybrid machine -- so the sentinel collides with
+    // the overwhelmingly common real value.
+    let topo = machine_of(2, Vec::new());
+    let facts = topo.shard_set();
+
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0].efficiency_class, Observed::NotObserved);
+    assert!(facts[0].core.is_none());
+    assert_eq!(facts[0].simultaneous_multithreading, Observed::NotObserved);
+}
+
+#[test]
+fn a_genuine_class_zero_is_known_not_missing() {
+    let topo = machine_of(2, vec![core_domain_at(0, &[0, 1])]);
+    let facts = topo.shard_set();
+
+    assert_eq!(facts[0].efficiency_class, Observed::Known(0));
+    assert!(
+        facts[0].efficiency_class.was_observed(),
+        "class zero is an answer, not an absence"
+    );
+    assert_eq!(
+        facts[0].simultaneous_multithreading,
+        Observed::Known(true),
+        "two processors in the core"
+    );
+}
+
+#[test]
+fn availability_is_not_observed_when_cpu_sets_was_never_consulted() {
+    // A hand-built topology has no CPU-set records, so parked and allocation
+    // state are gaps in what we asked -- not claims that the processor is
+    // available or unavailable.
+    let topo = machine_of(2, vec![core_domain_at(0, &[0, 1])]);
+    let facts = topo.shard_set();
+
+    assert_eq!(facts[0].parked, Observed::NotObserved);
+    assert_eq!(facts[0].allocated_to_this_process, Observed::NotObserved);
+}
+
+#[test]
+fn the_shard_set_states_availability_and_does_not_judge_it() {
+    // There is deliberately no `usable()` helper. Which of online, parked and
+    // allocation disqualifies a processor is a POLICY, and per D-21 this crate
+    // states facts -- baking the judgement in here is exactly what
+    // `outermost_partitioning_cache` was criticised for.
+    //
+    // It would also have been wrong: `allocated_to_this_process` reads false
+    // for every processor on the development host, so a `usable()` that
+    // refused on it refused the whole machine.
+    let mut topo = machine_of(2, vec![core_domain_at(0, &[0, 1])]);
+    topo.processors[1].online = false;
+    let facts = topo.shard_set();
+
+    assert!(facts[0].online);
+    assert!(!facts[1].online);
+
+    let mut parked = machine_of(1, Vec::new());
+    parked.cpu_sets = Some(vec![cpu_set_parked(0)]);
+    assert_eq!(
+        parked.shard_set()[0].parked,
+        Observed::Known(true),
+        "parked is reported, and is not the same as offline"
+    );
+    assert!(
+        parked.shard_set()[0].online,
+        "a parked processor is active; the scheduler is merely avoiding it"
+    );
+}
+
+#[test]
+fn the_shard_set_reads_availability_from_the_cpu_sets_when_present() {
+    let mut topo = machine_of(1, Vec::new());
+    topo.cpu_sets = Some(vec![cpu_set(0, 0, 0, 0)]);
+    let facts = topo.shard_set();
+
+    assert_eq!(facts[0].parked, Observed::Known(false));
+    assert_eq!(facts[0].allocated_to_this_process, Observed::Known(true));
+}
+
+/// A core relation over `numbers`, labelled by the relationship walk.
+fn core_domain_at(label: u32, numbers: &[u8]) -> Domain {
+    let mut processors = ProcessorSet::empty();
+    for &n in numbers {
+        processors.insert(0, n);
+    }
+    Domain {
+        kind: DomainKind::Core {
+            simultaneous_multithreading: numbers.len() > 1,
+            efficiency_class: 0,
+        },
+        processors,
+        observations: vec![Observation::new(Source::RelationshipWalk, label)],
+    }
+}
+
+fn cpu_set(index: u8, core: u8, node: u8, efficiency_class: u8) -> crate::cpu_set::CpuSet {
+    crate::cpu_set::CpuSet {
+        id: u32::from(index),
+        group: 0,
+        logical_processor_index: index,
+        core_index: core,
+        last_level_cache_index: 0,
+        numa_node_index: node,
+        efficiency_class,
+        parked: false,
+        allocated: true,
+        allocated_to_target_process: true,
+        real_time: false,
+        scheduling_class: 0,
+        allocation_tag: 0,
+    }
+}
+
+fn cpu_set_parked(index: u8) -> crate::cpu_set::CpuSet {
+    crate::cpu_set::CpuSet {
+        parked: true,
+        ..cpu_set(index, 0, 0, 0)
+    }
+}
 // --- M4+.4: "outermost" is inclusion, not the level number ---
 
 /// A cache relation over `numbers`, labelled by the relationship walk.

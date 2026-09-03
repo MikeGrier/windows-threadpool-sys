@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 
 use crate::CacheKind;
 use crate::observation::{Observation, Source};
+use crate::observed::Observed;
 use crate::processor_set::ProcessorSet;
 
 /// The identity of one logical processor: its group and its number within
@@ -584,6 +585,74 @@ mod serde_impl {
             })
         }
     }
+}
+
+/// Everything this crate knows about one processor, with each absence named.
+///
+/// Produced by [`MachineMemoryTopology::shard_set`]. Deliberately **not** a
+/// second copy of [`Processor`]: that type is the platform's own record, while
+/// this is the assembled answer to "may this processor host work, and where
+/// does it allocate from" -- gathered from both Win32 sources plus the derived
+/// relations.
+///
+/// # No sentinels, anywhere
+///
+/// Every optional field is an [`Observed`], so "the platform said zero" and
+/// "nobody asked" are different values rather than the same one. The field
+/// this exists to replace, [`Processor::capacity`], spells three facts as `0`
+/// -- offline, in no core, and efficiency class zero -- and the third is every
+/// processor on every non-hybrid machine.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProcessorFacts<'a> {
+    /// The processor's identity, always `(group, number)` and never flattened
+    /// (D-7): a Windows affinity is a `GROUP_AFFINITY`, so a bare index names a
+    /// different processor in every group.
+    pub id: ProcessorId,
+    /// Whether the slot is active. An offline slot exists and counts toward its
+    /// group's maximum, so planning work onto one is planning a thread that
+    /// cannot run.
+    pub online: bool,
+    /// The core relation this processor belongs to, if any names it.
+    ///
+    /// `None` is a firmware gap the crate tolerates by design, not a
+    /// contradiction -- see [`Self::efficiency_class`], which is
+    /// [`Observed::NotObserved`] in exactly that case rather than `0`.
+    pub core: Option<&'a Domain>,
+    /// Whether the owning core has more than one logical processor.
+    pub simultaneous_multithreading: Observed<bool>,
+    /// The scheduler's efficiency class for the owning core.
+    ///
+    /// [`Observed::NotObserved`] when no core names this processor -- which is
+    /// the distinction `Processor::capacity` cannot make. On a hybrid part
+    /// Windows orders class `0` as the *least* performant, so an unknown
+    /// processor reported as `0` is indistinguishable from an efficiency core:
+    /// a policy excluding efficiency cores silently drops a possible
+    /// performance core, and one tiering them mis-tiers it. Neither fails a
+    /// functional test.
+    pub efficiency_class: Observed<u8>,
+    /// Whether the scheduler is currently avoiding this processor.
+    ///
+    /// [`Observed::NotObserved`] when the CPU-set enumeration was not
+    /// consulted, which is any topology not produced by
+    /// [`MachineMemoryTopology::discover`]. Parked is **not** offline: the
+    /// processor is active and the scheduler is merely avoiding it.
+    pub parked: Observed<bool>,
+    /// Whether this processor is allocated to *this* process.
+    ///
+    /// A planner ignoring it places work on processors the process may not use,
+    /// which is a wrong plan rather than a slow one.
+    ///
+    /// **Reads `false` for every processor on the development host**, which is
+    /// not obviously right for a process that is plainly running on them. The
+    /// CPU-set flag *bit positions* are transcribed from the SDK's bitfield
+    /// order and have never been verified against a machine where they differ,
+    /// so this may be reporting the wrong bit. Tracked as `M4+.5`; treat the
+    /// value as unconfirmed until it is.
+    pub allocated_to_this_process: Observed<bool>,
+    /// The memory domain this processor allocates from, or
+    /// [`Observed::NotObserved`] for the **unplaced** case, which has no honest
+    /// fallback -- see [`MachineMemoryTopology::memory_domain_of`].
+    pub memory_domain: Observed<&'a Domain>,
 }
 
 #[cfg(test)]

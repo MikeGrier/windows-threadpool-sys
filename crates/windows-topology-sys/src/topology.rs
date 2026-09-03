@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 use std::io;
 
 use crate::cpu_set::CpuSet;
-use crate::domain::{Domain, DomainKind, Processor, ProcessorId};
+use crate::domain::{Domain, DomainKind, Processor, ProcessorFacts, ProcessorId};
 use crate::observation::{AttributeObservation, Observation, ProcessorAttribute, Source};
+use crate::observed::Observed;
 use crate::processor_set::ProcessorSet;
 use crate::provenance::Provenance;
 use crate::relation::{self, Relations};
@@ -633,6 +634,105 @@ impl MachineMemoryTopology {
                 .iter()
                 .all(|right| left.processors.is_disjoint(&right.processors))
         })
+    }
+
+    /// Everything this crate knows about one processor, without sentinels.
+    ///
+    /// The shard-set surface `M4+.2` calls for: what a caller needs to decide
+    /// whether a processor may host work, gathered so the answer is asked for
+    /// once rather than assembled differently by each consumer.
+    ///
+    /// Every field says which absence it means (D-13), and **none uses a
+    /// sentinel**. That is the point rather than a nicety:
+    /// [`Processor::capacity`] spells "offline", "in no core", and "efficiency
+    /// class zero" as the same `0`, and the third is every processor on every
+    /// non-hybrid machine -- so the stand-in collides with the overwhelmingly
+    /// common real value and no careful caller can tell them apart.
+    #[must_use]
+    pub fn shard_set(&self) -> Vec<ProcessorFacts<'_>> {
+        self.processors
+            .iter()
+            .map(|processor| {
+                let core = self.cores().find(|d| {
+                    d.processors
+                        .contains(processor.id.group, processor.id.number)
+                });
+                let cpu_set = self.cpu_sets.as_ref().and_then(|sets| {
+                    sets.iter().find(|s| {
+                        s.group == processor.id.group
+                            && s.logical_processor_index == processor.id.number
+                    })
+                });
+                ProcessorFacts {
+                    id: processor.id,
+                    online: processor.online,
+                    core,
+                    simultaneous_multithreading: match core.map(|d| &d.kind) {
+                        Some(DomainKind::Core {
+                            simultaneous_multithreading,
+                            ..
+                        }) => Observed::Known(*simultaneous_multithreading),
+                        _ => Observed::NotObserved,
+                    },
+                    efficiency_class: match core.map(|d| &d.kind) {
+                        Some(DomainKind::Core {
+                            efficiency_class, ..
+                        }) => Observed::Known(*efficiency_class),
+                        _ => Observed::NotObserved,
+                    },
+                    parked: cpu_set.map_or(Observed::NotObserved, |s| Observed::Known(s.parked)),
+                    allocated_to_this_process: cpu_set.map_or(Observed::NotObserved, |s| {
+                        Observed::Known(s.allocated_to_target_process)
+                    }),
+                    memory_domain: self.memory_domain_of(processor.id),
+                }
+            })
+            .collect()
+    }
+
+    /// Which memory domain `processor` allocates from.
+    ///
+    /// [`Observed::Known`] with the domain, or [`Observed::NotObserved`] when
+    /// no memory domain names it -- the **unplaced** case, which is deliberately
+    /// not collapsed into "node 0".
+    ///
+    /// # Why the unplaced case gets its own answer
+    ///
+    /// An unknown *cache* domain costs an optimisation. An unknown *memory*
+    /// domain has no honest fallback at all: the pool has to be allocated
+    /// somewhere, and guessing means quietly allocating remote memory for the
+    /// life of the process. `windows-placement-probe` already encodes this
+    /// asymmetry -- it refuses a missing NUMA node while tolerating a missing
+    /// cache domain -- and this method is where that distinction becomes the
+    /// model's rather than each consumer's.
+    ///
+    /// [`Observed::Absent`] is never returned: a memory domain covering no
+    /// processors is a real shape (D-5), but "this processor belongs to no
+    /// node" is a gap in what the firmware said, not a positive statement that
+    /// it has no memory.
+    #[must_use]
+    pub fn memory_domain_of(&self, processor: ProcessorId) -> Observed<&Domain> {
+        self.memory_domains()
+            .find(|domain| {
+                domain
+                    .processors
+                    .contains(processor.group, processor.number)
+            })
+            .map_or(Observed::NotObserved, Observed::Known)
+    }
+
+    /// Every processor no memory domain names.
+    ///
+    /// The set a caller must decide about before allocating anything, and
+    /// empty on a machine whose firmware covered every processor. Offered so
+    /// the question is asked once rather than rediscovered per allocation site.
+    #[must_use]
+    pub fn unplaced_processors(&self) -> Vec<ProcessorId> {
+        self.processors
+            .iter()
+            .filter(|processor| !self.memory_domain_of(processor.id).was_observed())
+            .map(|processor| processor.id)
+            .collect()
     }
 
     /// Every memory domain, including one with no processors (D-5).

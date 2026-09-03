@@ -37,7 +37,7 @@ the **adapter's** problem and must not be filed here as a gap.
 | M1 settle what is still open | **5 of 5 done** | nothing -- complete |
 | M2 the granularity model | **6 of 6 done** | nothing -- complete |
 | M3 observation and provenance | **4 of 4 done** | nothing -- complete |
-| M4 the queries | **ready** | M2 and M3 are both complete |
+| M4 the queries | **4 of 5 done** | `M4+.5`, which the work itself uncovered |
 | M5 the defects this subsumes | parked | M4, **except M5+.5 (done)** |
 
 **M1 was decision work, not implementation**, and it is complete. Each item was a question the
@@ -577,12 +577,26 @@ the `Processor::capacity` sentinel collision that reviewing the model alone had 
   Sabotage-verified: dropping the kind-exists guard -- which would make a machine with no caches look
   incomplete -- fails three tests, including the D-13 conflation case.
 
-- [ ] **M4+.2** -- The **shard-set** surface (EP-D-1): identity as `(group, number)`, online, core
+- [x] **M4+.2** -- The **shard-set** surface (EP-D-1): identity as `(group, number)`, online, core
   membership and SMT, efficiency class **without a sentinel**, and availability.
+  **Done.** `ProcessorFacts` and `MachineMemoryTopology::shard_set()`. Every optional field is an
+  `Observed`, so "the platform said zero" and "nobody asked" are different values -- which is the
+  `M5+.1` collision fixed from the other side, since `Processor::capacity` spells offline, in-no-core,
+  and class-zero as the same `0` and the third is every processor on every non-hybrid machine.
+  **It states availability and does not judge it.** A `usable()` helper was written and then removed:
+  which of online, parked and allocation disqualifies a processor is a **policy**, and per
+  [D-21](DESIGN-NOTES.md#d-21) this crate states facts -- baking the judgement in is exactly what
+  `outermost_partitioning_cache` was criticised for. It would also have been wrong, which is how the
+  next item was found.
 
-- [ ] **M4+.3** -- **Residency** (EP-D-3): processor to memory domain, with the unplaced case
+- [x] **M4+.3** -- **Residency** (EP-D-3): processor to memory domain, with the unplaced case
   distinguishable rather than defaulted -- an unknown cache domain costs an optimisation, an unknown
   memory domain has no honest fallback.
+  **Done.** `memory_domain_of(processor) -> Observed<&Domain>` and `unplaced_processors()`. The
+  unplaced case is `NotObserved`, never node zero: the pool has to be allocated somewhere, and
+  guessing means quietly allocating remote memory for the life of the process. `Observed::Absent` is
+  never returned -- a memory domain covering no processors is a real shape (D-5), but a processor
+  belonging to no node is a gap in what the firmware said, not a statement that it has no memory.
 
 - [x] **M4+.4** -- Reduce `outermost_partitioning_cache` to a **named projection** over the order --
   "the coarsest granularity with more than one group" -- so it is a query rather than a rule, and
@@ -605,15 +619,33 @@ the `Processor::capacity` sentinel collision that reviewing the model alone had 
 `M5+.1`'s `Processor::capacity` collision are the same defect from two sides. They land together, in
 `M4+.2`, and `M5+.1` records that rather than repeating the work.
 
+- [ ] **M4+.5** -- **Verify the CPU-set flag bit positions against the SDK**, which `M4+.2`'s
+  measurement gave evidence are wrong. `allocated_to_this_process` reads **false for every processor**
+  on the development host -- for a process plainly running on them, which is not a credible answer.
+  `parked` reads false everywhere too, so neither has ever been observed true and nothing distinguishes
+  "the bit is clear" from "we are reading the wrong bit".
+  The positions in `cpu_set::flags` are transcribed from the SDK's bitfield order and the module's own
+  doc calls changing them a breaking change -- but transcription is exactly the **asserted structure**
+  this reshape exists to distrust, and it has never been checked against a machine where the answer
+  would differ.
+  **Until it is verified, no behaviour may depend on these flags.** That is why `M4+.2` ships the
+  values as facts and no judgement over them; a `usable()` helper written against them refused every
+  processor on this machine.
+
 ## M5: the defects this subsumes
 
 Parked on M4, **except M5+.5, which is independent and ready now**. Each of the others already
 exists as a defect that the reshape is what fixes, so they are listed here rather than fixed
 separately and then re-fixed.
 
-- [ ] **M5+.1** -- `Processor::capacity` uses `0` as both a legitimate efficiency class and a "not
+- [x] **M5+.1** -- `Processor::capacity` uses `0` as both a legitimate efficiency class and a "not
   known" sentinel, and the two collide on **every non-hybrid machine**. Worse than an ambiguous
   `Option`: a colliding sentinel cannot be distinguished even by a careful caller.
+  **Subsumed by `M4+.2`, which is where the sentinel-free answer lives**: `ProcessorFacts` reports
+  `efficiency_class: Observed<u8>`, so class zero and "no core names this processor" are different
+  values. `Processor::capacity` itself is left in place and its documentation already warns against
+  it -- removing a published field is a second breaking change with no additional benefit once the
+  honest answer exists beside it.
 
 - [ ] **M5+.2** -- `DomainKind::Memory::memory_bytes` is unambiguous from `discover` but ambiguous
   from a **description**, where "the field was omitted" and "this node's capacity is unknown" are the

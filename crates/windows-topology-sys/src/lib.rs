@@ -84,7 +84,7 @@ mod walk;
 #[cfg(windows)]
 pub use cpu_set::CpuSet;
 #[cfg(windows)]
-pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorId};
+pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorFacts, ProcessorId};
 #[cfg(windows)]
 pub use granularity::{Granularity, Proximity};
 #[cfg(windows)]
