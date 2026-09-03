@@ -148,7 +148,7 @@ whether the topology can answer it today -- so the model is designed against a r
   **One of the four has since been corrected**, and it is recorded here rather than rewritten in the
   session, which is an append-only record of what was handed over. "A pairwise query must exist" is
   right about the requirement and wrong about the shape: per
-  [windows-topology-sys](../windows-topology-sys/CHECKLIST.md) `M4+.1` the ordered collection is the
+  [windows-topology-sys](../windows-topology-sys/COMPLETED-CHECKLIST.md) `M4+.1` the ordered collection is the
   surface and the pairwise query is derived from it, because an answer obliged to carry the block
   containing both processors is a question about the partition rather than about the pair.
   The *coverage* half -- recording which requirements the settled model answers and which it

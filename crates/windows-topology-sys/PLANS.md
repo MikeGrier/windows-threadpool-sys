@@ -1,7 +1,9 @@
 # Plans: windows-topology-sys
 
+No plans in progress.
+
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
-| [CHECKLIST.md](CHECKLIST.md) | in progress | **Reshaping the machine memory topology**, numbered `MMT-*` and deliberately distinct from the release checklist's `SH-*`, six of whose items it supersedes. The governing idea, settled with the engineer: model the **observed connectivity** rather than a ladder of levels with optional rungs, and treat presence and observation as facts to represent rather than shapes to infer from. M1 is decision work and gates everything -- whether several observations of one relation are held as a set or reduced on insert, what a query returns when two sources differ (three cases, not two: D-14 found that CPU Sets and the derivation can differ by answering *different questions*), what a consumer does with a fact that was never observed, whether `distances` survives at all now that the synthesizer measures for its own scenario, and whether that synthesizer lives in this crate -- which decides the crate's name, since `-sys` is right only while this is purely a Win32 wrapper. M2 through M4 build the granularity order, per-relation provenance, and the pairwise queries the execution planner stated requirements for. M5 lists the defects the reshape subsumes rather than fixing them twice. | [DESIGN-NOTES.md](DESIGN-NOTES.md), [design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md) |
 
-Completed plans are in [COMPLETED-PLANS.md](COMPLETED-PLANS.md).
+Completed plans are in [COMPLETED-PLANS.md](COMPLETED-PLANS.md). New work against this crate adds a
+row back here and reopens [CHECKLIST.md](CHECKLIST.md).
