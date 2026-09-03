@@ -69,9 +69,46 @@ wrongly after code exists.
   **What remains is narrower**: two sources claiming the same *kind* over overlapping-but-unequal
   memberships -- a real contradiction about the machine. Decide what a query returns then: a value
   plus a conflict marker, or the conflict itself, forcing the caller to adjudicate.
-  Note the detection machinery already exists. Overlapping-but-unequal sets at one kind is exactly
-  what `are_pairwise_disjoint` checks for cache domains today; generalising it from "cache levels" to
-  "any kind" is the whole of the check.
+  Note the detection machinery partly exists. Overlapping-but-unequal sets at one kind is exactly
+  what `are_pairwise_disjoint` checks for cache domains today -- though only at *query* time, inside
+  `outermost_partitioning_cache`, and `Core` and `Memory` domains are never validated at all.
+
+  ### The specifics, since "observations differ" is too vague to decide on
+
+  **Where it arises:** `discover()`, populating a `MachineMemoryTopology`. It makes **two separate,
+  sequential Win32 calls** -- `relation::discover()` then `cpu_set::enumerate()` -- and nothing
+  compares their results.
+
+  **Two shapes of conflict, not one.** The item above describes only the first:
+
+  - **A, partition conflict:** same kind, memberships overlap without being equal. GLPIE says a core
+    is `{0,1}`, CPU Sets groups `{0,1,2}` under one `CoreIndex`. `(kind, membership)` identity
+    from [D-15](DESIGN-NOTES.md#d-15) makes this detectable.
+  - **B, attribute conflict:** same processor, same attribute, **different scalar**. GLPIE's
+    `Core { efficiency_class }` against CPU Sets' `EfficiencyClass`. This is not a membership
+    question and D-15 does not reach it, which the item as first written did not notice.
+
+  **A third case that is not a source conflict at all: the two calls are not atomic.** A processor
+  parked, unparked, hot-added or hot-removed between them means the two halves describe **different
+  instants**. That is not Windows contradicting itself -- it is us sampling twice -- and **from a
+  single observation a torn read is indistinguishable from a genuine inconsistency.** So the topology
+  is already a composite of two moments and nothing records that, which is true even when nothing
+  conflicts.
+
+  **And a fourth, within a single source:** a processor named by two `Core` domains, from malformed
+  firmware or a hand-built description. Unchecked today.
+
+  ### What to decide
+
+  1. Does `discover()` **detect** at populate time, or is a conflict something only a query surfaces?
+     Detecting costs a comparison over every overlapping fact; not detecting means a caller who never
+     asks the right question never learns.
+  2. What happens when it does: **refuse** (an `Err` from `discover`, which would make a machine
+     unusable over a discrepancy that may be benign), **record and continue** (consistent with this
+     crate's posture of representing the awkward case), or **prefer a source** -- which is
+     reduce-on-insert wearing a different hat, and D-15 rejected it.
+  3. Whether to record that a topology is a **composite of two instants** regardless of conflict, and
+     whether to spend a third call re-reading the first source to tell a torn read from a real one.
 
 - [ ] **MMT-1.3** -- **What a consumer does when a needed fact was not observed**, given the bar that
   the model answers without further measurement. Degrade to a documented weaker policy, refuse, or
