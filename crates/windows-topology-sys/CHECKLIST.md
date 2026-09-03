@@ -668,9 +668,18 @@ separately and then re-fixed.
   from a **description**, where "the field was omitted" and "this node's capacity is unknown" are the
   same value. The [D-13](DESIGN-NOTES.md#d-13) audit found this and documentation cannot fix it.
 
-- [ ] **M5+.3** -- The partitioning rule is stated **three times in two crates**, and two of the
+- [x] **M5+.3** -- The partitioning rule is stated **three times in two crates**, and two of the
   three differ: `windows-platform-probes` omits the pairwise-disjointness check this crate requires.
   M4+.4 removes the reason to restate it.
+  **Done, and by M4+.4 the restatement had drifted in a second way**: it also ordered candidates by
+  **level number**, which this crate stopped doing. `Observation` now captures
+  `partitioning_cache_level` from `MachineMemoryTopology::outermost_partitioning_cache` at survey
+  time and looks the summary up, so there is one implementation of the rule.
+  **An existing platform-probes test then caught a real regression in M4+.4** -- and it was right to.
+  On this host L1 and L2 split the machine into the **same** eight pairs, so neither refines the
+  other and the first-wins tie-break answered `L1`, naming the inner cache for a boundary the outer
+  one also owns. Ties between *identical* partitions now take the higher level, which reads the
+  source's own labelling of one boundary rather than ordering distinct partitions by number.
 
 - [ ] **M5+.4** -- `windows-placement-probe` **refuses a partially-covering cache level** that this
   crate deliberately hands back, failing an entire measurement run over a topology this crate

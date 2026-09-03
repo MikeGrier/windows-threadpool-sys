@@ -753,6 +753,7 @@ fn agreeing_observation() -> crate::topology::Observation {
         packages: 1,
         cores: Vec::new(),
         caches: Vec::new(),
+        partitioning_cache_level: None,
         raw_active_processors: 4,
         raw_group_count: 1,
         raw_highest_numa_node: Some(0),
@@ -884,4 +885,53 @@ fn every_policy_would_produce_at_least_one_domain() {
              domains can perform no I/O"
         );
     }
+}
+
+// --- M5+.3: the partitioning rule has one implementation ---
+
+#[test]
+fn the_survey_reports_the_topology_crates_partitioning_level_not_its_own() {
+    // The restatement this removes differed from the crate's answer in two
+    // ways: it omitted the pairwise-disjointness check, and it ordered
+    // candidates by LEVEL NUMBER, which the topology crate stopped doing
+    // because a higher number is not always coarser.
+    //
+    // Here the higher level is the finer partition, so the two rules disagree:
+    // the old `max_by_key(level)` would answer L3, and asking the crate answers
+    // L2. The survey must report what the crate says.
+    let mut observation = agreeing_observation();
+    observation.caches = vec![
+        crate::topology::CacheLevel {
+            level: 2,
+            domains: 2,
+            processors_per_domain: vec![2, 2],
+        },
+        crate::topology::CacheLevel {
+            level: 3,
+            domains: 4,
+            processors_per_domain: vec![1, 1, 1, 1],
+        },
+    ];
+    observation.partitioning_cache_level = Some(2);
+
+    assert_eq!(
+        observation
+            .outermost_partitioning_cache()
+            .map(|c| c.level),
+        Some(2),
+        "the survey must not re-derive; it looks up what the crate decided"
+    );
+}
+
+#[test]
+fn no_partitioning_level_is_a_real_answer_in_the_survey_too() {
+    let mut observation = agreeing_observation();
+    observation.caches = vec![crate::topology::CacheLevel {
+        level: 3,
+        domains: 1,
+        processors_per_domain: vec![4],
+    }];
+    observation.partitioning_cache_level = None;
+
+    assert!(observation.outermost_partitioning_cache().is_none());
 }

@@ -101,6 +101,14 @@ pub struct Observation {
     pub cores: Vec<CoreShape>,
     /// Cache levels, ascending, each summarised across the machine.
     pub caches: Vec<CacheLevel>,
+    /// Which of [`Self::caches`] the topology crate says actually partitions
+    /// the machine, if any.
+    ///
+    /// Captured from `MachineMemoryTopology::outermost_partitioning_cache`
+    /// rather than derived from the summaries above, so the rule has one
+    /// implementation (`SH-16.9`). `None` is a real answer -- no reported level
+    /// divides this machine -- and not a failure.
+    pub partitioning_cache_level: Option<u8>,
 
     // --- read independently through Win32 ---
     /// `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`.
@@ -115,17 +123,23 @@ impl Observation {
     /// The outermost cache level that actually splits the machine into more
     /// than one domain, if any.
     ///
-    /// This is the rule the design wants, and it is deliberately *not* "level
-    /// 3". A shipping ARM64 laptop measured during the 2026-08-30 session
-    /// reports **no L3 at all**, with two L2 domains of six processors forming
-    /// the real cluster boundary, which is why the heuristic is phrased over
-    /// "the outermost level that partitions" rather than over a fixed number.
+    /// **Asked of `windows-topology-sys`, not re-derived here.** This method
+    /// used to restate the rule as "the highest level with more than one
+    /// domain", and by the time `M4+.4` landed that restatement differed from
+    /// the crate's own answer in two ways: it omitted the pairwise-disjointness
+    /// check, so a hand-built topology with overlapping blocks would have been
+    /// accepted, and it ordered candidates by **level number**, which the
+    /// topology crate stopped doing because a higher number is not always
+    /// coarser -- the ARM64 machine with no L3 is the standing counterexample.
+    ///
+    /// So the level is now captured at survey time from
+    /// `MachineMemoryTopology::outermost_partitioning_cache`, and this method
+    /// only looks up the summary for it. `SH-16.9` records this rule going
+    /// wrong three times in two crates; there is now one implementation.
     #[must_use]
     pub fn outermost_partitioning_cache(&self) -> Option<&CacheLevel> {
-        self.caches
-            .iter()
-            .filter(|c| c.domains > 1)
-            .max_by_key(|c| c.level)
+        let level = self.partitioning_cache_level?;
+        self.caches.iter().find(|c| c.level == level)
     }
 
     /// How many execution domains each candidate policy would produce.
@@ -288,6 +302,10 @@ pub fn measure() -> io::Result<Observation> {
         None
     };
 
+    // Asked once, here, rather than restated: the crate that owns the topology
+    // owns the rule (D-21).
+    let partitioning_cache_level = topology.outermost_partitioning_cache().map(|(level, _)| level);
+
     Ok(Observation {
         online_processors,
         groups,
@@ -297,6 +315,7 @@ pub fn measure() -> io::Result<Observation> {
         packages,
         cores,
         caches,
+        partitioning_cache_level,
         raw_active_processors,
         raw_group_count,
         raw_highest_numa_node,

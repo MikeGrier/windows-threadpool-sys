@@ -591,16 +591,23 @@ impl MachineMemoryTopology {
             .collect();
 
         // Coarsest by inclusion: the candidate no other candidate is coarser
-        // than. Ties -- two candidates refining each other, which means equal
-        // block memberships under different levels -- keep the first, matching
-        // `cache_partitions_at_level`'s own first-wins rule.
+        // than. Where two candidates describe the *same* partition -- identical
+        // blocks under different levels, which is the ordinary case for an L1
+        // and L2 that split a machine the same way -- neither refines the other,
+        // so the tie is broken by taking the **higher level**.
+        //
+        // That tie-break reads the source's own labelling of one boundary and is
+        // not the level ordering `M2+.2` forbids: distinct partitions are still
+        // ordered by inclusion, and level decides only which of two names for
+        // the identical partition is the outer one.
         candidates
             .iter()
-            .find(|candidate| {
+            .filter(|candidate| {
                 !candidates
                     .iter()
                     .any(|other| Self::refines(&candidate.1, &other.1))
             })
+            .max_by_key(|(level, _)| *level)
             .map(|(level, blocks)| (*level, blocks.clone()))
     }
 

@@ -1379,6 +1379,33 @@ fn the_outermost_partition_is_the_coarsest_one_not_the_highest_level() {
 }
 
 #[test]
+fn identical_partitions_under_two_levels_report_the_outer_one() {
+    // The ordinary shape on this host: L1 and L2 split the machine into the
+    // same eight pairs. Neither refines the other, so inclusion cannot separate
+    // them -- and answering "L1" would name the inner cache for a boundary the
+    // outer one also owns.
+    //
+    // Caught by an existing platform-probes test, which asserted that nothing
+    // deeper may also partition. That test was right.
+    let topo = machine_of(
+        8,
+        vec![
+            cache_at(1, 0, &[0, 1]),
+            cache_at(1, 1, &[2, 3]),
+            cache_at(1, 2, &[4, 5]),
+            cache_at(1, 3, &[6, 7]),
+            cache_at(2, 4, &[0, 1]),
+            cache_at(2, 5, &[2, 3]),
+            cache_at(2, 6, &[4, 5]),
+            cache_at(2, 7, &[6, 7]),
+        ],
+    );
+
+    let (level, blocks) = topo.outermost_partitioning_cache().expect("both partition");
+    assert_eq!(level, 2, "the outer name for one boundary");
+    assert_eq!(blocks.len(), 4);
+}
+#[test]
 fn the_usual_ordering_is_unchanged_where_the_two_rules_agree() {
     // Ordinary hardware: the higher level is also the coarser one, so the
     // answer must not move.
