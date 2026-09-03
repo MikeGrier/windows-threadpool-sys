@@ -19,7 +19,7 @@ the model.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| M1 the input contract | 2 of 5 done | nothing -- it is what unblocks the others |
+| M1 the input contract | 3 of 5 done | nothing -- it is what unblocks the others |
 | M2+ the plan as a value | parked | M1, and the topology model landing |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
@@ -70,12 +70,30 @@ whether the topology can answer it today -- so the model is designed against a r
   inclusion rather than by firmware numbering means two granularities can be **incomparable**, so
   the answer is a set of minimal shared granularities -- almost always one, but not by construction.
 
-- [ ] **EP-1.3** -- **The residency query.** Which memory domain each processor belongs to, and --
+- [x] **EP-1.3** -- **The residency query.** Which memory domain each processor belongs to, and --
   for a pair spanning two of them -- what it costs to place a shared buffer on one side rather than
   the other. **Gap already identified:** `Topology::distances` exists, is never populated, and Win32
   cannot populate it; the measurement exists in `windows-placement-probe` and reaches nothing.
   Tracked as `SH-16.11`. The probe measures this per node pair with a dedicated ring-placement
   column precisely because it was found to matter.
+  **Done:** stated as [EP-D-3](DESIGN-NOTES.md#ep-d-3). This is where the direction EP-1.2 refused
+  lands -- proximity is the link and symmetric, residency is the hop and is not.
+  The processor-to-node half is answered, with one asymmetry worth preserving: an unknown *cache*
+  domain costs an optimisation, but an unknown *memory* domain has no honest fallback, since the
+  pool must be allocated somewhere and guessing means quietly allocating remote memory for the life
+  of the process. `windows-placement-probe` already refuses on the second while tolerating the
+  first, and that judgement was correct.
+  **The cost half needs SH-16.11 restated, and it was.** That item read as though someone had
+  forgotten to populate a field. Two sharper problems replace it: `distances` can never carry
+  `Measured` provenance **by construction** -- its only inputs are a literal (`Synthetic`) and a file
+  (capped at `Restored`) -- so populating it would not help; and even populated it is SLIT-shaped,
+  one symmetric workload-independent scalar, while the question is directional. `D-9` in the
+  topology crate already deferred the attributed edge list that would answer it, naming *asymmetry*
+  among what it would absorb, with the trigger being that a scalar "demonstrably mismodels a machine
+  somebody is tuning for" -- and this planner is that machine-tuner.
+  **The trigger is approached, not met**, and the gap is a measurement nobody here can take: both
+  development hosts are single-node, so every directional run prints "VACUOUS ON THIS MACHINE".
+  Recorded so D-9 is reopened on evidence rather than on argument.
 
 - [ ] **EP-1.4** -- **What the planner does with an unanswered query**, given the model's bar is
   that it answers without further measurement. A fact that was not observed cannot be acquired at

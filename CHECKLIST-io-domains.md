@@ -768,8 +768,15 @@ Parked, not pending. Shape recorded so it is not lost, per the `M{n}+` conventio
   imply the rest were like it -- and which hop you got would depend on enumeration order. Real
   multi-node hardware is not equidistant: two nodes on one package are far closer than two across a
   socket link. `node_pairs` therefore selects one representative processor pair per *distinct* node
-  pair, keyed `(low, high)` so a link is measured once rather than once per direction, and `measure`
-  reports each hop separately in `by_node_pair`. The probe prints the resulting table, names the
+  pair, and `measure` reports each hop separately in `by_node_pair`.
+  **Corrected 2026-09-02:** this said the selection was "keyed `(low, high)` so a link is measured
+  once rather than once per direction", which the code has not done for some time -- it keys
+  `(producer.numa_node, consumer.numa_node)` and its comment states that "both *directions* are
+  kept", with `by_node_pair` adding that "each hop is measured once per ring placement, so there are
+  two". Four measurements per undirected edge, not one. Found while stating
+  [EP-D-3](crates/windows-execution-plan/DESIGN-NOTES.md#ep-d-3), whose whole subject is that
+  residency is directional, so a parked item asserting the opposite would have been read as evidence
+  against it. The probe prints the resulting table, names the
   cheapest and dearest hop, and says outright whether the spread is small enough for the single
   `cross NUMA node` row to be a fair summary.
   **These are measured hops, not a firmware distance matrix.** Windows exposes no NUMA distance table

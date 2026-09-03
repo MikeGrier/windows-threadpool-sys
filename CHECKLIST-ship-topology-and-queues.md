@@ -884,6 +884,28 @@ predicted about a 222-commit branch.
   **without further measurement**, a consumer shaping memory allocation must today either run the
   probe at decision time -- forbidden -- or guess. Gated on SH-16.8, and on the open question of
   which component owns the measurement phase.
+  **Corrected while stating [EP-D-3](crates/windows-execution-plan/DESIGN-NOTES.md#ep-d-3): the
+  wording above reads as an oversight, and it is not one.** The field is documented as being for a
+  fed-in description, because Windows exposes no user-mode SLIT reader -- accurate, and deliberate.
+  Two sharper problems replace the one this item claimed.
+  **First, `distances` can never carry `Measured` provenance, by construction.** Its only inputs are
+  hand construction (defaulting to `Synthetic`) and deserialization (capped at `Restored` by
+  `downgraded_to`), and `discover()` hardcodes `None`. So populating it would not help: a planner on
+  a real machine still could not obtain trustworthy distance *for that machine*.
+  **Second, even populated it answers the wrong question.** The matrix is SLIT-shaped -- one
+  symmetric, workload-independent scalar per pair -- while the residency decision is directional,
+  since the producer writes and the consumer reads. `D-9` in
+  [crates/windows-topology-sys/DESIGN-NOTES.md](crates/windows-topology-sys/DESIGN-NOTES.md) already
+  anticipated exactly this and deferred it, naming an attributed edge list that "would absorb HMAT,
+  **asymmetry**, and multi-hop CXL fabrics", with the trigger being that "scalar distance
+  demonstrably mismodels a machine somebody is tuning for". `D-8` keeps the JSON schema outside
+  semver specifically to make that revision cheap.
+  **The trigger is approached but not met, and the difference is a measurement nobody here can
+  take.** The probe treats direction as real -- four numbers per undirected edge, and its code says
+  "a hop is not symmetric even though the link is" -- but no run has *shown* those numbers differ,
+  because both development hosts report a single NUMA node and every such run prints "VACUOUS ON
+  THIS MACHINE". Take that measurement on multi-node hardware before reopening D-9 on asymmetry
+  grounds, not after.
 
 - [ ] **SH-16.12** -- **`Processor::capacity` uses `0` as both a legitimate efficiency class and a
   sentinel for "not known", and the two collide on the common case.** It is computed

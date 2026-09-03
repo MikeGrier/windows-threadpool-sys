@@ -13,6 +13,7 @@ a real caller instead of against a guess.
 |---|---|
 | <a id="ep-d-1"></a>EP-D-1 | **The shard-set query**: what the planner must know to choose which processors host a domain, and what today's model cannot tell it. |
 | <a id="ep-d-2"></a>EP-D-2 | **The proximity query**: how close two processors are, which selects the channel between their domains. Takes an **unordered** pair; the model has no answer today. |
+| <a id="ep-d-3"></a>EP-D-3 | **The residency query**: where a domain's pool lives, and which side of a cross-domain pair should host a shared ring. **Ordered**, and the half the model cannot answer is structurally unanswerable rather than merely unpopulated. |
 
 ## EP-D-1: the shard-set query
 
@@ -210,3 +211,111 @@ this query is the cause of that defect, not a separate problem.
 - A pairwise query over it, returning minimal shared granularities plus their membership.
 - Unobserved granularities represented, so an answer can be an upper bound and say so.
 - A top element, so the query is total.
+
+## EP-D-3: the residency query
+
+*Recorded by [CHECKLIST.md](CHECKLIST.md) EP-1.3.*
+
+### What the planner is choosing
+
+Two things, and they are different questions that happen to share a subject:
+
+- **Where each domain's own pool lives.** A domain allocates node-locally to the processor it is
+  pinned to. Per-processor, unordered, cheap.
+- **Which side of a cross-domain pair hosts their shared ring.** Ordered, because the producer
+  writes and the consumer reads, so the placement decides which of them pays for the crossing.
+
+This is where the direction that [EP-D-2](#ep-d-2) deliberately refused lands. Proximity is the
+link and is symmetric; residency is the hop and is not.
+
+### The first half is answered, with one asymmetry worth keeping
+
+`Topology::memory_domains()` yields the memory domains with their processor sets, so
+processor-to-domain is a lookup.
+
+Partial coverage exists here as it does for caches -- a processor may be named by no memory domain
+-- but **the right response is different, and `windows-placement-probe` already got this right**.
+Its `places_from_topology` refuses on a missing NUMA node while tolerating a missing cache domain,
+and the asymmetry is principled: an unknown cache domain costs an optimisation, whereas an unknown
+memory domain has no honest fallback at all, since the pool has to be allocated *somewhere* and
+guessing means quietly allocating remote memory for the life of the process.
+
+So the planner inherits that: an unplaced processor may still host a domain, but not with a
+node-local pool, and the difference has to be visible in the plan rather than assumed away.
+
+### The second half is not merely unpopulated -- it cannot be measured, by construction
+
+`Topology::distances` exists, and it is easy to read its permanent `None` as an oversight. It is
+not. The field is documented as being for a fed-in description, because "Windows exposes no
+user-mode SLIT reader", and that is accurate.
+
+The sharper problem is what follows from it. `distances` has exactly two input paths: hand
+construction, which defaults to `Provenance::Synthetic`, and deserialization, which
+`downgraded_to(Provenance::Restored)` caps. `Topology::discover` hardcodes `None`. So **no path
+exists by which `distances` can ever carry `Measured` provenance** -- not because nobody wrote the
+code, but because the only sources are a literal and a file, and a file cannot establish that it
+describes the machine you are on.
+
+Under the model's bar -- usable without further measurement -- a planner on a real machine
+therefore cannot obtain trustworthy distance for that machine today, and no amount of populating
+the existing field would change that.
+
+### A scalar distance cannot express what this query asks
+
+Even a populated `Distances` would not answer it. The matrix is SLIT-shaped: one scalar per pair,
+with `matrix[i][i]` conventionally `10`. That is a *symmetric, workload-independent* abstraction,
+and the residency question is neither. It asks which of two directions is cheaper for a specific
+access pattern -- a ring one side writes and the other reads.
+
+`windows-topology-sys` D-9 already anticipated this precisely, and excluded it deliberately:
+
+> **HMAT-style attributed relations.** ACPI's Heterogeneous Memory Attribute Table supersedes SLIT,
+> giving per-initiator/per-target read and write latency and bandwidth -- four numbers where SLIT
+> gives one scalar [...] A general edge list (`{ from, to, read_latency_ns, read_bandwidth_mbps,
+> ... }`) would absorb HMAT, **asymmetry**, and multi-hop CXL fabrics; the scalar distance matrix
+> this schema keeps will [be revisited when] scalar distance demonstrably mismodels a machine
+> somebody is tuning for.
+
+**This planner is the machine-tuner that deferral names, and asymmetry is exactly the property it
+needs.** D-8 makes the revision cheap by keeping the JSON schema outside the semver contract, which
+that decision says is "precisely what makes D-9's deferrals safe rather than merely convenient".
+
+### The trigger is approached, not met, and saying which matters
+
+D-9's condition is *demonstrable* mismodelling, and honesty requires separating what is shown from
+what is expected.
+
+What is shown: `windows-placement-probe` measures per-hop cost as four numbers per undirected edge
+-- two directions times two ring placements -- and its code states that "a hop is not symmetric even
+though the link is". The apparatus treats direction as real.
+
+What is **not** shown: any measurement demonstrating that the four numbers differ. Both development
+hosts report a single NUMA node, so every such run is vacuous -- the spike says so itself, printing
+"VACUOUS ON THIS MACHINE" and "Apparatus works; question unanswered". So the claim "scalar distance
+mismodels this machine" is currently unproven on hardware anyone here has.
+
+The requirement is real either way, because the planner must choose a side and today has nothing to
+choose with. But the *specific* claim that a scalar is insufficient needs a multi-node measurement,
+and that measurement should be taken before D-9 is reopened on those grounds rather than after.
+
+### A measured locality fact must carry what it measured
+
+The probe's numbers are nanoseconds for one ring-handoff pattern at one message size. Promoting
+them into the topology as "the distance" would bake one workload into a model other consumers share
+-- and a different consumer, streaming large buffers rather than handing off small messages, would
+read them as authoritative and be wrong.
+
+So a measured relation has to name its measurement, not just its value. This is the concrete reason
+per-relation provenance has to be more than a trust label: "measured" is not a sufficient
+description of a number whose meaning depends on how it was obtained.
+
+### What this asks of the model
+
+- Processor-to-memory-domain, with the unplaced case distinguishable rather than defaulted, because
+  here it has no honest default.
+- A **directed** cost between memory domains, which SLIT's scalar cannot express and which D-9
+  already sketched as an attributed edge list.
+- Provenance rich enough to say *what* a measured number measured, so one consumer's workload does
+  not become every consumer's constant.
+- And, before reopening D-9 on the asymmetry argument: a multi-node measurement showing the
+  directions actually differ.
