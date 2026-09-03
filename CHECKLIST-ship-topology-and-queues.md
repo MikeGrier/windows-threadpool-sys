@@ -840,6 +840,12 @@ predicted about a 222-commit branch.
   [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md) is attributed to hardware, but
   those sixteen processors do share one L3, so a per-level model would express it.
   Gated on the session above, which carries the design space and the open questions.
+  **Scope addition from [D-13](crates/windows-topology-sys/DESIGN-NOTES.md):** the audit that decision
+  performed over every `Option` in the crate found exactly one site that documentation cannot fix.
+  `DomainKind::Memory::memory_bytes` is unambiguous from `discover`, which always sets `None`, but a
+  **description's** `None` conflates "the description omitted the field" with "this node's capacity is
+  genuinely unknown" -- the two are the same value today. Whatever representation this item lands must
+  cover it, since absence becoming first-class is precisely the fix.
   **Direction now settled** by the engineer: presence and observation must be modeled, not
   collapsed into an `Option`. "Win32 did not report it" and "it was found not to be present" are
   different facts, and the representation must be built for **observed connectivity** rather than

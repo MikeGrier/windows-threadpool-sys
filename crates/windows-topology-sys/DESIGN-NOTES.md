@@ -32,6 +32,8 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-10"></a>D-10 | **The description is platform-neutral; platform constraints live in the planner.** A description sourced from Linux will have one group possibly containing more than 64 processors, which is unrepresentable as a Windows affinity mask. The schema does not enforce the Windows limit. A Windows planner consuming such a description must reject or split it rather than silently emitting an affinity mask that cannot exist. Keeping the constraint in the planner is what allows a description of a machine to be written on, and for, a different platform. |
 | <a id="d-11"></a>D-11 | **A `Memory` domain's `memory_bytes` is `Option<u64>`, not a bare `u64`, because Windows's own enumeration cannot report it.** `GetLogicalProcessorInformationEx`'s NUMA-node relationship carries a processor set and a node number, never a capacity; measuring node memory would mean a different API entirely. A `Topology` this crate discovers therefore always sets `memory_bytes: None` for every memory domain it produces from `RelationNumaNode`/`RelationNumaNodeEx`. Using `Some(0)` as a stand-in would be indistinguishable from "this node genuinely has no memory," which is exactly the CXL-expander case D-5 exists to represent honestly; `None` is the only choice that does not silently invent data. A hand-written or fed-in description may still supply a real value. |
 | <a id="d-12"></a>D-12 | **A topology carries its own provenance, and the untrusted value is the default.** This crate deliberately lets a topology be discovered, built by hand, or deserialized from a description written for a machine you do not have -- and until now the three were indistinguishable once built. [`Provenance`] is `Synthetic` by `Default`, so forgetting is safe and claiming is deliberate; only `discover` yields `Measured`; and deserialization can only ever *downgrade*, so a file cannot assert it is the machine you are on. |
+| <a id="d-13"></a>D-13 | **Every `Option` in this crate must say *which* absence it means.** "Not observed", "observed and absent", and "a computed answer that is negative" are three different facts, and an `Option` spells all three identically. Each one is documented at its site, and no field may mean more than one. See the detail section below, which audits every `Option` the crate has. |
+| <a id="d-14"></a>D-14 | **Windows's `LastLevelCacheIndex` is not `Topology::outermost_partitioning_cache`, and neither is wrong.** Measured on the x64 development host: CPU Sets reports **one** LLC group over all sixteen processors, while the derivation reports **eight** partitions at L2. Windows names the *last* level; the derivation names the outermost level that *divides*. They answer different questions, so neither may be substituted for the other, and a consumer treating the CPU-set value as "the cache domain" would collapse eight groups into one on that machine. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -80,6 +82,88 @@ transform claiming it. `from_relations` is a pure function of whatever relations
 cannot know where they came from; putting the claim in `discover` keeps it attached to the act of
 asking the operating system, so a future second caller of the transform does not silently inherit an
 assertion it has not earned.
+
+## D-13: which absence an `Option` means
+
+An `Option` is three different facts wearing one shape, and this crate carries all three:
+
+1. **Not observed.** Nothing asked. The value may exist on this machine; we did not look, or there
+   is no way to look.
+2. **Observed and absent.** Something asked, and the answer was that there is none.
+3. **A negative result.** Not an absence at all: a computed answer whose value happens to be "no".
+
+A consumer that cannot tell (1) from (2) will eventually read one as the other, and the failure is
+silent both ways -- treating "we did not look" as "there is none" invents a fact, and treating
+"there is none" as "we did not look" sends a caller off to re-derive something already settled.
+
+**The rule: every `Option` documents which of the three it means, at its site, and no single
+`Option` may mean more than one.** Where a field would otherwise have to mean two, that is the
+signal to change the representation rather than to write a longer comment.
+
+This is the same reasoning [D-11](#d-11) already applied to `memory_bytes`, one level down: `Some(0)`
+was rejected there because a sentinel would be indistinguishable from a real value. D-13 is that
+argument carried up from "do not use a sentinel" to "say which absence you mean".
+
+### The audit
+
+| Site | Which absence | Notes |
+|---|---|---|
+| `Topology::distances` | **not observed**, and unobservable here | Windows exposes no user-mode SLIT reader, so `discover` can never fill it. Populated only by a fed-in description. |
+| `Topology::cpu_sets` | **not observed** | `Some(v)` means the CPU-set API answered, and `v` may legitimately be empty; `None` means nothing asked, which is what a hand-built or deserialized topology is. |
+| `DomainKind::Memory::memory_bytes` | **not observed** from `discover` | See below: a *description's* `None` is currently ambiguous, and that is the one gap this audit found. |
+| `Topology::processor` | lookup miss | Ordinary "no such element", not a fact about the machine. |
+| `Topology::outermost_partitioning_cache` | **negative result** (category 3) | `None` is the real answer "no level divides this machine", already documented as such. Not an absence, and must not be read as one. |
+
+### The one gap this audit found
+
+`memory_bytes` is unambiguous from `discover`, which always sets `None` for the reason D-11 gives.
+It is **ambiguous from a description**: a description that omits the field and a description
+written for a node whose capacity is genuinely unknown produce the same `None`, and nothing
+distinguishes them.
+
+That is not fixable by documentation, because the two really are the same value today. It is fixed
+by the representation, which is the subject of the open locality-model work -- see `SH-16.8` in
+[CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md), where absence
+becomes first-class rather than a shape. Recorded here so the gap is not rediscovered, and queued
+there so it is not merely recorded.
+
+### Where this crate already got it wrong
+
+`Processor::capacity` is the counter-example, and it is worse than an ambiguous `Option`: it is a
+**sentinel that collides with a legitimate value**. `0` means offline, *or* in no core domain, *or*
+efficiency class zero -- and the third is every processor on every non-hybrid machine. A careful
+caller cannot distinguish them at all, where an ambiguous `Option` at least admits it is absent.
+Tracked as `SH-16.12`. `DomainKind::Core { efficiency_class }` carries the same fact with no
+sentinel and is the interim answer.
+
+## D-14: Windows's last-level cache is a different question
+
+`SYSTEM_CPU_SET_INFORMATION::LastLevelCacheIndex` and
+[`Topology::outermost_partitioning_cache`](crate::Topology::outermost_partitioning_cache) both look
+like "which cache groups these processors", and they are not the same question.
+
+Measured on the x64 development host, sixteen processors:
+
+- CPU Sets reports **one** distinct `LastLevelCacheIndex`. That is the L3, which spans the machine.
+- `outermost_partitioning_cache` reports **eight** partitions, at L2.
+
+Both are correct. Windows names the **last** level in the hierarchy, whether or not it divides
+anything; the derivation names the outermost level that **does** divide, which is what a caller
+sharding work needs and is why it exists. On a machine whose last level is shared by everything,
+those answers differ by the whole width of the machine.
+
+The consequence worth stating plainly: **a consumer must not substitute one for the other.** Reading
+`LastLevelCacheIndex` as "the cache domain" would have produced one shard group where the derivation
+produces eight, and nothing about the value would have looked wrong.
+
+This is also the first concrete instance of two Win32 sources describing overlapping facts, which is
+why `Topology::cpu_sets` is carried beside the domains rather than merged into them. Deciding what a
+consumer should do when the two disagree -- as opposed to answering different questions, which is
+this case -- is `SH-16.13`.
+
+Kept honest by a test that asserts the *relationship* rather than this host's numbers: Windows's
+grouping is never finer than the derived one, because the last level is at or outside whatever level
+first divides the machine.
 
 ## What was deliberately excluded (D-9)
 
