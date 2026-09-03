@@ -35,9 +35,9 @@ the **adapter's** problem and must not be filed here as a gap.
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | M1 settle what is still open | **5 of 5 done** | nothing -- complete |
-| M2 the granularity model | **ready** | nothing; M1 is closed and D-21 makes it self-justified |
+| M2 the granularity model | **6 of 6 done** | nothing -- complete |
 | M3 observation and provenance | **ready** | nothing (1 of 4 answered early, by D-19) |
-| M4 the queries | parked | M2, M3 |
+| M4 the queries | **ready** | M2 is done; M3 is decision work that does not block it |
 | M5 the defects this subsumes | parked | M4, **except M5+.5 (done)** |
 
 **M1 was decision work, not implementation**, and it is complete. Each item was a question the
@@ -330,13 +330,24 @@ quietly worked around, per the re-plan rule.
   > multi-group path was untested. Seven `is_subset` tests and a cross-group order test took that from
   > 1 detection to 4, two of which name the defect directly.
 
-- [ ] **M2+.5** -- Make absence first-class per [D-13](DESIGN-NOTES.md#d-13): **not observed**,
+- [x] **M2+.5** -- Make absence first-class per [D-13](DESIGN-NOTES.md#d-13): **not observed**,
   **observed and absent**, and **a negative result** are three different facts that an `Option`
   spells identically. Per [D-19](DESIGN-NOTES.md#d-19) this also carries the contested case -- a
   subject the sources genuinely disagreed on is one the unified view does not cover, which is *not
   observed*, so no fourth state is added.
   **Deliverable: the vocabulary type**, which `M5+.2` and `M5+.4` then consume -- M5+.4 already says
   "M2+.5 gives it the vocabulary to accept one". Independent of M2+.2/.3/.4, so it lands separately.
+  **Done.** `src/observed.rs` -- `Observed<T>` with `Known`, `Absent`, `NotObserved`, plus `known()`,
+  `was_observed()`, `map()`, and a `Default` of `NotObserved` (D-12's reasoning: forgetting a field
+  must not assert something about the machine). 9 tests.
+  **Two variants, not three, and the omission is deliberate.** The *negative result* is not an
+  absence -- it is a computed answer whose value happens to be "no" -- so giving it a variant would
+  re-create the conflation the type removes. It stays an ordinary value, or an `Option` documented as
+  meaning exactly that.
+  **Sabotage-verified:** making `was_observed()` treat `Absent` as a gap -- the precise conflation
+  this type exists to prevent -- is caught by the test named for that claim.
+  Not yet *applied* to any field: `M5+.2` (`memory_bytes` from a description) and `M5+.4` (the probe
+  refusing a partially-covering cache level) are the sites, and both are M5 items.
 
 - [x] **M2+.6** -- **Relations carry attributes, not only memberships.** Required by
   [D-19](DESIGN-NOTES.md#d-19): once the relation set *is* the unified model,

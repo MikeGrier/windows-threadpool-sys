@@ -66,6 +66,8 @@ mod cpu_set;
 mod domain;
 #[cfg(windows)]
 mod granularity;
+/// Absence with its reason attached.
+mod observed;
 #[cfg(windows)]
 mod processor_set;
 /// Where a topology's content came from.
@@ -83,6 +85,7 @@ pub use cpu_set::CpuSet;
 pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorId};
 #[cfg(windows)]
 pub use granularity::Granularity;
+pub use observed::Observed;
 pub use processor_set::ProcessorSet;
 pub use provenance::Provenance;
 #[cfg(windows)]
