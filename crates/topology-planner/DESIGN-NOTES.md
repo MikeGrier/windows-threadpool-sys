@@ -219,7 +219,7 @@ this query is the cause of that defect, not a separate problem.
   measured-only tier and a machine with no L3 both have positions.
 - Access to that order **as a collection**, with a pairwise helper derived from it, returning minimal
   shared granularities plus their membership. Stated here first as a pairwise query, which
-  [windows-topology-sys](../windows-topology-sys/CHECKLIST.md) `M4+.1` corrected: requiring the answer
+  [windows-topology-sys](../windows-topology-sys/COMPLETED-CHECKLIST.md) `M4+.1` corrected: requiring the answer
   to carry the block containing both processors makes it a question about the partition, not the pair,
   and a pairwise-primary surface would force the planner into the O(n^2) reconstruction that `SH-16.9`
   records going wrong three times. The three *requirements* below are unchanged; only the shape is.
@@ -359,7 +359,7 @@ re-scopes the component that records it.*
 ### What it settles
 
 **The crate-naming question** (`MMT-1.5` in
-[windows-topology-sys](../windows-topology-sys/CHECKLIST.md)). The planner does not live in
+[windows-topology-sys](../windows-topology-sys/COMPLETED-CHECKLIST.md)). The planner does not live in
 `windows-topology-sys`, which therefore stays a pure Win32 wrapper and keeps its `-sys` name. The
 decisive point is not preference but the adapter boundary: a crate on one side of an adapter is
 exactly what `-sys` names, and [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20) already scoped

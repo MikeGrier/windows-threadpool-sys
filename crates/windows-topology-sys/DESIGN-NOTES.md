@@ -1,8 +1,12 @@
 # Design notes: windows-topology-sys (Tier 1)
 
-This crate does not exist yet as compiled code. This file, the checklist beside it, and the design session
-it references are the design record that precedes it. Creating the Cargo skeleton is M1.1 in
-[CHECKLIST.md](CHECKLIST.md).
+This file is the authority for the crate's current behaviour. It began as a design record written
+before any code existed; the crate now ships, so where a decision below and the code disagree, the
+disagreement is a defect in one of them rather than a plan not yet executed.
+
+The plans that produced it are complete and archived in
+[COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md) -- the `M1`-`M4` enumeration plan, then the `MMT-*`
+reshape. Item IDs cited below (`MMT-1.1`, `M4+.1`, ...) resolve against that file.
 
 ## Intent
 
@@ -176,7 +180,7 @@ first divides the machine.
 
 ## D-15: a relation is its membership, and observations are a set
 
-*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.1.*
+*Recorded by [CHECKLIST.md](COMPLETED-CHECKLIST.md) MMT-1.1.*
 
 ### The question, and why it looked balanced
 
@@ -252,7 +256,7 @@ here.
 
 ## D-16: retry until coherent, and represent what survives
 
-*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.2.*
+*Recorded by [CHECKLIST.md](COMPLETED-CHECKLIST.md) MMT-1.2.*
 
 ### The problem, stated without the wrong framing
 
@@ -309,12 +313,12 @@ shape.
 
 The retry is bounded. Exhausting the bound is not a failure to collect -- it is the **conclusion**
 that the disagreement is genuine, and the point at which the conflict representation
-([MMT-1.2](CHECKLIST.md)'s partition and attribute shapes) applies. The two are one mechanism: retry to remove the
+([MMT-1.2](COMPLETED-CHECKLIST.md)'s partition and attribute shapes) applies. The two are one mechanism: retry to remove the
 transient cases, then represent whatever is left.
 
 ## D-17: incoherence in the field, and what it demands
 
-*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.2.*
+*Recorded by [CHECKLIST.md](COMPLETED-CHECKLIST.md) MMT-1.2.*
 
 ### Windows is the oracle, and an oracle is not a proof
 
@@ -390,7 +394,7 @@ writing down what was seen.
 
 ## D-18: what an observation is, and the last of MMT-1.2
 
-*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.2, which this closes.*
+*Recorded by [CHECKLIST.md](COMPLETED-CHECKLIST.md) MMT-1.2, which this closes.*
 
 ### The gap D-15 left
 
@@ -444,7 +448,7 @@ still returns a topology. The bound is where transience stops being a possible e
 
 ## D-19: the unified view, presented in addition to the individual ones
 
-*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.3. Corrects a pessimistic reading of
+*Recorded by [CHECKLIST.md](COMPLETED-CHECKLIST.md) MMT-1.3. Corrects a pessimistic reading of
 [D-15](#d-15) that had been carried into the M2/M4 plan.*
 
 ### The error this corrects
@@ -509,7 +513,7 @@ the same requirement.
 
 ## D-20: the Win32 boundary, and the deletion of `distances`
 
-*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.4. Supersedes `SH-16.11` in
+*Recorded by [CHECKLIST.md](COMPLETED-CHECKLIST.md) MMT-1.4. Supersedes `SH-16.11` in
 [CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md), which proposed
 filling the field.*
 

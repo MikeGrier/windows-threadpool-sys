@@ -228,7 +228,7 @@ milestone exists to avoid. So SH-3.4 waits on it.
 
 **Updated 2026-09-03 -- what that work now is, and what discharges the gate.** All six of those items
 are superseded into the `MMT-*` plan in
-[crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md), so the gate is
+[crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md), so the gate is
 discharged by **MMT M2 through M5 landing in this PR**, which is the engineer's direction. Two things
 that previously stood in the way are gone:
 
@@ -753,7 +753,7 @@ gap; the options in SH-14.3 instead make the recurrence harder to reach.
 > **Six of these items are superseded.** SH-16.5, SH-16.8, SH-16.9, SH-16.11, SH-16.12 and SH-16.13
 > are all the same piece of work seen from different angles -- reshaping the machine memory topology
 > -- and they now live in
-> [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) as a plan of
+> [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) as a plan of
 > their own, numbered `MMT-*`. They are left here, unchecked and marked, rather than deleted: each
 > records how the defect was *found*, which the new plan does not repeat.
 >
@@ -834,7 +834,7 @@ predicted about a 222-commit branch.
   Fixed by dropping empty domains, with the contrast against `memory_domains` (which deliberately
   keeps a processor-less domain, D-5) recorded at the filter.
 
-- [ ] **SH-16.5** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **`windows-placement-probe` refuses a partially-covering cache level that
+- [x] **SH-16.5** -- **DISCHARGED 2026-09-03 by M5+.4 -- `cache_domain` is `Observed<u32>`, the refusal is gone, and `Slice::same_cache_domain` answers `None` rather than `same` for an unobserved participant.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **`windows-placement-probe` refuses a partially-covering cache level that
   `windows-topology-sys` deliberately hands back.** `outermost_partitioning_cache` documents that
   "full coverage of the online processors is deliberately *not* required"; `places_from_topology`
   treats any online processor the chosen level does not name as `MissingPlacement::CacheDomain` and
@@ -858,7 +858,7 @@ predicted about a 222-commit branch.
   landed the collapse the session existed to remove. The contradiction is fixed by `MMT` **M2+.5** and
   **M5+.4** instead. The patch is kept as the record of what was tried and why it was not taken.
 
-- [ ] **SH-16.8** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **The locality model collapses a seven-kind, any-depth topology onto one cache
+- [x] **SH-16.8** -- **DISCHARGED 2026-09-03 by M2 -- the granularity order carries all seven kinds and any depth, and `minimal_shared` is the meet rather than a single cache level.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **The locality model collapses a seven-kind, any-depth topology onto one cache
   boundary, and nothing records that as a choice.** Raised by the engineer during the SH-16.5 fix, and
   confirmed: `windows-topology-sys` hardcodes no level count (`level` is a `u8`, and a regression test
   already guards against a consumer sweeping `1..=4`) and models `Group`, `Package`, `Die`, `Module`,
@@ -883,7 +883,7 @@ predicted about a 222-commit branch.
   for a ladder of levels with optional rungs. That rules out the SH-16.5 prototype's `Unknown` arm,
   which merges both. Shape still open.
 
-- [ ] **SH-16.9** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **The "outermost partitioning cache" rule is stated three times, and two of the
+- [x] **SH-16.9** -- **DISCHARGED 2026-09-03 by M5+.3 -- the rule has one implementation, which `windows-platform-probes` now asks rather than restates.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **The "outermost partitioning cache" rule is stated three times, and two of the
   three disagree.** `MachineMemoryTopology::outermost_partitioning_cache` requires more than one partition **and**
   pairwise disjointness. `Observation::outermost_partitioning_cache` in `windows-platform-probes` is
   `caches.iter().filter(|c| c.domains > 1).max_by_key(|c| c.level)` -- **no disjointness check** --
@@ -945,7 +945,7 @@ predicted about a 222-commit branch.
   checks the decode is self-consistent, not that it matches the OS. Confirm against a parked
   processor or an explicit `SetProcessDefaultCpuSets` before relying on the flags.
 
-- [ ] **SH-16.13** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **Reconcile the CPU-set observation with the relationship walk.** `CoreIndex`,
+- [x] **SH-16.13** -- **DISCHARGED 2026-09-03 by M3+.1.2 -- CPU Sets are folded into the relation set and carried beside the walk, so both observers are visible per relation.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **Reconcile the CPU-set observation with the relationship walk.** `CoreIndex`,
   `NumaNodeIndex` and `EfficiencyClass` **duplicate** facts `GetLogicalProcessorInformationEx`
   already reports, from a different kernel path -- so this is not redundancy to remove, it is a
   **second independent observer of the same relations**, and the two can disagree under a hypervisor
@@ -962,12 +962,12 @@ predicted about a 222-commit branch.
   sentinel**, so it is a cleaner source for the field whose `capacity` encoding collides with
   "unknown".
 
-- [ ] **SH-16.11** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.**
+- [x] **SH-16.11** -- **DISCHARGED 2026-09-03 by M5+.5 -- `distances` and the `Distances` type are deleted.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.**
   **And now ANSWERED, in the opposite direction to what this item proposed.**
   [D-20](crates/windows-topology-sys/DESIGN-NOTES.md#d-20) rules that the crate does not go below the
   Win32 topology APIs, so a fact Win32 does not report is not one the crate has: `distances` is
   **deleted, not filled**. The removal is `M5+.5` in
-  [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md). Everything
+  [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md). Everything
   below is the reasoning that led there and is kept for that; it no longer describes work. **`MachineMemoryTopology::distances` is a field for a fact Win32 cannot supply, it is never
   populated, and the measurement that would fill it already exists elsewhere.** `discover()`
   hardcodes `distances: None`, every other construction sets `None`, and no consumer reads the
@@ -1002,7 +1002,7 @@ predicted about a 222-commit branch.
   THIS MACHINE". Take that measurement on multi-node hardware before reopening D-9 on asymmetry
   grounds, not after.
 
-- [ ] **SH-16.12** -- **SUPERSEDED by [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) (MMT-*); kept for how it was found.** **`Processor::capacity` uses `0` as both a legitimate efficiency class and a
+- [x] **SH-16.12** -- **DISCHARGED 2026-09-03 by M5+.1, subsumed by M4+.2 -- the shard-set surface has no sentinel, so `0` is never overloaded.** SUPERSEDED by [crates/windows-topology-sys/COMPLETED-CHECKLIST.md](crates/windows-topology-sys/COMPLETED-CHECKLIST.md) (MMT-*); kept for how it was found.** **`Processor::capacity` uses `0` as both a legitimate efficiency class and a
   sentinel for "not known", and the two collide on the common case.** It is computed
   `online.then(|| find the owning Core domain).flatten().unwrap_or(0)`, so `0` means the processor is
   offline, *or* is online but named by no `Core` domain, *or* genuinely has efficiency class zero.

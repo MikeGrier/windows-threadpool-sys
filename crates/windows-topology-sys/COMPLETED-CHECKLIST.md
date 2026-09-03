@@ -551,7 +551,7 @@ item against the code before planning work from it.**
     cannot reach. `M3+.1.2` matches relations by `(kind, membership)`, so two sources describing one
     core agree on *that* even if they disagree about its `efficiency_class` -- and the unified
     relation keeps the walk's value while the CPU-sets value goes unrecorded.
-    This is [MMT-1.2](CHECKLIST.md)'s **attribute shape** and [D-18](DESIGN-NOTES.md#d-18)'s second
+    This is [MMT-1.2](COMPLETED-CHECKLIST.md)'s **attribute shape** and [D-18](DESIGN-NOTES.md#d-18)'s second
     subject kind: an observation whose subject is `(processor, attribute)` rather than
     `(kind, membership)`. Filed as its own item because the fold's doc comments cite it, and a rule
     cited in code but scheduled nowhere is exactly the orphaning the "design notes are not a work
