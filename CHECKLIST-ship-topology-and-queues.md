@@ -25,7 +25,7 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
-| M16 tenth review round | 6 of 12 open | **gates the merge**; 6 fixed, 6 wait on the design session |
+| M16 tenth review round | 7 of 13 open | **gates the merge**; SH-16.10 is ungated and next |
 | M-inf parked | ungated | not scheduled, deliberately |
 
 **The critical path is M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4.** M14 and M15 do not
@@ -867,11 +867,40 @@ predicted about a 222-commit branch.
   `SchedulingClass`, `AllocationTag`, `EfficiencyClass`, and per-processor `Parked` / `Allocated` /
   `RealTime` state.
   Raised by the engineer's question of whether we expose everything a real system would reveal
-  through the Win32 API set. Today the answer is **no**. Verify the field list against the SDK
-  before relying on it. Gated on SH-16.8, since what shape it lands in depends on the model.
+  through the Win32 API set. Today the answer is **no**.
   Note `Parked` and `Allocated` bear directly on **thread counts and assignments**, one of the three
   decisions the model exists to serve, so this is a gap already costing a named use rather than
   speculative completeness.
+  **Ungated, and split, because the gating premise was wrong.** This said "gated on SH-16.8, since
+  what shape it lands in depends on the model". That conflated two things: *acquiring* the data and
+  *reconciling* it with what `GetLogicalProcessorInformationEx` already reports. Acquisition does
+  not depend on the model at all -- CPU Sets is a **cheap OS read**, in the same class as the walk
+  this crate already does, and nothing about reading it presumes a granularity representation. Only
+  reconciliation depends on the model, and that is now SH-16.13.
+  Field list **verified against `windows-sys 0.61.2`** rather than recalled: `Id`, `Group`,
+  `LogicalProcessorIndex`, `CoreIndex`, `LastLevelCacheIndex`, `NumaNodeIndex`, `EfficiencyClass`,
+  a union carrying `AllFlags` (`Parked` / `Allocated` / `AllocatedToTargetProcess` / `RealTime`), a
+  union carrying `SchedulingClass`, and `AllocationTag`. All five APIs are present
+  (`GetSystemCpuSetInformation`, `GetThreadSelectedCpuSets`, `SetThreadSelectedCpuSets`,
+  `SetThreadSelectedCpuSetMasks`, `SetProcessDefaultCpuSets`) and `Win32_System_SystemInformation`
+  is already an enabled feature, so there is no manifest change and no blocker.
+
+- [ ] **SH-16.13** -- **Reconcile the CPU-set observation with the relationship walk.** `CoreIndex`,
+  `NumaNodeIndex` and `EfficiencyClass` **duplicate** facts `GetLogicalProcessorInformationEx`
+  already reports, from a different kernel path -- so this is not redundancy to remove, it is a
+  **second independent observer of the same relations**, and the two can disagree under a hypervisor
+  or where one path is stale.
+  This is the concrete instance of the design session's "can one relation hold several
+  observations?" question, which until now rested on the file-handle spike's agree/disagree
+  reasoning about a different subject. It is no longer speculative: two Win32 sources describe the
+  same processor's NUMA node and efficiency class today.
+  Per [PLATFORM INTEGRITY](.github/copilot-instructions.md)'s duplicate-then-decide rule, SH-16.10
+  lands the CPU-set data as its **own** observation alongside the existing domains, without merging.
+  This item is the merge-or-delete decision, made when the model settles rather than pre-empted.
+  Gated on SH-16.8.
+  Note it also bears on SH-16.12: CPU Sets carries `EfficiencyClass` as a plain `u8` with **no
+  sentinel**, so it is a cleaner source for the field whose `capacity` encoding collides with
+  "unknown".
 
 - [ ] **SH-16.11** -- **`Topology::distances` is a field for a fact Win32 cannot supply, it is never
   populated, and the measurement that would fill it already exists elsewhere.** `discover()`
