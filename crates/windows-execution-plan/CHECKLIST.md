@@ -1,15 +1,22 @@
-# Checklist: the execution-domain planner
+# Checklist: the topology planner
 
-Plans the mapping from a `MachineMemoryTopology` to a set of execution domains. See
-[COMPONENT.md](COMPONENT.md) for what this crate is and why it is separate from both the topology
-crate and the runtime.
+Plans an arrangement of execution domains from a stated **goal** plus an **abstracted idealized**
+description of a machine. See [COMPONENT.md](COMPONENT.md) for what this crate is and why it is
+separate from both the topology crate and the runtime, and
+[EP-D-4](DESIGN-NOTES.md#ep-d-4) for the architecture it now sits in.
+
+**The component is being re-scoped**, per [EP-D-4](DESIGN-NOTES.md#ep-d-4). It is named
+`topology-planner`; it queries an abstract model covering processors, memory, storage, interconnects,
+distances and bottlenecks rather than `MachineMemoryTopology` directly; and **adapters** bracket it
+-- one exposing its traits over the Windows topology objects, one realizing a plan as buffers, rings
+and threads. The directory is still `windows-execution-plan` pending the layout decision that
+EP-D-4 leaves open. **M2+ onward are written against the superseded shape and are not yet re-cut.**
 
 ## Where this stands
 
 **Nothing is implemented.** M1 is the only active milestone, and it is deliberately a
 *requirements* milestone rather than an implementation one: its output is the concrete statement
-of what `windows-topology-sys` must answer, which the open design session needs in order to settle
-the model.
+of what the model must answer, which the open design session needs in order to settle it.
 
 > **-> CROSS-COMPONENT PREREQUISITE:** M2 onwards cannot begin until
 > [DESIGN-SESSION-2026-09-02-cache-locality-model.md](../../design-sessions/DESIGN-SESSION-2026-09-02-cache-locality-model.md)
@@ -20,8 +27,8 @@ the model.
 | Milestone | State | What it is waiting on |
 |---|---|---|
 | M1 the input contract | 3 done, 2 blocked | as far as it can go before the model exists |
-| M1+ scenario and naming | open | the session; neither is a model question |
-| M2+ the plan as a value | parked | M1, and the topology model landing |
+| M1+ scenario and naming | **partly answered** | the name is settled (EP-D-4); the goal input is deferred for litigation, by direction |
+| M2+ the plan as a value | parked, **and needs re-cutting** | the layout decision, then M1 |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
 

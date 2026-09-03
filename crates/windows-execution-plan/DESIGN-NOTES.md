@@ -1,11 +1,18 @@
-# Design notes: the execution-domain planner
+# Design notes: the topology planner
 
 Current canonical decisions for this component. See [COMPONENT.md](COMPONENT.md) for what the
 component is; see [CHECKLIST.md](CHECKLIST.md) for what is planned.
 
-While M1 runs, most entries here are **queries** rather than choices: the planner's requirements
-on `windows-topology-sys`, stated precisely enough that the topology model can be designed against
-a real caller instead of against a guess.
+`EP-D-1` through `EP-D-3` are **queries** rather than choices: the planner's requirements, stated
+precisely enough that the topology model could be designed against a real caller instead of against
+a guess. They were written when the planner was to read `windows_topology_sys::MachineMemoryTopology`
+directly; [EP-D-4](#ep-d-4) rebinds them to traits over an abstract model, which changes what
+satisfies them and not what they require.
+
+[EP-D-4](#ep-d-4) is the first genuine **choice** here, and it re-scopes the component: the planner
+is `topology-planner`, it plans against an abstracted idealized machine, and adapters bracket it on
+both sides. **The component's own name and directory still say `windows-execution-plan`** and are
+pending the layout decision EP-D-4 leaves open.
 
 ## Decision index
 
@@ -14,6 +21,7 @@ a real caller instead of against a guess.
 | <a id="ep-d-1"></a>EP-D-1 | **The shard-set query**: what the planner must know to choose which processors host a domain, and what today's model cannot tell it. |
 | <a id="ep-d-2"></a>EP-D-2 | **The proximity query**: how close two processors are, which selects the channel between their domains. Takes an **unordered** pair; the model has no answer today. |
 | <a id="ep-d-3"></a>EP-D-3 | **The residency query**: where a domain's pool lives, and which side of a cross-domain pair should host a shared ring. **Ordered**, and the half the model cannot answer is structurally unanswerable rather than merely unpopulated. |
+| <a id="ep-d-4"></a>EP-D-4 | **The four-part architecture, and the planner's name.** The engineer's position: the planner is **`topology-planner`** (no `windows-` prefix); it takes a **goal** description (shape deferred for litigation), queries an **abstracted idealized** model covering processors, memory, storage, interconnects, distances and bottlenecks, and emits a **JSON-serializable, platform-neutral** plan. Two kinds of **adapter** bracket it: one exposing the planner's traits over the Windows topology objects, one **realizing** a plan as buffers, rings and threads with the user's code inserted at the right steps. Settles `MMT-1.5` (the facts crate keeps its `-sys` name), the "two graphs, one word" ambiguity, and where distance lives -- the attributed interconnect shape D-9 sketched goes in the abstract model, so D-9's deferral in the facts crate stands unreopened. |
 
 ## EP-D-1: the shard-set query
 
@@ -324,3 +332,83 @@ description of a number whose meaning depends on how it was obtained.
   not become every consumer's constant.
 - And, before reopening D-9 on the asymmetry argument: a multi-node measurement showing the
   directions actually differ.
+
+## EP-D-4: the four-part architecture, and the planner's name
+
+*The engineer's position, 2026-09-03. This is a **choice**, not one of M1's queries, and it
+re-scopes the component that records it.*
+
+### What was decided
+
+**The planner is `topology-planner`** -- deliberately with no `windows-` prefix.
+
+- **Input**: a description of the **goal** of the topology -- what the caller intends the
+  arrangement to achieve. Its shape is **explicitly deferred for litigation**, which is a named
+  deferral rather than an omission.
+- **What it queries**: an **abstracted, idealized** description of the machine, covering
+  **processors, memory, storage (NVMe), interconnects, distances, and bottlenecks**. Not
+  Windows-shaped, and materially richer than what any one platform reports.
+- **Output**: a data structure that **serializes to JSON** and is **still abstracted from Windows**.
+- **Adapters, in two directions**:
+  - *inward* -- exposing the traits the planner needs **over the topology objects already designed**,
+    so `windows_topology_sys::MachineMemoryTopology` becomes one source feeding the abstract model;
+  - *outward* -- **realizing** a planned topology in the current process as buffers, rings and
+    threads, with the user's processing code inserted at the appropriate steps.
+
+### What it settles
+
+**The crate-naming question** (`MMT-1.5` in
+[windows-topology-sys](../windows-topology-sys/CHECKLIST.md)). The planner does not live in
+`windows-topology-sys`, which therefore stays a pure Win32 wrapper and keeps its `-sys` name. The
+decisive point is not preference but the adapter boundary: a crate on one side of an adapter is
+exactly what `-sys` names, and [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20) already scoped
+that crate to "what the Win32 topology APIs report".
+
+**"Two graphs, one word"** -- [COMPONENT.md](COMPONENT.md) flagged that both the input and the output
+are graphs of processors and relations, so "topology" named all of them and distinguished none. Three
+things are now distinct: the **machine memory topology** (Windows facts), the **abstract topology**
+(idealized, multi-source, platform-neutral), and the **planned topology** (the output). The word is
+shared deliberately; the qualifier carries the distinction.
+
+**Where distance lives**, which three decisions had left in tension:
+
+- [D-20](../windows-topology-sys/DESIGN-NOTES.md#d-20) removed `distances` from the facts crate,
+  because Win32 does not report it and that crate does not go below Win32.
+- [EP-D-3](#ep-d-3) established that the planner needs a **directed** cost, which a SLIT-shaped
+  scalar cannot express.
+- `windows-topology-sys` D-9 deferred HMAT-style attributed relations until scalar distance
+  "demonstrably mismodels a machine somebody is tuning for" -- a trigger this component *approaches*
+  and, lacking multi-node hardware, has not met.
+
+The abstract model resolves all three without disturbing any: **interconnects and bottlenecks** are
+the attributed-edge shape D-9 sketched, and they live in the abstract model, so D-9's deferral in the
+facts crate **stands unreopened** while the need it named is met elsewhere. The measurement condition
+still applies before claiming asymmetry is real; it just no longer gates the schema.
+
+**Storage becomes representable**, which `windows-topology-sys` D-9 also excluded -- on the grounds
+that it "changes the crate's identity from processor topology to system topology". That exclusion was
+about *that crate* and still holds. NVMe belongs to the abstract model, which was never scoped to a
+processor topology.
+
+### What it opens
+
+- **Component layout.** How many crates, and where the traits live. If the traits are defined in the
+  planner, the inward adapter depends on the planner, which points the wrong way for a crate whose
+  job is to describe a machine. An abstract-model crate that both depend on avoids that, at the cost
+  of a fourth component. **Not yet decided.**
+- **Who measures.** The previous framing had this component measuring with permission. If distance is
+  a property of the abstract model, measurement plausibly belongs to whatever *populates* that model
+  -- an adapter -- rather than to the planner. The three-stage split (observe / synthesize / execute)
+  survives; which component owns the middle stage does not obviously.
+- **`MMT-1.3` / `EP-1.4`'s consumer changed.** Both ask what a consumer does with a fact that was not
+  observed. That consumer is no longer the planner reading `MachineMemoryTopology` directly -- it is
+  the **inward adapter**, deciding how an absent Windows fact appears in the abstract model. The
+  decision is still one decision, and it is still to be taken jointly, but it is taken at a boundary
+  that did not exist when both items were written.
+
+### What survives unchanged
+
+[EP-D-1](#ep-d-1), [EP-D-2](#ep-d-2) and [EP-D-3](#ep-d-3) are **requirements**, and requirements
+survive a change of binding. Each stated what the planner must know and why; what changes is that
+they are now satisfied by traits over an abstract model rather than by methods on a Windows type.
+They were written against a real caller, which is what makes them portable in this way.

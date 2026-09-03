@@ -28,7 +28,7 @@ Presence and observation are facts to represent, not shapes to infer from.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| M1 settle what is still open | 2 of 5 done | nothing -- these are decisions, and they gate the rest |
+| M1 settle what is still open | 4 of 5 done | MMT-1.3, which is joint with the planner's `EP-1.4` |
 | M2 the granularity model | parked | M1 |
 | M3 observation and provenance | parked | M1 (1 of 4 answered early, by D-19) |
 | M4 the queries | parked | M2, M3 |
@@ -231,12 +231,22 @@ wrongly after code exists.
   reads the *probe's own* measured `Observation`, not this field, so the one thing that looked like a
   consumer is not one. Removal is spawned as **M5+.5** and is not gated on the reshape.
 
-- [ ] **MMT-1.5** -- **Does the synthesizer live in this crate, and therefore what is this crate
+- [x] **MMT-1.5** -- **Does the synthesizer live in this crate, and therefore what is this crate
   called?** Recorded as open rather than settled: see
   [windows-execution-plan/COMPONENT.md](../windows-execution-plan/COMPONENT.md). The naming follows
   the merge rather than leading it -- while this crate is only a Win32 wrapper, `-sys` is correct
   for it; if it gains a synthesizer that measures, it stops being one and the name should change
   then.
+  **Answered by the engineer's architectural shift, recorded as
+  [EP-D-4](../windows-execution-plan/DESIGN-NOTES.md#ep-d-4): no.** The planner is a separate
+  component named **`topology-planner`** -- with no `windows-` prefix, because it plans against an
+  abstracted idealized machine and emits a platform-neutral plan. So this crate does not gain the
+  synthesizer, remains a pure Win32 wrapper, and **keeps its name**.
+  What settles it is not a naming preference but the shift's second half: the planner queries an
+  *abstract* model through traits, and **adapters** bridge this crate's objects to those traits. A
+  crate that is one side of an adapter boundary is exactly what `-sys` names.
+  [D-20](DESIGN-NOTES.md#d-20) reinforces it from the other direction -- a crate whose scope is
+  "what the Win32 topology APIs report" is a `-sys` crate by construction.
 
 ## M2: the granularity model
 
