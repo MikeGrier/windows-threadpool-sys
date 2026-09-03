@@ -141,10 +141,16 @@ wrongly after code exists.
      settled by [D-16](DESIGN-NOTES.md#d-16); only the number is open, and it is small -- a couple of
      passes failing to find a coherent set is not plausible.
 
-  3. **How a topology states its coherence.** Per [D-16](DESIGN-NOTES.md#d-16) it must say plainly
-     whether it was collected coherently and, where it was not, what disagreed -- so a reader knows how
-     far the parts may be **correlated**, which is a different question from whether any one part is
-     accurate.
+  3. **How a topology states its coherence** -- and [D-17](DESIGN-NOTES.md#d-17) raises the bar on
+     this from "say whether" to "say what, precisely enough to act on". Persistent disagreement is
+     expected on hardware we do not have and on prerelease firmware, so the report is not a corner
+     case: it is the crate's output on exactly the machines a user most needs to understand.
+     "Incoherent" is not actionable. *"These two sources disagree about which core processor 6 belongs
+     to, one saying X and the other Y"* is a bug report against a firmware table or an OS enumeration.
+     A reader also needs it to know how far the parts may be **correlated**, which is a different
+     question from whether any one part is accurate.
+     Note this is only possible because [D-15](DESIGN-NOTES.md#d-15) keeps both observations: a
+     disagreement cannot be reported after it has been collapsed.
 
   4. **Shape B still has no representation.** `(kind, membership)` identity does not reach a
      per-processor scalar disagreement, and that gap is untouched by any of the above.

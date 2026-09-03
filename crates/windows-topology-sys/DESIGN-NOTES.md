@@ -36,6 +36,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-14"></a>D-14 | **Windows's `LastLevelCacheIndex` is not `MachineMemoryTopology::outermost_partitioning_cache`, and neither is wrong.** Measured on the x64 development host: CPU Sets reports **one** LLC group over all sixteen processors, while the derivation reports **eight** partitions at L2. Windows names the *last* level; the derivation names the outermost level that *divides*. They answer different questions, so neither may be substituted for the other, and a consumer treating the CPU-set value as "the cache domain" would collapse eight groups into one on that machine. |
 | <a id="d-15"></a>D-15 | **A relation is identified by its `(kind, membership)`, not by any source's label -- so several observations of one relation are held as a *set*, never reduced on insert.** Measured, not assumed: the two Win32 sources agree exactly on the core partition (eight groups each) while labelling it completely differently (`[0,2,4,...,14]` against `[0,1,...,7]`). The "disagreement" a reduction would resolve is between *dictionaries*, not about the machine, and reducing would have to pick a label arbitrarily while discarding the other source's. Under membership identity the common case costs nothing -- one relation, two observations -- and a genuine contradiction stays representable. See the detail section below. |
 | <a id="d-16"></a>D-16 | **Collection retries until coherent, and what survives a retry is a genuine disagreement.** There is no transactional way to read the two Win32 sources together, so `discover()` validates them against each other and, on incoherence, **re-collects** -- bounded, and cheap because both are whole-machine enumerations. Transient incoherence from a hot-add resolves on the next pass; incoherence that survives is not transience and must be represented. Retry is therefore the *discriminator* between the two, which no single observation can be. And because the data can change while it is being collected, a topology states plainly whether it was collected coherently, so a reader knows how far its parts may be correlated. |
+| <a id="d-17"></a>D-17 | **Persistent incoherence between two Win32 sources is expected in the field, not exotic -- so the crate reports it precisely and never refuses over it.** No documented guarantee of cross-API coherence has been found, the two enumerations plausibly derive by different paths, and the firmware tables behind them are populated incrementally against scenarios that do not necessarily include ours. The likely places to meet it are therefore hardware we do not have and prerelease hardware with defective UEFI tables -- exactly where refusing would make the crate useless, and exactly where a precise report is worth more than a correct-looking answer. It is also **only testable synthetically**, which is what the hand-built and deserialized paths are for. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -304,6 +305,61 @@ The retry is bounded. Exhausting the bound is not a failure to collect -- it is 
 that the disagreement is genuine, and the point at which the conflict representation
 ([MMT-1.2](CHECKLIST.md)'s shapes A and B) applies. The two are one mechanism: retry to remove the
 transient cases, then represent whatever is left.
+
+## D-17: incoherence in the field, and what it demands
+
+*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.2.*
+
+### Windows is the oracle, and an oracle is not a proof
+
+There is no alternative to treating Windows as authoritative about the machine -- nothing else can
+see what it sees. But "authoritative" and "internally consistent across every API" are different
+claims, and only the first is available.
+
+**No documented guarantee of cross-API coherence has been found.** That is a statement about what we
+could establish, not proof that none exists; the point is that we may not rely on one we cannot cite.
+
+The mechanism for divergence is plausible and specific.
+`GetLogicalProcessorInformationEx` derives from the ACPI tables and CPUID.
+`GetSystemCpuSetInformation` is the kernel's much later scheduler-side abstraction. They very likely
+share a root, but not a derivation path -- and the newest facts, hybrid efficiency classes and the
+last-level-cache index, are exactly where one path may be updated and the other not.
+
+Underneath both, the firmware tables are **populated incrementally**, by vendors, against the
+scenarios those vendors test. A shard-per-core NUMA-aware runtime interrogating two topology APIs and
+cross-checking them is not a scenario anyone is likely to have tested.
+
+### So this is expected, not exotic
+
+The earlier framing of a persistent disagreement as "a defective hypervisor" made it sound rare
+enough to handle badly. The realistic sources are much more ordinary:
+
+- **hardware we do not have**, where nothing has ever cross-checked the two paths;
+- **prerelease hardware with defective UEFI tables**, which is a normal stage of a platform's life
+  rather than a fault condition;
+- **new topology features** arriving in one enumeration before the other.
+
+None of those are transient, so [D-16](#d-16)'s retry will not clear them. They land, by construction,
+in the bucket of things the model must represent -- and that bucket is likely to be populated on
+exactly the machines a user cares most about getting right.
+
+### What that demands
+
+**Refusing is out**, and not merely as a preference. The places this is most likely to occur are the
+places where the crate refusing would make it useless -- new hardware, being brought up, by someone
+who needs to know what the machine looks like. A library that declines to describe a machine because
+two of Windows's own APIs disagree has converted a report into an outage.
+
+**A report has to be precise enough to act on.** "Incoherent" is not actionable; "these two sources
+disagree about which core processor 6 belongs to, one saying X and the other Y" is a bug report
+against a firmware table or an OS enumeration. That is a genuinely useful thing for this crate to
+produce, and it is only possible because [D-15](#d-15) keeps both observations rather than reconciling
+them -- **a disagreement cannot be reported after it has been collapsed.**
+
+**And it is testable only synthetically.** By definition this arises on hardware we do not have, so
+the hand-built and deserialized construction paths are how the incoherent cases get exercised at all.
+That is a second, unanticipated justification for a facility this crate already has and already
+documents as a feature.
 
 ## What was deliberately excluded (D-9)
 
