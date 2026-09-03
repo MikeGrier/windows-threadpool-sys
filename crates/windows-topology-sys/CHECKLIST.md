@@ -367,19 +367,52 @@ quietly worked around, per the re-plan rule.
 
 **Ready.** M1 is closed.
 
+**Re-planned 2026-09-03, before implementing.** Checking these against the code found `M3+.3`'s
+premise wrong in the same way `M2+.6`'s was, and found work this milestone had been assigned but
+never given an item. Recorded rather than absorbed silently -- this is the third item in the reshape
+to assert a gap the crate does not have, and the pattern is what the M2 re-plan named: **check the
+item against the code before planning work from it.**
+
 - [ ] **M3+.1** -- Provenance is **per relation**, not per source. Per-relation subsumes per-source
   by repetition, and the reverse fails on the case that matters: two sources describing the *same*
   relation.
+  **What that means concretely, which the item did not say.** "The case that matters" does not exist
+  in the code yet: `domains` is built from `GetLogicalProcessorInformationEx` alone, and `cpu_sets`
+  sits beside it as a parallel list, so no relation is currently described by two sources. Satisfying
+  this item therefore means **unifying the two sources into one relation set keyed by
+  `(kind, membership)`** per [D-15](DESIGN-NOTES.md#d-15), with each relation recording which sources
+  observed it. That is the heart of [D-19](DESIGN-NOTES.md#d-19)'s unified view, and it does not
+  exist yet.
+  **It absorbs the `Domain::id` work rather than leaving it a separate item.** D-15 requires the
+  *label* to move from the relation to the observation, and unification forces it: the two sources
+  agree on the core partition while labelling it `[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]`, so a
+  single unified relation cannot carry one `id`. The two are the same change.
+  *(The M2 re-plan said this work "belongs to M3" without filing it anywhere, so until now it was
+  owned by no item at all.)*
 
 - [ ] **M3+.2** -- Keep two properties of the old `Provenance` **because they re-derive**, not
   because they were there: the default is the untrusted value (a *stronger* argument per-relation,
   since there are more places to forget), and trust never upgrades (a file still cannot establish it
   describes the machine you are on).
 
-- [ ] **M3+.3** -- Supersede the whole-object `Provenance` **without replacing it with another
+- [ ] **M3+.3** -- ~~Supersede the whole-object `Provenance` **without replacing it with another
   whole-object scalar**. With trust per relation, an object-level scalar can only be the minimum --
   ninety-nine measured relations and one synthetic reading `SYNTHETIC` -- or the maximum, which is
-  dishonest. Trust belongs to an *answer*.
+  dishonest. Trust belongs to an *answer*.~~
+  **Rewritten. The premise is wrong, recorded as [D-22](DESIGN-NOTES.md#d-22).** `Provenance` is not
+  an aggregate of anything: it records **how the object was obtained** -- `discover()` stamps
+  `Measured`, deserialization is capped at `Restored`, hand construction defaults to `Synthetic`. That
+  is a fact about the construction *act*, and no per-relation value can express it. The mixed
+  "ninety-nine measured and one synthetic" case cannot arise from collection at all; it needs someone
+  to hand-insert a relation into a discovered topology, which is exactly what per-relation provenance
+  makes **visible** rather than a reason to delete the object-level fact.
+  It also has a real consumer that wants precisely it: `windows-placement-probe`'s
+  `Record::is_trustworthy` gates on `is_measured()` to decide whether a measurement counts, and its
+  record schema carries the value at the top level deliberately so a collector need not reach into
+  the fingerprint.
+  **Revised deliverable:** keep the type, and make its documentation say what it actually means --
+  the construction act, orthogonal to per-relation provenance -- so the next reader does not repeat
+  this item's mistake.
 
 - [x] **M3+.4** -- Carry both observers without merging, per MMT-1.1's decision. `Topology::cpu_sets`
   already lands this way; this item is whether that stays a parallel list or becomes observations
