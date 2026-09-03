@@ -389,6 +389,33 @@ item against the code before planning work from it.**
   single unified relation cannot carry one `id`. The two are the same change.
   *(The M2 re-plan said this work "belongs to M3" without filing it anywhere, so until now it was
   owned by no item at all.)*
+  **Split into three sub-steps on execution**, because `Domain::id` turns out to have **14 uses
+  across three other crates** -- `windows-ioring-sys`' `ring_copy` example, `windows-placement-probe`,
+  and `windows-platform-probes` -- plus a hand-written JSON shape. Doing this as one commit would mix
+  an additive change, a behavioural one, and a cross-crate breaking one. Each sub-step below compiles
+  and is testable on its own, and the breaking change is last and isolated.
+
+  - [ ] **M3+.1.1** -- Introduce `Source` and `Observation`, and give `Domain` its observations,
+    populated by `from_relations` with the label it currently puts in `id`. **Additive**: `id` stays,
+    nothing downstream changes, and the unified view has somewhere to record what it unifies.
+
+  - [ ] **M3+.1.2** -- Fold CPU Sets into the relation set. For a `Core` or `Memory` membership that
+    matches an existing relation, add an observation; otherwise add a relation observed only by CPU
+    Sets. **This is where the unified view comes into being** -- today `discover` builds `domains`
+    from the relationship walk alone and leaves `cpu_sets` beside it, so the two sources have never
+    met.
+    Deliberately *not* folded: `LastLevelCacheIndex`. Per [D-14](DESIGN-NOTES.md#d-14) it answers a
+    different question from the derived cache partitioning -- one LLC group where the derivation finds
+    eight L2 partitions -- so under [D-15](DESIGN-NOTES.md#d-15) it is a **different relation**, not a
+    second observation of the same one. `EfficiencyClass` is likewise a per-processor attribute rather
+    than a membership, and belongs to [D-18](DESIGN-NOTES.md#d-18)'s other subject kind.
+
+  - [ ] **M3+.1.3** -- Remove `Domain::id`, now that observations carry the labels, and update the
+    three downstream crates and the wire shape. **Breaking**, and correct: there is no single
+    canonical id once two sources label the same relation differently -- measured as
+    `[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]` -- and a relation observed only by CPU Sets has no
+    walk label at all. Keeping `id` beside the observations would be two statements of one fact, which
+    is the restatement drift this repository has a rule about.
 
 - [ ] **M3+.2** -- Keep two properties of the old `Provenance` **because they re-derive**, not
   because they were there: the default is the untrusted value (a *stronger* argument per-relation,
