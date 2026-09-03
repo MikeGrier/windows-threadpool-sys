@@ -25,7 +25,7 @@ merge that closes it, which is backwards. Only M1 through M6 are a sequence.
 | M7-M13 review rounds | **done, archived** | -- |
 | M14 ninth review round | 1 open | SH-14.1, the ABA defect; disclosed at SH-15.8, fix is M15 |
 | M15 the claim protocol | 5 open | SH-15.6 is the decision; gated on SH-15.5.1 |
-| M16 tenth review round | 5 of 11 open | **gates the merge**; 6 fixed, 5 wait on the design session |
+| M16 tenth review round | 6 of 12 open | **gates the merge**; 6 fixed, 6 wait on the design session |
 | M-inf parked | ungated | not scheduled, deliberately |
 
 **The critical path is M16's locality-model work -> SH-3.1.1 -> SH-3.4 -> M4.** M14 and M15 do not
@@ -884,6 +884,27 @@ predicted about a 222-commit branch.
   **without further measurement**, a consumer shaping memory allocation must today either run the
   probe at decision time -- forbidden -- or guess. Gated on SH-16.8, and on the open question of
   which component owns the measurement phase.
+
+- [ ] **SH-16.12** -- **`Processor::capacity` uses `0` as both a legitimate efficiency class and a
+  sentinel for "not known", and the two collide on the common case.** It is computed
+  `online.then(|| find the owning Core domain).flatten().unwrap_or(0)`, so `0` means the processor is
+  offline, *or* is online but named by no `Core` domain, *or* genuinely has efficiency class zero.
+  The third is **every processor on every non-hybrid machine**, so the sentinel is not a rare
+  collision -- it is the usual value.
+  Found by [crates/windows-execution-plan](crates/windows-execution-plan/DESIGN-NOTES.md#ep-d-1)
+  EP-1.1 while checking what a shard planner can rely on, and it is worse for that consumer than for
+  most: Windows orders efficiency class with `0` as **least** performant, so on a hybrid part an
+  unknown processor is indistinguishable from an efficiency core. A policy excluding efficiency cores
+  would silently drop a processor that may be a performance core; a policy tiering them would put it
+  in the wrong tier. Neither shows up in a functional test.
+  **A third instance of the pattern SH-16.8 exists to fix**, and the one not previously swept -- the
+  others being `ProcessorPlace::cache_domain`'s `Option<u32>` (SH-16.5) and
+  `MachineDescription::cpu_model`, where the same conflation was noticed and solved with a side
+  boolean. Note this one is *worse* than an `Option`: a sentinel that collides with a valid value
+  cannot be distinguished even by a careful caller. Gated on SH-16.8, since the fix is the same
+  question -- how absence is represented -- and doing it twice would be doing it twice.
+  Note `DomainKind::Core { efficiency_class }` already carries the value without a sentinel, so the
+  interim guidance is to read that instead; the defect is that `capacity` exists and looks usable.
 
 - [x] **SH-16.6** -- **The thread-stack NUMA spike's `deep_probe` measures the shallow end of its own
   filler, so the discrimination it exists to make is inert.** The stack grows down, so `filler[0]` is
