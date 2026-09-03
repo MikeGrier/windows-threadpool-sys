@@ -19,7 +19,7 @@ the model.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| M1 the input contract | 1 of 5 done | nothing -- it is what unblocks the others |
+| M1 the input contract | 2 of 5 done | nothing -- it is what unblocks the others |
 | M2+ the plan as a value | parked | M1, and the topology model landing |
 | M3+ the policies | parked | M2+ |
 | M-inf parked | ungated | not scheduled, deliberately |
@@ -49,13 +49,26 @@ whether the topology can answer it today -- so the model is designed against a r
   performance core and a policy tiering them mis-tiers it. Neither fails a functional test. Filed
   against the owning crate as `SH-16.12`; use `DomainKind::Core { efficiency_class }` meanwhile.
 
-- [ ] **EP-1.2** -- **The proximity query, which is the crux.** For an *ordered pair* of
-  processors, how close are they -- because that is what chooses SPSC versus MPSC versus a routed
-  hop, and it is asked once per pair rather than once per machine. **The current model cannot
-  answer it**: `outermost_partitioning_cache` reports one global level and `same_cache_domain`
-  reduces it to a boolean at that level, so a client reconstructs the rest and, per `SH-16.9`,
-  reconstructs it differently each time. State the query precisely enough that the session can
-  design against it.
+- [x] **EP-1.2** -- **The proximity query, which is the crux.** For an ~~*ordered pair*~~
+  **unordered pair** of processors, how close are they -- because that is what chooses SPSC versus
+  MPSC versus a routed hop, and it is asked once per pair rather than once per machine. **The
+  current model cannot answer it**: `outermost_partitioning_cache` reports one global level and
+  `same_cache_domain` reduces it to a boolean at that level, so a client reconstructs the rest and,
+  per `SH-16.9`, reconstructs it differently each time. State the query precisely enough that the
+  session can design against it.
+  **Done:** stated as [EP-D-2](DESIGN-NOTES.md#ep-d-2).
+  **This item said "ordered pair" and was wrong**, corrected in place rather than quietly. The
+  repository had already settled it: `windows-placement-probe` documents that its placement labels
+  are "deliberately symmetric", that "the *relationship* between two processors genuinely is
+  symmetric", and that "direction therefore lives where it is real, not in the label" -- with the
+  measured side putting it as "a hop is not symmetric even though the link is". Proximity is the
+  link and is unordered; direction is the hop, and belongs to EP-1.3's residency question.
+  Three requirements came out of stating it. The answer needs the **membership** of the shared
+  granularity, not just its identity, or the planner re-derives the grouping to size an MPSC
+  fan-in. It needs to distinguish "tightest shared is X" from "**at most** X, and finer was not
+  observed", since under the model's bar the planner cannot go and check. And the order being by
+  inclusion rather than by firmware numbering means two granularities can be **incomparable**, so
+  the answer is a set of minimal shared granularities -- almost always one, but not by construction.
 
 - [ ] **EP-1.3** -- **The residency query.** Which memory domain each processor belongs to, and --
   for a pair spanning two of them -- what it costs to place a shared buffer on one side rather than

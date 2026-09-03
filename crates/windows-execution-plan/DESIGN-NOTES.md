@@ -12,6 +12,7 @@ a real caller instead of against a guess.
 | ID | Decision |
 |---|---|
 | <a id="ep-d-1"></a>EP-D-1 | **The shard-set query**: what the planner must know to choose which processors host a domain, and what today's model cannot tell it. |
+| <a id="ep-d-2"></a>EP-D-2 | **The proximity query**: how close two processors are, which selects the channel between their domains. Takes an **unordered** pair; the model has no answer today. |
 
 ## EP-D-1: the shard-set query
 
@@ -109,3 +110,103 @@ Nothing new in shape; three things in substance.
 - Efficiency class has to have exactly one representation, and it must distinguish "class zero"
   from "not known".
 - Core membership has to admit that a processor may be in no core, without that being an error.
+
+## EP-D-2: the proximity query
+
+*Recorded by [CHECKLIST.md](CHECKLIST.md) EP-1.2.*
+
+### What the planner is choosing
+
+For two domains, what connects them: a dedicated SPSC ring, a shared MPSC ring fanning several
+producers into one consumer, or a routed hop through an intermediate domain. That choice is made
+once per pair, and it is made from how close the two processors are.
+
+This is the query the whole model question turns on. Everything else the planner asks is either
+per-processor (EP-D-1) or per-memory-domain (EP-1.3); this is the only one that is *relational*,
+and it is the one today's model cannot answer.
+
+### It takes an unordered pair. The checklist item said ordered, and was wrong.
+
+`windows-placement-probe` already settled this and stated the reasoning, which is worth quoting
+because it is easy to get backwards:
+
+> These names are deliberately symmetric, and that is not an oversight left over from before hops
+> became directed. The *relationship* between two processors genuinely is symmetric -- two
+> processors either are SMT siblings or are not, share a cache domain or do not -- so there is no
+> honest `CrossNumaNodeForward` to name. Splitting the labels by direction would invent a
+> distinction the topology does not have.
+>
+> The *workload* is what is asymmetric: the producer writes and the consumer reads, so swapping
+> them swaps which side pays. Direction therefore lives where it is real, not in the label.
+
+And on the measured side: "a hop is not symmetric even though the link is."
+
+So the split is clean, and the planner needs both halves in different places:
+
+- **Proximity is the link.** Symmetric, unordered pair, answered here.
+- **Residency is the hop.** Asymmetric -- which side hosts the ring buffer, which the probe
+  measures with a dedicated ring-placement column because it was found to matter. That belongs to
+  EP-1.3, not here.
+
+Putting direction in the proximity query would invent an asymmetry the topology does not have, and
+would double the size of an answer that has no second half to fill.
+
+### What the answer must contain
+
+Not a boolean, and not a bare identifier. Three things:
+
+1. **The tightest granularity the two share.** Comparable against other pairs' answers, because the
+   policy's threshold ("SPSC within this, MPSC beyond it") is a comparison. The *identity* of the
+   granularity matters less than its position.
+
+2. **The membership of that granularity.** Selecting MPSC is not enough -- the planner must size the
+   fan-in, which is "how many other domains sit at this same proximity". Without membership the
+   planner would ask the proximity query O(n^2) times and reconstruct the grouping itself, which is
+   the re-derivation the seam exists to prevent.
+
+3. **Whether a finer granularity went unobserved.** This is the part that a naive design drops. If
+   L3 was observed and L2 was not, "tightest shared is L3" is *not* the answer -- the answer is "at
+   most L3, and finer was not looked at". A planner told the first would choose a slower channel
+   than the machine can support and never learn why. Under the model's bar -- usable without further
+   measurement -- it cannot go and check, so the distinction has to be in the answer.
+
+### The query should be total, which needs a top element
+
+Two processors in the same machine always share *something*: one address space, one scheduler, one
+memory system, however far apart. If the granularity order has no top, the query returns "nothing
+in common" for a cross-node pair and every caller writes the same empty-case branch.
+
+Making "the machine" an explicit top granularity is honest -- it is a real, if loose, locality tier
+-- and makes the query total. A bottom ("this processor alone") is the same argument at the other
+end and makes `proximity(a, a)` answerable rather than a special case, though a planner has no
+reason to ask it.
+
+### A partial order means the answer may not be a single granularity
+
+If the order is by observed set inclusion rather than by firmware numbering, two granularities can
+be **incomparable** -- neither refines the other. The tightest shared granularity is then not
+unique, and the honest answer is the set of *minimal* shared granularities, which is almost always
+exactly one.
+
+This is a cost, and it is worth naming rather than discovering later: every caller either handles a
+multi-element answer or documents that it takes the first. But the alternative -- forcing a linear
+order -- means silently discarding a real boundary on a machine whose levels do not nest, and this
+repository has been bitten specifically by structure that was assumed rather than checked.
+
+### What today's model answers: nothing
+
+`Topology::outermost_partitioning_cache` reports **one level for the whole machine**, and
+`Slice::same_cache_domain` reduces that to a boolean at that one level. Neither is pairwise. There
+is no query anywhere in `windows-topology-sys` that takes two processors.
+
+So a planner today reconstructs proximity from the partition list -- which is exactly what
+`SH-16.9` records three consumers already doing, in two mutually inconsistent ways. The absence of
+this query is the cause of that defect, not a separate problem.
+
+### What this asks of the model
+
+- A granularity order derived from **observed set inclusion**, not firmware level numbers, so a
+  measured-only tier and a machine with no L3 both have positions.
+- A pairwise query over it, returning minimal shared granularities plus their membership.
+- Unobserved granularities represented, so an answer can be an upper bound and say so.
+- A top element, so the query is total.
