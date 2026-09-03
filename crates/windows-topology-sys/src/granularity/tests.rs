@@ -66,6 +66,7 @@ fn topology(processor_count: u8, domains: Vec<Domain>) -> MachineMemoryTopology 
         domains,
         cpu_sets: None,
         provenance: Provenance::Synthetic,
+        processor_attributes: Vec::new(),
     }
 }
 

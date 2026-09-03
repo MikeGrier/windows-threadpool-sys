@@ -6,7 +6,7 @@ use std::io;
 
 use crate::cpu_set::CpuSet;
 use crate::domain::{Domain, DomainKind, Processor, ProcessorId};
-use crate::observation::{Observation, Source};
+use crate::observation::{AttributeObservation, Observation, ProcessorAttribute, Source};
 use crate::processor_set::ProcessorSet;
 use crate::provenance::Provenance;
 use crate::relation::{self, Relations};
@@ -28,8 +28,7 @@ pub struct MachineMemoryTopology {
     pub processors: Vec<Processor>,
     /// Every domain.
     pub domains: Vec<Domain>,
-    /// What `GetSystemCpuSetInformation` reported, as **its own observation**.
-    ///
+    /// What `GetSystemCpuSetInformation` reported, as **its own observation**.    ///
     /// Windows describes processors through two APIs, and this is the second
     /// one. It is not a more convenient spelling of [`Self::domains`]: it
     /// carries facts the relationship walk has no equivalent for -- whether a
@@ -52,6 +51,25 @@ pub struct MachineMemoryTopology {
     /// genuinely reported nothing.
     #[cfg_attr(feature = "serde", serde(default))]
     pub cpu_sets: Option<Vec<CpuSet>>,
+    /// What each source said about each processor's attributes.
+    ///
+    /// [D-18](../DESIGN-NOTES.md)'s second subject kind, and the one relation
+    /// unification cannot reach: two sources describing the same core agree on
+    /// `(kind, membership)` even when they disagree about a number hanging off
+    /// it, so that disagreement has nowhere to live among the relation's own
+    /// observations.
+    ///
+    /// Never reduced, for the same reason relations keep both observations:
+    /// collapsing them would destroy the disagreement, which is the only thing
+    /// a second observer is for. Use
+    /// [`Self::attribute_conflicts`] to find the subjects the sources did not
+    /// agree on.
+    ///
+    /// Empty for a hand-built or deserialized topology -- nobody asked, which
+    /// is [`Observed::NotObserved`](crate::Observed::NotObserved)'s meaning
+    /// carried up to a collection.
+    #[cfg_attr(feature = "serde", serde(default, skip))]
+    pub processor_attributes: Vec<AttributeObservation>,
     /// Where this content came from.
     ///
     /// **Defaults to [`Provenance::Synthetic`]**, so a topology built by hand
@@ -82,6 +100,9 @@ impl MachineMemoryTopology {
         // Both are cheap reads of the running system, so both belong to
         // discovery -- neither is a measurement in the sense that would make it
         // expensive or optional.
+        // The walk's per-processor claims, recorded before the fold so both
+        // sources' claims about one processor sit side by side (D-18).
+        topology.record_walk_attributes();
         let cpu_sets = crate::cpu_set::enumerate()?;
         // Folded into the relation set, and *also* kept verbatim. Not a
         // contradiction: D-19's unified view is presented **in addition to**
@@ -96,8 +117,7 @@ impl MachineMemoryTopology {
     }
 
     /// Record what the CPU-set enumeration says about relations, unifying with
-    /// what the relationship walk already reported.
-    ///
+    /// what the relationship walk already reported.    ///
     /// # What is folded, and what deliberately is not
     ///
     /// Only **core** and **NUMA node** membership. Those are the two facts both
@@ -154,6 +174,83 @@ impl MachineMemoryTopology {
             |kind| matches!(kind, DomainKind::Memory { .. }),
             |_| DomainKind::Memory { memory_bytes: None },
         );
+
+        // The attribute subject, which relation unification cannot reach: both
+        // sources report an efficiency class for the same processor, and they
+        // agree about the core while possibly disagreeing about this (D-18).
+        for set in cpu_sets {
+            self.processor_attributes.push(AttributeObservation::new(
+                ProcessorId {
+                    group: set.group,
+                    number: set.logical_processor_index,
+                },
+                ProcessorAttribute::EfficiencyClass,
+                u32::from(set.efficiency_class),
+                Source::CpuSets,
+            ));
+        }
+    }
+
+    /// Record the relationship walk's per-processor attribute claims.
+    ///
+    /// The walk attaches an efficiency class to a *core*, so its claim about a
+    /// processor is its core's value -- fanned out here rather than left for a
+    /// consumer to re-derive, which is the reconstruction this model exists to
+    /// stop.
+    fn record_walk_attributes(&mut self) {
+        let claims: Vec<AttributeObservation> = self
+            .domains
+            .iter()
+            .filter(|domain| domain.observed_by(Source::RelationshipWalk))
+            .filter_map(|domain| match domain.kind {
+                DomainKind::Core {
+                    efficiency_class, ..
+                } => Some((efficiency_class, &domain.processors)),
+                _ => None,
+            })
+            .flat_map(|(efficiency_class, processors)| {
+                processors.iter().map(move |(group, number)| {
+                    AttributeObservation::new(
+                        ProcessorId { group, number },
+                        ProcessorAttribute::EfficiencyClass,
+                        u32::from(efficiency_class),
+                        Source::RelationshipWalk,
+                    )
+                })
+            })
+            .collect();
+        self.processor_attributes.extend(claims);
+    }
+
+    /// The `(processor, attribute)` subjects the sources did not agree on.
+    ///
+    /// Empty is the ordinary answer. A non-empty one is the **attribute
+    /// conflict** [D-17](../DESIGN-NOTES.md) says to expect in the field and to
+    /// record rather than refuse over -- firmware tables are populated
+    /// incrementally, and the places to meet this are hardware nobody here has.
+    ///
+    /// Reported rather than resolved: picking a winner would destroy the
+    /// disagreement, and on a hybrid part the choice decides whether a
+    /// processor is treated as a performance or an efficiency core.
+    #[must_use]
+    pub fn attribute_conflicts(&self) -> Vec<(ProcessorId, ProcessorAttribute)> {
+        let mut claims: BTreeMap<(ProcessorId, ProcessorAttribute), Vec<u32>> = BTreeMap::new();
+        for observation in &self.processor_attributes {
+            claims
+                .entry(observation.subject())
+                .or_default()
+                .push(observation.value);
+        }
+        claims
+            .into_iter()
+            .filter(|(_, values)| {
+                let mut distinct = values.clone();
+                distinct.sort_unstable();
+                distinct.dedup();
+                distinct.len() > 1
+            })
+            .map(|(subject, _)| subject)
+            .collect()
     }
 
     /// Group the CPU-set records by whatever `key` names, keeping the records
@@ -274,6 +371,7 @@ impl MachineMemoryTopology {
             processors,
             domains,
             cpu_sets: None,
+            processor_attributes: Vec::new(),
             // Synthetic, not measured: this is a pure transform of whatever
             // relations it was handed, and cannot know where they came from.
             // `discover` stamps the claim because `discover` is what read the

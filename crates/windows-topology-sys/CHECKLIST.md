@@ -36,8 +36,8 @@ the **adapter's** problem and must not be filed here as a gap.
 |---|---|---|
 | M1 settle what is still open | **5 of 5 done** | nothing -- complete |
 | M2 the granularity model | **6 of 6 done** | nothing -- complete |
-| M3 observation and provenance | **ready** | nothing (1 of 4 answered early, by D-19) |
-| M4 the queries | **ready** | M2 is done; M3 is decision work that does not block it |
+| M3 observation and provenance | **4 of 4 done** | nothing -- complete |
+| M4 the queries | **ready** | M2 and M3 are both complete |
 | M5 the defects this subsumes | parked | M4, **except M5+.5 (done)** |
 
 **M1 was decision work, not implementation**, and it is complete. Each item was a question the
@@ -373,7 +373,7 @@ never given an item. Recorded rather than absorbed silently -- this is the third
 to assert a gap the crate does not have, and the pattern is what the M2 re-plan named: **check the
 item against the code before planning work from it.**
 
-- [ ] **M3+.1** -- Provenance is **per relation**, not per source. Per-relation subsumes per-source
+- [x] **M3+.1** -- Provenance is **per relation**, not per source. Per-relation subsumes per-source
   by repetition, and the reverse fails on the case that matters: two sources describing the *same*
   relation.
   **What that means concretely, which the item did not say.** "The case that matters" does not exist
@@ -458,7 +458,7 @@ item against the code before planning work from it.**
     NUMA assertion passed by coincidence and only the cache assertion failed -- the bug was one
     coincidence away from shipping.
 
-  - [ ] **M3+.1.4** -- **Record a per-processor attribute conflict**, which relation unification
+  - [x] **M3+.1.4** -- **Record a per-processor attribute conflict**, which relation unification
     cannot reach. `M3+.1.2` matches relations by `(kind, membership)`, so two sources describing one
     core agree on *that* even if they disagree about its `efficiency_class` -- and the unified
     relation keeps the walk's value while the CPU-sets value goes unrecorded.
@@ -469,6 +469,16 @@ item against the code before planning work from it.**
     queue" rule exists to stop.
     **Not observable on this host** -- every efficiency class reads `0` here -- so it is testable only
     synthetically, per [D-17](DESIGN-NOTES.md#d-17).
+    **Done.** `ProcessorAttribute`, `AttributeObservation`, and
+    `MachineMemoryTopology::{processor_attributes, attribute_conflicts}`. The walk's claim is fanned
+    out from each core to its processors rather than left for a consumer to re-derive -- that
+    reconstruction is what this model exists to stop.
+    **Reported, never resolved.** `attribute_conflicts` names the contested subjects and both claims
+    stay: picking a winner would destroy the disagreement, and on a hybrid part the choice decides
+    whether a processor is treated as a performance or an efficiency core.
+    Five tests, four of them synthetic, plus one that asserts *this host has no conflict* -- measured
+    rather than standing in for the conflicting case. Sabotage-verified: making agreement count as a
+    conflict fails three of them.
 
 - [x] **M3+.2** -- Keep two properties of the old `Provenance` **because they re-derive**, not
   because they were there: the default is the untrusted value (a *stronger* argument per-relation,

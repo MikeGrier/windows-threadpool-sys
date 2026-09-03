@@ -70,5 +70,71 @@ impl Observation {
     }
 }
 
+/// A per-processor attribute that more than one source may describe.
+///
+/// [D-18](../DESIGN-NOTES.md)'s **second subject kind**. Relation unification
+/// matches on `(kind, membership)`, so two sources describing one core agree
+/// about *that* even when they disagree about a number hanging off it -- and
+/// that disagreement has nowhere to live in a relation, because both
+/// observations name the same relation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[non_exhaustive]
+pub enum ProcessorAttribute {
+    /// The scheduler's efficiency class.
+    ///
+    /// Both Windows APIs report it: the relationship walk attaches it to a
+    /// core, and CPU Sets to each processor. On a hybrid part this is the value
+    /// that decides whether a processor is a performance or an efficiency core,
+    /// so a silent disagreement is a planning defect that shows up only in a
+    /// percentile.
+    EfficiencyClass,
+}
+
+/// One source's claim about one processor's attribute.
+///
+/// The `(subject, claim, source)` triple of [D-18](../DESIGN-NOTES.md), where
+/// the subject is `(processor, attribute)` rather than a relation identity.
+/// Held as a list and never reduced, for the same reason relations hold their
+/// observations as a set: collapsing them would destroy the disagreement, which
+/// is the only thing a second observer is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct AttributeObservation {
+    /// The processor this is about.
+    pub processor: crate::domain::ProcessorId,
+    /// Which attribute.
+    pub attribute: ProcessorAttribute,
+    /// What this source said its value is.
+    pub value: u32,
+    /// Which source said it.
+    pub source: Source,
+}
+
+impl AttributeObservation {
+    /// An observation of `attribute` on `processor`.
+    #[must_use]
+    pub fn new(
+        processor: crate::domain::ProcessorId,
+        attribute: ProcessorAttribute,
+        value: u32,
+        source: Source,
+    ) -> Self {
+        Self {
+            processor,
+            attribute,
+            value,
+            source,
+        }
+    }
+
+    /// The subject this observation is about.
+    #[must_use]
+    pub fn subject(&self) -> (crate::domain::ProcessorId, ProcessorAttribute) {
+        (self.processor, self.attribute)
+    }
+}
+
 #[cfg(test)]
 mod tests;

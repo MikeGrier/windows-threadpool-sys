@@ -76,6 +76,7 @@ fn synthetic() -> MachineMemoryTopology {
         // Named rather than defaulted, so this fixture states what it is. The
         // helper is called `synthetic` and now says so in the value too.
         provenance: Provenance::Synthetic,
+        processor_attributes: Vec::new(),
     }
 }
 
@@ -178,16 +179,17 @@ mod serde_tests {
         // are on", and once written to a file it can no longer assert that.
         // Reloading yields `Restored`.
         //
-        // Two things are downgraded across the boundary, for one reason. The
-        // provenance drops to `Restored`, and every relation's platform
-        // observations are dropped -- because a file saying "the relationship
-        // walk observed this" cannot establish that it did, and carrying the
-        // claim would be exactly the forgery D-12 refuses.
+        // Three things are downgraded across the boundary, for one reason. The
+        // provenance drops to `Restored`; every relation's platform
+        // observations are dropped; and so are the per-processor attribute
+        // claims -- because a file saying "the relationship walk observed this"
+        // cannot establish that it did, and carrying the claim would be exactly
+        // the forgery D-12 refuses.
         //
         // The assertion is deliberately not weakened to "the parts I still
         // expect to match". Everything else must survive verbatim, so this
-        // compares against the original with only those two adjusted -- a
-        // second corruption would still fail here.
+        // compares against the original with only those adjusted -- a second
+        // corruption would still fail here.
         let topology = MachineMemoryTopology::discover().expect("discover");
         assert!(
             topology.provenance.is_measured(),
@@ -200,6 +202,10 @@ mod serde_tests {
                 .all(|domain| !domain.observations.is_empty()),
             "a discovered relation must record which source reported it"
         );
+        assert!(
+            !topology.processor_attributes.is_empty(),
+            "a discovered topology records what each source said per processor"
+        );
 
         let json = serde_json::to_string(&topology).expect("serialize");
         let back: MachineMemoryTopology = serde_json::from_str(&json).expect("deserialize");
@@ -211,9 +217,14 @@ mod serde_tests {
                 .all(|domain| domain.observations.is_empty()),
             "a restored relation must not claim a platform source observed it"
         );
+        assert!(
+            back.processor_attributes.is_empty(),
+            "nor may a restored topology claim a source said anything per processor"
+        );
 
         let mut expected = topology;
         expected.provenance = Provenance::Restored;
+        expected.processor_attributes.clear();
         for domain in &mut expected.domains {
             domain.observations.clear();
         }
@@ -367,6 +378,7 @@ mod serde_tests {
             domains: vec![core_domain(0, &[0, 1, 2, 3], 0)],
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            processor_attributes: Vec::new(),
         };
         topology.fold_in_cpu_sets(&[
             cpu_set(0, 0, 0, 0),
@@ -411,6 +423,7 @@ mod serde_tests {
             domains: Vec::new(),
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            processor_attributes: Vec::new(),
         };
         topology.fold_in_cpu_sets(&[cpu_set(0, 0, 0, 2), cpu_set(1, 0, 0, 2)]);
 
@@ -443,6 +456,7 @@ mod serde_tests {
             domains: vec![core_domain(7, &[0, 1], 0)],
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            processor_attributes: Vec::new(),
         };
         topology.fold_in_cpu_sets(&[cpu_set(0, 3, 0, 0), cpu_set(1, 3, 0, 0)]);
 
@@ -473,6 +487,7 @@ mod serde_tests {
             domains: vec![memory],
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            processor_attributes: Vec::new(),
         };
         topology.fold_in_cpu_sets(&[cpu_set(0, 5, 0, 0), cpu_set(1, 5, 0, 0)]);
 
@@ -551,6 +566,128 @@ mod serde_tests {
                 .all(|domain| domain.observations.is_empty()),
             "and no relation claims a platform source either"
         );
+    }
+    // --- M3+.1.4: the attribute subject (D-18) ---
+
+    #[test]
+    fn both_sources_claim_an_efficiency_class_for_every_processor() {
+        let topology = MachineMemoryTopology::discover().expect("discover");
+
+        for processor in topology.processors.iter().filter(|p| p.online) {
+            let claims: Vec<_> = topology
+                .processor_attributes
+                .iter()
+                .filter(|a| {
+                    a.processor == processor.id
+                        && a.attribute == ProcessorAttribute::EfficiencyClass
+                })
+                .collect();
+            assert_eq!(
+                claims.len(),
+                2,
+                "both Win32 sources report an efficiency class for {:?}: {claims:?}",
+                processor.id
+            );
+        }
+    }
+
+    #[test]
+    fn this_host_has_no_attribute_conflict() {
+        // Measured, not assumed. Every efficiency class reads 0 here, so this
+        // asserts what the machine actually is rather than standing in for the
+        // conflicting case -- which is why the next test builds one.
+        let topology = MachineMemoryTopology::discover().expect("discover");
+        assert_eq!(topology.attribute_conflicts(), Vec::new());
+    }
+
+    #[test]
+    fn a_disagreement_about_one_processor_is_reported_not_resolved() {
+        // Testable only synthetically (D-17): the development host is not
+        // hybrid, and the field cases are hardware nobody here has plus
+        // prerelease firmware.
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(0, &[0, 1], 0)],
+            cpu_sets: None,
+            processor_attributes: Vec::new(),
+            provenance: Provenance::Synthetic,
+        };
+        topology.record_walk_attributes();
+        // CPU Sets disagrees about processor 0 and agrees about processor 1.
+        topology.fold_in_cpu_sets(&[cpu_set(0, 0, 0, 1), cpu_set(1, 0, 0, 0)]);
+
+        assert_eq!(
+            topology.attribute_conflicts(),
+            vec![(
+                ProcessorId {
+                    group: 0,
+                    number: 0
+                },
+                ProcessorAttribute::EfficiencyClass
+            )],
+            "only the contested processor is named"
+        );
+
+        // Both claims survive. Picking a winner would destroy the disagreement,
+        // and on a hybrid part it decides whether this is a performance core.
+        let values: Vec<u32> = topology
+            .processor_attributes
+            .iter()
+            .filter(|a| {
+                a.processor
+                    == ProcessorId {
+                        group: 0,
+                        number: 0,
+                    }
+            })
+            .map(|a| a.value)
+            .collect();
+        assert_eq!(values.len(), 2);
+        assert!(values.contains(&0) && values.contains(&1), "{values:?}");
+    }
+
+    #[test]
+    fn a_conflict_is_local_to_the_subject_that_has_one() {
+        // D-19's blast radius, at the attribute level: one contested processor
+        // must not make the others look uncertain.
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(0, &[0, 1, 2, 3], 0)],
+            cpu_sets: None,
+            processor_attributes: Vec::new(),
+            provenance: Provenance::Synthetic,
+        };
+        topology.record_walk_attributes();
+        topology.fold_in_cpu_sets(&[
+            cpu_set(0, 0, 0, 0),
+            cpu_set(1, 0, 0, 0),
+            cpu_set(2, 0, 0, 3),
+            cpu_set(3, 0, 0, 0),
+        ]);
+
+        assert_eq!(topology.attribute_conflicts().len(), 1);
+        assert_eq!(
+            topology.attribute_conflicts()[0].0,
+            ProcessorId {
+                group: 0,
+                number: 2
+            }
+        );
+    }
+
+    #[test]
+    fn a_hand_built_topology_records_no_attribute_claims() {
+        // Nobody asked, so nothing is claimed -- the same untrusted default the
+        // relation-level observations take.
+        let topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(0, &[0, 1], 0)],
+            cpu_sets: None,
+            processor_attributes: Vec::new(),
+            provenance: Provenance::Synthetic,
+        };
+        assert!(topology.processor_attributes.is_empty());
+        assert!(topology.attribute_conflicts().is_empty());
     }
     #[test]
     fn a_hand_written_synthetic_topology_parses() {
@@ -959,6 +1096,7 @@ fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
         domains,
         cpu_sets: None,
         provenance: Provenance::Synthetic,
+        processor_attributes: Vec::new(),
     }
 }
 
@@ -975,6 +1113,7 @@ fn cache_levels_are_empty_when_no_cache_is_reported() {
         domains: Vec::new(),
         cpu_sets: None,
         provenance: Provenance::Synthetic,
+        processor_attributes: Vec::new(),
     };
     assert!(topo.cache_levels().is_empty());
 }
