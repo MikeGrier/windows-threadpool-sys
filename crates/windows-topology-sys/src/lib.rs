@@ -65,6 +65,8 @@ mod cpu_set;
 #[cfg(windows)]
 mod domain;
 #[cfg(windows)]
+mod granularity;
+#[cfg(windows)]
 mod processor_set;
 /// Where a topology's content came from.
 mod provenance;
@@ -79,6 +81,8 @@ mod walk;
 pub use cpu_set::CpuSet;
 #[cfg(windows)]
 pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorId};
+#[cfg(windows)]
+pub use granularity::Granularity;
 pub use processor_set::ProcessorSet;
 pub use provenance::Provenance;
 #[cfg(windows)]

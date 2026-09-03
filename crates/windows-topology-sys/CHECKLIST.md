@@ -285,7 +285,7 @@ quietly worked around, per the re-plan rule.
   `Domain::id`, which [D-15](DESIGN-NOTES.md#d-15) requires, is real remaining work -- but it is
   observation work and belongs to **M3**, not here.
 
-- [ ] **M2+.2** -- Derive the order from **observed set inclusion**, never from firmware level
+- [x] **M2+.2** -- Derive the order from **observed set inclusion**, never from firmware level
   numbers. Inclusion is checkable; numbering is asserted, and this crate has been bitten by asserted
   structure before -- the ARM64 host with no L3, and the guard test against a consumer sweeping
   `1..=4`.
@@ -293,11 +293,11 @@ quietly worked around, per the re-plan rule.
   `outermost_partitioning_cache()` walks it with `.rev()` -- so today's only ordering *is* firmware
   numbering, which is what this item forbids.
 
-- [ ] **M2+.3** -- Give the order an explicit **top** ("the machine"), so a pairwise query is total.
+- [x] **M2+.3** -- Give the order an explicit **top** ("the machine"), so a pairwise query is total.
   Two processors always share one address space, one scheduler and one memory system; without a top,
   every caller writes the same empty-case branch for a cross-node pair.
 
-- [ ] **M2+.4** -- Represent **incomparable** granularities. An inclusion order is partial, so two
+- [x] **M2+.4** -- Represent **incomparable** granularities. An inclusion order is partial, so two
   granularities may not nest, and the honest answer to "tightest shared" is then a set of minimal
   elements -- almost always one, but not by construction.
 
@@ -312,6 +312,23 @@ quietly worked around, per the re-plan rule.
   > observed it. The operation the order exists to support is "the minimal relations containing this
   > set of processors", which returns a `Vec` precisely because M2+.4 says minimality need not be
   > unique. The *pairwise* query built on it, with membership and the upper-bound flag, is `M4+.1`.
+  >
+  > **Done.** `src/granularity.rs` -- `Granularity::{Relation, Machine}`,
+  > `MachineMemoryTopology::{machine_processors, minimal_shared, is_finer_than}`, on a new
+  > `ProcessorSet::is_subset`. 21 tests.
+  > **The top is a fallback, not a competitor**: `Machine` is returned exactly when no reported
+  > relation covers the query, so it never appears beside an observed relation. The alternative --
+  > treating it as an ordinary element -- was rejected on measurement of its consequence: on a machine
+  > whose group domain spans every processor, every answer would carry a redundant second element,
+  > which is systematic noise rather than M2+.4's "almost always one".
+  > **Totality is over processors the topology knows.** A query naming an unknown processor answers
+  > *empty*, not `Machine`, because claiming the machine contains a processor it has never heard of
+  > would be an invention.
+  > **Sabotage-verified, and it found a real gap.** Removing the strictness from minimality failed 10
+  > of 20 tests. Breaking `is_subset` failed only **one**, incidentally -- the new primitive the whole
+  > order rests on had no direct tests, and every granularity test used group 0 alone, so the
+  > multi-group path was untested. Seven `is_subset` tests and a cross-group order test took that from
+  > 1 detection to 4, two of which name the defect directly.
 
 - [ ] **M2+.5** -- Make absence first-class per [D-13](DESIGN-NOTES.md#d-13): **not observed**,
   **observed and absent**, and **a negative result** are three different facts that an `Option`

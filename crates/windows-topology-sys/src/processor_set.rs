@@ -134,6 +134,23 @@ impl ProcessorSet {
                 .is_none_or(|&other_mask| mask & other_mask == 0)
         })
     }
+
+    /// Whether every processor in `self` is also in `other`.
+    ///
+    /// This is the comparison the granularity order is built on (M2+.2):
+    /// inclusion is *checkable* against the memberships the platform actually
+    /// reported, where a firmware level number is only asserted. The empty
+    /// set is a subset of everything, which follows from the definition and
+    /// is not a special case.
+    #[must_use]
+    pub fn is_subset(&self, other: &Self) -> bool {
+        self.groups.iter().all(|(group, &mask)| {
+            other
+                .groups
+                .get(group)
+                .is_some_and(|&other_mask| mask & !other_mask == 0)
+        })
+    }
 }
 
 impl FromIterator<(u16, u8)> for ProcessorSet {

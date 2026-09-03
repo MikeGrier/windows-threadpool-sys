@@ -113,6 +113,104 @@ fn is_disjoint_across_groups_with_no_overlap_in_group_ids() {
 }
 
 #[test]
+fn is_subset_is_true_only_when_every_processor_is_covered() {
+    let pair = ProcessorSet::from_group_mask(0, 0b011);
+    let triple = ProcessorSet::from_group_mask(0, 0b111);
+
+    assert!(pair.is_subset(&triple));
+    assert!(!triple.is_subset(&pair));
+}
+
+#[test]
+fn is_subset_is_reflexive_but_that_is_not_strictness() {
+    // The order's comparison is built from this plus an inequality check, so
+    // this method deliberately answers `true` for equal sets.
+    let set = ProcessorSet::from_group_mask(0, 0b101);
+    assert!(set.is_subset(&set.clone()));
+}
+
+#[test]
+fn is_subset_is_false_when_a_group_is_missing_entirely() {
+    // The case that separates "every group I name is covered" from "every
+    // group I name is *present*": group 1 does not appear in `other` at all,
+    // so the answer must be false rather than vacuously true.
+    let spans_two_groups = {
+        let mut set = ProcessorSet::from_group_mask(0, 0b1);
+        set.insert(1, 0);
+        set
+    };
+    let one_group = ProcessorSet::from_group_mask(0, 0b1);
+
+    assert!(!spans_two_groups.is_subset(&one_group));
+    assert!(one_group.is_subset(&spans_two_groups));
+}
+
+#[test]
+fn is_subset_holds_across_several_groups() {
+    let smaller = {
+        let mut set = ProcessorSet::empty();
+        set.insert(0, 1);
+        set.insert(3, 2);
+        set
+    };
+    let larger = {
+        let mut set = ProcessorSet::empty();
+        set.insert(0, 1);
+        set.insert(0, 5);
+        set.insert(3, 2);
+        set.insert(3, 7);
+        set
+    };
+
+    assert!(smaller.is_subset(&larger));
+    assert!(!larger.is_subset(&smaller));
+}
+
+#[test]
+fn is_subset_is_false_when_one_group_of_several_is_not_covered() {
+    // Covered in group 0, not covered in group 1. A per-group check that
+    // stopped at the first match would wrongly answer true.
+    let left = {
+        let mut set = ProcessorSet::empty();
+        set.insert(0, 1);
+        set.insert(1, 4);
+        set
+    };
+    let right = {
+        let mut set = ProcessorSet::empty();
+        set.insert(0, 1);
+        set.insert(1, 5);
+        set
+    };
+
+    assert!(!left.is_subset(&right));
+}
+
+#[test]
+fn the_empty_set_is_a_subset_of_everything_including_itself() {
+    let empty = ProcessorSet::empty();
+    let populated = ProcessorSet::from_group_mask(0, 0b1);
+
+    assert!(empty.is_subset(&populated));
+    assert!(empty.is_subset(&ProcessorSet::empty()));
+    assert!(!populated.is_subset(&empty));
+}
+
+#[test]
+fn is_subset_and_is_disjoint_agree_where_they_must() {
+    // Two non-empty sets cannot be both, and a set that is a subset of a
+    // non-empty set is never disjoint from it. Checked because the two
+    // methods are the order's only set predicates and a sign error in either
+    // is invisible from the other's tests.
+    let small = ProcessorSet::from_group_mask(0, 0b001);
+    let big = ProcessorSet::from_group_mask(0, 0b111);
+    let apart = ProcessorSet::from_group_mask(0, 0b110);
+
+    assert!(small.is_subset(&big) && !small.is_disjoint(&big));
+    assert!(!small.is_subset(&apart) && small.is_disjoint(&apart));
+}
+
+#[test]
 fn from_iter_builds_the_same_set_as_repeated_insert() {
     let via_insert = {
         let mut set = ProcessorSet::empty();
