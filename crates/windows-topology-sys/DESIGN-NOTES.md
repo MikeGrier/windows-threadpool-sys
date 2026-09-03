@@ -35,6 +35,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-13"></a>D-13 | **Every `Option` in this crate must say *which* absence it means.** "Not observed", "observed and absent", and "a computed answer that is negative" are three different facts, and an `Option` spells all three identically. Each one is documented at its site, and no field may mean more than one. See the detail section below, which audits every `Option` the crate has. |
 | <a id="d-14"></a>D-14 | **Windows's `LastLevelCacheIndex` is not `MachineMemoryTopology::outermost_partitioning_cache`, and neither is wrong.** Measured on the x64 development host: CPU Sets reports **one** LLC group over all sixteen processors, while the derivation reports **eight** partitions at L2. Windows names the *last* level; the derivation names the outermost level that *divides*. They answer different questions, so neither may be substituted for the other, and a consumer treating the CPU-set value as "the cache domain" would collapse eight groups into one on that machine. |
 | <a id="d-15"></a>D-15 | **A relation is identified by its `(kind, membership)`, not by any source's label -- so several observations of one relation are held as a *set*, never reduced on insert.** Measured, not assumed: the two Win32 sources agree exactly on the core partition (eight groups each) while labelling it completely differently (`[0,2,4,...,14]` against `[0,1,...,7]`). The "disagreement" a reduction would resolve is between *dictionaries*, not about the machine, and reducing would have to pick a label arbitrarily while discarding the other source's. Under membership identity the common case costs nothing -- one relation, two observations -- and a genuine contradiction stays representable. See the detail section below. |
+| <a id="d-16"></a>D-16 | **Collection retries until coherent, and what survives a retry is a genuine disagreement.** There is no transactional way to read the two Win32 sources together, so `discover()` validates them against each other and, on incoherence, **re-collects** -- bounded, and cheap because both are whole-machine enumerations. Transient incoherence from a hot-add resolves on the next pass; incoherence that survives is not transience and must be represented. Retry is therefore the *discriminator* between the two, which no single observation can be. And because the data can change while it is being collected, a topology states plainly whether it was collected coherently, so a reader knows how far its parts may be correlated. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -241,6 +242,68 @@ class is zero everywhere, which is both trivially matchable *and* the exact valu
 `Processor::capacity`'s sentinel is indistinguishable from -- so that row confirms nothing about
 either source. A hybrid, multi-node machine would test all three properly, and none is available
 here.
+
+## D-16: retry until coherent, and represent what survives
+
+*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.2.*
+
+### The problem, stated without the wrong framing
+
+`discover()` reads two Win32 sources -- the relationship walk and the CPU-set enumeration -- and
+there is **no transactional way to read them together**. So the pair may describe different instants,
+and the model has to do something about it.
+
+An earlier reading of this file argued the case away, on the grounds that even an atomic `discover()`
+returns a topology that is stale the moment it returns, so the two-call window is only a larger
+instance of an unavoidable problem. That is true and it is not a reason to do nothing, because the
+two are not equally addressable: staleness after the fact is the executor's to validate, while
+incoherence *during* collection is ours, is detectable, and is cheap to fix.
+
+### The remedy is to collect again
+
+If the incoherence is detectable and harmful, **re-initiate collection**. Both calls are
+whole-machine enumerations and trivially inexpensive, so a retry costs almost nothing, and it is not
+plausible that more than a couple of passes fail to find a coherent set.
+
+This is the ordinary read-validate-retry shape, and the crate is already full of it -- every
+compare-exchange loop in the workspace is the same idea. It was missed here because the question was
+framed as "what do we *store* when sources disagree", which admits refuse, record, or prefer, and
+quietly excludes "ask again".
+
+### Retry is the discriminator, which is the part that matters
+
+This file previously asserted, twice, that a transient inconsistency and a genuine one are
+*indistinguishable from a single observation*. That is true, and the conclusion drawn from it -- that
+the model must therefore tolerate the ambiguity -- does not follow. The answer is to stop using a
+single observation.
+
+- **Transient incoherence resolves on the next pass.** A processor hot-added between two calls is not
+  hot-added again a microsecond later.
+- **Incoherence that survives a retry is not transience.** It is a real disagreement about one moment
+  -- a defective hypervisor, malformed firmware, a hand-built description -- and no amount of
+  re-reading will settle it.
+
+So the retry classifies as a side effect of fixing. What reaches the representation question is only
+what has already been *proved* genuine, which is a far smaller and better-defined set than "anything
+that ever looked inconsistent".
+
+### And the collection's coherence is stated, not implied
+
+Because the data can change while it is being collected, a topology must say plainly whether it was
+collected coherently -- and, where it was not, what disagreed. A reader can then tell how far the
+parts may be **correlated** with each other, which is a different question from whether any single
+part is accurate.
+
+This is the same principle as [D-13](#d-13) applied to the object rather than to a field: a fact
+about how reliable the data is must be *stated*, because a reader cannot infer it from the data's
+shape.
+
+### Bounds, and what the bound means
+
+The retry is bounded. Exhausting the bound is not a failure to collect -- it is the **conclusion**
+that the disagreement is genuine, and the point at which the conflict representation
+([MMT-1.2](CHECKLIST.md)'s shapes A and B) applies. The two are one mechanism: retry to remove the
+transient cases, then represent whatever is left.
 
 ## What was deliberately excluded (D-9)
 

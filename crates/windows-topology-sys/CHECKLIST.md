@@ -88,35 +88,55 @@ wrongly after code exists.
     `Core { efficiency_class }` against CPU Sets' `EfficiencyClass`. This is not a membership
     question and D-15 does not reach it, which the item as first written did not notice.
 
-  **A third case was raised here and then removed, because it is not this item's problem.** Recorded
-  rather than deleted, since the reasoning that disposed of it is the useful part.
+  **A third case: `discover()`'s two calls are not atomic.** Raised, then twice mis-corrected, then
+  wrongly retired, and finally **answered by [D-16](DESIGN-NOTES.md#d-16): collect again.** The whole
+  path is kept because the wrong turns are instructive.
 
-  The claim was that `discover()`'s two calls are not atomic, so a change between them leaves the two
-  halves describing different machines. Two corrections and then a dismissal:
+  If the incoherence is detectable and harmful, **re-initiate collection**. Both calls are
+  whole-machine enumerations and trivially inexpensive, so a retry costs almost nothing, and more
+  than a couple of passes failing to find a coherent set is not plausible.
+
+  **Retry is also the discriminator this item twice claimed could not exist.** The assertion was that
+  a transient inconsistency and a genuine one are indistinguishable *from a single observation* --
+  true, and the conclusion that the model must therefore tolerate the ambiguity does not follow. Stop
+  using a single observation: transience resolves on the next pass, and what survives is *proved*
+  genuine. So only what has already been classified reaches the representation question below.
+
+  The earlier missteps, kept short:
 
   - **It is not a torn read.** Nothing tears -- each call returns a self-consistent snapshot and the
     buffers are process-private. The accurate term is a *non-atomic composite*.
   - **Parking cannot cause it**, which was the example first given. Parking changes a CPU-Sets-only
     field; GLPIE does not report parked state, and none of the three overlapping facts move when a
     core parks -- `CoreIndex` and `NumaNodeIndex` are unchanged, `EfficiencyClass` is static.
-  - **And the concern proves too much.** Even a perfectly atomic `discover()` returns a topology that
-    is stale the instant it returns. A hot-add one microsecond *afterwards* leaves it equally wrong,
-    and no internal atomicity fixes that. The two-call window is a marginally larger instance of an
-    unavoidable problem, not a distinct one.
+  - **And then it was retired for proving too much** -- on the grounds that even an atomic
+    `discover()` returns a topology stale the instant it returns, so the two-call window is only a
+    larger instance of an unavoidable problem. True, and **not a reason to do nothing**: the two are
+    not equally addressable. Staleness after the fact is the executor's to validate, and is already
+    owned as `M-inf.1` in [windows-execution-plan](../windows-execution-plan/CHECKLIST.md).
+    Incoherence *during* collection is ours, detectable, and cheap to fix.
 
-  So the right question is not "were our two reads mutually consistent" but "is the machine still
-  what we planned against, when we act" -- which belongs to the executor and is **already owned**:
-  `M-inf.1` in [windows-execution-plan](../windows-execution-plan/CHECKLIST.md), filed explicitly as
-  "a different problem". The severity agrees: on an add we merely fail to use a new processor, and on
-  a remove pinning fails loudly where it happens. Neither corrupts a decision silently.
+  The framing is what caused the miss. Asking "what do we **store** when sources disagree" admits
+  refuse, record, or prefer -- and quietly excludes "ask again", which is the standard shape every
+  compare-exchange loop in this workspace already uses.
 
-  **What this item keeps** is the two shapes above, which arise from sources disagreeing *about the
-  same moment* -- a defective hypervisor, malformed firmware, a hand-built description -- and which no
-  amount of atomicity would fix.
+  ### What is left to decide
 
-  The argument against *refusing* on a conflict does not depend on any of this: a genuine
-  inconsistency is something a caller would rather be told about and route around than be unable to
-  run at all.
+  Retry removes the transient cases, so what reaches representation is proved genuine. Remaining:
+
+  1. **What is compared**, to call a collection coherent. The processor sets naming each other is the
+     hot-add signature; core and NUMA partitions and per-processor efficiency class are shapes A and B.
+  2. **The bound**, and what exhausting it *means* -- not a failure to collect, but the **conclusion**
+     that the disagreement is genuine, and the point at which shapes A and B apply.
+  3. **How a topology states its coherence.** Per [D-16](DESIGN-NOTES.md#d-16) it must say plainly
+     whether it was collected coherently and, where it was not, what disagreed -- so a reader knows how
+     far the parts may be **correlated**, which is a different question from whether any one part is
+     accurate.
+  4. **Shape B still has no representation.** `(kind, membership)` identity does not reach a
+     per-processor scalar disagreement, and that gap is untouched by any of the above.
+
+  Refusing outright remains rejected on its own merits: a genuine inconsistency is something a caller
+  would rather be told about and route around than be unable to run at all.
 
   **A finding that came out of checking it:** `online` (GLPIE, from `active_processors`) and `parked`
   (CPU Sets) are **complementary, not overlapping**. Parked is not offline -- a parked processor is
@@ -127,20 +147,10 @@ wrongly after code exists.
   **And a fourth, within a single source:** a processor named by two `Core` domains, from malformed
   firmware or a hand-built description. Unchecked today.
 
-  ### What to decide
-
-  1. Does `discover()` **detect** at populate time, or is a conflict something only a query surfaces?
-     Detecting costs a comparison over every overlapping fact; not detecting means a caller who never
-     asks the right question never learns.
-  2. What happens when it does: **refuse** (an `Err` from `discover`, which would make a machine
-     unusable over a discrepancy that may be benign), **record and continue** (consistent with this
-     crate's posture of representing the awkward case), or **prefer a source** -- which is
-     reduce-on-insert wearing a different hat, and D-15 rejected it.
-  3. ~~Whether to record that a topology is a composite of two instants.~~ **Dropped**, along with the
-     third call that would have distinguished a stale composite from a real inconsistency. Both were
-     answers to the question retired above. If staleness is worth addressing, what a snapshot wants is
-     *a notion of when it was taken* -- one fact, not a count of reads -- and that is a question for
-     whoever needs it, not a consequence of `discover()` making two calls.
+  Two questions this block used to ask are now answered and are not repeated: whether `discover()`
+  detects at populate time (**yes** -- it must, in order to retry), and whether it may prefer a source
+  (**no** -- [D-15](DESIGN-NOTES.md#d-15) rejected reduce-on-insert, and preferring is that by another
+  name). What remains is listed above.
 
 - [ ] **MMT-1.3** -- **What a consumer does when a needed fact was not observed**, given the bar that
   the model answers without further measurement. Degrade to a documented weaker policy, refuse, or
