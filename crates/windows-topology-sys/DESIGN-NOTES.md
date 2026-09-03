@@ -34,6 +34,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-12"></a>D-12 | **A topology carries its own provenance, and the untrusted value is the default.** This crate deliberately lets a topology be discovered, built by hand, or deserialized from a description written for a machine you do not have -- and until now the three were indistinguishable once built. [`Provenance`] is `Synthetic` by `Default`, so forgetting is safe and claiming is deliberate; only `discover` yields `Measured`; and deserialization can only ever *downgrade*, so a file cannot assert it is the machine you are on. |
 | <a id="d-13"></a>D-13 | **Every `Option` in this crate must say *which* absence it means.** "Not observed", "observed and absent", and "a computed answer that is negative" are three different facts, and an `Option` spells all three identically. Each one is documented at its site, and no field may mean more than one. See the detail section below, which audits every `Option` the crate has. |
 | <a id="d-14"></a>D-14 | **Windows's `LastLevelCacheIndex` is not `MachineMemoryTopology::outermost_partitioning_cache`, and neither is wrong.** Measured on the x64 development host: CPU Sets reports **one** LLC group over all sixteen processors, while the derivation reports **eight** partitions at L2. Windows names the *last* level; the derivation names the outermost level that *divides*. They answer different questions, so neither may be substituted for the other, and a consumer treating the CPU-set value as "the cache domain" would collapse eight groups into one on that machine. |
+| <a id="d-15"></a>D-15 | **A relation is identified by its `(kind, membership)`, not by any source's label -- so several observations of one relation are held as a *set*, never reduced on insert.** Measured, not assumed: the two Win32 sources agree exactly on the core partition (eight groups each) while labelling it completely differently (`[0,2,4,...,14]` against `[0,1,...,7]`). The "disagreement" a reduction would resolve is between *dictionaries*, not about the machine, and reducing would have to pick a label arbitrarily while discarding the other source's. Under membership identity the common case costs nothing -- one relation, two observations -- and a genuine contradiction stays representable. See the detail section below. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -164,6 +165,82 @@ this case -- is `SH-16.13`.
 Kept honest by a test that asserts the *relationship* rather than this host's numbers: Windows's
 grouping is never finer than the derived one, because the last level is at or outside whatever level
 first divides the machine.
+
+## D-15: a relation is its membership, and observations are a set
+
+*Recorded by [CHECKLIST.md](CHECKLIST.md) MMT-1.1.*
+
+### The question, and why it looked balanced
+
+Two Win32 sources now report overlapping facts about the same processors: the relationship walk and
+the CPU-set enumeration both describe a processor's core, its NUMA node and its efficiency class,
+from different kernel paths. So the model must decide whether several observations of one relation
+are **held as a set** or **reduced on insert** with the reduction recorded.
+
+Stated abstractly the two look balanced. A set is honest and pushes adjudication onto every caller;
+a reduction is convenient and throws away the disagreement, which is the one thing a second observer
+is for. That framing is what the question sat on for most of a day.
+
+### What measurement showed
+
+Compared on the x64 development host, as partitions rather than as labels:
+
+| | agreement | strength of the evidence |
+|---|---|---|
+| core partition | **identical**, eight groups each | **strong** -- eight non-trivial groups matched exactly |
+| core *labels* | **completely different**: `[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]` | -- |
+| NUMA partition | identical, one group | weak: a single group matches trivially |
+| efficiency class | identical, all zero | weak: all zero, which is the very value `Processor::capacity`'s sentinel collides with |
+
+**The two sources agree on the facts and disagree on the names.** CPU Sets numbers a core by its
+first logical processor; the relationship walk numbers domains in discovery order. Neither is wrong,
+and neither is a claim about the machine.
+
+### What follows
+
+**A relation is identified by `(kind, membership)`.** Which processors are grouped is the
+observation; what a source calls that group is an attribute *of the observation*, not of the
+relation. Two sources producing the same membership have observed **one** relation twice.
+
+That settles the question, and not by the argument the checklist item expected:
+
+- **Reduce-on-insert is not merely lossy, it is arbitrary.** Its job would be to resolve a conflict,
+  and the only conflict present is between labelling schemes -- where both labels are correct and
+  picking one is a coin toss. Meanwhile the fact that mattered needed no reduction at all, because
+  the sources agreed on it.
+- **A set costs nothing in the common case.** Agreement means one relation carrying two observations,
+  not two competing relations. The feared duplication does not materialise where the sources agree,
+  which is the usual case.
+- **And a genuine contradiction stays representable**: two sources claiming the same *kind* for
+  overlapping-but-unequal memberships. That is a real disagreement about the machine, and it is
+  exactly what a reduction would have hidden.
+
+### It also disposes of D-14's third case
+
+[D-14](#d-14) found that CPU Sets' `LastLevelCacheIndex` and the derived partitioning cache differ --
+one group against eight -- without either being wrong, because they answer different questions. That
+looked like it would need a third state beside "agree" and "contradict".
+
+Under membership identity it needs nothing. Different memberships at different kinds are **different
+relations**, so they never meet to disagree. The third case dissolves rather than being handled,
+which is a better outcome than the vocabulary MMT-1.2 was going to have to invent.
+
+### The machinery for detecting contradiction already exists
+
+Overlapping-but-unequal sets *at the same kind* is precisely what
+`MachineMemoryTopology::are_pairwise_disjoint` already checks for cache domains, and what
+[D-5](#d-5)-era work established as the shape of a corrupt or hand-built topology. Generalising it
+from "cache levels" to "any kind" is the whole of the contradiction check, rather than new
+machinery.
+
+### What this does not establish
+
+The core comparison is strong; the other two are not, and saying so matters more than the headline.
+The NUMA partition is one group on this host, so it would match under almost any bug. Efficiency
+class is zero everywhere, which is both trivially matchable *and* the exact value
+`Processor::capacity`'s sentinel is indistinguishable from -- so that row confirms nothing about
+either source. A hybrid, multi-node machine would test all three properly, and none is available
+here.
 
 ## What was deliberately excluded (D-9)
 

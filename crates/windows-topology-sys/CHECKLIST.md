@@ -28,7 +28,7 @@ Presence and observation are facts to represent, not shapes to infer from.
 
 | Milestone | State | What it is waiting on |
 |---|---|---|
-| M1 settle what is still open | open | nothing -- these are decisions, and they gate the rest |
+| M1 settle what is still open | 1 of 5 done | nothing -- these are decisions, and they gate the rest |
 | M2 the granularity model | parked | M1 |
 | M3 observation and provenance | parked | M1 |
 | M4 the queries | parked | M2, M3 |
@@ -40,19 +40,38 @@ wrongly after code exists.
 
 ## M1: settle what is still open
 
-- [ ] **MMT-1.1** -- **Are several observations of one relation held as a set, or reduced on insert
+- [x] **MMT-1.1** -- **Are several observations of one relation held as a set, or reduced on insert
   with the reduction recorded?** No longer speculative: `GetLogicalProcessorInformationEx` and
   `GetSystemCpuSetInformation` both report a processor's core, NUMA node and efficiency class, from
   different kernel paths, and both are read today. A set is honest and pushes adjudication onto every
   caller; reducing on insert is convenient and throws away the disagreement, which is the one thing a
   second observer is for.
+  **Done, as [D-15](DESIGN-NOTES.md#d-15): a set -- but the reason is not the one above.** Measured
+  rather than argued. The two sources **agree exactly** on the core partition (eight groups each) and
+  **label it completely differently** (`[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]`). So the
+  disagreement a reduction would resolve is between *dictionaries*, not about the machine.
+  That makes **a relation identified by `(kind, membership)`**, with a source's label an attribute of
+  the *observation*. Reduce-on-insert is then not merely lossy but **arbitrary** -- it would pick
+  between two correct labels by coin toss, while the fact that mattered needed no reduction because
+  the sources agreed. And a set costs nothing in the common case: agreement is one relation with two
+  observations, not two competing relations.
+  **Honest about the evidence:** only the core comparison is strong. NUMA is one group here so it
+  matches under almost any bug, and efficiency class is zero everywhere -- which is both trivially
+  matchable and the exact value `Processor::capacity`'s sentinel is indistinguishable from, so that
+  row confirms nothing. A hybrid, multi-node machine would test all three; none is available.
 
-- [ ] **MMT-1.2** -- **What a query returns when observations differ -- and there are three cases,
-  not two.** [D-14](DESIGN-NOTES.md#d-14) found the third: CPU Sets reports one last-level-cache
-  group where the derivation reports eight L2 partitions, and neither is wrong because they answer
-  **different questions**. So the model must distinguish *agreement*, *contradiction*, and
-  *different subject* -- and a design that only has the first two will file the third as a conflict
-  and teach a caller to distrust a correct answer.
+- [ ] **MMT-1.2** -- **What a query returns when observations differ.** ~~And there are three cases,
+  not two~~ -- **the third case dissolved.** [D-14](DESIGN-NOTES.md#d-14) found that CPU Sets reports
+  one last-level-cache group where the derivation reports eight L2 partitions, neither wrong because
+  they answer **different questions**, and this item was going to have to invent vocabulary for it.
+  [D-15](DESIGN-NOTES.md#d-15) removes the need: under `(kind, membership)` identity, different
+  memberships at different kinds are simply **different relations**, so they never meet to disagree.
+  **What remains is narrower**: two sources claiming the same *kind* over overlapping-but-unequal
+  memberships -- a real contradiction about the machine. Decide what a query returns then: a value
+  plus a conflict marker, or the conflict itself, forcing the caller to adjudicate.
+  Note the detection machinery already exists. Overlapping-but-unequal sets at one kind is exactly
+  what `are_pairwise_disjoint` checks for cache domains today; generalising it from "cache levels" to
+  "any kind" is the whole of the check.
 
 - [ ] **MMT-1.3** -- **What a consumer does when a needed fact was not observed**, given the bar that
   the model answers without further measurement. Degrade to a documented weaker policy, refuse, or
