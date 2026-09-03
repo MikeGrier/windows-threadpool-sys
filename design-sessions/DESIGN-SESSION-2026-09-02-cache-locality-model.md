@@ -260,6 +260,29 @@ consumer shaping memory allocation today must either run the probe at decision t
 bar above forbids, or guess. This is the whole design in one field, and it is tracked as
 SH-16.11.
 
+### The consumer this is being designed for
+
+"Most useful for consumers" was answered by naming one: a Seastar-style shard-per-core runtime
+building SPSC/MPSC rings between pinned threads over NUMA-local buffers. Walking that construction
+produced a requirements list, and it is now owned by
+[crates/windows-execution-plan](../crates/windows-execution-plan/CHECKLIST.md) M1 rather than being
+carried in this session as prose.
+
+The walk found the load-bearing query is **pairwise proximity** -- "how close are these two
+processors" -- asked once per pair of shards, because that is what selects SPSC versus MPSC versus a
+routed hop. The current model answers only the *global* question (`outermost_partitioning_cache`,
+one level for the whole machine) reduced to a boolean at that level (`same_cache_domain`), so the
+pairwise question has no answer at all today.
+
+That settles the vocabulary argument on use rather than on aesthetics. Under ordering-by-inclusion,
+pairwise proximity is one query over the order. Under a firmware-anchored ladder it is a fixed
+sequence of "same L1? same L2? same L3? same die? same node?", which breaks on the ARM64 host with
+no L3 and cannot express a measured-only tier at all.
+
+The walk also found the mapping itself was **unowned**: `CHECKLIST-io-domains.md` M32 lists four
+contracts "the runtime cannot be written without" and all four concern the queue, while M33+.1
+presupposes a plan naming which thread, which node and which shard. That is now a component.
+
 ### Still open
 
 - **Who owns the measurement phase, and what does it cost?** A `discover()` that measures is

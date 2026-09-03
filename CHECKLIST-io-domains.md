@@ -539,7 +539,8 @@ hardware the session could not obtain. What N>1 adds is additive, not a second m
 ## M32 -- Contracts the runtime cannot be written without
 
 These are decision items, not implementation. Each is open in the session record, and each would change
-the runtime's shape, so all three land before M33+ begins.
+the runtime's shape, so they land before M33+ begins. (The heading said "all three" while listing four;
+it now lists five, and the count is dropped rather than maintained.)
 
 - [ ] **M32.1** -- **The ordering guarantee.** Open since the 2026-08-27 namespace session, which
   observed that `DeleteFile(X)` then `CreateFile(X)` on a pool does not execute in order and said the
@@ -566,9 +567,22 @@ the runtime's shape, so all three land before M33+ begins.
   two-layer ring. **A decision recorded only in a session record steers nothing**, and this checklist is
   the mechanism that makes them binding.
 
+- [ ] **M32.5** -- **Note that the shard plan is *not* one of these contracts, and where it went.**
+  M33+.1 opens with "one pinned thread, its `IoRing`, its node-local registered pool, its shard",
+  which presupposes a mapping naming which thread, which node and which shard -- and that mapping was
+  unowned: M32's other four contracts are all about the queue, and no item anywhere computed the plan.
+  It is now [crates/windows-execution-plan](crates/windows-execution-plan/COMPONENT.md), a component
+  of its own, because it applies **policy** over the topology's facts and reasonable clients will
+  choose differently. Nothing here needs to decide it; this item exists so a reader of M33+ does not
+  conclude the mapping is obvious, which is how it went missing.
+
 > **-> CROSS-COMPONENT HANDOFF:** M33+ below spans `crates/windows-thread-ambient-sys`,
 > `crates/windows-namespace-request-sys`, and `crates/windows-ioring-sys`. Each has its own
 > [CHECKLIST.md](CHECKLIST.md); the items are held here until M32 settles, then move to the component that owns them.
+>
+> **The plan M33+ executes comes from
+> [crates/windows-execution-plan/CHECKLIST.md](crates/windows-execution-plan/CHECKLIST.md)**, which is
+> itself gated on the locality-model design session. So M33+ has two prerequisites, not one.
 
 ## M33+ -- The domain runtime (gated on M32)
 
