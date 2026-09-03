@@ -227,26 +227,283 @@ mod serde_tests {
     }
 
     #[test]
-    fn every_discovered_relation_names_the_relationship_walk_as_its_source() {
-        // M3+.1.1: the walk is the only source folded into `domains` today, so
-        // every relation must carry exactly its observation and no other. When
-        // M3+.1.2 folds CPU Sets in, the relations both sources describe gain a
-        // second observation -- and this test is what will show that happening
-        // rather than it arriving unnoticed.
+    fn both_sources_are_folded_into_one_relation_where_they_agree() {
+        // M3+.1.2: the walk and CPU Sets both describe cores and NUMA nodes. On
+        // a machine where they agree -- measured to be the ordinary case
+        // (D-15) -- that is ONE relation carrying TWO observations, not two
+        // competing relations.
+        //
+        // This test replaced one asserting exactly one observation per
+        // relation, which is what caught this change arriving rather than
+        // letting it land unnoticed.
         let topology = MachineMemoryTopology::discover().expect("discover");
 
+        let doubly_observed = topology
+            .domains
+            .iter()
+            .filter(|domain| domain.observations.len() > 1)
+            .count();
+        assert!(
+            doubly_observed > 0,
+            "both Win32 sources report cores, so at least one relation must \
+             carry two observations: {:?}",
+            topology
+                .domains
+                .iter()
+                .map(|d| (&d.kind, d.observations.len()))
+                .collect::<Vec<_>>()
+        );
+
         for domain in &topology.domains {
-            assert_eq!(
-                domain.observations.len(),
-                1,
-                "one source has been folded in, so one observation: {domain:?}"
+            assert!(
+                !domain.observations.is_empty(),
+                "every relation names who reported it: {domain:?}"
             );
-            assert_eq!(domain.observations[0].source, Source::RelationshipWalk);
+            let mut sources: Vec<_> = domain.observations.iter().map(|o| o.source).collect();
+            sources.sort_unstable();
+            sources.dedup();
             assert_eq!(
-                domain.observations[0].label, domain.id,
-                "the observation must carry the label the walk used"
+                sources.len(),
+                domain.observations.len(),
+                "one observation per source, never two from the same one: {domain:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_doubly_observed_relation_keeps_both_labels() {
+        // The measured disagreement D-15 is built on: the sources agree on the
+        // core partition and label it differently. Both labels survive, which
+        // they could not if the relation carried a single id.
+        let topology = MachineMemoryTopology::discover().expect("discover");
+
+        let both: Vec<_> = topology
+            .domains
+            .iter()
+            .filter(|d| d.observations.len() > 1)
+            .collect();
+        assert!(!both.is_empty(), "nothing was unified");
+
+        for domain in both {
+            assert!(
+                domain
+                    .observations
+                    .iter()
+                    .any(|o| o.source == Source::RelationshipWalk),
+                "{domain:?}"
+            );
+            assert!(
+                domain
+                    .observations
+                    .iter()
+                    .any(|o| o.source == Source::CpuSets),
+                "{domain:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_last_level_cache_grouping_is_not_folded_into_a_cache_relation() {
+        // D-14: CPU Sets' LastLevelCacheIndex answers a different question from
+        // the derived cache partitioning -- one group against eight L2
+        // partitions on the development host -- so folding it into `Cache`
+        // would assert an agreement neither source made.
+        let topology = MachineMemoryTopology::discover().expect("discover");
+
+        for domain in topology.caches() {
+            assert!(
+                domain
+                    .observations
+                    .iter()
+                    .all(|o| o.source == Source::RelationshipWalk),
+                "no cache relation may carry a CPU-sets observation: {domain:?}"
+            );
+        }
+    }
+    /// A CPU-set record for one processor in group 0.
+    fn cpu_set(index: u8, core: u8, node: u8, efficiency_class: u8) -> crate::cpu_set::CpuSet {
+        crate::cpu_set::CpuSet {
+            id: u32::from(index),
+            group: 0,
+            logical_processor_index: index,
+            core_index: core,
+            last_level_cache_index: 0,
+            numa_node_index: node,
+            efficiency_class,
+            parked: false,
+            allocated: true,
+            allocated_to_target_process: true,
+            real_time: false,
+            scheduling_class: 0,
+            allocation_tag: 0,
+        }
+    }
+
+    fn core_domain(id: u32, members: &[u8], efficiency_class: u8) -> Domain {
+        let mut processors = ProcessorSet::empty();
+        for &m in members {
+            processors.insert(0, m);
+        }
+        Domain {
+            kind: DomainKind::Core {
+                simultaneous_multithreading: members.len() > 1,
+                efficiency_class,
+            },
+            id,
+            processors,
+            observations: vec![Observation::new(Source::RelationshipWalk, id)],
+        }
+    }
+
+    // --- the fold, against shapes this host does not have ---
+    //
+    // Every other fold test runs `discover()`, which sees one machine whose two
+    // sources agree exactly. That cannot distinguish matching on equal
+    // membership from matching on a subset, because here the two coincide -- a
+    // sabotage run proved it, passing all 169 tests. These build the disagreeing
+    // shapes deliberately.
+
+    #[test]
+    fn folding_matches_on_equal_membership_not_on_containment() {
+        // The walk reports one four-processor core; CPU Sets reports two
+        // two-processor ones. Each CPU-sets membership is a strict SUBSET of the
+        // walk's, so a containment match would attach both observations to the
+        // walk's relation and record a false agreement.
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(0, &[0, 1, 2, 3], 0)],
+            cpu_sets: None,
+            provenance: Provenance::Synthetic,
+        };
+        topology.fold_in_cpu_sets(&[
+            cpu_set(0, 0, 0, 0),
+            cpu_set(1, 0, 0, 0),
+            cpu_set(2, 1, 0, 0),
+            cpu_set(3, 1, 0, 0),
+        ]);
+
+        let walk_relation = topology
+            .domains
+            .iter()
+            .find(|d| d.processors.len() == 4)
+            .expect("the walk's relation survives");
+        assert_eq!(
+            walk_relation.observations.len(),
+            1,
+            "a relation nothing agreed with keeps its single observation"
+        );
+
+        let cpu_only: Vec<_> = topology
+            .domains
+            .iter()
+            .filter(|d| {
+                matches!(d.kind, DomainKind::Core { .. })
+                    && d.observations.iter().all(|o| o.source == Source::CpuSets)
+            })
+            .collect();
+        assert_eq!(
+            cpu_only.len(),
+            2,
+            "each disagreeing CPU-sets membership becomes its own relation: {:?}",
+            topology.domains
+        );
+    }
+
+    #[test]
+    fn a_core_only_cpu_sets_reports_takes_its_efficiency_class_from_the_record() {
+        // Never fabricated. Defaulting to `0` would reinvent the
+        // `Processor::capacity` sentinel, because `0` is a legitimate class.
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: Vec::new(),
+            cpu_sets: None,
+            provenance: Provenance::Synthetic,
+        };
+        topology.fold_in_cpu_sets(&[cpu_set(0, 0, 0, 2), cpu_set(1, 0, 0, 2)]);
+
+        let core = topology
+            .domains
+            .iter()
+            .find(|d| matches!(d.kind, DomainKind::Core { .. }))
+            .expect("a core relation");
+        assert!(
+            matches!(
+                core.kind,
+                DomainKind::Core {
+                    efficiency_class: 2,
+                    simultaneous_multithreading: true
+                }
+            ),
+            "{:?}",
+            core.kind
+        );
+        assert_eq!(
+            core.observations,
+            vec![Observation::new(Source::CpuSets, 0)]
+        );
+    }
+
+    #[test]
+    fn folding_agreeing_sources_yields_one_relation_with_both_labels() {
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(7, &[0, 1], 0)],
+            cpu_sets: None,
+            provenance: Provenance::Synthetic,
+        };
+        topology.fold_in_cpu_sets(&[cpu_set(0, 3, 0, 0), cpu_set(1, 3, 0, 0)]);
+
+        let cores: Vec<_> = topology
+            .domains
+            .iter()
+            .filter(|d| matches!(d.kind, DomainKind::Core { .. }))
+            .collect();
+        assert_eq!(cores.len(), 1, "agreement is one relation: {cores:?}");
+        assert_eq!(
+            cores[0].observations,
+            vec![
+                Observation::new(Source::RelationshipWalk, 7),
+                Observation::new(Source::CpuSets, 3),
+            ],
+            "both labels survive, which is the whole of D-15"
+        );
+    }
+
+    #[test]
+    fn folding_never_attaches_a_cpu_sets_observation_to_the_wrong_kind() {
+        // A memory domain covering the same processors as a core must not
+        // absorb the core's CPU-sets observation.
+        let mut memory = core_domain(0, &[0, 1], 0);
+        memory.kind = DomainKind::Memory { memory_bytes: None };
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![memory],
+            cpu_sets: None,
+            provenance: Provenance::Synthetic,
+        };
+        topology.fold_in_cpu_sets(&[cpu_set(0, 5, 0, 0), cpu_set(1, 5, 0, 0)]);
+
+        let memory_domain = topology
+            .domains
+            .iter()
+            .find(|d| matches!(d.kind, DomainKind::Memory { .. }))
+            .expect("the memory domain");
+        assert!(
+            memory_domain
+                .observations
+                .iter()
+                .any(|o| o.source == Source::CpuSets),
+            "the NUMA membership does match this one, and should attach"
+        );
+        let core = topology
+            .domains
+            .iter()
+            .find(|d| matches!(d.kind, DomainKind::Core { .. }))
+            .expect("the core arrives as its own relation");
+        assert_eq!(
+            core.observations,
+            vec![Observation::new(Source::CpuSets, 5)]
+        );
     }
     #[test]
     fn a_hand_written_synthetic_topology_parses() {

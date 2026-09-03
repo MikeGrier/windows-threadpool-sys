@@ -1,11 +1,13 @@
 // Copyright (c) 2026 Mike Grier
 //! Assembling a [`MachineMemoryTopology`] from discovered relations.
 
+use std::collections::BTreeMap;
 use std::io;
 
 use crate::cpu_set::CpuSet;
 use crate::domain::{Domain, DomainKind, Processor, ProcessorId};
 use crate::observation::{Observation, Source};
+use crate::processor_set::ProcessorSet;
 use crate::provenance::Provenance;
 use crate::relation::{self, Relations};
 
@@ -77,15 +79,130 @@ impl MachineMemoryTopology {
     pub fn discover() -> io::Result<Self> {
         let relations = relation::discover()?;
         let mut topology = Self::from_relations(relations);
-        // The second observation, kept beside the first rather than folded into
-        // it. Both are cheap reads of the running system, so both belong to
+        // Both are cheap reads of the running system, so both belong to
         // discovery -- neither is a measurement in the sense that would make it
         // expensive or optional.
-        topology.cpu_sets = Some(crate::cpu_set::enumerate()?);
+        let cpu_sets = crate::cpu_set::enumerate()?;
+        // Folded into the relation set, and *also* kept verbatim. Not a
+        // contradiction: D-19's unified view is presented **in addition to**
+        // the individual per-source ones, so a caller wanting what CPU Sets
+        // said, in its own shape, still has it.
+        topology.fold_in_cpu_sets(&cpu_sets);
+        topology.cpu_sets = Some(cpu_sets);
         // The one place in the crate that may claim this is the machine you are
         // on, because it is the one place that asked the operating system.
         topology.provenance = Provenance::Measured;
         Ok(topology)
+    }
+
+    /// Record what the CPU-set enumeration says about relations, unifying with
+    /// what the relationship walk already reported.
+    ///
+    /// # What is folded, and what deliberately is not
+    ///
+    /// Only **core** and **NUMA node** membership. Those are the two facts both
+    /// Windows APIs describe, so they are the two where "two sources, one
+    /// relation" can arise at all.
+    ///
+    /// `LastLevelCacheIndex` is **not** folded. Per D-14 it answers a different
+    /// question from the derived cache partitioning -- measured on the
+    /// development host it reports one LLC group where the derivation finds
+    /// eight L2 partitions, and neither is wrong -- so under D-15 it is a
+    /// *different relation*, not a second observation of the same one. Folding
+    /// it into `Cache` would assert an agreement that was never claimed.
+    ///
+    /// `EfficiencyClass` is not folded as a *relation* either, because it is a
+    /// **per-processor attribute** rather than a membership -- D-18's other
+    /// subject kind, tracked as `M3+.1.4`. It is read only when CPU Sets
+    /// reports a core the walk did not, where it supplies that new relation's
+    /// attribute rather than a fabricated one.
+    ///
+    /// # How a relation is matched
+    ///
+    /// By `(kind, membership)` per D-15 -- but *kind* here means which kind, not
+    /// its attributes. Two sources reporting the same core over the same
+    /// processors have observed one relation even if they disagree about its
+    /// efficiency class; that disagreement is an attribute conflict, which is
+    /// the subject `M3+.1.4` covers rather than a reason to treat them as two
+    /// relations.
+    fn fold_in_cpu_sets(&mut self, cpu_sets: &[CpuSet]) {
+        let cores = Self::grouped_by(cpu_sets, |set| u32::from(set.core_index));
+        let nodes = Self::grouped_by(cpu_sets, |set| u32::from(set.numa_node_index));
+
+        self.fold_memberships(
+            &cores,
+            |kind| matches!(kind, DomainKind::Core { .. }),
+            |members| DomainKind::Core {
+                // Derived from the membership rather than reported: CPU Sets
+                // has no SMT field, and a core with more than one logical
+                // processor is what the flag means.
+                simultaneous_multithreading: members.len() > 1,
+                // Taken from what CPU Sets actually reported for these
+                // processors, never fabricated. Defaulting this to `0` would
+                // reinvent the `Processor::capacity` sentinel the reshape
+                // exists to remove -- `0` is a legitimate class, so a stand-in
+                // would be indistinguishable from a real value.
+                efficiency_class: members
+                    .iter()
+                    .map(|set| set.efficiency_class)
+                    .max()
+                    .unwrap_or_default(),
+            },
+        );
+        self.fold_memberships(
+            &nodes,
+            |kind| matches!(kind, DomainKind::Memory { .. }),
+            |_| DomainKind::Memory { memory_bytes: None },
+        );
+    }
+
+    /// Group the CPU-set records by whatever `key` names, keeping the records
+    /// themselves so a new relation's attributes come from what was reported.
+    fn grouped_by(
+        cpu_sets: &[CpuSet],
+        key: impl Fn(&CpuSet) -> u32,
+    ) -> BTreeMap<u32, Vec<&CpuSet>> {
+        let mut grouped: BTreeMap<u32, Vec<&CpuSet>> = BTreeMap::new();
+        for set in cpu_sets {
+            grouped.entry(key(set)).or_default().push(set);
+        }
+        grouped
+    }
+
+    /// Attach a CPU-sets observation to each matching relation, adding one
+    /// where no relation of that kind covers the same processors.
+    fn fold_memberships(
+        &mut self,
+        grouped: &BTreeMap<u32, Vec<&CpuSet>>,
+        is_kind: impl Fn(&DomainKind) -> bool,
+        make_kind: impl Fn(&[&CpuSet]) -> DomainKind,
+    ) {
+        for (&label, members) in grouped {
+            let mut processors = ProcessorSet::empty();
+            for set in members {
+                processors.insert(set.group, set.logical_processor_index);
+            }
+
+            let observation = Observation::new(Source::CpuSets, label);
+            match self
+                .domains
+                .iter_mut()
+                .find(|domain| is_kind(&domain.kind) && domain.processors == processors)
+            {
+                // One relation, observed twice. The labels differ and both are
+                // kept, which is the whole of D-15.
+                Some(domain) => domain.observations.push(observation),
+                // A relation only CPU Sets reported. Recorded rather than
+                // dropped: the walk not describing it is a fact about the walk,
+                // not evidence the relation is not there.
+                None => self.domains.push(Domain {
+                    kind: make_kind(members),
+                    id: label,
+                    processors,
+                    observations: vec![observation],
+                }),
+            }
+        }
     }
 
     fn from_relations(relations: Relations) -> Self {

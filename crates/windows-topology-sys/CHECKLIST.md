@@ -411,7 +411,7 @@ item against the code before planning work from it.**
     says -- which [D-22](DESIGN-NOTES.md#d-22) had just finished separating. Twelve round-trip tests
     failed on this and were right to: the question was real, not a test defect.
 
-  - [ ] **M3+.1.2** -- Fold CPU Sets into the relation set. For a `Core` or `Memory` membership that
+  - [x] **M3+.1.2** -- Fold CPU Sets into the relation set. For a `Core` or `Memory` membership that
     matches an existing relation, add an observation; otherwise add a relation observed only by CPU
     Sets. **This is where the unified view comes into being** -- today `discover` builds `domains`
     from the relationship walk alone and leaves `cpu_sets` beside it, so the two sources have never
@@ -421,6 +421,20 @@ item against the code before planning work from it.**
     eight L2 partitions -- so under [D-15](DESIGN-NOTES.md#d-15) it is a **different relation**, not a
     second observation of the same one. `EfficiencyClass` is likewise a per-processor attribute rather
     than a membership, and belongs to [D-18](DESIGN-NOTES.md#d-18)'s other subject kind.
+    **Done, and measured rather than asserted.** On this host the fold produces 44 relations, **9
+    doubly observed** and 0 CPU-sets-only: the eight cores carry `walk#N` beside `cpuSets#2N`, which
+    is D-15's `[0,1,...,7]` against `[0,2,...,14]` with both labels now kept, plus the single NUMA
+    node. Caches carry walk observations only, per D-14.
+    `cpu_sets` is still kept verbatim beside the folded view -- D-19's unified model is presented *in
+    addition to* the individual ones, not instead of them.
+    **A fabrication caught before it shipped.** The first version defaulted a CPU-sets-only core's
+    `efficiency_class` to `0`, which would have reinvented the `Processor::capacity` sentinel this
+    reshape exists to remove, since `0` is a legitimate class. It now takes the value from the records
+    themselves.
+    **Sabotage found a second host-shaped test gap.** Weakening the match from equal membership to
+    containment passed all 169 tests, because every membership on this machine is *exactly* equal so
+    the two rules coincide. Four synthetic fold tests -- built to disagree on purpose -- now catch it,
+    and the sabotage had to be injected in the semantically plausible direction to be meaningful.
 
   - [ ] **M3+.1.3** -- Remove `Domain::id`, now that observations carry the labels, and update the
     three downstream crates and the wire shape. **Breaking**, and correct: there is no single
@@ -428,6 +442,18 @@ item against the code before planning work from it.**
     `[0, 2, 4, ..., 14]` against `[0, 1, ..., 7]` -- and a relation observed only by CPU Sets has no
     walk label at all. Keeping `id` beside the observations would be two statements of one fact, which
     is the restatement drift this repository has a rule about.
+
+  - [ ] **M3+.1.4** -- **Record a per-processor attribute conflict**, which relation unification
+    cannot reach. `M3+.1.2` matches relations by `(kind, membership)`, so two sources describing one
+    core agree on *that* even if they disagree about its `efficiency_class` -- and the unified
+    relation keeps the walk's value while the CPU-sets value goes unrecorded.
+    This is [MMT-1.2](CHECKLIST.md)'s **attribute shape** and [D-18](DESIGN-NOTES.md#d-18)'s second
+    subject kind: an observation whose subject is `(processor, attribute)` rather than
+    `(kind, membership)`. Filed as its own item because the fold's doc comments cite it, and a rule
+    cited in code but scheduled nowhere is exactly the orphaning the "design notes are not a work
+    queue" rule exists to stop.
+    **Not observable on this host** -- every efficiency class reads `0` here -- so it is testable only
+    synthetically, per [D-17](DESIGN-NOTES.md#d-17).
 
 - [ ] **M3+.2** -- Keep two properties of the old `Provenance` **because they re-derive**, not
   because they were there: the default is the untrusted value (a *stronger* argument per-relation,
