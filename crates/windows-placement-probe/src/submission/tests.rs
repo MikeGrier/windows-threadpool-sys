@@ -301,3 +301,17 @@ fn the_sub_second_precision_never_reaches_the_record() {
         "the sub-second field reached the record: {json}"
     );
 }
+
+#[test]
+fn the_two_urls_agree_about_which_repository_this_is() {
+    // Two constants naming one repository, in two modules, because `report` is
+    // not gated behind `serde` and `DISCUSSION_URL` is. A checked relationship
+    // rather than a silent duplicate: if the repository ever moves and only one
+    // is updated, this fails instead of a runner being sent to a dead link.
+    assert!(
+        super::DISCUSSION_URL.starts_with(crate::report::REPOSITORY_URL),
+        "{} is not under {}",
+        super::DISCUSSION_URL,
+        crate::report::REPOSITORY_URL
+    );
+}

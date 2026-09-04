@@ -244,6 +244,7 @@ fn a_record_keeps_the_order_its_fields_are_declared_in() {
             "machine",
             "host",
             "topology_provenance",
+            "topology_coherence",
             "placements",
             "node_hops",
             "by_class",

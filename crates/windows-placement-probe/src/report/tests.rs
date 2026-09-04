@@ -6,12 +6,22 @@
 //! and would not check the property that matters, which is that the two cannot
 //! disagree.
 
-use windows_topology_sys::Provenance;
+use windows_topology_sys::{Coherence, ProcessorId, Provenance};
 
-use super::render;
+use super::{REPOSITORY_URL, render};
 use crate::build_identity::BuildSource;
 use crate::machine::VirtualisationHint;
 use crate::record::tests::fully_populated;
+
+/// A record whose two topology sources agreed, which is the ordinary case.
+///
+/// The shared fixture carries `Disagreed` because it derives the schema golden,
+/// so a test about the *quiet* path has to say so explicitly.
+fn coherent() -> crate::record::SubmissionRecord {
+    let mut record = fully_populated();
+    record.topology_coherence = Coherence::Agreed;
+    record
+}
 
 #[test]
 fn the_report_shows_the_values_the_record_carries() {
@@ -473,5 +483,179 @@ fn a_heterogeneous_machine_is_not_told_its_cores_are_all_one_class() {
         text.contains("sharing a cache domain"),
         "the report must state the selection rule that failed:
 {text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The topology-disagreement section.
+//
+// This is the one part of the report that asks the reader for something, so its
+// tone is a property worth testing rather than a matter of taste: a runner who
+// feels chased is a runner who closes the window, and the result they already
+// have is a valid submission.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_agreeing_topology_says_nothing_at_all() {
+    // Noise on every run that ever happens is what a reader learns to skip --
+    // including on the run where this section matters.
+    let text = render(&coherent());
+
+    assert!(
+        !text.contains("described itself two ways"),
+        "the quiet path must stay quiet: {text}"
+    );
+    assert!(!text.contains(REPOSITORY_URL), "got {text}");
+}
+
+#[test]
+fn an_uncollected_coherence_also_says_nothing() {
+    // A hand-built or deserialized topology never asked the question, so it has
+    // no disagreement to report. Reporting one would be a claim about a machine
+    // nobody read.
+    let mut record = fully_populated();
+    record.topology_coherence = Coherence::NotCollected;
+
+    assert!(!render(&record).contains("described itself two ways"));
+}
+
+#[test]
+fn a_disagreement_is_reported_with_what_was_seen() {
+    // "Incoherent" is not actionable. The counts and the retry number are what
+    // make this a concrete thing the reader can see rather than a word.
+    let record = fully_populated();
+
+    let text = render(&record);
+
+    assert!(text.contains("described itself two ways"), "got {text}");
+    assert!(
+        text.contains("repeated 3 times"),
+        "the retry count says why this is not a machine caught mid-change: {text}"
+    );
+    assert!(
+        text.contains("relationship walk reported 1 processor the CPU-set enumeration"),
+        "got {text}"
+    );
+    assert!(
+        text.contains("CPU-set enumeration reported 1 the walk did not"),
+        "got {text}"
+    );
+}
+
+#[test]
+fn the_counts_come_from_the_record_rather_than_being_fixed() {
+    // The property that makes the numbers above worth printing: they are a
+    // function of the record, like everything else in this report.
+    let mut record = fully_populated();
+    record.topology_coherence = Coherence::Disagreed {
+        walk_only: vec![
+            ProcessorId {
+                group: 0,
+                number: 3,
+            },
+            ProcessorId {
+                group: 1,
+                number: 4,
+            },
+        ],
+        cpu_sets_only: Vec::new(),
+        attempts: 7,
+    };
+
+    let text = render(&record);
+
+    assert!(
+        text.contains("reported 2 processors the CPU-set enumeration"),
+        "a count of two must be pluralised: {text}"
+    );
+    assert!(text.contains("reported 0 the walk did not"), "got {text}");
+    assert!(text.contains("repeated 7 times"), "got {text}");
+}
+
+#[test]
+fn the_disagreement_section_informs_rather_than_pressures() {
+    // **The tone is the requirement, not a nicety.** This section reports
+    // something detected and then offers a way to help; it must not read as a
+    // request, and must say plainly that the result in hand is already a valid
+    // submission. Checked as an absence of pressure words and a presence of the
+    // release, because both halves can be lost independently in an edit.
+    let text = render(&fully_populated());
+
+    assert!(
+        text.contains("None of that is required"),
+        "the offer must release the reader: {text}"
+    );
+    assert!(
+        text.contains("valid") && text.contains("worth sending"),
+        "the result in hand must be affirmed: {text}"
+    );
+    assert!(
+        text.contains("cannot be told apart"),
+        "the two possible causes must be presented as undecided: {text}"
+    );
+    assert!(
+        text.contains("this tool may be reading it wrongly"),
+        "a defect in this tool must be named as a live possibility: {text}"
+    );
+    for pressure in ["Please", "please", "you should", "we need", "make sure"] {
+        assert!(
+            !text.contains(pressure),
+            "{pressure:?} turns an offer into a request: {text}"
+        );
+    }
+}
+
+#[test]
+fn the_measurements_are_not_disowned_by_the_disagreement() {
+    // A runner told their machine described itself two ways will reasonably
+    // wonder whether the numbers above are worthless. They are not -- every row
+    // was timed on processors this run pinned -- and leaving that unsaid would
+    // lose submissions to a misunderstanding.
+    let text = render(&fully_populated());
+
+    assert!(
+        text.contains("Your measurements are unaffected"),
+        "got {text}"
+    );
+}
+
+#[test]
+fn the_metadata_advice_matches_what_the_record_already_carries() {
+    // Telling somebody to re-run with a flag whose output they are already
+    // holding reads as though the flag had not worked. The report knows which
+    // case it is in, because the record says so.
+    let mut opted_in = fully_populated();
+    opted_in.machine.os_build_suppressed = false;
+
+    let mut redacted = fully_populated();
+    redacted.machine.os_build_suppressed = true;
+
+    let opted_in = render(&opted_in);
+    let redacted = render(&redacted);
+
+    assert!(
+        redacted.contains("run with --include-metadata"),
+        "a redacted record should be told what would help: {redacted}"
+    );
+    assert!(
+        !opted_in.contains("run with --include-metadata"),
+        "a record that already names its OS build must not be asked for one: {opted_in}"
+    );
+    assert!(
+        opted_in.contains("already names the OS build"),
+        "and should be told that it is already the useful shape: {opted_in}"
+    );
+}
+
+#[test]
+fn the_disagreement_points_at_the_repository_rather_than_the_results_thread() {
+    // A disagreement between the platform's own tables is not a result, and
+    // posting it into the collection thread would bury it among measurements.
+    let text = render(&fully_populated());
+
+    assert!(text.contains(REPOSITORY_URL), "got {text}");
+    assert!(
+        text.contains("discussion") && text.contains("issue"),
+        "both routes are offered so the reader picks one: {text}"
     );
 }

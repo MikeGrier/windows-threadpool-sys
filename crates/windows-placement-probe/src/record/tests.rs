@@ -6,7 +6,7 @@
 #[cfg(feature = "serde")]
 use std::collections::BTreeSet;
 
-use windows_topology_sys::Provenance;
+use windows_topology_sys::{Coherence, ProcessorId, Provenance};
 
 use super::{MeasurementRecord, SCHEMA_VERSION, SubmissionRecord, civil_from_days, iso8601_utc};
 use crate::build_identity::{BuildIdentity, BuildSource};
@@ -82,6 +82,24 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
             provenance: Provenance::Measured,
         },
         topology_provenance: Provenance::Measured,
+        // **`Disagreed`, because this fixture derives the schema golden**, and
+        // it is the only variant carrying fields. `Agreed` would archive a
+        // shape with no `walk_only`/`cpu_sets_only`/`attempts` paths in it, so
+        // the guard would pass while describing less than the record can emit.
+        // A measured topology whose two sources disagreed is a real
+        // combination, not a contrived one -- it is the case the report's
+        // closing section exists for.
+        topology_coherence: Coherence::Disagreed {
+            walk_only: vec![ProcessorId {
+                group: 0,
+                number: 14,
+            }],
+            cpu_sets_only: vec![ProcessorId {
+                group: 0,
+                number: 15,
+            }],
+            attempts: 3,
+        },
         placements: vec![measurement.clone()],
         node_hops: vec![measurement.clone()],
         by_class: vec![measurement],
@@ -330,6 +348,7 @@ fn a_record_cannot_splice_an_announced_host_onto_another_machines_rows() {
         announced,
         MachineDescription::read(MetadataPolicy::redacted()),
         MetadataPolicy::redacted(),
+        Coherence::Agreed,
     )
     .expect_err("a record spanning two machines must not be assembled");
 
@@ -351,6 +370,7 @@ fn a_record_assembles_when_the_announced_and_measured_hosts_agree() {
         host.clone(),
         MachineDescription::read(MetadataPolicy::redacted()),
         MetadataPolicy::redacted(),
+        Coherence::Agreed,
     )
     .expect("identical hosts are the ordinary case");
 
@@ -369,6 +389,7 @@ fn the_default_policy_leaves_a_record_with_no_timestamp() {
         host,
         MachineDescription::read(MetadataPolicy::default()),
         MetadataPolicy::default(),
+        Coherence::Agreed,
     )
     .expect("identical hosts are the ordinary case");
 
@@ -392,6 +413,7 @@ fn opting_in_carries_a_timestamp_floored_to_the_minute() {
         host,
         MachineDescription::read(MetadataPolicy::included()),
         MetadataPolicy::included(),
+        Coherence::Agreed,
     )
     .expect("identical hosts are the ordinary case");
 

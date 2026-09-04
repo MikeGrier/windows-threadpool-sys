@@ -100,4 +100,15 @@ recorded_at
 recorded_at_epoch_seconds
 recorded_at_suppressed
 schema_version
+topology_coherence
+topology_coherence.disagreed
+topology_coherence.disagreed.attempts
+topology_coherence.disagreed.cpu_sets_only
+topology_coherence.disagreed.cpu_sets_only[]
+topology_coherence.disagreed.cpu_sets_only[].group
+topology_coherence.disagreed.cpu_sets_only[].number
+topology_coherence.disagreed.walk_only
+topology_coherence.disagreed.walk_only[]
+topology_coherence.disagreed.walk_only[].group
+topology_coherence.disagreed.walk_only[].number
 topology_provenance

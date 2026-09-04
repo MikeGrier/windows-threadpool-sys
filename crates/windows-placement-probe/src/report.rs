@@ -17,8 +17,24 @@
 
 use std::fmt::Write as _;
 
+use windows_topology_sys::Coherence;
+
 use crate::machine::VirtualisationHint;
 use crate::record::SubmissionRecord;
+
+/// Where a runner is pointed when something needs a conversation.
+///
+/// **The repository, not the results thread.** A disagreement between the
+/// platform's own tables is not a result, and posting it into the collection
+/// thread would bury it among measurements. Both a discussion and an issue are
+/// one click from here, so the runner picks whichever they are comfortable
+/// with rather than being told which one this is.
+///
+/// Deliberately its own constant rather than reusing
+/// [`submission::DISCUSSION_URL`](crate::submission::DISCUSSION_URL), which is
+/// gated behind the `serde` feature that this module is not; a test pins that
+/// the two agree about the repository so the pair cannot drift apart silently.
+pub const REPOSITORY_URL: &str = "https://github.com/MikeGrier/windows-threadpool-sys";
 
 /// Render the report a runner sees.
 #[must_use]
@@ -30,6 +46,7 @@ pub fn render(record: &SubmissionRecord) -> String {
     render_by_class(&mut out, record);
     render_node_hops(&mut out, record);
     render_trust(&mut out, record);
+    render_topology_disagreement(&mut out, record);
     out
 }
 
@@ -361,6 +378,165 @@ fn render_trust(out: &mut String, record: &SubmissionRecord) {
     let _ = writeln!(
         out,
         "  are timing measurements, and timing cannot catch a weakened ordering."
+    );
+}
+
+/// Say that this machine described itself two ways, and offer a way to help.
+///
+/// # Nothing at all on the ordinary run
+///
+/// [`Coherence::Agreed`] and [`Coherence::NotCollected`] print nothing. A
+/// section saying "the two sources agreed" would be noise on every run that
+/// ever happens, and noise is what a reader learns to skip -- including on the
+/// run where this matters.
+///
+/// # Informative, not coercive
+///
+/// This is a **report of something detected**, followed by an offer. It is
+/// deliberately not a request, not a prompt, and not phrased so that declining
+/// feels like a failure to help: the runner is already doing this project a
+/// favour, and the result they have is a valid submission exactly as it stands.
+/// The text says so in as many words, because a reader who feels chased is a
+/// reader who closes the window.
+///
+/// What it does say is what would be *learned*. Neither side can be identified
+/// from here -- the platform's description of this hardware may be
+/// inconsistent, or this tool may read it wrongly -- and telling those apart
+/// needs a second pair of eyes on a record from the machine that showed it.
+/// That is a fact about the situation, so it can be stated plainly without
+/// asking for anything.
+fn render_topology_disagreement(out: &mut String, record: &SubmissionRecord) {
+    /// `"s"` unless there is exactly one. A count printed as "1 processor(s)"
+    /// is the sort of thing a reader notices instead of the sentence.
+    const fn plural(count: usize) -> &'static str {
+        if count == 1 { "" } else { "s" }
+    }
+
+    let Coherence::Disagreed {
+        walk_only,
+        cpu_sets_only,
+        attempts,
+    } = &record.topology_coherence
+    else {
+        return;
+    };
+
+    let _ = writeln!(out);
+    let _ = writeln!(out, "-- this machine described itself two ways --");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  Windows describes processors through two independent interfaces, and"
+    );
+    let _ = writeln!(
+        out,
+        "  on this machine they disagreed about which processors exist. The two"
+    );
+    let _ = writeln!(
+        out,
+        "  readings were repeated {attempts} times and never agreed, so this is a standing"
+    );
+    let _ = writeln!(
+        out,
+        "  difference between the platform's own tables rather than one reading"
+    );
+    let _ = writeln!(out, "  catching the machine mid-change.");
+    let _ = writeln!(out);
+    // Counts, not identities. Enough that "a mismatch" is a concrete thing a
+    // reader can see rather than a word, and the record beside this carries the
+    // processors themselves for anyone who goes looking.
+    let _ = writeln!(
+        out,
+        "  The relationship walk reported {} processor{} the CPU-set enumeration",
+        walk_only.len(),
+        plural(walk_only.len())
+    );
+    let _ = writeln!(
+        out,
+        "  did not; the CPU-set enumeration reported {} the walk did not. The",
+        cpu_sets_only.len()
+    );
+    let _ = writeln!(out, "  record below names them individually.");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  Your measurements are unaffected: every row above was timed on"
+    );
+    let _ = writeln!(
+        out,
+        "  processors this run pinned and verified, and the numbers are real."
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  Two things could produce this, and they cannot be told apart from"
+    );
+    let _ = writeln!(
+        out,
+        "  here: the platform's description of this hardware may be inconsistent,"
+    );
+    let _ = writeln!(
+        out,
+        "  or this tool may be reading it wrongly. Either is worth knowing, and"
+    );
+    let _ = writeln!(
+        out,
+        "  the answer would apply to everyone with hardware like yours."
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  If you would like to help work out which, you can start a discussion"
+    );
+    let _ = writeln!(out, "  or open an issue at");
+    let _ = writeln!(out, "    {REPOSITORY_URL}");
+    let _ = writeln!(
+        out,
+        "  and mention that you saw this message. What helps most is a record"
+    );
+    // The advice a runner cannot act on is the advice not to give. A record that
+    // already names its OS build does not need to be produced again, and saying
+    // otherwise would read as though the flag they passed had not worked.
+    if record.machine.os_build_suppressed {
+        let _ = writeln!(
+            out,
+            "  run with --include-metadata, because the OS build and hypervisor are"
+        );
+        let _ = writeln!(
+            out,
+            "  what tie a disagreement like this to a particular platform version."
+        );
+        let _ = writeln!(
+            out,
+            "  That is a separate run and a separate decision; the maintainers can"
+        );
+        let _ = writeln!(
+            out,
+            "  arrange a way to share it that does not post it publicly."
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "  like this one, which already names the OS build and hypervisor -- the"
+        );
+        let _ = writeln!(
+            out,
+            "  things that tie a disagreement to a particular platform version. The"
+        );
+        let _ = writeln!(
+            out,
+            "  maintainers can arrange a way to share it that does not post it"
+        );
+        let _ = writeln!(out, "  publicly.");
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  None of that is required. The result you already have is a valid"
+    );
+    let _ = writeln!(
+        out,
+        "  submission and is worth sending exactly as it stands."
     );
 }
 

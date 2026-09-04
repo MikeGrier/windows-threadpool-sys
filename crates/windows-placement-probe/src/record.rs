@@ -20,7 +20,7 @@
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use windows_topology_sys::Provenance;
+use windows_topology_sys::{Coherence, Provenance};
 
 use crate::build_identity::BuildIdentity;
 use crate::core_affinity::{Measurement, Observation};
@@ -141,6 +141,26 @@ pub struct SubmissionRecord {
     /// filtering out synthetic submissions should not have to know that the
     /// fingerprint carries it, and this is the field they will look for.
     pub topology_provenance: Provenance,
+    /// Whether the two Win32 sources agreed about which processors exist, when
+    /// this machine's topology was read.
+    ///
+    /// Carried in full, including the processors each source named alone,
+    /// because a [`Disagreed`](Coherence::Disagreed) record is the one this
+    /// project most wants to look at and a bare "something disagreed" cannot be
+    /// investigated. The report asks a runner who sees one whether they are
+    /// willing to help work out which side is wrong; that ask would be hollow
+    /// if the record they were asked for did not say what differed.
+    ///
+    /// **Not part of [`Fingerprint`], deliberately.** Fingerprints are compared
+    /// for equality to catch a record spliced from two machines, and coherence
+    /// is not a fact about a machine's *shape*: an announced reading that
+    /// agreed and a measured one that did not would trip that check and discard
+    /// a perfectly good measurement over a difference that is not a difference
+    /// in shape.
+    ///
+    /// This is the coherence of the reading [`Self::host`] came from, which is
+    /// the reading the runner was shown in the notice.
+    pub topology_coherence: Coherence,
     /// One entry per placement this machine could express, per strategy.
     pub placements: Vec<MeasurementRecord>,
     /// One entry per *directed* node pair, per ring placement, per strategy.
@@ -302,6 +322,7 @@ impl SubmissionRecord {
         host: Fingerprint,
         machine: MachineDescription,
         policy: MetadataPolicy,
+        coherence: Coherence,
     ) -> std::io::Result<Self> {
         if host != observation.host {
             return Err(std::io::Error::new(
@@ -352,6 +373,7 @@ impl SubmissionRecord {
             build: BuildIdentity::current(),
             machine,
             topology_provenance: host.provenance,
+            topology_coherence: coherence,
             host,
             placements: observation.measurements.iter().map(Into::into).collect(),
             node_hops: observation.by_node_pair.iter().map(Into::into).collect(),

@@ -204,7 +204,17 @@ fn run(out: &mut impl Sink) -> ExitCode {
     // Cannot fail: the equality was just checked above. Handled rather than
     // unwrapped anyway, because the constructor owns that invariant and a panic
     // here would discard a measurement the runner has already paid for.
-    let record = match SubmissionRecord::new(&observation, host, machine, policy) {
+    // The coherence of the reading `host` came from -- the one the runner was
+    // shown in the notice -- rather than of the one `measure` took internally,
+    // so the record's account of how this machine described itself matches the
+    // shape it reports.
+    let record = match SubmissionRecord::new(
+        &observation,
+        host,
+        machine,
+        policy,
+        topology.coherence.clone(),
+    ) {
         Ok(record) => record,
         Err(error) => {
             out.problem(&format!("the record could not be assembled: {error}"));

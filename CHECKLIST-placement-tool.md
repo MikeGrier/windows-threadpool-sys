@@ -630,6 +630,21 @@ actionable is identifying and therefore belongs behind the review this tool alre
 - [ ] **PT-7.1** -- **Surface the topology's recorded inconsistencies**, in the tool's output and in
   the submission record. This is the only place they become visible to anyone: the topology crate keeps
   what each source said, and nothing in the workspace currently looks at it.
+  **Partly done by `M36.4` on 2026-09-04, and what remains is narrower than the text below.** The
+  **record** half is complete: `topology_coherence` carries the whole `Coherence`, so a submission
+  names the disagreeing processors individually. The **output** half is partly done: the report has
+  a section that appears only on `Disagreed`, gives the counts on each side and the retry number,
+  and says the measurements are unaffected. Two things are still open, and both are decisions rather
+  than plumbing:
+  (a) **Name the processors in the printed text**, not only in the record -- "what each source
+  claimed", which is what this item asks for and what counts alone do not give.
+  (b) **Decide whether an inconsistent run is marked in "how far to trust this".**
+  `is_fully_trusted` is deliberately untouched, so that section currently reads "an official build,
+  reading this machine's real topology" directly above the disagreement section. That is not a
+  contradiction -- the build *is* official and the topology *was* read -- but a reader may feel one.
+  This item's own two-sided framing below is the guidance for settling it: mark it plainly enough
+  that neither the runner nor a later reader is left guessing, without dressing up a nuisance as a
+  prize.
   Report what disagreed and what each source claimed, not merely that something did -- "incoherent" is
   not actionable, and the point of collecting from strangers' machines is to learn something specific
   about hardware nobody here can buy.
@@ -698,7 +713,23 @@ actionable is identifying and therefore belongs behind the review this tool alre
   include it should understand they are helping, and a reader choosing not to should understand what
   they are withholding. State the trade rather than presenting redaction as free.
 
-- [ ] **M36.4** -- **On `Coherence::Disagreed`, ask for the unredacted record privately.** The report
+- [x] **M36.4** -- **On `Coherence::Disagreed`, ask for the unredacted record privately.** Done
+  2026-09-04. **The dependency below was mis-stated and is corrected here**: `Coherence` was *not*
+  reachable from the record. `topology_provenance` is carried and `Fingerprint` is built from the
+  topology, but the fingerprint carries only the provenance, so the record had no way to know its
+  two sources had disagreed. The record gained `topology_coherence`, carrying the whole `Coherence`
+  including the processor lists -- a boolean would have made the ask hollow, since the record a
+  maintainer is offered has to contain what they would look at. It is a field of the *record* and
+  deliberately not of the `Fingerprint`, which is compared for equality to catch a spliced record
+  and would then discard a good measurement over a difference in no shape at all.
+  The wording is informative rather than coercive, per the engineer's direction: it reports what was
+  detected, says the measurements are unaffected, names both possible causes -- inconsistent
+  platform metadata *or* a defect in this tool -- as undecidable from the runner's machine, offers a
+  way to help, and closes with "None of that is required." A test asserts the release is present and
+  that no pressure word appears. See
+  [DESIGN-NOTES.md](crates/windows-placement-probe/DESIGN-NOTES.md) -> "A disagreement is reported
+  where it happens, and the ask attached to it is an offer".
+  The report
   emits extra text when the topology's two sources disagreed past the retry: say that the metadata was
   inconsistent, and ask the runner to contact the `windows-threadpool-sys` maintainers through the
   discussions or issues boards and share an **unredacted** probe file **privately**, so the

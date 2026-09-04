@@ -302,3 +302,99 @@ Engineer's decision, 2026-09-04. Queued as `M36.2` in
 in the README what redaction costs, and `M36.4` asks for an unredacted record
 privately when the topology's sources disagreed -- the one case where the context
 matters most.
+
+## A disagreement is reported where it happens, and the ask attached to it is an offer
+
+`MachineMemoryTopology::discover` reads two independent Win32 sources and
+compares which processors they name. When they never agree within the retry
+bound, `Coherence::Disagreed` is the *conclusion* that the difference is real
+rather than a moment caught mid-change. Nothing in this workspace looked at it.
+
+**The record now carries the whole `Coherence`**, `walk_only` and
+`cpu_sets_only` lists included, not a boolean summary. A record saying only
+"something disagreed" cannot be investigated, and the report attached to it asks
+a runner whether they would help investigate -- so a lossy field would make that
+ask hollow. Whatever a maintainer would need to look at, the record they are
+offered has to contain.
+
+**It is a field of the record, not of the `Fingerprint`.** Fingerprints are
+compared for equality to catch a record spliced from two machines, and coherence
+is not a fact about a machine's *shape*: an announced reading that agreed and a
+measured one that did not would trip that check and throw away a good
+measurement over a difference in no shape at all. Provenance flows through the
+fingerprint because it *is* a property of the reading the shape came from;
+coherence rides beside it instead, from the same reading.
+
+### Informative, not coercive -- and that is a tested property
+
+This is the only part of the report that asks the reader for anything, and the
+wording is a requirement rather than a matter of taste. The person running this
+is already doing the project a favour on hardware nobody here can buy, and the
+result they are holding is a valid submission whether or not they do anything
+else. A section that reads as a demand costs exactly the submission it was
+trying to improve.
+
+So the text states what was detected, says plainly that the measurements are
+unaffected, names **both** possible causes -- the platform's description of this
+hardware may be inconsistent, or this tool may be reading it wrongly -- and notes
+that neither can be identified from the runner's machine. Then it offers a way
+to help and closes by releasing the reader: "None of that is required."
+
+Naming this tool's own possible defect first-class matters. An ask that implied
+the platform must be at fault would be asking the runner to help confirm a
+conclusion rather than to help reach one, which is both discourteous and wrong:
+this tool has been the defective party before.
+
+`the_disagreement_section_informs_rather_than_pressures` asserts the release is
+present, that both causes are offered as undecided, and that no pressure word
+("please", "you should", "we need", "make sure") appears. Tone cannot be pinned
+completely by a test; these are the parts of it that can be, and they are the
+parts an ordinary edit would lose.
+
+### The quiet path stays quiet
+
+`Agreed` and `NotCollected` print nothing at all. A line reporting that the two
+sources agreed would appear on every run that ever happens, and a reader learns
+to skip whatever is always there -- including on the one run where this section
+is the most interesting thing in the file.
+
+### The advice matches what the reader is already holding
+
+The ask is for a record naming the OS build and hypervisor, which after M36.2
+means one run with `--include-metadata`. When the record already carries those,
+the text says so instead of advising a flag whose output the reader has in hand:
+that advice reads as though the flag had not worked, the same failure the
+collection notice avoids with `--no-cpu-model`.
+
+**"Privately" is an offer to arrange, not a channel that exists.** Discussions
+and issues are public, so the text asks the runner to make contact there and
+says the maintainers can arrange a way to share the file that does not post it
+publicly. Promising a private channel the project does not have would be a
+worse defect than asking for nothing.
+
+The link is the repository rather than the results thread: a disagreement
+between the platform's own tables is not a result, and posting it into the
+collection thread would bury it among measurements. That is a second URL
+constant, because `report` is not gated behind `serde` and `DISCUSSION_URL` is;
+a test pins that the two agree about the repository, so the pair cannot drift
+into sending a runner to a dead link.
+
+### What this deliberately does not do
+
+**`is_fully_trusted` is untouched.** A disagreement is not a doubt about
+provenance -- the build is official and the topology really was read from this
+machine -- so the "how far to trust this" section still says so, and the
+disagreement is reported in its own section below. Whether an inconsistent
+machine should additionally be *marked* there, and how to mark it without
+dressing up a nuisance as a prize, is `PT-7.1`'s decision and is left to it.
+
+**The printed text gives counts, not processor identities.** The record names
+them individually and says so. Naming them in the report is the rest of
+`PT-7.1`, which wants what each source claimed; counts are what M36.4 needs to
+make "a mismatch" a concrete thing rather than a word.
+
+Engineer's decision on the wording, 2026-09-04. Queued as `M36.4` in
+[CHECKLIST-placement-tool.md](../../CHECKLIST-placement-tool.md), completing M36.
+Three of the nine sabotages in [sabotage.json](sabotage.json) cover this section:
+printing it on every run, dropping its closing release, and advising
+`--include-metadata` to a record that already carries it.
