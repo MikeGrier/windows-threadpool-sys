@@ -600,12 +600,63 @@ that previously stood in the way are gone:
   **A live-host test asserting cross-API agreement** (`cpu_set/tests.rs:242`) contradicts the model''s
   premise that CPU Sets may disagree with the walk; it is a latent failure on untried hardware.
   Assert that both observations are *recorded*, not that they agree.
-  **`release-placement-probe.yml` gating**: `workflow_dispatch` against an existing release tag
-  satisfies the tag-prefix condition, so a build-only run can create or modify a release. Add
-  `github.event_name == ''push''`, and verify both paths rather than reading the change.
+  **`release-placement-probe.yml` gating -- DONE 2026-09-04.** `workflow_dispatch` against an
+  existing release tag satisfied the tag-prefix condition, so a build-only run could create or modify
+  a release. All four publishing guards now require `github.event_name == ''push''`, and the trigger''s
+  own comment no longer claims the restriction is "inherent" -- it was not, which is precisely how
+  the hole survived. Raised again by Copilot at review `5117514238` before it was fixed.
   **`queue_contention.rs:241`** starts its clock without ordering against workers entering their
   loops, so a descheduled coordinator under-reports the baseline -- the optimistic direction, in a
   probe whose numbers are quoted as evidence.
+
+- [ ] **SH-4.10** -- **The fingerprint collapses multi-source observations by last-write-wins, and
+  privileges the relationship walk.** Raised by Copilot across reviews `5117032381`, `5117514238` and
+  `5117911029` -- three rounds, one root, so it is recorded once here rather than three times.
+  `Source` has **no trust ordering** by construction
+  ([observation.rs](crates/windows-topology-sys/src/observation.rs)), and `fold_in_cpu_sets`
+  deliberately keeps differing memberships as *separate domains* so a disagreement survives into the
+  model. `places_from_topology` then flattens that with `HashMap::insert`, so:
+  (a) a processor in two core domains takes whichever domain is visited last, making core and
+  efficiency-class labels **iteration-order dependent**;
+  (b) the same for NUMA membership;
+  (c) a domain observed only by CPU Sets yields `MissingPlacement::NumaNode` even though it carries an
+  OS-reported node label, so a real observation is **discarded** for coming from the wrong source.
+  A reported disagreement is thereby converted into a silent arbitrary choice -- which is the defect
+  the topology model was reshaped to prevent, reappearing one layer up in its first consumer.
+  **The fix is a design decision, not a patch**: accept a sole or agreed label, and refuse the
+  measurement as ambiguous when the sources actually conflict. Refusing is consistent with this
+  seam''s existing rule that an invented value is worse than a lost one. Relates to `SH-4.8`''s
+  overlapping-domain finding, which is the same shape one layer down in `memory_domain_of`.
+
+- [ ] **SH-4.11** -- **The record''s anti-splice guard compares fingerprints, which cannot establish
+  what it claims.** Raised by Copilot at review `5117911029`.
+  [main.rs](crates/windows-placement-probe/src/bin/placement_probe/main.rs) compares
+  `observation.host != host` to refuse a record whose announced shape and measured rows came from two
+  different readings. But `Fingerprint` records only **marginal sizes** and its own documentation says
+  plainly that equal fingerprints may have different cache/class/NUMA *intersections*. A topology that
+  changed between the two discoveries while preserving every count passes the check, and the record
+  then combines the first topology with rows measured from the second -- the exact splice the guard
+  exists to prevent.
+  The honest fix is to compare a canonical **placement signature**, or the derived `places`
+  themselves, rather than the fingerprint. That signature is already queued as `PT-6.1` in
+  [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md), so this item is gated on it and the two
+  should be done together.
+  **Not a reason to weaken the guard**: it still catches every change that alters a count, which is
+  every case observed so far. It is weaker than its own comment claims, and the comment must be
+  corrected even if the check is not.
+
+- [ ] **SH-4.12** -- **`ring_copy`''s `ByL3` policy restates the partition rule instead of asking for
+  it.** Raised by Copilot at reviews `5116772196` and `5116886015`.
+  [policy.rs](crates/windows-ioring-sys/examples/ring_copy/policy.rs) selects domains with
+  `matches!(domain.kind, DomainKind::Cache { level: 3, .. })`. The reshaped topology model makes
+  `outermost_partitioning_cache()` the one definition of which cache level partitions a machine, and
+  level numbering is explicitly **not** the ordering contract. So this consumer can produce
+  **overlapping ring domains** where two cache kinds are reported at level 3, and degrades to a single
+  whole-machine domain on a host whose outermost partition is at some other level -- neither of which
+  the policy''s own documentation admits to.
+  This is the consumer-side twin of the platform-integrity rule: bind to the specified primitive, not
+  to the level number that happens to be L3 on today''s hardware. The fix renames the policy as well
+  as changing it, since `byl3` is a user-facing CLI value that would no longer describe what it does.
 
 - [ ] **SH-4.9** -- **`tools/check-publishable.ps1`: three findings with one root.** Its checks are
   **text searches standing in for structural facts**, which is how a check goes quietly vacuous.

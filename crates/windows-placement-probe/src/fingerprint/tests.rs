@@ -744,8 +744,12 @@ mod multi_group_conversion {
 
     // --- Partial topologies, which this seam exists to accept (D-12) ---
 
-    /// A topology whose only domain is the group: online processors, no core,
-    /// no cache, and no memory domain at all.
+    /// A topology whose only domains are the group and one memory domain:
+    /// online processors, no core, and no cache.
+    ///
+    /// **The memory domain is not incidental.** A topology naming none at all is
+    /// refused outright, so without it every test below would fail for that
+    /// reason rather than for the partial-topology behaviour it is exercising.
     fn bare_processors(count: u8) -> MachineMemoryTopology {
         let all: Vec<u8> = (0..count).collect();
         let mask = all.iter().fold(0_usize, |mask, n| mask | (1 << n));
@@ -796,7 +800,7 @@ mod multi_group_conversion {
         // core mentioned simply vanished -- the result described a smaller
         // machine than the topology did, and said nothing about the omission.
         let places = places_from_topology(&bare_processors(4))
-            .expect("no memory domain at all means the single-node default applies");
+            .expect("the fixture supplies a memory domain, so every processor is placeable");
 
         assert_eq!(places.len(), 4, "every online processor must be placed");
         let mut numbers: Vec<u8> = places.iter().map(|p| p.number).collect();
@@ -840,7 +844,8 @@ mod multi_group_conversion {
             )],
         });
 
-        let places = places_from_topology(&topology).expect("no memory domain, so node 0 applies");
+        let places = places_from_topology(&topology)
+            .expect("both groups carry a memory domain, so every processor is placeable");
 
         assert_eq!(places.len(), 2);
         assert_ne!(

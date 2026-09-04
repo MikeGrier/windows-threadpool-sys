@@ -51,9 +51,16 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
   # Kept for a re-run after merge, when the file does live on the default
-  # branch. Inherently build-and-verify-only for the same reason as above: an
-  # earlier revision declared a `dry_run` input and never read it, which would
-  # have been a switch that silently did nothing.
+  # branch. Build-and-verify-only -- but **that is enforced below rather than
+  # inherent**, and an earlier revision of this comment claimed otherwise.
+  #
+  # A dispatch takes a `ref`, and GitHub accepts a **tag** there as readily as a
+  # branch. Dispatching against an existing `placement-probe-v*` tag therefore
+  # made `github.ref` match the tag-prefix guards, so a manual run reached the
+  # publishing steps and could mint attestations and replace the assets of a
+  # release that had already shipped. The guards now require a `push` event as
+  # well, which is the only trigger that can create a tag rather than merely
+  # name one.
   workflow_dispatch:
 
 permissions:
@@ -194,7 +201,7 @@ jobs:
         # The negative check above overwrote the artifact with an unstamped one.
         # Rebuilding is not a formality: shipping that binary would attach a
         # file marked UNOFFICIAL to an official release.
-        if: startsWith(github.ref, 'refs/tags/placement-probe-v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/placement-probe-v')
         shell: bash
         env:
           PLACEMENT_PROBE_COMMIT: ${{ github.sha }}
@@ -205,7 +212,7 @@ jobs:
             -p windows-placement-probe --bin placement-probe
 
       - name: Name the artifact for its architecture
-        if: startsWith(github.ref, 'refs/tags/placement-probe-v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/placement-probe-v')
         shell: bash
         run: |
           arch="${{ matrix.target }}"
@@ -215,7 +222,7 @@ jobs:
              "dist/placement-probe-${arch}.exe"
 
       - uses: actions/upload-artifact@v4
-        if: startsWith(github.ref, 'refs/tags/placement-probe-v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/placement-probe-v')
         with:
           name: placement-probe-${{ matrix.target }}
           path: dist/placement-probe-*.exe
@@ -225,7 +232,7 @@ jobs:
     name: attach to the release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/placement-probe-v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/placement-probe-v')
     permissions:
       # The only job that needs it, and only for the tag path.
       contents: write
@@ -282,7 +289,14 @@ jobs:
 
           Download the binary for your architecture and run it. Pass `--preview`
           first if you would like to see exactly what it collects before it
-          measures anything, and `--no-cpu-model` to withhold the processor name.
+          measures anything.
+
+          By default a result carries **only** the machine's shape and its
+          timings. The CPU model, OS build, virtualisation hint and run time are
+          withheld unless you pass `--include-metadata`; sending them helps tie
+          a result to a particular platform version, and is entirely your
+          choice. `--no-cpu-model` subtracts the processor name from that
+          opt-in, so on its own it changes nothing.
 
           It makes **no network connections**. Sending the result is your
           decision and your action:

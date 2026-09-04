@@ -334,9 +334,14 @@ pub struct Fingerprint {
     ///
     /// The nodes the topology **reported**, so this does not necessarily sum to
     /// [`processors`](Self::processors): a topology naming no memory domains
-    /// leaves this empty, while every processor is still counted and every
-    /// placement still reports node `0` -- the documented single-node default
-    /// for exactly that case.
+    /// leaves this empty, while every processor is still counted.
+    ///
+    /// **Such a topology yields no placements at all**, so this list being
+    /// empty and the run having measured something cannot both be true of a
+    /// discovered host: `places_from_topology` refuses a topology that names no
+    /// memory domain rather than reporting node `0` for everyone. An earlier
+    /// version of this field documented that fallback, which was removed for
+    /// fabricating a node the machine never claimed.
     ///
     /// Empty is deliberately not rendered as one node covering the machine, even
     /// though [`cache_domain_sizes`](Self::cache_domain_sizes) does exactly that
@@ -548,8 +553,9 @@ impl fmt::Display for Fingerprint {
 ///
 /// Returns whatever [`MachineMemoryTopology::discover`] failed with, or
 /// [`ErrorKind::InvalidData`](std::io::ErrorKind::InvalidData) if the discovered
-/// topology names memory domains but leaves an online processor out of all of
-/// them. Discovery has never produced that, and it would mean the topology
+/// topology leaves an online processor with no memory domain -- either because
+/// it names domains and omits that processor, or because it names none at all.
+/// Discovery has never produced either, and either would mean the topology
 /// crate's parse had regressed rather than that the machine is unusual -- which
 /// is worth saying out loud rather than papering over with a fabricated node.
 pub fn discover_places() -> std::io::Result<Vec<ProcessorPlace>> {
@@ -587,7 +593,12 @@ pub enum MissingPlacement {
     Core,
     /// No cache domain covers it at the level that partitions the machine.
     CacheDomain,
-    /// No memory domain covers it, though the topology names memory domains.
+    /// No memory domain covers it.
+    ///
+    /// Covers both shapes, deliberately: a topology that names memory domains
+    /// and omits this processor, and one that names none at all. The second is
+    /// not a single-node machine to be defaulted to node `0` -- it is a machine
+    /// that declined to say -- so both are refused and both arrive here.
     NumaNode,
 }
 
@@ -597,7 +608,7 @@ impl MissingPlacement {
         match self {
             Self::Core => "core domains but places no core for",
             Self::CacheDomain => "a partitioning cache level that omits",
-            Self::NumaNode => "memory domains but places no NUMA node for",
+            Self::NumaNode => "no NUMA node for",
         }
     }
 }
@@ -653,11 +664,19 @@ impl std::error::Error for UnplacedProcessor {}
 /// **uniform** across the machine is a real answer, and an absence that singles
 /// one processor out is a gap.
 ///
-/// A topology naming no memory domain describes a single-node machine, so node
-/// zero is correct for everyone; a topology naming nodes 1 and 2 and omitting a
-/// processor has not said where it is, and answering zero invents a node the
-/// machine does not have. The same holds for cores, efficiency classes, and the
-/// cache level that partitions the machine.
+/// A topology naming nodes 1 and 2 and omitting a processor has not said where
+/// that processor is, and answering zero invents a node the machine does not
+/// have. The same holds for cores, efficiency classes, and the cache level that
+/// partitions the machine.
+///
+/// **Naming no memory domain at all is refused too, and that is the correction
+/// this paragraph used to get wrong.** It once read that such a topology
+/// "describes a single-node machine, so node zero is correct for everyone".
+/// It does not describe one: it declined to describe any, and node `0` was a
+/// value this code supplied rather than one the machine claimed. The uniformity
+/// rule above still holds for cores and classes, where an absent attribute has
+/// no value to invent; NUMA is the exception because node `0` is a real label
+/// that compares equal to a real answer.
 ///
 /// **The invented value is worse than a lost one**, which is why this refuses
 /// rather than substituting a sentinel: a synthetic core id can equal a real
