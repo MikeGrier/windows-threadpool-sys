@@ -309,18 +309,34 @@ fn a_stale_temporary_from_a_recycled_pid_does_not_fail_the_backup() {
 // ---------------------------------------------------------------------------
 
 use super::sink::{Captured, Sink, emit};
-use super::{render_collection_notice, render_plan};
+use super::{Options, render_collection_notice, render_plan};
 use windows_placement_probe::fingerprint::Fingerprint;
 use windows_placement_probe::machine::MachineDescription;
+use windows_placement_probe::redaction::MetadataPolicy;
 
 /// A description with every field known, so a test can tell "withheld" from
 /// "this host would not say" -- which the notice renders differently and which
 /// a real machine may not offer both of.
 fn described() -> MachineDescription {
-    let mut machine = MachineDescription::read(false);
+    let mut machine = MachineDescription::read(MetadataPolicy::included());
     machine.cpu_model = Some("Test CPU 9000".to_owned());
     machine.os_build = Some("10.0.99999".to_owned());
     machine
+}
+
+/// The options a runner produces by passing the given switches.
+///
+/// Built through [`Options`] rather than by naming a policy directly, so these
+/// tests exercise the mapping from flags to policy that the tool actually uses.
+fn options(include_metadata: bool, suppress_model: bool) -> Options {
+    Options {
+        preview: false,
+        include_metadata,
+        suppress_model,
+        no_file: false,
+        help: false,
+        version: false,
+    }
 }
 
 fn host() -> Fingerprint {
@@ -331,7 +347,11 @@ fn host() -> Fingerprint {
 fn the_notice_names_the_model_it_is_about_to_publish() {
     // The disclosure's central promise: what it says it collects is what it
     // collects. A runner judging the model has to be shown the model.
-    let notice = render_collection_notice(&described(), &host(), false);
+    let notice = render_collection_notice(
+        &described(),
+        &host(),
+        options(true, false).metadata_policy(),
+    );
 
     assert!(
         notice.contains("Test CPU 9000"),
@@ -347,15 +367,57 @@ fn suppressing_the_model_says_so_rather_than_going_quiet() {
     let mut machine = described();
     machine.cpu_model = None;
 
-    let withheld = render_collection_notice(&machine, &host(), true);
-    let unknown = render_collection_notice(&machine, &host(), false);
+    let mut unknown = machine.clone();
+    unknown.model_suppressed = false;
+    let mut withheld = machine;
+    withheld.model_suppressed = true;
 
-    assert!(withheld.contains("(withheld: --no-cpu-model)"));
+    let policy = options(true, false).metadata_policy();
+    let withheld = render_collection_notice(&withheld, &host(), policy);
+    let unknown = render_collection_notice(&unknown, &host(), policy);
+
+    assert!(withheld.contains("(withheld)"));
     assert!(unknown.contains("(this host would not say)"));
     assert_ne!(
         withheld, unknown,
         "the two absences must not render identically"
     );
+}
+
+#[test]
+fn the_default_notice_says_the_secondary_rows_are_withheld() {
+    // **What M36.2 changed, seen from the disclosure.** A runner who passes
+    // nothing must be told the context is not being sent, and must not be shown
+    // values the record will not carry.
+    let machine = MachineDescription::read(MetadataPolicy::default());
+    let notice =
+        render_collection_notice(&machine, &host(), options(false, false).metadata_policy());
+
+    assert!(
+        notice.contains("--include-metadata"),
+        "the default notice must name the opt-in: {notice}"
+    );
+    assert!(
+        !notice.contains("Test CPU 9000"),
+        "a withheld row must not preview a value that will not be sent"
+    );
+    assert!(
+        notice.matches("(withheld)").count() >= 3,
+        "every withheld row must say so: {notice}"
+    );
+}
+
+#[test]
+fn the_default_notice_still_shows_the_topology_and_the_timings() {
+    // The measurement is not redactable, and the notice must keep saying so --
+    // a runner who read "everything is withheld" and inferred that the topology
+    // was too would have consented to the wrong thing.
+    let host = host();
+    let machine = MachineDescription::read(MetadataPolicy::default());
+    let notice = render_collection_notice(&machine, &host, MetadataPolicy::default());
+
+    assert!(notice.contains(&host.to_string()), "got {notice}");
+    assert!(notice.contains("timings"), "got {notice}");
 }
 
 #[test]
@@ -365,7 +427,8 @@ fn the_notice_shows_the_topology_value_not_a_description_of_it() {
     // that the topology identifies the hardware whether or not the model is
     // named. A runner asked to judge that could not see the thing being judged.
     let host = host();
-    let notice = render_collection_notice(&described(), &host, false);
+    let notice =
+        render_collection_notice(&described(), &host, options(true, false).metadata_policy());
 
     assert!(
         notice.contains(&host.to_string()),
@@ -376,14 +439,66 @@ fn the_notice_shows_the_topology_value_not_a_description_of_it() {
 #[test]
 fn the_suppression_hint_is_offered_only_when_it_would_do_something() {
     // Advising --no-cpu-model to somebody who already passed it is noise that
-    // reads as though the flag did not take effect.
+    // reads as though the flag did not take effect -- and so is advising it to
+    // somebody who is sending no metadata at all, where it would do nothing.
+    let machine = |suppress| {
+        let mut machine = described();
+        machine.model_suppressed = suppress;
+        if suppress {
+            machine.cpu_model = None;
+        }
+        machine
+    };
+
     assert!(
-        render_collection_notice(&described(), &host(), false)
-            .contains("--no-cpu-model to withhold")
+        render_collection_notice(
+            &machine(false),
+            &host(),
+            options(true, false).metadata_policy()
+        )
+        .contains("--no-cpu-model to withhold")
     );
     assert!(
-        !render_collection_notice(&described(), &host(), true)
-            .contains("--no-cpu-model to withhold")
+        !render_collection_notice(
+            &machine(true),
+            &host(),
+            options(true, true).metadata_policy()
+        )
+        .contains("--no-cpu-model to withhold")
+    );
+    assert!(
+        !render_collection_notice(
+            &machine(true),
+            &host(),
+            options(false, false).metadata_policy()
+        )
+        .contains("--no-cpu-model to withhold"),
+        "a run sending no metadata has nothing for --no-cpu-model to withhold"
+    );
+}
+
+#[test]
+fn the_model_switch_subtracts_from_the_opt_in_rather_than_cancelling_it() {
+    // The composition that makes `--no-cpu-model` worth keeping as a separate
+    // flag. A runner willing to send an OS build and a hypervisor name may
+    // still be in front of a part whose name is not theirs to publish, so the
+    // two switches must compose rather than one overriding the other.
+    let policy = options(true, true).metadata_policy();
+
+    assert!(!policy.includes_cpu_model());
+    assert!(policy.includes_os_build());
+    assert!(policy.includes_virtualisation());
+    assert!(policy.includes_timestamp());
+}
+
+#[test]
+fn withholding_the_model_without_opting_in_changes_nothing() {
+    // The redundant combination must be harmless: a cautious runner who passes
+    // both flags is owed the same record as one who passes neither, not a
+    // narrower one and not a different notice.
+    assert_eq!(
+        options(false, true).metadata_policy(),
+        options(false, false).metadata_policy()
     );
 }
 
@@ -391,8 +506,11 @@ fn the_suppression_hint_is_offered_only_when_it_would_do_something() {
 fn the_notice_keeps_promising_what_it_does_not_collect() {
     // The half of the disclosure a reader is most likely to be reassured by,
     // and the half most likely to be quietly dropped in an edit.
-    let notice = render_collection_notice(&described(), &host(), false);
-
+    let notice = render_collection_notice(
+        &described(),
+        &host(),
+        options(true, false).metadata_policy(),
+    );
     for promise in [
         "host name",
         "user name",

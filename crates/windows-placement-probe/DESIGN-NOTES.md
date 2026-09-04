@@ -208,3 +208,97 @@ one.
 No schema version bump: the freeze starts at the first release and this crate has not had one.
 
 Raised in the PR #56 review, as two suppressed comments on the same defect.
+
+## The measurement is not redactable; the context is, and is withheld by default
+
+A record holds two kinds of thing, and they earn opposite defaults.
+
+The **measurement** -- the topology, the placements, the timings -- is the reason
+the record exists. Redacting it leaves a file that says nothing, and it is also
+the part that most identifies unusual hardware, so no switch will ever withhold
+it. The README says that plainly rather than implying a redaction story that
+does not exist: an unreleased part is identified by an unusual core count and a
+novel cache arrangement at least as well as by its name.
+
+The **context** -- the minute the run finished, the CPU model, the OS build, the
+virtualisation hint -- explains a measurement without being one. All of it is
+now withheld unless the runner passes `--include-metadata`.
+
+**The default flipped, and that is the whole change.** The tool began by
+collecting the context and offering `--no-cpu-model` as the single escape hatch,
+which asks a stranger doing a favour to recognise in advance which field they
+would rather not send. Defaulting to redacted asks nothing of them.
+
+`--no-cpu-model` survives as a *subtraction* from `--include-metadata`, because
+the case it was built for is real and is not covered by the general opt-in: a
+runner willing to send an OS build and a hypervisor name may still be sitting in
+front of a part whose name is not theirs to publish. Passed on its own it
+withholds something already withheld, which is redundant rather than an error and
+is tested to stay harmless -- a cautious runner who passes both flags must get
+the same record as one who passes neither.
+
+**One policy, decided once.** `MetadataPolicy` is built from the flags in
+`Options::metadata_policy` and then handed to `MachineDescription::read` and
+`SubmissionRecord::new`. Every consumer -- the disclosure notice, the machine
+read, the record, the report -- reads that one answer instead of re-deriving it
+from the flags, so the notice cannot describe a policy the record does not
+implement.
+
+**A withheld field is not read at all**, rather than read and then dropped. The
+registry call does not happen, so the module's commitment about what it does not
+touch is kept by control flow rather than by a discard a later refactor could
+lose. The notice therefore shows a withheld row as withheld instead of previewing
+a value that will not be sent; there is nothing for a runner to judge in a value
+nobody is asking for.
+
+**Suppression is recorded, never merely absent.** "The runner did not send this"
+and "the host would not answer" are different facts, and a collector that cannot
+tell them apart will eventually read one as the other. The mechanism differs by
+field only because the types do:
+
+- `cpu_model` and `os_build` are `Option<String>` beside a `*_suppressed` flag,
+  following the pattern `model_suppressed` already established.
+- `virtualisation` gained a `Suppressed` **variant** rather than a flag, because
+  every other variant is a claim about what was observed and a withheld hint has
+  no honest value to fall back on. `NotDetected` would assert a negative finding
+  nobody made -- on the field that decides whether a submission could ever have
+  shown NUMA rows -- and `Unknown` would blame the firmware. Carrying it in the
+  enum also states the fact once, where a variant plus a boolean could disagree.
+- `recorded_at` is `Option<String>` beside `recorded_at_suppressed`, which is
+  **redundant by construction today**: a clock cannot decline to answer the way a
+  registry key can, so the timestamp is absent only when withheld. It is carried
+  anyway, because that is a fact about the implementation and a collector should
+  not have to know it -- every other withheld field says so in the data, and a
+  hand-assembled record (every field is public) can drop the timestamp without
+  meaning to claim anything.
+
+**The file name loses the stamp too.** `submission::file_name` is derived from
+the record, so a record with no timestamp yields `placement-probe-v1-250.json`.
+Reaching past the record for the clock would put the withheld minute back into a
+file name the runner may well attach, which is the one place it could still
+escape. Nothing is lost but convenience: the collision *guarantee* was always the
+exclusive create and the numbered suffix in the writer, and the milliseconds that
+keep that suffix from being needed in practice are still there.
+
+**This supersedes nothing about the minute-flooring**, which still applies to the
+value that survives an opt-in. Flooring answers "how precise may a timestamp we
+do send be"; this answers "do we send one at all".
+
+No `SCHEMA_VERSION` bump: the freeze starts at the first release and this crate
+has not had one. `schema/v1.txt` was regenerated in place, per the decision
+above.
+
+**Every guard above is sabotage-verified**, in
+[sabotage.json](sabotage.json): six defects -- a withheld hint falling back to
+the enum default, each of the two registry reads happening regardless of policy,
+a record stamping a timestamp regardless of policy, a file name carrying a stamp
+the record withheld, and `--no-cpu-model` ceasing to subtract -- and all six turn
+the suite red. The mirror-image claim, that an *opted-in* field is present, is
+deliberately not sabotaged there, because it depends on what the host will
+answer.
+
+Engineer's decision, 2026-09-04. Queued as `M36.2` in
+[CHECKLIST-placement-tool.md](../../CHECKLIST-placement-tool.md); `M36.3` states
+in the README what redaction costs, and `M36.4` asks for an unredacted record
+privately when the topology's sources disagreed -- the one case where the context
+matters most.

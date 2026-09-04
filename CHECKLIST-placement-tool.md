@@ -662,7 +662,16 @@ actionable is identifying and therefore belongs behind the review this tool alre
   to a band of longitudes for no gain. `recorded_at_subsecond_millis` is untouched: it is
   `serde(skip)` and exists only so two runs in one second get distinct file names.
 
-- [ ] **M36.2** -- **Redact the secondary metadata by default, with an opt-in to include it.**
+- [x] **M36.2** -- **Redact the secondary metadata by default, with an opt-in to include it.**
+  Done 2026-09-04, with a single `--include-metadata` as recommended; `--no-cpu-model` survives as a
+  subtraction from it, because the confidential-part case it was built for is not covered by the
+  general opt-in and passing it alone is redundant rather than wrong. Suppression is recorded for
+  every newly redactable field: `os_build_suppressed` and `recorded_at_suppressed` beside their
+  `Option`s, and a `VirtualisationHint::Suppressed` variant rather than a flag, since that enum's
+  other variants are all claims about what was observed. The backup file's name drops the stamp with
+  the record, so the withheld minute cannot escape through a file a runner attaches. See
+  [DESIGN-NOTES.md](crates/windows-placement-probe/DESIGN-NOTES.md) -> "The measurement is not
+  redactable; the context is, and is withheld by default".
   Engineer's decision, 2026-09-04. The secondary metadata is the timestamp, the OS build, and the
   hypervisor name/hint -- everything in `MachineDescription` and the `recorded_at*` fields that is
   *context* rather than *measurement*. The topology is excluded from this by construction: it is the

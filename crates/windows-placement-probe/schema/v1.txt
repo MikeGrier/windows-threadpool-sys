@@ -57,6 +57,7 @@ machine
 machine.cpu_model
 machine.model_suppressed
 machine.os_build
+machine.os_build_suppressed
 machine.virtualisation
 machine.virtualisation_name
 node_hops
@@ -97,5 +98,6 @@ placements[].slice
 placements[].strategy
 recorded_at
 recorded_at_epoch_seconds
+recorded_at_suppressed
 schema_version
 topology_provenance

@@ -1,0 +1,85 @@
+{
+  "package": "windows-placement-probe",
+  "description": "Sabotages for the redaction policy: the default that withholds the secondary metadata, the per-field way each withholding is recorded, and the file name that must not leak a withheld timestamp. Run with tools/run-sabotage.ps1; see tools/README-sabotage.md for the format and for why the results are read the way they are.",
+  "notCoveredHere": "These sabotages assert that a *withheld* field is absent, which is a claim about this tool's policy and holds on any host. The mirror-image claim -- that an opted-in field is present -- is deliberately NOT sabotaged here, because it depends on what the host will answer: a machine whose registry declines to name its processor would report the sabotage as caught for the wrong reason. The opted-in direction is covered by the machine tests, which assert shape and policy rather than any particular value.",
+  "sabotages": [
+    {
+      "name": "a withheld virtualisation hint falls back to the enum default",
+      "file": "src/machine.rs",
+      "expect": "caught",
+      "why": "The exact trap the Suppressed variant exists to close. `NotDetected` is the enum's default, so a withheld hint that fell back to it would tell a reader this machine had been examined and found to be bare metal -- a claim nobody made, on the field that decides whether a submission could ever have shown NUMA rows.",
+      "find": [
+        "            (VirtualisationHint::Suppressed, None)"
+      ],
+      "replace": [
+        "            (VirtualisationHint::default(), None)"
+      ]
+    },
+    {
+      "name": "the cpu model is read whatever the policy says",
+      "file": "src/machine.rs",
+      "expect": "caught",
+      "why": "The module promises that a field the policy withholds is not read at all, rather than read and then dropped. This is the shape that promise fails in: the registry call happens and the value lands in the record under the default policy.",
+      "find": [
+        "            cpu_model: policy.includes_cpu_model().then(read_cpu_model).flatten(),"
+      ],
+      "replace": [
+        "            cpu_model: read_cpu_model(),"
+      ]
+    },
+    {
+      "name": "the os build is read whatever the policy says",
+      "file": "src/machine.rs",
+      "expect": "caught",
+      "why": "The same defect on the field M36.2 made redactable, kept separate because os_build_suppressed is a different flag from model_suppressed and a guard covering only the model would leave this open.",
+      "find": [
+        "            os_build: policy.includes_os_build().then(read_os_build).flatten(),"
+      ],
+      "replace": [
+        "            os_build: read_os_build(),"
+      ]
+    },
+    {
+      "name": "the record stamps a timestamp whatever the policy says",
+      "file": "src/record.rs",
+      "expect": "caught",
+      "why": "Even a minute correlates two submissions from one host, which is why the timestamp is context rather than measurement. Note that this leaves recorded_at_suppressed saying true beside a populated timestamp, so the record would also contradict itself.",
+      "find": [
+        "        let recorded_minute = policy",
+        "            .includes_timestamp()",
+        "            .then(|| now - (now % SECONDS_PER_MINUTE));"
+      ],
+      "replace": [
+        "        let recorded_minute = Some(now - (now % SECONDS_PER_MINUTE));"
+      ]
+    },
+    {
+      "name": "the file name carries a stamp the record withheld",
+      "file": "src/submission.rs",
+      "expect": "caught",
+      "why": "The one place a withheld minute could still escape. A runner who attaches the backup file rather than pasting the text would hand over, in the name, exactly the value the record was built to omit.",
+      "find": [
+        "        None => String::new(),"
+      ],
+      "replace": [
+        "        None => \"2026-01-01T00-00-00Z-\".to_owned(),"
+      ]
+    },
+    {
+      "name": "--no-cpu-model stops subtracting from --include-metadata",
+      "file": "src/bin/placement_probe/main.rs",
+      "expect": "caught",
+      "why": "The composition that makes the second switch worth keeping. Without it, a runner who opted in and then withheld the model would silently send the model anyway -- the one case the flag was built for, and the one where being wrong costs the most.",
+      "find": [
+        "        if self.suppress_model {",
+        "            policy.without_cpu_model()",
+        "        } else {",
+        "            policy",
+        "        }"
+      ],
+      "replace": [
+        "        policy"
+      ]
+    }
+  ]
+}

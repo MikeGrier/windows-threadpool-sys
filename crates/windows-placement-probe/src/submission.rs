@@ -95,15 +95,16 @@ pub fn render_submission(record: &SubmissionRecord) -> Result<String, serde_json
 /// A predictable file name for the same record.
 ///
 /// Includes the schema version so a directory of collected files can be sorted
-/// by shape without opening any of them, and the timestamp so two runs are
-/// distinguishable at a glance.
+/// by shape without opening any of them, and the timestamp -- when the record
+/// carries one -- so two runs are distinguishable at a glance.
 ///
 /// # Why the name carries milliseconds when the record does not
 ///
-/// The record's own timestamp is second-resolution, which is all a measurement
-/// taken over several seconds can honestly claim. A *file name* has a different
-/// job: a run finishes in well under a second, so two of them can share a
-/// second and would otherwise want the same name.
+/// The record's own timestamp is floored to the minute, deliberately: a finer
+/// one correlates two submissions from one host. A *file name* has a different
+/// job and never leaves the runner's machine unless they send it, so it can be
+/// as precise as the collision problem needs -- a run finishes in well under a
+/// second, and two of them would otherwise want the same name.
 ///
 /// The milliseconds come from the same clock reading as `recorded_at` rather
 /// than from a fresh one, so the name and the record inside it always describe
@@ -115,15 +116,30 @@ pub fn render_submission(record: &SubmissionRecord) -> Result<String, serde_json
 /// writer creates the file exclusively and falls back to a numbered suffix;
 /// that is what makes the guarantee, and this only keeps the suffix from ever
 /// being needed in practice.
+///
+/// # A withheld timestamp is withheld from the name too
+///
+/// The name is derived from the record, so a record carrying no timestamp
+/// yields a name carrying none -- `placement-probe-v1-250.json`. Reaching past
+/// the record for the clock would put the withheld minute back into a file name
+/// the runner may well attach, which is the one place it could still escape.
+///
+/// Only convenience is lost: the collision *guarantee* was never the stamp, and
+/// the milliseconds that keep the suffix unnecessary are still here.
 #[must_use]
 pub fn file_name(record: &SubmissionRecord) -> String {
-    let stamp: String = record
-        .recorded_at
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
+    // The trailing separator belongs to the stamp rather than to the format
+    // string, so an absent stamp leaves no doubled hyphen behind.
+    let stamp: String = match &record.recorded_at {
+        Some(at) => at
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .chain(std::iter::once('-'))
+            .collect(),
+        None => String::new(),
+    };
     format!(
-        "placement-probe-v{}-{}-{:03}.json",
+        "placement-probe-v{}-{}{:03}.json",
         record.schema_version, stamp, record.recorded_at_subsecond_millis
     )
 }

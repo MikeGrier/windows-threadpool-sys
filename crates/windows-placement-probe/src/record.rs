@@ -26,6 +26,7 @@ use crate::build_identity::BuildIdentity;
 use crate::core_affinity::{Measurement, Observation};
 use crate::fingerprint::Fingerprint;
 use crate::machine::MachineDescription;
+use crate::redaction::MetadataPolicy;
 
 /// The version of the record's shape.
 ///
@@ -78,7 +79,7 @@ pub struct SubmissionRecord {
     /// Which shape this record has. See [`SCHEMA_VERSION`].
     pub schema_version: u32,
     /// When the run finished, as an ISO-8601 UTC timestamp **floored to the
-    /// minute**.
+    /// minute**, or `None` when the runner withheld it.
     ///
     /// The seconds field is therefore always `00`, and that is deliberate
     /// rather than an artefact. A submitted record describes someone's own
@@ -89,14 +90,30 @@ pub struct SubmissionRecord {
     ///
     /// UTC with no local offset, because an offset narrows the submitter to a
     /// band of longitudes and buys nothing.
-    pub recorded_at: String,
+    ///
+    /// **Absent by default**: the timestamp is context rather than
+    /// measurement, so [`MetadataPolicy`] withholds it unless the runner opts
+    /// in. Flooring still applies to the value that survives the opt-in, and is
+    /// not a substitute for it.
+    pub recorded_at: Option<String>,
     /// The same minute in seconds since the Unix epoch, and so always a
-    /// multiple of 60.
+    /// multiple of 60. Absent exactly when [`Self::recorded_at`] is.
     ///
     /// Carried beside the formatted form because a collector should never have
     /// to parse prose to sort records, and because it survives any later change
     /// to how the string is rendered.
-    pub recorded_at_epoch_seconds: u64,
+    pub recorded_at_epoch_seconds: Option<u64>,
+    /// Whether the timestamp was withheld.
+    ///
+    /// **Redundant by construction today, and carried anyway.** A clock cannot
+    /// decline to answer the way a registry key can, so today the two fields
+    /// above are `None` only when this is true. That is a fact about the
+    /// implementation, and a collector should not have to know it to read a
+    /// record -- the other withheld fields say so in the data, and this one
+    /// says it the same way. Every field of this struct is public, so a
+    /// hand-assembled record can also drop the timestamp without meaning to
+    /// claim anything, and this distinguishes that too.
+    pub recorded_at_suppressed: bool,
     /// Milliseconds past that second, for naming a file and nothing else.
     ///
     /// **Deliberately not serialized, and deliberately not a second clock
@@ -284,6 +301,7 @@ impl SubmissionRecord {
         observation: &Observation,
         host: Fingerprint,
         machine: MachineDescription,
+        policy: MetadataPolicy,
     ) -> std::io::Result<Self> {
         if host != observation.host {
             return Err(std::io::Error::new(
@@ -316,12 +334,20 @@ impl SubmissionRecord {
         // `recorded_at_subsecond_millis` is unaffected: it is `serde(skip)` and
         // exists only so two runs in one second get distinct *file names*. It
         // never reaches the record.
-        let recorded_minute = now - (now % SECONDS_PER_MINUTE);
+        //
+        // **And the whole timestamp is withheld unless `policy` says otherwise**,
+        // because a minute is still a correlator and the timestamp is context
+        // rather than measurement. The flooring above is what the opted-in value
+        // gets, not a stand-in for the choice not to send one.
+        let recorded_minute = policy
+            .includes_timestamp()
+            .then(|| now - (now % SECONDS_PER_MINUTE));
 
         Ok(Self {
             schema_version: SCHEMA_VERSION,
-            recorded_at: iso8601_utc(recorded_minute),
+            recorded_at: recorded_minute.map(iso8601_utc),
             recorded_at_epoch_seconds: recorded_minute,
+            recorded_at_suppressed: !policy.includes_timestamp(),
             recorded_at_subsecond_millis: since_epoch.subsec_millis(),
             build: BuildIdentity::current(),
             machine,

@@ -72,6 +72,8 @@ pub mod paste_json;
 pub mod peer_index_cache;
 /// The record a run produces and a runner sends back.
 pub mod record;
+/// Which secondary metadata a submission carries.
+pub mod redaction;
 /// The human-readable report, rendered from the record.
 pub mod report;
 /// Turning a run into something a person can paste into a discussion thread.

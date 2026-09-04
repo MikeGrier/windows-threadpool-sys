@@ -12,6 +12,7 @@ use super::{MeasurementRecord, SCHEMA_VERSION, SubmissionRecord, civil_from_days
 use crate::build_identity::{BuildIdentity, BuildSource};
 use crate::fingerprint::Fingerprint;
 use crate::machine::{MachineDescription, VirtualisationHint};
+use crate::redaction::MetadataPolicy;
 
 /// A record with **every** optional field populated.
 ///
@@ -51,8 +52,9 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
 
     SubmissionRecord {
         schema_version: SCHEMA_VERSION,
-        recorded_at: "2026-08-31T12:00:00Z".to_owned(),
-        recorded_at_epoch_seconds: 1_788_177_600,
+        recorded_at: Some("2026-08-31T12:00:00Z".to_owned()),
+        recorded_at_epoch_seconds: Some(1_788_177_600),
+        recorded_at_suppressed: false,
         recorded_at_subsecond_millis: 250,
         build: BuildIdentity {
             crate_version: "2026.902.0",
@@ -64,6 +66,7 @@ pub(crate) fn fully_populated() -> SubmissionRecord {
             cpu_model: Some("Example CPU".to_owned()),
             model_suppressed: false,
             os_build: Some("10.0.26200.9168".to_owned()),
+            os_build_suppressed: false,
             virtualisation: VirtualisationHint::Detected,
             virtualisation_name: Some("Example Hypervisor".to_owned()),
         },
@@ -325,7 +328,8 @@ fn a_record_cannot_splice_an_announced_host_onto_another_machines_rows() {
     let error = SubmissionRecord::new(
         &observation_on(measured),
         announced,
-        MachineDescription::read(true),
+        MachineDescription::read(MetadataPolicy::redacted()),
+        MetadataPolicy::redacted(),
     )
     .expect_err("a record spanning two machines must not be assembled");
 
@@ -345,11 +349,71 @@ fn a_record_assembles_when_the_announced_and_measured_hosts_agree() {
     let record = SubmissionRecord::new(
         &observation_on(host.clone()),
         host.clone(),
-        MachineDescription::read(true),
+        MachineDescription::read(MetadataPolicy::redacted()),
+        MetadataPolicy::redacted(),
     )
     .expect("identical hosts are the ordinary case");
 
     assert_eq!(record.host, host);
+}
+
+#[test]
+fn the_default_policy_leaves_a_record_with_no_timestamp() {
+    // **The behaviour M36.2 exists for**, at the record's own boundary: even a
+    // minute is a correlator between two submissions from one host, so it is
+    // sent only when the runner asks for it to be.
+    let host = measured_host();
+
+    let record = SubmissionRecord::new(
+        &observation_on(host.clone()),
+        host,
+        MachineDescription::read(MetadataPolicy::default()),
+        MetadataPolicy::default(),
+    )
+    .expect("identical hosts are the ordinary case");
+
+    assert_eq!(record.recorded_at, None);
+    assert_eq!(record.recorded_at_epoch_seconds, None);
+    assert!(
+        record.recorded_at_suppressed,
+        "an absent timestamp must say it was withheld rather than leave a reader guessing"
+    );
+}
+
+#[test]
+fn opting_in_carries_a_timestamp_floored_to_the_minute() {
+    // The other half, so the withholding above is known to be a policy rather
+    // than a constructor that stopped reading the clock -- and the flooring
+    // from M36.1 is still in force on the value that survives the opt-in.
+    let host = measured_host();
+
+    let record = SubmissionRecord::new(
+        &observation_on(host.clone()),
+        host,
+        MachineDescription::read(MetadataPolicy::included()),
+        MetadataPolicy::included(),
+    )
+    .expect("identical hosts are the ordinary case");
+
+    let seconds = record
+        .recorded_at_epoch_seconds
+        .expect("an opted-in record carries the epoch value");
+    let rendered = record
+        .recorded_at
+        .as_deref()
+        .expect("an opted-in record carries the rendered form");
+
+    assert!(!record.recorded_at_suppressed);
+    assert_eq!(seconds % 60, 0, "the minute floor still applies: {seconds}");
+    assert!(
+        rendered.ends_with(":00Z"),
+        "the two forms must agree about the seconds field: {rendered}"
+    );
+    assert_eq!(
+        rendered,
+        iso8601_utc(seconds),
+        "the rendered form must be the epoch value, not a second clock reading"
+    );
 }
 
 #[test]

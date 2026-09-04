@@ -239,6 +239,7 @@ fn a_record_keeps_the_order_its_fields_are_declared_in() {
             "schema_version",
             "recorded_at",
             "recorded_at_epoch_seconds",
+            "recorded_at_suppressed",
             "build",
             "machine",
             "host",

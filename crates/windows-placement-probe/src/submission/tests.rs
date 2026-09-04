@@ -208,7 +208,48 @@ fn two_runs_do_not_collide_on_one_file_name() {
     // Overwriting a previous result silently is a data loss nobody notices.
     let first = fully_populated();
     let mut second = fully_populated();
-    second.recorded_at = "2026-09-01T13:00:00Z".to_owned();
+    second.recorded_at = Some("2026-09-01T13:00:00Z".to_owned());
+
+    assert_ne!(file_name(&first), file_name(&second));
+}
+
+#[test]
+fn a_record_with_no_timestamp_names_a_file_without_one() {
+    // The name is derived from the record, so a withheld timestamp must not
+    // reappear in a file name the runner may well attach. This is the one place
+    // the redacted minute could still escape.
+    let mut redacted = fully_populated();
+    redacted.recorded_at = None;
+    redacted.recorded_at_epoch_seconds = None;
+    redacted.recorded_at_suppressed = true;
+
+    let name = file_name(&redacted);
+
+    assert!(
+        !name.contains("2026"),
+        "the withheld minute leaked into the file name: {name}"
+    );
+    assert!(
+        !name.contains("--"),
+        "an absent stamp must not leave a doubled separator: {name}"
+    );
+    assert!(
+        name.ends_with("-250.json"),
+        "the milliseconds that avoid a collision must survive: {name}"
+    );
+}
+
+#[test]
+fn two_records_with_no_timestamp_still_get_different_names() {
+    // The collision the milliseconds exist to avoid, in the case that lost the
+    // rest of the stamp. The exclusive create and its numbered suffix are what
+    // make the guarantee, but they must not be reached on every ordinary run.
+    let mut first = fully_populated();
+    first.recorded_at = None;
+    first.recorded_at_suppressed = true;
+    let mut second = first.clone();
+    first.recorded_at_subsecond_millis = 120;
+    second.recorded_at_subsecond_millis = 890;
 
     assert_ne!(file_name(&first), file_name(&second));
 }

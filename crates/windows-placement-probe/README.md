@@ -35,6 +35,10 @@ placement-probe --preview    see exactly what it collects, measure nothing
 placement-probe              measure, and print a result to paste
 ```
 
+By default a result carries the machine's **shape and its timings and nothing
+else**. `--include-metadata` adds the context described below, and is worth
+reading about before you decide either way.
+
 The run states its own worst-case duration before starting. It is usually a
 second or two, and grows with the number of NUMA nodes.
 
@@ -45,24 +49,37 @@ paste -- it will render correctly without you doing anything else.
 
 ## What it collects, and what it does not
 
-**Collected:** the shape of the machine (logical processors, cores, cache
-domains, efficiency classes, NUMA nodes), the CPU model, the OS build, whether
-virtualisation was detected, and the timings it measures.
+**Always collected:** the shape of the machine (logical processors, cores, cache
+domains, efficiency classes, NUMA nodes) and the timings it measures. That is
+the measurement -- a result without it says nothing -- so it is not redactable.
 
-**Not collected:** your host name, your user name, file paths, environment
+**Collected only with `--include-metadata`:** the CPU model, the OS build,
+whether virtualisation was detected, and the minute the run finished. These
+explain a measurement without being one, so they are **withheld by default**.
+
+**Never collected:** your host name, your user name, file paths, environment
 variables, serial numbers, or anything about installed software. That list is a
 commitment, not a description of the current implementation.
 
 **It makes no network connections.** It writes a file and prints text; sending
 either is your decision and your action.
 
-`--preview` shows the values it would collect **before** measuring, so you can
-decide with the real values in front of you rather than a promise about them.
-`--no-cpu-model` withholds the processor name.
+`--preview` shows what it would collect **before** measuring, so you can decide
+with the real values in front of you rather than a promise about them. Under the
+default it shows those rows as withheld, because a field it will not send is one
+it does not read.
+
+`--no-cpu-model` withholds the processor name. It subtracts from
+`--include-metadata`, so on its own it changes nothing -- the model is already
+withheld.
+
+A withheld field is recorded as withheld rather than merely left blank, so
+somebody reading a submission can always tell "the runner did not send this"
+from "this host would not say".
 
 ### If the hardware is confidential, do not send the result
 
-`--no-cpu-model` reduces incidental leakage and nothing more. An unreleased part
+Redaction reduces incidental leakage and nothing more. An unreleased part
 is identified by its **topology** -- an unusual core count, a novel cache
 arrangement -- at least as well as by its name, and the topology is the
 measurement. No switch fixes that, and it would be dishonest to imply otherwise.

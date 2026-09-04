@@ -20,12 +20,23 @@
 //! commitment about this module, not a description of what it happens to do
 //! today.
 //!
+//! # None of it is collected unless the runner says so
+//!
+//! Every field here is *context* rather than measurement, so
+//! [`MetadataPolicy`] withholds all of it by default and
+//! [`MachineDescription::read`] does not even ask the host for a field it will
+//! not carry. The paragraph above therefore describes the shape of what an
+//! opted-in submission contains, not what a default one does.
+//!
 //! # Every field is optional, and absence is honest
 //!
 //! A host that will not answer produces a record missing a field rather than a
 //! failed run or a fabricated value. A registry key can be absent, a policy can
 //! deny a read, and a future Windows can rename something. None of those is a
 //! reason to stop measuring, and none is a reason to invent an answer.
+//!
+//! Withheld and unanswerable are kept apart wherever they can both occur, so a
+//! collector never has to guess which one an empty field means.
 
 use std::fmt;
 
@@ -33,6 +44,8 @@ use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
     HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
 };
+
+use crate::redaction::MetadataPolicy;
 
 /// Whether the machine looks virtualised.
 ///
@@ -61,6 +74,16 @@ pub enum VirtualisationHint {
     Detected,
     /// The question could not be asked -- the firmware strings were unreadable.
     Unknown,
+    /// The question was not asked, because the runner did not send this.
+    ///
+    /// **A variant rather than a flag beside the field**, unlike the optional
+    /// strings on [`MachineDescription`], and for a reason particular to this
+    /// type: every other variant here is a claim about what was observed, so a
+    /// withheld hint has no honest value to fall back to. `NotDetected` would
+    /// assert a negative finding nobody made and `Unknown` would blame the
+    /// firmware. Carrying the fact in the enum also keeps it stated once,
+    /// rather than in a variant and a boolean that could disagree.
+    Suppressed,
 }
 
 impl fmt::Display for VirtualisationHint {
@@ -69,6 +92,7 @@ impl fmt::Display for VirtualisationHint {
             Self::NotDetected => "not detected",
             Self::Detected => "detected",
             Self::Unknown => "unknown",
+            Self::Suppressed => "withheld",
         })
     }
 }
@@ -77,18 +101,33 @@ impl fmt::Display for VirtualisationHint {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachineDescription {
-    /// The processor's marketing name, or `None` when unreadable or suppressed.
+    /// The processor's marketing name, or `None` when unreadable or withheld.
     ///
     /// Suppression is recorded in [`Self::model_suppressed`] rather than left
     /// to be inferred from absence: a field withheld by the runner and a field
     /// the host would not answer are different facts, and a collector that
     /// cannot tell them apart will eventually read one as the other.
     pub cpu_model: Option<String>,
-    /// Whether the runner asked for the model to be withheld.
+    /// Whether the model was withheld rather than unreadable.
+    ///
+    /// **True by default**, because the policy is
+    /// [redacted](crate::redaction::MetadataPolicy::redacted) unless the runner
+    /// opts in. It does not distinguish "withheld by the default" from
+    /// "withheld by `--no-cpu-model`", and deliberately: the record's job is to
+    /// say the value was not sent, not to explain which switch did it.
     pub model_suppressed: bool,
-    /// The OS build, as `10.0.22631.4460` or similar.
+    /// The OS build, as `10.0.22631.4460` or similar, or `None` when unreadable
+    /// or withheld.
     pub os_build: Option<String>,
-    /// Whether the machine looks virtualised.
+    /// Whether the OS build was withheld rather than unreadable.
+    ///
+    /// Same distinction, same reason, as [`Self::model_suppressed`].
+    pub os_build_suppressed: bool,
+    /// Whether the machine looks virtualised, or was not asked about.
+    ///
+    /// Withholding is carried by
+    /// [`VirtualisationHint::Suppressed`] rather than by a flag beside this
+    /// field -- see that variant for why.
     pub virtualisation: VirtualisationHint,
     /// The firmware's system manufacturer, when it names a known hypervisor.
     ///
@@ -99,24 +138,29 @@ pub struct MachineDescription {
 }
 
 impl MachineDescription {
-    /// Read what this machine will say about itself.
+    /// Read what this machine will say about itself, as far as `policy` allows.
     ///
-    /// `suppress_model` withholds the CPU model at the runner's request. It
-    /// does not make confidential hardware safe to submit -- the topology
+    /// **A field the policy withholds is not read**, rather than read and then
+    /// dropped. The registry call never happens, so the commitment in this
+    /// module's documentation is kept by the control flow rather than by a
+    /// later discard that a refactor could lose.
+    ///
+    /// None of this makes confidential hardware safe to submit -- the topology
     /// identifies an unreleased part at least as well as its name does, and the
-    /// topology is the measurement -- so the switch reduces incidental leakage
+    /// topology is the measurement -- so redaction reduces incidental leakage
     /// and nothing more.
     #[must_use]
-    pub fn read(suppress_model: bool) -> Self {
-        let (virtualisation, virtualisation_name) = detect_virtualisation();
+    pub fn read(policy: MetadataPolicy) -> Self {
+        let (virtualisation, virtualisation_name) = if policy.includes_virtualisation() {
+            detect_virtualisation()
+        } else {
+            (VirtualisationHint::Suppressed, None)
+        };
         Self {
-            cpu_model: if suppress_model {
-                None
-            } else {
-                read_cpu_model()
-            },
-            model_suppressed: suppress_model,
-            os_build: read_os_build(),
+            cpu_model: policy.includes_cpu_model().then(read_cpu_model).flatten(),
+            model_suppressed: !policy.includes_cpu_model(),
+            os_build: policy.includes_os_build().then(read_os_build).flatten(),
+            os_build_suppressed: !policy.includes_os_build(),
             virtualisation,
             virtualisation_name,
         }

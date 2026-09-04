@@ -20,7 +20,15 @@ fn the_report_shows_the_values_the_record_carries() {
     let record = fully_populated();
     let text = render(&record);
 
-    assert!(text.contains(&record.recorded_at), "timestamp missing");
+    assert!(
+        text.contains(
+            record
+                .recorded_at
+                .as_deref()
+                .expect("the fixture carries a timestamp")
+        ),
+        "timestamp missing"
+    );
     assert!(
         text.contains(&record.schema_version.to_string()),
         "schema version missing"
@@ -64,6 +72,46 @@ fn a_withheld_model_reads_differently_from_an_unreadable_one() {
 
     assert!(withheld.contains("withheld"), "got {withheld}");
     assert!(!unreadable.contains("withheld"), "got {unreadable}");
+}
+
+#[test]
+fn a_withheld_os_build_reads_differently_from_an_unreadable_one() {
+    // The same distinction, on the field M36.2 made redactable. A report that
+    // flattened the two would undo in the text what the record keeps apart.
+    let mut withheld = fully_populated();
+    withheld.machine.os_build = None;
+    withheld.machine.os_build_suppressed = true;
+
+    let mut unreadable = fully_populated();
+    unreadable.machine.os_build = None;
+    unreadable.machine.os_build_suppressed = false;
+
+    let withheld = render(&withheld);
+    let unreadable = render(&unreadable);
+
+    assert!(withheld.contains("os build:       (withheld"), "{withheld}");
+    assert!(
+        unreadable.contains("os build:       (this host would not say)"),
+        "{unreadable}"
+    );
+}
+
+#[test]
+fn a_withheld_timestamp_says_so_rather_than_showing_a_blank() {
+    // The default record carries no timestamp, so this is what most reports
+    // will show. A bare blank would read as a rendering fault.
+    let mut redacted = fully_populated();
+    redacted.recorded_at = None;
+    redacted.recorded_at_epoch_seconds = None;
+    redacted.recorded_at_suppressed = true;
+
+    let text = render(&redacted);
+
+    assert!(text.contains("recorded:  (withheld)"), "got {text}");
+    assert!(
+        !text.contains("2026-08-31"),
+        "the withheld minute must not survive anywhere in the report: {text}"
+    );
 }
 
 #[test]

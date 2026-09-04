@@ -8,6 +8,7 @@
 //! value, which would be an assertion about whatever host ran the suite.
 
 use super::{MachineDescription, VirtualisationHint, classify_virtualisation};
+use crate::redaction::MetadataPolicy;
 
 #[test]
 fn the_default_hint_is_not_a_claim_of_bare_metal() {
@@ -31,7 +32,7 @@ fn reading_this_machine_answers_something() {
     // A smoke test with teeth: if the registry reads were wrong -- bad key
     // path, wrong value type, mishandled buffer -- every field would come back
     // empty at once, and that is what this catches.
-    let described = MachineDescription::read(false);
+    let described = MachineDescription::read(MetadataPolicy::included());
 
     assert!(
         described.cpu_model.is_some() || described.os_build.is_some(),
@@ -42,7 +43,7 @@ fn reading_this_machine_answers_something() {
 
 #[test]
 fn the_cpu_model_when_present_looks_like_a_processor_name() {
-    let described = MachineDescription::read(false);
+    let described = MachineDescription::read(MetadataPolicy::included());
 
     if let Some(model) = &described.cpu_model {
         assert!(!model.is_empty(), "an empty model must be reported as None");
@@ -73,7 +74,7 @@ fn the_os_build_reports_the_real_major_version_and_not_the_legacy_string() {
         return;
     };
 
-    let build = MachineDescription::read(false)
+    let build = MachineDescription::read(MetadataPolicy::included())
         .os_build
         .expect("a host that reports a major version must yield a build");
 
@@ -87,7 +88,7 @@ fn the_os_build_reports_the_real_major_version_and_not_the_legacy_string() {
 fn the_os_build_when_present_is_dotted_numbers() {
     // Guards the assembly in `read_os_build`, which stitches several registry
     // values together and could silently produce something like "..".
-    let described = MachineDescription::read(false);
+    let described = MachineDescription::read(MetadataPolicy::included());
 
     if let Some(build) = &described.os_build {
         let parts: Vec<&str> = build.split('.').collect();
@@ -113,7 +114,7 @@ fn the_os_build_when_present_is_dotted_numbers() {
 fn suppressing_the_model_withholds_it_and_records_that_it_was_withheld() {
     // The distinction that a bare `Option` would have lost. A collector must be
     // able to tell "the runner withheld this" from "the host would not say".
-    let suppressed = MachineDescription::read(true);
+    let suppressed = MachineDescription::read(MetadataPolicy::included().without_cpu_model());
 
     assert!(suppressed.cpu_model.is_none());
     assert!(suppressed.model_suppressed);
@@ -121,24 +122,67 @@ fn suppressing_the_model_withholds_it_and_records_that_it_was_withheld() {
 
 #[test]
 fn not_suppressing_records_that_nothing_was_withheld() {
-    let described = MachineDescription::read(false);
+    let described = MachineDescription::read(MetadataPolicy::included());
 
     assert!(
         !described.model_suppressed,
         "an unsuppressed read must not claim the model was withheld"
     );
+    assert!(
+        !described.os_build_suppressed,
+        "an unsuppressed read must not claim the os build was withheld"
+    );
+    assert_ne!(
+        described.virtualisation,
+        VirtualisationHint::Suppressed,
+        "an unsuppressed read must not claim the hint was withheld"
+    );
 }
 
 #[test]
-fn suppression_withholds_only_the_model() {
-    // Suppression is a privacy switch, not a mute button: the fields it does
-    // not cover must still be collected, or a suppressed submission would be
-    // far less useful than the runner intended.
-    let open = MachineDescription::read(false);
-    let suppressed = MachineDescription::read(true);
+fn suppressing_the_model_withholds_only_the_model() {
+    // The subtraction is a scalpel, not a mute button: the fields it does not
+    // cover must still be collected, or an opted-in submission that withheld a
+    // name would be far less useful than the runner intended.
+    let open = MachineDescription::read(MetadataPolicy::included());
+    let suppressed = MachineDescription::read(MetadataPolicy::included().without_cpu_model());
 
     assert_eq!(open.os_build, suppressed.os_build);
     assert_eq!(open.virtualisation, suppressed.virtualisation);
+    assert!(!suppressed.os_build_suppressed);
+}
+
+#[test]
+fn the_default_policy_withholds_every_secondary_field() {
+    // **The behaviour M36.2 exists for.** A run that asks for nothing must send
+    // nothing but the measurement, and must say so in every field rather than
+    // leaving a reader to infer it from a blank.
+    let described = MachineDescription::read(MetadataPolicy::default());
+
+    assert_eq!(described.cpu_model, None);
+    assert!(described.model_suppressed);
+    assert_eq!(described.os_build, None);
+    assert!(described.os_build_suppressed);
+    assert_eq!(described.virtualisation, VirtualisationHint::Suppressed);
+    assert_eq!(described.virtualisation_name, None);
+}
+
+#[test]
+fn a_withheld_hint_is_not_reported_as_a_negative_finding() {
+    // The trap this variant exists to close. `NotDetected` is the enum's
+    // default, so a withheld hint that fell back to it would tell a reader this
+    // machine had been examined and found to be bare metal -- a claim nobody
+    // made, on the field that decides whether a submission could ever have
+    // shown NUMA rows.
+    let described = MachineDescription::read(MetadataPolicy::redacted());
+
+    assert_ne!(described.virtualisation, VirtualisationHint::NotDetected);
+    assert_ne!(
+        described.virtualisation,
+        VirtualisationHint::Unknown,
+        "a withheld hint must not blame the firmware either"
+    );
+    assert_eq!(VirtualisationHint::Suppressed.to_string(), "withheld");
 }
 
 #[test]
@@ -146,7 +190,7 @@ fn a_detected_hypervisor_names_itself() {
     // A bare "detected" would ask the reader to trust the heuristic. Naming the
     // string that matched lets them judge it -- which matters, because the
     // markers include manufacturer names that also ship real hardware.
-    let described = MachineDescription::read(false);
+    let described = MachineDescription::read(MetadataPolicy::included());
 
     match described.virtualisation {
         VirtualisationHint::Detected => assert!(

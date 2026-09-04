@@ -17,8 +17,9 @@ use sink::{Sink, Stdio, emit};
 use windows_placement_probe::build_identity::BuildIdentity;
 use windows_placement_probe::core_affinity::{self, RunPlan};
 use windows_placement_probe::fingerprint::{Fingerprint, places_from_topology};
-use windows_placement_probe::machine::MachineDescription;
+use windows_placement_probe::machine::{MachineDescription, VirtualisationHint};
 use windows_placement_probe::record::SubmissionRecord;
+use windows_placement_probe::redaction::MetadataPolicy;
 use windows_placement_probe::submission::{self, DISCUSSION_URL};
 use windows_topology_sys::MachineMemoryTopology;
 
@@ -26,7 +27,15 @@ use windows_topology_sys::MachineMemoryTopology;
 struct Options {
     /// Show what would be collected, and measure nothing.
     preview: bool,
+    /// Include the secondary metadata, which is withheld by default.
+    include_metadata: bool,
     /// Withhold the CPU model.
+    ///
+    /// Kept as a separate switch rather than folded into
+    /// [`Self::include_metadata`] because it subtracts from it: a runner
+    /// willing to send an OS build and a hypervisor name may still be sitting
+    /// in front of a part whose name is not theirs to publish. Redundant on its
+    /// own, and harmless -- see [`Options::metadata_policy`].
     suppress_model: bool,
     /// Skip writing the backup file.
     no_file: bool,
@@ -39,6 +48,31 @@ struct Options {
     help: bool,
     /// Print the build identity and exit.
     version: bool,
+}
+
+impl Options {
+    /// Which secondary metadata this run will collect.
+    ///
+    /// The one place the switches become a policy, so every consumer -- the
+    /// notice, the machine read, the record -- is deciding from the same
+    /// answer rather than re-deriving it from the flags.
+    ///
+    /// `--no-cpu-model` without `--include-metadata` withholds something
+    /// already withheld. That is redundant rather than an error, and stays
+    /// harmless on purpose: a cautious runner who passes both must get the same
+    /// record as one who passes neither, not a worse one.
+    fn metadata_policy(&self) -> MetadataPolicy {
+        let policy = if self.include_metadata {
+            MetadataPolicy::included()
+        } else {
+            MetadataPolicy::redacted()
+        };
+        if self.suppress_model {
+            policy.without_cpu_model()
+        } else {
+            policy
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -82,7 +116,8 @@ fn run(out: &mut impl Sink) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let machine = MachineDescription::read(options.suppress_model);
+    let policy = options.metadata_policy();
+    let machine = MachineDescription::read(policy);
 
     // **One discovery, two derivations.** The announced plan and the recorded
     // fingerprint used to come from separate `MachineMemoryTopology::discover()` calls, so a
@@ -123,10 +158,7 @@ fn run(out: &mut impl Sink) -> ExitCode {
     // recorded. The seam stays closed; the skew it left behind is checked.
     let host = Fingerprint::from_topology(&topology);
 
-    emit(
-        out,
-        &render_collection_notice(&machine, &host, options.suppress_model),
-    );
+    emit(out, &render_collection_notice(&machine, &host, policy));
     emit(out, &render_plan(&plan));
 
     if options.preview {
@@ -172,7 +204,7 @@ fn run(out: &mut impl Sink) -> ExitCode {
     // Cannot fail: the equality was just checked above. Handled rather than
     // unwrapped anyway, because the constructor owns that invariant and a panic
     // here would discard a measurement the runner has already paid for.
-    let record = match SubmissionRecord::new(&observation, host, machine) {
+    let record = match SubmissionRecord::new(&observation, host, machine, policy) {
         Ok(record) => record,
         Err(error) => {
             out.problem(&format!("the record could not be assembled: {error}"));
@@ -200,10 +232,19 @@ fn run(out: &mut impl Sink) -> ExitCode {
 /// A person deciding whether to do this a favour should be able to decide with
 /// the real values in front of them rather than a promise about them, which is
 /// why the preview exists and why this prints what was actually read.
+///
+/// # A withheld field shows as withheld, and no value is read to show it
+///
+/// Under the default policy the secondary rows say they are withheld rather
+/// than showing what they would have contained. Reading a value only to preview
+/// something the record will not carry would contradict the module's promise
+/// that a withheld field is never read at all -- and there is nothing for the
+/// runner to judge in a value that is not being sent. The row a runner does
+/// need to judge, the topology, is always shown, because it is always sent.
 fn render_collection_notice(
     machine: &MachineDescription,
     host: &Fingerprint,
-    suppressed: bool,
+    policy: MetadataPolicy,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "== windows-placement-probe ==");
@@ -223,32 +264,47 @@ fn render_collection_notice(
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "What it collects about this machine, as read just now:"
+        "What this run will put in the record, as read just now:"
     );
     let _ = writeln!(
         out,
         "  cpu model      {}",
-        match (&machine.cpu_model, suppressed) {
+        match (&machine.cpu_model, machine.model_suppressed) {
             (Some(model), _) => model.as_str(),
-            (None, true) => "(withheld: --no-cpu-model)",
+            (None, true) => "(withheld)",
             (None, false) => "(this host would not say)",
         }
     );
     let _ = writeln!(
         out,
         "  os build       {}",
-        machine.os_build.as_deref().unwrap_or("(unknown)")
+        match (&machine.os_build, machine.os_build_suppressed) {
+            (Some(build), _) => build.as_str(),
+            (None, true) => "(withheld)",
+            (None, false) => "(this host would not say)",
+        }
+    );
+    // Parenthesised when withheld, so the column reads the same way as the two
+    // rows above it. The hint's own `Display` stays a plain word, because it is
+    // the rendering of a value rather than of this table's cell.
+    let _ = writeln!(
+        out,
+        "  virtualisation {}",
+        match (machine.virtualisation, &machine.virtualisation_name) {
+            (VirtualisationHint::Suppressed, _) => "(withheld)".to_owned(),
+            (hint, Some(name)) => format!("{hint} ({name})"),
+            (hint, None) => hint.to_string(),
+        }
     );
     let _ = writeln!(
         out,
-        "  virtualisation {}{}",
-        machine.virtualisation,
-        match &machine.virtualisation_name {
-            Some(name) => format!(" ({name})"),
-            None => String::new(),
+        "  run time       {}",
+        if policy.includes_timestamp() {
+            "the minute this run finished, in UTC"
+        } else {
+            "(withheld)"
         }
-    );
-    // **The value, not the category.** Every other row here shows what was
+    ); // **The value, not the category.** Every other row here shows what was
     // actually read, and this one named a subject instead -- while the
     // paragraph below warns that the topology identifies the part whether or
     // not the model is named. A runner asked to judge that could not see the
@@ -277,21 +333,46 @@ fn render_collection_notice(
         "software. Read the printed record before sending it -- if you are not"
     );
     let _ = writeln!(out, "happy with something in it, do not send it.");
-    if !suppressed {
-        let _ = writeln!(out);
+    let _ = writeln!(out);
+    if policy.includes_anything() {
         let _ = writeln!(
             out,
-            "Pass --no-cpu-model to withhold the model. Note that it does not make"
+            "You passed --include-metadata, so the rows above that this machine"
         );
         let _ = writeln!(
             out,
-            "confidential hardware safe to submit: the topology describes the part"
+            "would answer are being sent. Thank you -- they are what lets a result"
         );
-        let _ = writeln!(out, "whether or not it is named.");
+        let _ = writeln!(out, "be tied to an OS build or a hypervisor.");
+        if !machine.model_suppressed {
+            let _ = writeln!(out);
+            let _ = writeln!(
+                out,
+                "Pass --no-cpu-model to withhold just the model. Note that it does not"
+            );
+            let _ = writeln!(
+                out,
+                "make confidential hardware safe to submit: the topology describes the"
+            );
+            let _ = writeln!(out, "part whether or not it is named.");
+        }
+    } else {
+        let _ = writeln!(
+            out,
+            "Everything above except the topology and the timings is withheld by"
+        );
+        let _ = writeln!(
+            out,
+            "default. Pass --include-metadata to send it too: a defect that appears"
+        );
+        let _ = writeln!(
+            out,
+            "only on one OS build, or only under one hypervisor, can only be found"
+        );
+        let _ = writeln!(out, "when somebody sends that context.");
     }
     out
 }
-
 fn render_plan(plan: &RunPlan) -> String {
     let mut out = String::new();
     let _ = writeln!(out);
@@ -538,6 +619,7 @@ fn publish(temporary: &str, final_name: &str) -> std::io::Result<()> {
 fn parse_arguments() -> Result<Options, String> {
     let mut options = Options {
         preview: false,
+        include_metadata: false,
         suppress_model: false,
         no_file: false,
         version: false,
@@ -547,6 +629,7 @@ fn parse_arguments() -> Result<Options, String> {
     for argument in std::env::args().skip(1) {
         match argument.as_str() {
             "--preview" => options.preview = true,
+            "--include-metadata" => options.include_metadata = true,
             "--no-cpu-model" => options.suppress_model = true,
             "--no-file" => options.no_file = true,
             "--version" | "-V" => options.version = true,
@@ -568,11 +651,15 @@ fn help() -> String {
          \x20   placement-probe [OPTIONS]\n\
          \n\
          OPTIONS:\n\
-         \x20   --preview        Show what would be collected and measure nothing.\n\
-         \x20   --no-cpu-model   Withhold the CPU model from the record.\n\
-         \x20   --no-file        Do not write the backup copy of the record.\n\
-         \x20   -V, --version    Print this build's identity and exit.\n\
-         \x20   -h, --help       Print this message.\n\
+         \x20   --preview            Show what would be collected and measure nothing.\n\
+         \x20   --include-metadata   Also send the run time, the CPU model, the OS\n\
+         \x20                        build and the virtualisation hint, all of which\n\
+         \x20                        are withheld by default.\n\
+         \x20   --no-cpu-model       Withhold the CPU model from the record. Only\n\
+         \x20                        does anything beside --include-metadata.\n\
+         \x20   --no-file            Do not write the backup copy of the record.\n\
+         \x20   -V, --version        Print this build's identity and exit.\n\
+         \x20   -h, --help           Print this message.\n\
          \n\
          Results are collected at:\n\
          \x20   {DISCUSSION_URL}\n"

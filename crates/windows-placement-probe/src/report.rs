@@ -17,6 +17,7 @@
 
 use std::fmt::Write as _;
 
+use crate::machine::VirtualisationHint;
 use crate::record::SubmissionRecord;
 
 /// Render the report a runner sees.
@@ -40,7 +41,20 @@ fn render_header(out: &mut String, record: &SubmissionRecord) {
     let _ = writeln!(out);
     let _ = writeln!(out, "host:      {}", record.host);
     let _ = writeln!(out, "build:     {}", record.build);
-    let _ = writeln!(out, "recorded:  {}", record.recorded_at);
+    let _ = writeln!(
+        out,
+        "recorded:  {}",
+        match (&record.recorded_at, record.recorded_at_suppressed) {
+            (Some(stamp), _) => stamp.as_str(),
+            (None, true) => "(withheld)",
+            // Unreachable from `SubmissionRecord::new`, which only drops the
+            // timestamp by withholding it. Rendered rather than unwrapped
+            // because every field of the record is public, and a report that
+            // panicked on a hand-assembled record would be worse than one that
+            // says what it found.
+            (None, false) => "(unknown)",
+        }
+    );
     let _ = writeln!(out, "schema:    {}", record.schema_version);
 }
 
@@ -62,17 +76,24 @@ fn render_machine(out: &mut String, record: &SubmissionRecord) {
     let _ = writeln!(
         out,
         "os build:       {}",
-        machine.os_build.as_deref().unwrap_or("(unknown)")
+        match (&machine.os_build, machine.os_build_suppressed) {
+            (Some(build), _) => build.as_str(),
+            (None, true) => "(withheld by the runner)",
+            (None, false) => "(this host would not say)",
+        }
     );
-    let _ = write!(out, "virtualisation: {}", machine.virtualisation);
-    match &machine.virtualisation_name {
-        Some(name) => {
-            let _ = writeln!(out, " ({name})");
+    // Parenthesised when withheld, so this column reads the same way as the two
+    // rows above it. The hint's own `Display` stays a plain word, because it is
+    // the rendering of a value rather than of this table's cell.
+    let _ = writeln!(
+        out,
+        "virtualisation: {}",
+        match (machine.virtualisation, &machine.virtualisation_name) {
+            (VirtualisationHint::Suppressed, _) => "(withheld by the runner)".to_owned(),
+            (hint, Some(name)) => format!("{hint} ({name})"),
+            (hint, None) => hint.to_string(),
         }
-        None => {
-            let _ = writeln!(out);
-        }
-    }
+    );
 }
 
 fn render_placements(out: &mut String, record: &SubmissionRecord) {
