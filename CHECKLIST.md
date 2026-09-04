@@ -174,33 +174,25 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
 
 ## M35 -- Measure what the long-path opt-in actually does
 
-- [ ] **M35.1** -- **Measure whether the long-path opt-in lifts `MAX_PATH` for a *relative* path, and
-  whether it does so without changing how the path is parsed.** A probe, not a doc edit: the question
-  is about behaviour and has already produced two wrong answers from reading alone.
-  **The state of the evidence.** Microsoft's
-  [Maximum Path Length Limitation](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)
-  puts "relative paths are always limited to a total of MAX_PATH characters" inside the `\\?\`
-  **prefix** section, as a consequence of that mechanism, and its separate long-path opt-in section
-  lists `CreateFileW` among the functions with the restriction removed, excluding nothing. So the
-  documented answer is that the opt-in covers relative paths. A PR #56 review round asserted the
-  opposite; that assertion was accepted and shipped for one commit on the strength of a web search
-  returning blog posts, then reverted against the primary source.
-  **The hypothesis worth falsifying, and why documentation cannot settle it.** A plausible
-  implementation is to regularize the path and prepend `\\?\` before proceeding -- and that prefix is
-  precisely what disables `.`, `..` and forward-slash translation. If that is how it works, a relative
-  path containing any of those could resolve under `MAX_PATH` and fail over it, which no page states
-  and which callers of this crate would meet directly, since `windows-file-watcher` passes paths to
-  Win32 verbatim (`D-85`) and cannot mask the difference.
-  **What the experiment needs.** `LongPathsEnabled` is already `1` on the development host, so the
-  machine half is satisfied; what is missing is a test binary carrying `longPathAware` in its
-  manifest, which no crate here does yet. Then: build a directory tree past `MAX_PATH`, set the
-  current directory inside it, and call `CreateFileW` with relative paths that are short/long and
-  plain/`..`-bearing/forward-slashed, recording which combinations open. Run it with the manifest
-  present and absent, since the absent case is the one most consumers will actually have.
-  **Report the result where the claim lives**: `Session::subscribe`'s note currently says what
-  Microsoft documents and says plainly that this workspace has not measured it. Replace that with the
-  measurement, or with the sharp edge if one is found.
-
+- [x] **M35.1** -- **Measure whether the long-path opt-in lifts `MAX_PATH` for a *relative* path, and
+  whether it does so without changing how the path is parsed.**
+  **Done 2026-09-04, and it settles a question that had produced three wrong answers from reading.**
+  `probe-long-path-aware` and `probe-long-path-unaware` in
+  [windows-platform-probes](crates/windows-platform-probes/src/long_path.rs) are the same code
+  differing only in whether their manifest declares `longPathAware`; `build.rs` embeds it into that
+  one binary via `rustc-link-arg-bin`, so the other thirteen probes are unaffected.
+  **Result, on a host with `LongPathsEnabled=1`.** With the opt-in, a relative path of 429 characters
+  opens in every shape -- plain, containing `b\..`, and forward-slash separated. Without it, all three
+  are refused with `ERROR_PATH_NOT_FOUND` while the same shapes at 78 characters open. The targets are
+  created first, so a not-found from a file that provably exists is the length refusal.
+  **So the documented reading was right and the review finding was wrong**: the opt-in covers relative
+  paths, and `MAX_PATH` binds them only in a process that has not opted in.
+  **And the regularize-then-prefix hypothesis is falsified.** If the opt-in worked by prepending
+  `\\?\`, that prefix would disable `.`, `..` and forward-slash translation, so those shapes would
+  have failed past the ceiling while working below it. Both resolve at both lengths. The opt-in lifts
+  the length check without re-parsing, so there is no discontinuity at `MAX_PATH` for a caller of
+  `windows-file-watcher` to fall into.
+  The measurement is recorded where the claim lives, in `Session::subscribe`'s note.
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.

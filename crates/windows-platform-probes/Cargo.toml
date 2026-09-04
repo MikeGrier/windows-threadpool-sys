@@ -16,6 +16,14 @@ description = "Executable probes for the undocumented Windows behaviour this wor
 path = "src/lib.rs"
 
 [[bin]]
+name = "probe-long-path-aware"
+path = "src/bin/long_path_aware.rs"
+
+[[bin]]
+name = "probe-long-path-unaware"
+path = "src/bin/long_path_unaware.rs"
+
+[[bin]]
 name = "probe-core-affinity"
 path = "src/bin/core_affinity.rs"
 
@@ -120,6 +128,10 @@ features = [
 	"Win32_Storage_FileSystem",
 	# GetSystemDirectoryW, so the request probe measures the real system
 	# directory instead of assuming Windows is installed on C:.
+	# SetCurrentDirectoryW, for the long-path probe: the current directory is
+	# half of what a relative path resolves against, so the probe has to place
+	# it deliberately rather than inherit whatever launched it.
+	"Win32_System_Environment",
 	"Win32_System_SystemInformation",
 	"Win32_System_Diagnostics_Debug",
 	"Win32_System_IO",
