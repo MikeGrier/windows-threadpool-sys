@@ -395,6 +395,21 @@ that previously stood in the way are gone:
   that touches **only** `crates/windows-ioring-sys/`. Verified against release-please's manifest-mode
   documentation that the footer is applied **per package, by the paths the commit touches**, so it
   pins ioring without disturbing the other five bumps. Decide between that and simply accepting 0.3.0.
+
+  **Measured, because the rule had to be affordable before it could be recommended.** Nine
+  release-triggering commits on this branch span more than one *released* crate -- and only two of
+  those are the ioring case. **Seven genuinely changed both crates'' source**, so a blanket
+  "one crate per commit" rule would have forced non-compiling commits seven times to fix a problem
+  that existed twice. That is why the standing rule flags rather than blocks.
+  The measurement also **found a hole in the first version of the check**. `983afbc`
+  (`feat(guard-alloc)`) touched only *one* released crate -- ioring -- because guard-alloc is
+  `publish = false`; a "spans more than one crate" test misses it entirely, yet it is the commit that
+  actually shipped a wrong entry. The rule is therefore two-pronged: flag a commit that spans several
+  released crates, **and** one whose `(scope)` names a crate other than the one it will be attributed
+  to.
+  Enforced going forward by [tools/check-commit-scope.ps1](tools/check-commit-scope.ps1), wired into
+  the pre-commit gate in [.github/copilot-instructions.md](.github/copilot-instructions.md) so an
+  unattended session runs it rather than being expected to remember the rule.
   **The gate this used to hold over SH-2.2 is lifted** -- that item is closed, having had nothing
   left to do once the pins were deleted rather than maintained.
   **No longer carries a pin hazard.** An earlier version of this item warned that the PR must not be

@@ -155,6 +155,25 @@ edits (`tpu_replace_in_file` / `tpu_edit_file`), not only to PowerShell/shell.
   any hit is a blocking violation — move those tests into a sibling `tests.rs`
   first. See the full gate in
   [instructions/global.rust.instructions.md](instructions/global.rust.instructions.md).
+- **Release-scope pre-commit gate:** before committing anything typed `feat`, `fix`,
+  or marked `!`, run
+  `.\tools\check-commit-scope.ps1 -Staged -Type '<type>'`
+  and act on what it reports. **release-please attributes a commit to a crate by the
+  PATHS it touches, not by the `(scope)` in the subject line**, so a release-triggering
+  commit that incidentally edits a second released crate's files gives that crate a
+  changelog entry and a version bump it did not earn. Measured on this repository: nine
+  such commits on one branch, and it has already **shipped** -- `windows-ioring-sys`'
+  CHANGELOG carries two `**guard-alloc:**` entries for exactly this reason.
+  The script **flags, it does not decide**, because path data cannot separate the two
+  cases and both occur here. When the crates genuinely changed together, leave it -- the
+  bump is earned and splitting would produce a commit that does not compile. When the
+  sibling is only a **ride-along** (its example, test, or docs followed a rename), move
+  that part into its own `chore(<crate>):` commit: `chore` triggers no release, so the
+  sibling gets nothing. For a cross-crate **rename**, the three-commit form is the one
+  that keeps every commit compiling -- add the new name as an alias (`feat`, additive),
+  move the consumer (`chore`), then delete the alias (`feat!`, owning crate only).
+  Never split a genuinely coupled change merely to satisfy the check: a commit that does
+  not build is a worse defect than a changelog line that overstates a bump.
 - **Commit every file `cargo fmt` reformats, even outside your task's scope.**
   `cargo fmt` rewrites *all* files in the formatted scope, not just the ones you
   edited — so a run can clean up a pre-existing formatting drift in a file your
