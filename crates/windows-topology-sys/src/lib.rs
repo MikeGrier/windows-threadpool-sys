@@ -9,11 +9,17 @@
 //! - **[`MachineMemoryTopology::discover`]** reads the running system's processor groups,
 //!   cores, caches, and NUMA nodes safely, via
 //!   [`GetLogicalProcessorInformationEx`][gpi].
-//! - **[`MachineMemoryTopology`]**, [`Domain`], and friends are plain data. They do not
-//!   need Windows to construct: build one by hand, or (with the `serde`
+//! - **[`MachineMemoryTopology`]**, [`Domain`], and friends are plain data. They need no
+//!   Windows *API call* to construct: build one by hand, or (with the `serde`
 //!   feature) deserialize one from JSON written for a machine you do not
 //!   have. See [`examples/print_topology.rs`] for the shape a description
 //!   takes.
+//!
+//!   That is a claim about not calling the platform, **not** about other
+//!   platforms: this crate is Windows-only and does not build elsewhere. An
+//!   earlier version of these docs said it degraded to an empty shell on other
+//!   targets, which was never true and never built in CI -- raised in PR #56
+//!   review.
 //!
 //! [gpi]: https://learn.microsoft.com/windows/win32/api/sysinfoapi/nf-sysinfoapi-getlogicalprocessorinformationex
 //! [`examples/print_topology.rs`]: https://github.com/MikeGrier/windows-threadpool-sys/blob/main/crates/windows-topology-sys/examples/print_topology.rs
@@ -63,6 +69,7 @@
 #[cfg(windows)]
 mod anomaly;
 
+#[cfg(windows)]
 mod cpu_set;
 #[cfg(windows)]
 mod domain;
@@ -77,6 +84,7 @@ mod processor_set;
 /// Where a topology's content came from.
 mod provenance;
 
+#[cfg(windows)]
 mod records;
 #[cfg(windows)]
 mod relation;
@@ -87,6 +95,7 @@ mod walk;
 
 #[cfg(windows)]
 pub use anomaly::{AnomalyKind, EnumerationAnomaly};
+#[cfg(windows)]
 pub use cpu_set::CpuSet;
 #[cfg(windows)]
 pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorFacts, ProcessorId};
@@ -95,6 +104,7 @@ pub use granularity::{Granularity, Proximity};
 #[cfg(windows)]
 pub use observation::{AttributeObservation, Observation, ProcessorAttribute, Source};
 pub use observed::Observed;
+#[cfg(windows)]
 pub use processor_set::ProcessorSet;
 pub use provenance::Provenance;
 #[cfg(windows)]

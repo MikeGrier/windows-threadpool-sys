@@ -55,6 +55,7 @@ use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::System::SystemInformation::{
     CpuSetInformation, GetSystemCpuSetInformation, SYSTEM_CPU_SET_INFORMATION,
 };
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 /// One processor as the CPU-set API describes it.
 ///
@@ -157,9 +158,17 @@ mod flags {
 
 /// Enumerate the CPU sets the current process can see.
 ///
-/// A null process handle asks about the calling process. It makes **no
-/// difference to the flags** on the build this was measured against -- see
-/// [`CpuSet::allocated_to_target_process`] and D-23 in `DESIGN-NOTES.md`.
+/// The current process is named explicitly, because `Process` is **not**
+/// optional in the way a null handle suggests: Microsoft documents it as the
+/// process used to compute `AllocatedToTargetProcess`, so passing null means no
+/// allocation check is made rather than "ask about me". Raised in PR #56
+/// review, where an earlier comment here claimed the opposite.
+///
+/// It makes no difference to the flags on the build this was measured against,
+/// which read zero under a null handle, the pseudo-handle, and a real
+/// `OpenProcess` handle alike -- see [`CpuSet::allocated_to_target_process`] and
+/// D-23 in `DESIGN-NOTES.md`. Asking the documented question anyway is what
+/// makes the zero a fact about the build rather than about the call.
 ///
 /// # Errors
 ///
@@ -168,13 +177,14 @@ mod flags {
 pub(crate) fn enumerate() -> io::Result<(Vec<CpuSet>, Option<EnumerationAnomaly>)> {
     let mut length: u32 = 0;
     // SAFETY: a null buffer with a zero length and a valid out-pointer, which is
-    // the documented sizing call. A null process handle names this process.
+    // the documented sizing call. `GetCurrentProcess` is a pseudo-handle needing
+    // no close, and is the documented way to ask about this process.
     let probe = unsafe {
         GetSystemCpuSetInformation(
             std::ptr::null_mut(),
             0,
             &raw mut length,
-            std::ptr::null_mut(),
+            GetCurrentProcess(),
             0,
         )
     };
@@ -206,7 +216,7 @@ pub(crate) fn enumerate() -> io::Result<(Vec<CpuSet>, Option<EnumerationAnomaly>
             buffer.cast(),
             length,
             &raw mut actual_length,
-            std::ptr::null_mut(),
+            GetCurrentProcess(),
             0,
         )
     };

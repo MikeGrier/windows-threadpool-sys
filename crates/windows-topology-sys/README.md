@@ -2,8 +2,10 @@
 
 A refined view of the processor, cache, and memory topology Windows publishes.
 
-**Windows only.** Every item is behind `cfg(windows)`; the crate builds to an
-empty shell on other platforms.
+**Windows only.** The crate does not build on other platforms, and is not
+intended to: an earlier version of this line claimed it degraded to an empty
+shell elsewhere, which was never true and was never built in CI (raised in
+PR #56 review).
 
 ## Example
 
@@ -72,9 +74,10 @@ indistinguishable from a measured one.
 ## Scope
 
 **What this is:** safe enumeration ([`MachineMemoryTopology::discover`]), plus a plain-data
-description ([`MachineMemoryTopology`], [`Domain`]) that needs no Windows API to construct
--- build one by hand, or (with the `serde` feature) deserialize one from JSON
-written for a machine you do not have.
+description ([`MachineMemoryTopology`], [`Domain`]) that needs no Windows API *call* to
+construct -- build one by hand, or (with the `serde` feature) deserialize one
+from JSON written for a machine you do not have. (A machine you do not have,
+not a platform you are not on.)
 
 **What this is not:** a partitioning policy. It answers what the machine looks
 like, never which boundary you should shard on -- that depends on the workload,

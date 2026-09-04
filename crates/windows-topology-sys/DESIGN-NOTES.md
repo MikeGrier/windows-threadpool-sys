@@ -689,6 +689,25 @@ D-20 is a ruling about the crate's *scope*: this crate does not go below the Win
 fact only firmware reports is not one it carries at all. The field is deleted, and the capability the
 Linux comparison vindicated is knowingly given up.
 
+### Amendment (PR #56 review): the shipping call passed a null process handle
+
+The measurement above stands -- it explicitly covered a real `OpenProcess`
+handle, and `parked`, `allocated` and `real_time` do not depend on the process
+argument at all, so an all-zero `AllFlags` is a fact about the build.
+
+But the review found that `cpu_set::enumerate` itself passed **null** for
+`Process`, under a comment claiming a null handle "names this process". That
+claim is wrong: Microsoft documents `Process` as the process used to compute
+`AllocatedToTargetProcess`, so a null handle means **no allocation check is
+made** rather than "ask about the caller". On a build that did populate the
+byte, `allocated_to_target_process` would therefore have read `false` because of
+how this crate called the API, not because of the machine -- a second, entirely
+separate reason for the same wrong answer, hiding behind the first.
+
+The call now names `GetCurrentProcess()` explicitly. That changes nothing
+observable here, which is the point: it makes the zero a fact about the build
+rather than about the call.
+
 ## D-24: one record walk, no panic, and incoherence as an observation
 
 The crate reads two variable-length record chains from Windows -- `GetLogicalProcessorInformationEx`
