@@ -856,3 +856,56 @@ absent processor is visible in `cpu_sets_only` while a fabricated one is visible
 checklist item, because the answer is that the current shape is correct and the documentation was what
 was missing. Should a consumer ever need a merged list, it belongs as a derived view built from both
 sources, not as a mutation of the walk's.
+
+## D-41: a buffer that grows between sizing and fetching is a transient, and is retried
+
+Both Win32 enumerations this crate reads -- `GetLogicalProcessorInformationEx`
+and `GetSystemCpuSetInformation` -- are two-call APIs: size with a null buffer,
+which fails with `ERROR_INSUFFICIENT_BUFFER` and reports the byte count, then
+fetch into an allocation of that size.
+
+**The machine can change between those two calls.** A processor hot-added after
+the sizing call needs more bytes than that call asked for, so the fetch fails
+with `ERROR_INSUFFICIENT_BUFFER` a *second* time. Both enumerators returned that
+error, which made a transient into a failed `discover()`.
+
+That was the opposite of how this crate treats the same class of transient one
+layer up. [D-16](#d-16) has `discover` read both sources up to
+`COHERENCE_ATTEMPTS` times precisely so that a hot-add caught between them is
+retried away, and only a difference that *survives* the retry is reported as
+`Coherence::Disagreed`. The inner read gave up on the first growth while the
+outer loop stood ready to absorb exactly that event -- and worse, the inner
+error propagated out through `collect_once()?`, so the outer retry never ran at
+all.
+
+Both enumerators now attempt the size-and-fetch pair up to `SIZING_ATTEMPTS`
+times, defined once in [records.rs](src/records.rs) beside the record-walking
+code the two already share. Any error other than `ERROR_INSUFFICIENT_BUFFER` on
+the fetch is still returned immediately: only the growth case is retried,
+because only the growth case is a fact about the machine rather than about the
+call.
+
+**Bounded, for the same reason the outer retry is.** A machine being hot-plugged
+continuously is not one this crate can describe, and looping until it settles
+would hang discovery rather than fail it. Three attempts, matching D-16's shape.
+
+**Not a silent-corruption fix.** The previous behaviour failed loudly and
+truncated nothing, so this is robustness rather than correctness: it converts an
+`ERROR_INSUFFICIENT_BUFFER` that reads like a bug in this crate into the
+successful read it almost always would have been on a second pass.
+
+### Why there is a `const` assertion and not a test
+
+The race needs a hot-add to occur inside a two-call window, which no test here
+can provoke; a test that merely called `enumerate()` would exercise the
+first-attempt path and prove nothing about the loop. What *can* be checked is
+the constant: at `1` the loop sizes, fetches and gives up on the first growth,
+which is exactly the behaviour this decision replaces, while every call site
+still reads correctly. So `SIZING_ATTEMPTS >= 2` is asserted at compile time --
+verified in both directions, by setting it to `1` and confirming the build fails
+with that message.
+
+Raised by Copilot in the PR #56 review as "both topology enumerators mishandle
+buffer growth during hot-add", in a headline-only round. The first reading was
+that `Coherence` already covered it; it covers the *cross-source* hot-add and
+not the *within-enumerator* one, which is why the two are distinguished above.

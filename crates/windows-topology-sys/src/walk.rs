@@ -16,6 +16,10 @@
 //!   `Size` accounting, is exactly what correct use of the API requires.
 //! - The record body is a `union` discriminated by the record's
 //!   `Relationship` field, unchecked by the type system.
+//! - The buffer is sized by one call and filled by another, so the machine can
+//!   grow in between and make the second call fail for the same reason the
+//!   first did. The pair is therefore attempted more than once -- see
+//!   [`SIZING_ATTEMPTS`](crate::records::SIZING_ATTEMPTS).
 //!
 //! Everything `unsafe` in this crate is here. Every function this module
 //! exposes to the rest of the crate is safe.
@@ -42,6 +46,7 @@ use crate::observation::Source;
 use crate::records::{Record as RawRecord, RecordWalk};
 use std::io;
 
+use crate::records::SIZING_ATTEMPTS;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::System::SystemInformation::{
     CACHE_RELATIONSHIP, CacheData, CacheInstruction, CacheTrace, CacheUnified, GROUP_AFFINITY,
@@ -126,46 +131,58 @@ pub(crate) enum Record {
 ///
 /// Returns any error from `GetLogicalProcessorInformationEx`.
 pub(crate) fn enumerate() -> io::Result<(Vec<Record>, Vec<EnumerationAnomaly>)> {
-    let mut length: u32 = 0;
-    // SAFETY: a null buffer and a valid `length` out-pointer. Documented to
-    // fail with `ERROR_INSUFFICIENT_BUFFER` and report the required size in
-    // `length`, writing nothing through the null buffer pointer.
-    let probe = unsafe {
-        GetLogicalProcessorInformationEx(RelationAll, std::ptr::null_mut(), &raw mut length)
-    };
-    if probe != 0 {
-        // Documented to fail on the sizing call; succeeding would mean zero
-        // bytes were needed, i.e. nothing to report.
-        return Ok((Vec::new(), Vec::new()));
-    }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
-        return Err(error);
+    // **Sized and fetched in a bounded loop**, because the machine can change
+    // between the two calls -- see `SIZING_ATTEMPTS` for why a second
+    // `ERROR_INSUFFICIENT_BUFFER` is retried rather than returned.
+    let mut grew = None;
+    for _ in 0..SIZING_ATTEMPTS {
+        let mut length: u32 = 0;
+        // SAFETY: a null buffer and a valid `length` out-pointer. Documented to
+        // fail with `ERROR_INSUFFICIENT_BUFFER` and report the required size in
+        // `length`, writing nothing through the null buffer pointer.
+        let probe = unsafe {
+            GetLogicalProcessorInformationEx(RelationAll, std::ptr::null_mut(), &raw mut length)
+        };
+        if probe != 0 {
+            // Documented to fail on the sizing call; succeeding would mean zero
+            // bytes were needed, i.e. nothing to report.
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
+            return Err(error);
+        }
+
+        // `u64`-backed storage guarantees 8-byte alignment for every record's
+        // header and for the `usize`-sized fields inside its trailing arrays,
+        // regardless of what a `Vec<u8>` allocation would have happened to give.
+        let mut storage = vec![0_u64; length.div_ceil(8) as usize];
+        let buffer = storage.as_mut_ptr().cast::<u8>();
+        let mut actual_length = length;
+        // SAFETY: `buffer` points to `storage`, whose byte length is at least
+        // `length` (the value the sizing call just reported) and 8-byte aligned;
+        // `actual_length` is a valid in/out length pointer.
+        let ok = unsafe {
+            GetLogicalProcessorInformationEx(RelationAll, buffer.cast(), &raw mut actual_length)
+        };
+        if ok != 0 {
+            // SAFETY: `buffer` now holds `actual_length` bytes written by the
+            // call above: zero or more consecutive
+            // `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` records whose `Size`
+            // fields sum to `actual_length`, per the API's own contract.
+            return Ok(unsafe { decode(buffer.cast_const(), actual_length) });
+        }
+
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
+            return Err(error);
+        }
+        // The machine grew between the sizing call and this one. Size again.
+        grew = Some(error);
     }
 
-    // `u64`-backed storage guarantees 8-byte alignment for every record's
-    // header and for the `usize`-sized fields inside its trailing arrays,
-    // regardless of what a `Vec<u8>` allocation would have happened to give.
-    let mut storage = vec![0_u64; length.div_ceil(8) as usize];
-    let buffer = storage.as_mut_ptr().cast::<u8>();
-    let mut actual_length = length;
-    // SAFETY: `buffer` points to `storage`, whose byte length is at least
-    // `length` (the value the sizing call just reported) and 8-byte aligned;
-    // `actual_length` is a valid in/out length pointer.
-    let ok = unsafe {
-        GetLogicalProcessorInformationEx(RelationAll, buffer.cast(), &raw mut actual_length)
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    // SAFETY: `buffer` now holds `actual_length` bytes written by the call
-    // above: zero or more consecutive `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX`
-    // records whose `Size` fields sum to `actual_length`, per the API's own
-    // contract.
-    Ok(unsafe { decode(buffer.cast_const(), actual_length) })
+    Err(grew.expect("SIZING_ATTEMPTS is a non-zero constant, so the loop ran at least once"))
 }
-
 const RELATIONSHIP_OFFSET: usize =
     core::mem::offset_of!(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Relationship);
 const SIZE_OFFSET: usize = core::mem::offset_of!(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Size);

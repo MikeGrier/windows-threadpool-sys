@@ -12,7 +12,10 @@
 //! the same reasons:
 //!
 //! - Size first with a null buffer, which fails with `ERROR_INSUFFICIENT_BUFFER`
-//!   and reports the byte count.
+//!   and reports the byte count. **The pair is attempted more than once**: the
+//!   machine can grow between the sizing call and the fetch, and a hot-add there
+//!   makes the fetch fail the same way. See
+//!   [`SIZING_ATTEMPTS`](crate::records::SIZING_ATTEMPTS).
 //! - Records are **variable length**: advance by each record's own `Size` field,
 //!   never by `size_of::<SYSTEM_CPU_SET_INFORMATION>()`. The struct's declared
 //!   size describes today's `CpuSetInformation` record, and a future type may be
@@ -51,6 +54,7 @@ use crate::observation::Source;
 use crate::records::RecordWalk;
 use std::io;
 
+use crate::records::SIZING_ATTEMPTS;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::System::SystemInformation::{
     CpuSetInformation, GetSystemCpuSetInformation, SYSTEM_CPU_SET_INFORMATION,
@@ -175,61 +179,73 @@ mod flags {
 /// Returns any error from `GetSystemCpuSetInformation` other than the expected
 /// sizing failure.
 pub(crate) fn enumerate() -> io::Result<(Vec<CpuSet>, Option<EnumerationAnomaly>)> {
-    let mut length: u32 = 0;
-    // SAFETY: a null buffer with a zero length and a valid out-pointer, which is
-    // the documented sizing call. `GetCurrentProcess` is a pseudo-handle needing
-    // no close, and is the documented way to ask about this process.
-    let probe = unsafe {
-        GetSystemCpuSetInformation(
-            std::ptr::null_mut(),
-            0,
-            &raw mut length,
-            GetCurrentProcess(),
-            0,
-        )
-    };
-    if probe != 0 {
-        // Succeeding on the sizing call would mean zero bytes were needed, so
-        // there is nothing to report.
-        return Ok((Vec::new(), None));
-    }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
-        return Err(error);
-    }
-    if length == 0 {
-        return Ok((Vec::new(), None));
+    // **Sized and fetched in a bounded loop**, because the machine can change
+    // between the two calls -- see `SIZING_ATTEMPTS` for why a second
+    // `ERROR_INSUFFICIENT_BUFFER` is retried rather than returned.
+    let mut grew = None;
+    for _ in 0..SIZING_ATTEMPTS {
+        let mut length: u32 = 0;
+        // SAFETY: a null buffer with a zero length and a valid out-pointer, which
+        // is the documented sizing call. `GetCurrentProcess` is a pseudo-handle
+        // needing no close, and is the documented way to ask about this process.
+        let probe = unsafe {
+            GetSystemCpuSetInformation(
+                std::ptr::null_mut(),
+                0,
+                &raw mut length,
+                GetCurrentProcess(),
+                0,
+            )
+        };
+        if probe != 0 {
+            // Succeeding on the sizing call would mean zero bytes were needed, so
+            // there is nothing to report.
+            return Ok((Vec::new(), None));
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
+            return Err(error);
+        }
+        if length == 0 {
+            return Ok((Vec::new(), None));
+        }
+
+        // `u64`-backed storage for the same reason the relationship walk uses it:
+        // it guarantees 8-byte alignment for every record header regardless of what
+        // a `Vec<u8>` allocation would have happened to provide. `AllocationTag` is
+        // 8-byte-sized, so this is not merely tidiness.
+        let mut storage = vec![0_u64; (length as usize).div_ceil(8)];
+        let buffer = storage.as_mut_ptr().cast::<u8>();
+        let mut actual_length = length;
+        // SAFETY: `buffer` points to `storage`, whose byte length is at least
+        // `length` (the size the probe just reported) and is 8-byte aligned;
+        // `actual_length` is a valid in/out length pointer.
+        let ok = unsafe {
+            GetSystemCpuSetInformation(
+                buffer.cast(),
+                length,
+                &raw mut actual_length,
+                GetCurrentProcess(),
+                0,
+            )
+        };
+        if ok != 0 {
+            // SAFETY: `buffer` holds `actual_length` bytes written by the call
+            // above: consecutive `SYSTEM_CPU_SET_INFORMATION` records whose `Size`
+            // fields sum to `actual_length`, per the API's contract.
+            return Ok(unsafe { decode(buffer.cast_const(), actual_length) });
+        }
+
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
+            return Err(error);
+        }
+        // The machine grew between the sizing call and this one. Size again.
+        grew = Some(error);
     }
 
-    // `u64`-backed storage for the same reason the relationship walk uses it:
-    // it guarantees 8-byte alignment for every record header regardless of what
-    // a `Vec<u8>` allocation would have happened to provide. `AllocationTag` is
-    // 8-byte-sized, so this is not merely tidiness.
-    let mut storage = vec![0_u64; (length as usize).div_ceil(8)];
-    let buffer = storage.as_mut_ptr().cast::<u8>();
-    let mut actual_length = length;
-    // SAFETY: `buffer` points to `storage`, whose byte length is at least
-    // `length` (the size the probe just reported) and is 8-byte aligned;
-    // `actual_length` is a valid in/out length pointer.
-    let ok = unsafe {
-        GetSystemCpuSetInformation(
-            buffer.cast(),
-            length,
-            &raw mut actual_length,
-            GetCurrentProcess(),
-            0,
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    // SAFETY: `buffer` holds `actual_length` bytes written by the call above:
-    // consecutive `SYSTEM_CPU_SET_INFORMATION` records whose `Size` fields sum
-    // to `actual_length`, per the API's contract.
-    Ok(unsafe { decode(buffer.cast_const(), actual_length) })
+    Err(grew.expect("SIZING_ATTEMPTS is a non-zero constant, so the loop ran at least once"))
 }
-
 const SIZE_OFFSET: usize = core::mem::offset_of!(SYSTEM_CPU_SET_INFORMATION, Size);
 const TYPE_OFFSET: usize = core::mem::offset_of!(SYSTEM_CPU_SET_INFORMATION, Type);
 const UNION_OFFSET: usize = core::mem::offset_of!(SYSTEM_CPU_SET_INFORMATION, Anonymous);

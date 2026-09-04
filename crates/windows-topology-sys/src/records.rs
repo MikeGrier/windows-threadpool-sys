@@ -27,6 +27,38 @@
 use crate::EnumerationAnomaly;
 use crate::observation::Source;
 
+/// How many times a size-then-fetch pair is attempted when the buffer grows
+/// between the two calls.
+///
+/// **Both enumerations size with a null buffer and then fetch into an
+/// allocation of the size they were told.** The machine can change in between:
+/// a processor hot-added after the sizing call needs more bytes than that call
+/// asked for, and the fetch then fails with `ERROR_INSUFFICIENT_BUFFER` a
+/// *second* time.
+///
+/// Treating that as a hard failure would turn a transient into a failed
+/// discovery, which is the opposite of how
+/// [`MachineMemoryTopology::discover`](crate::MachineMemoryTopology::discover)
+/// handles the same class of transient one layer up: per
+/// [D-16](../DESIGN-NOTES.md#d-16) it retries a bounded number of times and
+/// then represents whatever survives. This is that discipline applied to the
+/// read itself, so the outer retry is reached rather than pre-empted by an
+/// error from the inner one.
+///
+/// **Bounded, for the same reason the outer retry is.** A machine being
+/// hot-plugged continuously is not a machine this crate can describe, and
+/// looping until it settles would hang discovery instead of failing it.
+pub(crate) const SIZING_ATTEMPTS: u32 = 3;
+
+// A single attempt is no retry at all -- it would size, fetch, and give up on
+// the first growth, which is the behaviour this constant exists to replace.
+// Asserted at compile time because the loops below read correctly either way
+// and a `1` here would silently restore the old behaviour.
+const _: () = assert!(
+    SIZING_ATTEMPTS >= 2,
+    "SIZING_ATTEMPTS below 2 absorbs no buffer growth at all"
+);
+
 /// One record, bounded by the `Size` it declared.
 ///
 /// Reads through this type cannot leave the record, which is what keeps a
