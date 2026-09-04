@@ -20,6 +20,14 @@ pub enum BuildSource {
     Local,
     /// Built by this repository's CI, which is the only path that produces an
     /// artifact traceable to the commit that made it.
+    ///
+    /// **This is what the build was told about itself, not something it can
+    /// prove.** The value comes from an environment variable read at build
+    /// time, so it distinguishes an *accidental* local build from a CI one --
+    /// which is what it is for -- and does not authenticate a binary someone
+    /// else handed you. See the crate README, "Trusting the binary": the
+    /// release asset's SHA-256 digest is what ties a download to what this
+    /// repository published.
     Ci,
 }
 

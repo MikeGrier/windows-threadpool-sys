@@ -74,9 +74,35 @@ its commit and reads as official; anything else is marked `!!UNOFFICIAL!!`,
 including a build from a local working copy. The same marking appears in the
 result, so a submission always says which build produced it.
 
-That distinction is why the download is the recommended path: an artifact
-attached to a release here is traceable to the commit that built it, in a way a
-local build of byte-identical source is not.
+**That marker is self-reported, and it is not evidence about a binary you did
+not build.** The build stamp comes from two ordinary environment variables
+(`PLACEMENT_PROBE_SOURCE` and `PLACEMENT_PROBE_COMMIT`) read by `build.rs`, so
+anyone building this crate can set them and produce a binary that calls itself
+official and names any commit it likes. Nothing signs the result: these
+binaries carry no Authenticode signature and no build attestation, so
+`--version` cannot authenticate an arbitrary download.
+
+What the marker is genuinely for is catching an **accident** -- a local build
+submitted by mistake, or a result pasted from a working copy with uncommitted
+changes -- which is the common case and worth catching. It is not a defence
+against anyone who wants to misreport a build, and this document previously
+implied otherwise.
+
+**To establish that a download is what this repository published, verify it
+against the release.** GitHub records a SHA-256 digest for every release asset
+at upload time and exposes it in the release page, the API, and `gh`:
+
+```powershell
+# What you have.
+Get-FileHash .\placement-probe-x86_64.exe -Algorithm SHA256
+
+# What the release published.
+gh release view <tag> --repo MikeGrier/windows-threadpool-sys --json assets `
+  --jq '.assets[] | "\(.name)  \(.digest)"'
+```
+
+That anchors the bytes to the release, which is the traceable thing -- the
+`--version` line only repeats what the build was told about itself.
 
 ## What a result does not establish
 
