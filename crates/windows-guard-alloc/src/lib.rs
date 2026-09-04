@@ -142,9 +142,18 @@ fn seed_from_environment() -> Option<u64> {
 ///
 /// A mutation run made that concrete: the prefix arm, the truncation check, and
 /// both comparisons in the guard above all survived, and not one of them could
-/// have been reached from a test. Splitting the pure half out is what makes
-/// them reachable; the impure half that remains is a single Win32 call with no
-/// branch of its own.
+/// have been reached from a test.
+///
+/// **The split closes some of that and not all of it, and an earlier version of
+/// this note claimed otherwise.** What became reachable is what moved: the
+/// prefix arm, the radix that follows it, the empty-digits case and the overflow
+/// checks, all of which tests now drive directly. The truncation check and the
+/// two comparisons in [`seed_from_environment`] did **not** move -- they run
+/// before this function is called, so a test that calls `parse_seed` cannot
+/// reach them, and they remain unexercised. Closing those needs the
+/// `GetEnvironmentVariableW` call to be injectable, which is a larger change
+/// than this split and is not pretended to be done. Raised in the PR #56 review.
+
 fn parse_seed(digits: &[u16]) -> Option<u64> {
     const ZERO: u16 = b'0' as u16;
     const LOWER_X: u16 = b'x' as u16;
