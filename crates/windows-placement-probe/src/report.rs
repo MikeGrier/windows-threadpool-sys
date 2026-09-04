@@ -31,9 +31,15 @@ use crate::record::SubmissionRecord;
 /// with rather than being told which one this is.
 ///
 /// Deliberately its own constant rather than reusing
-/// [`submission::DISCUSSION_URL`](crate::submission::DISCUSSION_URL), which is
-/// gated behind the `serde` feature that this module is not; a test pins that
-/// the two agree about the repository so the pair cannot drift apart silently.
+/// `submission::DISCUSSION_URL`, which is gated behind the `serde` feature that
+/// this module is not; a test pins that the two agree about the repository so
+/// the pair cannot drift apart silently.
+///
+/// **That name is inline code and not an intra-doc link, for the same reason
+/// the constant exists.** A link resolves under `--all-features` and dangles
+/// under `--no-default-features`, so linking it broke the configuration this
+/// crate's manifest advertises -- while the sentence doing the linking was
+/// itself explaining that the target is gated and this module is not.
 pub const REPOSITORY_URL: &str = "https://github.com/MikeGrier/windows-threadpool-sys";
 
 /// Render the report a runner sees.
