@@ -247,8 +247,28 @@ that previously stood in the way are gone:
   by the time anyone read it, and it stated "54 commits" against a branch now **221 commits** ahead.
   Its surviving instruction is **SH-3.1.1** below, which is the part that was never done.
 
-- [ ] **SH-3.1.1** -- **Review the PR as a diff rather than as a memory of having written it, then
-  mark it ready.** 221 commits across the topology crate, the queue crate and the probes is far more
+- [x] **SH-3.1.1** -- **Review the PR as a diff rather than as a memory of having written it, then
+  mark it ready.**
+  **Done 2026-09-03 for the review and the description; the promotion is SH-3.1.2, which is the
+  engineer''s.** The item was right that nobody owned "who decides it is ready", so it is now assigned
+  rather than left implicit.
+  The description was rewritten against the diff and the title with it: both dated from 2026-08-31 at
+  54 commits, against a branch now 282, and neither mentioned the topology reshape -- the largest
+  change in the branch -- or the two new crates beside the queue crate. It now states the 17 breaking
+  changes, the four crates release-please will bump, and what ships knowingly unfinished.
+  **The review found a real out-of-bounds read** in `cpu_set::decode` (`Type` is at offset 4; the
+  guard proved four bytes; the full-struct check sat one line *after* the read), fixed in `be64f17`
+  and witnessed with a guard page -- `0xC0000005` before, clean after. A test could not have caught it:
+  the decoded output is identical either way. It also found the same defect class unguarded in
+  `walk::decode`, which is unchanged on this branch and so is queued as `M6` in
+  [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) rather than
+  folded into a merging PR. Two release-please surprises became SH-3.4.1 and SH-3.4.2.
+
+- [ ] **SH-3.1.2** -- **The engineer takes PR #56 out of draft**, after reading the diff. Assigned by
+  decision on 2026-09-03 rather than left unowned, which is the gap SH-3.1.1 named. A draft cannot be
+  merged, so this gates SH-3.4 whether or not anything else is outstanding.
+  Not blocking on SH-3.2/SH-3.3 by necessity -- those can run against an open PR -- but they were
+  deliberately left unrun at promotion time, so do not read "ready" as "gated". 221 commits across the topology crate, the queue crate and the probes is far more
   than fits in a session's recollection, and the branch contains at least one deliberate breaking
   change plus several documented reversals of earlier conclusions -- D-18 amended and then
   superseded, PT-5.3 reversed, SH-14.3 absorbed, and a crate's version scheme changed from semver to
