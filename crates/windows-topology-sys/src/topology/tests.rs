@@ -432,6 +432,62 @@ mod serde_tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "serde")]
+    fn coherence_serializes_in_the_lowercase_spelling_the_rest_of_this_crate_uses() {
+        // Every serialized name this crate emits is lowercase -- `Provenance`,
+        // `Source` and `ProcessorAttribute` carry `rename_all`, and `Domain`'s
+        // hand-written serializer writes "group", "package", "cache". This enum
+        // was derived without the attribute and spelled its variants
+        // `NotCollected` and `Disagreed`, which is not a cosmetic difference:
+        // a consumer archiving a document containing one freezes that spelling.
+        let agreed = serde_json::to_string(&Coherence::Agreed).expect("serialize");
+        let not_collected = serde_json::to_string(&Coherence::NotCollected).expect("serialize");
+        let disagreed = serde_json::to_string(&Coherence::Disagreed {
+            walk_only: vec![ProcessorId {
+                group: 0,
+                number: 1,
+            }],
+            cpu_sets_only: Vec::new(),
+            attempts: 3,
+        })
+        .expect("serialize");
+
+        assert_eq!(agreed, "\"agreed\"");
+        assert_eq!(not_collected, "\"not_collected\"");
+        assert!(
+            disagreed.starts_with("{\"disagreed\":"),
+            "the data-carrying variant must be spelled the same way: {disagreed}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn every_coherence_variant_round_trips_through_its_serialized_form() {
+        // The rename is only safe because it is applied to both halves. An
+        // attribute on `Serialize` alone would write a name `Deserialize` then
+        // refused to read, which no test of serialization alone would notice.
+        for coherence in [
+            Coherence::NotCollected,
+            Coherence::Agreed,
+            Coherence::Disagreed {
+                walk_only: vec![ProcessorId {
+                    group: 1,
+                    number: 7,
+                }],
+                cpu_sets_only: vec![ProcessorId {
+                    group: 0,
+                    number: 2,
+                }],
+                attempts: 3,
+            },
+        ] {
+            let text = serde_json::to_string(&coherence).expect("serialize");
+            let back: Coherence = serde_json::from_str(&text).expect("deserialize");
+            assert_eq!(back, coherence, "round trip changed {text}");
+        }
+    }
+
     /// A CPU-set record for one processor in group 0.
     fn cpu_set(index: u8, core: u8, node: u8, efficiency_class: u8) -> crate::cpu_set::CpuSet {
         crate::cpu_set::CpuSet {

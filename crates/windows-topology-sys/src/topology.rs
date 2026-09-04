@@ -40,8 +40,18 @@ const COHERENCE_ATTEMPTS: u32 = 3;
 /// retried: [D-17](../DESIGN-NOTES.md#d-17) establishes those are expected in
 /// the field and persistent, so re-reading cannot settle them and they are
 /// carried as separate per-source observations instead.
+///
+/// # Serialized spelling
+///
+/// `snake_case`, like [`Provenance`](crate::Provenance),
+/// [`Source`](crate::Source) and [`ProcessorAttribute`](crate::ProcessorAttribute),
+/// and like the lowercase names `Domain`'s hand-written serializer emits for
+/// [`DomainKind`](crate::DomainKind). Every serialized name this crate produces
+/// is lowercase; this one was derived without the attribute and so spelled its
+/// variants `NotCollected` and `Disagreed` until that was corrected.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum Coherence {
     /// Not collected from a running system, so the question does not arise.
     ///
