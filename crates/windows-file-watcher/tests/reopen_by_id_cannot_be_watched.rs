@@ -23,8 +23,8 @@ use std::path::Path;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_INVALID_PARAMETER, ERROR_OPERATION_ABORTED, GetLastError, HANDLE,
-    INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_INVALID_PARAMETER, ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, GetLastError,
+    HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED,
@@ -145,16 +145,27 @@ fn read_directory_changes_accepted(handle: HANDLE) -> Result<(), u32> {
         )
     };
     if ok == 0 {
-        // The call failed, so no IRP was queued and nothing is outstanding
-        // against `buffer` or `overlapped`; both may leave scope freely.
-        //
         // SAFETY: called immediately after the failing call above.
-        return Err(unsafe { GetLastError() });
+        let error = unsafe { GetLastError() };
+        // **A zero return with `ERROR_IO_PENDING` is a queued read, not a failed
+        // one**, which is exactly how the production `classify_submission`
+        // reads it: `returned != 0` *or* `ERROR_IO_PENDING` both mean
+        // `Issued::Pending`. Returning here on that error would drop `buffer`
+        // and `overlapped` with the IRP still outstanding against both -- the
+        // very use-after-free the cancel-and-wait below exists to prevent, and
+        // the one this crate has already paid for once. Raised in PR #56
+        // review.
+        //
+        // Anything else really did fail: no IRP was queued, so nothing is
+        // outstanding and both locals may leave scope freely.
+        if error != ERROR_IO_PENDING {
+            return Err(error);
+        }
     }
 
-    // A nonzero return here means the read was *queued*, so an IRP is
-    // outstanding against this frame's `overlapped` and this function's
-    // `buffer`.
+    // The read was *queued* -- by a nonzero return, or by a zero return with
+    // `ERROR_IO_PENDING` -- so an IRP is outstanding against this frame's
+    // `overlapped` and this function's `buffer`.
     //
     // SAFETY: `handle` is live and this thread issued the read above.
     unsafe { CancelIo(handle) };
