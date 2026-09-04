@@ -68,15 +68,30 @@ use crate::machine::MachineDescription;
 /// at the first release, not before".
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Seconds in a minute, which is the resolution a submitted record keeps.
+const SECONDS_PER_MINUTE: u64 = 60;
+
 /// One run's complete output.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct SubmissionRecord {
     /// Which shape this record has. See [`SCHEMA_VERSION`].
     pub schema_version: u32,
-    /// When the run finished, as an ISO-8601 UTC timestamp.
+    /// When the run finished, as an ISO-8601 UTC timestamp **floored to the
+    /// minute**.
+    ///
+    /// The seconds field is therefore always `00`, and that is deliberate
+    /// rather than an artefact. A submitted record describes someone's own
+    /// machine, and a second-precision timestamp links two submissions from one
+    /// host to each other even after every identifying field is withheld.
+    /// Nothing in the analysis needs finer: these measure a machine's shape,
+    /// not an ordering of events.
+    ///
+    /// UTC with no local offset, because an offset narrows the submitter to a
+    /// band of longitudes and buys nothing.
     pub recorded_at: String,
-    /// The same instant in seconds since the Unix epoch.
+    /// The same minute in seconds since the Unix epoch, and so always a
+    /// multiple of 60.
     ///
     /// Carried beside the formatted form because a collector should never have
     /// to parse prose to sort records, and because it survives any later change
@@ -287,11 +302,26 @@ impl SubmissionRecord {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
         let now = since_epoch.as_secs();
+        // **Floored to the minute, and the record carries only the floored
+        // value.** A submitted record is a thing someone hands over about their
+        // own machine, and a second-precision timestamp is close to a serial
+        // number: it links two submissions from one host to each other even
+        // when every other identifying field has been withheld. Nothing in the
+        // analysis needs finer than a minute -- these are measurements of a
+        // machine's shape, not of an event ordering.
+        //
+        // UTC, and no local offset anywhere, because an offset narrows the
+        // submitter to a band of longitudes for no analytical gain.
+        //
+        // `recorded_at_subsecond_millis` is unaffected: it is `serde(skip)` and
+        // exists only so two runs in one second get distinct *file names*. It
+        // never reaches the record.
+        let recorded_minute = now - (now % SECONDS_PER_MINUTE);
 
         Ok(Self {
             schema_version: SCHEMA_VERSION,
-            recorded_at: iso8601_utc(now),
-            recorded_at_epoch_seconds: now,
+            recorded_at: iso8601_utc(recorded_minute),
+            recorded_at_epoch_seconds: recorded_minute,
             recorded_at_subsecond_millis: since_epoch.subsec_millis(),
             build: BuildIdentity::current(),
             machine,

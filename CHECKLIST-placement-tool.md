@@ -653,3 +653,46 @@ actionable is identifying and therefore belongs behind the review this tool alre
   So the honest framing is unchanged rather than weakened -- if the hardware is confidential, the right
   answer remains not to send it -- but the README's list of what is collected must grow to match, per
   `PT-4.3`, and the runner must still see the real values before deciding, per `PT-4.5`.
+## M36 -- Redact the secondary metadata by default
+
+- [x] **M36.1** -- **Floor the record's timestamp to the minute, in UTC.** Done 2026-09-04. A
+  second-precision stamp links two submissions from one host to each other even after every
+  identifying field is withheld, and nothing in the analysis needs finer -- these measure a machine's
+  shape, not an ordering of events. UTC with no local offset, because an offset narrows the submitter
+  to a band of longitudes for no gain. `recorded_at_subsecond_millis` is untouched: it is
+  `serde(skip)` and exists only so two runs in one second get distinct file names.
+
+- [ ] **M36.2** -- **Redact the secondary metadata by default, with an opt-in to include it.**
+  Engineer's decision, 2026-09-04. The secondary metadata is the timestamp, the OS build, and the
+  hypervisor name/hint -- everything in `MachineDescription` and the `recorded_at*` fields that is
+  *context* rather than *measurement*. The topology is excluded from this by construction: it is the
+  measurement, and the README already says so plainly.
+  **Default flips to redacted.** `--no-cpu-model` becomes one case of a general rule rather than the
+  only switch. Decide whether the opt-in is one flag or per-field; a single `--include-metadata` is
+  the smaller surface and is the recommendation unless a per-field need appears.
+  **Suppression must stay distinguishable from absence**, which the existing `model_suppressed` flag
+  already does for the model: a field withheld by the runner and a field the host would not answer are
+  different facts, and a collector that cannot tell them apart will read one as the other. Every newly
+  redactable field needs the same treatment.
+  **No `SCHEMA_VERSION` bump**: the freeze starts at the first release and this crate has not had one.
+
+- [ ] **M36.3** -- **Say in the README what redaction costs.** There is real value in correlating
+  metadata anomalies with specific platform versions -- a defect that shows up only on one OS build,
+  or only under one hypervisor, is exactly what the secondary metadata is for. A reader choosing to
+  include it should understand they are helping, and a reader choosing not to should understand what
+  they are withholding. State the trade rather than presenting redaction as free.
+
+- [ ] **M36.4** -- **On `Coherence::Disagreed`, ask for the unredacted record privately.** The report
+  emits extra text when the topology's two sources disagreed past the retry: say that the metadata was
+  inconsistent, and ask the runner to contact the `windows-threadpool-sys` maintainers through the
+  discussions or issues boards and share an **unredacted** probe file **privately**, so the
+  inconsistency can be verified -- or the probe fixed -- and a bug logged with Windows.
+  **This is the point of the whole design.** Redaction is the default because most records do not need
+  the context; the one case where the context matters most is a disagreement, which
+  [D-17](crates/windows-topology-sys/DESIGN-NOTES.md#d-17) attributes to prerelease hardware,
+  defective firmware tables, or a feature landing in one enumeration before the other -- the
+  bug-worthy cases. So the request is made exactly there, and privately, rather than by collecting
+  everything from everyone against the possibility.
+  Depends on M36.2 (there must be something to un-redact) and on `Coherence` being reachable from
+  the record, which it is: `topology_provenance` is already carried, and `Fingerprint` is built from
+  the topology.

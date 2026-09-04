@@ -351,3 +351,32 @@ fn a_record_assembles_when_the_announced_and_measured_hosts_agree() {
 
     assert_eq!(record.host, host);
 }
+
+#[test]
+fn flooring_to_the_minute_is_what_zeroes_the_seconds_field() {
+    // A submitted record describes someone's own machine, and a
+    // second-precision timestamp is close to a serial number: it links two
+    // submissions from one host to each other even after every identifying
+    // field has been withheld. Nothing in the analysis needs finer than a
+    // minute -- these measure a machine's shape, not an ordering of events.
+    //
+    // Pins that the *flooring* does the work rather than the renderer, by
+    // showing the renderer faithfully reports a non-zero seconds field when
+    // given one. A test that only checked the floored case would still pass if
+    // someone made `iso8601_utc` truncate, which would leave
+    // `recorded_at_epoch_seconds` disagreeing with the string beside it.
+    let unaligned = 1_788_177_637; // ...:00:37Z
+    let floored = unaligned - (unaligned % 60);
+
+    assert!(
+        super::iso8601_utc(unaligned).ends_with(":37Z"),
+        "the renderer must report the seconds it is given: {}",
+        super::iso8601_utc(unaligned)
+    );
+    assert!(
+        super::iso8601_utc(floored).ends_with(":00Z"),
+        "a floored instant renders a zero seconds field: {}",
+        super::iso8601_utc(floored)
+    );
+    assert_eq!(floored % 60, 0, "and the epoch value is a whole minute");
+}
