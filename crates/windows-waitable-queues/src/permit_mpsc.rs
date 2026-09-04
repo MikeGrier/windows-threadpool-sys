@@ -64,7 +64,7 @@ use std::sync::Arc;
 use crate::CacheAligned;
 use crate::capacity::{Bounds, MAX_ADMISSIBLE_CAPACITY, validate_capacity};
 use crate::doorbell::Doorbell;
-use crate::error::{CapacityError, PushError};
+use crate::error::{CapacityError, Disconnected, PushError};
 use crate::metrics::Metrics;
 
 /// A ticket, and the slot sequence numbers compared against one.
@@ -474,7 +474,23 @@ impl<T> Reservation<T> {
     ///
     /// Cannot fail for want of room: the permit taken at `reserve` is still
     /// held, so a slot is guaranteed.
-    pub fn send(mut self, item: T) {
+    pub fn send(mut self, item: T) -> Result<(), Disconnected<T>> {
+        // **Checked, and the item comes back.** This used to publish
+        // unconditionally and return `()`, so redeeming against a departed
+        // consumer put the item into a ring nobody would ever read; it was
+        // destroyed at teardown and the caller was never told. That is a silent
+        // loss of exactly the message a reservation exists to guarantee.
+        //
+        // `reserving_mpsc::Reservation::send` has always returned
+        // `Disconnected<T>` here. This module's documentation claims only the
+        // *admission* protocol differs between the two, so the divergence was
+        // undisclosed as well as wrong. Raised in the PR #56 review.
+        if !self.shared.consumer_live.load(Ordering::Acquire) {
+            // `self` is dropped on the way out with `spent` still false, which
+            // releases the permit and the producer count -- the right outcome,
+            // because this message is never being delivered.
+            return Err(Disconnected(item));
+        }
         self.spent = true;
         let position = self.shared.tail.0.fetch_add(1, Ordering::Relaxed);
         // SAFETY: the permit taken at `reserve` is still held and this ticket
@@ -482,6 +498,7 @@ impl<T> Reservation<T> {
         unsafe {
             self.shared.publish(position, item);
         }
+        Ok(())
     }
 }
 

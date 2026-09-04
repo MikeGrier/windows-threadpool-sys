@@ -558,7 +558,9 @@ that previously stood in the way are gone:
   observable API; or keep it out of the published crate entirely and measure it from a path
   dependency. The disclosure in the module docs is honest but does not settle the semver question.
 
-- [ ] **SH-4.7** -- **Two `permit_mpsc` findings from the PR #56 review, one of which contradicts a
+- [x] **SH-4.7** -- **Two `permit_mpsc` findings from the PR #56 review, both now settled. The
+  contract half was fixed on 2026-09-04: `Reservation::send` returns `Disconnected<T>` instead of
+  publishing into a ring nobody will read. Originally: one of which contradicts a
   prior review.** Both are in the experimental module, so neither blocks the release, and both should
   be settled before `SH-15.6` decides the module''s fate.
   **Contract:** `Reservation::send` publishes unconditionally even when the consumer is already

@@ -182,7 +182,7 @@ fn a_reservation_delivers_even_when_the_queue_is_otherwise_full() {
     }
     assert!(tx.push(99).is_err());
     // Reserved is guaranteed: this cannot fail.
-    reservation.send(42);
+    reservation.send(42).expect("the consumer is still here");
     assert_eq!(rx.len(), 4);
     for value in 0..3 {
         assert_eq!(rx.pop(), Some(value));
@@ -216,7 +216,7 @@ fn an_outstanding_reservation_does_not_block_the_consumer() {
     assert_eq!(rx.pop(), Some(1));
     assert_eq!(rx.pop(), Some(2));
     assert_eq!(rx.pop(), None);
-    reservation.send(3);
+    reservation.send(3).expect("the consumer is still here");
     assert_eq!(rx.pop(), Some(3));
 }
 
@@ -226,7 +226,9 @@ fn every_reservation_the_capacity_allows_can_be_taken_at_once() {
     let reservations: Vec<_> = (0..4).map(|_| tx.reserve().expect("room")).collect();
     assert!(tx.push(99).is_err(), "every slot is spoken for");
     for (value, reservation) in reservations.into_iter().enumerate() {
-        reservation.send(value as u32);
+        reservation
+            .send(value as u32)
+            .expect("the consumer is still here");
     }
     for value in 0..4 {
         assert_eq!(rx.pop(), Some(value));
@@ -382,8 +384,44 @@ fn a_producer_and_a_reservation_contend_for_the_same_room_without_overdrawing() 
         let claims = usize::from(reserved.is_some()) + usize::from(pushed);
         assert!(claims <= 1, "both claimants took the same single slot");
         if let Some(reservation) = reserved {
-            reservation.send(2);
+            reservation.send(2).expect("the consumer is still here");
         }
         drop(rx);
     }
+}
+
+#[test]
+fn redeeming_against_a_departed_consumer_hands_the_item_back() {
+    // The whole point of a reservation is that the message it stands for is
+    // not lost. This used to publish into a ring nobody would ever read: the
+    // item was destroyed at teardown and the caller was never told, which is a
+    // silent loss of exactly the message the reservation guaranteed.
+    //
+    // `reserving_mpsc::Reservation::send` has always answered `Disconnected`
+    // here, and this module claims only the *admission* protocol differs, so
+    // the divergence was undisclosed as well as wrong. Raised in the PR #56
+    // review.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let reservation = tx.reserve().expect("an empty queue has room");
+    drop(rx);
+
+    let returned = reservation
+        .send(7)
+        .expect_err("a departed consumer must not swallow the item");
+    assert_eq!(returned.0, 7, "the item itself must come back, not a copy");
+}
+
+#[test]
+fn a_refused_redemption_gives_the_room_back() {
+    // The complement, so the refusal cannot be bought by leaking the slot the
+    // reservation was holding: the permit must return to the pool exactly as
+    // it does when a reservation is simply dropped.
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    let reservation = tx.reserve().expect("an empty queue has room");
+    drop(rx);
+    let _ = reservation.send(7);
+
+    // Both slots are free again, so both may be reserved.
+    assert!(tx.reserve().is_ok(), "the refused slot must be reusable");
+    assert!(tx.reserve().is_ok(), "and the queue's other slot with it");
 }
