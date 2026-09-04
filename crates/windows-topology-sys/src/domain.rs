@@ -618,7 +618,7 @@ mod serde_impl {
 
 /// Everything this crate knows about one processor, with each absence named.
 ///
-/// Produced by [`MachineMemoryTopology::shard_set`]. Deliberately **not** a
+/// Produced by [`MachineMemoryTopology::shard_set`](crate::MachineMemoryTopology::shard_set). Deliberately **not** a
 /// second copy of [`Processor`]: that type is the platform's own record, while
 /// this is the assembled answer to "may this processor host work, and where
 /// does it allocate from" -- gathered from both Win32 sources plus the derived
@@ -663,7 +663,7 @@ pub struct ProcessorFacts<'a> {
     ///
     /// [`Observed::NotObserved`] when the CPU-set enumeration was not
     /// consulted, which is any topology not produced by
-    /// [`MachineMemoryTopology::discover`]. Parked is **not** offline: the
+    /// [`MachineMemoryTopology::discover`](crate::MachineMemoryTopology::discover). Parked is **not** offline: the
     /// processor is active and the scheduler is merely avoiding it.
     pub parked: Observed<bool>,
     /// Whether this processor is allocated to *this* process.
@@ -678,11 +678,11 @@ pub struct ProcessorFacts<'a> {
     ///
     /// It also does not mean what its name suggests -- allocation is the
     /// explicit `SetProcessDefaultCpuSets` kind, not "may we run here". Do not
-    /// branch on it; see [`CpuSet::allocated_to_target_process`].
+    /// branch on it; see [`CpuSet::allocated_to_target_process`](crate::CpuSet::allocated_to_target_process).
     pub allocated_to_this_process: Observed<bool>,
     /// The memory domain this processor allocates from, or
     /// [`Observed::NotObserved`] for the **unplaced** case, which has no honest
-    /// fallback -- see [`MachineMemoryTopology::memory_domain_of`].
+    /// fallback -- see [`MachineMemoryTopology::memory_domain_of`](crate::MachineMemoryTopology::memory_domain_of).
     pub memory_domain: Observed<&'a Domain>,
 }
 
