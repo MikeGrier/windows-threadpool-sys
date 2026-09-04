@@ -104,3 +104,11 @@ pub use relation::{
 };
 #[cfg(windows)]
 pub use topology::MachineMemoryTopology;
+
+// The crate's markdown documentation is compiled as doctests, so an example that
+// a contract change invalidates breaks the build instead of quietly teaching the
+// old answer. `cfg(doctest)` means these items exist only while rustdoc collects
+// tests, so they cost an ordinary build nothing.
+#[cfg(all(doctest, windows))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

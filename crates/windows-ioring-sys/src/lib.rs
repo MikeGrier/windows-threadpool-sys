@@ -111,7 +111,7 @@
 //! construction is also the expensive one. "Durability on the ring" in
 //! `DESIGN-NOTES.md` has the full shape and the three ways to pay for it.
 //!
-//! # MachineMemoryTopology guidance
+//! # Topology guidance
 //!
 //! This crate does not partition anything for you (D-8 in `DESIGN-NOTES.md`):
 //! it makes a ring cheap and correct, makes its affinity explicit, and leaves
@@ -192,3 +192,11 @@ pub use ring::InjectedFailure;
 pub use ring::{Completion, IoRing, Op, RingInfo};
 #[cfg(windows)]
 pub use token::Token;
+
+// The crate's markdown documentation is compiled as doctests, so an example that
+// a contract change invalidates breaks the build instead of quietly teaching the
+// old answer. `cfg(doctest)` means these items exist only while rustdoc collects
+// tests, so they cost an ordinary build nothing.
+#[cfg(all(doctest, windows))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
