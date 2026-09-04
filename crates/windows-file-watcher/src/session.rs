@@ -71,24 +71,25 @@ impl Session {
     /// prepend `\\?\` on a caller's behalf -- that prefix selects a different
     /// path parsing mode in which none of those resolve.
     ///
-    /// The consequence worth knowing is about length, and it differs for the
-    /// two kinds of path:
+    /// The consequence worth knowing: a path longer than `MAX_PATH` opens only
+    /// by one of two escapes, and **only the first is available to a relative
+    /// path**.
     ///
-    /// - **Absolute.** A path longer than `MAX_PATH` opens if **your**
-    ///   application declares `longPathAware` in its manifest *and* the machine
-    ///   has `LongPathsEnabled` set, or if you pass an already-`\\?\`-prefixed
-    ///   path, which is forwarded unchanged.
-    /// - **Relative.** Neither escape applies. A relative path is always
-    ///   limited to `MAX_PATH` in total, because the `\\?\` prefix cannot be
-    ///   used with one -- the prefix means "do not resolve this", and a
-    ///   relative path exists to be resolved against the current directory.
-    ///   Opting into long paths does not lift that, so an overlong relative
-    ///   path fails to open however the machine and manifest are configured.
-    ///   Make it absolute if it may exceed `MAX_PATH`.
+    /// - **Long-path opt-in -- works for relative and absolute alike.** If
+    ///   **your** application declares `longPathAware` in its manifest *and*
+    ///   the machine has `LongPathsEnabled` set, `CreateFileW` is one of the
+    ///   functions Windows lists as no longer carrying a `MAX_PATH`
+    ///   restriction, and that is a property of the call rather than of the
+    ///   shape of the path.
+    /// - **The `\\?\` prefix -- absolute only.** Windows states that a
+    ///   relative path is limited to `MAX_PATH` *because the prefix cannot be
+    ///   applied to one*: the prefix means "pass this through with minimal
+    ///   modification", so there is nothing left to resolve it against. That
+    ///   limit is a consequence of the prefix route, not a separate ceiling
+    ///   the opt-in leaves standing.
     ///
-    /// An earlier version of this note gave the two escapes without that
-    /// distinction, which invited the reading that the manifest setting is
-    /// enough for any path. Raised in the PR #56 review.
+    /// So a long relative path is fine in a long-path-aware process, and has
+    /// no escape at all in one that has not opted in.
     ///
     /// # Errors
     ///
