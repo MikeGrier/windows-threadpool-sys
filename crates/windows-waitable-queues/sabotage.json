@@ -298,10 +298,10 @@
       "expect": "caught",
       "why": "The sequence protocol's whole arithmetic in one line. A slot freed at `pos + capacity - 1` is never equal to the position that next claims it, so every producer reads a negative difference and reports Full for ever: the queue works for exactly one lap and then wedges. An off-by-one here is invisible to any test that never wraps, which is why the wrap tests run a thousand rounds through four slots.",
       "find": [
-        "            position.wrapping_add(self.shared.capacity),"
+        "            position.wrapping_add(self.shared.capacity as Position),"
       ],
       "replace": [
-        "            position.wrapping_add(self.shared.capacity - 1),"
+        "            position.wrapping_add(self.shared.capacity as Position - 1),"
       ]
     },
     {
@@ -324,13 +324,13 @@
       "find": [
         "const BOUNDS: Bounds = Bounds {",
         "    min: 2,",
-        "    max: WRAPPING_MAX_CAPACITY,",
+        "    max: MAX_ADMISSIBLE_CAPACITY,",
         "};"
       ],
       "replace": [
         "const BOUNDS: Bounds = Bounds {",
         "    min: 1,",
-        "    max: WRAPPING_MAX_CAPACITY,",
+        "    max: MAX_ADMISSIBLE_CAPACITY,",
         "};"
       ]
     },
@@ -354,12 +354,19 @@
       "why": "A reservation handed out over a full queue is a promise that cannot be kept, which is worse than a refusal: the caller has already been told it may proceed. Reserve is the CHEAP place to fail -- no work has started -- and removing the check moves that failure to the one place the design exists to keep it away from.",
       "find": [
         "            if !self.shared.has_room_beyond_reservations(position, reserved) {",
+        "                // Provisional for the reason `push`'s matching check is: a",
+        "                // stale `word` and a freshly-read `head` need not describe the",
+        "                // same instant, and once `head` passes a stale `position` the",
+        "                // subtraction wraps and an empty queue refuses a reservation.",
+        "                let current = self.shared.claim.0.load(Ordering::Relaxed);",
+        "                if current != word {",
+        "                    word = current;",
+        "                    continue;",
+        "                }",
         "                return None;",
         "            }"
       ],
-      "replace": [
-        ""
-      ]
+      "replace": []
     },
     {
       "name": "reserving_mpsc: redeeming does not release the reservation",

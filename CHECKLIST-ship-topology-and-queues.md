@@ -299,10 +299,28 @@ that previously stood in the way are gone:
   and the in-scope test suites including doctests. Release-mode warnings differ from debug ones, which
   is why the milestone discipline names both.
 
-- [ ] **SH-3.3** -- Run the `windows-waitable-queues` sabotage sweep on a clean tree and confirm every
+- [x] **SH-3.3** -- Run the `windows-waitable-queues` sabotage sweep on a clean tree and confirm every
   entry still behaves as declared. It is the crate about to become public and the sweep is what has
   caught its real defects -- including a lost wakeup that only surfaced because a *baseline* run hung
   once in an otherwise green suite.
+  **Done 2026-09-03: 39 of 39 behave as declared** -- 37 caught, and the two `CONTROL` entries
+  survived as they are supposed to, which is the manifest checking itself. Baseline green, sources
+  restored, exit 0.
+  **But the first run was 36 of 39, and the three failures were the interesting part.** They were not
+  survivors: they came back `MANIFEST STALE`, meaning the patterns no longer matched and those
+  sabotages **were not run at all**. Three guards on the crate about to be published were silently
+  unverified, and a green sweep summary would never have said so -- the tool reports staleness
+  precisely because a sabotage that does not apply proves nothing.
+  **This branch''s own work caused the drift**, which is why it had to be caught here rather than
+  assumed: `slotwise_mpsc frees a slot one short of the next lap` broke when positions widened to 64
+  bits and the expression gained an `as Position` cast; `slotwise_mpsc accepts a capacity of one`
+  broke when `WRAPPING_MAX_CAPACITY` was renamed `MAX_ADMISSIBLE_CAPACITY`; and `reserving_mpsc:
+  reserve does not check for room` broke when the no-room path grew its stale-`word` retry, turning a
+  three-line block into twelve and giving `has_room_beyond_reservations` a second call site in
+  `push`. The repaired pattern anchors on the comment that is unique to `reserve`, so the two sites
+  cannot be confused.
+  Each repair was re-run individually and **caught** before the full sweep, so the fix restored the
+  check rather than merely restoring the match.
 
 - [ ] **SH-3.4** -- Merge to `main`, and confirm release-please raises a release PR proposing
   **0.2.0** for the topology crate. If it proposes 0.1.1, the breaking-change marker did not take and
