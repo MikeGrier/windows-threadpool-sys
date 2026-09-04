@@ -332,10 +332,27 @@ that previously stood in the way are gone:
 
   | Crate | From | Expect | Driven by |
   |---|---|---|---|
-  | `windows-topology-sys` | 0.1.0 | **0.2.0** | 7 breaking commits |
-  | `windows-waitable-queues` | 0.1.0 | **0.2.0** | 6 breaking commits -- but see SH-3.4.1 |
-  | `windows-file-watcher` | 0.1.3 | **0.2.0** | the reopen-by-id removal |
-  | `windows-ioring-sys` | 0.2.0 | **0.3.0** | path attribution only -- see SH-3.4.2 |
+  | `windows-topology-sys` | 0.1.0 | **0.2.0** | 9 breaking |
+  | `windows-waitable-queues` | 0.1.0 | **0.2.0** | 6 breaking -- but see SH-3.4.1 |
+  | `windows-ioring-sys` | 0.2.0 | **0.3.0** | 2 breaking by path attribution -- see SH-3.4.2 |
+  | `windows-file-watcher` | 0.1.3 | **0.2.0** | 1 breaking, the reopen-by-id removal |
+  | `windows-thread-ambient-sys` | 0.2.0 | **0.2.1** | 3 `fix:` commits scoped to other crates that changed its `src/` |
+  | `windows-file-watcher-example-test-harness` | 0.1.2 | **0.1.3** | not its own commits -- the `cargo-workspace` plugin, below |
+
+  **The other six crates get no release at all**, and that is correct rather than a gap:
+  `wtf-string`, `windows-threadpool-sys`, `windows-overlapped-io-sys`,
+  `windows-impersonation-token-sys`, `windows-file-enumeration-sys` and
+  `windows-namespace-request-sys` have only `test:`, `docs:` and `refactor:` commits since their last
+  tags. Only `feat`, `fix` and breaking changes trigger a release; the rest are changelog-only. An
+  earlier version of this item assumed any conventional commit bumps a patch, which is wrong.
+
+  **The harness bump is the `cargo-workspace` plugin, and it is verified rather than assumed.** The
+  harness has a *runtime* dependency `windows-file-watcher = "0.1.3"`, which `^0.1.3` does **not**
+  satisfy once that crate reaches 0.2.0 -- so something must rewrite it or the published manifest is
+  broken. The plugin does exactly that, as this repository''s own history shows: `8b37f9f` and
+  `5f7f6af` (both `chore: release main`) each bumped the harness *and* rewrote its
+  `windows-file-watcher` requirement in the same commit. Confirm it happened again rather than
+  trusting it; it is the one dependency edge in the workspace that a bump can actually break.
 
 - [ ] **SH-3.4.1** -- **Decide `windows-waitable-queues`' first published version before the release
   PR merges.** The crate is not on crates.io, sits at 0.1.0 in the manifest, and carries six `!`
