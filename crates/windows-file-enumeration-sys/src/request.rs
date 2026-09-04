@@ -35,21 +35,45 @@ pub const MINIMUM_BUFFER_CAPACITY: usize = 1024;
 /// to it.
 pub(crate) const RECORD_ALIGNMENT: usize = 8;
 
+/// The page size every Windows target this crate builds for uses.
+///
+/// Named rather than written as `4096` at the assertion site, and stated here
+/// because it is the unit [`DEFAULT_BUFFER_CAPACITY`] is chosen in: a buffer
+/// that is a whole number of pages has each refill begin on a page boundary.
+/// Large-page allocations are a different mechanism and are not what this
+/// buffer uses.
+const PAGE_SIZE: usize = 4096;
+
 // The relationships these capacities depend on, checked by the compiler rather
 // than by a test -- they are facts about constants, so a test could only report
 // after the fact, on a build somebody chose to run.
 //
 // A mutation run replaced `64 * 1024` with `64 + 1024`, and every test passed:
 // 1088 is still above the minimum and still a legal capacity, so nothing that
-// merely enumerates a directory can tell the difference. What it is *not* is a
-// whole number of records' worth of aligned buffer, which is the property the
-// default is chosen for.
+// merely enumerates a directory can tell the difference.
+//
+// **The first version of this guard asserted `is_power_of_two`, and its comment
+// gave the wrong reason.** It said 1088 is not "a whole number of records' worth
+// of aligned buffer" -- but 1088 is 136 * 8, so it is exactly that. The
+// assertion killed the mutant only because 1088 happens not to be a power of
+// two, which is incidental: 2048 is a power of two, is not a whole page, and
+// would have passed the guard while regressing every refill. Raised in the
+// PR #56 review.
+//
+// Asserted below is the property actually claimed -- whole pages -- which is
+// what makes a refill land on a page boundary instead of straddling one.
 const _: () = {
     assert!(
+        DEFAULT_BUFFER_CAPACITY.is_multiple_of(PAGE_SIZE),
+        "the default is sized to whole pages; a value that is merely 'big enough' \
+         would pass every functional test while making each refill straddle a \
+         page boundary"
+    );
+    assert!(
         DEFAULT_BUFFER_CAPACITY.is_power_of_two(),
-        "the default is sized to whole pages and record alignments; a value that \
-         is merely 'big enough' would pass every functional test while making \
-         each refill straddle a boundary"
+        "kept alongside the page check because it is the stronger statement of \
+         the same intent: the default is a round size, not an arbitrary one that \
+         happens to divide by the page"
     );
     assert!(
         DEFAULT_BUFFER_CAPACITY > MINIMUM_BUFFER_CAPACITY,
