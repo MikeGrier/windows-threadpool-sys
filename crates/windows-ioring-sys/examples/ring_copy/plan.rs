@@ -130,6 +130,14 @@ pub enum RemoteNode {
     /// `label_from` answers `None` for every domain in a description, however
     /// many nodes that description describes.
     Unnamed,
+    /// The machine names its nodes, but *this domain's own* node is unknown, so
+    /// there is nothing for a candidate to be remote from.
+    ///
+    /// Distinct from [`RemoteNode::Unnamed`], which is about the machine, where
+    /// this is about one domain. Both refuse, but conflating them would hide
+    /// that a partially-named topology is a different situation from an
+    /// entirely unnamed one.
+    LocalUnknown,
 }
 
 /// A NUMA node other than `local`, for the sample's `--placement remote`
@@ -140,7 +148,31 @@ pub enum RemoteNode {
 /// node: a run that measures local placement while reporting itself as remote
 /// would show no placement effect, and the reader would conclude there is
 /// none. A refused run says less than a wrong one, and says it honestly.
+/// Whether any memory domain carries an operational node number at all.
+///
+/// The *machine-level* question, kept separate from [`remote_numa_node`]'s
+/// per-domain one. Asking the latter with `local = None` used to serve as this,
+/// and stopped working the moment an unknown local node became its own answer
+/// -- the global check then refused every run, including on a live machine.
+/// Two questions, two functions.
+#[must_use]
+pub fn names_any_numa_node(topology: &MachineMemoryTopology) -> bool {
+    topology.domains.iter().any(|domain| {
+        matches!(domain.kind, DomainKind::Memory { .. })
+            && domain.label_from(Source::RelationshipWalk).is_some()
+    })
+}
+
 pub fn remote_numa_node(topology: &MachineMemoryTopology, local: Option<u32>) -> RemoteNode {
+    // **Remoteness is a relationship, so it needs both ends.** Without a local
+    // node there is nothing for a candidate to be remote *from*: the comparison
+    // below is `Some(id) != local`, and against `None` that is true for every
+    // named node, so the first one would be returned as remote on no evidence
+    // at all. That is the same unknown-promoted-to-a-finding this function was
+    // rewritten to stop doing at the other end. Raised in the PR #56 review.
+    if local.is_none() {
+        return RemoteNode::LocalUnknown;
+    }
     let mut any_named = false;
     for domain in &topology.domains {
         if !matches!(domain.kind, DomainKind::Memory { .. }) {

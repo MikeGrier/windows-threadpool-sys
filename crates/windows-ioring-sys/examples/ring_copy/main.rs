@@ -237,21 +237,39 @@ fn main() -> io::Result<()> {
     // the topology rather than about a domain -- and because the refusal must
     // happen before the copy rather than per-chunk inside it.
     if args.remote_placement {
-        // Two separate questions, and answering only the first was a defect
-        // caught by running this rather than by reading it.
+        // Three questions, asked at the level each belongs to. Answering only
+        // the first was a defect caught by running this; then routing the first
+        // through the per-domain function was a second one, which refused every
+        // run including on a live machine.
         //
-        // `None` as the local node asks the *global* form -- is there any
-        // memory domain carrying an operational node number at all? -- because
-        // every named node differs from "no node". That detects a restored
-        // description, and nothing else: an `Other` here says the nodes are
-        // named, never that a remote one exists.
+        // Machine level: does anything name a node at all? A restored
+        // description names none, because deserialization drops the
+        // observations that carry them.
         //
-        // Whether a genuinely different node exists is per-domain, so it is
-        // asked of the plans below against their real local nodes. Skipping
-        // that left a single-node machine silently measuring local placement
-        // under `--placement remote`, which is the same substitution this
-        // whole block exists to prevent.
-        match plan::remote_numa_node(&topology, None) {
+        // Domain level: is this domain's own node known, and is there a
+        // different one? Neither can be asked of the machine, because both are
+        // relative to one domain.
+        let classified: Vec<plan::RemoteNode> = plans
+            .iter()
+            .map(|domain_plan| plan::remote_numa_node(&topology, domain_plan.local_numa_node))
+            .collect();
+        let machine_names_nodes = plan::names_any_numa_node(&topology);
+        let outcome = if !machine_names_nodes {
+            plan::RemoteNode::Unnamed
+        } else if let Some(unknown) = classified
+            .iter()
+            .find(|node| matches!(node, plan::RemoteNode::LocalUnknown))
+        {
+            *unknown
+        } else if classified
+            .iter()
+            .any(|node| matches!(node, plan::RemoteNode::Other(_)))
+        {
+            plan::RemoteNode::Other(0)
+        } else {
+            plan::RemoteNode::SameAsLocal
+        };
+        match outcome {
             plan::RemoteNode::Unnamed => {
                 report.error_line(format_args!(
                     "--placement remote needs a topology that names its NUMA nodes, and this one \
@@ -263,13 +281,19 @@ fn main() -> io::Result<()> {
                 ));
                 std::process::exit(2);
             }
+            plan::RemoteNode::LocalUnknown => {
+                report.error_line(format_args!(
+                    "--placement remote needs to know which NUMA node each domain is local to, and \
+                     this topology does not say. A node cannot be shown to be remote without one \
+                     to be remote from, so proceeding would report a remote run on no evidence. \
+                     Use --placement local, or a topology that names its nodes."
+                ));
+                std::process::exit(2);
+            }
             plan::RemoteNode::SameAsLocal | plan::RemoteNode::Other(_) => {
-                let any_remote = plans.iter().any(|domain_plan| {
-                    matches!(
-                        plan::remote_numa_node(&topology, domain_plan.local_numa_node),
-                        plan::RemoteNode::Other(_)
-                    )
-                });
+                let any_remote = classified
+                    .iter()
+                    .any(|node| matches!(node, plan::RemoteNode::Other(_)));
                 if !any_remote {
                     report.line(format_args!(
                         "note: no domain has a NUMA node other than its own, so there is nothing \
@@ -297,9 +321,9 @@ fn main() -> io::Result<()> {
                         // Both already reported above -- `Unnamed` exited, and
                         // `SameAsLocal` said that local is the only node there
                         // is. Neither may reach here as a silent substitution.
-                        plan::RemoteNode::SameAsLocal | plan::RemoteNode::Unnamed => {
-                            domain_plan.local_numa_node
-                        }
+                        plan::RemoteNode::SameAsLocal
+                        | plan::RemoteNode::Unnamed
+                        | plan::RemoteNode::LocalUnknown => domain_plan.local_numa_node,
                     }
                 } else {
                     domain_plan.local_numa_node
