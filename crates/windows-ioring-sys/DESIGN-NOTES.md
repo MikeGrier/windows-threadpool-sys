@@ -68,6 +68,7 @@ runs a continuation), this crate exposes the mechanism and documents the trade-o
 | <a id="d-43"></a>D-43 | **Fixed in M18.6: `EventDelivery` hands out a `RingScope` -- every read-only part of `IoRing` plus batch construction, and no `&mut IoRing` -- because any `&mut IoRing` permits whole-value assignment, which let safe code replace the ring and silently stop delivery.** The defect, for the record: `EventDelivery::ring` returned `&Mutex<IoRing>`. Found by [M18.1's borrow-surface audit](#borrow-surface-audit-m181) and **measured, not argued**: `*delivery.ring().lock().unwrap() = IoRing::new(64, 64)?` compiles, and a probe recorded one completion delivered before the swap and **none** after it, despite four further operations being submitted and completed on the replacement. The mechanism is that the pool's wait holds its own duplicate of the *original* ring's completion event ([D-20](#d-20)); replacing the ring drops that ring and attaches nothing to the new one, so the armed wait can never be signalled again. **This is [D-35](#d-35)'s shape at a different layer** -- there, `&mut Vec<u8>` permitted `reserve` and reassignment where only byte writes were intended, and the fix was to narrow the returned type to `&mut [u8]`. Here the returned type permits replacing the whole ring where only submitting work was intended. Note the trap in the obvious fixes: a `Deref`/`DerefMut` newtype does **not** close it, because `*guard = ...` works through `DerefMut` just as well, and neither does a `with_ring(\|ring: &mut IoRing\| ...)` closure, for the same reason. Closing it meant never letting a `&mut IoRing` escape -- `RingScope` hands out a `Batch` instead -- which changed all nine call sites including the `epoch_log` example. The refusal is now enforced by a `compile_fail` doctest, itself verified by adding a `DerefMut` impl and watching that doctest fail, which is also the empirical proof of the claim above that a `Deref` newtype would not have closed the hole. **Severity was silent correctness, not unsoundness.** No use-after-free is reachable: the old ring runs down normally, the wait's duplicate handle stays valid, and completions on the replacement are still claimable. Delivery simply stops, which is the failure mode hardest to notice. The existing rustdoc warns against calling `completion_event` on the shared ring but says nothing about replacing it. |
 | <a id="d-44"></a>D-44 | **A spike against the real kernel is a budgeted, first-class technique for every new Win32 surface this crate wraps -- not something that happens after a test fails mysteriously.** The full argument is in [Testing strategy](#testing-strategy-m185); the decision is that the budget is allocated *before* the wrapper is written. Two of the eight defects behind M15-M18 exist because a Win32 contract was assumed rather than measured: the completion event is edge-triggered ([D-19](#d-19)) and `BuildIoRingRegisterBuffers` reads its array when the operation *runs* ([D-32](#d-32)). No oracle, generator, allocator or mutation run supplies that knowledge, because each of them checks code against **our** stated contract -- and in both cases our stated contract was the thing that was wrong. What they detect is a *consequence*, and only on a path some test already walks: the guard allocator does turn D-32 into a hard `STATUS_ACCESS_VIOLATION`, measured in M17.4's calibration, but that is the crash after the mistake, not the knowledge that would have prevented it. A spike is also the only technique here that can be run *before* there is code to test. Two obligations follow, both learned the hard way and recorded in [design-sessions/spikes/README.md](design-sessions/spikes/README.md): a spike must carry a **control case**, because the first two drain-ordering spikes could not discriminate and would have returned confidently wrong answers; and it must be **kept**, as a standalone single-file program depending only on `windows-sys`, so that what it measures stays the operating system's behaviour rather than ours. |
 | <a id="d-45"></a>D-45 | **A borrow-returning method must be audited on two questions, not one: what the returned value *permits*, and how long the *borrow* lasts. `RegisteredBuffers::get` therefore takes `&mut self`.** [M18.1's audit](#borrow-surface-audit-m181) asked only the first, of all nineteen items, and the second is where [D-36](#d-36)'s fix was still open: `get` checked `kernel_writes` at the instant of the call but returned a slice living as long as the borrow, and `Batch::read_registered` takes the registration by **shared** reference -- so safe code could take the borrow while the buffer was quiet, then submit a read into that same buffer and keep reading. Measured before being believed: a probe watched the bytes change from `0x11` to `0xEE` through the live slice while a fresh `get(0)` at that same instant correctly refused with `WouldBlock`. The guard worked; the borrow outlived it. **`&mut self` costs nothing real**, because no caller needs to read a buffer during the window it is refused -- while a read is in flight the bytes are indeterminate and only become meaningful once the completion is observed, so earlier or later is always available. That is not merely an argument: all ~40 read sites in this crate's tests, examples and the epoch-log sample already read at a quiescent point, and converting them needed nothing but `mut` on a local. The concession D-36 deliberately kept (reading a buffer whose own *write* is in flight, where the kernel only reads) is given up with it, and is likewise unused. The arena pattern survives, because a [`Token`] holds a [`RegisteredUse`] rather than a borrow of the registration, so quiet neighbours stay readable while operations are outstanding. Enforced by a `compile_fail` doctest, itself verified by reverting the signature and watching it fail, and paired with a `no_run` doctest asserting the neighbour case still compiles so the guard cannot become over-constraining unnoticed. `get_mut` never had the defect: `&mut self` already conflicted with the shared borrow. |
+| <a id="d-46"></a>D-46 | **This crate's next release is pinned to `0.2.1`, because the two breaking commits attributed to it broke nothing here.** release-please attributes a commit to a crate by the **paths it touches**, not by the `(scope)` in its subject. Two `topology`-scoped breaking commits edited this crate -- `b9e0c35` touched only `examples/ring_copy/`, and `36e397d` touched the example plus **one doc-comment heading** in `src/lib.rs` (`# Topology guidance` -> `# MachineMemoryTopology guidance`). Across the whole branch **no public item signature in this crate changed**, so a 0.3.0 announcing breaking changes would send consumers looking for a migration that does not exist. The pin is a `Release-As: 0.2.1` footer, which release-please applies per package by path. **The pin is a promise, and it constrains what may land here before the release**: it is only honest while this crate's public surface stays compatible, so no breaking change may enter `windows-ioring-sys` until 0.2.1 ships. If one becomes necessary, the pin is removed rather than the break being quietly absorbed -- changing our mind about a break *after* pinning is exactly the silent understatement the pin exists to prevent. |
 
 ## Durability on the ring
 
@@ -825,3 +826,58 @@ absent. A model belongs here as an **oracle over observed sequences**
 assuming ([D-37](#d-37)): it works, and needs no SDK, but it is keyed by *image
 file name* and cargo rehashes test binaries on every meaningful rebuild -- so
 it would degrade silently to instrumenting nothing.
+
+## D-46: the next release is pinned to 0.2.1, and what that pin obliges
+
+release-please decides which crate a commit belongs to by the **paths it touches**, not by the
+`(scope)` in its subject line. Two commits scoped to `topology` and marked breaking edited files
+under `crates/windows-ioring-sys/`, so release-please counts two breaking changes *for this crate*
+and would propose **0.3.0**.
+
+What those commits actually did here:
+
+| Commit | Changed in this crate |
+|---|---|
+| `b9e0c35` `feat(topology)!: remove Domain::id ...` | `examples/ring_copy/plan.rs`, `policy.rs` |
+| `36e397d` `refactor(topology)!: rename Topology ...` | three example files, and **one line** of `src/lib.rs` |
+
+That one line is a doc-comment heading:
+
+```
+-//! # Topology guidance
++//! # MachineMemoryTopology guidance
+```
+
+They touched this crate because the `ring_copy` example *consumes* `windows-topology-sys`; renaming
+`Topology` and removing `Domain::id` forced the example to follow. The break is real, and it belongs
+to `windows-topology-sys`, which takes its own 0.2.0 for it. Across the entire branch **no public
+item signature in this crate changed** -- the only other `src/` edits are comments and one test-only
+helper.
+
+So a 0.3.0 here would announce breaking changes under a heading consumers are trained to act on, and
+send them looking for a migration that does not exist. The release is pinned instead:
+
+```
+Release-As: 0.2.1
+```
+
+applied on a commit touching only this crate's paths, which release-please evaluates per package by
+path.
+
+### The pin is a promise, and it constrains what may land here
+
+A forced version is only honest while the claim behind it holds. `0.2.1` asserts that this crate's
+public surface is compatible with `0.2.0`, so **no breaking change may enter `windows-ioring-sys`
+between this pin and the release of 0.2.1**.
+
+If a break becomes necessary before then, the answer is to **remove the pin** and let the crate take
+its minor bump -- never to let the break land underneath a version that says there isn't one.
+Changing our mind about a break *after* pinning, and absorbing it quietly, is precisely the silent
+understatement the pin was written to prevent: it would ship a compatible-looking version over an
+incompatible surface, which is worse than the overstated 0.3.0 this decision set out to avoid.
+
+The general defect this is one instance of -- a release-triggering commit that incidentally edits a
+second released crate's files -- is guarded going forward by
+[tools/check-commit-scope.ps1](../../tools/check-commit-scope.ps1), wired into the pre-commit gate.
+It has bitten this crate before: the `**guard-alloc:**` entries in [CHANGELOG.md](CHANGELOG.md) are
+there because those commits touched `tests/registration.rs`.
