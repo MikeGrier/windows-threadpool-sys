@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::io;
 
+use crate::EnumerationAnomaly;
 use crate::cpu_set::CpuSet;
 use crate::domain::{Domain, DomainKind, Processor, ProcessorFacts, ProcessorId};
 use crate::observation::{AttributeObservation, Observation, ProcessorAttribute, Source};
@@ -86,6 +87,23 @@ pub struct MachineMemoryTopology {
         )
     )]
     pub provenance: Provenance,
+    /// Records the enumeration could not decode, if any.
+    ///
+    /// **Empty on every healthy machine**, and empty for a hand-built or
+    /// deserialized topology, which asked nothing. A non-empty list means a
+    /// buffer Windows returned did not describe what it claimed to -- a
+    /// defective hypervisor, a driver corrupting memory -- and it carries the
+    /// byte offset and the reason so that is diagnosable from the data rather
+    /// than from a debugger.
+    ///
+    /// Per [D-24](../DESIGN-NOTES.md#d-24) this is *recorded* rather than
+    /// thrown: a malformed record is not evidence that this crate reached an
+    /// inconsistent state, so it must not panic, and dropping it silently would
+    /// leave a consumer unable to tell a truncated enumeration from a small
+    /// machine. Whatever decoded before the anomaly is still present in the
+    /// fields above and is still correct.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub enumeration_anomalies: Vec<EnumerationAnomaly>,
 }
 
 impl MachineMemoryTopology {
@@ -104,7 +122,8 @@ impl MachineMemoryTopology {
         // The walk's per-processor claims, recorded before the fold so both
         // sources' claims about one processor sit side by side (D-18).
         topology.record_walk_attributes();
-        let cpu_sets = crate::cpu_set::enumerate()?;
+        let (cpu_sets, cpu_set_anomaly) = crate::cpu_set::enumerate()?;
+        topology.enumeration_anomalies.extend(cpu_set_anomaly);
         // Folded into the relation set, and *also* kept verbatim. Not a
         // contradiction: D-19's unified view is presented **in addition to**
         // the individual per-source ones, so a caller wanting what CPU Sets
@@ -383,6 +402,10 @@ impl MachineMemoryTopology {
             // machine -- so if this ever gains a second caller, that caller
             // does not silently inherit an assertion it has not earned.
             provenance: Provenance::Synthetic,
+            // Carried, not re-derived: whatever the walk could not decode is a
+            // fact about the enumeration that produced these relations, and a
+            // pure transform is the wrong place to lose it.
+            enumeration_anomalies: relations.anomalies,
         }
     }
 

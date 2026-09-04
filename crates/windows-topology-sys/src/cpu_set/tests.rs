@@ -47,6 +47,13 @@ fn record(
 }
 
 fn decode_all(storage: &[u64], length: u32) -> Vec<CpuSet> {
+    decode_with_anomaly(storage, length).0
+}
+
+fn decode_with_anomaly(
+    storage: &[u64],
+    length: u32,
+) -> (Vec<CpuSet>, Option<crate::EnumerationAnomaly>) {
     // SAFETY: `storage` holds `length` initialized bytes of consecutive records.
     unsafe { decode(storage.as_ptr().cast::<u8>(), length) }
 }
@@ -172,7 +179,11 @@ fn enumerating_the_running_system_agrees_with_itself() {
     // The only test that touches the real API. It cannot assert a machine's
     // shape, so it asserts internal consistency instead: ids are unique, and
     // every record names a group and processor number that could exist.
-    let records = enumerate().expect("enumerating cpu sets on a live system");
+    let (records, anomaly) = enumerate().expect("enumerating cpu sets on a live system");
+    assert_eq!(
+        anomaly, None,
+        "a healthy machine reports no malformed record"
+    );
     assert!(
         !records.is_empty(),
         "a running Windows system reports at least one cpu set"
@@ -213,7 +224,7 @@ fn windows_llc_grouping_is_not_the_derived_partitioning_cache() {
     // does not fail on a machine with a different shape: wherever both are
     // known, Windows's LLC grouping is never finer than the derived one, since
     // the last level is at or outside whatever level first divides the machine.
-    let records = enumerate().expect("cpu sets");
+    let (records, _) = enumerate().expect("cpu sets");
     let topo = crate::MachineMemoryTopology::discover().expect("discover");
 
     let mut llc: Vec<u8> = records.iter().map(|r| r.last_level_cache_index).collect();
@@ -241,7 +252,7 @@ fn windows_llc_grouping_is_not_the_derived_partitioning_cache() {
 /// every bit reads zero.
 #[test]
 fn the_availability_flags_are_all_clear_on_this_host() {
-    let Ok(sets) = super::enumerate() else {
+    let Ok((sets, _)) = super::enumerate() else {
         return;
     };
     if sets.is_empty() {

@@ -19,7 +19,27 @@
 //!
 //! Everything `unsafe` in this crate is here. Every function this module
 //! exposes to the rest of the crate is safe.
+//!
+//! ## How the records are walked
+//!
+//! Through [`crate::records`], which both of this crate's enumerations share.
+//! Per [D-24](../DESIGN-NOTES.md#d-24) the operating system is **trusted** for
+//! the structural validity of a buffer it just wrote -- this is not a trust
+//! boundary and there is no validation pass. The walk bounds its reads because
+//! bounds are how it knows where a record ends, which is a decoding
+//! requirement rather than a defence.
+//!
+//! Two consequences a reader should not have to infer: nothing here **panics**
+//! over the shape of the buffer, because a malformed record is not evidence
+//! that this crate reached an inconsistent state; and a record that cannot be
+//! decoded is **recorded** in
+//! [`MachineMemoryTopology::enumeration_anomalies`](crate::MachineMemoryTopology::enumeration_anomalies)
+//! rather than silently dropped, so a short list is distinguishable from a
+//! small machine.
 
+use crate::EnumerationAnomaly;
+use crate::observation::Source;
+use crate::records::{Record as RawRecord, RecordWalk};
 use std::io;
 
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
@@ -105,7 +125,7 @@ pub(crate) enum Record {
 /// # Errors
 ///
 /// Returns any error from `GetLogicalProcessorInformationEx`.
-pub(crate) fn enumerate() -> io::Result<Vec<Record>> {
+pub(crate) fn enumerate() -> io::Result<(Vec<Record>, Vec<EnumerationAnomaly>)> {
     let mut length: u32 = 0;
     // SAFETY: a null buffer and a valid `length` out-pointer. Documented to
     // fail with `ERROR_INSUFFICIENT_BUFFER` and report the required size in
@@ -116,7 +136,7 @@ pub(crate) fn enumerate() -> io::Result<Vec<Record>> {
     if probe != 0 {
         // Documented to fail on the sizing call; succeeding would mean zero
         // bytes were needed, i.e. nothing to report.
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let error = io::Error::last_os_error();
     if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
@@ -152,16 +172,6 @@ const SIZE_OFFSET: usize = core::mem::offset_of!(SYSTEM_LOGICAL_PROCESSOR_INFORM
 const UNION_OFFSET: usize =
     core::mem::offset_of!(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Anonymous);
 
-/// Read a `T` from `base + offset`, without assuming alignment.
-///
-/// # Safety
-///
-/// `base + offset` must address at least `size_of::<T>()` initialized bytes.
-unsafe fn read_at<T: Copy>(base: *const u8, offset: usize) -> T {
-    // SAFETY: forwarded from the caller.
-    unsafe { base.add(offset).cast::<T>().read_unaligned() }
-}
-
 /// Read `count` consecutive `GROUP_AFFINITY` entries starting at `base`,
 /// trusting `count` rather than any type-declared array length (see the
 /// module's own documentation).
@@ -170,18 +180,24 @@ unsafe fn read_at<T: Copy>(base: *const u8, offset: usize) -> T {
 ///
 /// `base` must address at least `count` consecutive, initialized
 /// `GROUP_AFFINITY` values.
-unsafe fn read_group_affinities(base: *const u8, count: u16) -> Vec<GroupAffinity> {
-    (0..u32::from(count))
-        .map(|i| {
-            let offset = i as usize * size_of::<GROUP_AFFINITY>();
-            // SAFETY: forwarded from the caller; `i < count`.
-            let raw: GROUP_AFFINITY = unsafe { read_at(base, offset) };
-            GroupAffinity {
-                group: raw.Group,
-                mask: raw.Mask,
-            }
+unsafe fn read_group_affinities(
+    record: RawRecord,
+    at: usize,
+    count: u16,
+) -> (Vec<GroupAffinity>, bool) {
+    // SAFETY: forwarded from the caller. The read is bounded by the record's
+    // own `Size`, so a `count` larger than the record can hold yields only the
+    // entries that fit -- which is what closes the amplification this `u16`
+    // used to have over a 16-byte stride (D-24).
+    let (raw, complete) = unsafe { record.read_array::<GROUP_AFFINITY>(at, usize::from(count)) };
+    let affinities = raw
+        .into_iter()
+        .map(|entry| GroupAffinity {
+            group: entry.Group,
+            mask: entry.Mask,
         })
-        .collect()
+        .collect();
+    (affinities, complete)
 }
 
 /// As [`read_group_affinities`], for `CACHE_RELATIONSHIP`/
@@ -198,10 +214,14 @@ unsafe fn read_group_affinities(base: *const u8, count: u16) -> Vec<GroupAffinit
 ///
 /// `base` must address at least `group_count.max(1)` consecutive,
 /// initialized `GROUP_AFFINITY` values.
-unsafe fn read_legacy_group_affinities(base: *const u8, group_count: u16) -> Vec<GroupAffinity> {
+unsafe fn read_legacy_group_affinities(
+    record: RawRecord,
+    at: usize,
+    group_count: u16,
+) -> (Vec<GroupAffinity>, bool) {
     let count = group_count.max(1);
     // SAFETY: forwarded from the caller.
-    unsafe { read_group_affinities(base, count) }
+    unsafe { read_group_affinities(record, at, count) }
 }
 
 /// # Safety
@@ -210,105 +230,159 @@ unsafe fn read_legacy_group_affinities(base: *const u8, group_count: u16) -> Vec
 /// `GetLogicalProcessorInformationEx`: zero or more consecutive
 /// `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` records whose `Size` fields sum
 /// to `length`.
-unsafe fn decode(buffer: *const u8, length: u32) -> Vec<Record> {
-    let mut records = Vec::new();
-    let mut offset: usize = 0;
-    let length = length as usize;
-    while offset < length {
-        // SAFETY: `offset < length`, and the caller's contract guarantees a
-        // full record header lives at this offset.
-        let record_base = unsafe { buffer.add(offset) };
-        // SAFETY: `record_base` addresses a full record header.
-        let relationship: LOGICAL_PROCESSOR_RELATIONSHIP =
-            unsafe { read_at(record_base, RELATIONSHIP_OFFSET) };
-        // SAFETY: as above.
-        let size: u32 = unsafe { read_at(record_base, SIZE_OFFSET) };
-        assert!(
-            size > 0,
-            "GetLogicalProcessorInformationEx reported a zero-size record"
-        );
-        // SAFETY: the union starts within this record, which the caller's
-        // contract guarantees is `size` bytes of initialized data.
-        let union_base = unsafe { record_base.add(UNION_OFFSET) };
-        // SAFETY: `union_base` addresses the union body of a record whose
-        // `Relationship` field is `relationship`, and whose `Size` accounts
-        // for whatever trailing array that relationship's body declares.
-        records.push(unsafe { decode_body(relationship, union_base) });
-        offset += size as usize;
-    }
-    records
-}
+unsafe fn decode(buffer: *const u8, length: u32) -> (Vec<Record>, Vec<EnumerationAnomaly>) {
+    // The minimum is the fixed header -- `Relationship` and `Size` -- and
+    // deliberately **not** `size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>()`.
+    // That struct is 80 bytes because its union is as large as its largest arm
+    // (`GROUP_RELATIONSHIP`, 72), while a real processor-core record is 8 + 40 =
+    // 48. Using the struct size would reject every processor, cache and NUMA
+    // record on every machine. Measured, not assumed.
+    //
+    // Each body then bounds its own reads against the record's own `Size`, so
+    // a record too short for the body it claims yields no body rather than
+    // reading into its neighbour.
+    // SAFETY: forwarded from this function's own contract.
+    let mut walk = unsafe {
+        RecordWalk::new(
+            buffer,
+            length,
+            SIZE_OFFSET,
+            UNION_OFFSET,
+            Source::RelationshipWalk,
+        )
+    };
 
+    let mut records = Vec::new();
+    let mut anomalies = Vec::new();
+    for raw in &mut walk {
+        // SAFETY: the walk proved the header is within the record.
+        let Some(relationship) =
+            (unsafe { raw.read::<LOGICAL_PROCESSOR_RELATIONSHIP>(RELATIONSHIP_OFFSET) })
+        else {
+            continue;
+        };
+        // SAFETY: `raw` addresses `raw.size()` initialized bytes.
+        let (record, truncated) = unsafe { decode_body(relationship, raw) };
+        if let Some(anomaly) = truncated {
+            anomalies.push(anomaly);
+        }
+        if let Some(record) = record {
+            records.push(record);
+        }
+    }
+    anomalies.extend(walk.anomaly());
+    (records, anomalies)
+}
+/// Decode the body a record's `Relationship` field claims it holds.
+///
+/// Returns the record, plus an anomaly when a trailing array declared more
+/// entries than the record could hold. A body that does not fit at all yields
+/// `None` rather than a partial record read from a neighbour's bytes.
+///
 /// # Safety
 ///
-/// `union_base` must address the union body of a
-/// `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` record whose `Relationship`
-/// field is `relationship`, with enough trailing bytes for whatever variable
-/// array that relationship's body declares.
+/// `record` must address the bytes of its own declared `Size`, which
+/// [`RecordWalk`] establishes before yielding it.
 unsafe fn decode_body(
     relationship: LOGICAL_PROCESSOR_RELATIONSHIP,
-    union_base: *const u8,
-) -> Record {
+    record: RawRecord,
+) -> (Option<Record>, Option<EnumerationAnomaly>) {
     // windows-sys names these relationship constants in mixed case, not
     // SCREAMING_CASE; that is not this crate's naming to change.
     #[allow(non_upper_case_globals)]
     match relationship {
-        // SAFETY: forwarded from the caller.
-        RelationProcessorCore => Record::ProcessorCore(unsafe { read_processor_body(union_base) }),
-        RelationProcessorPackage => {
+        RelationProcessorCore
+        | RelationProcessorPackage
+        | RelationProcessorDie
+        | RelationProcessorModule => {
             // SAFETY: forwarded from the caller.
-            Record::ProcessorPackage(unsafe { read_processor_body(union_base) })
+            let (body, anomaly) = unsafe { read_processor_body(record) };
+            let wrap = match relationship {
+                RelationProcessorCore => Record::ProcessorCore,
+                RelationProcessorPackage => Record::ProcessorPackage,
+                RelationProcessorDie => Record::ProcessorDie,
+                _ => Record::ProcessorModule,
+            };
+            (body.map(wrap), anomaly)
         }
-        RelationProcessorDie => Record::ProcessorDie(unsafe { read_processor_body(union_base) }),
-        RelationProcessorModule => {
+        RelationCache => {
             // SAFETY: forwarded from the caller.
-            Record::ProcessorModule(unsafe { read_processor_body(union_base) })
+            let (body, anomaly) = unsafe { read_cache_body(record) };
+            (body.map(Record::Cache), anomaly)
         }
-        // SAFETY: forwarded from the caller.
-        RelationCache => Record::Cache(unsafe { read_cache_body(union_base) }),
-        // SAFETY: forwarded from the caller.
         RelationNumaNode | RelationNumaNodeEx => {
-            Record::NumaNode(unsafe { read_numa_body(union_base) })
+            // SAFETY: forwarded from the caller.
+            let (body, anomaly) = unsafe { read_numa_body(record) };
+            (body.map(Record::NumaNode), anomaly)
         }
-        // SAFETY: forwarded from the caller.
-        RelationGroup => Record::Group(unsafe { read_group_body(union_base) }),
-        other => Record::Unknown(other),
+        RelationGroup => {
+            // SAFETY: forwarded from the caller.
+            let (body, anomaly) = unsafe { read_group_body(record) };
+            (body.map(Record::Group), anomaly)
+        }
+        other => (Some(Record::Unknown(other)), None),
     }
+}
+
+/// Offset of `field` within a relationship body, from the start of the record.
+macro_rules! body {
+    ($ty:ty, $field:ident) => {
+        UNION_OFFSET + core::mem::offset_of!($ty, $field)
+    };
 }
 
 /// # Safety
 ///
-/// `base` must address a `PROCESSOR_RELATIONSHIP` whose trailing `GroupMask`
-/// array has at least `GroupCount` initialized entries.
-unsafe fn read_processor_body(base: *const u8) -> ProcessorBody {
-    // SAFETY: forwarded from the caller.
-    let flags: u8 = unsafe { read_at(base, core::mem::offset_of!(PROCESSOR_RELATIONSHIP, Flags)) };
-    // SAFETY: forwarded from the caller.
-    let efficiency_class: u8 = unsafe {
-        read_at(
-            base,
-            core::mem::offset_of!(PROCESSOR_RELATIONSHIP, EfficiencyClass),
-        )
+/// `record` must address the bytes of its own declared `Size`.
+unsafe fn read_processor_body(
+    record: RawRecord,
+) -> (Option<ProcessorBody>, Option<EnumerationAnomaly>) {
+    // SAFETY: forwarded from the caller; every read is bounded by the record.
+    let Some((flags, efficiency_class, group_count)) = (unsafe {
+        (|| {
+            Some((
+                record.read::<u8>(body!(PROCESSOR_RELATIONSHIP, Flags))?,
+                record.read::<u8>(body!(PROCESSOR_RELATIONSHIP, EfficiencyClass))?,
+                record.read::<u16>(body!(PROCESSOR_RELATIONSHIP, GroupCount))?,
+            ))
+        })()
+    }) else {
+        return (None, None);
     };
     // SAFETY: forwarded from the caller.
-    let group_count: u16 = unsafe {
-        read_at(
-            base,
-            core::mem::offset_of!(PROCESSOR_RELATIONSHIP, GroupCount),
-        )
-    };
-    // SAFETY: forwarded from the caller; `group_count` names the true length.
-    let group_masks = unsafe {
+    let (group_masks, complete) = unsafe {
         read_group_affinities(
-            base.add(core::mem::offset_of!(PROCESSOR_RELATIONSHIP, GroupMask)),
+            record,
+            body!(PROCESSOR_RELATIONSHIP, GroupMask),
             group_count,
         )
     };
-    ProcessorBody {
-        flags,
-        efficiency_class,
-        group_masks,
-    }
+    let anomaly = truncation(record, complete, group_count, group_masks.len());
+    (
+        Some(ProcessorBody {
+            flags,
+            efficiency_class,
+            group_masks,
+        }),
+        anomaly,
+    )
+}
+
+/// The anomaly for a trailing array that claimed more than the record held.
+fn truncation(
+    record: RawRecord,
+    complete: bool,
+    declared: u16,
+    decoded: usize,
+) -> Option<EnumerationAnomaly> {
+    (!complete).then(|| {
+        EnumerationAnomaly::truncated_array(
+            Source::RelationshipWalk,
+            record.offset(),
+            usize::from(declared),
+            decoded,
+        )
+    })
 }
 
 /// # Safety
@@ -318,42 +392,38 @@ unsafe fn read_processor_body(base: *const u8) -> ProcessorBody {
 /// initialized entries -- pre-Windows-20H2 records report `GroupCount == 0`
 /// but still have exactly one legacy `GroupMask` entry there (see
 /// [`read_legacy_group_affinities`]).
-unsafe fn read_cache_body(base: *const u8) -> CacheBody {
-    // SAFETY: forwarded from the caller.
-    let level: u8 = unsafe { read_at(base, core::mem::offset_of!(CACHE_RELATIONSHIP, Level)) };
-    // SAFETY: forwarded from the caller.
-    let associativity: u8 = unsafe {
-        read_at(
-            base,
-            core::mem::offset_of!(CACHE_RELATIONSHIP, Associativity),
-        )
+unsafe fn read_cache_body(record: RawRecord) -> (Option<CacheBody>, Option<EnumerationAnomaly>) {
+    // SAFETY: forwarded from the caller; every read is bounded by the record.
+    let Some((level, associativity, line_size, cache_size, cache_type, group_count)) = (unsafe {
+        (|| {
+            Some((
+                record.read::<u8>(body!(CACHE_RELATIONSHIP, Level))?,
+                record.read::<u8>(body!(CACHE_RELATIONSHIP, Associativity))?,
+                record.read::<u16>(body!(CACHE_RELATIONSHIP, LineSize))?,
+                record.read::<u32>(body!(CACHE_RELATIONSHIP, CacheSize))?,
+                record.read::<i32>(body!(CACHE_RELATIONSHIP, Type))?,
+                record.read::<u16>(body!(CACHE_RELATIONSHIP, GroupCount))?,
+            ))
+        })()
+    }) else {
+        return (None, None);
     };
     // SAFETY: forwarded from the caller.
-    let line_size: u16 =
-        unsafe { read_at(base, core::mem::offset_of!(CACHE_RELATIONSHIP, LineSize)) };
-    // SAFETY: forwarded from the caller.
-    let cache_size: u32 =
-        unsafe { read_at(base, core::mem::offset_of!(CACHE_RELATIONSHIP, CacheSize)) };
-    // SAFETY: forwarded from the caller.
-    let cache_type: i32 = unsafe { read_at(base, core::mem::offset_of!(CACHE_RELATIONSHIP, Type)) };
-    // SAFETY: forwarded from the caller.
-    let group_count: u16 =
-        unsafe { read_at(base, core::mem::offset_of!(CACHE_RELATIONSHIP, GroupCount)) };
-    // SAFETY: forwarded from the caller; `group_count` names the true length.
-    let group_masks = unsafe {
-        read_legacy_group_affinities(
-            base.add(core::mem::offset_of!(CACHE_RELATIONSHIP, Anonymous)),
-            group_count,
-        )
+    let (group_masks, complete) = unsafe {
+        read_legacy_group_affinities(record, body!(CACHE_RELATIONSHIP, Anonymous), group_count)
     };
-    CacheBody {
-        level,
-        associativity,
-        line_size,
-        cache_size,
-        cache_type,
-        group_masks,
-    }
+    let anomaly = truncation(record, complete, group_count.max(1), group_masks.len());
+    (
+        Some(CacheBody {
+            level,
+            associativity,
+            line_size,
+            cache_size,
+            cache_type,
+            group_masks,
+        }),
+        anomaly,
+    )
 }
 
 /// # Safety
@@ -363,61 +433,64 @@ unsafe fn read_cache_body(base: *const u8) -> CacheBody {
 /// initialized entries -- pre-Windows-20H2 records report `GroupCount == 0`
 /// but still have exactly one legacy `GroupMask` entry there (see
 /// [`read_legacy_group_affinities`]).
-unsafe fn read_numa_body(base: *const u8) -> NumaNodeBody {
-    // SAFETY: forwarded from the caller.
-    let node_number: u32 = unsafe {
-        read_at(
-            base,
-            core::mem::offset_of!(NUMA_NODE_RELATIONSHIP, NodeNumber),
-        )
+unsafe fn read_numa_body(record: RawRecord) -> (Option<NumaNodeBody>, Option<EnumerationAnomaly>) {
+    // SAFETY: forwarded from the caller; every read is bounded by the record.
+    let Some((node_number, group_count)) = (unsafe {
+        (|| {
+            Some((
+                record.read::<u32>(body!(NUMA_NODE_RELATIONSHIP, NodeNumber))?,
+                record.read::<u16>(body!(NUMA_NODE_RELATIONSHIP, GroupCount))?,
+            ))
+        })()
+    }) else {
+        return (None, None);
     };
     // SAFETY: forwarded from the caller.
-    let group_count: u16 = unsafe {
-        read_at(
-            base,
-            core::mem::offset_of!(NUMA_NODE_RELATIONSHIP, GroupCount),
-        )
-    };
-    // SAFETY: forwarded from the caller; `group_count` names the true length.
-    let group_masks = unsafe {
+    let (group_masks, complete) = unsafe {
         read_legacy_group_affinities(
-            base.add(core::mem::offset_of!(NUMA_NODE_RELATIONSHIP, Anonymous)),
+            record,
+            body!(NUMA_NODE_RELATIONSHIP, Anonymous),
             group_count,
         )
     };
-    NumaNodeBody {
-        node_number,
-        group_masks,
-    }
+    let anomaly = truncation(record, complete, group_count.max(1), group_masks.len());
+    (
+        Some(NumaNodeBody {
+            node_number,
+            group_masks,
+        }),
+        anomaly,
+    )
 }
 
 /// # Safety
 ///
-/// `base` must address a `GROUP_RELATIONSHIP` whose trailing `GroupInfo`
-/// array has at least `ActiveGroupCount` initialized entries.
-unsafe fn read_group_body(base: *const u8) -> GroupBody {
-    // SAFETY: forwarded from the caller.
-    let active_group_count: u16 = unsafe {
-        read_at(
-            base,
-            core::mem::offset_of!(GROUP_RELATIONSHIP, ActiveGroupCount),
+/// `record` must address the bytes of its own declared `Size`.
+unsafe fn read_group_body(record: RawRecord) -> (Option<GroupBody>, Option<EnumerationAnomaly>) {
+    // SAFETY: forwarded from the caller; the read is bounded by the record.
+    let Some(active_group_count) =
+        (unsafe { record.read::<u16>(body!(GROUP_RELATIONSHIP, ActiveGroupCount)) })
+    else {
+        return (None, None);
+    };
+    // SAFETY: forwarded from the caller; bounded by the record, so an
+    // `ActiveGroupCount` larger than the record can hold yields only what fits.
+    let (raw, complete) = unsafe {
+        record.read_array::<PROCESSOR_GROUP_INFO>(
+            body!(GROUP_RELATIONSHIP, GroupInfo),
+            usize::from(active_group_count),
         )
     };
-    // SAFETY: forwarded from the caller.
-    let info_base = unsafe { base.add(core::mem::offset_of!(GROUP_RELATIONSHIP, GroupInfo)) };
-    let group_info = (0..u32::from(active_group_count))
-        .map(|i| {
-            let offset = i as usize * size_of::<PROCESSOR_GROUP_INFO>();
-            // SAFETY: forwarded from the caller; `i < active_group_count`.
-            let raw: PROCESSOR_GROUP_INFO = unsafe { read_at(info_base, offset) };
-            GroupInfo {
-                maximum_processor_count: raw.MaximumProcessorCount,
-                active_processor_count: raw.ActiveProcessorCount,
-                active_processor_mask: raw.ActiveProcessorMask,
-            }
+    let group_info: Vec<_> = raw
+        .into_iter()
+        .map(|entry| GroupInfo {
+            maximum_processor_count: entry.MaximumProcessorCount,
+            active_processor_count: entry.ActiveProcessorCount,
+            active_processor_mask: entry.ActiveProcessorMask,
         })
         .collect();
-    GroupBody { group_info }
+    let anomaly = truncation(record, complete, active_group_count, group_info.len());
+    (Some(GroupBody { group_info }), anomaly)
 }
 
 /// What a cache holds, converted from Windows's raw `PROCESSOR_CACHE_TYPE`.

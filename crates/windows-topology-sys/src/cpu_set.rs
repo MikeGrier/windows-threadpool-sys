@@ -28,7 +28,27 @@
 //! Merging them here would silently pick a winner and destroy the disagreement,
 //! which is the one thing a second observer is *for*. The records come back as
 //! what they are; deciding what to do when they differ is tracked separately.
+//!
+//! ## How the records are walked
+//!
+//! Through [`crate::records`], which both of this crate's enumerations share.
+//! Per [D-24](../DESIGN-NOTES.md#d-24) the operating system is **trusted** for
+//! the structural validity of a buffer it just wrote -- this is not a trust
+//! boundary and there is no validation pass. The walk bounds its reads because
+//! bounds are how it knows where a record ends, which is a decoding
+//! requirement rather than a defence.
+//!
+//! Two consequences a reader should not have to infer: nothing here **panics**
+//! over the shape of the buffer, because a malformed record is not evidence
+//! that this crate reached an inconsistent state; and a record that cannot be
+//! decoded is **recorded** in
+//! [`MachineMemoryTopology::enumeration_anomalies`](crate::MachineMemoryTopology::enumeration_anomalies)
+//! rather than silently dropped, so a short list is distinguishable from a
+//! small machine.
 
+use crate::EnumerationAnomaly;
+use crate::observation::Source;
+use crate::records::RecordWalk;
 use std::io;
 
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
@@ -145,7 +165,7 @@ mod flags {
 ///
 /// Returns any error from `GetSystemCpuSetInformation` other than the expected
 /// sizing failure.
-pub(crate) fn enumerate() -> io::Result<Vec<CpuSet>> {
+pub(crate) fn enumerate() -> io::Result<(Vec<CpuSet>, Option<EnumerationAnomaly>)> {
     let mut length: u32 = 0;
     // SAFETY: a null buffer with a zero length and a valid out-pointer, which is
     // the documented sizing call. A null process handle names this process.
@@ -161,14 +181,14 @@ pub(crate) fn enumerate() -> io::Result<Vec<CpuSet>> {
     if probe != 0 {
         // Succeeding on the sizing call would mean zero bytes were needed, so
         // there is nothing to report.
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
     let error = io::Error::last_os_error();
     if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
         return Err(error);
     }
     if length == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
 
     // `u64`-backed storage for the same reason the relationship walk uses it:
@@ -204,23 +224,13 @@ const SIZE_OFFSET: usize = core::mem::offset_of!(SYSTEM_CPU_SET_INFORMATION, Siz
 const TYPE_OFFSET: usize = core::mem::offset_of!(SYSTEM_CPU_SET_INFORMATION, Type);
 const UNION_OFFSET: usize = core::mem::offset_of!(SYSTEM_CPU_SET_INFORMATION, Anonymous);
 
-/// Read a `T` from `base + offset` without assuming alignment.
-///
-/// # Safety
-///
-/// `base + offset` must address at least `size_of::<T>()` initialized bytes.
-unsafe fn read_at<T: Copy>(base: *const u8, offset: usize) -> T {
-    // SAFETY: forwarded from the caller.
-    unsafe { base.add(offset).cast::<T>().read_unaligned() }
-}
-
 /// Walk `length` bytes of consecutive records.
 ///
 /// # Safety
 ///
 /// `base` must address `length` initialized bytes laid out as consecutive
 /// `SYSTEM_CPU_SET_INFORMATION` records.
-unsafe fn decode(base: *const u8, length: u32) -> Vec<CpuSet> {
+unsafe fn decode(base: *const u8, length: u32) -> (Vec<CpuSet>, Option<EnumerationAnomaly>) {
     // Offsets within the `CpuSet` arm of the record's union, computed from the
     // generated types so a binding change moves them rather than silently
     // shifting what is read.
@@ -236,64 +246,56 @@ unsafe fn decode(base: *const u8, length: u32) -> Vec<CpuSet> {
         };
     }
 
+    // SAFETY: forwarded from this function's own contract.
+    let mut walk = unsafe {
+        RecordWalk::new(
+            base,
+            length,
+            SIZE_OFFSET,
+            size_of::<SYSTEM_CPU_SET_INFORMATION>(),
+            Source::CpuSets,
+        )
+    };
+
     let mut records = Vec::new();
-    let mut offset = 0_usize;
-    let length = length as usize;
-
-    while offset + SIZE_OFFSET + size_of::<u32>() <= length {
-        let record = unsafe { base.add(offset) };
-        // SAFETY: the bound above proved `Size` itself is in range.
-        let size = unsafe { read_at::<u32>(record, SIZE_OFFSET) } as usize;
-        // A zero or oversized `Size` would loop forever or read past the end.
-        // Windows does not produce either, and trusting it anyway is how a
-        // hostile or corrupt buffer becomes a hang instead of a stop.
-        if size == 0 || offset + size > length {
-            break;
+    for record in &mut walk {
+        // Every read below is bounded by the record's own `Size`, and the walk
+        // has already established that `Size` covers a full
+        // `SYSTEM_CPU_SET_INFORMATION` -- so none of these can fail. They are
+        // written as options rather than asserted because the alternative to a
+        // `None` that skips a record is a panic, and per D-24 this crate does
+        // not panic over the shape of someone else's buffer.
+        // SAFETY: the walk yielded a record addressing `size` initialized bytes.
+        let decoded = unsafe {
+            (|| {
+                if record.read::<i32>(TYPE_OFFSET)? != CpuSetInformation {
+                    return None;
+                }
+                let all_flags = record.read::<u8>(field!(Anonymous1))?;
+                Some(CpuSet {
+                    id: record.read(field!(Id))?,
+                    group: record.read(field!(Group))?,
+                    logical_processor_index: record.read(field!(LogicalProcessorIndex))?,
+                    core_index: record.read(field!(CoreIndex))?,
+                    last_level_cache_index: record.read(field!(LastLevelCacheIndex))?,
+                    numa_node_index: record.read(field!(NumaNodeIndex))?,
+                    efficiency_class: record.read(field!(EfficiencyClass))?,
+                    parked: all_flags & flags::PARKED != 0,
+                    allocated: all_flags & flags::ALLOCATED != 0,
+                    allocated_to_target_process: all_flags & flags::ALLOCATED_TO_TARGET_PROCESS
+                        != 0,
+                    real_time: all_flags & flags::REAL_TIME != 0,
+                    scheduling_class: record.read(field!(Anonymous2))?,
+                    allocation_tag: record.read(field!(AllocationTag))?,
+                })
+            })()
+        };
+        if let Some(cpu_set) = decoded {
+            records.push(cpu_set);
         }
-        // `Type` sits at offset 4, so even reading the discriminant needs more
-        // than the four bytes the loop guard proved. A record shorter than the
-        // full struct is skipped rather than inspected: the backing buffer is
-        // `length` bytes exactly when `length % 8 == 0`, so a trailing record
-        // declaring a `Size` of 1..=7 would put the `Type` read past the
-        // allocation. Checking the length after reading the field it protects
-        // is the bug this ordering exists to prevent.
-        if size < size_of::<SYSTEM_CPU_SET_INFORMATION>() {
-            offset += size;
-            continue;
-        }
-
-        // SAFETY: `size` bytes from `record` are in range, and the check above
-        // proved this record is at least a full `SYSTEM_CPU_SET_INFORMATION`,
-        // so every field below is within it.
-        let kind = unsafe { read_at::<i32>(record, TYPE_OFFSET) };
-        if kind == CpuSetInformation {
-            // SAFETY: as above; each offset is computed from the generated type.
-            let all_flags = unsafe { read_at::<u8>(record, field!(Anonymous1)) };
-            records.push(CpuSet {
-                id: unsafe { read_at::<u32>(record, field!(Id)) },
-                group: unsafe { read_at::<u16>(record, field!(Group)) },
-                logical_processor_index: unsafe {
-                    read_at::<u8>(record, field!(LogicalProcessorIndex))
-                },
-                core_index: unsafe { read_at::<u8>(record, field!(CoreIndex)) },
-                last_level_cache_index: unsafe {
-                    read_at::<u8>(record, field!(LastLevelCacheIndex))
-                },
-                numa_node_index: unsafe { read_at::<u8>(record, field!(NumaNodeIndex)) },
-                efficiency_class: unsafe { read_at::<u8>(record, field!(EfficiencyClass)) },
-                parked: all_flags & flags::PARKED != 0,
-                allocated: all_flags & flags::ALLOCATED != 0,
-                allocated_to_target_process: all_flags & flags::ALLOCATED_TO_TARGET_PROCESS != 0,
-                real_time: all_flags & flags::REAL_TIME != 0,
-                scheduling_class: unsafe { read_at::<u8>(record, field!(Anonymous2)) },
-                allocation_tag: unsafe { read_at::<u64>(record, field!(AllocationTag)) },
-            });
-        }
-
-        offset += size;
     }
 
-    records
+    (records, walk.anomaly())
 }
 
 #[cfg(test)]

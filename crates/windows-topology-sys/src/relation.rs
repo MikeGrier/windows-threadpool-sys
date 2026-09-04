@@ -135,6 +135,9 @@ pub struct Relations {
     pub numa_nodes: Vec<NumaNodeRelation>,
     /// Every processor group.
     pub groups: Vec<GroupRelation>,
+    /// Records the walk could not decode. Empty on a healthy machine; see
+    /// [`crate::MachineMemoryTopology::enumeration_anomalies`].
+    pub anomalies: Vec<crate::EnumerationAnomaly>,
 }
 
 fn core_from(body: walk::ProcessorBody) -> CoreRelation {
@@ -194,7 +197,8 @@ fn groups_from(body: walk::GroupBody) -> Vec<GroupRelation> {
 /// call.
 pub fn discover() -> io::Result<Relations> {
     let mut relations = Relations::default();
-    for record in walk::enumerate()? {
+    let (walk_records, walk_anomalies) = walk::enumerate()?;
+    for record in walk_records {
         match record {
             Record::ProcessorCore(body) => relations.cores.push(core_from(body)),
             Record::ProcessorPackage(body) => relations.packages.push(package_from(body)),
@@ -206,6 +210,7 @@ pub fn discover() -> io::Result<Relations> {
             Record::Unknown(_) => {}
         }
     }
+    relations.anomalies = walk_anomalies;
     Ok(relations)
 }
 

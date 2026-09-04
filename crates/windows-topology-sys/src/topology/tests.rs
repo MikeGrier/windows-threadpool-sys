@@ -78,6 +78,7 @@ fn synthetic() -> MachineMemoryTopology {
         // Named rather than defaulted, so this fixture states what it is. The
         // helper is called `synthetic` and now says so in the value too.
         provenance: Provenance::Synthetic,
+        enumeration_anomalies: Vec::new(),
         processor_attributes: Vec::new(),
     }
 }
@@ -380,6 +381,7 @@ mod serde_tests {
             domains: vec![core_domain(0, &[0, 1, 2, 3], 0)],
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            enumeration_anomalies: Vec::new(),
             processor_attributes: Vec::new(),
         };
         topology.fold_in_cpu_sets(&[
@@ -425,6 +427,7 @@ mod serde_tests {
             domains: Vec::new(),
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            enumeration_anomalies: Vec::new(),
             processor_attributes: Vec::new(),
         };
         topology.fold_in_cpu_sets(&[cpu_set(0, 0, 0, 2), cpu_set(1, 0, 0, 2)]);
@@ -458,6 +461,7 @@ mod serde_tests {
             domains: vec![core_domain(7, &[0, 1], 0)],
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            enumeration_anomalies: Vec::new(),
             processor_attributes: Vec::new(),
         };
         topology.fold_in_cpu_sets(&[cpu_set(0, 3, 0, 0), cpu_set(1, 3, 0, 0)]);
@@ -491,6 +495,7 @@ mod serde_tests {
             domains: vec![memory],
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            enumeration_anomalies: Vec::new(),
             processor_attributes: Vec::new(),
         };
         topology.fold_in_cpu_sets(&[cpu_set(0, 5, 0, 0), cpu_set(1, 5, 0, 0)]);
@@ -615,6 +620,7 @@ mod serde_tests {
             cpu_sets: None,
             processor_attributes: Vec::new(),
             provenance: Provenance::Synthetic,
+            enumeration_anomalies: Vec::new(),
         };
         topology.record_walk_attributes();
         // CPU Sets disagrees about processor 0 and agrees about processor 1.
@@ -660,6 +666,7 @@ mod serde_tests {
             cpu_sets: None,
             processor_attributes: Vec::new(),
             provenance: Provenance::Synthetic,
+            enumeration_anomalies: Vec::new(),
         };
         topology.record_walk_attributes();
         topology.fold_in_cpu_sets(&[
@@ -689,6 +696,7 @@ mod serde_tests {
             cpu_sets: None,
             processor_attributes: Vec::new(),
             provenance: Provenance::Synthetic,
+            enumeration_anomalies: Vec::new(),
         };
         assert!(topology.processor_attributes.is_empty());
         assert!(topology.attribute_conflicts().is_empty());
@@ -945,6 +953,7 @@ fn heterogeneous_relations() -> (crate::relation::Relations, Vec<Domain>) {
             active_processor_count: 2,
             active_processors: ProcessorSet::from_group_mask(0, 0b11),
         }],
+        anomalies: Vec::new(),
     };
 
     let domains = vec![
@@ -1030,6 +1039,7 @@ fn an_offline_processor_reports_no_capacity_even_when_a_core_claims_it() {
             // Only processor 0 is online.
             active_processors: ProcessorSet::from_group_mask(0, 0b01),
         }],
+        anomalies: Vec::new(),
     };
     let domains = vec![Domain {
         kind: DomainKind::Core {
@@ -1100,6 +1110,7 @@ fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
         domains,
         cpu_sets: None,
         provenance: Provenance::Synthetic,
+        enumeration_anomalies: Vec::new(),
         processor_attributes: Vec::new(),
     }
 }
@@ -1117,6 +1128,7 @@ fn cache_levels_are_empty_when_no_cache_is_reported() {
         domains: Vec::new(),
         cpu_sets: None,
         provenance: Provenance::Synthetic,
+        enumeration_anomalies: Vec::new(),
         processor_attributes: Vec::new(),
     };
     assert!(topo.cache_levels().is_empty());
@@ -1353,6 +1365,7 @@ fn machine_of(count: u8, domains: Vec<Domain>) -> MachineMemoryTopology {
         cpu_sets: None,
         processor_attributes: Vec::new(),
         provenance: Provenance::Synthetic,
+        enumeration_anomalies: Vec::new(),
     }
 }
 

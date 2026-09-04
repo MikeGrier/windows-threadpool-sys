@@ -61,6 +61,8 @@
 #![warn(missing_docs)]
 
 #[cfg(windows)]
+mod anomaly;
+
 mod cpu_set;
 #[cfg(windows)]
 mod domain;
@@ -74,6 +76,8 @@ mod observed;
 mod processor_set;
 /// Where a topology's content came from.
 mod provenance;
+
+mod records;
 #[cfg(windows)]
 mod relation;
 #[cfg(windows)]
@@ -82,6 +86,7 @@ mod topology;
 mod walk;
 
 #[cfg(windows)]
+pub use anomaly::{AnomalyKind, EnumerationAnomaly};
 pub use cpu_set::CpuSet;
 #[cfg(windows)]
 pub use domain::{AttributeValue, Domain, DomainKind, Processor, ProcessorFacts, ProcessorId};
