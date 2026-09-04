@@ -529,6 +529,42 @@ that previously stood in the way are gone:
   `release_permit` preceding its `fetch_sub` in modification order, with the release sequence
   supplying the edge. One of the two is wrong; settle it with an argument written down, not a patch.
 
+- [ ] **SH-4.8** -- **Six more PR #56 review findings, none blocking the release.** Replied to and
+  resolved on the PR; recorded here so none is lost.
+  **Memory safety in a test (do first).** `reopen_by_id_cannot_be_watched.rs:153` returns early on a
+  zero return with `ERROR_IO_PENDING` -- a *successful* overlapped submission -- dropping `buffer`
+  and `overlapped` while the queued IRP may still write through both. Production
+  `classify_submission` handles this case; the test does not. Wait for or cancel the operation
+  before dropping.
+  **`reserving_mpsc`''s `head` acquire load** (`reserving_mpsc.rs:608`), which **contradicts an
+  earlier review round** that called it the only acquire edge `Reservation::send`''s non-atomic slot
+  write has. This is a shipping shape, so settle it with a written argument naming the execution and
+  the edge -- do not strengthen the ordering to be safe, which hides whichever model is wrong.
+  **Overlapping domains resolved by iteration order**: `memory_domain_of` returns the first match and
+  the core map lets a later domain replace an earlier one. For hand-built and deserialized
+  topologies -- which the API explicitly accepts -- an overlap is an *ambiguity*, and
+  `memory_domain_of` is the sharper case because its value reaches `VirtualAllocExNuma`.
+  **A live-host test asserting cross-API agreement** (`cpu_set/tests.rs:242`) contradicts the model''s
+  premise that CPU Sets may disagree with the walk; it is a latent failure on untried hardware.
+  Assert that both observations are *recorded*, not that they agree.
+  **`release-placement-probe.yml` gating**: `workflow_dispatch` against an existing release tag
+  satisfies the tag-prefix condition, so a build-only run can create or modify a release. Add
+  `github.event_name == ''push''`, and verify both paths rather than reading the change.
+  **`queue_contention.rs:241`** starts its clock without ordering against workers entering their
+  loops, so a descheduled coordinator under-reports the baseline -- the optimistic direction, in a
+  probe whose numbers are quoted as evidence.
+
+- [ ] **SH-4.9** -- **`tools/check-publishable.ps1`: three findings with one root.** Its checks are
+  **text searches standing in for structural facts**, which is how a check goes quietly vacuous.
+  An unanchored pattern is satisfied by a *commented-out* assignment, so CI would believe the
+  dependency registry exists while the shell never defines it -- re-creating the publish race the
+  check exists to prevent. The trigger/choice searches scan every YAML list rather than
+  `on.push.tags` and `on.workflow_dispatch.inputs.crate.options`, so an identical entry in a matrix
+  keeps them green after the real trigger is removed. And the description still says the placement
+  probe is "not on crates.io yet", implying a registry publication that `publish = false` ruled out.
+  Fix together by parsing the workflow structure rather than adding anchors until the next false
+  green.
+
 ## M5: verify from outside the workspace
 
 - [ ] **SH-5.1** -- In a scratch project **outside this repository**, depend on both crates from
