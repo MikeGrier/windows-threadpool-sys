@@ -434,6 +434,63 @@ mod serde_tests {
 
     #[test]
     #[cfg(feature = "serde")]
+    fn a_document_cannot_assert_enumeration_anomalies_into_a_restored_topology() {
+        // An anomaly is a fact about *an enumeration*, and a deserialized
+        // topology performed none -- the same reason `coherence` is not read
+        // back. The field's own documentation has always said the list is empty
+        // for a deserialized topology; `serde(default)` let a document say
+        // otherwise, so the contract was contradicted by its own attribute.
+        let document = r#"{
+            "processors": [],
+            "domains": [],
+            "cpu_sets": [],
+            "provenance": "measured",
+            "enumeration_anomalies": [
+                {
+                    "source": "relationship_walk",
+                    "offset": 64,
+                    "kind": { "TrailingBytes": { "remaining": 3 } }
+                }
+            ]
+        }"#;
+
+        let restored: MachineMemoryTopology =
+            serde_json::from_str(document).expect("the document must still deserialize");
+
+        assert!(
+            restored.enumeration_anomalies.is_empty(),
+            "a restored topology claimed anomalies from an enumeration it never ran: {:?}",
+            restored.enumeration_anomalies
+        );
+        // The neighbouring guarantee, asserted here so the two cannot drift:
+        // both fields describe a collection, and neither survives a round trip.
+        assert_eq!(restored.coherence, Coherence::NotCollected);
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn enumeration_anomalies_are_still_written_out() {
+        // Skipping the *deserialize* side only. A dump is where a human reads
+        // how the run that produced it went, so dropping these from the output
+        // would lose the diagnosis this field exists to carry.
+        let mut topology = MachineMemoryTopology::default();
+        topology.enumeration_anomalies.push(EnumerationAnomaly {
+            source: Source::RelationshipWalk,
+            offset: 64,
+            kind: crate::AnomalyKind::TrailingBytes { remaining: 3 },
+        });
+
+        let text = serde_json::to_string(&topology).expect("serialize");
+
+        assert!(
+            text.contains("enumeration_anomalies"),
+            "the anomaly must survive into the document: {text}"
+        );
+        assert!(text.contains("64"), "got {text}");
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
     fn coherence_serializes_in_the_lowercase_spelling_the_rest_of_this_crate_uses() {
         // Every serialized name this crate emits is lowercase -- `Provenance`,
         // `Source` and `ProcessorAttribute` carry `rename_all`, and `Domain`'s

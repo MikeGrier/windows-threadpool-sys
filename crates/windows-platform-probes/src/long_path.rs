@@ -55,7 +55,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 // `SetCurrentDirectoryW` lives under Environment rather than FileSystem,
 // because the current directory is per-process environment state rather than a
 // file operation.
-use windows_sys::Win32::System::Environment::SetCurrentDirectoryW;
+use windows_sys::Win32::System::Environment::{GetCurrentDirectoryW, SetCurrentDirectoryW};
 
 /// Windows's classic path ceiling.
 const MAX_PATH: usize = 260;
@@ -287,11 +287,121 @@ fn attempt(current_dir_len: usize, depth: usize, shape: Shape) -> Attempt {
     }
 }
 
+/// This process's current directory, as a null-terminated wide string.
+///
+/// Sized then fetched, which is this API's documented shape: a zero length with
+/// a null buffer returns the size *including* the terminator, and the filling
+/// call returns the count *excluding* it.
+fn current_directory() -> Result<Vec<u16>, String> {
+    // SAFETY: the documented sizing form -- a zero length with a null buffer,
+    // which writes nothing and returns the required size.
+    let needed = unsafe { GetCurrentDirectoryW(0, std::ptr::null_mut()) };
+    if needed == 0 {
+        // SAFETY: called immediately after the failing call.
+        return Err(format!("GetCurrentDirectoryW sizing failed: {}", unsafe {
+            GetLastError()
+        }));
+    }
+    let mut buffer = vec![0_u16; needed as usize];
+    // SAFETY: `buffer` has `needed` elements, which is the size the call above
+    // asked for, and is writable for that length.
+    let written = unsafe { GetCurrentDirectoryW(needed, buffer.as_mut_ptr()) };
+    if written == 0 || written >= needed {
+        // SAFETY: called immediately after the failing call.
+        return Err(format!("GetCurrentDirectoryW failed: {}", unsafe {
+            GetLastError()
+        }));
+    }
+    Ok(buffer)
+}
+
+/// The temporary tree and the process state this experiment borrows.
+///
+/// **A guard, because both are leaks if `measure` returns early**, and it
+/// returns early on every apparatus failure. This is a library function, so
+/// neither is excused by the probe binaries exiting straight afterwards: a test
+/// or any other caller keeps running in the process whose current directory was
+/// moved.
+///
+/// The tree is the sharper of the two. It is deliberately longer than
+/// `MAX_PATH`, which is the very property that stops Explorer and `del` from
+/// removing it -- so litter left in `%TEMP%` by a probe about long paths is
+/// litter that is hard to clear up by hand.
+struct Apparatus {
+    root: PathBuf,
+    /// Where the process was before [`Self::enter`], if it moved at all.
+    previous_directory: Option<Vec<u16>>,
+}
+
+impl Apparatus {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            previous_directory: None,
+        }
+    }
+
+    /// Move the process into `directory`, remembering where it was.
+    fn enter(&mut self, directory: &Path) -> Result<(), String> {
+        // Captured *before* the move, or there is nothing to go back to.
+        let previous = current_directory()?;
+        let wide = wide(directory.as_os_str());
+        // SAFETY: `wide` is a live null-terminated buffer for the call.
+        if unsafe { SetCurrentDirectoryW(wide.as_ptr()) } == 0 {
+            // SAFETY: called immediately after the failing call.
+            return Err(format!("SetCurrentDirectoryW failed: {}", unsafe {
+                GetLastError()
+            }));
+        }
+        self.previous_directory = Some(previous);
+        Ok(())
+    }
+}
+
+impl Drop for Apparatus {
+    fn drop(&mut self) {
+        // **Restore the directory first, and that ordering is load-bearing.**
+        // A process's current directory holds a handle on it, so removing the
+        // tree while parked inside it fails -- the cleanup would silently do
+        // nothing and leave exactly the litter this guard exists to prevent.
+        if let Some(previous) = &self.previous_directory {
+            // SAFETY: `previous` is the null-terminated buffer
+            // `GetCurrentDirectoryW` filled, still live here.
+            unsafe { SetCurrentDirectoryW(previous.as_ptr()) };
+        }
+
+        // By verbatim path, for the same reason the tree was built by one: the
+        // deep branch is past `MAX_PATH`, so an ordinary path would fail to
+        // reach it on a host that has not opted in -- which is half the hosts
+        // this probe is meant to run on.
+        let verbatim = PathBuf::from(format!(r"\\?\{}", self.root.display()));
+        // Best-effort: a failure here leaves litter, which is worth neither a
+        // panic in a `Drop` nor a field on an observation about path lengths.
+        let _ = std::fs::remove_dir_all(&verbatim);
+    }
+}
+
 /// Run the experiment.
 ///
 /// `manifest_aware` is what the *caller* knows about its own manifest -- the
 /// process cannot ask Windows whether it opted in, so the two binaries pass
 /// their own answer and are named for it.
+///
+/// The temporary tree and the current directory are both restored before this
+/// returns, on every path including the apparatus failures -- see `Apparatus`.
+///
+/// # Not safe to call concurrently
+///
+/// This borrows **process-wide** state: it moves the current directory, and it
+/// builds its tree under a root named after the process id. Two calls at once
+/// in one process share both -- one would remove the tree the other was still
+/// using, and they would fight over the directory. A unique root per call would
+/// not fix that, because there is one current directory per process however the
+/// trees are named.
+///
+/// The probe binaries call this once and exit, so this costs them nothing. A
+/// caller running it from a test suite must serialize its calls; the tests
+/// beside this module do exactly that.
 #[must_use]
 pub fn measure(manifest_aware: bool) -> Observation {
     let mut observation = Observation {
@@ -306,6 +416,9 @@ pub fn measure(manifest_aware: bool) -> Observation {
         observation.apparatus_error = Some(error);
         return observation;
     }
+    // From here on the tree exists, so every exit below has something to clean
+    // up -- including the early returns, which is why this is a guard.
+    let mut apparatus = Apparatus::new(root.clone());
 
     // Deep enough that the resolved path clears `MAX_PATH` with room to spare,
     // and shallow enough that the short case stays well under it.
@@ -338,13 +451,8 @@ pub fn measure(manifest_aware: bool) -> Observation {
 
     // The current directory is the short root for every attempt, so the length
     // under test lives in the relative path rather than in the cwd.
-    let root_wide = wide(root.as_os_str());
-    // SAFETY: `root_wide` is a live null-terminated buffer for the call.
-    if unsafe { SetCurrentDirectoryW(root_wide.as_ptr()) } == 0 {
-        // SAFETY: called immediately after the failing call.
-        observation.apparatus_error = Some(format!("SetCurrentDirectoryW failed: {}", unsafe {
-            GetLastError()
-        }));
+    if let Err(error) = apparatus.enter(&root) {
+        observation.apparatus_error = Some(error);
         return observation;
     }
     let current_dir_len = root.as_os_str().len();
@@ -370,3 +478,6 @@ pub fn measure(manifest_aware: bool) -> Observation {
 pub fn is_refusal(attempt: &Attempt) -> bool {
     !attempt.opened && matches!(attempt.error, ERROR_PATH_NOT_FOUND | ERROR_FILE_NOT_FOUND)
 }
+
+#[cfg(test)]
+mod tests;

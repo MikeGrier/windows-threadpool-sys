@@ -193,7 +193,20 @@ pub struct MachineMemoryTopology {
     /// leave a consumer unable to tell a truncated enumeration from a small
     /// machine. Whatever decoded before the anomaly is still present in the
     /// fields above and is still correct.
-    #[cfg_attr(feature = "serde", serde(default))]
+    ///
+    /// **Written out, never read back in**, for exactly the reason
+    /// [`Self::coherence`] is not: an anomaly is a fact about *an enumeration*,
+    /// and a deserialized topology performed none. A description is welcome to
+    /// carry these so a human reading a dump can see how the run that produced
+    /// it went, but a file cannot *establish* that a buffer walk hit a
+    /// malformed record any more than it can establish that the walk observed
+    /// anything at all (D-12).
+    ///
+    /// This was `serde(default)` until 2026-09-04, which let a document assert
+    /// anomalies into a topology that had asked nothing -- contradicting the
+    /// first paragraph of this very comment, which has always said the list is
+    /// empty for a deserialized topology.
+    #[cfg_attr(feature = "serde", serde(skip_deserializing))]
     pub enumeration_anomalies: Vec<EnumerationAnomaly>,
     /// Whether the two Win32 sources described the same machine when this was
     /// collected.
