@@ -277,6 +277,33 @@ that previously stood in the way are gone:
   **0.2.0** for the topology crate. If it proposes 0.1.1, the breaking-change marker did not take and
   the version would silently understate the break -- fix the marker rather than editing the version by
   hand, or the next break will do the same thing.
+  **This item named one crate; SH-3.1.1's diff review found four will be bumped.** The config sets
+  both `bump-minor-pre-major` and `bump-patch-for-minor-pre-major`, so for a 0.x crate a breaking
+  change bumps the **minor** and everything else the **patch**. Check all four, not just topology:
+
+  | Crate | From | Expect | Driven by |
+  |---|---|---|---|
+  | `windows-topology-sys` | 0.1.0 | **0.2.0** | 7 breaking commits |
+  | `windows-waitable-queues` | 0.1.0 | **0.2.0** | 6 breaking commits -- but see SH-3.4.1 |
+  | `windows-file-watcher` | 0.1.3 | **0.2.0** | the reopen-by-id removal |
+  | `windows-ioring-sys` | 0.2.0 | **0.3.0** | path attribution only -- see SH-3.4.2 |
+
+- [ ] **SH-3.4.1** -- **Decide `windows-waitable-queues`' first published version before the release
+  PR merges.** The crate is not on crates.io, sits at 0.1.0 in the manifest, and carries six `!`
+  commits, so release-please will propose **0.2.0** and 0.1.0 will never exist. The `!` markers are
+  honest about the branch's history but describe an API that was never published, so nothing can
+  break. Either accept 0.2.0 as the first version, or force the first release with `Release-As: 0.1.0`.
+  Not a defect -- a naming decision that is cheap now and permanent afterwards.
+
+- [ ] **SH-3.4.2** -- **Decide what to do about `windows-ioring-sys`' unearned breaking bump.**
+  Release-please attributes a commit by the **paths it touches**, not by its Conventional Commits scope.
+  Two `feat(topology)!` commits (`b9e0c35`, `36e397d`) touched `crates/windows-ioring-sys/`, so it
+  will take a breaking **0.3.0**. Its public API did not break: the only changes there were one
+  doc-comment heading in `lib.rs` (`# Topology guidance` -> `# MachineMemoryTopology guidance`) and
+  code under `examples/ring_copy/`. A 0.3.0 whose CHANGELOG cites breaking changes would misinform
+  consumers who experience none. **The general lesson outlives this instance**: a breaking commit that
+  incidentally edits a second crate's files bumps that crate as breaking too, so either keep such
+  commits path-clean or expect to correct the bump.
   **The gate this used to hold over SH-2.2 is lifted** -- that item is closed, having had nothing
   left to do once the pins were deleted rather than maintained.
   **No longer carries a pin hazard.** An earlier version of this item warned that the PR must not be
@@ -300,8 +327,12 @@ that previously stood in the way are gone:
 - [ ] **SH-4.2** -- Update `windows-ioring-sys` to depend on the published 0.2.0 and release it, per
   the order settled in SH-2.2.
 
-- [ ] **SH-4.3** -- Release `windows-waitable-queues` 0.1.0, with SH-2.1's fix in place. Confirm the
-  tag triggered a publish rather than assuming it did.
+- [ ] **SH-4.3** -- Release `windows-waitable-queues` at **the version SH-3.4.1 settles**, with
+  SH-2.1's fix in place. Confirm the tag triggered a publish rather than assuming it did.
+  **This item said "0.1.0" and that is not what release-please will propose.** Six breaking commits
+  against a manifest version of 0.1.0 yields **0.2.0** under `bump-minor-pre-major`, on a crate that
+  has never been published -- so 0.1.0 would be skipped entirely. SH-3.4.1 decides whether to accept
+  that or force 0.1.0; this item follows it rather than asserting a version of its own.
   **The gate on [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) PT-5.3 is void as of
   2026-09-02** -- that decision was reversed and the tool is never published to a registry, so there
   is no gate to lift and no bullet to edit. The tool's GitHub binaries never waited on this.

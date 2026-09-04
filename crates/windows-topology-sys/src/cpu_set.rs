@@ -250,12 +250,23 @@ unsafe fn decode(base: *const u8, length: u32) -> Vec<CpuSet> {
         if size == 0 || offset + size > length {
             break;
         }
+        // `Type` sits at offset 4, so even reading the discriminant needs more
+        // than the four bytes the loop guard proved. A record shorter than the
+        // full struct is skipped rather than inspected: the backing buffer is
+        // `length` bytes exactly when `length % 8 == 0`, so a trailing record
+        // declaring a `Size` of 1..=7 would put the `Type` read past the
+        // allocation. Checking the length after reading the field it protects
+        // is the bug this ordering exists to prevent.
+        if size < size_of::<SYSTEM_CPU_SET_INFORMATION>() {
+            offset += size;
+            continue;
+        }
 
-        // SAFETY: `size` bytes from `record` are in range, and this record is at
-        // least a full `SYSTEM_CPU_SET_INFORMATION`, so every field below is
-        // within it.
+        // SAFETY: `size` bytes from `record` are in range, and the check above
+        // proved this record is at least a full `SYSTEM_CPU_SET_INFORMATION`,
+        // so every field below is within it.
         let kind = unsafe { read_at::<i32>(record, TYPE_OFFSET) };
-        if kind == CpuSetInformation && size >= size_of::<SYSTEM_CPU_SET_INFORMATION>() {
+        if kind == CpuSetInformation {
             // SAFETY: as above; each offset is computed from the generated type.
             let all_flags = unsafe { read_at::<u8>(record, field!(Anonymous1)) };
             records.push(CpuSet {

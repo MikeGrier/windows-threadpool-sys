@@ -260,3 +260,44 @@ fn the_availability_flags_are_all_clear_on_this_host() {
             .collect::<Vec<_>>()
     );
 }
+
+/// A record whose declared `Size` is smaller than the struct is skipped rather
+/// than inspected. This is a **memory-safety** guard, not a decoding one: the
+/// two behave identically here (an undersized record is not decoded either
+/// way), but `Type` sits at offset 4, so reading it needs eight bytes when the
+/// loop guard has only proved four. The backing buffer is exactly `length`
+/// bytes when `length % 8 == 0`, so a trailing record declaring `Size` in
+/// `1..=7` used to put that read past the allocation.
+#[test]
+fn an_undersized_record_is_skipped_without_reading_its_type() {
+    // Two four-byte records in an eight-byte buffer: the walk reaches offset 4,
+    // where reading `Type` would span bytes 8..12 -- past the allocation.
+    let mut storage = vec![0_u64; 1];
+    let base = storage.as_mut_ptr().cast::<u8>();
+    // SAFETY: both writes are inside the single `u64` of `storage`.
+    unsafe {
+        base.cast::<u32>().write_unaligned(4);
+        base.add(4).cast::<u32>().write_unaligned(4);
+    }
+
+    let decoded = decode_all(&storage, 8);
+
+    assert!(
+        decoded.is_empty(),
+        "a record too small to hold the struct decodes nothing: {decoded:?}"
+    );
+}
+
+/// The walk stops at a record that runs past the declared length rather than
+/// reading into whatever follows it.
+#[test]
+fn a_record_overrunning_the_buffer_stops_the_walk() {
+    let full = size_of::<SYSTEM_CPU_SET_INFORMATION>() as u32;
+    let mut storage = encode(&[record(7, 0, 0, 0, 0, 0)]);
+    let base = storage.as_mut_ptr().cast::<u8>();
+    // Declare a size one byte longer than the buffer actually holds.
+    // SAFETY: `Size` is the first field, inside the allocation.
+    unsafe { base.cast::<u32>().write_unaligned(full + 1) };
+
+    assert!(decode_all(&storage, full).is_empty());
+}
