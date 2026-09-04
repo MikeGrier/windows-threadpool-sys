@@ -758,14 +758,33 @@ mod multi_group_conversion {
                     capacity: 0,
                 })
                 .collect(),
-            domains: vec![Domain {
-                kind: DomainKind::Group,
-                processors: ProcessorSet::from_group_mask(0, mask),
-                observations: vec![windows_topology_sys::Observation::new(
-                    windows_topology_sys::Source::RelationshipWalk,
-                    0,
-                )],
-            }],
+            domains: vec![
+                Domain {
+                    kind: DomainKind::Group,
+                    processors: ProcessorSet::from_group_mask(0, mask),
+                    observations: vec![windows_topology_sys::Observation::new(
+                        windows_topology_sys::Source::RelationshipWalk,
+                        0,
+                    )],
+                },
+                // A memory domain, because these fixtures exist to test what
+                // happens with no *core* domain and every one of them would
+                // otherwise be refused for an unrelated reason. It used to be
+                // absent, and the conversion invented node 0 to cover for it --
+                // so each of these tests was quietly also asserting that
+                // fabrication. Supplying the node keeps each test about the
+                // thing it is named for.
+                Domain {
+                    kind: DomainKind::Memory {
+                        memory_bytes: windows_topology_sys::Observed::NotObserved,
+                    },
+                    processors: ProcessorSet::from_group_mask(0, mask),
+                    observations: vec![windows_topology_sys::Observation::new(
+                        windows_topology_sys::Source::RelationshipWalk,
+                        0,
+                    )],
+                },
+            ],
             cpu_sets: None,
             ..Default::default()
         }
@@ -799,6 +818,18 @@ mod multi_group_conversion {
             },
             online: true,
             capacity: 0,
+        });
+        // Group 1 needs its own memory domain, because a processor no memory
+        // domain names is now refused rather than defaulted to node 0.
+        topology.domains.push(Domain {
+            kind: DomainKind::Memory {
+                memory_bytes: windows_topology_sys::Observed::NotObserved,
+            },
+            processors: ProcessorSet::from_group_mask(1, 0b1),
+            observations: vec![windows_topology_sys::Observation::new(
+                windows_topology_sys::Source::RelationshipWalk,
+                1,
+            )],
         });
         topology.domains.push(Domain {
             kind: DomainKind::Group,
@@ -836,12 +867,24 @@ mod multi_group_conversion {
     }
 
     #[test]
-    fn node_zero_is_the_answer_only_when_no_memory_domain_exists() {
-        // The half of the default that is correct: a topology naming no memory
-        // domain describes one node, and every processor is in it.
-        let places = places_from_topology(&bare_processors(2)).expect("one implicit node");
+    fn a_topology_naming_no_memory_domain_is_refused_rather_than_defaulted() {
+        // **This test asserted the opposite until the PR #56 review.** It said a
+        // topology naming no memory domain "describes one node, and every
+        // processor is in it", and node 0 was supplied for them all. That reads
+        // as a reasonable default and is a fabrication: the topology declined to
+        // state a memory domain, `MachineMemoryTopology` reports that as
+        // `NotObserved` with no node-zero fallback of its own, and the number
+        // invented here reaches `VirtualAllocExNuma` -- so the probe would
+        // allocate on a node nobody established and measure the result as
+        // though it had.
+        let mut topology = bare_processors(2);
+        topology
+            .domains
+            .retain(|domain| !matches!(domain.kind, DomainKind::Memory { .. }));
 
-        assert!(places.iter().all(|p| p.numa_node == 0));
+        let refusal = places_from_topology(&topology)
+            .expect_err("a placement nobody observed must not be invented");
+        assert_eq!(refusal.missing, MissingPlacement::NumaNode);
     }
 
     #[test]
@@ -851,6 +894,11 @@ mod multi_group_conversion {
         // this machine does not have, which is exactly the fabricated label the
         // crate's own seam rule forbids.
         let mut topology = bare_processors(3);
+        // Drop the fixture's blanket node so cpu2 is genuinely outside every
+        // named domain; the two pushed below cover only cpu0 and cpu1.
+        topology
+            .domains
+            .retain(|domain| !matches!(domain.kind, DomainKind::Memory { .. }));
         for (id, mask) in [(1_u32, 0b001_usize), (2, 0b010)] {
             topology.domains.push(Domain {
                 kind: DomainKind::Memory {
@@ -958,6 +1006,18 @@ mod multi_group_conversion {
             },
             online: true,
             capacity: 0,
+        });
+        // Group 1 needs its own memory domain, because a processor no memory
+        // domain names is now refused rather than defaulted to node 0.
+        topology.domains.push(Domain {
+            kind: DomainKind::Memory {
+                memory_bytes: windows_topology_sys::Observed::NotObserved,
+            },
+            processors: ProcessorSet::from_group_mask(1, 0b1),
+            observations: vec![windows_topology_sys::Observation::new(
+                windows_topology_sys::Source::RelationshipWalk,
+                1,
+            )],
         });
         topology.domains.push(Domain {
             kind: DomainKind::Group,
@@ -1130,12 +1190,16 @@ mod multi_group_conversion {
         // `L-[4]` improved silently: the unpartitioned branch fills the cache
         // list with the processor count, so it used to read `L-[0]`.
         //
-        // `numa[]` is the deliberate asymmetry. Every placement for this
-        // topology reports node 0, so the node list no longer sums to the
-        // processor count -- but `L-` marks the cache absence and nothing marks
-        // a NUMA one, so rendering `numa[4]` would be indistinguishable from a
-        // host that really did report one node of four, and the more useful fact
-        // would be lost. See the field docs and PT-6.2.
+        // **`numa[4]`, and it used to be `numa[]`.** The old expectation rested
+        // on a fabrication: this fixture named no memory domain, the conversion
+        // invented node 0 for every processor, and the render then suppressed
+        // the node list because a `numa[4]` built from an invented node would be
+        // indistinguishable from a host that really did report one node of four.
+        // The fixture now names the node it means, so the count is real and is
+        // rendered. A topology that genuinely names no memory domain is refused
+        // outright rather than rendered -- see
+        // `a_topology_naming_no_memory_domain_is_refused_rather_than_defaulted`.
+        // See the field docs and PT-6.2.
         let fingerprint = Fingerprint::from_topology(&bare_processors(4));
 
         // The `!!SYNTHETIC!!` prefix is load-bearing rather than noise: a
@@ -1144,15 +1208,16 @@ mod multi_group_conversion {
         assert_eq!(
             fingerprint.to_string(),
             format!(
-                "!!SYNTHETIC!! {} 4p/0c smt- L-[4] ec[] numa[]",
+                "!!SYNTHETIC!! {} 4p/0c smt- L-[4] ec[] numa[4]",
                 std::env::consts::ARCH
             )
         );
-        assert!(
-            fingerprint.numa_node_sizes.iter().sum::<usize>() < fingerprint.processors,
-            "the node list is what the topology reported, not a partition of the \
-             processors; this asymmetry is documented, so a future change that \
-             removes it should fail here and be made on purpose"
+        assert_eq!(
+            fingerprint.numa_node_sizes.iter().sum::<usize>(),
+            fingerprint.processors,
+            "this fixture now names one node covering every processor, so the list \
+             sums to the count -- it previously summed to less only because the \
+             node was invented and the render suppressed it"
         );
     }
 

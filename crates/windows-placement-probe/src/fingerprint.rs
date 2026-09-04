@@ -720,10 +720,10 @@ pub fn places_from_topology(
         }
     }
 
+    // No `any_memory_domain` flag any more: it existed only to license the
+    // node-zero fallback below, and that fallback invented a placement.
     let mut numa_of = std::collections::BTreeMap::new();
-    let mut any_memory_domain = false;
     for domain in topology.memory_domains() {
-        any_memory_domain = true;
         // The relationship walk's label, which is the real Windows NUMA node
         // number -- NOT a position. This value reaches `VirtualAllocExNuma`,
         // so a positional index would allocate on the wrong node on any machine
@@ -799,13 +799,20 @@ pub fn places_from_topology(
                 None if !any_cache_partition => Observed::Absent,
                 None => Observed::NotObserved,
             };
-            let numa_node = match numa_of.get(&id).copied() {
-                Some(node) => node,
-                // The same rule again: a topology naming no memory domain
-                // describes a machine with one node, and every processor is in
-                // it.
-                None if !any_memory_domain => 0,
-                None => return refuse(MissingPlacement::NumaNode),
+            // **No fallback, deliberately.** This previously read node 0 when
+            // the topology named no memory domain, on the reasoning that such
+            // a machine has one node and every processor is in it. That
+            // reasoning invents a fact: `MachineMemoryTopology` reports an
+            // unobserved memory domain as `NotObserved` and offers no
+            // node-zero default, so the probe was manufacturing a placement
+            // the topology declined to state -- and this number is passed to
+            // `VirtualAllocExNuma`, which then allocates on a node nobody
+            // established. Refusing the processor is the honest answer, and it
+            // matches the `cache_domain` arm above, which was corrected
+            // earlier in this same review cycle for exactly this reason.
+            // Raised in the PR #56 review.
+            let Some(numa_node) = numa_of.get(&id).copied() else {
+                return refuse(MissingPlacement::NumaNode);
             };
 
             Ok(ProcessorPlace {
