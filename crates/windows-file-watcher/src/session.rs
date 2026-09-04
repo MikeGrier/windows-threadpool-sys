@@ -69,11 +69,26 @@ impl Session {
     /// `path` reaches Win32 **verbatim** (D-85). It may be relative, may use
     /// forward slashes, and may contain `.` or `..`, because this crate does not
     /// prepend `\\?\` on a caller's behalf -- that prefix selects a different
-    /// path parsing mode in which none of those resolve. The consequence worth
-    /// knowing: a path longer than `MAX_PATH` opens only if **your**
-    /// application declares `longPathAware` in its manifest and the machine has
-    /// `LongPathsEnabled` set, or if you pass an already-`\\?\`-prefixed path,
-    /// which is forwarded unchanged.
+    /// path parsing mode in which none of those resolve.
+    ///
+    /// The consequence worth knowing is about length, and it differs for the
+    /// two kinds of path:
+    ///
+    /// - **Absolute.** A path longer than `MAX_PATH` opens if **your**
+    ///   application declares `longPathAware` in its manifest *and* the machine
+    ///   has `LongPathsEnabled` set, or if you pass an already-`\\?\`-prefixed
+    ///   path, which is forwarded unchanged.
+    /// - **Relative.** Neither escape applies. A relative path is always
+    ///   limited to `MAX_PATH` in total, because the `\\?\` prefix cannot be
+    ///   used with one -- the prefix means "do not resolve this", and a
+    ///   relative path exists to be resolved against the current directory.
+    ///   Opting into long paths does not lift that, so an overlong relative
+    ///   path fails to open however the machine and manifest are configured.
+    ///   Make it absolute if it may exceed `MAX_PATH`.
+    ///
+    /// An earlier version of this note gave the two escapes without that
+    /// distinction, which invited the reading that the manifest setting is
+    /// enough for any path. Raised in the PR #56 review.
     ///
     /// # Errors
     ///
