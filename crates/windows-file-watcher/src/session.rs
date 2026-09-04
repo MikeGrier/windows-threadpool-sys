@@ -88,8 +88,26 @@ impl Session {
     ///   limit is a consequence of the prefix route, not a separate ceiling
     ///   the opt-in leaves standing.
     ///
-    /// So a long relative path is fine in a long-path-aware process, and has
-    /// no escape at all in one that has not opted in.
+    /// So, *as documented*, a long relative path is fine in a long-path-aware
+    /// process and has no escape at all in one that has not opted in.
+    ///
+    /// **That last paragraph is what Microsoft documents, not what this crate
+    /// has measured, and the distinction is deliberate.** A plausible
+    /// implementation of the opt-in is to regularize the path and then prepend
+    /// `\\?\` before proceeding as usual -- and that would have an observable
+    /// edge, because the prefix is exactly what disables `.`, `..` and
+    /// forward-slash translation. A relative path using any of those could then
+    /// behave one way under `MAX_PATH` and another way over it. Nothing here
+    /// has run that experiment, this crate passes the path to Win32 verbatim
+    /// so it cannot mask such a difference, and a caller relying on `..` in a
+    /// long relative path should measure it on their own target before
+    /// depending on it.
+    ///
+    /// Queued as `M35.1` rather than left as a doubt in prose. The reason it
+    /// is not answered here is narrow and worth stating: the machine half of
+    /// the opt-in is already satisfied on the development host, and what is
+    /// missing is a test binary carrying `longPathAware` in its manifest,
+    /// which no crate in this workspace does yet.
     ///
     /// # Errors
     ///

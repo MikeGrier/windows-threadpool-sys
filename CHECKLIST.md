@@ -172,6 +172,35 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   discussion thread, so "can this be captured and asserted end to end?" has real value there rather
   than being architectural tidiness.
 
+## M35 -- Measure what the long-path opt-in actually does
+
+- [ ] **M35.1** -- **Measure whether the long-path opt-in lifts `MAX_PATH` for a *relative* path, and
+  whether it does so without changing how the path is parsed.** A probe, not a doc edit: the question
+  is about behaviour and has already produced two wrong answers from reading alone.
+  **The state of the evidence.** Microsoft's
+  [Maximum Path Length Limitation](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)
+  puts "relative paths are always limited to a total of MAX_PATH characters" inside the `\\?\`
+  **prefix** section, as a consequence of that mechanism, and its separate long-path opt-in section
+  lists `CreateFileW` among the functions with the restriction removed, excluding nothing. So the
+  documented answer is that the opt-in covers relative paths. A PR #56 review round asserted the
+  opposite; that assertion was accepted and shipped for one commit on the strength of a web search
+  returning blog posts, then reverted against the primary source.
+  **The hypothesis worth falsifying, and why documentation cannot settle it.** A plausible
+  implementation is to regularize the path and prepend `\\?\` before proceeding -- and that prefix is
+  precisely what disables `.`, `..` and forward-slash translation. If that is how it works, a relative
+  path containing any of those could resolve under `MAX_PATH` and fail over it, which no page states
+  and which callers of this crate would meet directly, since `windows-file-watcher` passes paths to
+  Win32 verbatim (`D-85`) and cannot mask the difference.
+  **What the experiment needs.** `LongPathsEnabled` is already `1` on the development host, so the
+  machine half is satisfied; what is missing is a test binary carrying `longPathAware` in its
+  manifest, which no crate here does yet. Then: build a directory tree past `MAX_PATH`, set the
+  current directory inside it, and call `CreateFileW` with relative paths that are short/long and
+  plain/`..`-bearing/forward-slashed, recording which combinations open. Run it with the manifest
+  present and absent, since the absent case is the one most consumers will actually have.
+  **Report the result where the claim lives**: `Session::subscribe`'s note currently says what
+  Microsoft documents and says plainly that this workspace has not measured it. Replace that with the
+  measurement, or with the sharp edge if one is found.
+
 ## M-inf -- Parked
 
 Ungated work with no identified predecessor deliverable.
