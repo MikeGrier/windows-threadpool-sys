@@ -122,11 +122,55 @@ if ($Staged) {
     }
 }
 
-if (-not $findings) {
-    Write-Host 'No release-triggering commit spans more than one released crate.' -ForegroundColor Green
-    exit 0
+# A `Release-As:` pin asserts something about a crate's surface. It stays honest
+# only while nothing breaks underneath it, so a breaking commit landing in a
+# pinned crate AFTER the pin is a defect: it would ship a compatible-looking
+# version over an incompatible surface, which is worse than the overstated bump
+# the pin was written to avoid. Remove the pin rather than absorb the break.
+$pinViolations = @()
+if (-not $Staged) {
+    $pins = @{}
+    foreach ($sha in @(git --no-pager log $Range --format='%h' --reverse)) {
+        $body = git --no-pager log -1 --format='%B' $sha | Out-String
+        $touched = @(Get-ReleasedCrates @(git --no-pager show $sha --name-only --format=''))
+        if ($body -match '(?m)^Release-As:\s*(\S+)\s*$') {
+            $pinnedTo = $matches[1]
+            foreach ($crate in $touched) { $pins[$crate] = @{ Version = $pinnedTo; Sha = $sha } }
+            continue
+        }
+        $subject = git --no-pager log -1 --format='%s' $sha
+        if (-not (Test-Breaking $subject)) { continue }
+        foreach ($crate in $touched) {
+            if ($pins.ContainsKey($crate)) {
+                $pinViolations += [pscustomobject]@{
+                    Crate = $crate; Pin = $pins[$crate].Version; PinSha = $pins[$crate].Sha
+                    Sha = $sha; Subject = $subject
+                }
+            }
+        }
+    }
 }
 
+if ($pinViolations) {
+    Write-Host ''
+    Write-Host "$($pinViolations.Count) breaking change(s) landed in a crate whose version is PINNED." -ForegroundColor Red
+    foreach ($v in $pinViolations) {
+        Write-Host ("  {0} pinned to {1} by {2}, then broken by {3}  {4}" -f $v.Crate, $v.Pin, $v.PinSha, $v.Sha, $v.Subject)
+    }
+    Write-Host ''
+    Write-Host 'A pin asserts the surface is compatible. Remove the pin and let the crate take its' -ForegroundColor Cyan
+    Write-Host 'bump -- never absorb a break underneath a version that says there is not one.'
+    exit 1
+}
+
+if (-not $findings) {
+    Write-Host 'No release-triggering commit spans more than one released crate.' -ForegroundColor Green
+    if (-not $Staged) {
+        $pinLines = @(git --no-pager log $Range --format='%B' | Select-String '^Release-As:')
+        if ($pinLines) { Write-Host "  ($($pinLines.Count) Release-As pin(s) in range, none broken since)" -ForegroundColor DarkGray }
+    }
+    exit 0
+}
 Write-Host ''
 Write-Host "$($findings.Count) release-triggering change(s) span more than one released crate." -ForegroundColor Yellow
 Write-Host 'Each of these crates will get a changelog entry and a version bump from it.'
