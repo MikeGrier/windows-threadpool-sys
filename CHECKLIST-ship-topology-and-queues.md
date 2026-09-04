@@ -334,7 +334,7 @@ that previously stood in the way are gone:
   |---|---|---|---|
   | `windows-topology-sys` | 0.1.0 | **0.2.0** | 9 breaking |
   | `windows-waitable-queues` | 0.1.0 | **0.2.0** | 6 breaking -- but see SH-3.4.1 |
-  | `windows-ioring-sys` | 0.2.0 | **0.3.0** | 2 breaking by path attribution -- see SH-3.4.2 |
+  | `windows-ioring-sys` | 0.2.0 | **0.2.1** | pinned by `Release-As` -- SH-3.4.2, [D-46](crates/windows-ioring-sys/DESIGN-NOTES.md#d-46) |
   | `windows-file-watcher` | 0.1.3 | **0.2.0** | 1 breaking, the reopen-by-id removal |
   | `windows-thread-ambient-sys` | 0.2.0 | **0.2.1** | 3 `fix:` commits scoped to other crates that changed its `src/` |
   | `windows-file-watcher-example-test-harness` | 0.1.2 | **0.1.3** | not its own commits -- the `cargo-workspace` plugin, below |
@@ -361,7 +361,21 @@ that previously stood in the way are gone:
   break. Either accept 0.2.0 as the first version, or force the first release with `Release-As: 0.1.0`.
   Not a defect -- a naming decision that is cheap now and permanent afterwards.
 
-- [ ] **SH-3.4.2** -- **Decide what to do about `windows-ioring-sys`' unearned breaking bump.**
+- [x] **SH-3.4.2** -- **Decide what to do about `windows-ioring-sys`' unearned breaking bump.**
+  **DECIDED 2026-09-03: ioring ships as 0.2.1.** Pinned by a `Release-As: 0.2.1` footer on `cdce13b`,
+  a commit touching only `crates/windows-ioring-sys/`, which release-please applies per package by
+  path. Verified against its documentation that the footer works on any commit type -- including
+  `docs:` -- and overrides a breaking bump. Rationale recorded as
+  [D-46](crates/windows-ioring-sys/DESIGN-NOTES.md#d-46) in the crate that owns the consequence.
+  **The pin creates an obligation, and it is enforced rather than remembered**: a forced version
+  asserts the surface is compatible, so **no breaking change may enter `windows-ioring-sys` before
+  0.2.1 ships**. If one becomes necessary the pin is removed and the crate takes its bump -- the
+  break is never absorbed under a version that says there is not one, which would ship a
+  compatible-looking version over an incompatible surface and is strictly worse than the overstated
+  0.3.0 this avoids. [tools/check-commit-scope.ps1](tools/check-commit-scope.ps1) now fails when a
+  breaking commit lands in a crate pinned earlier in the range; sabotage-verified by injecting a
+  `feat(ioring)!` after the pin and confirming it named both commits.
+
   Release-please attributes a commit by the **paths it touches**, not by its Conventional Commits scope.
   Two `feat(topology)!` commits (`b9e0c35`, `36e397d`) touched `crates/windows-ioring-sys/`, so it
   will take a breaking **0.3.0**. Its public API did not break: the only changes there were one
