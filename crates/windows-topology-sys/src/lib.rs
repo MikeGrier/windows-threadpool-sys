@@ -49,10 +49,25 @@
 //!
 //! # Availability
 //!
-//! `GetLogicalProcessorInformationEx` is documented back to Windows Vista /
-//! Server 2008, so [`MachineMemoryTopology::discover`] works on every version this
-//! repository's shared baseline supports; nothing here is gated on a runtime
-//! capability probe the way `windows-ioring-sys` needs one.
+//! **Windows 11 / Windows Server 2025 and later.**
+//!
+//! That is the floor this crate claims, and it is a claim about what is
+//! *tested* rather than the oldest version the APIs might work on.
+//! `GetLogicalProcessorInformationEx` is documented back to Vista, and an
+//! earlier version of this section said so -- but [`MachineMemoryTopology::discover`]
+//! also calls `GetSystemCpuSetInformation`, which is documented only from
+//! Windows 10 / Server 2016, and this crate imports it statically. A down-level
+//! system would therefore fail to *load* the process, not merely get a poorer
+//! answer. Raised in PR #56 review.
+//!
+//! The floor is stated at Windows 11 / Server 2025 rather than at the older
+//! version the imports would technically permit, because nothing below that is
+//! tested here and an untested floor is a guess presented as a guarantee.
+//! Server 2025 is the server release built on the Windows 11 codebase; Server
+//! 2022 is not, despite the adjacent version numbers.
+//!
+//! Nothing here is gated on a runtime capability probe the way
+//! `windows-ioring-sys` needs one.
 //!
 //! # The JSON schema is not semver-covered
 //!

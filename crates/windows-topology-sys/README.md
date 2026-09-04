@@ -2,6 +2,13 @@
 
 A refined view of the processor, cache, and memory topology Windows publishes.
 
+**Windows 11 / Windows Server 2025 and later.** That floor is what is *tested*,
+not the oldest version the APIs might work on: `discover` calls
+`GetSystemCpuSetInformation`, which is documented only from Windows 10 /
+Server 2016 and is imported statically, and nothing below Windows 11 is
+exercised here. (Server 2025 is the server release built on the Windows 11
+codebase; Server 2022 is not, despite the adjacent version numbers.)
+
 **Windows only.** The crate does not build on other platforms, and is not
 intended to: an earlier version of this line claimed it degraded to an empty
 shell elsewhere, which was never true and was never built in CI (raised in

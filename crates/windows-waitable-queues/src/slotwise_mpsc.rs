@@ -159,7 +159,7 @@ const BOUNDS: Bounds = Bounds {
 /// # Errors
 ///
 /// Returns [`CapacityError`] if `capacity` is zero, is not a power of two, is
-/// less than two, or exceeds [`usize::MAX`] / 2.
+/// less than two, or exceeds `2^(usize::BITS - 2)`.
 ///
 /// # Examples
 ///

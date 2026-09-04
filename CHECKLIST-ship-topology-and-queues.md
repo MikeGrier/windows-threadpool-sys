@@ -475,6 +475,22 @@ that previously stood in the way are gone:
   is no gate to lift and no bullet to edit. The tool's GitHub binaries never waited on this.
   Blocked by SH-1.1, and by M31.6 as well if SH-1.2 decided that it gates.
 
+- [ ] **SH-4.4** -- **State the supported Windows baseline in the crates this PR did not release.**
+  `windows-topology-sys` was corrected in PR #56 (it claimed Vista / Server 2008 while statically
+  importing a Windows 10 API), and the engineer''s ruling is that a crate should claim **Windows 11
+  and the matching server release** -- the floor that is *tested*, not the oldest the APIs might
+  work on. **Scoped deliberately to the releasing crates at the time**, so the rest are queued here
+  rather than changed under a PR that does not publish them.
+  To review, one crate at a time: `windows-threadpool-sys`, `windows-overlapped-io-sys`,
+  `windows-file-enumeration-sys`, `windows-impersonation-token-sys`, `windows-namespace-request-sys`,
+  `wtf-string`, and `windows-file-watcher`.
+  **Two traps found doing the first one.** A statement about *when an API appeared* is not a baseline
+  claim and must not be rewritten -- `windows-ioring-sys`'' "Windows 11 and Server 2022 added
+  `IoRing`" and `windows-file-watcher`''s "supported from Windows 10 version 1803 onward" are both
+  correct as API facts. And **Server 2022 is not the Windows 11 counterpart**: it is built on the
+  Windows 10 "Iron" codebase (build 20348), while Server 2025 shares Windows 11 24H2''s build 26100.
+  A crate claiming a Windows 11 floor pairs with **Server 2025**.
+
 ## M5: verify from outside the workspace
 
 - [ ] **SH-5.1** -- In a scratch project **outside this repository**, depend on both crates from
