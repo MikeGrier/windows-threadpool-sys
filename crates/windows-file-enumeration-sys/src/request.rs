@@ -38,10 +38,16 @@ pub(crate) const RECORD_ALIGNMENT: usize = 8;
 /// The page size every Windows target this crate builds for uses.
 ///
 /// Named rather than written as `4096` at the assertion site, and stated here
-/// because it is the unit [`DEFAULT_BUFFER_CAPACITY`] is chosen in: a buffer
-/// that is a whole number of pages has each refill begin on a page boundary.
-/// Large-page allocations are a different mechanism and are not what this
-/// buffer uses.
+/// because it is the unit [`DEFAULT_BUFFER_CAPACITY`]'s *length* is chosen in.
+///
+/// **It says nothing about alignment**, and an earlier version of this comment
+/// claimed it did -- twice, in two places six lines apart, of which only one
+/// was corrected on the first attempt. [`crate::buffer::NativeBuffer`] stores
+/// `Vec<u64>`, so the allocation is 8-byte aligned; a length that is a whole
+/// number of pages does not decide where the buffer *starts*, and a refill can
+/// begin partway through a page. What the constraint buys is a round request
+/// size with no part-page tail. Large-page allocations are a different
+/// mechanism and are not what this buffer uses.
 const PAGE_SIZE: usize = 4096;
 
 // The relationships these capacities depend on, checked by the compiler rather
