@@ -216,19 +216,28 @@ jobs:
   # ever appears, the answer is already in that build's log. A design decision
   # is currently resting on documentation because no such machine is available.
   #
-  # A FAILURE HERE MUST NOT BREAK THE BUILD. These are observations, not
-  # assertions -- `continue-on-error` is deliberate, not laziness.
+  # A SPIKE'S RESULT MUST NOT BREAK THE BUILD, BUT A BROKEN SPIKE MUST.
+  # `run-numa-spikes.ps1` already draws that line and is the only place that
+  # does: it exits 0 for any *finding*, including the vacuous one expected here,
+  # and non-zero only when a spike fails to build or to run. So this job carries
+  # no `continue-on-error` -- adding one back would discard exactly the signal
+  # the script exits non-zero to raise, and the two statements below would stop
+  # being true.
+  #
+  # It had one until 2026-09-04, and that is what the PR #56 review caught: the
+  # job-level flag converted the script's deliberate exit 1 into a green check,
+  # so a spike that no longer compiled would have gone unnoticed indefinitely.
   #
   # They are compiled through the scratch-crate procedure their own README
   # documents, rather than being made workspace members, because each is
   # deliberately written against `windows-sys` alone so that what it measures is
   # the operating system and not us. A useful side effect: this job is the
   # executable form of that README instruction, so the instruction cannot rot
-  # without turning this step red.
+  # without turning this step red -- which is only true while the step is
+  # allowed to turn red.
   numa-spikes:
-    name: NUMA spikes (observational, never fails the build)
+    name: NUMA spikes (results observational, instrument failures block)
     runs-on: windows-latest
-    continue-on-error: true
     timeout-minutes: 15
     env:
       RUSTUP_TOOLCHAIN: stable
