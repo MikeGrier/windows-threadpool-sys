@@ -24,24 +24,30 @@
 //!
 //! # What it collects, and what it does not
 //!
-//! **Collected:** the shape of the machine (logical processors, cores, cache
-//! domains, efficiency classes, NUMA nodes), the CPU model, the OS build, a
-//! hint about whether virtualisation was detected, and the timings this tool
-//! measures.
+//! **Always collected:** the shape of the machine (logical processors, cores,
+//! cache domains, efficiency classes, NUMA nodes) and the timings this tool
+//! measures. That is the measurement, so it is not redactable.
 //!
-//! **Not collected:** host name, user name, file paths, environment variables,
-//! serial numbers, or anything about installed software. That list is a
-//! commitment rather than a description of the current implementation.
+//! **Collected only with `--include-metadata`:** the CPU model, the OS build, a
+//! hint about whether virtualisation was detected, and the minute the run
+//! finished. These are *context* rather than measurement, so they are
+//! **withheld by default** -- see
+//! [`redaction::MetadataPolicy`]. A field the
+//! policy withholds is not read at all, rather than read and then dropped.
+//!
+//! **Never collected:** host name, user name, file paths, environment
+//! variables, serial numbers, or anything about installed software. That list
+//! is a commitment rather than a description of the current implementation.
 //!
 //! **The tool makes no network connections.** It writes a file; sending it is
 //! your decision and your action. The record is text, so you can read it before
-//! deciding -- and if you would rather not share the CPU model, there is a
-//! switch for that.
+//! deciding.
 //!
-//! **If the hardware is confidential, do not send the record.** The model name
-//! can be suppressed, but the topology *is* the measurement, and an unreleased
-//! part is identified by its shape at least as well as by its name. No switch
-//! fixes that, and pretending otherwise would be worse than saying so.
+//! **If the hardware is confidential, do not send the record.** Redaction
+//! reduces incidental leakage and nothing more: the topology *is* the
+//! measurement, and an unreleased part is identified by its shape at least as
+//! well as by its name. No switch fixes that, and pretending otherwise would be
+//! worse than saying so.
 //!
 //! # An instrument, not a library
 //!

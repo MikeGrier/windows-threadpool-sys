@@ -27,6 +27,15 @@ fn main() {
 /// The probe's whole report, as text.
 fn render() -> String {
     let mut out = String::new();
+    // First line of the report, and part of the returned text rather than
+    // written out here: a captured report must carry the line naming the
+    // machine that produced it, and the taint marker with it. Without it a
+    // finding can be pasted anywhere and compared against anything.
+    let _ = writeln!(
+        out,
+        "{}",
+        windows_placement_probe::fingerprint::banner_line()
+    );
     let fixture = Fixture::new("bin");
     let truth = ground_truth(&fixture);
     let _ = writeln!(out, "--- ground truth (one handle, start to finish) ---");

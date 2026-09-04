@@ -129,6 +129,15 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
 - [ ] **M34.2** -- **Route every tool's output through one sink, per the repository's own rule**: never
   call `println!`/`eprintln!` from more than one site in a tool; introduce a writer trait, sink or
   formatter at the first occurrence and route everything through it.
+  **Updated 2026-09-04 (second pass): every probe now leads its report with the host line.** The
+  banner had reached only the seven binaries this item named plus the shared long-path renderer,
+  which left **eight** probes -- `cancel_io`, `completion_port`, `device_map`, `error_mode`,
+  `handle_state`, `ioring`, `pool_growth`, `worker_context` -- composing a report that named no
+  machine. `pool_growth` was the sharpest case: it printed "every number here is from this host and
+  this Windows build" while giving a reader no way to tell which host that was. The rest are
+  behavioural findings about what *this* Windows does, which is equally uninterpretable unattributed.
+  All eight now emit `banner_line()` as the first line of the returned text, verified by running each
+  binary rather than by reading the diff. Raised by Copilot at review `5118237348`.
   **Updated 2026-09-04: the conversion is done; what remains is the capture test.** The item said
   "seven binaries violate this today" and named them, from review 5072622803 on pull request #56.
   Five had already been converted when a later review round re-checked, and the last two --

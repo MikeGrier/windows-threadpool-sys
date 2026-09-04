@@ -47,6 +47,15 @@ fn main() {
 /// changes the result.
 fn render() -> String {
     let mut out = String::new();
+    // First line of the report, and part of the returned text rather than
+    // written out here: a captured report must carry the line naming the
+    // machine that produced it, and the taint marker with it. Without it a
+    // finding can be pasted anywhere and compared against anything.
+    let _ = writeln!(
+        out,
+        "{}",
+        windows_placement_probe::fingerprint::banner_line()
+    );
     let _ = writeln!(out, "--- each bit on its own, set then read back ---");
     for bit in [
         bits::FAIL_CRITICAL_ERRORS,
