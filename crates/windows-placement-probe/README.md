@@ -77,6 +77,53 @@ A withheld field is recorded as withheld rather than merely left blank, so
 somebody reading a submission can always tell "the runner did not send this"
 from "this host would not say".
 
+### What redaction costs
+
+Redaction is the default because most results do not need the context. It is not
+free, though, and presenting it as free would be a way of deciding for you. So
+here is what you are withholding, and either choice is a reasonable one to make
+once you have read it.
+
+**Withheld context cannot be recovered later.** Everything below follows from
+that asymmetry. A field nobody sent is gone: the machine belongs to someone else,
+the run is over, and the question that needed it usually gets asked months
+afterwards. Collecting too much is a privacy cost that can at least be corrected
+going forward by collecting less; collecting too little cannot be corrected at
+all.
+
+What each field buys, in the order that actually matters for this dataset:
+
+- **The virtualisation hint decides whether a submission can answer the question
+  at all.** A VM slice *flattens topology* -- the machine this tool was developed
+  on reports one L3 domain and one NUMA node for silicon that has eight and two.
+  The rows this project is missing, the cost of crossing between NUMA nodes, are
+  missing for exactly that reason. Without the hint, a flat topology from a small
+  bare machine and a flat slice of a large virtual one arrive as the same
+  submission.
+- **The OS build explains a disagreement.** Placement cost is a scheduler
+  behaviour, and the scheduler changes between Windows builds. Two results that
+  disagree are otherwise indistinguishable from two builds disagreeing -- and
+  once results are pooled without it, nothing recovers the distinction.
+- **The CPU model makes a result citable.** A detailed topology narrows the part
+  to a small class; the name identifies one. It is also what lets two submissions
+  from the same part be pooled with confidence rather than by inference.
+- **The minute is the weakest of the four**, and saying so is more useful than
+  pretending otherwise. Alongside an OS build it adds little; without one it is
+  the only thing that places a result relative to a known change. Its cost is
+  precisely its benefit read backwards: a timestamp is what would let two
+  submissions from one host be recognised as one host's, which is why it is
+  withheld at all despite being the least explanatory of the four.
+
+**Redaction does not make you anonymous, and it is not offered as though it
+does.** The topology is always sent, it is the most identifying thing in the
+record, and an unusual machine is recognisable from it alone. What redaction does
+is keep context out of a record that was never about the context.
+
+**A redacted submission is still a good submission.** Every withheld field says
+it was withheld, so a reader can weigh the result rather than guess at it. If the
+choice is between sending a redacted result and sending nothing, send it -- that
+difference is far larger than everything on this page.
+
 ### If the hardware is confidential, do not send the result
 
 Redaction reduces incidental leakage and nothing more. An unreleased part

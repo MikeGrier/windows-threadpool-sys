@@ -685,7 +685,14 @@ actionable is identifying and therefore belongs behind the review this tool alre
   redactable field needs the same treatment.
   **No `SCHEMA_VERSION` bump**: the freeze starts at the first release and this crate has not had one.
 
-- [ ] **M36.3** -- **Say in the README what redaction costs.** There is real value in correlating
+- [x] **M36.3** -- **Say in the README what redaction costs.** Done 2026-09-04, as a
+  "What redaction costs" section. Built on the asymmetry `PT-1.2` already established -- withheld
+  context cannot be recovered later, while over-collection can be corrected going forward -- then
+  what each of the four fields buys, ordered by explanatory value rather than by sensitivity, with
+  the minute named as the weakest of them. Two guards against mis-reading the new default: redaction
+  does not make a submitter anonymous, because the topology is always sent and is the most
+  identifying thing in the record; and a redacted submission is still a good submission, because
+  sending nothing is by far the worse outcome. There is real value in correlating
   metadata anomalies with specific platform versions -- a defect that shows up only on one OS build,
   or only under one hypervisor, is exactly what the secondary metadata is for. A reader choosing to
   include it should understand they are helping, and a reader choosing not to should understand what
