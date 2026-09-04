@@ -370,6 +370,31 @@ that previously stood in the way are gone:
   consumers who experience none. **The general lesson outlives this instance**: a breaking commit that
   incidentally edits a second crate's files bumps that crate as breaking too, so either keep such
   commits path-clean or expect to correct the bump.
+
+  **This is not hypothetical -- it has already shipped.** `windows-ioring-sys`'s existing CHANGELOG
+  carries two `**guard-alloc:**` entries (`983afbc`, `36ecd8a`), which landed there because those
+  commits touched `crates/windows-ioring-sys/tests/registration.rs`; guard-alloc is a dev-dependency,
+  so exercising it meant editing ioring's tests. Same mechanism, one release earlier, unnoticed.
+
+  **Splitting the commit is the right shape, and a naive two-way split is wrong.** The obvious fix --
+  "rename in topology, then update the ioring example in a `chore:` commit" -- produces a commit that
+  **does not compile**: `examples/ring_copy/plan.rs` does `use windows_topology_sys::{..., Topology}`
+  and `pub fn build_plan(topology: &Topology, ...)`, so a topology-only rename breaks it until the
+  follow-up lands. CI would not catch it (it builds the PR head and main's tip, not each commit), but
+  `git bisect` across that range would.
+  The version that compiles at every step is **three** commits, the deprecation dance: (1) add the new
+  name with the old one kept as an alias -- additive, `feat(topology)`, not breaking; (2) move the
+  consumer to the new name -- `chore(ioring)`, no novelty; (3) delete the alias -- `feat(topology)!`,
+  touching only topology paths. Adopt that shape for a cross-crate rename from now on.
+
+  **Do not rewrite these two commits.** They are 15 and 44 deep in a pushed branch with an open PR;
+  `git rebase -i` is forbidden by this repository's own terminal rules; and retrofitting the alias
+  step would mean fabricating a deprecation that never happened, for one changelog line.
+
+  **The cheap correct fix, if the bump is worth correcting:** a `Release-As: 0.2.1` footer on a commit
+  that touches **only** `crates/windows-ioring-sys/`. Verified against release-please's manifest-mode
+  documentation that the footer is applied **per package, by the paths the commit touches**, so it
+  pins ioring without disturbing the other five bumps. Decide between that and simply accepting 0.3.0.
   **The gate this used to hold over SH-2.2 is lifted** -- that item is closed, having had nothing
   left to do once the pins were deleted rather than maintained.
   **No longer carries a pin hazard.** An earlier version of this item warned that the PR must not be
