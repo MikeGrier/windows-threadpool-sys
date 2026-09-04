@@ -180,15 +180,39 @@ impl MachineMemoryTopology {
     /// it has never heard of would be an invention.
     #[must_use]
     pub fn proximity(&self, processors: &[ProcessorId]) -> Proximity<'_> {
+        // **A query may not abort over its own argument.** `ProcessorId`'s
+        // fields are public and `number` is a `u8`, so any value up to 255 is
+        // constructible, while a `ProcessorSet` holds one bit per processor in
+        // a `usize` -- and `ProcessorSet::insert` asserts on anything wider.
+        // Passing such an id here used to panic, which is a poor answer to a
+        // question about a machine that simply does not have that processor.
+        //
+        // The threshold is target-dependent, which is what makes it sharp:
+        // `usize::BITS` is 64 on x86-64 and 32 on `i686-pc-windows-msvc`, a
+        // target [D-18](../DESIGN-NOTES.md#d-18) deliberately keeps supported.
+        // A `number` of 40 is an ordinary query on one and an abort on the
+        // other. Raised in the PR #56 review.
+        //
+        // Reported rather than skipped: dropping the id would answer a question
+        // about fewer processors than were asked about, and "these share
+        // nothing" would become indistinguishable from "one of these cannot
+        // exist here". That is the conflation `Observed` exists to remove,
+        // arriving by a different door.
         let mut set = ProcessorSet::empty();
+        let mut unrepresentable = Vec::new();
         for id in processors {
-            set.insert(id.group, id.number);
+            if ProcessorSet::can_represent(id.number) {
+                set.insert(id.group, id.number);
+            } else {
+                unrepresentable.push(*id);
+            }
         }
         Proximity {
             shared: self.minimal_shared(&set),
             finer_unobserved: processors
                 .iter()
                 .any(|id| !self.kinds_covering(*id).is_empty()),
+            unrepresentable,
         }
     }
 
@@ -289,6 +313,20 @@ pub struct Proximity<'a> {
     ///
     /// [EP-D-2]: ../../topology-planner/DESIGN-NOTES.md
     pub finer_unobserved: bool,
+    /// Processors the query named that this platform cannot express, and which
+    /// therefore took no part in [`Self::shared`].
+    ///
+    /// Empty in every ordinary case. Non-empty means a caller passed a
+    /// `ProcessorId` whose `number` is at least `usize::BITS` -- constructible,
+    /// because the field is public and it is a `u8`, and target-dependent,
+    /// because that ceiling is 64 on x86-64 and 32 on `i686-pc-windows-msvc`.
+    ///
+    /// Carried rather than skipped so "these processors share nothing" stays
+    /// distinguishable from "one of these could not exist on this machine".
+    /// A caller that ignores this field gets the first reading of the second
+    /// situation, which is exactly the conflation this crate's `Observed`
+    /// exists to prevent elsewhere.
+    pub unrepresentable: Vec<ProcessorId>,
 }
 
 impl<'a> Proximity<'a> {

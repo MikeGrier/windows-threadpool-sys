@@ -40,12 +40,27 @@ impl ProcessorSet {
         set
     }
 
+    /// Whether a processor number fits this platform's group width.
+    ///
+    /// A `ProcessorSet` holds one bit per processor in a `usize`, so the
+    /// ceiling is `usize::BITS` -- 64 on x86-64, 32 on `i686-pc-windows-msvc`.
+    /// `ProcessorId::number` is a `u8` and its field is public, so a caller can
+    /// build an id this set cannot hold; [`Self::insert`] asserts on one, and
+    /// this is how a caller asks *before* rather than being aborted.
+    #[must_use]
+    pub fn can_represent(number: u8) -> bool {
+        u32::from(number) < MAX_PROCESSORS_PER_GROUP
+    }
+
     /// Add `number` within `group` to the set.
     ///
     /// # Panics
     ///
     /// Panics if `number` is `MAX_PROCESSORS_PER_GROUP` or greater: a
     /// processor group cannot hold more processors than a mask has bits.
+    /// [`Self::can_represent`] is how a caller holding a publicly-constructed
+    /// [`crate::ProcessorId`] asks first -- the panic is for a caller building
+    /// a set it controls, not a way to reject a query's argument.
     pub fn insert(&mut self, group: u16, number: u8) {
         assert!(
             u32::from(number) < MAX_PROCESSORS_PER_GROUP,

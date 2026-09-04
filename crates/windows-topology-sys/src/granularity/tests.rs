@@ -488,3 +488,60 @@ fn an_unknown_processor_yields_an_empty_answer_not_the_machine() {
     let t = topology(2, vec![core(&[0, 1])]);
     assert!(t.proximity(&[id(0), id(7)]).shared.is_empty());
 }
+
+#[test]
+fn a_processor_number_too_wide_for_this_platform_is_reported_not_panicked() {
+    // `ProcessorId`'s fields are public and `number` is a `u8`, so any value up
+    // to 255 is constructible; a `ProcessorSet` holds one bit per processor in
+    // a `usize`, and `insert` asserts on anything wider. `proximity` used to
+    // pass the id straight in, so a public query aborted the process over its
+    // own argument. Raised in the PR #56 review.
+    //
+    // The ceiling is `usize::BITS`, so this test's id is out of range on every
+    // supported target: 64 on x86-64, 32 on `i686-pc-windows-msvc`, and 255 is
+    // beyond both. That target-dependence is the sharp part -- a `number` of 40
+    // is an ordinary query on one and an abort on the other.
+    let topology = topology(2, Vec::new());
+    let impossible = ProcessorId {
+        group: 0,
+        number: 255,
+    };
+
+    let proximity = topology.proximity(&[impossible]);
+
+    assert_eq!(
+        proximity.unrepresentable,
+        vec![impossible],
+        "an id this platform cannot express must be named, not silently dropped"
+    );
+}
+
+#[test]
+fn an_unrepresentable_processor_does_not_corrupt_the_answer_for_the_others() {
+    // The complement: the representable processors must still be answered
+    // about. Skipping the bad id and saying nothing would answer a question
+    // about fewer processors than were asked, and a caller comparing two
+    // processors would read "nothing shared" from an argument it got wrong.
+    let topology = topology(2, Vec::new());
+    let real = ProcessorId {
+        group: 0,
+        number: 0,
+    };
+    let impossible = ProcessorId {
+        group: 0,
+        number: 255,
+    };
+
+    let alone = topology.proximity(&[real]);
+    let mixed = topology.proximity(&[real, impossible]);
+
+    assert!(
+        mixed.unrepresentable.contains(&impossible),
+        "the bad id must be reported"
+    );
+    assert_eq!(
+        mixed.shared.len(),
+        alone.shared.len(),
+        "the representable processor's answer must be unchanged by its company"
+    );
+}
