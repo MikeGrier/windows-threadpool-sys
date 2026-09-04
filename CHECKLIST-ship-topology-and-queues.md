@@ -491,6 +491,44 @@ that previously stood in the way are gone:
   Windows 10 "Iron" codebase (build 20348), while Server 2025 shares Windows 11 24H2''s build 26100.
   A crate claiming a Windows 11 floor pairs with **Server 2025**.
 
+- [ ] **SH-4.5** -- **Propagate enumeration incompleteness into the placement probe''s trust state.**
+  Raised in PR #56 review. `places_from_topology` ignores
+  `MachineMemoryTopology::enumeration_anomalies`, and `SubmissionRecord::is_fully_trusted` gates only
+  on `build.is_official()` and two `Provenance::Measured` checks -- which a `discover()` result
+  satisfies even when records were dropped. A truncated enumeration can therefore be filed as a
+  **trustworthy small machine**, which is the one thing a measurement tool must not do.
+  **Deliberately not rushed into PR #56**: the honest fix records the anomaly count *in the record*
+  and gates trust on it, and the record carries a **versioned schema** (see the `collapse the record
+  schema back to v1` commit), so this is a schema decision rather than a one-line guard. Downgrading
+  `Provenance` instead would be wrong -- per [D-22](crates/windows-topology-sys/DESIGN-NOTES.md#d-22)
+  provenance records how the object was *obtained*, not how complete it is.
+  The gap is newly reachable because `enumeration_anomalies` itself is new in this PR; before it,
+  there was nothing to propagate.
+
+- [ ] **SH-4.6** -- **Rule on whether `experimental-permit-claim` may be published at all.**
+  Raised in PR #56 review, and the reviewer is **technically right**: a public Cargo feature and its
+  `pub mod` are observable API even when non-default, so a consumer can enable the feature and depend
+  on `permit_mpsc`. Deleting it in a later compatible release would break that build, and no amount
+  of documentation exempts it from semver -- which is exactly what `SH-15.6` currently plans to do.
+  Three options, and this is the engineer''s call: commit to compatibility for the published feature;
+  move the experiment behind `#[doc(hidden)]` and a `cfg` that is not a Cargo feature, so it is not
+  observable API; or keep it out of the published crate entirely and measure it from a path
+  dependency. The disclosure in the module docs is honest but does not settle the semver question.
+
+- [ ] **SH-4.7** -- **Two `permit_mpsc` findings from the PR #56 review, one of which contradicts a
+  prior review.** Both are in the experimental module, so neither blocks the release, and both should
+  be settled before `SH-15.6` decides the module''s fate.
+  **Contract:** `Reservation::send` publishes unconditionally even when the consumer is already
+  dropped, so the caller gets no indication and the item is discarded at teardown -- where
+  `reserving_mpsc::Reservation::send` returns `Disconnected<T>` with the item. The module claims only
+  the *admission* protocol differs, so this is a divergence it does not disclose.
+  **Memory ordering:** the reviewer argues the relaxed ticket operation gives no acquire edge from
+  the consumer''s most recent `release_permit`, leaving the slot write unordered against that read.
+  **A prior review round concluded the opposite** -- that a thread holding a permit always has
+  `tail - head <= capacity - 1` at its `fetch_add`, so the slot it claims was freed by a
+  `release_permit` preceding its `fetch_sub` in modification order, with the release sequence
+  supplying the edge. One of the two is wrong; settle it with an argument written down, not a patch.
+
 ## M5: verify from outside the workspace
 
 - [ ] **SH-5.1** -- In a scratch project **outside this repository**, depend on both crates from
