@@ -106,16 +106,57 @@ fn numa_node_for(topology: &MachineMemoryTopology, processors: &ProcessorSet) ->
         })
 }
 
+/// What `--placement remote` can actually be given on this topology.
+///
+/// Three answers rather than `Option<u32>`, because the two ways of having no
+/// remote node need opposite handling and an `Option` cannot tell them apart.
+/// Conflating them is what let a restored topology silently produce a *local*
+/// measurement while the caller had asked for a remote one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteNode {
+    /// A NUMA node other than the local one. The switch does what it says.
+    Other(u32),
+    /// The memory domains name their nodes, and there is only the local one --
+    /// an ordinary single-node machine. Falling back to local is the honest
+    /// answer here, because no other node exists to place on.
+    SameAsLocal,
+    /// No memory domain carries an operational node number, so which nodes
+    /// exist cannot be determined -- let alone which is remote.
+    ///
+    /// This is what a **restored** topology gives. `Domain::deserialize`
+    /// deliberately leaves `observations` empty (D-12/D-22: a file cannot
+    /// establish that the relationship walk saw anything), and the node number
+    /// is carried by a `Source::RelationshipWalk` observation -- so
+    /// `label_from` answers `None` for every domain in a description, however
+    /// many nodes that description describes.
+    Unnamed,
+}
+
 /// A NUMA node other than `local`, for the sample's `--placement remote`
 /// switch -- deliberately the wrong node, so the buffer-placement effect
 /// (M7.4) is measurable rather than assumed.
-pub fn remote_numa_node(topology: &MachineMemoryTopology, local: Option<u32>) -> Option<u32> {
-    topology
-        .domains
-        .iter()
-        .filter_map(|domain| match domain.kind {
-            DomainKind::Memory { .. } => domain.label_from(Source::RelationshipWalk),
-            _ => None,
-        })
-        .find(|&id| Some(id) != local)
+///
+/// That purpose is why [`RemoteNode::Unnamed`] must not degrade to the local
+/// node: a run that measures local placement while reporting itself as remote
+/// would show no placement effect, and the reader would conclude there is
+/// none. A refused run says less than a wrong one, and says it honestly.
+pub fn remote_numa_node(topology: &MachineMemoryTopology, local: Option<u32>) -> RemoteNode {
+    let mut any_named = false;
+    for domain in &topology.domains {
+        if !matches!(domain.kind, DomainKind::Memory { .. }) {
+            continue;
+        }
+        let Some(id) = domain.label_from(Source::RelationshipWalk) else {
+            continue;
+        };
+        any_named = true;
+        if Some(id) != local {
+            return RemoteNode::Other(id);
+        }
+    }
+    if any_named {
+        RemoteNode::SameAsLocal
+    } else {
+        RemoteNode::Unnamed
+    }
 }

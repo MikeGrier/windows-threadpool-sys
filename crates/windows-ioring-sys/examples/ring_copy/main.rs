@@ -233,6 +233,54 @@ fn main() -> io::Result<()> {
     let source_handle = SendHandle(source_file.as_raw_handle());
     let destination_handle = SendHandle(destination_file.as_raw_handle());
 
+    // Settled once, before any thread starts, because both answers are about
+    // the topology rather than about a domain -- and because the refusal must
+    // happen before the copy rather than per-chunk inside it.
+    if args.remote_placement {
+        // Two separate questions, and answering only the first was a defect
+        // caught by running this rather than by reading it.
+        //
+        // `None` as the local node asks the *global* form -- is there any
+        // memory domain carrying an operational node number at all? -- because
+        // every named node differs from "no node". That detects a restored
+        // description, and nothing else: an `Other` here says the nodes are
+        // named, never that a remote one exists.
+        //
+        // Whether a genuinely different node exists is per-domain, so it is
+        // asked of the plans below against their real local nodes. Skipping
+        // that left a single-node machine silently measuring local placement
+        // under `--placement remote`, which is the same substitution this
+        // whole block exists to prevent.
+        match plan::remote_numa_node(&topology, None) {
+            plan::RemoteNode::Unnamed => {
+                report.error_line(format_args!(
+                    "--placement remote needs a topology that names its NUMA nodes, and this one \
+                     does not. A restored description (--topology) carries no node numbers: \
+                     deserialization deliberately drops the observations that hold them, because \
+                     a file cannot establish what the relationship walk saw. Refusing rather \
+                     than placing locally, which would report a remote run that measured a local \
+                     one. Drop --topology to measure this machine, or use --placement local."
+                ));
+                std::process::exit(2);
+            }
+            plan::RemoteNode::SameAsLocal | plan::RemoteNode::Other(_) => {
+                let any_remote = plans.iter().any(|domain_plan| {
+                    matches!(
+                        plan::remote_numa_node(&topology, domain_plan.local_numa_node),
+                        plan::RemoteNode::Other(_)
+                    )
+                });
+                if !any_remote {
+                    report.line(format_args!(
+                        "note: no domain has a NUMA node other than its own, so there is nothing \
+                         remote to place on; --placement remote measures the same placement as \
+                         --placement local on this machine"
+                    ));
+                }
+            }
+        }
+    }
+
     let domain_count = plans.len() as u64;
     let per_domain = source_len.div_ceil(domain_count.max(1));
 
@@ -244,8 +292,15 @@ fn main() -> io::Result<()> {
                 let start = per_domain * index as u64;
                 let end = (start + per_domain).min(source_len);
                 let numa_node = if args.remote_placement {
-                    plan::remote_numa_node(&topology, domain_plan.local_numa_node)
-                        .or(domain_plan.local_numa_node)
+                    match plan::remote_numa_node(&topology, domain_plan.local_numa_node) {
+                        plan::RemoteNode::Other(node) => Some(node),
+                        // Both already reported above -- `Unnamed` exited, and
+                        // `SameAsLocal` said that local is the only node there
+                        // is. Neither may reach here as a silent substitution.
+                        plan::RemoteNode::SameAsLocal | plan::RemoteNode::Unnamed => {
+                            domain_plan.local_numa_node
+                        }
+                    }
                 } else {
                     domain_plan.local_numa_node
                 };
