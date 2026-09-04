@@ -128,7 +128,7 @@ pub use relation::{
     Relations, discover,
 };
 #[cfg(windows)]
-pub use topology::MachineMemoryTopology;
+pub use topology::{Coherence, MachineMemoryTopology};
 
 // The crate's markdown documentation is compiled as doctests, so an example that
 // a contract change invalidates breaks the build instead of quietly teaching the

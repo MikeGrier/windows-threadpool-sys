@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! Assembling a [`MachineMemoryTopology`] from discovered relations.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 use crate::EnumerationAnomaly;
@@ -12,6 +12,63 @@ use crate::observed::Observed;
 use crate::processor_set::ProcessorSet;
 use crate::provenance::Provenance;
 use crate::relation::{self, Relations};
+/// How many passes [`MachineMemoryTopology::discover`] makes before concluding
+/// that a disagreement is genuine.
+///
+/// Three, because the bound's job is to separate "the machine changed while we
+/// were looking" from "these two APIs disagree", and one repeat already does
+/// that: a hot-add is not repeated microseconds later. The third pass is
+/// slack for two changes landing in quick succession, and the cost of being
+/// wrong in this direction is one more cheap enumeration, where the cost of
+/// being wrong in the other is reporting a transient as genuine.
+const COHERENCE_ATTEMPTS: u32 = 3;
+
+/// How the two Win32 sources agreed when a topology was collected.
+///
+/// [`MachineMemoryTopology::discover`] reads the relationship walk and the
+/// CPU-set enumeration in two separate calls, and Windows offers no
+/// transactional way to read them together -- so the pair may describe
+/// different instants. [D-16](../DESIGN-NOTES.md#d-16) is the decision this
+/// type implements: retry to remove the transient cases, then represent
+/// whatever survives.
+///
+/// **What is compared is which processors exist**, because that is the
+/// disagreement a second pass can actually settle. A processor hot-added or
+/// removed between the two calls appears in one source and not the other, and
+/// is not hot-added again a microsecond later. Disagreements about how
+/// processors are *grouped* -- which core, which node -- are deliberately not
+/// retried: [D-17](../DESIGN-NOTES.md#d-17) establishes those are expected in
+/// the field and persistent, so re-reading cannot settle them and they are
+/// carried as separate per-source observations instead.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Coherence {
+    /// Not collected from a running system, so the question does not arise.
+    ///
+    /// A hand-built or deserialized topology takes this: nothing was read
+    /// twice, so there is nothing to have agreed. The default for the same
+    /// reason.
+    #[default]
+    NotCollected,
+    /// Both sources described the same processors on the pass this topology
+    /// was built from.
+    Agreed,
+    /// They never agreed within the retry bound, so the disagreement is
+    /// genuine rather than transient, and is reported rather than hidden.
+    ///
+    /// Per [D-16](../DESIGN-NOTES.md#d-16), exhausting the bound is not a
+    /// failure to collect -- it is the *conclusion* that the disagreement is
+    /// real. The topology is returned, and this says what differed on the
+    /// final pass so a caller can decide what that means for its own use.
+    Disagreed {
+        /// Processors the relationship walk reported and CPU Sets did not.
+        walk_only: Vec<ProcessorId>,
+        /// Processors CPU Sets reported and the relationship walk did not.
+        cpu_sets_only: Vec<ProcessorId>,
+        /// How many passes were made before giving up.
+        attempts: u32,
+    },
+}
 
 /// A processor, cache, and memory topology: a set of processors and the
 /// domains that relate them.
@@ -104,6 +161,24 @@ pub struct MachineMemoryTopology {
     /// fields above and is still correct.
     #[cfg_attr(feature = "serde", serde(default))]
     pub enumeration_anomalies: Vec<EnumerationAnomaly>,
+    /// Whether the two Win32 sources described the same machine when this was
+    /// collected.
+    ///
+    /// Stated rather than implied, per [D-16](../DESIGN-NOTES.md#d-16): a
+    /// reader cannot infer from the data's shape how far its parts may be
+    /// *correlated* with each other, and that is a different question from
+    /// whether any single part is accurate.
+    ///
+    /// **Written out, never read back in.** A description is welcome to carry
+    /// this so a human reading a dump can see how the run that produced it
+    /// went, but a file cannot *establish* that two enumerations agreed --
+    /// exactly as it cannot establish that the relationship walk observed
+    /// anything (D-12). So deserialization always yields
+    /// [`Coherence::NotCollected`], which is the true answer for a topology
+    /// nobody collected, and a description claiming `Agreed` gains nothing by
+    /// saying so.
+    #[cfg_attr(feature = "serde", serde(skip_deserializing))]
+    pub coherence: Coherence,
 }
 
 impl MachineMemoryTopology {
@@ -114,6 +189,40 @@ impl MachineMemoryTopology {
     /// Returns any error from the underlying `GetLogicalProcessorInformationEx`
     /// or `GetSystemCpuSetInformation` calls.
     pub fn discover() -> io::Result<Self> {
+        // D-16's retry. Both calls are whole-machine enumerations and cheap, so
+        // a repeat costs almost nothing, and it is not plausible that several
+        // passes in a row fail to find a coherent set.
+        //
+        // Bounded, and the bound is the point: exhausting it is not a failure
+        // to collect, it is the conclusion that the disagreement is genuine.
+        // The topology is returned either way, with `coherence` saying which
+        // happened.
+        let mut last = None;
+        for attempt in 1..=COHERENCE_ATTEMPTS {
+            let (topology, cpu_sets) = Self::collect_once()?;
+            let (walk_only, cpu_sets_only) = topology.processor_divergence(&cpu_sets);
+            if walk_only.is_empty() && cpu_sets_only.is_empty() {
+                return Ok(topology.finish(cpu_sets, Coherence::Agreed));
+            }
+            last = Some((topology, cpu_sets, walk_only, cpu_sets_only, attempt));
+        }
+
+        // Every pass disagreed. What survives a retry is not transience, so it
+        // is represented rather than retried further or refused over.
+        let (topology, cpu_sets, walk_only, cpu_sets_only, attempts) =
+            last.expect("COHERENCE_ATTEMPTS is a non-zero constant, so the loop ran at least once");
+        Ok(topology.finish(
+            cpu_sets,
+            Coherence::Disagreed {
+                walk_only,
+                cpu_sets_only,
+                attempts,
+            },
+        ))
+    }
+
+    /// One pass over both sources, in the order the fold needs them.
+    fn collect_once() -> io::Result<(Self, Vec<CpuSet>)> {
         let relations = relation::discover()?;
         let mut topology = Self::from_relations(relations);
         // Both are cheap reads of the running system, so both belong to
@@ -124,16 +233,56 @@ impl MachineMemoryTopology {
         topology.record_walk_attributes();
         let (cpu_sets, cpu_set_anomaly) = crate::cpu_set::enumerate()?;
         topology.enumeration_anomalies.extend(cpu_set_anomaly);
+        // Returned unfolded, because the coherence question is asked of the two
+        // sources *before* they are combined -- once folded, which source said
+        // what about a processor's existence is no longer a question the shape
+        // can answer.
+        Ok((topology, cpu_sets))
+    }
+
+    /// Combine the pass's two sources and state how they agreed.
+    fn finish(mut self, cpu_sets: Vec<CpuSet>, coherence: Coherence) -> Self {
         // Folded into the relation set, and *also* kept verbatim. Not a
         // contradiction: D-19's unified view is presented **in addition to**
         // the individual per-source ones, so a caller wanting what CPU Sets
         // said, in its own shape, still has it.
-        topology.fold_in_cpu_sets(&cpu_sets);
-        topology.cpu_sets = Some(cpu_sets);
+        self.fold_in_cpu_sets(&cpu_sets);
+        self.cpu_sets = Some(cpu_sets);
+        self.coherence = coherence;
         // The one place in the crate that may claim this is the machine you are
         // on, because it is the one place that asked the operating system.
-        topology.provenance = Provenance::Measured;
-        Ok(topology)
+        self.provenance = Provenance::Measured;
+        self
+    }
+
+    /// Which processors one source reported and the other did not.
+    ///
+    /// Existence only. See [`Coherence`] for why grouping disagreements are
+    /// deliberately outside this comparison.
+    fn processor_divergence(&self, cpu_sets: &[CpuSet]) -> (Vec<ProcessorId>, Vec<ProcessorId>) {
+        // Only processors the walk calls active are comparable: it reports a
+        // slot for every position up to a group's maximum, including ones no
+        // processor occupies, and CPU Sets reports only real processors. A raw
+        // set comparison would therefore diverge on every machine with an
+        // inactive slot, which is a difference in what the two APIs enumerate
+        // rather than a difference about the machine.
+        let walk: BTreeSet<ProcessorId> = self
+            .processors
+            .iter()
+            .filter(|processor| processor.online)
+            .map(|processor| processor.id)
+            .collect();
+        let sets: BTreeSet<ProcessorId> = cpu_sets
+            .iter()
+            .map(|set| ProcessorId {
+                group: set.group,
+                number: set.logical_processor_index,
+            })
+            .collect();
+        (
+            walk.difference(&sets).copied().collect(),
+            sets.difference(&walk).copied().collect(),
+        )
     }
 
     /// Record what the CPU-set enumeration says about relations, unifying with
@@ -421,6 +570,10 @@ impl MachineMemoryTopology {
             // machine -- so if this ever gains a second caller, that caller
             // does not silently inherit an assertion it has not earned.
             provenance: Provenance::Synthetic,
+            // For the same reason: one set of relations is one source, and
+            // coherence is a statement about two agreeing. `discover` sets this
+            // once it has both.
+            coherence: Coherence::NotCollected,
             // Carried, not re-derived: whatever the walk could not decode is a
             // fact about the enumeration that produced these relations, and a
             // pure transform is the wrong place to lose it.

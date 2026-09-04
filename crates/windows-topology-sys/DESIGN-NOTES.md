@@ -259,6 +259,31 @@ here.
 
 *Recorded by [CHECKLIST.md](COMPLETED-CHECKLIST.md) MMT-1.2.*
 
+**Implemented 2026-09-04, and it was not before.** This decision was recorded under MMT-1.2 -- whose own
+text is about *representation* -- and the retry it specifies was never transcribed into a work item, so
+nothing ever caused it to be built. Meanwhile `Observed`'s public rustdoc, [D-17](#d-17) and
+[D-19](#d-19) all argued from it as though it existed. The PR #56 review caught the gap. It is the
+failure mode this repository's own rule names: a decision recorded only in a design note, with the work
+it implies never queued, is orphaned.
+
+**What was built, and the one place it is narrower than the text above.** `discover` now makes up to
+`COHERENCE_ATTEMPTS` (three) passes, comparing **which processors each source reports**, and returns on
+the first coherent pass. The comparison is deliberately limited to processor *existence*, because that
+is the disagreement a second pass can settle -- a processor hot-added or removed between the two calls
+appears in one source and not the other, and is not hot-added again a microsecond later. Disagreements
+about **grouping** -- which core, which node -- are not retried, because [D-17](#d-17) establishes those
+are expected and persistent, so re-reading cannot settle them; they are carried as separate per-source
+observations, which is the representation half of this decision and already worked.
+
+Inactive slots are excluded from the comparison: the walk reports a slot for every position up to a
+group's maximum while CPU Sets reports only real processors, so comparing raw would make any machine
+with an unoccupied slot exhaust the bound and report a false `Disagreed` on every call.
+
+The outcome is stated on the topology as `Coherence` -- `Agreed`, `Disagreed { .. }` with what differed
+on the final pass, or `NotCollected` for a topology nobody collected. It is written to a description but
+never read back from one, for the same reason [D-12](#d-12) drops observations across that boundary: a
+file cannot establish that two enumerations agreed.
+
 ### The problem, stated without the wrong framing
 
 `discover()` reads two Win32 sources -- the relationship walk and the CPU-set enumeration -- and

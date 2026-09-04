@@ -7,6 +7,7 @@ use crate::observed::Observed;
 use crate::processor_set::ProcessorSet;
 use crate::provenance::Provenance;
 use crate::relation::CacheKind;
+use crate::topology::Coherence;
 use crate::topology::MachineMemoryTopology;
 
 /// `count` processors in group 0, all online.
@@ -69,6 +70,7 @@ fn topology(processor_count: u8, domains: Vec<Domain>) -> MachineMemoryTopology 
         domains,
         cpu_sets: None,
         provenance: Provenance::Synthetic,
+        coherence: Coherence::NotCollected,
         enumeration_anomalies: Vec::new(),
         processor_attributes: Vec::new(),
     }

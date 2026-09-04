@@ -34,10 +34,17 @@
 ///
 /// Per [D-19](../DESIGN-NOTES.md), a subject the two Win32 sources genuinely
 /// disagreed about is one the unified view does not cover -- which is
-/// [`Observed::NotObserved`], not a fourth state. The retry in
-/// [D-16](../DESIGN-NOTES.md) has already removed the transient cases by the
-/// time anything is represented, so what reaches this type is a settled
-/// question, and "we cannot say" is the honest answer to it.
+/// [`Observed::NotObserved`], not a fourth state.
+///
+/// [D-16](../DESIGN-NOTES.md)'s retry runs before anything is represented, and
+/// removes the transient case it can settle: two enumerations describing
+/// different sets of processors because the machine changed between the calls.
+/// What it deliberately does not retry is a disagreement about how processors
+/// are *grouped*, which [D-17](../DESIGN-NOTES.md) establishes is persistent in
+/// the field -- re-reading cannot settle those, so they are carried as separate
+/// per-source observations instead. Either way "we cannot say" is the honest
+/// answer, and [`crate::Coherence`] on the topology says which of the two
+/// happened during collection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Observed<T> {

@@ -78,6 +78,7 @@ fn synthetic() -> MachineMemoryTopology {
         // Named rather than defaulted, so this fixture states what it is. The
         // helper is called `synthetic` and now says so in the value too.
         provenance: Provenance::Synthetic,
+        coherence: Coherence::NotCollected,
         enumeration_anomalies: Vec::new(),
         processor_attributes: Vec::new(),
     }
@@ -182,12 +183,13 @@ mod serde_tests {
         // are on", and once written to a file it can no longer assert that.
         // Reloading yields `Restored`.
         //
-        // Three things are downgraded across the boundary, for one reason. The
+        // Four things are downgraded across the boundary, for one reason. The
         // provenance drops to `Restored`; every relation's platform
-        // observations are dropped; and so are the per-processor attribute
-        // claims -- because a file saying "the relationship walk observed this"
-        // cannot establish that it did, and carrying the claim would be exactly
-        // the forgery D-12 refuses.
+        // observations are dropped; so are the per-processor attribute claims;
+        // and the coherence drops to `NotCollected` -- because a file saying
+        // "the relationship walk observed this" or "the two enumerations
+        // agreed" cannot establish that it did, and carrying the claim would be
+        // exactly the forgery D-12 refuses.
         //
         // The assertion is deliberately not weakened to "the parts I still
         // expect to match". Everything else must survive verbatim, so this
@@ -224,9 +226,15 @@ mod serde_tests {
             back.processor_attributes.is_empty(),
             "nor may a restored topology claim a source said anything per processor"
         );
+        assert_eq!(
+            back.coherence,
+            Coherence::NotCollected,
+            "nor may it claim the two enumerations agreed, which only a collection can establish"
+        );
 
         let mut expected = topology;
         expected.provenance = Provenance::Restored;
+        expected.coherence = Coherence::NotCollected;
         expected.processor_attributes.clear();
         for domain in &mut expected.domains {
             domain.observations.clear();
@@ -328,6 +336,102 @@ mod serde_tests {
             );
         }
     }
+    /// A topology whose walk reports exactly `processors` in group 0.
+    fn walk_reporting(processors: &[(u8, bool)]) -> MachineMemoryTopology {
+        MachineMemoryTopology {
+            processors: processors
+                .iter()
+                .map(|&(number, online)| Processor {
+                    id: ProcessorId { group: 0, number },
+                    online,
+                    capacity: 0,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn two_sources_reporting_the_same_processors_are_coherent() {
+        let topology = walk_reporting(&[(0, true), (1, true)]);
+        let sets = vec![cpu_set(0, 0, 0, 0), cpu_set(1, 0, 0, 0)];
+        assert_eq!(
+            topology.processor_divergence(&sets),
+            (Vec::new(), Vec::new()),
+            "identical processor sets are the coherent case"
+        );
+    }
+
+    #[test]
+    fn a_processor_only_the_walk_saw_is_a_divergence() {
+        // The hot-remove shape: the walk enumerated a processor that was gone
+        // by the time CPU Sets was asked. D-16's retry exists to find out
+        // whether that persists.
+        let topology = walk_reporting(&[(0, true), (1, true)]);
+        let sets = vec![cpu_set(0, 0, 0, 0)];
+        let (walk_only, cpu_sets_only) = topology.processor_divergence(&sets);
+        assert_eq!(
+            walk_only,
+            vec![ProcessorId {
+                group: 0,
+                number: 1
+            }]
+        );
+        assert!(cpu_sets_only.is_empty());
+    }
+
+    #[test]
+    fn a_processor_only_cpu_sets_saw_is_a_divergence() {
+        // The hot-add shape, and asserted separately because a comparison that
+        // comes out right in one direction can be wrong in the other.
+        let topology = walk_reporting(&[(0, true)]);
+        let sets = vec![cpu_set(0, 0, 0, 0), cpu_set(1, 0, 0, 0)];
+        let (walk_only, cpu_sets_only) = topology.processor_divergence(&sets);
+        assert!(walk_only.is_empty());
+        assert_eq!(
+            cpu_sets_only,
+            vec![ProcessorId {
+                group: 0,
+                number: 1
+            }]
+        );
+    }
+
+    #[test]
+    fn an_inactive_slot_is_not_a_divergence() {
+        // The walk reports a slot for every position up to a group's maximum,
+        // occupied or not, and CPU Sets reports only real processors. Comparing
+        // those raw would make every machine with an inactive slot look
+        // incoherent forever -- three passes, then a false `Disagreed`. That is
+        // a difference in what the two APIs enumerate, not about the machine.
+        let topology = walk_reporting(&[(0, true), (1, false)]);
+        let sets = vec![cpu_set(0, 0, 0, 0)];
+        assert_eq!(
+            topology.processor_divergence(&sets),
+            (Vec::new(), Vec::new()),
+            "an offline slot is outside the comparison"
+        );
+    }
+
+    #[test]
+    fn a_discovered_topology_states_its_coherence() {
+        // The live path. This machine's two enumerations agree, so the retry
+        // settles on the first pass -- but what is asserted is that `discover`
+        // *states* an answer, never leaving the default that means "nobody
+        // collected this".
+        let topology = MachineMemoryTopology::discover().expect("discover");
+        assert_ne!(
+            topology.coherence,
+            Coherence::NotCollected,
+            "a collected topology must say how its two sources agreed"
+        );
+        assert_eq!(
+            topology.coherence,
+            Coherence::Agreed,
+            "the two enumerations disagree about which processors exist on this host"
+        );
+    }
+
     /// A CPU-set record for one processor in group 0.
     fn cpu_set(index: u8, core: u8, node: u8, efficiency_class: u8) -> crate::cpu_set::CpuSet {
         crate::cpu_set::CpuSet {
@@ -381,6 +485,7 @@ mod serde_tests {
             domains: vec![core_domain(0, &[0, 1, 2, 3], 0)],
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
             enumeration_anomalies: Vec::new(),
             processor_attributes: Vec::new(),
         };
@@ -427,6 +532,7 @@ mod serde_tests {
             domains: Vec::new(),
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
             enumeration_anomalies: Vec::new(),
             processor_attributes: Vec::new(),
         };
@@ -461,6 +567,7 @@ mod serde_tests {
             domains: vec![core_domain(7, &[0, 1], 0)],
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
             enumeration_anomalies: Vec::new(),
             processor_attributes: Vec::new(),
         };
@@ -495,6 +602,7 @@ mod serde_tests {
             domains: vec![memory],
             cpu_sets: None,
             provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
             enumeration_anomalies: Vec::new(),
             processor_attributes: Vec::new(),
         };
@@ -620,6 +728,7 @@ mod serde_tests {
             cpu_sets: None,
             processor_attributes: Vec::new(),
             provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
             enumeration_anomalies: Vec::new(),
         };
         topology.record_walk_attributes();
@@ -666,6 +775,7 @@ mod serde_tests {
             cpu_sets: None,
             processor_attributes: Vec::new(),
             provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
             enumeration_anomalies: Vec::new(),
         };
         topology.record_walk_attributes();
@@ -696,6 +806,7 @@ mod serde_tests {
             cpu_sets: None,
             processor_attributes: Vec::new(),
             provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
             enumeration_anomalies: Vec::new(),
         };
         assert!(topology.processor_attributes.is_empty());
@@ -1110,6 +1221,7 @@ fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
         domains,
         cpu_sets: None,
         provenance: Provenance::Synthetic,
+        coherence: Coherence::NotCollected,
         enumeration_anomalies: Vec::new(),
         processor_attributes: Vec::new(),
     }
@@ -1128,6 +1240,7 @@ fn cache_levels_are_empty_when_no_cache_is_reported() {
         domains: Vec::new(),
         cpu_sets: None,
         provenance: Provenance::Synthetic,
+        coherence: Coherence::NotCollected,
         enumeration_anomalies: Vec::new(),
         processor_attributes: Vec::new(),
     };
@@ -1365,6 +1478,7 @@ fn machine_of(count: u8, domains: Vec<Domain>) -> MachineMemoryTopology {
         cpu_sets: None,
         processor_attributes: Vec::new(),
         provenance: Provenance::Synthetic,
+        coherence: Coherence::NotCollected,
         enumeration_anomalies: Vec::new(),
     }
 }
