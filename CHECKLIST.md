@@ -128,16 +128,23 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
 
 - [ ] **M34.2** -- **Route every tool's output through one sink, per the repository's own rule**: never
   call `println!`/`eprintln!` from more than one site in a tool; introduce a writer trait, sink or
-  formatter at the first occurrence and route everything through it. Seven binaries violate this today
-  and were flagged individually in review 5072622803 on pull request #56:
-  [main.rs](crates/windows-placement-probe/src/bin/placement_probe/main.rs),
-  [doorbell_cost.rs](crates/windows-platform-probes/src/bin/doorbell_cost.rs),
-  [queue_contention.rs](crates/windows-platform-probes/src/bin/queue_contention.rs),
-  [request_cost.rs](crates/windows-platform-probes/src/bin/request_cost.rs),
-  [topology.rs](crates/windows-platform-probes/src/bin/topology.rs),
-  [core_affinity.rs](crates/windows-platform-probes/src/bin/core_affinity.rs) and
-  [peer_index_cache.rs](crates/windows-platform-probes/src/bin/peer_index_cache.rs). The banner
-  helpers that hardcode stdout are part of it, not an exception to it.
+  formatter at the first occurrence and route everything through it.
+  **Updated 2026-09-04: the conversion is done; what remains is the capture test.** The item said
+  "seven binaries violate this today" and named them, from review 5072622803 on pull request #56.
+  Five had already been converted when a later review round re-checked, and the last two --
+  [queue_contention.rs](crates/windows-platform-probes/src/bin/queue_contention.rs) and
+  [peer_index_cache.rs](crates/windows-platform-probes/src/bin/peer_index_cache.rs) -- were fixed in
+  that pull request, so all seven now compose their whole report as text and hand it to a sink at one
+  place. Verified by counting, not by reading: no probe binary contains a direct `println!`/
+  `eprintln!` at all. The two survivors were the *banner*, which those two rendered by calling a
+  helper that wrote to stdout itself -- so a captured report was missing the one line naming the
+  machine that produced it, and the banner also emitted mid-`render`, ahead of the body, making the
+  order on a terminal luck rather than construction.
+  **The stdout-writing banner helpers are gone rather than documented against.** `print_banner` and
+  `print_banner_with` were removed and `banner_lines_with` returns the string instead, because three
+  call sites had each grown a comment warning about them -- a rule restated three times instead of a
+  hazard removed once. The defect class is now unreachable by construction: there is no
+  banner helper that writes to a stream.
   **The PowerShell tools are NOT part of this item, because they are already done.** A later review
   round on the same pull request observed that the inventory above named only Rust binaries while five
   scripts emitted from many sites, so those were converted in that pull request rather than queued
@@ -148,17 +155,19 @@ M22-M29, and [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M30-M33.
   sink. They were small enough to convert in place, which is exactly why they did not need deferring.
   (`run-sabotage.ps1`'s `Exit-WithMessage` is deliberately outside its sink: that path writes to
   stderr and exits, and there the destination is part of the meaning.)
-  **What remains deferred is the seven Rust binaries, and the reason is sequencing rather than doubt.**
-  It is one refactor across seven binaries; done properly it means choosing the seam once and applying
-  it uniformly, which is a large diff touching every probe's output. Landing it inside a 90-commit
-  branch already under review would mix it with unrelated correctness work.
-  **The point of the rule is that output becomes testable, so the conversion is not done until
-  something tests it.** An abstraction introduced without a capture-based test spends the cost and
-  skips the benefit -- do not check this item off on the refactor alone. That test is what the Rust
-  binaries still owe; a PowerShell sink is a function whose destination can be swapped, but this
-  workspace runs no PowerShell test harness in which to assert against it, and inventing one to cover
-  five diagnostic scripts is not a cost this item is willing to spend without deciding to adopt such a
-  harness first.
+  **What remains is the capture test, and it has a structural obstacle worth naming.**
+  The point of the rule is that output becomes testable, so this item is not checked off on the
+  refactor alone -- an abstraction introduced without a capture-based test spends the cost and skips
+  the benefit. `Captured` exists in [report.rs](crates/windows-platform-probes/src/report.rs) for
+  exactly that purpose, and `banner_line` is already asserted directly.
+  **The obstacle: each probe's `render()` lives in its own `bin` target, which nothing can import.**
+  That is precisely why the two banner defects survived every test -- there was no reachable seam to
+  assert against. Closing it means moving each `render()` into the crate's library and leaving `main`
+  as the one place that names the stream, which is a real refactor rather than a test to write.
+  Decide the seam once and apply it uniformly.
+  A PowerShell sink is a function whose destination can be swapped, but this workspace runs no
+  PowerShell test harness in which to assert against it, and inventing one to cover five diagnostic
+  scripts is not a cost this item is willing to spend without deciding to adopt such a harness first.
   Start with `placement_probe`: its output is a published artifact that strangers paste into a
   discussion thread, so "can this be captured and asserted end to end?" has real value there rather
   than being architectural tidiness.

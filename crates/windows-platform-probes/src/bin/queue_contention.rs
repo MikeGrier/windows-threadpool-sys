@@ -23,7 +23,14 @@ fn main() {
 /// The probe's whole report, as text.
 fn render() -> String {
     let mut out = String::new();
-    windows_placement_probe::fingerprint::print_banner();
+    // First line of the report, and part of the returned text rather than
+    // written out here: a captured report must carry the line naming the
+    // machine that produced it, and the taint marker with it.
+    let _ = writeln!(
+        out,
+        "{}",
+        windows_placement_probe::fingerprint::banner_line()
+    );
     let _ = writeln!(out, "== does the array queue's tail claim contend? ==\n");
 
     let observation = measure();

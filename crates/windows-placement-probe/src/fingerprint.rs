@@ -820,22 +820,26 @@ pub fn places_from_topology(
         .collect()
 }
 
-/// Print the host fingerprint as a probe's first line, or say why it could not
-/// be read.
+/// The host fingerprint as a probe's first line, or why it could not be read.
 ///
 /// Never fails the probe: a measurement without a fingerprint is still worth
 /// having, and is far better than one that refused to run. But it says so
 /// loudly, because an unlabelled number is what this exists to prevent.
-pub fn print_banner() {
-    println!("{}", banner_line());
-}
-
-/// The banner as a string, so what a probe prints can be asserted rather than
-/// inspected.
 ///
-/// Separated from [`print_banner`] for one reason: the taint marker reaching
-/// this line is the whole point of carrying provenance, and a property that
-/// matters that much should not rest on a human having read the format string.
+/// **Returns the line rather than printing it, and there is deliberately no
+/// printing counterpart.** A probe composes its whole report as text and hands
+/// it to a sink at exactly one place; a helper that wrote to stdout itself put
+/// a line on the terminal that the returned report did not contain, so a
+/// *captured* report was missing the one line naming the machine that produced
+/// it -- and the taint marker with it. It also emitted during `render`, ahead
+/// of the body, so even on a terminal the ordering was luck. Both printing
+/// forms were removed rather than documented against, because three call sites
+/// had each grown a comment warning about them, which is a rule restated three
+/// times instead of a hazard removed once.
+///
+/// Returning a string has a second benefit worth keeping: what a probe prints
+/// can be *asserted*, and the taint marker reaching this line is too important
+/// to rest on a human having read the format string.
 #[must_use]
 pub fn banner_line() -> String {
     match Fingerprint::discover() {
@@ -844,14 +848,14 @@ pub fn banner_line() -> String {
     }
 }
 
-/// Print the host fingerprint and the slice one measurement ran on.
+/// The host fingerprint and the slice one measurement ran on, as two lines.
 ///
 /// Both, always: the host says which experiments the machine can express, and
 /// the slice says which one this number came from. Either alone leaves a
 /// reader unable to tell whether two figures are comparable.
-pub fn print_banner_with(slice: &Slice) {
-    print_banner();
-    println!("slice: {slice}");
+#[must_use]
+pub fn banner_lines_with(slice: &Slice) -> String {
+    format!("{}\nslice: {slice}", banner_line())
 }
 
 #[cfg(test)]

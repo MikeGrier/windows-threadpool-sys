@@ -19,10 +19,9 @@ fn main() -> std::io::Result<()> {
 /// The probe's whole report, as text.
 fn render(observation: &Observation) -> String {
     let mut out = String::new();
-    // `banner_line`, not `print_banner`: the latter writes to stdout itself,
-    // which would put a line on the terminal that the returned report does not
-    // contain -- so a captured report would be missing the one line that says
-    // which machine produced it, and the taint marker with it.
+    // First line of the report, and part of the returned text rather than
+    // written out here: a captured report must carry the line naming the
+    // machine that produced it, and the taint marker with it.
     let _ = writeln!(
         out,
         "{}",
