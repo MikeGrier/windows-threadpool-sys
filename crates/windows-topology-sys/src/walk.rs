@@ -347,7 +347,10 @@ unsafe fn read_processor_body(
             ))
         })()
     }) else {
-        return (None, None);
+        return (
+            None,
+            body_too_short(record, body!(PROCESSOR_RELATIONSHIP, GroupMask)),
+        );
     };
     // SAFETY: forwarded from the caller.
     let (group_masks, complete) = unsafe {
@@ -366,6 +369,23 @@ unsafe fn read_processor_body(
         }),
         anomaly,
     )
+}
+
+/// A record whose declared `Size` covers the generic header but not the fixed
+/// body of the relationship it names.
+///
+/// Reported rather than dropped: per [D-24](../DESIGN-NOTES.md#d-24) a record
+/// that cannot be decoded is an observation, and "too short for the body it
+/// claims" is exactly that. `minimum` is the offset at which the relationship's
+/// trailing array begins -- i.e. the smallest `Size` that could hold every
+/// fixed field the body reader needs.
+fn body_too_short(record: RawRecord, minimum: usize) -> Option<EnumerationAnomaly> {
+    Some(EnumerationAnomaly::undersized(
+        Source::RelationshipWalk,
+        record.offset(),
+        record.size(),
+        minimum,
+    ))
 }
 
 /// The anomaly for a trailing array that claimed more than the record held.
@@ -406,7 +426,10 @@ unsafe fn read_cache_body(record: RawRecord) -> (Option<CacheBody>, Option<Enume
             ))
         })()
     }) else {
-        return (None, None);
+        return (
+            None,
+            body_too_short(record, body!(CACHE_RELATIONSHIP, Anonymous)),
+        );
     };
     // SAFETY: forwarded from the caller.
     let (group_masks, complete) = unsafe {
@@ -443,7 +466,10 @@ unsafe fn read_numa_body(record: RawRecord) -> (Option<NumaNodeBody>, Option<Enu
             ))
         })()
     }) else {
-        return (None, None);
+        return (
+            None,
+            body_too_short(record, body!(NUMA_NODE_RELATIONSHIP, Anonymous)),
+        );
     };
     // SAFETY: forwarded from the caller.
     let (group_masks, complete) = unsafe {
@@ -471,7 +497,10 @@ unsafe fn read_group_body(record: RawRecord) -> (Option<GroupBody>, Option<Enume
     let Some(active_group_count) =
         (unsafe { record.read::<u16>(body!(GROUP_RELATIONSHIP, ActiveGroupCount)) })
     else {
-        return (None, None);
+        return (
+            None,
+            body_too_short(record, body!(GROUP_RELATIONSHIP, GroupInfo)),
+        );
     };
     // SAFETY: forwarded from the caller; bounded by the record, so an
     // `ActiveGroupCount` larger than the record can hold yields only what fits.

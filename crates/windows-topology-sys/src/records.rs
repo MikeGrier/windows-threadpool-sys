@@ -40,6 +40,14 @@ pub(crate) struct Record {
 }
 
 impl Record {
+    /// This record's declared length in bytes.
+    ///
+    /// Used when reporting a record too short for the body its relationship
+    /// names: the declared length is half of what makes that anomaly legible.
+    pub(crate) fn size(self) -> usize {
+        self.size
+    }
+
     /// This record's byte offset within the buffer, for reporting where an
     /// anomaly was found.
     pub(crate) fn offset(self) -> usize {

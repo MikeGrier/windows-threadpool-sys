@@ -166,7 +166,16 @@ impl MachineMemoryTopology {
     /// the subject `M3+.1.4` covers rather than a reason to treat them as two
     /// relations.
     fn fold_in_cpu_sets(&mut self, cpu_sets: &[CpuSet]) {
-        let cores = Self::grouped_by(cpu_sets, |set| u32::from(set.core_index));
+        // `CoreIndex` is documented as relative to the record's `Group`, so it
+        // is not unique across a multi-group machine: group 0 core 0 and group 1
+        // core 0 are different cores that share an index. Keying on the index
+        // alone folded them into one cross-group `Core` domain, corrupting both
+        // core membership and the efficiency class derived from it. Raised in
+        // PR #56 review. `NumaNodeIndex` is *not* group-relative -- node numbers
+        // are machine-wide -- so it keys on itself.
+        let cores = Self::grouped_by(cpu_sets, |set| {
+            (u32::from(set.group) << 8) | u32::from(set.core_index)
+        });
         let nodes = Self::grouped_by(cpu_sets, |set| u32::from(set.numa_node_index));
 
         self.fold_memberships(
@@ -188,6 +197,7 @@ impl MachineMemoryTopology {
                     .max()
                     .unwrap_or_default(),
             },
+            |members| members.first().map_or(0, |set| u32::from(set.core_index)),
         );
         self.fold_memberships(
             &nodes,
@@ -195,8 +205,12 @@ impl MachineMemoryTopology {
             |_| DomainKind::Memory {
                 memory_bytes: Observed::NotObserved,
             },
+            |members| {
+                members
+                    .first()
+                    .map_or(0, |set| u32::from(set.numa_node_index))
+            },
         );
-
         // The attribute subject, which relation unification cannot reach: both
         // sources report an efficiency class for the same processor, and they
         // agree about the core while possibly disagreeing about this (D-18).
@@ -295,14 +309,19 @@ impl MachineMemoryTopology {
         grouped: &BTreeMap<u32, Vec<&CpuSet>>,
         is_kind: impl Fn(&DomainKind) -> bool,
         make_kind: impl Fn(&[&CpuSet]) -> DomainKind,
+        label_of: impl Fn(&[&CpuSet]) -> u32,
     ) {
-        for (&label, members) in grouped {
+        for members in grouped.values() {
             let mut processors = ProcessorSet::empty();
             for set in members {
                 processors.insert(set.group, set.logical_processor_index);
             }
 
-            let observation = Observation::new(Source::CpuSets, label);
+            // The label is the source's own, taken from the records rather than
+            // from the grouping key: those differ wherever the key has to carry
+            // more than the label to be unique, which is the group-relative
+            // `CoreIndex` case below.
+            let observation = Observation::new(Source::CpuSets, label_of(members));
             match self
                 .domains
                 .iter_mut()
@@ -621,21 +640,54 @@ impl MachineMemoryTopology {
         // than. Where two candidates describe the *same* partition -- identical
         // blocks under different levels, which is the ordinary case for an L1
         // and L2 that split a machine the same way -- neither refines the other,
-        // so the tie is broken by taking the **higher level**.
+        // so the tie is broken by taking the **higher level**. Where they
+        // describe *different* partitions neither of which refines the other,
+        // there is no outermost one and the answer is `None`; see below.
         //
         // That tie-break reads the source's own labelling of one boundary and is
         // not the level ordering `M2+.2` forbids: distinct partitions are still
         // ordered by inclusion, and level decides only which of two names for
         // the identical partition is the outer one.
-        candidates
+        // Two candidates can be *incomparable* rather than identical: disjoint
+        // partitions `{0,1}/{2,3}` and `{0,2}/{1,3}` each survive the filter,
+        // neither refines the other, and they are not the same partition. There
+        // is then no outermost partitioning cache, and answering with the
+        // higher-numbered level would invent one -- reintroducing exactly the
+        // level ordering `M2+.2` forbids, in the one case where it changes the
+        // answer. `None` is the honest result, and per D-13 the caller already
+        // has to handle it.
+        let maximal: Vec<_> = candidates
             .iter()
             .filter(|candidate| {
                 !candidates
                     .iter()
                     .any(|other| Self::refines(&candidate.1, &other.1))
             })
+            .collect();
+        let first = maximal.first()?;
+        if !maximal
+            .iter()
+            .all(|other| Self::same_partition(&first.1, &other.1))
+        {
+            return None;
+        }
+        maximal
+            .iter()
             .max_by_key(|(level, _)| *level)
             .map(|(level, blocks)| (*level, blocks.clone()))
+    }
+
+    /// Whether two candidate partitions have exactly the same blocks.
+    ///
+    /// The identical case `refines` deliberately excludes: an L1 and an L2 that
+    /// split the machine the same way are one boundary under two names, which is
+    /// the ordinary case on real hardware and the only case the level tie-break
+    /// is allowed to decide.
+    fn same_partition(left: &[&Domain], right: &[&Domain]) -> bool {
+        left.len() == right.len()
+            && left
+                .iter()
+                .all(|block| right.iter().any(|o| o.processors == block.processors))
     }
 
     /// Whether every block of `finer` sits inside some block of `coarser`, and

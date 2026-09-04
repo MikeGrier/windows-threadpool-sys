@@ -1450,6 +1450,36 @@ fn the_usual_ordering_is_unchanged_where_the_two_rules_agree() {
 }
 
 #[test]
+fn two_incomparable_partitions_have_no_outermost_one() {
+    // Raised in PR #56 review. The level tie-break is only allowed to decide
+    // between two names for the *same* boundary. Here L2 and L3 partition the
+    // same eight processors *differently* -- {0,1}/{2,3}/{4,5}/{6,7} against
+    // {0,2}/{1,3}/{4,6}/{5,7} -- so neither refines the other and they are not
+    // the same partition. There is no outermost partitioning cache, and
+    // answering "L3" because 3 > 2 would invent one, which is the level
+    // ordering M2+.2 forbids in the one case where it changes the answer.
+    let topo = machine_of(
+        8,
+        vec![
+            cache_at(2, 0, &[0, 1]),
+            cache_at(2, 1, &[2, 3]),
+            cache_at(2, 2, &[4, 5]),
+            cache_at(2, 3, &[6, 7]),
+            cache_at(3, 4, &[0, 2]),
+            cache_at(3, 5, &[1, 3]),
+            cache_at(3, 6, &[4, 6]),
+            cache_at(3, 7, &[5, 7]),
+        ],
+    );
+
+    assert_eq!(
+        topo.outermost_partitioning_cache().map(|(level, _)| level),
+        None,
+        "no partition is outermost, so none may be named"
+    );
+}
+
+#[test]
 fn a_level_that_partitions_nothing_is_still_never_a_candidate() {
     // A fully shared cache is one block, so it cannot be the boundary however
     // coarse it is -- the rule this projection must not lose.
@@ -1649,4 +1679,71 @@ fn a_domain_covering_nothing_is_not_a_partition() {
         topo.outermost_partitioning_cache().is_none(),
         "a level whose only second domain covers nothing does not divide the machine"
     );
+}
+
+#[test]
+fn cpu_sets_in_different_groups_sharing_a_core_index_are_not_folded_together() {
+    // Raised in PR #56 review. `SYSTEM_CPU_SET_INFORMATION::CoreIndex` is
+    // documented as relative to the record's `Group`, so on a multi-group host
+    // group 0 core 0 and group 1 core 0 are *different* cores that share an
+    // index. Keying the fold on the index alone merged them into one
+    // cross-group `Core` domain, which corrupts both membership and the
+    // efficiency class derived from it.
+    let mut topology = MachineMemoryTopology::default();
+    // Both groups have a core whose group-relative index is 0, each with two
+    // logical processors. That is the collision: four records, two cores.
+    let sets = vec![
+        cpu_set_in(0, 0, 0, 0, 0),
+        cpu_set_in(0, 1, 0, 0, 0),
+        cpu_set_in(1, 0, 0, 0, 0),
+        cpu_set_in(1, 1, 0, 0, 0),
+    ];
+    topology.fold_in_cpu_sets(&sets);
+
+    let cores: Vec<_> = topology
+        .domains
+        .iter()
+        .filter(|d| matches!(d.kind, DomainKind::Core { .. }))
+        .collect();
+
+    assert_eq!(
+        cores.len(),
+        2,
+        "one core per group, not one shared: {cores:?}"
+    );
+    for core in &cores {
+        assert_eq!(
+            core.processors.len(),
+            2,
+            "each core holds only its own group's processors: {core:?}"
+        );
+        let groups: Vec<u16> = core.processors.iter().map(|(group, _)| group).collect();
+        assert!(
+            groups.windows(2).all(|w| w[0] == w[1]),
+            "a core must not span groups: {groups:?}"
+        );
+    }
+    // The label stays the source's own group-relative index, not the key.
+    let labels: Vec<u32> = cores
+        .iter()
+        .flat_map(|c| c.observations.iter().map(|o| o.label))
+        .collect();
+    assert!(
+        labels.iter().all(|&l| l == 0),
+        "both cores are index 0 in their own group: {labels:?}"
+    );
+}
+
+/// As [`cpu_set`], but places the record in a named group.
+fn cpu_set_in(
+    group: u16,
+    index: u8,
+    core: u8,
+    node: u8,
+    efficiency_class: u8,
+) -> crate::cpu_set::CpuSet {
+    crate::cpu_set::CpuSet {
+        group,
+        ..cpu_set(index, core, node, efficiency_class)
+    }
 }

@@ -459,10 +459,20 @@ fn a_record_too_short_for_its_body_yields_no_record_rather_than_a_neighbours_byt
     record.truncate(UNION_OFFSET);
 
     let records = decode_records(record.as_ptr(), record.len() as u32);
+    let anomalies = decode_anomalies(record.as_ptr(), record.len() as u32);
 
     assert!(
         records.is_empty(),
         "no body fits, so no record is invented: {records:?}"
+    );
+    // The half this test originally missed. Asserting only that no record was
+    // emitted is satisfied just as well by silently dropping it, which is what
+    // the code did -- and what D-24 says it must not do.
+    assert_eq!(anomalies.len(), 1, "the drop is recorded, not silent");
+    assert!(
+        matches!(anomalies[0].kind, crate::AnomalyKind::Undersized { .. }),
+        "{:?}",
+        anomalies[0]
     );
 }
 
