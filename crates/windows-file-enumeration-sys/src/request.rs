@@ -60,14 +60,20 @@ const PAGE_SIZE: usize = 4096;
 // would have passed the guard while regressing every refill. Raised in the
 // PR #56 review.
 //
-// Asserted below is the property actually claimed -- whole pages -- which is
-// what makes a refill land on a page boundary instead of straddling one.
+// **And the first repair over-claimed in turn**, which the same review caught:
+// it said a page-multiple length makes "each refill begin on a page boundary".
+// It does not. `NativeBuffer` stores `Vec<u64>`, so the allocation is 8-byte
+// aligned and nothing more -- a length that is a whole number of pages says
+// nothing about where the buffer starts. What the constraint actually buys is a
+// page-sized *request*: a round amount for the kernel to fill per call, and one
+// that does not leave a part-page tail. Alignment would need page-aligned
+// storage, which this buffer does not have and does not need.
 const _: () = {
     assert!(
         DEFAULT_BUFFER_CAPACITY.is_multiple_of(PAGE_SIZE),
-        "the default is sized to whole pages; a value that is merely 'big enough' \
-         would pass every functional test while making each refill straddle a \
-         page boundary"
+        "the default is a whole number of pages in length; a value that is merely \
+         'big enough' would pass every functional test while asking the kernel for \
+         a ragged part-page amount on every refill"
     );
     assert!(
         DEFAULT_BUFFER_CAPACITY.is_power_of_two(),
