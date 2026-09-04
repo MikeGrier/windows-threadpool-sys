@@ -202,6 +202,17 @@ order is the authority and the numbers are only names.
   `RUSTDOCFLAGS`.
 
 - [ ] **SH-2.3** -- Dry-run both publishes (`cargo publish --dry-run`) from the merge commit, and read
+  **Run at the branch tip on 2026-09-03 and clean for four crates** -- `windows-waitable-queues`,
+  `windows-topology-sys`, `windows-file-watcher`, `windows-ioring-sys`. Still open because this item
+  asks for the **merge commit**, which does not exist yet; the branch-tip run is evidence that nothing
+  structural blocks it, not a substitute.
+  What the run settled, so it is not re-litigated: `windows-ioring-sys` publishes while holding
+  *versionless* path dev-dependencies on `windows-topology-sys` and `windows-guard-alloc`. Those are
+  stripped from the published manifest, which is exactly what makes them legal -- a version pin there
+  would fail, naming a crate that is unpublished (`guard-alloc`) or not yet at that version. And no
+  crate anywhere pins `windows-topology-sys` or `windows-waitable-queues` to a version, so the 0.2.0
+  bumps cannot break resolution. The branch adds **no third-party dependency** and changes **no
+  external dependency version**: the only additions to `Cargo.lock` are the two new workspace crates.
   the packaged file list rather than only the exit code. A crate that builds in a workspace can still
   fail to package -- excluded files, a path dependency without a version, a README that is not in the
   package.
