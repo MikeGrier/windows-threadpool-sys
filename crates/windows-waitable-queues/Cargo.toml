@@ -2,7 +2,13 @@
 
 [package]
 name = "windows-waitable-queues"
-version = "0.1.0" # x-release-please-version
+# `0.0.x` on purpose: this crate has never been published, so this is a starting
+# point rather than a record of a release. With `bump-minor-pre-major`, the six
+# breaking commits behind it make the first published version `0.1.0` -- which is
+# what a first release should look like. Leaving it at `0.1.0` would have made
+# that first release `0.2.0`, skipping `0.1.0` entirely. Not `0.0.0`, which
+# release-please special-cases into a jump to `1.0.0`.
+version = "0.0.1" # x-release-please-version
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true

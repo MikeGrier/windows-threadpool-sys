@@ -333,7 +333,7 @@ that previously stood in the way are gone:
   | Crate | From | Expect | Driven by |
   |---|---|---|---|
   | `windows-topology-sys` | 0.1.0 | **0.2.0** | 9 breaking |
-  | `windows-waitable-queues` | 0.1.0 | **0.2.0** | 6 breaking -- but see SH-3.4.1 |
+  | `windows-waitable-queues` | 0.0.1 | **0.1.0** | 6 breaking, from a corrected starting point -- SH-3.4.1 |
   | `windows-ioring-sys` | 0.2.0 | **0.2.1** | pinned by `Release-As` -- SH-3.4.2, [D-46](crates/windows-ioring-sys/DESIGN-NOTES.md#d-46) |
   | `windows-file-watcher` | 0.1.3 | **0.2.0** | 1 breaking, the reopen-by-id removal |
   | `windows-thread-ambient-sys` | 0.2.0 | **0.2.1** | 3 `fix:` commits scoped to other crates that changed its `src/` |
@@ -354,8 +354,25 @@ that previously stood in the way are gone:
   `windows-file-watcher` requirement in the same commit. Confirm it happened again rather than
   trusting it; it is the one dependency edge in the workspace that a bump can actually break.
 
-- [ ] **SH-3.4.1** -- **Decide `windows-waitable-queues`' first published version before the release
-  PR merges.** The crate is not on crates.io, sits at 0.1.0 in the manifest, and carries six `!`
+- [x] **SH-3.4.1** -- **Decide `windows-waitable-queues`' first published version before the release
+  PR merges.**
+  **DECIDED 2026-09-03: the crate starts at `0.0.1`, so its first published version is `0.1.0`.**
+  Not the `Release-As` route this item first proposed -- that was the wrong instrument, and the two
+  cases differ in a way worth stating. The ioring pin *asserts* something falsifiable ("no break
+  happened"), which is why it needs a guard. Here nothing is asserted: the crate has **no release
+  tag**, so its manifest entry was never a record of a release, only a starting point -- and the
+  starting point was simply wrong. Setting it to `0.0.1` corrects it rather than overriding it.
+  Three consequences, in order of importance: with `bump-minor-pre-major` a breaking change takes
+  `0.0.1` to **`0.1.0`**, which is what a first release should look like; it is **robust** where a
+  fixed `Release-As` is not, since further breaking commits before release still yield `0.1.0`; and
+  it needs no footer, no pin, and nothing to remember.
+  **`0.0.0` would have been the wrong value** -- release-please special-cases it and the pre-major
+  options stop applying, jumping to `1.0.0`
+  ([googleapis/release-please#2087](https://github.com/googleapis/release-please/issues/2087)).
+  Safe to lower: both consumers are versionless path dependencies on `publish = false` crates, so no
+  requirement anywhere can fail to resolve. Verified by `cargo metadata` and a clean
+  `cargo publish --dry-run`.
+ The crate is not on crates.io, sits at 0.1.0 in the manifest, and carries six `!`
   commits, so release-please will propose **0.2.0** and 0.1.0 will never exist. The `!` markers are
   honest about the branch's history but describe an API that was never published, so nothing can
   break. Either accept 0.2.0 as the first version, or force the first release with `Release-As: 0.1.0`.
