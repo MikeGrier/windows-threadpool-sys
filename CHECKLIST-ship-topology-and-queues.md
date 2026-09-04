@@ -275,7 +275,11 @@ that previously stood in the way are gone:
   [crates/windows-topology-sys/CHECKLIST.md](crates/windows-topology-sys/CHECKLIST.md) rather than
   folded into a merging PR. Two release-please surprises became SH-3.4.1 and SH-3.4.2.
 
-- [ ] **SH-3.1.2** -- **The engineer takes PR #56 out of draft**, after reading the diff. Assigned by
+- [x] **SH-3.1.2** -- **The engineer takes PR #56 out of draft**, after reading the diff.
+  **Done 2026-09-04: the PR reports `isDraft=false` and `mergeable=MERGEABLE`.** Recorded here from
+  the API rather than from having been told, because the item's whole point was that the decision has
+  an owner and a visible outcome.
+  Originally: assigned by
   decision on 2026-09-03 rather than left unowned, which is the gap SH-3.1.1 named. A draft cannot be
   merged, so this gates SH-3.4 whether or not anything else is outstanding.
   Not blocking on SH-3.2/SH-3.3 by necessity -- those can run against an open PR -- but they were
