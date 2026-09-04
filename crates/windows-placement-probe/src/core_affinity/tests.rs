@@ -7,7 +7,10 @@
 //! seconds. What is worth testing here is that the probe cannot silently
 //! mislabel a pair, because every conclusion it prints is keyed on that label.
 
-use super::{Placement, RunPlan, classify, memory_placements, node_pairs, representative_pairs};
+use super::{
+    Placement, RunPlan, classify, memory_placements, node_pairs, representative_pairs,
+    within_class_pair,
+};
 use crate::peer_index_cache::ITEMS;
 use windows_topology_sys::MachineMemoryTopology;
 
@@ -89,6 +92,103 @@ fn differing_in_both_is_cross_cross() {
     let a = place(0, 1, windows_topology_sys::Observed::Known(0));
     let b = place(6, 0, windows_topology_sys::Observed::Known(1));
     assert_eq!(classify(a, b), Placement::CrossCacheCrossClass);
+}
+
+#[test]
+fn two_unobserved_cache_domains_are_unknown_rather_than_the_same() {
+    // The defect this guards, in the direction that flatters the machine.
+    // `Observed` derives `PartialEq`, so `NotObserved == NotObserved` is true
+    // and comparing the values directly reported two processors that were
+    // merely both *missing* from the cache partition as sharing a cache. The
+    // measurement then claimed a cache-controlled comparison nobody observed.
+    let a = place(0, 1, windows_topology_sys::Observed::NotObserved);
+    let b = place(1, 1, windows_topology_sys::Observed::NotObserved);
+    assert_eq!(classify(a, b), Placement::UnknownCacheSameClass);
+    assert_eq!(classify(b, a), Placement::UnknownCacheSameClass);
+}
+
+#[test]
+fn an_unobserved_domain_against_a_known_one_is_unknown_rather_than_cross() {
+    // The same defect in the other direction, which no reader would suspect
+    // from the first: `NotObserved != Known(0)` is also true, so the pair was
+    // reported as a *cache crossing* that was equally never observed. Both
+    // directions are asserted because fixing only one is the likelier mistake.
+    let known = place(0, 1, windows_topology_sys::Observed::Known(0));
+    let unknown = place(6, 1, windows_topology_sys::Observed::NotObserved);
+    assert_eq!(classify(known, unknown), Placement::UnknownCacheSameClass);
+    assert_eq!(classify(unknown, known), Placement::UnknownCacheSameClass);
+}
+
+#[test]
+fn an_unobserved_domain_still_reports_the_class_it_does_know() {
+    // Unknown is about the cache alone. The efficiency class is a separate
+    // observation and is still carried, so the label degrades in one axis
+    // rather than collapsing to a single "unknown" bucket.
+    let a = place(0, 1, windows_topology_sys::Observed::NotObserved);
+    let b = place(1, 0, windows_topology_sys::Observed::NotObserved);
+    assert_eq!(classify(a, b), Placement::UnknownCacheCrossClass);
+}
+
+#[test]
+fn an_absent_cache_partition_is_shared_not_unknown() {
+    // `Absent` is the platform positively reporting that no cache level
+    // partitions this machine, so every processor really is behind the one
+    // domain. Only `NotObserved` -- "nothing asked, or no way to ask" -- is
+    // unknown. Guarding the distinction because the cheap fix for the defect
+    // above is to treat every non-`Known` alike, which would silently discard
+    // a real answer on every host without a partitioning cache level.
+    let a = place(0, 1, windows_topology_sys::Observed::Absent);
+    let b = place(1, 1, windows_topology_sys::Observed::Absent);
+    assert_eq!(classify(a, b), Placement::SameCacheSameClass);
+}
+
+#[test]
+fn a_node_crossing_still_dominates_an_unobserved_cache() {
+    // The precedence order is unchanged by the new variants: a pair on
+    // different nodes is a node crossing whatever the cache relationship was,
+    // including not knowing it.
+    let a = place(0, 1, windows_topology_sys::Observed::NotObserved);
+    let b = on_node(place(6, 1, windows_topology_sys::Observed::NotObserved), 1);
+    assert_eq!(classify(a, b), Placement::CrossNumaNode);
+}
+
+#[test]
+fn siblings_are_siblings_even_when_the_cache_was_not_observed() {
+    // Sharing a physical core is established by the core id alone, so it does
+    // not depend on the cache observation and must not be downgraded by it.
+    let a = sibling(0, 0, 1, windows_topology_sys::Observed::NotObserved);
+    let b = sibling(1, 0, 1, windows_topology_sys::Observed::NotObserved);
+    assert_eq!(classify(a, b), Placement::SameCoreSiblings);
+}
+
+#[test]
+fn a_within_class_pair_is_never_chosen_on_an_unobserved_cache() {
+    // The selector's contract is a pair that genuinely shares a cache, because
+    // the `by_class` measurement it feeds claims cache control. Two processors
+    // merely both missing from the partition satisfied `==` and were chosen,
+    // so the run measured a pair it could not describe.
+    let places = [
+        place(0, 1, windows_topology_sys::Observed::NotObserved),
+        place(1, 1, windows_topology_sys::Observed::NotObserved),
+    ];
+    assert!(
+        within_class_pair(&places, 1).is_none(),
+        "an unobserved cache domain cannot evidence a same-cache pair"
+    );
+}
+
+#[test]
+fn a_within_class_pair_is_still_chosen_on_a_known_shared_cache() {
+    // The complement, so the fix above cannot be satisfied by refusing every
+    // pair: a genuinely observed shared domain must still be selected.
+    let places = [
+        place(0, 1, windows_topology_sys::Observed::Known(0)),
+        place(1, 1, windows_topology_sys::Observed::Known(0)),
+    ];
+    assert!(
+        within_class_pair(&places, 1).is_some(),
+        "a known shared cache domain is exactly what this selector is for"
+    );
 }
 
 #[test]

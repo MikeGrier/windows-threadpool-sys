@@ -168,3 +168,43 @@ tell that three of them were never emitted by any build anyone could obtain.
 **Rejected: dropping the golden until release.** The guard is what makes an
 accidental shape change visible, and that is as valuable during development as
 after it -- more so, since that is when the shape actually moves.
+
+## An unobserved cache relationship is a third answer, not a coin flip
+
+`ProcessorPlace::cache_domain` is an `Observed<u32>`, and `Observed` derives `PartialEq`. Comparing two
+of them with `==` therefore answers a question nobody asked: `NotObserved == NotObserved` is **true**, so
+two processors that were merely both *missing* from the cache partition compare as sharing a cache, and
+`NotObserved != Known(0)` is also true, so an unobserved domain against a known one compares as a cache
+*crossing*. Either way an unknown is promoted into a finding, in a tool whose entire product is
+measurements that other people are asked to trust.
+
+Both directions were live. `classify` filed such pairs under `SameCache*` or `CrossCache*`, and
+`within_class_pair` -- which selects the evidence for a `by_class` measurement that claims cache control
+-- would choose two unobserved processors as a same-cache pair. The second is the worse of the two: it
+does not merely mislabel a measurement, it causes the run to *make* one it cannot describe.
+
+The rule now has one definition, `ProcessorPlace::shares_cache_domain_with`, returning `Option<bool>`;
+`classify`, `within_class_pair` and `Slice::same_cache_domain` all ask it rather than restating it. That
+last one already had the rule right and was the reason the defect was hard to see: the contract was
+stated correctly in one place while two other sites re-implemented it with `==` and got it wrong. A
+hand-written second copy of a contract rule is not a check of the contract, it is a check of the copy.
+
+**`Absent` is deliberately not unknown.** It is the platform positively reporting that no cache level
+partitions this machine, so two `Absent` processors really do share the single domain. Only
+`NotObserved` -- "nothing asked, or no way to ask" -- poisons the comparison. The cheap fix for the
+defect above is to treat every non-`Known` alike, which would silently discard a real answer on every
+host without a partitioning cache level; `an_absent_cache_partition_is_shared_not_unknown` exists to
+stop that.
+
+**Labelled rather than dropped.** `Placement` gained `UnknownCacheSameClass` and
+`UnknownCacheCrossClass` instead of the pairs being excluded, because the handoff really was timed
+between two named processors and the number is real -- it is only the *cache* relationship that is
+unknown, and the efficiency class is still carried. They sit after `CrossNumaNode` rather than beside
+their `SameCache`/`CrossCache` counterparts because that ordering runs tightest-to-loosest *coupling*
+and an unobserved relationship is not a point on that scale. This follows `CrossNumaNode`'s own
+reasoning, quoted from its doc: the merge is silent, and the run that would expose it is the expensive
+one.
+
+No schema version bump: the freeze starts at the first release and this crate has not had one.
+
+Raised in the PR #56 review, as two suppressed comments on the same defect.

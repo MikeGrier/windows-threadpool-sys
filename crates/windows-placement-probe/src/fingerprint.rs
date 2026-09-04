@@ -124,6 +124,37 @@ pub struct ProcessorPlace {
 }
 
 impl ProcessorPlace {
+    /// Whether this processor and `other` sit behind the same cache domain,
+    /// or `None` when the topology never said.
+    ///
+    /// **The one definition of that comparison; every caller asks here.** It
+    /// exists because `Observed` derives `PartialEq`, so `==` answers the wrong
+    /// question on the variant that matters: two `NotObserved` domains compare
+    /// *equal* and would be reported as sharing a cache the topology never
+    /// established, and a `NotObserved` against a `Known` compares *unequal*
+    /// and would be reported as a cache crossing that was never observed.
+    /// Either way an unknown is silently promoted to a finding, in a tool whose
+    /// entire product is measurements other people trust.
+    ///
+    /// `Absent` is deliberately *not* unknown: it is the platform positively
+    /// reporting that no cache level partitions this machine, so two `Absent`
+    /// processors really do share the (single) domain. Only `NotObserved` --
+    /// "nothing asked, or no way to ask" -- poisons the comparison.
+    ///
+    /// Raised in the PR #56 review, which found `core_affinity` comparing these
+    /// with `==` at two sites while [`Slice::same_cache_domain`] had the rule
+    /// right. That is why the rule now lives in one place instead of being
+    /// restated: a second copy is not a check of the contract, it is a check of
+    /// the copy.
+    #[must_use]
+    pub fn shares_cache_domain_with(self, other: Self) -> Option<bool> {
+        if self.cache_domain == Observed::NotObserved || other.cache_domain == Observed::NotObserved
+        {
+            return None;
+        }
+        Some(self.cache_domain == other.cache_domain)
+    }
+
     /// This processor's full identity, as the pinning call needs it.
     ///
     /// Exists so no call site is tempted to pass a bare `number`, which is the
@@ -216,17 +247,21 @@ impl Slice {
         // sharing a cache. That is the hazard the old refusal existed to
         // prevent, moved from "refuse the whole run" to "answer the one
         // question that cannot be answered".
-        let mut domains = participants.iter().map(|(_, place)| place.cache_domain);
-        let first = domains.next()?;
-        if first == Observed::NotObserved {
-            return None;
-        }
+        //
+        // The rule itself is [`ProcessorPlace::shares_cache_domain_with`] and
+        // is asked rather than restated here -- this fold only extends it from
+        // a pair to a set.
+        let mut places = participants.iter().map(|(_, place)| *place);
+        let first = places.next()?;
         let mut same = true;
-        for domain in domains {
-            if domain == Observed::NotObserved {
-                return None;
-            }
-            same &= domain == first;
+        for place in places {
+            same &= first.shares_cache_domain_with(place)?;
+        }
+        // A single participant is trivially of one domain, but only if that
+        // domain was observed at all -- otherwise the loop above never ran and
+        // never asked.
+        if first.cache_domain == Observed::NotObserved {
+            return None;
         }
         Some(same)
     }

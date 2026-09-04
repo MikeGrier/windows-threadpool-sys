@@ -113,7 +113,13 @@ fn within_class_pair(
     members
         .iter()
         .flat_map(|a| members.iter().map(move |b| (**a, **b)))
-        .find(|(a, b)| a.core != b.core && a.cache_domain == b.cache_domain)
+        // `shares_cache_domain_with`, not `==`: this pair is the *evidence* for
+        // a within-class comparison that claims cache control, so an unknown
+        // relationship disqualifies it. Comparing the `Observed` values
+        // directly selected two processors that were merely both missing from
+        // the cache partition, and reported them as a same-cache pair. Raised
+        // in the PR #56 review.
+        .find(|(a, b)| a.core != b.core && a.shares_cache_domain_with(*b) == Some(true))
 }
 
 /// Every efficiency class this machine has.
@@ -291,6 +297,27 @@ pub enum Placement {
     /// Absent on every host measured so far -- all three are VM slices that
     /// present a single node -- and reported inexpressible rather than merged.
     CrossNumaNode,
+    /// Same efficiency class; the cache relationship was never observed.
+    ///
+    /// Not a cache category, which is why these two sit after `CrossNumaNode`
+    /// rather than beside their `SameCache`/`CrossCache` counterparts: the
+    /// ordering above runs from tightest to loosest *coupling*, and an
+    /// unobserved relationship is not a point on that scale. `CrossNumaNode`
+    /// remains the loosest coupling this machine can express.
+    ///
+    /// Reached when the topology omitted a processor from the level that
+    /// partitions the machine, which `windows-topology-sys` reports as
+    /// `Observed::NotObserved` rather than inventing a domain. The measurement
+    /// itself is real -- a handoff was timed between two named processors -- so
+    /// it is labelled honestly instead of dropped, or worse, filed under a
+    /// cache relationship nobody established. Same reasoning as
+    /// `CrossNumaNode`'s: the merge is silent, and the run that would expose it
+    /// is the expensive one.
+    UnknownCacheSameClass,
+    /// Different efficiency class; the cache relationship was never observed.
+    ///
+    /// See [`Self::UnknownCacheSameClass`].
+    UnknownCacheCrossClass,
 }
 
 impl Placement {
@@ -304,6 +331,11 @@ impl Placement {
             Self::CrossCacheSameClass => "cross cache, same class",
             Self::CrossCacheCrossClass => "cross cache, cross class",
             Self::CrossNumaNode => "cross NUMA node",
+            // "unknown", never "same" or "cross": a reader scanning the table
+            // must be able to see that the topology did not answer, rather than
+            // being handed a cache claim it never made.
+            Self::UnknownCacheSameClass => "unknown cache, same class",
+            Self::UnknownCacheCrossClass => "unknown cache, cross class",
         }
     }
 }
@@ -450,13 +482,19 @@ pub fn classify(producer: ProcessorPlace, consumer: ProcessorPlace) -> Placement
     if producer.numa_node != consumer.numa_node {
         return Placement::CrossNumaNode;
     }
-    let same_cache = producer.cache_domain == consumer.cache_domain;
+    // `shares_cache_domain_with` rather than `==`, and the third answer is a
+    // label rather than a guess. Comparing the `Observed` values directly made
+    // two unobserved domains "same cache" and an unobserved against a known one
+    // "cross cache", filing a measurement under a relationship the topology
+    // never established. Raised in the PR #56 review.
     let same_class = producer.efficiency_class == consumer.efficiency_class;
-    match (same_cache, same_class) {
-        (true, true) => Placement::SameCacheSameClass,
-        (true, false) => Placement::SameCacheCrossClass,
-        (false, true) => Placement::CrossCacheSameClass,
-        (false, false) => Placement::CrossCacheCrossClass,
+    match (producer.shares_cache_domain_with(consumer), same_class) {
+        (Some(true), true) => Placement::SameCacheSameClass,
+        (Some(true), false) => Placement::SameCacheCrossClass,
+        (Some(false), true) => Placement::CrossCacheSameClass,
+        (Some(false), false) => Placement::CrossCacheCrossClass,
+        (None, true) => Placement::UnknownCacheSameClass,
+        (None, false) => Placement::UnknownCacheCrossClass,
     }
 }
 
