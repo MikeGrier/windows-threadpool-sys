@@ -824,3 +824,35 @@ listed re-opens exactly this hole. A test that derived one from the other was pr
 asking the next editor to remember.
 
 Raised in the PR #56 review.
+
+## D-26: a processor only CPU Sets saw is reported, not synthesized
+
+[D-16](#d-16)'s retry can end in `Coherence::Disagreed`, and one shape of that disagreement is a
+processor the CPU-set enumeration reported and the relationship walk did not. `MachineMemoryTopology::processors`
+does **not** gain an entry for it. The PR #56 review raised this as an omission; it is one, and it is
+deliberate.
+
+**Synthesizing the entry is the option that looks helpful and is not.** `processors` carries the walk's
+view, and every `Processor` in it has a core, an efficiency class and domain memberships *because the
+walk described them*. A processor the walk never mentioned has none of those. Adding it would put a
+record in the list with fabricated or empty fields, indistinguishable by shape from one the platform
+actually described -- the precise confusion [D-13](#d-13) and `Observed` exist to remove, arriving
+through a field rather than through a value.
+
+**The outlet already exists, which is what makes the omission tolerable.** `Coherence::Disagreed`
+carries `cpu_sets_only`, so the processors are named, and both sides now say so: the field documents
+that they are absent from `processors`, and `processors` documents that they are named in coherence.
+A caller reading only `processors` gets the walk's view -- which is what that field has always been --
+and one that needs the disagreement has it in full.
+
+**On likelihood, and why that is not the reason.** Reaching this state needs a disagreement that
+survives every pass of the retry, which [D-17](#d-17) says comes from prerelease hardware, defective
+firmware tables, or a topology feature landing in one enumeration before the other. Rare, and rare is
+not the argument: [D-17](#d-17) also says those are exactly the machines a user most needs to get
+right. The argument is that a fabricated `Processor` would be *worse* than an absent one, because an
+absent processor is visible in `cpu_sets_only` while a fabricated one is visible nowhere.
+
+**Not scheduled as work.** This decision closes the question rather than deferring it: there is no
+checklist item, because the answer is that the current shape is correct and the documentation was what
+was missing. Should a consumer ever need a merged list, it belongs as a derived view built from both
+sources, not as a mutation of the walk's.

@@ -64,6 +64,12 @@ pub enum Coherence {
         /// Processors the relationship walk reported and CPU Sets did not.
         walk_only: Vec<ProcessorId>,
         /// Processors CPU Sets reported and the relationship walk did not.
+        ///
+        /// **These are absent from [`MachineMemoryTopology::processors`]**,
+        /// which carries the walk's view alone. This field is where they are
+        /// named, and reading it is the only way to learn they exist -- see
+        /// [D-26](../DESIGN-NOTES.md#d-26) for why they are reported here
+        /// rather than synthesized into a list that has one source.
         cpu_sets_only: Vec<ProcessorId>,
         /// How many passes were made before giving up.
         attempts: u32,
@@ -84,6 +90,24 @@ pub enum Coherence {
 pub struct MachineMemoryTopology {
     /// Every logical processor, including one for each inactive slot up to a
     /// group's maximum processor count.
+    ///
+    /// **As the relationship walk reported them.** A processor that only the
+    /// CPU-set enumeration saw is *not* here, and that is a real omission
+    /// rather than an oversight: this list has one source, and inventing an
+    /// entry for a processor the walk never described would put a `Processor`
+    /// here with no `core`, no class and no domain membership -- a fabricated
+    /// record of exactly the kind [`Observed`] exists to prevent.
+    ///
+    /// The disagreement is not lost, it is [reported](Self::coherence):
+    /// [`Coherence::Disagreed`] names such processors in its `cpu_sets_only`
+    /// field. A caller that needs them can read them there, and one that
+    /// ignores coherence sees the walk's view, which is what this field has
+    /// always been.
+    ///
+    /// Reaching that state takes a disagreement surviving every pass of
+    /// [`Self::discover`]'s retry, so it is not the ordinary case -- but the
+    /// ordinary case is not what a topology crate is for. See
+    /// [D-26](../DESIGN-NOTES.md#d-26).
     pub processors: Vec<Processor>,
     /// Every domain.
     pub domains: Vec<Domain>,
