@@ -150,14 +150,14 @@ fn a_single_node_machine_says_why_there_are_no_hops() {
 }
 
 #[test]
-fn a_fully_trusted_run_is_not_marked() {
+fn a_fully_traceable_run_is_not_marked() {
     let text = render(&fully_populated());
 
     assert!(text.contains("official build"), "got {text}");
 }
 
 #[test]
-fn an_untrusted_run_names_each_reason_separately() {
+fn a_marked_run_names_each_reason_separately() {
     // "Something is wrong" is not actionable. A reader triaging a surprising
     // submission needs to know whether the build or the topology was the
     // problem, and both can be true at once.
@@ -180,7 +180,7 @@ fn the_ordering_caveat_is_stated_even_on_a_clean_run() {
 
     assert!(
         text.contains("memory ordering"),
-        "the ordering caveat must appear on every run, including trusted ones"
+        "the ordering caveat must appear on every run, including unmarked ones"
     );
 }
 

@@ -5,9 +5,16 @@ use std::fmt;
 
 /// Where a binary came from.
 ///
-/// Ordered by trust, `Unknown < Local < Ci`, so the derived `Ord` is the trust
-/// order -- the same shape as `windows_topology_sys::Provenance` one layer down,
-/// and for the same reason.
+/// Ordered by how well a build can be traced to the source that made it,
+/// `Unknown < Local < Ci`, so the derived `Ord` is that order -- the same shape
+/// as `windows_topology_sys::Provenance` one layer down, and for the same
+/// reason.
+///
+/// **Traceability, not trustworthiness.** `Ci` means an artifact that names the
+/// commit it was built from; it does not mean the binary is honest, and this
+/// enum cannot establish that -- the value is read from an environment variable
+/// at build time, so anyone building this crate can set it. Ordering these by
+/// "trust" would claim an authentication property that no variant here has.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -25,7 +32,7 @@ pub enum BuildSource {
     /// prove.** The value comes from an environment variable read at build
     /// time, so it distinguishes an *accidental* local build from a CI one --
     /// which is what it is for -- and does not authenticate a binary someone
-    /// else handed you. See the crate README, "Trusting the binary": the
+    /// else handed you. See the crate README, "Checking what a binary is": the
     /// release asset's SHA-256 digest is what ties a download to what this
     /// repository published.
     Ci,
@@ -44,9 +51,9 @@ impl BuildSource {
 }
 
 impl fmt::Display for BuildSource {
-    /// Renders the untrusted variants in capitals and the trusted one in lower
-    /// case, so a build that cannot vouch for itself is visibly louder than one
-    /// that can.
+    /// Renders the unofficial variants in capitals and the CI one in lower
+    /// case, so a build that cannot name where it came from is visibly louder
+    /// than one that can.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
     }

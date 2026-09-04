@@ -499,7 +499,7 @@ impl fmt::Display for Fingerprint {
     ///
     /// A measured fingerprint renders exactly as it always did, so every string
     /// already recorded in a checklist or design note stays valid and
-    /// comparable. Only the untrusted cases gain a prefix, and they gain it at
+    /// comparable. Only the unmeasured cases gain a prefix, and they gain it at
     /// the *front*, where a reader scanning a column of results cannot skip it.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.provenance.is_measured() {

@@ -6,7 +6,7 @@
 //! owns, built from whatever commit was current -- so the record carries the
 //! commit, whether the tree was dirty, and whether the build came from CI.
 //!
-//! # The default is untrusted
+//! # The default is unofficial
 //!
 //! Every value here can fail to be determined: a `cargo install` from a
 //! crates.io tarball has no repository, a downloaded source zip has no `.git`,
@@ -71,7 +71,7 @@ fn main() {
     // local build reported `v0.1.0 79b9c4666a1b [ci]` -- no `!!UNOFFICIAL!!`
     // marker, so a record from it would have pooled with real CI results.
     // That inverts this file's stated default, which is that being unable to
-    // tell must resolve to untrusted.
+    // tell must resolve to unofficial.
     let source = match std::env::var(SOURCE_ENV) {
         Ok(value) if value.trim().eq_ignore_ascii_case("ci") && stamped_commit.is_some() => "ci",
         _ if commit.is_some() => "local",

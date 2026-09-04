@@ -381,7 +381,15 @@ impl SubmissionRecord {
         })
     }
 
-    /// Whether every part of this record is trustworthy.
+    /// Whether this record can be traced back to a named build and a real
+    /// machine.
+    ///
+    /// **Deliberately not phrased as trust.** What this answers is narrow and
+    /// mechanical -- was the binary built by CI from a named commit, and was the
+    /// topology read from the host rather than fed in -- and calling that
+    /// "trusted" would import a much larger set of questions about honesty and
+    /// authentication that this predicate does not ask and cannot answer. The
+    /// build stamp is self-reported; see [`BuildIdentity`].
     ///
     /// A record that fails this is still worth sending -- it is not worth
     /// silently pooling with the rest, because a defect found later can only be
@@ -394,14 +402,14 @@ impl SubmissionRecord {
     /// into `host`. Both fields are public, so the duplication can be broken --
     /// by hand-assembling a record, or by editing one field of a deserialized
     /// one -- and consulting only the copy let a record whose fingerprint
-    /// renders `!!SYNTHETIC!!` report itself fully trusted. The printed report
+    /// renders `!!SYNTHETIC!!` report itself fully traceable. The printed report
     /// would then contradict the very string beside it.
     ///
     /// Requiring both is the conservative reading: a record that disagrees with
     /// itself about where its topology came from is exactly the record not to
     /// pool, whichever field happens to be right.
     #[must_use]
-    pub fn is_fully_trusted(&self) -> bool {
+    pub fn is_fully_traceable(&self) -> bool {
         self.build.is_official()
             && self.topology_provenance.is_measured()
             && self.host.provenance.is_measured()

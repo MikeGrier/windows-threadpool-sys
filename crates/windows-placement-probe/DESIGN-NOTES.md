@@ -79,8 +79,9 @@ git is absent -- and it would answer a different question than the one the
 marking exists to ask. "This source came from commit X" is not "this binary was
 built by CI from commit X"; only the second makes the artifact independently
 checkable, because only the second was produced by something other than the
-person submitting the record. Blurring the two would leave the record's trust
-section saying something it cannot support. The unknown commit is honest, and
+person submitting the record. Blurring the two would leave the record's
+"where this result came from" section saying something it cannot support. The
+unknown commit is honest, and
 honest is the point.
 
 **What publication will oblige**, recorded so the cost is not rediscovered
@@ -381,9 +382,9 @@ into sending a runner to a dead link.
 
 ### What this deliberately does not do
 
-**`is_fully_trusted` is untouched.** A disagreement is not a doubt about
+**`is_fully_traceable` is untouched.** A disagreement is not a doubt about
 provenance -- the build is official and the topology really was read from this
-machine -- so the "how far to trust this" section still says so, and the
+machine -- so the "where this result came from" section still says so, and the
 disagreement is reported in its own section below. Whether an inconsistent
 machine should additionally be *marked* there, and how to mark it without
 dressing up a nuisance as a prize, is `PT-7.1`'s decision and is left to it.

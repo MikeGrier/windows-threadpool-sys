@@ -131,7 +131,7 @@ is identified by its **topology** -- an unusual core count, a novel cache
 arrangement -- at least as well as by its name, and the topology is the
 measurement. No switch fixes that, and it would be dishonest to imply otherwise.
 
-## Trusting the binary
+## Checking what a binary is
 
 Run `placement-probe --version`. A binary built by this repository's CI reports
 its commit and reads as official; anything else is marked `!!UNOFFICIAL!!`,
@@ -157,7 +157,7 @@ implied otherwise.
 **To establish what a download actually is, verify its attestation.** Every
 released binary is signed by GitHub at build time with a statement binding those
 exact bytes to this repository, the workflow that built them, and the commit
-they were built from. Checking it trusts none of what the binary says about
+they were built from. Checking it relies on none of what the binary says about
 itself:
 
 ```powershell

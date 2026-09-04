@@ -45,7 +45,7 @@ pub fn render(record: &SubmissionRecord) -> String {
     render_placements(&mut out, record);
     render_by_class(&mut out, record);
     render_node_hops(&mut out, record);
-    render_trust(&mut out, record);
+    render_origin(&mut out, record);
     render_topology_disagreement(&mut out, record);
     out
 }
@@ -336,11 +336,20 @@ fn render_node_hops(out: &mut String, record: &SubmissionRecord) {
     }
 }
 
-fn render_trust(out: &mut String, record: &SubmissionRecord) {
+/// Say what this result can be traced back to.
+///
+/// # Deliberately not "how far to trust this"
+///
+/// The question here is narrow and mechanical: was the binary built by CI from
+/// a named commit, and was the topology read from the host rather than fed in.
+/// Framing that as trust invites a much larger conversation -- about honesty,
+/// about authentication -- that this section does not have and cannot settle,
+/// since the build stamp is self-reported. Saying where a result came from is
+/// the claim that is actually being made.
+fn render_origin(out: &mut String, record: &SubmissionRecord) {
     let _ = writeln!(out);
-    let _ = writeln!(out, "-- how far to trust this --");
-
-    if record.is_fully_trusted() {
+    let _ = writeln!(out, "-- where this result came from --");
+    if record.is_fully_traceable() {
         let _ = writeln!(
             out,
             "  An official build, reading this machine's real topology."
@@ -368,9 +377,8 @@ fn render_trust(out: &mut String, record: &SubmissionRecord) {
         let _ = writeln!(out, "  an official run can, so say so when you send them.");
     }
 
-    // Stated on every run, not only untrusted ones. A long clean run is exactly
-    // when someone is most tempted to read more into it than it says.
-    let _ = writeln!(out);
+    // Stated on every run, not only marked ones. A long clean run is exactly
+    // when someone is most tempted to read more into it than it says.    let _ = writeln!(out);
     let _ = writeln!(
         out,
         "  What this does NOT establish: anything about memory ordering. These"

@@ -110,7 +110,7 @@ fn run(out: &mut impl Sink) -> ExitCode {
     if options.version {
         // Deliberately the whole identity rather than just a version number.
         // CI asserts on this line that a released artifact reports itself
-        // official, and a runner can check the same thing before trusting a
+        // official, and a runner can check the same thing before relying on a
         // download -- both need the commit and the source, not just "0.1.0".
         out.line(&BuildIdentity::current().to_string());
         return ExitCode::SUCCESS;

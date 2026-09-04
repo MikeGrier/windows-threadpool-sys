@@ -23,10 +23,11 @@
 //! # None of it is collected unless the runner says so
 //!
 //! Every field here is *context* rather than measurement, so
-//! [`MetadataPolicy`] withholds all of it by default and
-//! [`MachineDescription::read`] does not even ask the host for a field it will
-//! not carry. The paragraph above therefore describes the shape of what an
-//! opted-in submission contains, not what a default one does.
+//! [`MetadataPolicy`](crate::redaction::MetadataPolicy) withholds all of it by
+//! default and [`MachineDescription::read`](crate::machine::MachineDescription::read)
+//! does not even ask the host for a field it will not carry. The paragraph
+//! above therefore describes the shape of what an opted-in submission contains,
+//! not what a default one does.
 //!
 //! # Every field is optional, and absence is honest
 //!

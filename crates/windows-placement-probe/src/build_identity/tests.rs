@@ -14,14 +14,14 @@ fn official() -> BuildIdentity {
 }
 
 #[test]
-fn the_default_source_is_the_untrusted_one() {
+fn the_default_source_is_the_unofficial_one() {
     // The load-bearing property, matching Provenance one layer down: a value
-    // that was never established must not read as trustworthy.
+    // that was never established must not read as official.
     assert_eq!(BuildSource::default(), BuildSource::Unknown);
 }
 
 #[test]
-fn the_source_ordering_is_the_trust_order() {
+fn the_source_ordering_runs_from_unknown_to_official() {
     assert!(BuildSource::Unknown < BuildSource::Local);
     assert!(BuildSource::Local < BuildSource::Ci);
 }

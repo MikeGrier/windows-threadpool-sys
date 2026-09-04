@@ -192,7 +192,7 @@ fn a_synthetic_host_is_marked_at_the_front() {
 }
 
 #[test]
-fn a_restored_host_is_marked_and_says_which_kind_of_untrusted_it_is() {
+fn a_restored_host_is_marked_and_says_which_kind_of_unmeasured_it_is() {
     // Restored and synthetic are different claims -- one describes some real
     // machine, the other describes none -- and a reader deciding how much to
     // believe a number needs to know which.
@@ -206,16 +206,16 @@ fn a_restored_host_is_marked_and_says_which_kind_of_untrusted_it_is() {
 }
 
 #[test]
-fn an_untrusted_host_never_compares_equal_to_the_real_one_it_imitates() {
+fn an_unmeasured_host_never_compares_equal_to_the_real_one_it_imitates() {
     // The specific bug the marker exists to prevent, and the reason it lives
     // inside the string rather than beside it. The fingerprint is documented as
     // canonical, so equality of the rendered form is a supported comparison --
     // which means a fabricated machine claiming the exact shape of a real one
     // must not produce the same string.
     let real = x64_smt_host();
-    for untrusted in [Provenance::Synthetic, Provenance::Restored] {
+    for unmeasured in [Provenance::Synthetic, Provenance::Restored] {
         let mut imitation = x64_smt_host();
-        imitation.provenance = untrusted;
+        imitation.provenance = unmeasured;
 
         assert_eq!(
             imitation.processors, real.processors,
@@ -224,13 +224,13 @@ fn an_untrusted_host_never_compares_equal_to_the_real_one_it_imitates() {
         assert_ne!(
             imitation.to_string(),
             real.to_string(),
-            "{untrusted:?} rendered identically to a measured host"
+            "{unmeasured:?} rendered identically to a measured host"
         );
     }
 }
 
 #[test]
-fn the_marker_is_the_only_difference_an_untrusted_host_renders() {
+fn the_marker_is_the_only_difference_an_unmeasured_host_renders() {
     // The taint must not disturb the shape it prefixes, or a tainted
     // fingerprint could not be compared against a real one at all -- which is
     // exactly what someone validating synthetic selection logic needs to do.
@@ -260,7 +260,7 @@ fn a_fingerprint_read_from_this_machine_reports_itself_as_measured() {
 
 #[test]
 fn a_fingerprint_built_from_a_hand_made_topology_is_not_measured() {
-    // The path a synthetic host takes. `MachineMemoryTopology::default` is untrusted by
+    // The path a synthetic host takes. `MachineMemoryTopology::default` is unmeasured by
     // construction, and `from_topology` must carry that through rather than
     // inventing an answer.
     let fingerprint =

@@ -538,16 +538,17 @@ that previously stood in the way are gone:
   Windows 10 "Iron" codebase (build 20348), while Server 2025 shares Windows 11 24H2''s build 26100.
   A crate claiming a Windows 11 floor pairs with **Server 2025**.
 
-- [ ] **SH-4.5** -- **Propagate enumeration incompleteness into the placement probe''s trust state.**
+- [ ] **SH-4.5** -- **Propagate enumeration incompleteness into the placement probe''s traceability
+  state.**
   Raised in PR #56 review. `places_from_topology` ignores
-  `MachineMemoryTopology::enumeration_anomalies`, and `SubmissionRecord::is_fully_trusted` gates only
-  on `build.is_official()` and two `Provenance::Measured` checks -- which a `discover()` result
-  satisfies even when records were dropped. A truncated enumeration can therefore be filed as a
-  **trustworthy small machine**, which is the one thing a measurement tool must not do.
+  `MachineMemoryTopology::enumeration_anomalies`, and `SubmissionRecord::is_fully_traceable` gates
+  only on `build.is_official()` and two `Provenance::Measured` checks -- which a `discover()` result
+  satisfies even when records were dropped. A truncated enumeration can therefore be filed as an
+  **unremarkable small machine**, which is the one thing a measurement tool must not do.
   **Deliberately not rushed into PR #56**: the honest fix records the anomaly count *in the record*
-  and gates trust on it, and the record carries a **versioned schema** (see the `collapse the record
-  schema back to v1` commit), so this is a schema decision rather than a one-line guard. Downgrading
-  `Provenance` instead would be wrong -- per [D-22](crates/windows-topology-sys/DESIGN-NOTES.md#d-22)
+  and gates that state on it, and the record carries a **versioned schema** (see the `collapse the
+  record schema back to v1` commit), so this is a schema decision rather than a one-line guard.
+  Downgrading  `Provenance` instead would be wrong -- per [D-22](crates/windows-topology-sys/DESIGN-NOTES.md#d-22)
   provenance records how the object was *obtained*, not how complete it is.
   The gap is newly reachable because `enumeration_anomalies` itself is new in this PR; before it,
   there was nothing to propagate.

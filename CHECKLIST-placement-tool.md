@@ -638,8 +638,8 @@ actionable is identifying and therefore belongs behind the review this tool alre
   than plumbing:
   (a) **Name the processors in the printed text**, not only in the record -- "what each source
   claimed", which is what this item asks for and what counts alone do not give.
-  (b) **Decide whether an inconsistent run is marked in "how far to trust this".**
-  `is_fully_trusted` is deliberately untouched, so that section currently reads "an official build,
+  (b) **Decide whether an inconsistent run is marked in "where this result came from".**
+  `is_fully_traceable` is deliberately untouched, so that section currently reads "an official build,
   reading this machine's real topology" directly above the disagreement section. That is not a
   contradiction -- the build *is* official and the topology *was* read -- but a reader may feel one.
   This item's own two-sided framing below is the guidance for settling it: mark it plainly enough

@@ -176,7 +176,7 @@ jobs:
       # triggers exist -- but it must not *publish*. Without the guard these
       # steps ran on every trigger, so each pull-request run attached two
       # downloadable binaries stamped `[ci]`, which `is_official` accepts and
-      # `SubmissionRecord::is_fully_trusted` then passes. Anyone could take one
+      # `SubmissionRecord::is_fully_traceable` then passes. Anyone could take one
       # from the run's artifact list and submit results indistinguishable from a
       # real release build, which is precisely the boundary this file's header
       # says the release attachment exists to draw.
