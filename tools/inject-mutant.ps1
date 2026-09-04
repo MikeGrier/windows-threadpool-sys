@@ -115,9 +115,24 @@ function Invoke-Suite {
         -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError "$out.err"
     try {
         if ($proc.WaitForExit($Seconds * 1000)) {
-            $outcome = if ($proc.ExitCode -eq 0) { 'passed' } else { 'failed' }
-            return [pscustomobject]@{ Outcome = $outcome; Code = $proc.ExitCode }
-        }
+            if ($proc.ExitCode -eq 0) {
+                return [pscustomobject]@{ Outcome = 'passed'; Code = 0 }
+            }
+            # A non-zero exit is not evidence the tests killed the mutant: a
+            # replacement that does not compile also exits non-zero, and then no
+            # test ran at all. Reporting that as `caught` credits the suite with
+            # a detection it never made -- the same unviable-vs-caught
+            # distinction `run-sabotage.ps1` draws. Raised in PR #56 review.
+            $text = @(
+                (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue),
+                (Get-Content -LiteralPath "$out.err" -Raw -ErrorAction SilentlyContinue)
+            ) -join "`n"
+            $outcome = if ($text -match 'could not compile|(?m)^error\[E\d+\]') {
+                'unviable'
+            } else {
+                'failed'
+            }
+            return [pscustomobject]@{ Outcome = $outcome; Code = $proc.ExitCode }        }
         Get-CimInstance Win32_Process -Filter "ParentProcessId=$($proc.Id)" -ErrorAction SilentlyContinue |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
@@ -210,9 +225,16 @@ foreach ($target in $targets) {
         # leaving the file truncated -- still reaches the restoring `finally`.
         [System.IO.File]::WriteAllText($path, (($mutated -join "`n") + "`n"), $utf8NoBom)
         $run = Invoke-Suite -Repository $repo -CargoArgs $cargoArgs -Seconds $TimeoutSeconds
-        $verdict = if ($run.Outcome -eq 'passed') { '*** SURVIVED ***' } else { 'caught' }
-        $detail = if ($run.Outcome -eq 'hung') { "HUNG past ${TimeoutSeconds}s" } else { "exit $($run.Code)" }
-    }
+        $verdict = switch ($run.Outcome) {
+            'passed' { '*** SURVIVED ***' }
+            'unviable' { '!!! UNVIABLE !!!' }
+            default { 'caught' }
+        }
+        $detail = switch ($run.Outcome) {
+            'hung' { "HUNG past ${TimeoutSeconds}s" }
+            'unviable' { 'did not compile -- no test ran, so this proves nothing' }
+            default { "exit $($run.Code)" }
+        }    }
     finally {
         [System.IO.File]::WriteAllText($path, (($original -join "`n") + "`n"), $utf8NoBom)
         if ((Get-Content -LiteralPath $path -Raw) -ne (($original -join "`n") + "`n")) {
@@ -222,8 +244,10 @@ foreach ($target in $targets) {
         }
     }
 
-    $level = if ($verdict -eq 'caught') { 'good' } else { $survivors++; 'bad' }
-    Write-Report ("{0}:{1} '{2}' -> '{3}'  {4} ({5})" -f `
+    # An unviable mutant counts as `bad` for exit purposes: it is an
+    # inconclusive result, not a pass, and treating it as one would hide the
+    # source drift that produced it.
+    $level = if ($verdict -eq 'caught') { 'good' } else { $survivors++; 'bad' }    Write-Report ("{0}:{1} '{2}' -> '{3}'  {4} ({5})" -f `
             $File, $target.Line, $Find, $Replace, $verdict, $detail) -Level $level
 }
 
