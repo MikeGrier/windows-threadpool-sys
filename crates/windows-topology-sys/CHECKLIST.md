@@ -7,29 +7,40 @@ enumeration plan that preceded it. Cite item IDs (`MMT-1.1`, `M4+.1`, `M5+.4`, .
 Decisions live in [DESIGN-NOTES.md](DESIGN-NOTES.md), which is the authority for current behaviour;
 the archived checklist records what was *done*, not what is *true now*.
 
-## M6: the record walks' bounds discipline
+## M6: one record walk, per D-24
 
-Opened 2026-09-03 by the PR #56 diff review (`SH-3.1.1`), which found an out-of-bounds read in
-`cpu_set.rs` and, next to it, the same defect class unguarded in `walk.rs`. The `cpu_set.rs` half is
-already fixed and shipped in that PR; this milestone is the sibling it exposed.
+Opened 2026-09-03 by the PR #56 diff review (`SH-3.1.1`), which found the crate''s two record
+decoders internally coherent and mutually opposite. [D-24](DESIGN-NOTES.md#d-24) is the ruling this
+milestone implements: **one shared walk, no panic, incoherence recorded in the returned data, and no
+trust boundary** -- the OS is trusted for structural validity, and the careful walk is simply how
+variable-length records are traversed correctly.
 
-- [ ] **M6.1** -- **`walk::decode` trusts the kernel's `Size` without bounding it against the
-  buffer.** Its loop guard is `while offset < length`, which proves only that **one** byte is in
-  range, and it then reads `Relationship` and `Size` -- two 4-byte fields at offsets 0 and 4 -- and
-  advances by `size` with **no** `offset + size <= length` check at any point. The backing buffer is
-  `vec![0_u64; length.div_ceil(8)]`, i.e. exactly `length` bytes whenever `length % 8 == 0`, so a
-  record declaring a `Size` that overruns the buffer walks the loop straight past the allocation.
-  **This is the same defect the review found in `cpu_set.rs`**, where the `Type` read at offset 4 sat
-  outside the guard that covered it. That one was witnessed deterministically: with the buffer placed
-  flush against a `PAGE_NOACCESS` page, the original ordering raised `0xC0000005` and the fixed
-  ordering returned cleanly. `walk.rs` was **unchanged on that branch**, so it was left out of the PR
-  rather than silently widening a merge -- not because it is less real.
-  **Do not stop at the loop guard.** `decode_body` is the larger half: it reads each relationship's
-  trailing array using counts taken from the record with no bound against the buffer at all, so
-  guarding only the outer loop would give false confidence. Both halves, or neither.
-  Verify the same way rather than by reasoning: a guard-page harness that faults before the fix and
-  returns after it. A test alone cannot witness this -- the decoded output is identical either way,
-  which is exactly why it survived review until someone read the guard against the offsets.
+- [ ] **M6.1** -- **A shared, self-bounding record walk.** New private module: an iterator over a
+  `Size`-chained record list, parameterised by the offset of the `Size` field and the minimum record
+  size, yielding a **record view bounded by its own `Size`**. The view''s read accessor returns
+  nothing when the read would leave the record, so a trailing array cannot be read past the record
+  that declares it -- the `GroupCount` amplification closes *by construction*, not by a separate
+  check. Built first and unused; `walk.rs` and `cpu_set.rs` adopt it in M6.3/M6.4.
+
+- [ ] **M6.2** -- **Vocabulary for a record that did not fit, and somewhere for it to live.** A public
+  anomaly type carrying the [`Source`](src/observation.rs) that was being read, the byte offset, and
+  what was wrong, plus a new `MachineMemoryTopology` field to carry them. Breaking (the struct has
+  public fields and is deliberately hand-constructible, so it does not take `#[non_exhaustive]`),
+  which is free on this branch. `serde(default)` so an existing description still deserializes.
+
+- [ ] **M6.3** -- **Port `cpu_set::decode` to the shared walk.** Its existing checks become the shared
+  ones; its silent `break` becomes a recorded anomaly. Behaviour for well-formed input is unchanged,
+  which its five malformed-input tests should confirm without being rewritten.
+
+- [ ] **M6.4** -- **Port `walk::decode` to the shared walk, and delete the `assert!`.** This is the
+  item with the actual defect in it: a zero `Size` currently panics, `offset + size` is never checked
+  against the buffer, and `read_group_affinities` reads `GroupCount` x 16 bytes unbounded. All three
+  resolve into the shared walk. Add the malformed-input tests this file has never had.
+  Verify the amplification is closed the way `cpu_set`''s was -- a guard-page harness, since the
+  decoded output is identical either way and no ordinary test can witness it.
+
+- [ ] **M6.5** -- **Surface the anomalies through `discover()`**, and state the policy where a reader
+  will meet it: the module docs of both walks, which currently say opposite things about trust.
 
 ## Deferred, and why
 

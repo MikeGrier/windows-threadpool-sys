@@ -47,6 +47,7 @@ additional CPU and memory cost; do not solve the consumer's architecture for the
 | <a id="d-21"></a>D-21 | **This crate publishes a *refined view of what the platform publishes* -- it is not shaped by the planner.** The model was originally expected to couple tightly to the solver, which is why its reshape was planned against the planner's requirements; the **adapter** between the platform data model and the planner relieves that tension, and the engineer's clarification makes the refinement the crate's whole job. The scope test is therefore "is this a refinement of what Windows reports?", never "does the planner need it?" -- and a planner requirement with **no platform correspondence is the adapter's problem**, not a gap here. Two consequences: the reshape (M2-M5) is **self-justified** and no longer waits on a planner, and `MMT-1.3` stops gating it, because what a consumer *does* with an unobserved fact is not a question about a refined view of platform data. The model owes only that the absence be representable and distinguishable, which is [D-13](#d-13) and `M2+.5`. `EP-D-1`..`EP-D-3` survive as **evidence** the shape is right rather than as its justification -- a shape that answers a real caller's questions is better validated than one invented in the abstract. |
 | <a id="d-22"></a>D-22 | **The whole-object [`Provenance`] survives per-relation provenance, because it is not an aggregate of it.** `M3+.3` planned to supersede it, arguing that an object-level scalar "can only be the minimum ... or the maximum, which is dishonest". That premise is wrong: `Provenance` records **how the object was obtained** -- `discover()` stamps `Measured`, deserialization is capped at `Restored`, hand construction defaults to `Synthetic` -- which is a fact about the *construction act*, not a roll-up of anything. No per-relation value can express it, and `windows-placement-probe` depends on exactly it: `Record::is_trustworthy` gates on `is_measured()` to decide whether a measurement counts. The two are **orthogonal and both kept**: the object says how the collection happened, a relation says which source reported it. They also compose usefully -- a `Measured` topology with a hand-inserted `Synthetic` relation is precisely the mixed case `M3+.3` was groping at, and per-relation provenance is what makes it visible rather than a reason to delete the object-level fact. |
 | <a id="d-23"></a>D-23 | **`SYSTEM_CPU_SET_INFORMATION`'s `AllFlags` byte is measured to be **constant zero** on Windows 11 25H2 (10.0.26200.9168, AMD64), even in the state it is documented to describe.** Established by experiment, not inference: `SetProcessDefaultCpuSets` was called successfully, `GetProcessDefaultCpuSets` confirmed the allocation stuck (`[0x100, 0x101]`), and `AllFlags` still read `0x00` for **every** processor -- under a `NULL` process handle, the `GetCurrentProcess()` pseudo-handle, and a real `OpenProcess` handle alike. So `parked`, `allocated`, `allocated_to_target_process` and `real_time` carry **no information** on this build, and a consumer reading `false` is reading a byte the kernel did not populate rather than a fact about the machine. Two consequences: the bit *positions* can be neither confirmed nor falsified from an all-zero byte, so they stand on the SDK's declared bitfield order alone; and **no behaviour may depend on these fields** -- which is why `M4+.2` ships them as values with no judgement over them, after a `usable()` helper written against them refused every processor on this machine. |
+| <a id="d-24"></a>D-24 | **The record walks are shared, they never panic, and a structurally incoherent record is an observation recorded in the returned data.** The engineer's ruling, settling a divergence in which the crate's two decoders -- `cpu_set::decode` and `walk::decode` -- were each internally coherent and mutually opposite: one bounded every read against the buffer and stopped on a bad `Size`, the other proved one byte, `assert!`ed on a zero `Size`, and read a `u16` `GroupCount` times a 16-byte stride (up to **1,048,560 bytes**) with no bound at all. Three parts. **Panic is not an option**: a malformed structure is not evidence that *we* reached an inconsistent state, and taking the caller down over it leaves them nowhere to go. **The careful walk is simply the correct way to traverse variable-length records** -- bounds are how you know where a record ends -- so it is shared rather than restated, which is [CONTRACT INTEGRITY](../../.github/copilot-instructions.md) applied to the one rule the two sites had drifted on. And **this is not a trust boundary**: the OS is trusted for structural validity, and [D-16](#d-16)'s distrust was always about *correlation between sources*, never about whether a data structure is well-formed -- so there is no validation pass, no untrusted-input posture, and no re-verification of what the kernel just wrote. What incoherence there is gets **recorded**, in the same spirit as [D-18](#d-18)'s attribute conflicts: the topology carries what was observed, including the observation that a record did not fit. |
 
 ## D-12: provenance, and why the default points at distrust
 
@@ -687,3 +688,68 @@ Linux, and that finding was sound on its own terms -- but it was a conclusion ab
 D-20 is a ruling about the crate's *scope*: this crate does not go below the Win32 topology APIs, so a
 fact only firmware reports is not one it carries at all. The field is deleted, and the capability the
 Linux comparison vindicated is knowingly given up.
+
+## D-24: one record walk, no panic, and incoherence as an observation
+
+The crate reads two variable-length record chains from Windows -- `GetLogicalProcessorInformationEx`
+in `walk.rs` and `GetSystemCpuSetInformation` in `cpu_set.rs`. They share their scaffolding almost
+exactly: the same two-call sizing against `ERROR_INSUFFICIENT_BUFFER`, the same `vec![0_u64; ...]`
+backing chosen for 8-byte alignment (`cpu_set.rs` cites `walk.rs` for it), the same `read_at<T>`
+helper with the same safety wording.
+
+They then disagreed completely about how to walk what they had read, and neither said why:
+
+| | `cpu_set::decode` | `walk::decode` |
+|---|---|---|
+| loop guard proves | the `Size` field is readable | one byte |
+| `Size` against the buffer | stops when it overruns | unchecked |
+| a zero `Size` | stops, returns what it has | **`assert!` -- panics** |
+| trailing array | none exist | `GroupCount` x 16 bytes, unchecked |
+| malformed-input tests | five | none |
+
+Neither file was careless. Each was coherent across its code, its comments and its tests -- they were
+two opposite designs sitting in one crate, which is exactly the restatement drift the repository's
+CONTRACT INTEGRITY rule exists to catch: one rule, stated twice, differing, with nothing detecting it.
+
+The asymmetry ran the wrong way. `walk.rs` had strictly *more* surface and strictly *less* checking:
+`GroupCount` is a `u16` read out of the buffer that multiplies a 16-byte stride, so a maximal value
+reads **1,048,560 bytes** past the record. `cpu_set.rs` has no trailing array at all, and it was the
+one bounding its reads.
+
+### The ruling
+
+**Panic is not an option.** A record that does not fit is not evidence that *this crate* has reached
+an internally inconsistent state, which is the only thing a panic should mean. Killing the caller
+over a malformed byte leaves them with no move: they cannot catch it meaningfully, cannot degrade,
+and cannot report anything more useful than that we gave up. The `assert!` goes.
+
+**The careful walk is not defensiveness -- it is how you traverse variable-length records correctly.**
+Bounds are how the walk knows where a record ends; they are load-bearing for *decoding*, not a guard
+bolted on against a hostile buffer. That reframing is what makes sharing obvious: there is one
+correct way to walk a `Size`-chained record list, so it is written once and both decoders use it,
+rather than each site re-deriving it and drifting.
+
+**This is not a trust boundary, and no validation pass is added.** The operating system is trusted
+for the structural validity of a buffer it just wrote. [D-16](#d-16)'s distrust has been misread as
+supporting the opposite -- it does not: that decision is about *correlation between sources*, about
+whether two observers agree on what they saw, and says nothing about whether a data structure is
+well-formed. So there is no untrusted-input posture here, no verify-then-decode two-pass, and no
+re-checking of the kernel's own output for its own sake.
+
+**Structural incoherence is recorded, not swallowed and not thrown.** This is [D-18](#d-18)'s
+instinct applied one layer down: the topology already carries what each source *said*, including
+where sources disagree, precisely because destroying a disagreement destroys the only thing a second
+observer is for. A record that does not fit its buffer is the same kind of fact -- something the
+enumeration observed -- so it travels back with the data rather than vanishing into an early `break`.
+A consumer that does not care is unaffected; one debugging a strange machine gets the byte offset and
+the reason instead of a silently short list.
+
+### What follows
+
+The shared walk yields records **bounded by their own `Size`**, so a read that would leave the record
+returns nothing rather than reaching past it. That closes the `GroupCount` amplification *by
+construction* rather than by a separate check -- the trailing array simply cannot be read beyond the
+record that declares it, because the walk never hands out the bytes.
+
+Recorded as `M6` in [CHECKLIST.md](CHECKLIST.md), which is where the work is queued; this decision is
+the thing that work derives from.
