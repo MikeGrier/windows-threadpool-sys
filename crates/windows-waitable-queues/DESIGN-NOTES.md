@@ -61,6 +61,9 @@ preferred.
 | <a id="d-35"></a>D-35 | **Measured: the permit claim is 2.7x faster than `reserving_mpsc` at 16-32 producers, and 1.45x slower at one.** The safer claim is also the faster one everywhere contention exists, which was not the expected result -- it touches *two* shared lines where the shipping shape touches one plus a read, and [D-26](#d-26) had established that the shared line is what collapses. The mechanism is that both of its operations are unconditional read-modify-writes that never retry, where the shipping shape's compare-exchange retries once per lost race; the retries dominate long before the second line does. It is the only shape measured that gets *faster* per push as producers are added (42.8 ns at two to 19.5 at thirty-two) and the only one that stays within 1.5x of a bare contended `fetch_add`. **This decides the shape of the fix but not the fix**: the drained regime's refusal counts differ by orders of magnitude in a way this harness cannot attribute, which SH-15.5.1 exists to settle before SH-15.6 adopts anything. |
 | <a id="d-36"></a>D-36 | **0.1.0 ships [SH-14.1](../../CHECKLIST-ship-topology-and-queues.md) disclosed rather than fixed, and the disclosure is a release blocker.** Following [D-31](#d-31)'s principle -- the disclosure, not the deferral, is the decision -- because the fix is a claim-protocol replacement ([D-35](#d-35)) whose adoption is still gated on an open question, and holding the release for it would trade a *documented* hazard for an undocumented rush. **The two gaps are not equally forgiving and the text says so**: an unverified ordering is a risk of a bug, this is a known one with a computed exposure, and its failure mode is silent -- no error, panic, or counter -- so a caller can neither detect nor mitigate it. That is precisely why it may not ship in silence. Stated in the crate docs, the README, and the shape's own module docs, each leading with **"on every target, not only 32-bit ones"**, because the natural spelling "32-bit position" invites the opposite reading and SH-6.1 already had to be corrected for exactly that. The shape-selection guidance in both documents was also amended: it previously said "start with `reserving_mpsc`" with no caveat, pointing callers at the hazardous shape by default. |
 | <a id="d-37"></a>D-37 | **The reserving claim word ships in two widths: the narrow one on every target, the wide one only where a 128-bit exchange is genuinely lock-free.** `reserving_mpsc` keeps its packed 64-bit word, keeps [SH-14.1](../../CHECKLIST-ship-topology-and-queues.md)'s hazard, keeps [D-36](#d-36)'s warnings, and is **never silently swapped** for the wide shape on targets that could host one -- a contract that changes with the target is what PLATFORM INTEGRITY rule 2 forbids, and a caller who read "2^32" must get 2^32. `reserving_mpsc_wide` is the same protocol with a `u128` word split 64/64: recurrence needs 2^64 pushes, and the capacity ceiling rises to 2^62. **The gate is one line of `Cargo.toml`: `default-features = false`.** Measured, not designed -- with the default feature set `portable-atomic` compiles on i686 and silently substitutes a global lock, but with defaults off `AtomicU128` **does not exist** there (`no AtomicU128 in the root`), nor on x86_64 built without `cmpxchg16b`. It exists exactly where a native lock-free exchange is guaranteed at compile time, so the `use` statement is the gate and it fails loudly. A `cfg(target_has_atomic = "128")` would be the *wrong* gate -- it is emitted even with `cmpxchg16b` disabled -- and a `const` assertion on `is_always_lock_free()`, though genuinely const-evaluable, is redundant where the type exists and unreachable where it does not. That is the standard [SH-14.2](../../CHECKLIST-ship-topology-and-queues.md) already set when it probed i686 to confirm `AtomicU64` was lock-free before widening `slotwise_mpsc`, recording that a hidden mutex "would have made this a bad trade". [D-7](#d-7)'s burden of proof for adding a Cargo feature is **discharged, not waived**: D-7 rejected feature-gating because the only benefit was compile time, and the cost here is a third-party dependency, which dead-code elimination does not remove from `Cargo.lock` or from an auditor's review. |
+| <a id="d-38"></a>D-38 | **One atomic, one discipline: an atomic that carries any acquire/release operation has acquire/release on *every* operation, and a relaxed load is never mixed in.** A relaxed operation is still **atomic** -- indivisible, untorn, and free of data-race UB -- but it is *unordered*: it behaves like a plain load or store with respect to placement, unanchored relative to the ordered operations on the same object and free to be moved by the optimizer or the processor. It is not pinned to its textual site, so reasoning about it in statement order is nonsense. **The two axes are independent, and conflating them is the mistake in both directions:** relaxed does not mean "no guarantees" (see [D-40](#d-40) -- the atomicity is often the whole point), and it does not mean "ordered but weakly". The failure mode is that it usually does what the source appears to say, until a change of code generator or a weaker processor makes it not; on x86-64 TSO a decorative `Acquire` and a `Relaxed` load emit near-identical code, so a test suite on this host cannot see the difference at all -- which is the same blindness [D-31](#d-31) measured. **When the two resolutions differ, promote the load.** The exception is a reference count ([D-39](#d-39)), and it is an exception for a stated reason rather than by convention. |
+| <a id="d-39"></a>D-39 | **The reference counts keep a relaxed increment against an `AcqRel` decrement, and that is the one sanctioned departure from [D-38](#d-38).** It is sanctioned because *no dependent memory is read on the strength of the relaxed increment*: a thread incrementing `producers` already holds a handle, so it needs no edge to learn the object exists, and the cache-coherence effect an acquire would buy is not required until the count reaches zero -- at which point the `AcqRel` decrement supplies it. That is the same argument `std::sync::Arc` makes, and it is a property of what the count is used for, not a general licence. A count whose value ever decided whether to *dereference* something would not qualify. |
+| <a id="d-40"></a>D-40 | **A relaxed atomic is chosen for its *atomicity*, and dropping to a plain field is never the way to "simplify" one.** [D-38](#d-38) says a relaxed operation is unordered; it is still indivisible, and that is frequently the entire reason the field is an atomic at all. Without it the implementation may synthesise a wide access out of narrower ones and observe a **torn** value, and concurrent access to a non-atomic field is a data race and therefore UB regardless. `reserving_mpsc`'s claim word is the worked example: it packs `reserved` and `position` into one `u64` and is uniformly relaxed ([D-38](#d-38)), yet a torn read would yield a pair that never existed as a state and would break the compare-and-swap protocol outright. On `i686-pc-windows-msvc` -- which [D-18](#d-18) deliberately keeps supported -- that load must be a `cmpxchg8b` or an 8-byte SSE load, *more* expensive than the two `mov`s a plain `u64` would get, and the compiler is obliged to pay it for exactly this reason. **Relaxed is a statement about ordering only; it is never a step toward removing the atomic.** |
 
 ## D-2: capabilities are sliced, not gathered
 
@@ -1320,3 +1323,98 @@ consumer's `head` is simultaneously the stale input that SH-14.1 exploits and th
 measured. Removing it for correctness removes it for performance as well, which is why this
 measurement came out the way it did -- and why "closing the hole will cost throughput" was the wrong
 thing to have worried about.
+
+## D-38: one atomic, one discipline
+
+An atomic that carries any acquire/release operation carries acquire/release on **every** operation.
+A relaxed load is never mixed onto it.
+
+The reason is not that relaxed is "weaker and therefore riskier". It is that a relaxed operation has no
+memory ordering **at all**, so it is not placed at any defined point relative to the ordered operations
+on the same object, and the code generator and the processor are both free to move it. With respect to
+placement it behaves like a plain load or store: it is not pinned to its site in the source. Reading
+such a program in textual order -- statement one, then statement two, then statement three -- and
+concluding what the relaxed operation observes is not a weak argument; it is not an argument, because
+the premise that it happens there is false.
+
+**"Plain" above is about placement only, and the distinction is easy to lose.** A relaxed operation is
+still fully atomic: indivisible, never torn, immune to the compiler inventing or duplicating accesses,
+and coherent (all threads agree on a single modification order for that one location). What it gives up
+is ordering with respect to *other* memory. The two axes are independent, and the confusion runs in both
+directions -- "relaxed means no guarantees, so I may as well use a plain field" is as wrong as "relaxed
+is ordered, just weakly", and it is the more dangerous of the two because the field it produces is a
+data race. [D-40](#d-40) states the atomicity half, with this crate's claim word as the worked example.
+
+What makes this expensive rather than merely wrong is that it **usually does what the author expected**:
+a simple load or a simple store at the obvious place. It survives review, it survives testing, and it
+breaks later, when an optimizer version changes or the code runs on a processor with a weaker model.
+
+This crate is unusually exposed to that, for a reason already measured. On x86-64's TSO, a decorative
+`Acquire` load and a `Relaxed` load compile to very nearly the same instruction, so **no test on this
+host can distinguish them** -- which is precisely the blindness [D-31](#d-31) recorded when weakening a
+real `Acquire` to `Relaxed` left all twenty tests of the day green. On AArch64 the same two loads are
+`ldar` and `ldr`, and the difference is real. CI builds `aarch64-pc-windows-msvc`.
+
+### The resolutions, and which one to take
+
+For a mixed atomic there are two consistent repairs: **promote the loads to acquire**, or **demote the
+stores to relaxed**. Both are valid, and choosing between them is a separate and more involved analysis
+of what the atomic is actually for.
+
+**The standing answer here is to promote the load.** An acquire that turns out to have been unnecessary
+is a performance claim someone can come back and make with a benchmark. A relaxed load that turns out to
+have been load-bearing is a defect that appears only on hardware we do not own. The asymmetry is not
+close, so it is settled in advance rather than re-argued per site.
+
+Demotion is correct only where the atomic has **no release operation anywhere** -- there being nothing to
+pair with, an acquire load on it would read as a guarantee the type does not make. Three atomics are in
+that position and are uniformly relaxed for that reason: `reserving_mpsc`'s claim word (every write is a
+`Relaxed/Relaxed` compare-exchange), `permit_mpsc`'s `tail` and `head`, and `slotwise_mpsc`'s `tail`
+(whose claim CAS is deliberately `Relaxed/Relaxed` and says so at the site).
+
+Those four remain atomics, and the atomicity is load-bearing even with no ordering attached to it --
+[D-40](#d-40). The claim word makes the point unmissable: it is a `u64` packing two `u32` halves, so a
+torn read would produce a `(reserved, position)` pair that was never a state the queue was in. "Every
+operation on it is relaxed" is therefore not a step toward making it a plain field; it is a statement
+about ordering and nothing else.
+
+### What the audit found
+
+Every atomic in the crate was grouped by field and asked one question: does it have a release write, and
+does it also have relaxed operations? Four atomics had **acquire loads with no release write anywhere**
+-- the acquire pairing with nothing, synchronizing with nothing:
+
+| Atomic | Acquire loads | Release writes |
+|---|---|---|
+| `reserving_mpsc` claim word | 4 | 0 |
+| `permit_mpsc::tail` | 1 | 0 |
+| `permit_mpsc::head` | 1 | 0 |
+| `slotwise_mpsc::tail` | 1 | 0 |
+
+Four more had a real release store with relaxed loads mixed in, and those loads were promoted:
+`reserving_mpsc::head`, `slotwise_mpsc::head`, `spsc::head`, `spsc::tail`.
+
+One had a genuine load-bearing edge with a relaxed operation sitting in the middle of it:
+`permit_mpsc`'s permit counter, where the `Release` increment frees a slot and the `Acquire` decrement
+claims it, but the overdraw undo was `Relaxed`. That one is rescuable by the release-sequence rule, but
+that rule was narrowed once already (C++20 dropped same-thread relaxed stores from it) and it is not
+something a reader should have to reconstruct to trust a slot handoff. It is now `Release`, which costs
+one `stlxr` over `stxr` on AArch64, on the contended slow path.
+
+Two categories were deliberately left alone. Reference counts are [D-39](#d-39). Reads through
+`&mut self` in `Drop` are not atomic operations at all -- `get_mut` is a plain read, and there is no
+second thread for an ordering to order against -- so `permit_mpsc`'s drop was converted to `get_mut`,
+matching `reserving_mpsc`, which removes the question rather than answering it.
+
+### Why the audit is a script and not a reading
+
+The first two versions of the audit were both wrong, in opposite directions, and neither error was
+visible without checking a result by hand. The first required the receiver on one line and so missed
+every multi-line `self.shared\n.head\n.0\n.store(...)` chain, reporting three atomics as having no writes
+at all. The second matched across newlines and started absorbing words out of comments, splitting one
+atomic's operations into several phantom fields and inventing "decorative acquire" findings for atomics
+whose release store it had filed elsewhere.
+
+Both produced confident, plausible, wrong tables. The lesson is not about regular expressions: an
+ordering audit's output has to be checked against the source at a few points before it is believed,
+because a wrong audit here is indistinguishable from a right one by inspection.

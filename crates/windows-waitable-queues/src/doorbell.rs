@@ -365,7 +365,12 @@ impl std::fmt::Debug for Doorbell {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Doorbell")
             .field("created", &self.event.get().is_some())
-            .field("signalled", &self.signalled.load(Ordering::Relaxed))
+            // Acquire, matching every other operation on `signalled`, which
+            // carries an `AcqRel` swap and a `Release` store. Nothing here
+            // depends on the edge, but a lone relaxed load on such an atomic is
+            // a plain load with no defined position relative to them, and this
+            // is a `Debug` formatter -- there is no cost worth the exception.
+            .field("signalled", &self.signalled.load(Ordering::Acquire))
             .finish()
     }
 }

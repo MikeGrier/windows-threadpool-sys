@@ -26,7 +26,7 @@ use crate::Consumer as _;
 use crate::{Bounded, PushError, RecvError, Reserving};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -1332,36 +1332,65 @@ fn the_gauges_are_exact_when_the_two_loads_agree() {
 }
 
 #[test]
-fn the_high_water_mark_never_exceeds_the_capacity() {
-    // The defect, driven directly. The depth is sampled from this producer's
-    // position and a load of the consumer's, which are two readings rather than
-    // one instant -- and `Reservation::send` is the path with no room check, so
-    // the only `head` its thread is ordered against is the one `reserve` read,
-    // which may be arbitrarily old by the time the reservation is redeemed.
+fn publish_waits_for_a_head_that_has_freed_the_slot() {
+    // The `send`-path data race, asserted as the guarantee that closes it.
+    //
+    // Freeing a slot is the consumer's `head.store(Release)`, and on that path
+    // it is the *only* release it performs -- so a producer may write the slot
+    // only once an acquire load of `head` has actually observed that store. A
+    // single acquire load does not give that: it may legally return any earlier
+    // value in the modification order, and synchronizes only with the release
+    // whose value it in fact reads. `Reservation::send` is the exposed path,
+    // because it has no room check and a `Reservation` is `Send`, so the thread
+    // redeeming one need never have read `head` at all.
     //
     // A stale read cannot be raced for on a coherent machine, so the state one
-    // would observe is written instead: `head` behind the claim position by more
-    // than the capacity. Without the clamp this records a peak of 12 on a
-    // four-slot queue.
-    let (tx, rx) = bounded_with::<u32>(4, Options::new().tracking_high_water())
-        .expect("4 is a valid capacity");
+    // would observe is written instead: `head` far enough behind the claim
+    // position that this slot's previous occupant has not been freed. `publish`
+    // must then wait rather than write.
+    //
+    // **This replaces `the_high_water_mark_never_exceeds_the_capacity`**, which
+    // drove the same stale state to prove the high-water *clamp* bounded the
+    // over-report. Waiting for a fresh `head` removes the over-report at its
+    // source -- after the wait, `position - head < capacity`, so the depth is
+    // already bounded and the clamp cannot be reached from here. Asserting the
+    // fix is worth more than asserting a mitigation that is now unreachable.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
     let slot = tx.reserve().expect("an empty queue has room");
 
-    let stale_head = u32::MAX - 10;
-    tx.shared.head.0.store(stale_head, Ordering::Release);
+    // `send` claims position 0, so this leaves `position - head == 11` on a
+    // four-slot queue: a view in which the slot is not free.
+    tx.shared.head.0.store(u32::MAX - 10, Ordering::Release);
 
-    slot.send(7).expect("the consumer is still here");
+    // `Arc<AtomicBool>` rather than a `static`, for the reason `DropCounter`
+    // gives: tests share a process, so a module-scope flag would be visible to
+    // whichever test ran beside this one.
+    let sent = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&sent);
+    let sender = thread::spawn(move || {
+        slot.send(7).expect("the consumer is still here");
+        flag.store(true, Ordering::Release);
+    });
 
-    // Restored before anything walks the ring: teardown and `pop` both step from
-    // `head` to the claim position, and a head this far behind sets them a
-    // four-billion-step loop that hangs rather than fails.
-    tx.shared.head.0.store(0, Ordering::Release);
-
-    let peak = tx.high_water().expect("tracking was asked for");
+    // One-sided on purpose: a slow machine leaves it waiting and the assertion
+    // still holds. Only a `publish` that wrongly proceeded can fail it, and that
+    // one returns immediately.
+    thread::sleep(Duration::from_millis(50));
     assert!(
-        peak <= tx.capacity(),
-        "a four-slot queue reported a peak of {peak}"
+        !sent.load(Ordering::Acquire),
+        "the slot was written while `head` still said its previous occupant was live"
     );
+
+    // Free it, and the wait must end. Also restores a `head` the teardown walk
+    // can use: it steps from `head` to the claim position, and a head this far
+    // behind would set it a four-billion-step loop that hangs rather than fails.
+    tx.shared.head.0.store(0, Ordering::Release);
+    sender.join().expect("the sending thread must not panic");
+    assert!(
+        sent.load(Ordering::Acquire),
+        "observing the freeing store must end the wait"
+    );
+
     assert_eq!(rx.pop(), Some(7), "the item itself must be unaffected");
 }
 

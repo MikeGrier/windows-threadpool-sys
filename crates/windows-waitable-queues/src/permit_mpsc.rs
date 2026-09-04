@@ -269,7 +269,20 @@ impl<T> Shared<T> {
         }
         // Overdrawn. Put it back; a concurrent claimant that saw the negative
         // value is doing the same.
-        self.permits.0.fetch_add(1, Ordering::Relaxed);
+        //
+        // Release, matching `release_permit`, even though this thread published
+        // nothing and needs no edge of its own. Unlike `tail` and `head`, this
+        // counter carries a real edge, and a relaxed RMW here would sit in the
+        // middle of it: if this undo reads from a consumer's release and a
+        // third thread's acquire then reads from this undo, that thread's
+        // synchronization with the consumer rests entirely on the release
+        // sequence rule. That rule holds, but it was narrowed once already
+        // (C++20 dropped same-thread relaxed stores from it), and it is not a
+        // thing a reader should have to reconstruct to trust a slot handoff.
+        // Uniform acquire/release on this counter costs one `stlxr` over
+        // `stxr` on ARM64, on the contended slow path, and removes the
+        // argument entirely.
+        self.permits.0.fetch_add(1, Ordering::Release);
         false
     }
 
@@ -309,28 +322,45 @@ impl<T> Shared<T> {
         self.doorbell.signal();
     }
 
+    /// Relaxed on both, because neither `tail` nor `head` ever receives a
+    /// release write: `tail` only ever moves by `fetch_add(Relaxed)`, and the
+    /// consumer's `head` store is deliberately relaxed (see `pop`, where the
+    /// permit is what frees the slot). An acquire load here would therefore
+    /// pair with nothing and synchronize with nothing -- it would read as a
+    /// guarantee this queue does not make. The real edges are `sequence`
+    /// (release in `publish`, acquire in `pop`) and `permits` (release in
+    /// `release_permit`, acquire in `try_take_permit`); this is a snapshot and
+    /// rides on neither.
     fn len(&self) -> usize {
-        let tail = self.tail.0.load(Ordering::Acquire);
-        let head = self.head.0.load(Ordering::Acquire);
+        let tail = self.tail.0.load(Ordering::Relaxed);
+        let head = self.head.0.load(Ordering::Relaxed);
         (tail.wrapping_sub(head) as usize).min(self.capacity)
     }
 }
 
 impl<T> Drop for Shared<T> {
     fn drop(&mut self) {
-        // Every handle is gone, so the positions can be read directly. A slot
-        // whose sequence marks it published still holds an item nobody took.
-        let head = self.head.0.load(Ordering::Relaxed);
-        let tail = self.tail.0.load(Ordering::Relaxed);
+        // Every handle is gone, so `&mut self` proves this is the only thread.
+        // `get_mut` reads each position directly rather than atomically, which
+        // is why no ordering appears here at all: there is no second thread for
+        // one to order against, so the question does not arise. That is why
+        // this is not a relaxed read on an otherwise acquire/release atomic --
+        // it is not an atomic read. `reserving_mpsc`'s drop does the same.
+        //
+        // A slot whose sequence marks it published still holds an item nobody
+        // took.
+        let mask = self.mask;
+        let head = *self.head.0.get_mut();
+        let tail = *self.tail.0.get_mut();
         let mut position = head;
         while position != tail {
-            let slot = &self.slots[position as usize & self.mask];
-            if slot.sequence.load(Ordering::Relaxed) == position.wrapping_add(1) {
+            let slot = &mut self.slots[position as usize & mask];
+            if *slot.sequence.get_mut() == position.wrapping_add(1) {
                 // SAFETY: the sequence says a producer finished writing this
                 // slot and no consumer took it. Every handle is gone, so this
                 // is the only reader, and each position is visited once.
                 unsafe {
-                    (*slot.value.get()).assume_init_drop();
+                    slot.value.get_mut().assume_init_drop();
                 }
             }
             position = position.wrapping_add(1);

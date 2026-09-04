@@ -300,8 +300,11 @@ impl<T> Shared<T> {
         // `head` to decide there was room, so the depth is a subtraction of two
         // values it is holding. The counter's line is producer-owned too, since
         // nothing else writes it.
+        // Acquire, matching every other load of `head`: it carries a release
+        // store, and a relaxed load mixed onto such an atomic is a plain load
+        // with no defined position relative to the ordered operations on it.
         self.metrics
-            .record_depth(tail.wrapping_sub(self.head.0.load(Ordering::Relaxed)) + 1);
+            .record_depth(tail.wrapping_sub(self.head.0.load(Ordering::Acquire)) + 1);
 
         // SAFETY: the caller's precondition says this slot holds no initialized
         // item, so writing a `MaybeUninit` over it drops nothing.
@@ -379,9 +382,14 @@ impl<T> Producer<T> {
     /// [`PushError::Disconnected`] when the consumer is gone. Either way the
     /// item comes back, so nothing is lost by the refusal.
     pub fn push(&self, item: T) -> Result<(), PushError<T>> {
-        // Relaxed: this thread is the only writer of `tail`, so it cannot read
-        // a stale value of its own.
-        let tail = self.shared.tail.0.load(Ordering::Relaxed);
+        // Acquire, matching every other load of `tail`. Sole-writer coherence
+        // would suffice to read this thread's own latest value, but `tail` also
+        // carries a release store (in `publish`), and a relaxed load mixed onto
+        // an atomic that carries acquire/release operations is a plain load:
+        // unanchored with respect to those operations, and free to be moved by
+        // the optimizer or the processor. Uniform acquire is what keeps the
+        // source text describing what actually happens.
+        let tail = self.shared.tail.0.load(Ordering::Acquire);
         // Acquire: pairs with the consumer's release store, so a slot it freed
         // is visible as free here.
         let head = self.shared.head.0.load(Ordering::Acquire);
@@ -501,7 +509,9 @@ impl<T> Producer<T> {
     /// on another thread -- it is only the writing side that is pinned.
     #[must_use = "a reservation withholds capacity from the best-effort path until it is used or dropped"]
     pub fn reserve(&self) -> Option<Reservation<'_, T>> {
-        let tail = self.shared.tail.0.load(Ordering::Relaxed);
+        // Acquire on both: each carries a release store, so a relaxed load on
+        // either would be a plain load, unanchored with respect to it.
+        let tail = self.shared.tail.0.load(Ordering::Acquire);
         let head = self.shared.head.0.load(Ordering::Acquire);
         let reserved = self.shared.reserved.load(Ordering::Relaxed);
 
@@ -586,7 +596,8 @@ impl<T> Reservation<'_, T> {
             return Err(Disconnected(item));
         }
 
-        let tail = shared.tail.0.load(Ordering::Relaxed);
+        // Acquire, matching every other load of `tail`; see `push`.
+        let tail = shared.tail.0.load(Ordering::Acquire);
         // SAFETY: the reservation guarantees a free slot -- the room check that
         // granted it withheld one from the best-effort path, and this thread is
         // the only one that could have consumed it since.
@@ -659,8 +670,10 @@ impl<T> Consumer<T> {
     /// good"; the order matters, and [`Self::is_disconnected`] documents which
     /// way round.
     pub fn pop(&self) -> Option<T> {
-        // Relaxed: this thread is the only writer of `head`.
-        let head = self.shared.head.0.load(Ordering::Relaxed);
+        // Acquire, matching every other load of `head`. Sole-writer coherence
+        // would suffice here, but `head` also carries the release store below;
+        // see `push` for why the two disciplines are not mixed on one atomic.
+        let head = self.shared.head.0.load(Ordering::Acquire);
         // Acquire: pairs with the producer's release store, so an item it
         // published is visible here.
         let tail = self.shared.tail.0.load(Ordering::Acquire);

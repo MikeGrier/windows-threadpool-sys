@@ -247,6 +247,16 @@ const fn reserved_of(word: u64) -> u32 {
 
 /// Builds a claim word from its two halves.
 ///
+/// **Why the word is one `AtomicU64` and not two `AtomicU32`s**, given that every
+/// operation on it is `Relaxed` (see D-38 in DESIGN-NOTES.md): relaxed is a
+/// statement about *ordering*, and says nothing about atomicity. The two halves
+/// are read and written as a unit, so the load must be indivisible -- a torn read
+/// would return a `(reserved, position)` pair that was never a state this queue
+/// was in, and the compare-and-swap protocol would be building on a value that
+/// never existed. On `i686-pc-windows-msvc`, which D-18 keeps supported, that
+/// costs a `cmpxchg8b` or an 8-byte SSE load rather than the two `mov`s a plain
+/// `u64` would get. That cost is the point, not an overhead to optimize away.
+///
 /// The `|` could equally be `^`, or `+`, and a mutation run will report as much.
 /// The halves are disjoint by construction -- the shift clears every bit the
 /// position occupies -- so all three agree on every input, and no test can tell
@@ -487,7 +497,7 @@ impl<T> Shared<T> {
     /// subtraction produce a number near `u32::MAX`. A bounded queue must never
     /// report holding more than it can.
     fn len(&self) -> usize {
-        let position = position_of(self.claim.0.load(Ordering::Acquire));
+        let position = position_of(self.claim.0.load(Ordering::Relaxed));
         let head = self.head.0.load(Ordering::Acquire);
         (position.wrapping_sub(head) as usize).min(self.capacity)
     }
@@ -508,7 +518,7 @@ impl<T> Shared<T> {
     /// together to avoid. `head` is still a second load, so the result is
     /// clamped for the reason `len` is.
     fn remaining(&self) -> usize {
-        let word = self.claim.0.load(Ordering::Acquire);
+        let word = self.claim.0.load(Ordering::Relaxed);
         let head = self.head.0.load(Ordering::Acquire);
         let capacity = self.capacity_u32();
         let occupied = position_of(word).wrapping_sub(head).min(capacity);
@@ -523,7 +533,15 @@ impl<T> Shared<T> {
     /// is the right answer: the consumer may safely park on it, because the
     /// producer's publishing store is followed by a signal.
     fn has_ready_item(&self) -> bool {
-        let position = self.head.0.load(Ordering::Relaxed);
+        // Acquire, matching every other load of `head`. This thread is `head`'s
+        // only writer, so coherence alone would make a relaxed load read its
+        // own latest value -- but `head` carries a release store (in `pop`), and
+        // a relaxed load on an atomic that also carries acquire/release
+        // operations is a plain load: unanchored, free to be moved by the
+        // optimizer or the processor, with no defined position relative to the
+        // ordered operations on the same object. Uniform acquire is what makes
+        // the load mean, at this point in the source, what it appears to mean.
+        let position = self.head.0.load(Ordering::Acquire);
         let slot = &self.slots[position as usize & self.mask];
         slot.sequence.load(Ordering::Acquire) == position.wrapping_add(1)
     }
@@ -600,22 +618,65 @@ impl<T> Shared<T> {
         // given target's codegen happens to order it today.
         //
         // Placing it here rather than in `send` covers every path with one
-        // load. It must follow the claim exchange, and does: the invariant
-        // `occupied + reserved <= capacity` holds at that exchange with
-        // `reserved >= 1`, so `head >= position - capacity + 1` there, and
-        // `head` never moves backwards. Reading it afterwards can therefore
-        // only be fresher, never staler, than the edge the write requires.
-        let head = self.head.0.load(Ordering::Acquire);
+        // load.
+        //
+        // **The load must be fresh *enough*, and a single acquire load does not
+        // guarantee that.** An earlier version of this comment argued that
+        // because the claim invariant makes `head >= position - capacity + 1`
+        // true at the exchange, and `head` never moves backwards, a later load
+        // "can only be fresher". That conflates what `head` *is* in modification
+        // order with what a load is *guaranteed to observe*: an acquire load may
+        // legally return any earlier value in the modification order, and
+        // synchronizes only with the release store whose value it actually
+        // reads.
+        //
+        // Nothing else forces freshness here. The claim exchange is `Relaxed`,
+        // so it carries no edge; and while `reserve` does read `head`, a
+        // `Reservation` is `Send`, so the thread that redeems one **need never
+        // have read `head` at all** -- leaving no coherence constraint to
+        // inherit. A reservation held across a full lap and redeemed elsewhere
+        // is exactly the case. Raised in PR #56 review.
+        //
+        // So the load is repeated until it observes a `head` that has actually
+        // passed this position's previous occupant. That is the store which
+        // frees the slot, so observing it (or any later one, by the same
+        // consumer and therefore sequenced after its read) is precisely the
+        // edge the write below needs. The loop terminates because the claim
+        // invariant makes the condition already true in modification order --
+        // this waits to *see* it, not for it to *become* true.
+        let mut head = self.head.0.load(Ordering::Acquire);
+        while position.wrapping_sub(head) >= self.capacity_u32() {
+            std::hint::spin_loop();
+            head = self.head.0.load(Ordering::Acquire);
+        }
         if self.metrics.tracks_high_water() {
             let depth = position.wrapping_sub(head).wrapping_add(1) as usize;
+            // **The clamp is unreachable from here, and is kept deliberately.**
+            // The wait above exits only once `position - head < capacity`, so
+            // `depth <= capacity` already holds and `min` never binds. It was
+            // load-bearing when this was a single unvalidated load: a stale
+            // `head` then made the depth an unbounded over-report, and
+            // `the_high_water_mark_never_exceeds_the_capacity` drove exactly
+            // that. Waiting for a fresh `head` removes the over-report at its
+            // source, so that test was replaced by
+            // `publish_waits_for_a_head_that_has_freed_the_slot`, which asserts
+            // the fix instead of the mitigation.
+            //
+            // Kept because it costs one register-to-register `min` on a path
+            // already doing an atomic load, and because it bounds the metric by
+            // the shape's own contract rather than by an argument a future
+            // change to the wait might invalidate silently. A mutation run will
+            // report it as a survivor; that is expected, and it is unreachable
+            // code rather than a missing test.
             self.metrics.record_depth(depth.min(self.capacity));
         }
 
         let slot = &self.slots[position as usize & self.mask];
         // SAFETY: the caller's claim makes this thread the only writer, and the
-        // acquire load of `head` above synchronizes-with the `head.store` by
-        // which the consumer freed this slot a lap ago, so its read of the
-        // previous occupant happens-before this write.
+        // acquire load of `head` above -- repeated until it observed a value
+        // past this position's previous occupant -- synchronizes-with the
+        // `head.store` by which the consumer freed this slot a lap ago, so its
+        // read of the previous occupant happens-before this write.
         //
         // The claim alone is not enough. It establishes that the slot is
         // *logically* free -- `occupied + reserved <= capacity` with
@@ -848,7 +909,7 @@ impl<T> Producer<T> {
     /// snapshot.
     #[must_use]
     pub fn outstanding_reservations(&self) -> usize {
-        reserved_of(self.shared.claim.0.load(Ordering::Acquire)) as usize
+        reserved_of(self.shared.claim.0.load(Ordering::Relaxed)) as usize
     }
 
     /// Whether the next best-effort push would be refused, as a snapshot.
@@ -1066,8 +1127,12 @@ impl<T> Consumer<T> {
     /// correct answer -- and the producer signals when it publishes, so waiting
     /// is not a gamble.
     pub fn pop(&self) -> Option<T> {
-        // Relaxed: this thread is the only writer of `head`.
-        let position = self.shared.head.0.load(Ordering::Relaxed);
+        // Acquire, matching every other load of `head`. Sole-writer coherence
+        // would suffice to read this thread's own latest value, but `head` also
+        // carries the release store below, and a relaxed load mixed onto such an
+        // atomic is a plain load the code generator may move. See
+        // `has_ready_item` for the full argument.
+        let position = self.shared.head.0.load(Ordering::Acquire);
         let slot = &self.shared.slots[position as usize & self.shared.mask];
         // Acquire: pairs with the producer's release store, so an item it
         // published is visible here.
@@ -1123,7 +1188,7 @@ impl<T> Consumer<T> {
     /// a drained queue with an outstanding reservation is not an idle one.
     #[must_use]
     pub fn outstanding_reservations(&self) -> usize {
-        reserved_of(self.shared.claim.0.load(Ordering::Acquire)) as usize
+        reserved_of(self.shared.claim.0.load(Ordering::Relaxed)) as usize
     }
 
     /// How many further items a best-effort push could still place, as a

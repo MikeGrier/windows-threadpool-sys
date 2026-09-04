@@ -321,6 +321,49 @@ that previously stood in the way are gone:
   cannot be confused.
   Each repair was re-run individually and **caught** before the full sweep, so the fix restored the
   check rather than merely restoring the match.
+- [x] **SH-3.3.1** -- **Finish and verify the memory-ordering discipline sweep.**
+  **Done 2026-09-04: 308 lib + 8 doc + 1 integration green in 0.41s, and the sabotage sweep reports
+  all 39 behaving as declared** with both `CONTROL` entries surviving and no `MANIFEST STALE`.
+  **The verification found a real defect in this work.** Waiting for a fresh `head` made
+  `the_high_water_mark_never_exceeds_the_capacity` hang -- it wrote an impossible `head`
+  (`u32::MAX - 10`) to force an over-report and restored it only *after* `send` returned, so the new
+  wait spun for 314s of CPU rather than proceeding. The state that test constructs is one the fixed
+  code correctly refuses. It was replaced by `publish_waits_for_a_head_that_has_freed_the_slot`,
+  which asserts the guarantee instead of the mitigation, and which was **sabotage-verified**: with
+  the wait reduced back to a single load it fails in 0.05s with the message written for it. The
+  clamp is kept as documented defence-in-depth and is now unreachable by construction, which is
+  recorded at the site so a mutation run's survivor there is read as unreachable code rather than a
+  missing test.
+  **The rule, from the engineer, recorded as `D-38`/`D-39`/`D-40` in
+  [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md):** acquire/release discipline is
+  never intermixed with relaxed on the same atomic. A relaxed operation is *unordered* -- unanchored
+  with respect to the ordered operations on that object and free to be moved by the optimizer or the
+  processor -- so it is not pinned to its textual site and statement-order reasoning about it is not a
+  weak argument but no argument. It is still fully **atomic**, and that half is load-bearing
+  independently (`D-40`): the claim word packs two `u32`s into a `u64`, so a torn read would yield a
+  state the queue was never in. **When the two repairs differ, promote the load** -- an unnecessary
+  acquire is a benchmark someone can bring later, an unnecessary relaxed is a defect on hardware we do
+  not own.
+  **Why no test here can see this:** on x86-64 TSO a decorative `Acquire` and a `Relaxed` load emit
+  nearly the same code, which is the same blindness `D-31` measured. On AArch64 they are `ldar` and
+  `ldr`, and CI builds `aarch64-pc-windows-msvc`.
+  **What changed** (audit output in `D-38`): four atomics had acquire loads with **no release write
+  anywhere**, so the acquires paired with nothing -- `reserving_mpsc`'s claim word, `permit_mpsc`'s
+  `tail` and `head`, `slotwise_mpsc`'s `tail`; those are now uniformly relaxed. Four had a real
+  release store with relaxed loads mixed in -- `reserving_mpsc::head`, `slotwise_mpsc::head`,
+  `spsc::head`, `spsc::tail`; those loads were promoted to acquire. `permit_mpsc`'s permit counter had
+  a relaxed operation inside a genuinely load-bearing edge and is now `Release`. `permit_mpsc`'s `Drop`
+  was converted to `get_mut()`, matching `reserving_mpsc`, which removes the question instead of
+  answering it. The `producers` refcounts are deliberately unchanged (`D-39`).
+  **Tooling note:** the cargo-mcp server's `cargo_test` was wedged for this item -- it accepted the
+  call and never spawned a cargo process (confirmed repeatedly via `Get-Process`), while
+  `cargo_check`, `cargo_fmt` and `cargo_clippy` worked normally on the same process, and
+  `cargo_test` with `no_run` also worked. So the failure is in the test-execution phase, not the
+  build phase, and not a stale binary: the running process, the installed extension, the VSIX and
+  the source repo are all `cargo-mcp` 0.12.1. The engineer authorised the terminal as a fallback
+  while diagnosing it.
+  **This also settles half of SH-4.7**, whose memory-ordering half is subsumed by the rule above.
+
 
 - [ ] **SH-3.4** -- Merge to `main`, and confirm release-please raises a release PR proposing
   **0.2.0** for the topology crate. If it proposes 0.1.1, the breaking-change marker did not take and
@@ -522,12 +565,15 @@ that previously stood in the way are gone:
   dropped, so the caller gets no indication and the item is discarded at teardown -- where
   `reserving_mpsc::Reservation::send` returns `Disconnected<T>` with the item. The module claims only
   the *admission* protocol differs, so this is a divergence it does not disclose.
-  **Memory ordering:** the reviewer argues the relaxed ticket operation gives no acquire edge from
-  the consumer''s most recent `release_permit`, leaving the slot write unordered against that read.
-  **A prior review round concluded the opposite** -- that a thread holding a permit always has
-  `tail - head <= capacity - 1` at its `fetch_add`, so the slot it claims was freed by a
-  `release_permit` preceding its `fetch_sub` in modification order, with the release sequence
-  supplying the edge. One of the two is wrong; settle it with an argument written down, not a patch.
+  **Memory ordering -- settled by SH-3.3.1, 2026-09-04.** The reviewer argued the relaxed ticket
+  operation gives no acquire edge from the consumer''s most recent `release_permit`; a prior round
+  concluded the opposite, that the release sequence supplies it. Both were reasoning about whether
+  the edge could be *rescued*, and the answer taken was to stop depending on the rescue: the permit
+  counter''s overdraw undo is now `Release` rather than `Relaxed`, so the counter carries one
+  discipline throughout and the edge holds without appealing to the release-sequence rule -- a rule
+  that was narrowed once already, when C++20 dropped same-thread relaxed stores from it. Recorded as
+  `D-38` in [DESIGN-NOTES.md](crates/windows-waitable-queues/DESIGN-NOTES.md). The cost is one
+  `stlxr` over `stxr` on AArch64, on the contended slow path.
 
 - [ ] **SH-4.8** -- **Six more PR #56 review findings, none blocking the release.** Replied to and
   resolved on the PR; recorded here so none is lost.

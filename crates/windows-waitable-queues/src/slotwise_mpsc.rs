@@ -352,8 +352,21 @@ impl<T> Shared<T> {
     ///
     /// The clamp is also what makes the narrowing cast exact: the result is at
     /// most the capacity, which is a `usize` by construction.
+    /// The two orderings differ, because the two atomics do.
+    ///
+    /// `tail` never receives a release write at all -- the claim CAS in `push`
+    /// is deliberately `Relaxed/Relaxed`, and says so -- so every operation on
+    /// it is relaxed and an acquire load here would pair with nothing.
+    ///
+    /// `head` does carry a release store (in `pop`), so its loads are acquire
+    /// throughout. Not because this snapshot needs the edge -- nothing is
+    /// dereferenced on the strength of the number -- but because a relaxed load
+    /// mixed onto an atomic that also carries acquire/release operations is a
+    /// plain load, unanchored with respect to the ordered operations on the
+    /// same object and free to be moved. Mixing the two disciplines on one
+    /// atomic makes the source text stop describing what happens.
     fn len(&self) -> usize {
-        let tail = self.tail.0.load(Ordering::Acquire);
+        let tail = self.tail.0.load(Ordering::Relaxed);
         let head = self.head.0.load(Ordering::Acquire);
         tail.wrapping_sub(head).min(self.capacity as Position) as usize
     }
@@ -375,7 +388,10 @@ impl<T> Shared<T> {
     /// sequentially consistent fences on both sides are what stop both loads
     /// from returning stale values.
     fn has_ready_item(&self) -> bool {
-        let position = self.head.0.load(Ordering::Relaxed);
+        // Acquire, matching every other load of `head`: it carries a release
+        // store, so a relaxed load here would be a plain load with no defined
+        // position relative to it. See `len` for the full argument.
+        let position = self.head.0.load(Ordering::Acquire);
         let slot = &self.slots[self.slot_index(position)];
         slot.sequence.load(Ordering::Acquire) == position.wrapping_add(1)
     }
@@ -718,8 +734,11 @@ impl<T> Consumer<T> {
     /// from "empty for good"; the order matters, and [`Self::is_disconnected`]
     /// documents which way round.
     pub fn pop(&self) -> Option<T> {
-        // Relaxed: this thread is the only writer of `head`.
-        let position = self.shared.head.0.load(Ordering::Relaxed);
+        // Acquire, matching every other load of `head`. Sole-writer coherence
+        // would suffice to read this thread's own latest value, but `head` also
+        // carries the release store below, and a relaxed load mixed onto such an
+        // atomic is a plain load the code generator may move. See `len`.
+        let position = self.shared.head.0.load(Ordering::Acquire);
         let slot = &self.shared.slots[self.shared.slot_index(position)];
         // Acquire: pairs with the producer's release store, so an item it
         // published is visible here.
