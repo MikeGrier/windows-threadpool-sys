@@ -319,6 +319,78 @@ mod serde_tests {
     }
 
     #[test]
+    fn an_unrecognised_domain_kind_named_after_a_known_one_is_refused() {
+        // The sibling of the attribute-name check above, and the same hazard
+        // one level up: `Other` promises that a description this crate cannot
+        // interpret round-trips losslessly, and a name this crate *does*
+        // interpret breaks that promise outright. Written as `"kind": "group"`,
+        // the document reads back as `DomainKind::Group` -- a different kind,
+        // with the attributes silently gone. Raised in the PR #56 review.
+        for known in [
+            "group", "package", "die", "module", "core", "cache", "memory",
+        ] {
+            let mut attributes = BTreeMap::new();
+            attributes.insert("watts".to_string(), AttributeValue::UnsignedInteger(15));
+            let domain = Domain {
+                kind: DomainKind::Other {
+                    name: known.to_string(),
+                    attributes,
+                },
+                processors: ProcessorSet::empty(),
+                observations: Vec::new(),
+            };
+            serde_json::to_string(&domain).expect_err(&format!(
+                "an unrecognised kind named {known:?} must not be written as that known kind"
+            ));
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_domain_kind_with_its_own_name_still_round_trips() {
+        // The complement, so the refusal above cannot be satisfied by refusing
+        // every `Other`: a genuinely unknown name is exactly what the variant
+        // is for and must still survive the round trip intact.
+        let mut attributes = BTreeMap::new();
+        attributes.insert("watts".to_string(), AttributeValue::UnsignedInteger(15));
+        let domain = Domain {
+            kind: DomainKind::Other {
+                name: "power".to_string(),
+                attributes,
+            },
+            processors: ProcessorSet::empty(),
+            observations: Vec::new(),
+        };
+        let restored = round_trip(&domain);
+        assert_eq!(restored, domain);
+    }
+
+    #[test]
+    fn every_well_known_name_decodes_to_a_named_kind() {
+        // Binds the constant the serializer refuses on to the arms the
+        // deserializer actually matches, so the two cannot drift apart. A name
+        // listed but no longer decoded would make the refusal above spurious;
+        // a name decoded but not listed would let an `Other` claim it, which is
+        // the defect this pair of tests exists to prevent. Derived from the
+        // constant rather than restating it, so adding a kind to one place and
+        // not the other fails here.
+        for name in crate::domain::serde_impl::WELL_KNOWN_KIND_NAMES {
+            let json = format!(
+                r#"{{"kind":"{name}","id":0,"processors":[],
+                     "simultaneous_multithreading":false,"efficiency_class":0,
+                     "level":1,"associativity":8,"line_size":64,"size_bytes":32768,
+                     "cache_type":"unified","memory_bytes":0}}"#
+            );
+            let domain: Domain = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("{name:?} must decode as a named kind: {e}"));
+            assert!(
+                !matches!(domain.kind, DomainKind::Other { .. }),
+                "{name:?} is listed as well known but decoded as `Other`, so the \
+                 serializer refuses a name nothing actually reserves"
+            );
+        }
+    }
+
+    #[test]
     fn a_hand_written_synthetic_description_parses() {
         // The whole point of an open, hand-writable schema: no discovery, no
         // ProcessorSet builder API, just JSON text a human could type.

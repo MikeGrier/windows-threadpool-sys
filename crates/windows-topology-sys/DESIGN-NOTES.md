@@ -772,3 +772,30 @@ record that declares it, because the walk never hands out the bytes.
 
 Recorded as `M6` in [CHECKLIST.md](CHECKLIST.md), which is where the work is queued; this decision is
 the thing that work derives from.
+
+## D-25: an unrecognised kind may not borrow a name this crate decodes
+
+`DomainKind::Other` exists so that "a description this crate cannot fully interpret still round-trips
+losslessly". Serializing one whose `name` is a kind this crate *does* decode breaks that promise at the
+only point where it matters, so it is refused rather than written.
+
+The failure is not symmetric across the kinds, and the quiet half is the dangerous one. `Group`,
+`Package`, `Die` and `Module` carry no fields, so an `Other` named `"group"` is written as
+`"kind": "group"`, read back as `DomainKind::Group`, and its attributes are dropped **silently** -- no
+error, no warning, and a document that means something other than what was serialized. `core`, `cache`
+and `memory` usually fail loudly on a missing field, which is better but still not a round trip; and
+where the attributes happen to supply those fields, the result decodes cleanly as a different kind.
+
+**Refused, not escaped or renamed.** Prefixing or mangling the name would let the write succeed while
+changing a value the caller chose, which trades a detectable error for an undetectable one. This is the
+same judgement, and the same remedy, as the pre-existing check one level down that refuses an `Other`
+whose *attribute* name collides with the reserved `kind`/`id`/`processors` fields -- the hazard is
+identical, only the field differs, and the two now sit beside each other in the serializer.
+
+The list of reserved names is `WELL_KNOWN_KIND_NAMES`, and `every_well_known_name_decodes_to_a_named_kind`
+binds it to the deserializer's arms rather than trusting them to stay in step. Both directions of drift
+are defects: a name listed but no longer decoded makes the refusal spurious, and a name decoded but not
+listed re-opens exactly this hole. A test that derived one from the other was preferred to a comment
+asking the next editor to remember.
+
+Raised in the PR #56 review.

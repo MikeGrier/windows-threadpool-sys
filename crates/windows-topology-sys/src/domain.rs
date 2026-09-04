@@ -461,6 +461,15 @@ mod serde_impl {
             .ok_or_else(|| E::custom(format!("domain is missing required field \"{key}\"")))
     }
 
+    /// Every kind name this crate decodes into a named [`DomainKind`].
+    ///
+    /// **Must list exactly the arms the deserializer matches before its
+    /// `other =>` fallback**, and `every_well_known_name_decodes_to_a_named_kind`
+    /// asserts that it does rather than leaving the two to drift.
+    pub(super) const WELL_KNOWN_KIND_NAMES: &[&str] = &[
+        "group", "package", "die", "module", "core", "cache", "memory",
+    ];
+
     impl Serialize for Domain {
         fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
             let mut map = serializer.serialize_map(None)?;
@@ -472,7 +481,33 @@ mod serde_impl {
                 DomainKind::Core { .. } => "core",
                 DomainKind::Cache { .. } => "cache",
                 DomainKind::Memory { .. } => "memory",
-                DomainKind::Other { name, .. } => name.as_str(),
+                DomainKind::Other { name, .. } => {
+                    // The same rule as the attribute-name collision check
+                    // below, for the same reason and by the same remedy.
+                    //
+                    // `Other` exists so a description this crate cannot fully
+                    // interpret "still round-trips losslessly", and a name this
+                    // crate *does* interpret breaks exactly that: the document
+                    // would say `"kind": "group"`, and reading it back yields
+                    // `DomainKind::Group`, not the `Other` that was written.
+                    // `Group`, `Package`, `Die` and `Module` carry no fields,
+                    // so that substitution succeeds silently and the attributes
+                    // are dropped on the floor; `core`, `cache` and `memory`
+                    // fail loudly on a missing field, or -- worse -- succeed as
+                    // a different kind when the attributes happen to match.
+                    //
+                    // Refused rather than escaped or renamed, because both of
+                    // those would change a name the caller chose. Raised in the
+                    // PR #56 review.
+                    if WELL_KNOWN_KIND_NAMES.contains(&name.as_str()) {
+                        return Err(S::Error::custom(format!(
+                            "domain kind name \"{name}\" collides with a kind this crate names \
+                             itself, so the document would deserialize as that kind rather than \
+                             as `Other`"
+                        )));
+                    }
+                    name.as_str()
+                }
             };
             map.serialize_entry("kind", kind_name)?;
             // The wire shape keeps an "id" because a description is written by
@@ -601,6 +636,10 @@ mod serde_impl {
                         Some(value) => crate::observed::Observed::Known(as_u64(value)?),
                     },
                 },
+                // Every arm above must appear in `WELL_KNOWN_KIND_NAMES`, or
+                // `Serialize` would let an `Other` claim that name and the
+                // document would decode as the named kind instead. The test
+                // named on that constant is what enforces it.
                 other => DomainKind::Other {
                     name: other.to_string(),
                     attributes: fields,
