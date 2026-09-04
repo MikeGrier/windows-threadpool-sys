@@ -78,9 +78,11 @@ result, so a submission always says which build produced it.
 not build.** The build stamp comes from two ordinary environment variables
 (`PLACEMENT_PROBE_SOURCE` and `PLACEMENT_PROBE_COMMIT`) read by `build.rs`, so
 anyone building this crate can set them and produce a binary that calls itself
-official and names any commit it likes. Nothing signs the result: these
-binaries carry no Authenticode signature and no build attestation, so
-`--version` cannot authenticate an arbitrary download.
+official and names any commit it likes. Nothing about the stamp is checked or
+signed, so `--version` cannot authenticate an arbitrary download. (Released
+binaries *are* attested -- see below -- but that is a signature over the bytes
+made by GitHub, not something the stamp establishes. These binaries carry no
+Authenticode signature.)
 
 What the marker is genuinely for is catching an **accident** -- a local build
 submitted by mistake, or a result pasted from a working copy with uncommitted
@@ -88,21 +90,30 @@ changes -- which is the common case and worth catching. It is not a defence
 against anyone who wants to misreport a build, and this document previously
 implied otherwise.
 
-**To establish that a download is what this repository published, verify it
-against the release.** GitHub records a SHA-256 digest for every release asset
-at upload time and exposes it in the release page, the API, and `gh`:
+**To establish what a download actually is, verify its attestation.** Every
+released binary is signed by GitHub at build time with a statement binding those
+exact bytes to this repository, the workflow that built them, and the commit
+they were built from. Checking it trusts none of what the binary says about
+itself:
 
 ```powershell
-# What you have.
-Get-FileHash .\placement-probe-x86_64.exe -Algorithm SHA256
+gh attestation verify .\placement-probe-x86_64.exe `
+  --repo MikeGrier/windows-threadpool-sys
+```
 
-# What the release published.
+A binary that was not built by this repository's release workflow has no such
+attestation and fails that check, whatever its `--version` line claims.
+
+If you would rather not install `gh`, the weaker check is the release digest.
+GitHub records a SHA-256 for every release asset at upload time, so comparing it
+tells you the bytes match what the release published -- though unlike the
+attestation it says nothing about how they were built:
+
+```powershell
+Get-FileHash .\placement-probe-x86_64.exe -Algorithm SHA256
 gh release view <tag> --repo MikeGrier/windows-threadpool-sys --json assets `
   --jq '.assets[] | "\(.name)  \(.digest)"'
 ```
-
-That anchors the bytes to the release, which is the traceable thing -- the
-`--version` line only repeats what the build was told about itself.
 
 ## What a result does not establish
 

@@ -229,11 +229,46 @@ jobs:
     permissions:
       # The only job that needs it, and only for the tag path.
       contents: write
+      # Artifact attestation needs both: `id-token` to mint the OIDC token
+      # Sigstore signs against, and `attestations` to persist the result. Kept
+      # on this job rather than at workflow level so the build and pull-request
+      # paths cannot mint anything.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      # **What the `--version` stamp cannot do.** That stamp is self-reported:
+      # `build.rs` reads it from environment variables, so a binary built
+      # anywhere can claim to be an official build at any commit. It catches an
+      # accident, not a forgery, and the crate README says so.
+      #
+      # This is the part that does not rely on being told. GitHub signs a
+      # statement binding these exact bytes to this workflow, this repository
+      # and this commit, and a downloader checks it without trusting anything
+      # the binary says about itself:
+      #
+      #     gh attestation verify placement-probe-x86_64.exe \
+      #       --repo MikeGrier/windows-threadpool-sys
+      #
+      # Deliberately **before** the upload, so a failure here means nothing was
+      # published rather than something unattested was. Re-running after a
+      # partial upload mints a second attestation for the same bytes, which is
+      # allowed and harmless -- the alternative is publishing first and finding
+      # out afterwards.
+      #
+      # It runs here rather than in the build matrix for two reasons: these are
+      # the exact files that get uploaded, so nothing can change between the
+      # claim and the artifact; and this job alone is gated on the tag, so the
+      # pull-request path builds and verifies without minting attestations for
+      # binaries nobody will ever download.
+      - name: Attest the binaries
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: artifacts/placement-probe-*.exe
 
       - name: Write the release notes
         # A file rather than an inline `--notes` string. The notes mention
