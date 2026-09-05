@@ -1,0 +1,81 @@
+# Copyright (c) 2026 Mike Grier
+
+[package]
+name = "windows-waitable-queues"
+# `0.0.x` on purpose: this crate has never been published, so this is a starting
+# point rather than a record of a release. With `bump-minor-pre-major`, the six
+# breaking commits behind it make the first published version `0.1.0` -- which is
+# what a first release should look like. Leaving it at `0.1.0` would have made
+# that first release `0.2.0`, skipping `0.1.0` entirely. Not `0.0.0`, which
+# release-please special-cases into a jump to `1.0.0`.
+version = "0.0.1" # x-release-please-version
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/windows-waitable-queues"
+description = "Bounded producer/consumer queues whose readiness is a waitable Windows HANDLE, so a consumer can park on a queue and a kernel object in the same wait."
+readme = "README.md"
+keywords = ["windows", "queue", "spsc", "mpsc", "concurrency"]
+categories = ["concurrency", "os::windows-apis", "data-structures"]
+
+# Deliberately publishable, unlike `windows-guard-alloc` next door: this is a
+# general-purpose facility whose value is that it exists, and its first consumer
+# (the I/O domain runtime) is not its only plausible one. Publishing is
+# therefore an obligation accepted, not an oversight -- see DESIGN-NOTES.md D-8
+# for what it commits us to.
+publish = true
+
+# The crate is Windows-only -- every public item is behind `cfg(windows)` and
+# the implementation imports `std::os::windows::io` unconditionally -- so
+# docs.rs must build it on a Windows target or the build fails outright.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+[features]
+# An experimental claim protocol, measured against the shipping one by
+# `probe-queue-contention` so that SH-14.3 can be decided on evidence. Not
+# covered by this crate's semver promise; it will either be merged into
+# `reserving_mpsc` or deleted (SH-15.6). Non-default so nothing depends on it
+# by accident.
+experimental-permit-claim = []
+
+# A 128-bit claim word for `reserving_mpsc`, adding the `Wide` layout.
+#
+# **The only thing in this crate that costs a third-party dependency, which is
+# why it is a feature rather than always present.** Rust's standard library has
+# no 128-bit atomic -- `core::sync::atomic` stops at 64 bits -- so a
+# double-width compare-and-swap needs `portable-atomic`. Without this feature
+# the crate depends on `windows-sys` alone and every layout uses `AtomicU64`.
+#
+# `default-features = false` on the dependency is load-bearing: with its
+# defaults, `portable-atomic` silently substitutes a global lock where the
+# native instruction is unavailable, which would put a mutex in the claim path
+# while still compiling. With them off, `AtomicU128` does not exist on such a
+# target and the build fails naming it.
+#
+# Most callers should not need this. `Perpetual` reaches roughly twenty years
+# before its claim position recurs, on a plain `AtomicU64` at no measured cost,
+# whereas the 128-bit exchange measured 2-3x slower on the claim itself. See
+# `ClaimLayout` for the comparison.
+dwcas = ["dep:portable-atomic"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies.portable-atomic]
+version = "1.15.0"
+default-features = false
+optional = true
+
+[dependencies.windows-sys]
+version = "0.61.2"
+default-features = false
+features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_System_Threading",
+]

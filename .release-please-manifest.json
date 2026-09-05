@@ -9,5 +9,6 @@
   "crates/windows-thread-ambient-sys": "0.2.0",
   "crates/windows-threadpool-sys": "0.1.3",
   "crates/windows-topology-sys": "0.1.0",
+  "crates/windows-waitable-queues": "0.0.1",
   "crates/wtf-string": "0.1.0"
 }
