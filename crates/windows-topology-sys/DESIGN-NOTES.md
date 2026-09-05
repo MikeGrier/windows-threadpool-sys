@@ -137,7 +137,7 @@ distinguishes them.
 
 That is not fixable by documentation, because the two really are the same value today. It is fixed
 by the representation, which is the subject of the open locality-model work -- see `SH-16.8` in
-CHECKLIST-ship-topology-and-queues.md, where absence
+[CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md), where absence
 becomes first-class rather than a shape. Recorded here so the gap is not rediscovered, and queued
 there so it is not merely recorded.
 
@@ -540,7 +540,7 @@ the same requirement.
 ## D-20: the Win32 boundary, and the deletion of `distances`
 
 *Recorded by [CHECKLIST.md](COMPLETED-CHECKLIST.md) MMT-1.4. Supersedes `SH-16.11` in
-CHECKLIST-ship-topology-and-queues.md, which proposed
+[CHECKLIST-ship-topology-and-queues.md](../../CHECKLIST-ship-topology-and-queues.md), which proposed
 filling the field.*
 
 ### The ruling is about scope, not about the field

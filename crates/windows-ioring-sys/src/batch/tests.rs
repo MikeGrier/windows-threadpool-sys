@@ -446,3 +446,87 @@ fn dropping_a_registration_with_work_outstanding_is_refused() {
     // already in progress would abort instead of failing the test.
     drop(buffers);
 }
+
+#[test]
+fn require_refuses_an_op_the_ring_does_not_support() {
+    // `Batch::require -> Ok(())` survived: every op this crate names is
+    // genuinely supported on any real host these tests run on, so nothing
+    // distinguished the real check from one that always passes.
+    // `set_supported_ops_for_test` constructs a ring that lacks one, so the
+    // refusal has something to refuse.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    ring.set_supported_ops_for_test(&[crate::Op::Nop]);
+    let batch = Batch::new(&mut ring);
+
+    let error = batch
+        .require(crate::Op::Read)
+        .expect_err("Read was left out of the constructed capability set");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+
+    batch
+        .require(crate::Op::Nop)
+        .expect("Nop is in the constructed capability set");
+}
+
+#[test]
+fn the_debug_rendering_names_the_registration_and_its_identity() {
+    // `<impl Debug for PendingBufferRegistration<B>>::fmt -> Ok(Default::default())`
+    // survived: that mutation writes nothing to the formatter, so the
+    // rendering comes back empty regardless of what the registration holds.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(vec![vec![0_u8; 64]])
+        .expect("queue buffer registration");
+    let rendering = format!("{pending:?}");
+    assert!(
+        rendering.contains("PendingBufferRegistration"),
+        "got {rendering}"
+    );
+    assert!(
+        rendering.contains(&pending.user_data().to_string()),
+        "the operation's identity must appear: {rendering}"
+    );
+}
+
+#[test]
+fn windows_refuses_an_empty_buffer_registration() {
+    // Written while chasing `RegisteredBuffers::is_empty -> false`, which a
+    // mutation run reports as surviving. It survives because the state it would
+    // misreport **cannot be reached**: nothing in this crate rejects an empty
+    // vector -- `register_buffers` only checks that the count fits a `u32` and
+    // that the ring has no prior table -- but the kernel refuses the submission
+    // with `E_INVALIDARG`, so no caller ever holds an empty registration and
+    // `is_empty` never has occasion to return `true`.
+    //
+    // That makes the mutant unreachable rather than untested, and manufacturing
+    // an in-crate struct literal to kill it would assert a shape the API cannot
+    // produce. What is worth pinning is the platform behaviour itself, because
+    // it is undocumented, it is the reason the accessor looks untested, and a
+    // future version that started accepting empty registrations would change
+    // which states this crate can be in.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    let mut batch = Batch::new(&mut ring);
+    let pending = batch
+        .register_buffers(Vec::<Vec<u8>>::new())
+        .expect("this crate queues it; the refusal comes from the kernel");
+    let user_data = pending.user_data();
+    batch.submit_and_wait(1, 5_000).expect("submit");
+
+    let completion = ring
+        .try_pop()
+        .expect("pop")
+        .expect("the registration completion is ready");
+    assert_eq!(completion.user_data(), user_data);
+
+    let Err(error) = pending
+        .claim_if(&completion)
+        .expect("its own completion is accepted")
+    else {
+        panic!("Windows accepted an empty buffer registration; is_empty is now reachable");
+    };
+    assert!(
+        error.to_string().contains("0x80070057"),
+        "expected E_INVALIDARG, got {error}"
+    );
+}

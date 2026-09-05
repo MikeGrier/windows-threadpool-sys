@@ -1585,6 +1585,125 @@ with the three rejected alternatives).
   version in prose each produce a distinct located failure; exit 2 is reserved for
   configuration errors and the script is cwd-independent.
 
+## Moved 2026-08-31 -- topology provenance: a topology now carries where it came from, and cannot pass as measured
+
+# Checklist: topology provenance
+
+**Problem.** [crates/windows-topology-sys/src/topology.rs](crates/windows-topology-sys/src/topology.rs)
+documents that a `Topology` is "built either by `Topology::discover` from the running system, by hand,
+or (with the `serde` feature) by deserializing a fed-in description" -- and **nothing distinguishes the
+three once built**. `Topology` derives `Default`, has public fields, and derives `Deserialize`. There is
+a passing test that parses a *Linux-shaped* description, complete with an ACPI SLIT-style distance
+matrix, on a Windows-only crate. A consumer handed that value treats another machine's topology, or a
+fabricated one, as this machine's truth.
+
+This is not hypothetical for the work in flight. `probe-core-affinity` needs synthetic multi-node
+topologies precisely because no NUMA machine is available, and the whole point of a probe is that its
+output is believed.
+
+**Decision.** Topology content carries its own provenance, defaulting to the *untrusted* value so that
+forgetting is safe and claiming is deliberate. Persisted forms carry it visibly, and loading can only
+ever downgrade -- a file cannot assert that it is this machine.
+
+Related: [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M-inf.4, which is what surfaced this.
+
+## M1: the marker, and its invariants
+
+- [x] **TP-1.1** -- Add `Provenance` to `windows-topology-sys` with three states ordered by trust:
+  `Measured` (read from the running system), `Restored` (deserialized from a description of some
+  machine), `Synthetic` (constructed by hand). **`Synthetic` is `Default`.** That is the load-bearing
+  choice: `Topology::default()`, `..Default::default()`, and any construction that omits the field all
+  come out tainted, so a caller must do work to claim data is real rather than work to admit it is not.
+  Document that the threat model is *accident*, not forgery -- a caller who writes
+  `provenance: Measured` over fabricated data has lied deliberately, and no type prevents that.
+
+- [x] **TP-1.2** -- Add the field to `Topology` and set `Measured` in `discover()`. This is a **breaking
+  change** for struct-literal construction, and deliberately so: every existing site is forced to state
+  which kind of data it holds. Update the crate's own tests and every dependent that constructs a
+  `Topology` by hand.
+
+- [x] **TP-1.3** -- Serde: serialize the marker so it is *visible* in the persisted form, and
+  **downgrade on load** -- `Measured` becomes `Restored`, everything else is unchanged. The rule is
+  **never upgrade**, so a hand-edited `"provenance": "measured"` is ignored rather than honoured. A
+  description absent the field loads as `Synthetic`. Test each of the four load cases, including that a
+  round trip of a measured topology does not come back measured.
+
+## M2: making it loud where it is read
+
+- [x] **TP-2.1** -- `Fingerprint` in [crates/windows-placement-probe/src/fingerprint.rs](crates/windows-placement-probe/src/fingerprint.rs)
+  carries the provenance and renders it **first and unmissably** when it is not `Measured`. The
+  fingerprint string is documented as canonical, so string equality is a usable comparison -- which
+  means the marker must be *inside* the string, or a synthetic host could compare equal to a real one.
+  That is the specific bug this prevents, not merely a display nicety.
+
+- [x] **TP-2.2** -- Every probe banner and every persisted probe line inherits it, since
+  `print_banner` and `Slice` are what end up pasted into checklists and design notes. A number quoted
+  from a synthetic run must arrive already labelled, because the label is what a reader will not think
+  to ask for.
+  **Done, and the banner inherits it by construction** -- it embeds the fingerprint's own `Display`
+  rather than re-rendering, so the two cannot drift. `print_banner` was split so the line is available
+  as a string (`banner_line`) and the marker's arrival is asserted rather than confirmed by reading a
+  format string.
+  **`Slice` deliberately carries no marker of its own, and the reason is structural rather than an
+  oversight.** A `Slice` records which processors a measurement was pinned to, and one can only exist
+  from a real `measure()` run: `measure` takes no injected topology (and
+  [crates/windows-placement-probe/src/core_affinity.rs](crates/windows-placement-probe/src/core_affinity.rs)
+  now documents why it must not), and pinning to a processor that does not exist panics. A slice is
+  therefore always real, and it is always printed beneath the banner that carries the host's
+  provenance. **If `measure` ever does gain such a seam, this reasoning collapses and `Slice` needs its
+  own marker** -- which is a second, independent reason not to add one.
+
+## M3: closing the loop with the probes
+
+- [x] **TP-3.1** -- Reconsider whether `probe-core-affinity`'s synthetic hosts should be expressed as
+  `Topology` values rather than as `Vec<ProcessorPlace>`. Going through `Topology` would exercise the
+  provenance path end to end and let a synthetic *NUMA* host drive selection through the real
+  `discover_places` conversion; staying at `ProcessorPlace` keeps the tests pure and fast. **Decide on
+  the evidence, and record the decision either way** -- this item is not "do it", it is "choose".
+  Note the constraint from
+  [crates/windows-placement-probe/src/core_affinity.rs](crates/windows-placement-probe/src/core_affinity.rs):
+  `measure()` must still not gain a topology-injection seam, whatever is decided here.
+
+  **Decided: both, because they are tests of different units -- and the evidence that settled it was a
+  hole, not a preference.** `classify`, `representative_pairs` and `node_pairs` take `ProcessorPlace`;
+  that *is* their input type, so `ProcessorPlace` fixtures test them at their own boundary and stay.
+  What was missing is that `discover_places` -- which carries the rules for which cache level
+  partitions the machine, which core and class each processor belongs to, and which NUMA node -- took
+  no argument, called `Topology::discover()` internally, and appeared in **zero tests**. It was not
+  merely untested; it was untestable.
+
+  **That hole was load-bearing and is now proven closed.** The NUMA lookup added earlier could not be
+  verified on a single-node host, because a correct map and a completely broken one both yield node 0.
+  Replacing the whole lookup with a hardcoded `0` was tried against the suite as it stood before this
+  item: **it passed everything.** Against the suite now, three tests fail. The `ProcessorPlace`
+  fixtures could never have caught it, because they encode what a test author *assumed* the conversion
+  produces -- the exact "depend on specified primitives, never on incidental behavior" trap.
+
+  **A pure `places_from_topology` seam was added; `measure()` still has none.** The distinction is the
+  rule worth keeping: *a seam that only moves data is safe; a seam that lets fabricated labels reach
+  real hardware is not.* Feeding a synthetic topology to a conversion yields synthetic positions, which
+  is what the caller asked for and cannot be mistaken for a measurement. Feeding one to `measure()`
+  would produce genuine timings under fabricated node ids, because a synthetic topology's processor
+  *numbers* are still valid on the real host and every pin would succeed.
+
+## Moved 2026-08-31 -- the sabotage harness became a tool
+
+### <a id="m341"></a>M34.1 -- Promote the ad-hoc sabotage harness into a reusable tool. *(completed 2026-08-31 20:03:57 -04:00)*
+- [x] **M34.1** -- Promote the ad-hoc sabotage harness into a reusable tool. **Done.**
+  [tools/run-sabotage.ps1](tools/run-sabotage.ps1) plus
+  [tools/README-sabotage.md](tools/README-sabotage.md), driven by a `sabotage.json` kept beside the
+  code it patches; the first is
+  [crates/windows-waitable-queues/sabotage.json](crates/windows-waitable-queues/sabotage.json), whose
+  nine entries reproduce the M30.4/M30.5 sweep exactly through the promoted tool.
+  Six of the tool's own guards were verified by making each one fire: a name filter matching nothing,
+  a missing file, a dirty target, a pattern matching 14 sites instead of 1, a patch that changes
+  nothing, and a deliberately red baseline. A harness whose guards are untested is the thing it exists
+  to warn about.
+  Two subtleties are recorded in [DESIGN-NOTES.md](DESIGN-NOTES.md) -> `Sabotage sweeps` rather than
+  left in the script: a **survived** sabotage may be a defect in the *sabotage* rather than a hole in
+  the tests, which is why the patch is now printed on every unexpected result; and a **too-short
+  timeout manufactures a false "caught"**, crediting tests with catching a defect they never ran
+  against, so the bound errs generous.
 ## Moved 2026-09-01 -- Thread ambient mutation gaps
 
 ### <a id="m236"></a>M23.6 -- Close mutation gaps with deterministic fault injection and exhaustive assertions. *(completed 2026-09-01 20:25:29 UTC-04:00)*
@@ -1597,3 +1716,472 @@ capture-set formatting, declared emptiness, and restore reports; then rerun muta
 classify any survivors that are behaviorally equivalent.
 
 The final mutation run tested 233 mutants: 142 were caught, 91 were unviable, and none were missed.
+
+## Moved 2026-09-02 -- M1 of the topology/queues release: the public surface settled before publication
+
+Every item complete. The milestone existed because its decisions were free before 0.1.0 and expensive
+after: a deleted public type costs a yank-and-migrate once published, and `Reserving`'s associated
+type needed its bound before any caller could depend on the unbounded form. Moved from
+[CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md).
+
+### M1: settle the public surface before it is public
+
+- [x] **SH-1.1** -- **MIRRORS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M31.8 -- one piece of
+  work seen from two plans. Check both off in the same commit; neither is done alone.**
+  **Decide M31.8 (merge-or-delete for `slotwise_mpsc` and `reserving_mpsc`) before the first
+  publish, not after.** This is the highest-leverage item in the file and it is release-blocking for a
+  mechanical reason: the decision may *delete a public type*. Doing that before 0.1.0 costs nothing;
+  doing it after means a breaking release, a yank-and-migrate for anyone who adopted it, and a
+  permanent line in the changelog explaining why a shape existed for one version.
+  The measurement is already done and agrees across both architectures -- see M31.5 and M31.7 in
+  [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) -- so this needs a decision, not more work.
+
+- [x] **SH-1.2** -- **GOVERNS [CHECKLIST-io-domains.md](CHECKLIST-io-domains.md) M31.6 -- this is not
+  that item and does not complete it.** It decides only whether M31.6 blocks SH-4.3. If the answer is
+  "it gates", record that on M31.6 and SH-4.3 cannot proceed until M31.6 is done; if "it does not",
+  record that too, so a later reader does not mistake a considered choice for an oversight. **Checking
+  this off never checks off M31.6.**
+  **Decide explicitly whether M31.6 (loom verification) gates 0.1.0**, and record the
+  answer either way rather than letting it drift into "not yet".
+
+  **Decided: it does not gate 0.1.0. It gates 1.0, and the gap is disclosed in the crate's own
+  documentation rather than left for an adopter to discover.** Recorded as D-31.
+
+  Three findings drove it, and the second was not expected:
+
+  - **Loom would close the demonstrated gap.** The sabotage sweep showed a weakened `Acquire` on the
+    producer's load of `head` survives the whole suite. That defect lives in queue code, which is
+    exactly what loom models well.
+  - **Loom would *not* close the gap where a real bug actually occurred.** The doorbell's correctness
+    is the interleaving of an `AtomicBool` mirror with real `SetEvent`/`ResetEvent` syscalls. Loom
+    models the atomics and cannot model the syscalls; stubbing them tests a *model* of `SetEvent`
+    rather than `SetEvent`. D-15's lost wakeup -- the only ordering bug this crate has actually had --
+    was found by sabotage, and loom would not have found it. So loom is valuable and is **not** the
+    thing standing between this crate and confidence about its hardest part.
+  - **The risk loom addresses is mostly regression risk**, and that risk is lowest now. The orderings
+    are believed correct and were reasoned about at the time; sabotage *introduced* the weakening to
+    prove the suite was blind to it. Regression risk rises with contributors, changes, and consumers
+    -- all of which start after publication, not before.
+
+  Against that, gating would block 0.1.0, and through it the placement tool and the NUMA measurements
+  from other people's machines that this whole sequence exists to obtain. Loom is invasive work: every
+  atomic in the crate goes behind a `cfg` shim across four modules.
+
+  **The disclosure is what makes this a decision rather than a punt**, and it is not optional: the
+  crate documentation states what is verified, states that stress testing here is *known* not to catch
+  ordering defects and cites the measurement showing it, and says loom is planned before 1.0. An
+  adopter then makes their own call with the same information we have. `0.x` carries the rest.
+  The reason it deserves a deliberate answer rather than a default: the sabotage sweep demonstrated
+  that weakening the producer's `Acquire` load of `head` to `Relaxed` left **all twenty tests green**,
+  while every logic defect injected beside it was caught. So this is not an untested-by-omission gap,
+  it is a gap this workspace has *evidence* the existing tests cannot close. Publishing a lock-free
+  queue with it open is a defensible choice; making it unknowingly is not.
+
+- [x] **SH-1.3** -- **Qualify both MPSC shapes by name.** `mpsc` beside `reserving_mpsc` made one
+  canonical by implication -- which contradicts this crate's own "no shape is the canonical one", and
+  after SH-1.1 is simply false. Renamed to `slotwise_mpsc`, which names its claim protocol: it claims
+  slot by slot with no shared counter. `sequence_mpsc` was considered and rejected for inviting the
+  reading that it alone preserves FIFO order, which both shapes do. Recorded as D-30.
+  **Belongs in M1 for the same reason SH-1.1 does**: it is a public-surface change, free before the
+  first publish and a breaking rename with a deprecation path afterwards.
+
+- [x] **SH-1.4** -- **State the algorithms' pedigree and why an existing crate is not used.** A public
+  concurrent-queue crate has to answer both questions or a reader assumes the worst: that the
+  algorithms are homegrown, and that the author did not look at the alternatives.
+  Neither is true, and the honest answers are load-bearing. The algorithms are *published designs*
+  chosen deliberately, because a concurrent queue is a bad place to be original -- the failure mode is
+  a reordering that appears on one machine, under load, months later. And the reason no channel crate
+  fits is structural rather than dismissive: **on Windows, waiting is a kernel-object operation**, so a
+  queue whose readiness is not a `HANDLE` cannot join a `WaitForMultipleObjects` alongside an I/O
+  completion, a process handle, or a cancellation event -- however good its own blocking receive, and
+  however rich its own `select`, which can only select over its own channels.
+  Written into both the crate docs and the README, because docs.rs shows one and crates.io the other.
+
+- [x] **SH-1.5** -- **Bound `Reserving::Reservation<'a>` so a generic caller can redeem what it claims.**
+  Done: the `Claim` trait carries `send` and `is_disconnected`, `Reservation<'a>` is bound on it, and
+  both reservation types implement it as forwarders. 87 lines across five files, no concrete signature
+  changed, `slotwise_mpsc` untouched because it does not implement `Reserving` at all. Mutation-tested
+  rather than assumed: 62 mutants over the whole reservation surface report 0 missed, and the first
+  run found a real gap -- `is_disconnected` stuck at `false` survived on `spsc`, because the connected
+  case was asserted there and the disconnected case only on the other shape.
+  The associated type is declared with no bound at all, so a caller generic over
+  [`Reserving`](crates/windows-waitable-queues/src/traits.rs) can call `reserve()` and then do
+  nothing with the result except drop it. `reserve` is `#[must_use]` precisely because a held claim
+  withholds capacity from every other producer -- and the one operation that discharges it, `send`,
+  is inherent to each shape's concrete type and unreachable through the trait. The trait cannot
+  express the operation it exists for.
+
+  **The two implementors already agree exactly, so this is additive**: both
+  `spsc::Reservation<'a, T>` and `reserving_mpsc::Reservation<T>` already have
+  `send(self, item: T) -> Result<(), Disconnected<T>>`, `is_disconnected(&self) -> bool`, and a
+  `Drop` that returns the slot. No concrete signature changes; nothing to migrate.
+
+  Add a `Reservation` trait carrying `send` and `is_disconnected`, bound the associated type on it,
+  and implement it for both types. `is_disconnected` is included rather than deferred for the reason
+  the `Reserving` docs give at length -- a caller needs to learn the stream ended *before* doing the
+  work the claim was taken for -- and because `reserving_mpsc`'s reservation is `Send`, so it may be
+  redeemed on a thread holding no producer handle to ask instead. Adding it later is the same
+  breaking change, merely deferred.
+
+  **Why this blocks rather than waits.** Adding a bound to an associated type is a breaking change
+  to the trait: every implementor must then satisfy it. It is free while the crate is unpublished
+  and a major bump with a migration afterwards, and this is the milestone that exists to settle
+  exactly that -- see SH-1.1 and SH-1.3, both landed on the same "free before the first publish"
+  reasoning. D-3 already makes this argument ("the trait *shape* is fixed now so signatures stay
+  compatible"); this is the same reasoning applied to a piece it missed. Pull request #56 is what
+  puts these traits in front of consumers, so the window closes when it merges.
+
+  **How it surfaced**, recorded because the route is the useful part: not from review and not from a
+  failing test, but from a `cargo mutants` run showing that nothing exercised the capability traits
+  at all, and then from being unable to write the obvious generic test for `Reserving` -- the test
+  in [traits/tests.rs](crates/windows-waitable-queues/src/traits/tests.rs) is scoped to claim-and-release
+  and says so. A contract gap presenting as an untestable API is a signal worth keeping.
+
+  Extend that test to claim-and-redeem through the trait as part of this item, since it is the
+  check that would have caught the gap in the first place.
+
+## Moved 2026-09-02 -- M7 through M13: seven PR #56 review rounds, all findings resolved
+
+Seven consecutive automated-review rounds on the pull request that ships `windows-topology-sys`
+0.2.0 and `windows-waitable-queues` 0.1.0, kept as milestones so each round's findings stayed
+attributable to the round that raised them. All items complete. Moved from
+[CHECKLIST-ship-topology-and-queues.md](CHECKLIST-ship-topology-and-queues.md); the two later rounds
+(M14, M15) remain there because they carry open work.
+
+### M7: PR #56 automated-review round
+
+The findings an automated review raised against the pull request that lands this work, verified against
+the source before being accepted. Each item names what was checked, so a later reader can tell a real
+repair from a reviewer's guess that was taken on trust.
+
+- [x] **SH-7.1** -- **`reserving_mpsc` reports `Full` from a claim word that was never current.**
+  `push` and `reserve` load the claim word relaxed, then test room with
+  `has_room_beyond_reservations(position, reserved)`, which computes
+  `position.wrapping_sub(head)`. If other producers claim and publish past `position` and the consumer
+  drains them while this thread is between the load and the room check, `head` passes the stale
+  `position` and the subtraction wraps to near `u32::MAX` -- so the queue reports `Full` (and records a
+  refusal) at the moment it is empty, and `reserve` returns `None` for the same reason. The compare-and-
+  swap that would have caught the staleness is never reached, because both paths return before it.
+  Re-read the claim and retry when it moved; report no room only from a word still current.
+
+- [x] **SH-7.2** -- **The NUMA cross-check compares a count against a highest identifier.**
+  `windows-platform-probes`'s `Observation::cross_check` compares `numa_domains` (a count of memory
+  domains) with `GetNumaHighestNodeNumber() + 1`. Windows documents that value as the highest node
+  *number*, and does not guarantee node numbers are dense -- nodes 0 and 2 give a count of 2 and a
+  highest of 2, and the probe then reports a parsing regression on correct hardware. Memory domains
+  already carry the node number in `Domain::id`, so compare highest against highest.
+
+- [x] **SH-7.3** -- **A cache level is called a partition without checking that it is one.**
+  `cache_partitions_at_level` deduplicates by equal processor set, which is exactly right for the
+  measured case it was written for (L1i and L1d over identical sets). It does not establish a
+  *partition*: `Topology` is deliberately constructible by hand and by deserialization (D-12), so
+  distinct-but-overlapping sets reach `outermost_partitioning_cache`, which returns them as domains a
+  consumer then double-counts. Require the distinct sets to be pairwise disjoint before a level
+  qualifies as partitioning.
+
+- [x] **SH-7.4** -- **`windows-waitable-queues` cannot build its documentation on docs.rs.** The crate
+  is Windows-only and imports `std::os::windows::io` unconditionally, but its manifest omits the
+  `[package.metadata.docs.rs]` target block that every other published Windows-only crate here carries,
+  so docs.rs would build it for its default Linux target and fail. Add the same block.
+
+- [x] **SH-7.5** -- **The mutant injector replaces every occurrence on the line, not the first.**
+  `tools/inject-mutant.ps1` calls the *static* `[regex]::Replace(input, pattern, replacement, 1)`, whose
+  fourth parameter is `RegexOptions` -- `1` is `IgnoreCase`, not a replacement count, and no static
+  overload takes a count at all. The tool therefore does precisely what its own header comment says it
+  exists to avoid. Fix the replacement, refuse a line whose pattern occurs more than once unless a
+  column disambiguates it, verify the baseline is green before trusting a "caught", run with all
+  features so a feature-gated mutation is not reported as surviving, perform the mutating write inside
+  the guarded region so a failed write still restores, and route its output through one sink.
+
+- [x] **SH-7.6** -- **A spike that fails to run is reported as a finding about the machine.**
+  `tools/run-numa-spikes.ps1` checks the exit code of `cargo build` but not of `cargo run`, then decides
+  vacuity by searching the output for `VACUOUS`. A crashed spike prints no such line, so the summary
+  says "**NOT vacuous -- this runner has more than one NUMA node**" and the script exits 0. That is the
+  instrument breaking while claiming a result, which the script's own documentation says is the one
+  thing worth failing over.
+
+- [x] **SH-7.7** -- **Two tools write output from several sites, and two hazards remain in the
+  sabotage/mutation harness.** `tools/check-publishable.ps1` and `tools/inject-mutant.ps1` each call
+  `Write-Host` from several places, against the repository's one-output-sink rule.
+  `tools/run-sabotage.ps1` performs its patching write before entering the `try` whose `finally`
+  restores the file, so a write that throws part-way leaves the clean source damaged.
+  `tools/run-mutants.ps1` derives a deterministic output directory per package or file, so a second run
+  of the same scope overwrites the analysis the parameter documentation promises to preserve.
+  The placement probe's tests name scratch directories without the process id, so two concurrent test
+  processes -- which the documented `-j 2` mutation workflow creates -- delete each other's fixtures.
+
+- [x] **SH-7.8** -- **Reply to every thread and resolve the ones that are addressed**, including the one
+  finding that was checked and found not to hold: `GetSystemDirectoryW` returning exactly the buffer
+  length is unreachable (success excludes the terminator, failure includes it and so exceeds the
+  buffer), though the guard is widened anyway so the next reader need not redo the analysis.
+
+### M8: PR #56 third review round (suppressed findings)
+
+The reviewer generated no new inline comments in these rounds and instead listed **suppressed** findings in
+the review body, so none of them arrived as a resolvable thread. They are recorded here because a finding
+that produces no thread is otherwise invisible to the "are all comments resolved?" check that gates merge.
+
+- [x] **SH-8.1** -- **The contention probe times thread creation, and lets early producers run alone.**
+  All five timed runs in `windows-platform-probes`'s `queue_contention` start the clock *before*
+  `thread::scope` spawns anything, and every worker begins pushing the moment it is spawned. At 50,000
+  pushes each, an early producer can finish a large uncontended prefix -- or finish outright -- while the
+  last threads are still being created, so a row labelled 16 or 32 producers may never have had 16 or 32
+  contenders. The measured interval also includes spawn cost. This is not a cosmetic inaccuracy: the
+  module's own header says these numbers decide whether two speculative queue shapes get written at all
+  and whether the two shipped shapes merge. Hold every participant -- producers *and*, in the drained
+  runs, the consumer -- at a start barrier, and start the clock when it releases.
+
+- [x] **SH-8.2** -- **A failed backup write leaves a truncated file under the canonical name.**
+  `write_backup_to_new_file` reserves the name with `create_new` and then `write_all`s through `?`, so a
+  disk-full or quota failure returns an error while leaving a zero-length or partial `.json` behind. That
+  file is indistinguishable from a real record to whoever collects it, and the next run's collision
+  suffix steps politely around it. Publish by rename: write the bytes to an exclusively-created temporary
+  in the same directory, flush, and move it onto the reserved name only once the write has succeeded.
+
+- [x] **SH-8.3** -- **`places_from_topology` drops processors and invents NUMA membership.**
+  Two defects in one conversion, both reachable only through a hand-built or deserialized `Topology` --
+  which is exactly the input this seam exists to accept (D-12).
+  It iterates `class_of`, which is populated only from `DomainKind::Core` domains, so an online processor
+  with no core domain is **silently absent from the result** -- and the documented core-id fallback
+  beneath it, written to keep group 1's cpu5 distinct from group 0's, is unreachable dead code as a
+  direct consequence.
+  It then defaults absent NUMA membership to `unwrap_or(0)`. That is the right answer only when the
+  topology names no memory domain at all; when it names nodes 1 and 2, it **fabricates node 0** and files
+  a processor under a node the machine does not have -- the precise failure this crate's own rule
+  ("a seam that only moves data is safe; a seam that lets fabricated labels reach real hardware is not")
+  exists to prevent.
+  Iterate the online processors so every one is placed, and refuse a topology that names memory domains
+  but not this processor's, rather than inventing one.
+
+### M9: PR #56 fourth review round
+
+- [x] **SH-9.1** -- **Both bounded shapes could report a length larger than their capacity.**
+  `len` reads the producer-side position and then `head`, which are two instants; a consumer draining
+  past the sampled position makes the wrapping subtraction yield a number near the integer maximum. The
+  comment beside it claimed the overestimate was "safe in the direction that matters for a backpressure
+  gauge", which is true of a *bounded* overestimate and not of `usize::MAX`. Both are now clamped to the
+  capacity, so the skew still resolves towards full -- the safe direction -- while the impossible value
+  is gone.
+
+- [x] **SH-9.2** -- **`reserving_mpsc` inherited a `remaining()` that counted reserved slots as room.**
+  `Bounded::remaining` defaults to `capacity - len`, and this shape's `len` excludes reservations by
+  design, so an empty queue of four holding one reservation answered four while only three items fit --
+  promising room for a push guaranteed to be refused. Overridden on both handles and both trait impls,
+  reading the packed claim word **once** so the position and the reservation count cannot be sampled at
+  different instants; `is_full` is now defined in terms of it rather than restating the rule.
+
+- [x] **SH-9.3** -- **The pull request description described the release plumbing, not the product.**
+  The body framed the change as CI and provenance work and mentioned `windows-waitable-queues` only
+  under release tracking, while the majority of the diff is that crate's public API and its three
+  lock-free queue implementations. Rewritten to lead with the shipped surface.
+
+### M10: PR #56 fifth review round
+
+- [x] **SH-10.1** -- **`BOUNDS_MAX` does not compile on a 32-bit target.** `reserving_mpsc`'s maximum
+  was a flat `1 << 31`, derived from the packed position's width alone. On a 32-bit target the
+  crate-wide `WRAPPING_MAX_CAPACITY` is `usize::MAX / 2`, which is `2^31 - 1` -- *narrower* than the
+  packing -- so the const assertion that no shape may exceed it fails the build outright, for every
+  capacity including the small valid ones. Now the narrower of the two limits, kept a power of two so
+  the value stays one a caller could actually pass. Verified in both directions against a real
+  `i686-pc-windows-msvc` check: the old constant fails with `E0080`, the new one compiles.
+
+- [x] **SH-10.2** -- **The backup's final name was visible empty for the whole write.** The previous
+  round reserved the destination with `create_new` and renamed onto it, which fixed the truncated-file
+  case and left a worse one: an empty file under the record's own name for the duration of the write,
+  and permanently if the process was killed in that window -- contradicting the absent-or-complete
+  guarantee its own doc comment claimed. Publication is now a single atomic no-replace `MoveFileExW`
+  from a fully-written temporary. `std::fs::rename` cannot express this: on Windows it always passes
+  `MOVEFILE_REPLACE_EXISTING`, so it would clobber a record a concurrent run had placed.
+
+- [x] **SH-10.3** -- **The tool discovered the topology three times.** The plan used one reading, the
+  fingerprint another, and `core_affinity::measure` a third, so a processor going offline mid-run could
+  have the announced plan, the recorded host, and the measured rows describing different machines with
+  nothing saying which. The plan and the fingerprint now derive from one `Topology::discover`.
+  `measure` still discovers its own, and deliberately so: its documentation refuses a
+  `measure_with(places)` seam because a supplied list's processor *numbers* stay valid on the real host
+  while its node labels need not, so every pin would succeed and real timings would be filed under
+  fabricated labels. Its rows carry their own places, so each row states what it measured.
+
+- [x] **SH-10.4** -- **`spsc` had the same `remaining()` defect, and it was missed.** The previous round
+  corrected `reserving_mpsc` and stopped there, but `spsc` implements `Reserving` too -- so reserving
+  every slot left it reporting the full capacity as available while both `push` and `reserve` refused.
+  Its `Bounded` impls now override `remaining` on the producer *and* the consumer, its `len` is clamped
+  to the capacity like the other two shapes', and `is_full` is defined in terms of `remaining` rather
+  than restating the rule. The trait's default now documents that a `Reserving` shape must override it,
+  so the next shape to reserve does not inherit the same wrong answer silently.
+
+- [x] **SH-10.5** -- **The high-water depth could record a peak the queue never reached.**
+  `reserving_mpsc`'s `publish` sampled the depth from its own position and a relaxed load of `head`,
+  ungated and unclamped. `slotwise_mpsc`'s twin is bounded by construction -- its producer's acquire
+  load of the slot's sequence synchronizes-with the consumer freeing that slot, so `head` cannot be
+  older than `position - capacity + 1` -- but this shape has a second entry point with no such edge:
+  `Reservation::send` redeems without a room check, so the only `head` its thread is ordered against is
+  the one *`reserve`* read, which may be arbitrarily old by the time the reservation is redeemed. The
+  sample is now gated on tracking (parity with the twin), read before publication, and clamped to the
+  capacity.
+  `Observable::high_water`'s contract is corrected to match what all three shapes actually deliver: an
+  **upper bound** on the true peak, never below it and never above the capacity, with the reason the
+  cheap sample is preferred to an exact count. Counting exactly would put a read-modify-write on a line
+  shared by every producer and the consumer into every push and every pop -- the line this crate pads
+  its positions apart to keep out of the hot path.
+
+### M11: PR #56 sixth review round
+
+Three findings against `places_from_topology`, all of the same shape, plus three against the
+mutation wrapper. The conversion's three silent fallbacks are replaced by one rule.
+
+- [x] **SH-11.1** -- **Three fallbacks each invented an answer that reads as a real one.**
+  `places_from_topology` accepted a topology whose domains do not cover every processor, and filled
+  each gap with a value indistinguishable from a measured one. A processor absent from every core
+  domain was given a synthetic core id derived from its group and number, which can equal a real
+  core domain's id -- `classify` then reports two processors as SMT siblings when one's core is
+  merely unknown. Its efficiency class became `0`, which is also a genuine Windows class, so
+  `within_class_pair` reports a same-class pair against a real class-0 core. Its cache domain became
+  `None`, which the type already means "no cache level partitions this machine" -- so two processors
+  omitted from an incomplete partition compare equal and serialize a confident same-cache
+  measurement.
+  The three share one cause: an absence was read as a value. The rule now distinguishes *uniform*
+  absence from a *gap*. A machine that reports no core domains at all, or no partitioning cache
+  level, has told us something true about itself and still converts. A machine that places every
+  other processor but not this one has told us nothing about this one, and the conversion refuses:
+  `places_from_topology` returns `Err(UnplacedProcessor)` naming the processor and, in a new
+  `MissingPlacement` field, which of core / cache domain / NUMA node was missing.
+  `MissingPlacement` is `#[non_exhaustive]`.
+  Core and efficiency class are two spellings of one rule -- `Topology::cores()` filters to
+  `DomainKind::Core`, so a processor's class is known exactly when its core is -- and an
+  `EfficiencyClass` variant written for the second was removed on discovering it is unreachable.
+  Sabotage confirms the pair behaves that way: removing either refusal alone leaves the suite green,
+  because the other still fires; removing both fails two tests.
+
+- [x] **SH-11.2** -- **The mutation wrapper's output directory could collide.** The stamp has
+  one-second resolution, so two runs launched in the same second -- a script starting several scopes
+  at once, which is exactly the case that wants separate output -- selected the same directory and
+  interleaved their results. A short random suffix now follows the stamp, which still sorts
+  chronologically.
+
+- [x] **SH-11.3** -- **The wrapper terminated fault handlers it did not start.** Cleanup matched
+  `WerFault` / `WerFaultSecure` / `vsjitdebugger` by name across the whole session, so a crash report
+  the user was reading or a debugger attached to an unrelated process was killed by a mutation sweep.
+  The wrapper now records the ones already running at startup and skips them.
+
+- [x] **SH-11.4** -- **The `mutants.out` nesting finding does not hold; documented in place.**
+  The report was that `Join-Path $OutputDirectory 'mutants.out'` doubles a path cargo-mutants already
+  appends. It does not: cargo-mutants treats `--output` as the parent and creates `mutants.out`
+  inside it. Verified on disk -- a run with `--output .scratch\mutants-encoding-<stamp>` produced
+  `<stamp>\mutants.out\caught.txt` with 22 lines, matching the 22 caught the wrapper reported. A
+  comment now records the evidence, since the path reads like a duplication and has been challenged
+  once already.
+
+- [x] **SH-11.5** -- **A hard-killed run could block the next one's backup entirely.** The temporary
+  was named for the record plus this process's id and nothing else, and created with `create_new`. A
+  run killed mid-write leaves that file behind, and Windows reuses process ids -- so a later run
+  issued the same id found the corpse under the only name it would ever try. The resulting
+  `AlreadyExists` left `write_temporary` *before* the caller's suffix loop was reached, so the whole
+  backup failed rather than landing under a next-best name. The temporary now carries its own
+  attempt counter, matching the final name's budget; a stale file is stepped around rather than
+  overwritten, since it belongs to whatever left it.
+
+- [x] **SH-11.6** -- **Both tools bypassed their own single-output-sink contract.** `run-mutants.ps1`
+  emitted its per-category summary directly to the success stream, and `run-sabotage.ps1` did the
+  same for the `-List` output, every blank line, the result table, and the injected patch text --
+  each contradicting the `Write-Report` doc comment directly above them. All now route through the
+  sink, which gained pipeline binding so a formatted table can flow into it. Verified: the `-List`
+  path emits zero objects to the success stream.
+
+- [x] **SH-11.7** -- **The sabotage harness silently narrowed its own sweep.** Found while checking
+  SH-11.6's output: the harness prepends the `test` subcommand to a manifest's `testArgs`, but nine
+  of the eleven manifests already begin with `test`. The result was `cargo test test -p ...`, in
+  which the second word is not a subcommand but a TESTNAME filter -- a sweep claiming to run a
+  package's suite while running a subset of it, the same false-green this tool exists to prevent.
+  The vector is now normalised so either manifest spelling produces one `test`.
+  **No prior verification was weakened**: every crate swept so far keeps its tests under a
+  `mod tests`, so the accidental filter matched all of them, and all fourteen recorded baselines
+  report "0 filtered out". The defect was latent, and would have appeared on the first crate laid
+  out differently.
+
+### M12: PR #56 seventh review round
+
+- [x] **SH-12.1** -- **The banner undercounted the machine it was about to measure.**
+  `Fingerprint::processors` is documented as the logical-processor count but was summed over
+  core-domain membership, which agreed with that meaning only while every processor was guaranteed to
+  sit in a core domain. SH-11.1 stopped guaranteeing it: `places_from_topology` now explicitly accepts
+  a topology naming no cores and places every online processor. The banner consequently read
+  `0p/0c` for a machine the measurement was about to use four processors on -- a defect this branch
+  created rather than inherited.
+  The count is now read off `topology.processors` with the same `online` filter the placement applies,
+  so the summary counts exactly what the measurement will use. `cores` deliberately still counts core
+  domains: zero there is the honest report that the topology named none.
+  Sabotage-verified. Two new tests pin both directions -- an uncored processor is still counted, an
+  offline slot is not -- and each asserts equality against `places_from_topology`'s own output rather
+  than a literal, so the two cannot drift apart again.
+
+- [x] **SH-12.2** -- **Two consequences of that fix, found by sweeping it rather than reported.**
+  `cache_domain_sizes` fills itself with the processor count when no cache level partitions the host,
+  so the bare-machine render silently improved from `L-[0]` to `L-[4]`.
+  `numa_node_sizes` did not, and now does not sum to `processors` in that one case: it reports the
+  nodes the topology *named*, and a bare topology names none, while every placement still reports the
+  documented node-`0` default. Keeping it that way is deliberate -- the cache list can afford to fill
+  itself because `L-` marks the absence, and `numa[4]` would be indistinguishable from a host that
+  genuinely reported one node of four. The behaviour is now documented on the field and pinned by a
+  test that asserts the whole render, including the `!!SYNTHETIC!!` provenance marker. The stronger
+  fix needs a marker, which is a serialized field and so a schema bump, tracked as
+  [CHECKLIST-placement-tool.md](CHECKLIST-placement-tool.md) `PT-6.2`.
+
+### M13: PR #56 eighth review round
+
+- [x] **SH-13.1** -- **A record could splice two machines together.** The tool announced a shape read
+  at one instant while `core_affinity::measure` discovered again at another, so a processor going
+  offline -- or moving group or node -- between them produced a record whose `host` described one
+  machine while every row was measured on a different one. Nothing in the file said so, and the host
+  is precisely what a reader interprets row sets *through*.
+  `measure` now reports the shape it actually ran on, as `Observation::host`, which is the fix that
+  keeps the anti-synthetic boundary intact: the measurement still discovers for itself and no seam
+  accepts a fabricated shape from outside. `SubmissionRecord::new` refuses when the announced and
+  measured hosts differ, so the splice is unrepresentable rather than merely avoided at the one
+  current call site; the tool checks first anyway and reports the disagreement in terms a runner can
+  act on. Refusing rather than silently recording the measured shape, because the notice is what the
+  runner consented to.
+
+- [x] **SH-13.2** -- **The tool wrote from 54 independent print sites.** The repository's
+  one-output-sink rule requires an output abstraction at the *first* output site so the storage
+  target and the formatting stay separable from the call sites that compose content. This binary had
+  none, which is why its collection notice -- a disclosure a runner reads before agreeing to publish
+  facts about their machine -- could only be exercised by running the process and capturing stdout.
+  A `Sink` trait now carries the two streams the tool genuinely has, `print_collection_notice` and
+  `print_plan` became `render_*` functions returning a `String` (matching the idiom the record report
+  already used), and `main` is the only place that names the real streams.
+  Verified as a pure refactor by comparing the built binary's output before and after: `--preview`
+  and `--help` are **byte-identical**, and `--version` differs only by the build identity correctly
+  reporting the working tree as `DIRTY`. Eight new tests cover what was previously unreachable,
+  including that the notice shows the model rather than describing it, that a withheld model reads
+  differently from one the host would not report, and that the two streams cannot satisfy each
+  other's assertions.
+
+- [x] **SH-13.3** -- **The two new probes wrote from 94 independent print sites between them.** Same
+  rule as SH-13.2, in [core_affinity.rs](crates/windows-platform-probes/src/bin/core_affinity.rs)
+  (67 sites) and [doorbell_cost.rs](crates/windows-platform-probes/src/bin/doorbell_cost.rs) (27).
+  A `Report` sink now lives in [report.rs](crates/windows-platform-probes/src/report.rs), shared by
+  both. One stream, not two: unlike the placement probe these have only ever written to stdout, and
+  inventing a diagnostic stream they do not use would be adding a distinction the tools do not make.
+  Each `main` is now three lines -- measure, render, emit -- and is the only place naming the real
+  stream.
+  One find during the conversion that the mechanical part would have missed: `render` called
+  `fingerprint::print_banner()`, which writes to stdout *itself*. Left alone it would have put the
+  identifying line on the terminal while leaving it out of the returned report, so a captured report
+  would be missing the one line saying which machine produced it -- and the `!!SYNTHETIC!!` taint
+  marker with it. `banner_line()` already existed for exactly this and is now used.
+  Verified as a pure refactor by running both probes before and after and comparing with numerals
+  masked (their output is timing-dependent, so byte equality is not available): 38 lines and 50 lines
+  respectively, **structurally identical** both times.
+
+- [x] **SH-13.4** -- **The other twelve probes still print directly, and now there is a sink to
+  adopt.** `probe-peer-index-cache` (55 sites), `probe-request-cost` (45), `probe-topology` (32),
+  `probe-queue-contention` (27), `probe-ioring` (24), `probe-completion-port` (22),
+  `probe-worker-context` (22), `probe-device-map` (21), `probe-cancel-io` (19),
+  `probe-pool-growth` (16), `probe-handle-state` (14), `probe-error-mode` (10) -- 307 sites.
+  Deliberately **not** done in the review round that introduced the sink: those probes predate it and
+  are outside that round's scope, and each conversion needs its own before/after comparison against
+  the probe's real output, which is what makes it a refactor rather than a rewrite.
+  Queued rather than left as a note precisely because a half-adopted abstraction is the state most
+  likely to be forgotten -- the next probe author will see twelve neighbours printing directly and
+  reasonably conclude that is the house style.

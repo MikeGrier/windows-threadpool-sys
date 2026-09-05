@@ -89,7 +89,25 @@ windows-threadpool-sys = { version = "0.1.3", path = "../windows-threadpool-sys"
 # crate rather than raw `GetLogicalProcessorInformationEx` calls. M7's
 # ring-copy sample additionally needs the `serde` feature, to load a fed-in
 # topology description (D-10 in windows-topology-sys's DESIGN-NOTES.md).
-windows-topology-sys = { version = "0.2.0", path = "../windows-topology-sys", features = [
+#
+# **Path-only, with no `version`, deliberately.** Cargo omits a versionless
+# dev-dependency from the published manifest entirely -- verified by packaging
+# this crate and reading the result -- and that is the right outcome here. A
+# `version` would have been published as a requirement nothing ever checks:
+# publish verification builds the library alone, not examples or tests, so the
+# pin was never exercised at the one moment it was supposed to matter.
+#
+# What it *did* do was break the workspace. Cargo enforces `path` + `version`
+# agreement at every build regardless of dependency kind, so this pin reading
+# "0.1.0" against a `windows-topology-sys` bumped to 0.2.0 failed `cargo
+# metadata` for every crate here -- turning a release of an unrelated crate into
+# a red `main`. Deleting it removes the last of those; see SH-2.5 in
+# CHECKLIST-ship-topology-and-queues.md.
+#
+# The examples still build from a checkout, which is where anyone reads them.
+# They are not buildable from the packaged tarball, which they were only ever
+# incidentally.
+windows-topology-sys = { path = "../windows-topology-sys", features = [
 	"serde",
 ] }
 # M7's ring-copy sample deserializes a fed-in topology description (--topology).

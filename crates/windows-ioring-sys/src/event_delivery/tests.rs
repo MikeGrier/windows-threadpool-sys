@@ -60,6 +60,25 @@ fn a_scope_reports_the_rings_static_properties() {
 }
 
 #[test]
+fn a_scope_reflects_a_ring_that_genuinely_lacks_support() {
+    // `RingScope::supports -> true` survived: the test above only ever asks
+    // about an op the host genuinely supports, so the honest forwarder and
+    // the constant agree everywhere a real host could answer. Restricting the
+    // ring's capability set before wrapping it constructs the disagreement --
+    // the same seam `Batch::require`'s own gap needed.
+    let mut ring = IoRing::new(8, 8).expect("create ring");
+    ring.set_supported_ops_for_test(&[Op::Nop]);
+    let delivery = EventDelivery::new(ring, |_completion| {}, None).expect("wire event delivery");
+
+    let scope = delivery.scope();
+    assert!(scope.supports(Op::Nop));
+    assert!(
+        !scope.supports(Op::Read),
+        "Read was left out of the constructed capability set"
+    );
+}
+
+#[test]
 fn a_scope_reports_registration_counts_that_change_with_registrations() {
     let ring = IoRing::new(8, 8).expect("create ring");
     let delivery = EventDelivery::new(ring, |_completion| {}, None).expect("wire event delivery");

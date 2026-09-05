@@ -5,9 +5,10 @@
 use std::fs::File;
 use std::os::windows::io::{AsHandle, AsRawHandle};
 
-use super::QueryVolumeInformation;
+use super::{QueryVolumeInformation, VolumeInformation};
 use crate::CapturedHandle;
 use crate::handle::tests::{Fixture, handle_allocation};
+use wtf_string::Wtf16String;
 
 fn request_for(file: &File) -> QueryVolumeInformation {
     QueryVolumeInformation::new(
@@ -188,4 +189,51 @@ fn a_query_performs_the_same_way_on_another_thread() {
     .expect("the worker did not panic");
 
     assert_eq!(observed, expected);
+}
+
+#[test]
+fn each_accessor_reports_its_own_field() {
+    // Four accessors -- `label`, `serial_number`, `maximum_component_length`,
+    // and `flags` -- all survived replacement by constants in a mutation run.
+    // The tests above query a *real* volume, so they cannot assert exact
+    // values: whatever this machine reports is what they get, and a constant is
+    // as plausible as the truth.
+    //
+    // Built directly rather than queried, because what is under test is the
+    // wiring between four same-typed fields and their accessors, not the query.
+    // Three of them are `u32` and nothing but distinct values can tell a
+    // transposition apart -- the failure this catches is an accessor returning
+    // its neighbour, which every real query would hide behind plausible numbers.
+    let information = VolumeInformation {
+        label: Wtf16String::from("LABEL"),
+        serial_number: 0x1111_1111,
+        maximum_component_length: 0x2222_2222,
+        flags: 0x3333_3333,
+        filesystem_name: Wtf16String::from("NTFS"),
+    };
+
+    assert_eq!(information.label().to_string_lossy(), "LABEL");
+    assert_eq!(information.serial_number(), 0x1111_1111);
+    assert_eq!(information.maximum_component_length(), 0x2222_2222);
+    assert_eq!(information.flags(), 0x3333_3333);
+    assert_eq!(information.filesystem_name().to_string_lossy(), "NTFS");
+
+    // The property the three numeric assertions rest on. Stated rather than
+    // eyeballed, so a later edit that reused a value would fail here instead of
+    // silently weakening the test into one that cannot detect a transposition.
+    let numeric = [
+        information.serial_number(),
+        information.maximum_component_length(),
+        information.flags(),
+    ];
+    for (index, value) in numeric.iter().enumerate() {
+        for other in &numeric[index + 1..] {
+            assert_ne!(value, other, "two numeric fields share a value");
+        }
+    }
+    assert_ne!(
+        information.label(),
+        information.filesystem_name(),
+        "the two string fields must differ, or one accessor could serve both"
+    );
 }

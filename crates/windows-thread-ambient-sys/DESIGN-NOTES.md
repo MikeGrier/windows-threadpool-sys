@@ -132,10 +132,12 @@ any blocking call can raise a hard error.
 <a id="d-restore-policy"></a>
 
 Failing to restore impersonation is fail-fast, because returning a shared worker
-to a pool under an unknown identity is a process-wide security failure. That
-semantics is **inherited unchanged** from
-[windows-impersonation-token-sys](../windows-impersonation-token-sys/DESIGN-NOTES.md);
-this crate does not restate or reimplement it.
+to a pool under an unknown identity is a process-wide security failure. **That is
+this crate's decision.**
+[windows-impersonation-token-sys](../windows-impersonation-token-sys/DESIGN-NOTES.md)
+is used because its behaviour already satisfies it, and this crate does not
+reimplement it -- but the guarantee is owned here, so a change in that dependency
+would make the dependency wrong rather than change this contract.
 
 The other aspects do not warrant that severity, and imposing it on them would be
 the single-strictest-semantics failure the composite exists to avoid. Their

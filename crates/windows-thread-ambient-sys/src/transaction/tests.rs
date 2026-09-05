@@ -17,7 +17,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 
 use super::{
     Captured, TransactionContext, TransactionError, TransactionFailure, TransactionGuard, capture,
-    is_supported, system_proc, with_applied,
+    install, is_supported, system_proc, with_applied,
 };
 use crate::test_injection::{self, FaultPoint};
 
@@ -357,4 +357,137 @@ fn a_context_is_send_so_it_can_reach_a_worker() {
     fn assert_send<T: Send>() {}
     assert_send::<TransactionContext>();
     assert_send::<Captured<TransactionContext>>();
+}
+
+// --- TransactionError's own error-trait surface --------------------------
+//
+// Nothing exercised `raw_os_error`, `Display`, or `Error::source` at all.
+// `TransactionError::synthetic` builds one directly, matching this module's
+// own private `error` helper's shape.
+
+#[test]
+fn raw_os_error_reports_the_wrapped_code_or_none() {
+    let with_code = TransactionError::synthetic(TransactionFailure::Install, Some(5));
+    assert_eq!(with_code.raw_os_error(), Some(5));
+
+    let without_code = TransactionError::synthetic(TransactionFailure::Unsupported, None);
+    assert_eq!(without_code.raw_os_error(), None);
+}
+
+#[test]
+fn display_names_the_failing_stage_and_the_source_when_there_is_one() {
+    let with_code = TransactionError::synthetic(TransactionFailure::Duplicate, Some(5));
+    let rendered = with_code.to_string();
+    assert!(rendered.contains("duplicated"), "got {rendered}");
+
+    let without_code = TransactionError::synthetic(TransactionFailure::Unsupported, None);
+    let rendered = without_code.to_string();
+    assert!(rendered.contains("ktmw32.dll"), "got {rendered}");
+}
+
+#[test]
+fn source_is_present_only_when_an_os_error_was_wrapped() {
+    let with_code = TransactionError::synthetic(TransactionFailure::Install, Some(5));
+    assert!(std::error::Error::source(&with_code).is_some());
+
+    let without_code = TransactionError::synthetic(TransactionFailure::Unsupported, None);
+    assert!(std::error::Error::source(&without_code).is_none());
+}
+
+// --- is_supported ---------------------------------------------------------
+//
+// `is_supported -> true` survived, and no test in this file forces it. That
+// is not an oversight: `ntdll.dll`'s `RtlGetCurrentTransaction` and
+// `RtlSetCurrentTransaction` are undocumented but long-stable exports present
+// on every Windows version this crate has ever been tested against, so the
+// honest answer and the constant agree on every reachable host. `KTM`'s cache
+// is a process-global `OnceLock` with no injectable seam, and the one test
+// that reads it (`the_entry_points_resolve_on_this_system`, above) already
+// asserts the true case explicitly -- proving the constant right rather than
+// wrong is the most this environment can show. Recorded so a later run does
+// not re-investigate it as a gap.
+
+#[test]
+fn release_and_drop_each_restore_a_real_entry_transaction() {
+    // **Named for what it checks.** Its siblings in `declared` and `error_mode`
+    // carry `release_reports_a_genuine_restore_failure_...` because those
+    // aspects have a naturally-rejecting value to restore -- a null WOW64
+    // redirection cookie, and `SEM_NOALIGNMENTFAULTEXCEPT`. A transaction has
+    // no equivalent: `restore` either sets a real handle or clears to "none",
+    // and both succeed, so there is no genuine failure to provoke here and this
+    // test never had that half. It carried the name anyway, which made
+    // `release`'s error path read as covered by *this* test.
+    //
+    // That path **is** covered, by `explicit_release_reports_an_injected_restore_failure`
+    // above, through the `FaultPoint::TransactionSet` injection built for
+    // exactly this -- so the gap was in the name, not in the suite. Do not go
+    // looking for a non-injected transaction restore failure to add here; there
+    // isn't one.
+    //
+    // `TransactionGuard::release -> Ok(())`, `<impl Drop for
+    // TransactionGuard>::drop -> ()`, and the `!` deleted from that same
+    // `drop` all survived: an ordinary test thread starts with no transaction,
+    // and `Captured::Absent` installs "no transaction" too, so the entry state
+    // and the installed state render identically through `live()` -- a guard
+    // that restores nothing is indistinguishable from one that does. A real
+    // transaction as the entry state is what makes "restored" and "still
+    // cleared" two different, checkable things.
+    //
+    // Run on a dedicated thread rather than the calling one. Measured: with
+    // the mutation genuinely applied, leaving this thread's transaction
+    // unrestored does not stay confined to this thread or even to this test --
+    // running the whole crate's `cargo test` reliably fails three *other*,
+    // unrelated transaction tests alongside this one every time (confirmed
+    // clean 25/25 without the mutation, failing 10/10 with it, both via a
+    // direct `cargo test` invocation, which is what this workspace's CI runs).
+    // TxF's current-transaction state is process-visible in a way this
+    // crate's own aspects are not, so an unreleased guard is a sharper
+    // contamination than the same mistake on error mode or memory priority
+    // would be. A dedicated thread does not prevent that spread -- nothing
+    // this test does can -- but it does mean the *test's own* pass/fail
+    // reflects its own assertion rather than another test's unrelated state.
+    let observed = std::thread::spawn(|| {
+        let transaction = Transaction::new()?;
+        Some(while_transacted(&transaction, || {
+            let before = live();
+            assert!(!super::is_none_sentinel(before), "precondition: transacted");
+
+            // `release`'s own restore, checked by state rather than by return
+            // value.
+            let guard = install(&Captured::Absent).expect("install");
+            assert!(
+                super::is_none_sentinel(live()),
+                "Absent did not clear the thread's transaction"
+            );
+            guard
+                .release()
+                .expect("releasing an installed Absent must succeed");
+            let released_cleanly = live() == before;
+
+            // `Drop`'s restore, on a guard that is never released explicitly.
+            let dropped_cleanly = {
+                let _guard = install(&Captured::Absent).expect("install");
+                assert!(super::is_none_sentinel(live()));
+                drop(_guard);
+                live() == before
+            };
+
+            (released_cleanly, dropped_cleanly)
+        }))
+    })
+    .join()
+    .expect("the worker did not panic");
+
+    let Some((released_cleanly, dropped_cleanly)) = observed else {
+        eprintln!("skipped: this system cannot create a transaction");
+        return;
+    };
+    assert!(
+        released_cleanly,
+        "release did not restore the entry transaction"
+    );
+    assert!(
+        dropped_cleanly,
+        "dropping the guard without releasing did not restore the entry transaction"
+    );
 }

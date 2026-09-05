@@ -53,6 +53,8 @@ fn from_and_into_conversions_round_trip() {
     // reverse below.
     let from_owned_os: Wtf16String = os.clone().into();
     assert_eq!(from_owned_os.as_units(), wtf.as_units());
+    let from_os_string_ref: Wtf16String = (&os).into();
+    assert_eq!(from_os_string_ref.as_units(), wtf.as_units());
     let from_ref: OsString = (&wtf).into();
     assert_eq!(from_ref, os);
     let borrowed: &Wtf16Str = &wtf;

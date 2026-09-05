@@ -236,3 +236,137 @@ fn an_error_without_an_os_code_renders_only_its_description() {
     assert_eq!(error.to_string(), PathFailure::EmptyPath.description());
     assert!(std::error::Error::source(&error).is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Boundaries.
+//
+// A mutation sweep moved the ordinary path limit by one in both directions and
+// changed `>` to `>=` and `==`, and every one of those survived: the tests
+// above use comfortably-wrong lengths, which prove a check exists but not that
+// it sits at the right unit.
+//
+// This is the same block, and for the same reason, as the one in
+// `windows-file-enumeration-sys`'s path module -- the two crates carry
+// near-identical path contracts, and the sweep found the same gap in both.
+// ---------------------------------------------------------------------------
+
+/// An absolute path of exactly `units` UTF-16 units, already in normal form so
+/// `GetFullPathNameW` returns it unchanged and the resolved length equals the
+/// input length.
+fn absolute_path_of_length(units: usize) -> String {
+    let prefix = r"C:\";
+    format!("{prefix}{}", "a".repeat(units - prefix.len()))
+}
+
+#[test]
+fn an_ordinary_path_of_exactly_max_path_content_is_accepted() {
+    // 259 = MAX_PATH - 1, the longest path that leaves room for the terminator.
+    // Rejecting it is the off-by-one a "much too long" test cannot see, and it
+    // is the expensive direction: it refuses a path Windows would have opened.
+    let path = absolute_path_of_length(259);
+    assert_eq!(path.chars().count(), 259);
+
+    let prepared = prepare_str(&path).expect("259 units is within the ordinary limit");
+    assert_eq!(text(&prepared), path);
+}
+
+#[test]
+fn an_ordinary_path_one_unit_past_max_path_content_is_rejected() {
+    let path = absolute_path_of_length(260);
+    assert_eq!(path.chars().count(), 260);
+
+    let error = prepare_str(&path).expect_err("260 units leaves no room for the terminator");
+    assert_eq!(error.failure(), PathFailure::PathTooLong);
+}
+
+#[test]
+fn the_ordinary_limit_is_one_less_than_max_path() {
+    // The relationship the two tests above rest on, stated directly so a change
+    // to the constant fails here with its reason rather than only as a puzzling
+    // length assertion elsewhere.
+    assert_eq!(MAX_PATH_CONTENT, MAX_PATH - 1);
+    assert_eq!(MAX_PATH_CONTENT, 259);
+}
+
+#[test]
+fn a_verbatim_drive_relative_path_with_a_separator_is_rejected() {
+    // `\\?\C:foo` has no separator at all, so it is refused before the root is
+    // ever inspected and never reaches the drive-designator check. This form
+    // does reach it: the root is `C:foo`, which contains a colon but is not a
+    // drive. Without it, the check could report every root as a drive and
+    // nothing would notice.
+    let error = prepare_str(r"\\?\C:foo\bar").expect_err("drive-relative, not fully qualified");
+    assert_eq!(error.failure(), PathFailure::NotFullyQualified);
+}
+
+#[test]
+fn a_verbatim_root_needs_a_letter_before_its_colon_not_merely_a_colon() {
+    // Both halves of the drive-designator rule are load-bearing, and only a
+    // root that satisfies one but not the other separates them. `1:` has the
+    // colon in the right place and is still not a drive, so a check accepting
+    // *either* condition would wave it through.
+    for path in [r"\\?\1:\", r"\\?\1:\dir"] {
+        let error = prepare_str(path).expect_err("a digit is not a drive letter");
+        assert_eq!(
+            error.failure(),
+            PathFailure::NotFullyQualified,
+            "for {path}"
+        );
+    }
+
+    // Deliberately no companion case for "second unit is not a colon": the
+    // check is guarded by `root.contains(&COLON)`, so a colonless root -- a
+    // volume GUID, say -- never reaches it and is accepted on its own terms.
+    let prepared = prepare_str(r"\\?\Ca\dir").expect("a colonless root is not a drive at all");
+    assert_eq!(text(&prepared), r"\\?\Ca\dir");
+}
+
+#[test]
+fn every_path_failure_describes_itself_distinctly() {
+    // `PathFailure::description -> "xyzzy"` survived: the tests above assert
+    // which *failure* was reported, never what it says, so a description that
+    // collapsed every variant onto one string would go unnoticed.
+    //
+    // Distinctness is the assertion that matters. A description exists to tell
+    // one failure from another, so it catches every constant substitution at
+    // once rather than one string at a time -- and non-emptiness alone would
+    // not, because a constant is non-empty too.
+    let cases = [
+        ("EmptyPath", PathFailure::EmptyPath),
+        ("InteriorNul", PathFailure::InteriorNul),
+        ("PathTooLong", PathFailure::PathTooLong),
+        ("NotFullyQualified", PathFailure::NotFullyQualified),
+        ("PathResolution", PathFailure::PathResolution),
+    ];
+
+    for (name, failure) in cases {
+        assert!(
+            !failure.description().is_empty(),
+            "{name} has no description, so a reader learns nothing from it"
+        );
+    }
+    for (index, (name, failure)) in cases.iter().enumerate() {
+        for (other_name, other) in &cases[index + 1..] {
+            assert_ne!(
+                failure.description(),
+                other.description(),
+                "{name} and {other_name} describe themselves identically, so the \
+                 description cannot tell them apart"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_failure_decided_here_carries_no_os_error_and_renders_as_its_description() {
+    // The half of `PathError` that has no Win32 call behind it. Asserting the
+    // exact rendering -- rather than merely that it is non-empty -- is what
+    // binds `Display` to `description`: without it the formatter could drop the
+    // description entirely and nothing would fail.
+    let error = prepare_str("").expect_err("an empty path names nothing");
+
+    assert_eq!(error.failure(), PathFailure::EmptyPath);
+    assert_eq!(error.raw_os_error(), None);
+    assert!(std::error::Error::source(&error).is_none());
+    assert_eq!(error.to_string(), PathFailure::EmptyPath.description());
+}

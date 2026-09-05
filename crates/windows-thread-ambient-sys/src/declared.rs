@@ -280,6 +280,19 @@ impl DeclaredError {
         }
     }
 
+    /// Builds a `DeclaredError` reporting a specific outcome, for tests
+    /// elsewhere in the crate that need one without provoking a real Win32
+    /// failure -- redirection's is only reachable in a 32-bit process, and
+    /// memory priority and background mode have no known failure mode at all
+    /// on a real thread.
+    #[cfg(test)]
+    pub(crate) fn synthetic(aspect: DeclaredAspect, os_error: Option<i32>) -> Self {
+        Self {
+            aspect,
+            source: os_error.map(io::Error::from_raw_os_error),
+        }
+    }
+
     /// Which aspect failed.
     #[must_use]
     pub const fn aspect(&self) -> DeclaredAspect {

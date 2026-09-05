@@ -11,22 +11,42 @@
 //! observations themselves -- the actual file names each handle returned --
 //! which is what makes a surprising result diagnosable rather than merely red.
 
+use std::fmt::Write as _;
 use windows_platform_probes::handle_state::{
     Fixture, SingleShot, closing_duplicate_preserves_source, duplicate_shares_cursor, ground_truth,
     query_disturbs_cursor, separate_opens_are_independent,
 };
+use windows_platform_probes::report::{Stdout, emit};
 
 fn main() {
+    // The only place that names the real stream. Everything below composes
+    // text; nothing below knows where it goes.
+    emit(&mut Stdout, &render());
+}
+
+/// The probe's whole report, as text.
+fn render() -> String {
+    let mut out = String::new();
+    // First line of the report, and part of the returned text rather than
+    // written out here: a captured report must carry the line naming the
+    // machine that produced it, and the taint marker with it. Without it a
+    // finding can be pasted anywhere and compared against anything.
+    let _ = writeln!(
+        out,
+        "{}",
+        windows_placement_probe::fingerprint::banner_line()
+    );
     let fixture = Fixture::new("bin");
     let truth = ground_truth(&fixture);
-    println!("--- ground truth (one handle, start to finish) ---");
-    println!("{} entries: {truth:?}\n", truth.len());
+    let _ = writeln!(out, "--- ground truth (one handle, start to finish) ---");
+    let _ = writeln!(out, "{} entries: {truth:?}\n", truth.len());
 
     let observation = duplicate_shares_cursor(&fixture);
-    println!("--- does a duplicate share the cursor? ---");
-    println!("source (restart)   -> {:?}", observation.source_first);
-    println!("duplicate (continue) -> {:?}", observation.other_next);
-    println!(
+    let _ = writeln!(out, "--- does a duplicate share the cursor? ---");
+    let _ = writeln!(out, "source (restart)   -> {:?}", observation.source_first);
+    let _ = writeln!(out, "duplicate (continue) -> {:?}", observation.other_next);
+    let _ = writeln!(
+        out,
         "  -> {}\n",
         if observation.continued(&truth) {
             "SHARED: the duplicate continued where the source stopped"
@@ -38,10 +58,11 @@ fn main() {
     );
 
     let control = separate_opens_are_independent(&fixture);
-    println!("--- control: two separate opens ---");
-    println!("open #1 (restart)  -> {:?}", control.source_first);
-    println!("open #2 (continue) -> {:?}", control.other_next);
-    println!(
+    let _ = writeln!(out, "--- control: two separate opens ---");
+    let _ = writeln!(out, "open #1 (restart)  -> {:?}", control.source_first);
+    let _ = writeln!(out, "open #2 (continue) -> {:?}", control.other_next);
+    let _ = writeln!(
+        out,
         "  -> {}\n",
         if control.restarted() {
             "INDEPENDENT, as expected -- so the result above is attributable to duplication"
@@ -50,8 +71,9 @@ fn main() {
         }
     );
 
-    println!("--- does closing the duplicate break the source? ---");
-    println!(
+    let _ = writeln!(out, "--- does closing the duplicate break the source? ---");
+    let _ = writeln!(
+        out,
         "  -> {}\n",
         if closing_duplicate_preserves_source(&fixture) {
             "no: the source kept enumerating"
@@ -60,7 +82,10 @@ fn main() {
         }
     );
 
-    println!("--- does an interleaved single-shot query move the cursor? ---");
+    let _ = writeln!(
+        out,
+        "--- does an interleaved single-shot query move the cursor? ---"
+    );
     for (query, on_duplicate) in [
         (SingleShot::BasicInfo, false),
         (SingleShot::IdInfo, false),
@@ -68,7 +93,8 @@ fn main() {
         (SingleShot::BasicInfo, true),
     ] {
         let (succeeded, disturbed) = query_disturbs_cursor(&fixture, query, on_duplicate, &truth);
-        println!(
+        let _ = writeln!(
+            out,
             "{query:?}{}  succeeded={succeeded}  -> {}",
             if on_duplicate {
                 " (on the duplicate)"
@@ -82,4 +108,5 @@ fn main() {
             }
         );
     }
+    out
 }

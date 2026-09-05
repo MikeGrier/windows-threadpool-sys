@@ -105,3 +105,18 @@ pub use socket::{AssociatedSocket, BlockingSocket, SocketIo};
 
 #[cfg(windows)]
 pub use started::Started;
+
+// The crate's markdown documentation is compiled as doctests, so an example that
+// a contract change invalidates breaks the build instead of quietly teaching the
+// old answer. `cfg(doctest)` means these items exist only while rustdoc collects
+// tests, so they cost an ordinary build nothing.
+// Gated on `fs` because the README's example uses the `fs` adapter's
+// `BlockingEndpoint::read`, which does not exist in the default feature set
+// (`default = []`). Without the gate the example fails to compile for a reason
+// the README already states -- so the gate matches the doctest to what the
+// prose says it needs, rather than weakening the example. docs.rs builds with
+// `all-features`, so the published documentation is the configuration that
+// checks it.
+#[cfg(all(doctest, windows, feature = "fs"))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

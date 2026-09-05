@@ -56,6 +56,21 @@ fn code_reports_the_raw_value() {
     assert_eq!(error.code(), IORING_E_SUBMISSION_QUEUE_FULL);
 }
 
+#[test]
+fn the_debug_rendering_names_the_type_and_the_code() {
+    // `<impl Debug for IoRingError>::fmt -> Ok(Default::default())` survived:
+    // that mutation writes nothing to the formatter, so `format!("{error:?}")`
+    // comes back empty. The real rendering names the type and prints the code
+    // in hex, neither of which an empty string can satisfy.
+    let error = IoRingError::new(IORING_E_SUBMISSION_QUEUE_FULL);
+    let rendering = format!("{error:?}");
+    assert!(rendering.contains("IoRingError"), "got {rendering}");
+    assert!(
+        rendering.contains(&format!("{:08X}", IORING_E_SUBMISSION_QUEUE_FULL as u32)),
+        "the code must appear in hex: {rendering}"
+    );
+}
+
 // --- named conditions and predicates (M10.5, D-30) ---
 
 #[test]

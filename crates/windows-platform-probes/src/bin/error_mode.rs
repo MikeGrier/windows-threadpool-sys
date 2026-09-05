@@ -13,10 +13,13 @@
 //! the one observation a test must not: the alignment bit's process-scope
 //! stickiness is irreversible, so it is demonstrated here and nowhere else.
 
+use std::fmt::Write as _;
+
 use windows_platform_probes::error_mode::{
     alignment_bit_is_sticky_at_process_scope, bits, combined_invalid_installs_nothing, probe_bit,
     settable_bits, thread_mode_independent_of_process,
 };
+use windows_platform_probes::report::{Stdout, emit};
 
 fn name(bit: u32) -> &'static str {
     match bit {
@@ -29,7 +32,31 @@ fn name(bit: u32) -> &'static str {
 }
 
 fn main() {
-    println!("--- each bit on its own, set then read back ---");
+    // The only place that names the real stream. Everything below composes
+    // text; nothing below knows where it goes.
+    emit(&mut Stdout, &render());
+}
+
+/// The probe's whole report, as text.
+///
+/// **This one measures as it renders**, unlike its siblings, and the coupling is
+/// real rather than laziness: the last observation permanently alters this
+/// process (see `alignment_bit_is_sticky_at_process_scope`), so the order in
+/// which the observations are taken is part of what is being reported. Splitting
+/// measurement from rendering would invite a later reordering that silently
+/// changes the result.
+fn render() -> String {
+    let mut out = String::new();
+    // First line of the report, and part of the returned text rather than
+    // written out here: a captured report must carry the line naming the
+    // machine that produced it, and the taint marker with it. Without it a
+    // finding can be pasted anywhere and compared against anything.
+    let _ = writeln!(
+        out,
+        "{}",
+        windows_placement_probe::fingerprint::banner_line()
+    );
+    let _ = writeln!(out, "--- each bit on its own, set then read back ---");
     for bit in [
         bits::FAIL_CRITICAL_ERRORS,
         bits::NO_GP_FAULT_ERROR_BOX,
@@ -44,7 +71,8 @@ fn main() {
         } else {
             "REJECTED"
         };
-        println!(
+        let _ = writeln!(
+            out,
             "{}  ok={} last_error={:<5} read_back=0x{:04X}  -> {verdict}",
             name(bit),
             outcome.set_ok,
@@ -53,11 +81,12 @@ fn main() {
         );
     }
 
-    println!("\nsettable mask: 0x{:04X}", settable_bits());
+    let _ = writeln!(out, "\nsettable mask: 0x{:04X}", settable_bits());
 
     let (installed_nothing, read_back) = combined_invalid_installs_nothing();
-    println!("\n--- one invalid bit alongside two valid ones ---");
-    println!(
+    let _ = writeln!(out, "\n--- one invalid bit alongside two valid ones ---");
+    let _ = writeln!(
+        out,
         "read back 0x{read_back:04X}  -> {}",
         if installed_nothing {
             "the WHOLE call failed; none of the valid bits was installed"
@@ -67,8 +96,9 @@ fn main() {
     );
 
     let observation = thread_mode_independent_of_process();
-    println!("\n--- process mode versus thread mode ---");
-    println!(
+    let _ = writeln!(out, "\n--- process mode versus thread mode ---");
+    let _ = writeln!(
+        out,
         "process=0x{:04X} thread=0x{:04X}  -> {}",
         observation.process_mode,
         observation.thread_mode,
@@ -79,10 +109,17 @@ fn main() {
         }
     );
 
-    println!("\n--- irreversible: the alignment bit at process scope ---");
-    println!("(this permanently alters this process, which is why no test does it)");
+    let _ = writeln!(
+        out,
+        "\n--- irreversible: the alignment bit at process scope ---"
+    );
+    let _ = writeln!(
+        out,
+        "(this permanently alters this process, which is why no test does it)"
+    );
     let (before, after) = alignment_bit_is_sticky_at_process_scope();
-    println!(
+    let _ = writeln!(
+        out,
         "before=0x{before:04X} after restore attempt=0x{after:04X}  -> {}",
         if after & bits::NO_ALIGNMENT_FAULT_EXCEPT != 0 {
             "STICKY: the restore was ignored"
@@ -90,4 +127,5 @@ fn main() {
             "clearable"
         }
     );
+    out
 }

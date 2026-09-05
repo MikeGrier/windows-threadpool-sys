@@ -33,6 +33,22 @@ jobs:
         shell: pwsh
         run: ./tools/check-encoding.ps1
 
+  # release-please decides which crates are versioned and tagged;
+  # publish-crate.yml decides which tags publish. Nothing connected the two, so
+  # a crate could be release-managed and unpublishable at once -- and the
+  # failure is silent in the worst way: the release PR merges, the tag is
+  # created, the workflow never runs, and the crate is released everywhere
+  # except crates.io. That happened to `windows-waitable-queues` and was caught
+  # by review rather than by anything here.
+  publishable:
+    name: every release-managed crate can publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check-publishable.ps1
+        shell: pwsh
+        run: ./tools/check-publishable.ps1
+
   # The edition, MSRV, and pinned channel are declared once in Cargo.toml and
   # rust-toolchain.toml, then restated a dozen times -- in this file's `msrv`
   # job below, in README/DEVELOPMENT prose, and in the instruction files a code
@@ -170,6 +186,75 @@ jobs:
         run: cargo run -p windows-platform-probes --bin probe-ioring --locked
       - name: probe magnitudes (completion port)
         run: cargo run -p windows-platform-probes --bin probe-completion-port --locked
+      # Printed on every build on purpose. Hosted runners are a heterogeneous
+      # fleet, so accumulating this across builds turns ordinary CI into a slow
+      # survey of what real machines look like -- and the negative result, that
+      # cloud runners are consistently single-node, is itself evidence for how
+      # the execution-domain design should size itself by default. The probe
+      # emits one `x-probe-topology` JSON line so the results can be mined out
+      # of logs mechanically rather than read by eye.
+      - name: probe magnitudes (topology)
+        run: cargo run -p windows-platform-probes --bin probe-topology --locked
+      # Decides how much machinery the two-layer ring's doorbell needs. Its
+      # park-and-wake handshake is bounded rather than INFINITE on purpose: the
+      # first version of it deadlocked, because an auto-reset event does not
+      # count signals and the waiter's count never caught up. A probe that can
+      # hang is a probe that can hang a build.
+      - name: probe magnitudes (doorbell cost)
+        run: cargo run -p windows-platform-probes --bin probe-doorbell-cost --locked
+      # Read with the doorbell probe above: together they say whether the
+      # queue's mechanics or the request's own cost deserves the attention.
+      - name: probe magnitudes (request cost)
+        run: cargo run -p windows-platform-probes --bin probe-request-cost --locked
+
+  # The NUMA questions the 2026-08-30 design session could not answer, run
+  # against whatever machine the runner fleet supplies.
+  #
+  # BOTH SPIKES ARE EXPECTED TO BE VACUOUS on a single-node runner, and they say
+  # so themselves rather than printing a confident zero. That is the point: the
+  # cost is a minute per build, and the payoff is that if a multi-node runner
+  # ever appears, the answer is already in that build's log. A design decision
+  # is currently resting on documentation because no such machine is available.
+  #
+  # A SPIKE'S RESULT MUST NOT BREAK THE BUILD, BUT A BROKEN SPIKE MUST.
+  # `run-numa-spikes.ps1` already draws that line and is the only place that
+  # does: it exits 0 for any *finding*, including the vacuous one expected here,
+  # and non-zero only when a spike fails to build or to run. So this job carries
+  # no `continue-on-error` -- adding one back would discard exactly the signal
+  # the script exits non-zero to raise, and the two statements below would stop
+  # being true.
+  #
+  # It had one until 2026-09-04, and that is what the PR #56 review caught: the
+  # job-level flag converted the script's deliberate exit 1 into a green check,
+  # so a spike that no longer compiled would have gone unnoticed indefinitely.
+  #
+  # They are compiled through the scratch-crate procedure their own README
+  # documents, rather than being made workspace members, because each is
+  # deliberately written against `windows-sys` alone so that what it measures is
+  # the operating system and not us. A useful side effect: this job is the
+  # executable form of that README instruction, so the instruction cannot rot
+  # without turning this step red -- which is only true while the step is
+  # allowed to turn red.
+  numa-spikes:
+    name: NUMA spikes (results observational, instrument failures block)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the spikes
+        shell: pwsh
+        run: ./tools/run-numa-spikes.ps1 -Summary $env:GITHUB_STEP_SUMMARY
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: numa-spikes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .scratch/numa-spikes/*.txt
+          if-no-files-found: warn
 
   feature-matrix:
     name: windows-overlapped-io-sys (${{ matrix.feature }} only)

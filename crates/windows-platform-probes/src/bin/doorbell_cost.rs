@@ -1,0 +1,193 @@
+// Copyright (c) Mike Grier.
+
+//! Prints how expensive a doorbell is relative to the syscall it would guard.
+//!
+//! **An experiment, not a component.** These probes measure platform behaviour
+//! and are not for production use. Do not call them from production code, and
+//! do not lift a technique out of here. See this crate's DESIGN-NOTES.md.
+//!
+//! This decides whether the two-layer ring design needs an eventcount at all.
+//! If a doorbell is a meaningful fraction of `SubmitIoRing`, the skip-when-busy
+//! rules are load-bearing. If it is noise, a simple always-signal queue is
+//! adequate and the more delicate protocol -- publish intent, re-check, park --
+//! can wait for evidence that it is worth its lost-wakeup risk.
+
+use std::fmt::Write as _;
+use windows_platform_probes::doorbell_cost::{Observation, measure, measure_park_and_wake};
+
+use windows_platform_probes::report::{Stdout, emit};
+
+fn main() {
+    // The only place that names the real stream. Everything above composes
+    // text; nothing above knows where it goes.
+    emit(
+        &mut Stdout,
+        &render(&measure(), measure_park_and_wake(20_000)),
+    );
+}
+
+/// The probe's whole report, as text.
+fn render(observation: &Observation, park: Option<f64>) -> String {
+    let mut out = String::new();
+    // First line of the report, and part of the returned text rather than
+    // written out here: a captured report must carry the line naming the
+    // machine that produced it, and the taint marker with it. Without it a
+    // timing number can be pasted anywhere and compared against anything.
+    let _ = writeln!(
+        out,
+        "{}",
+        windows_placement_probe::fingerprint::banner_line()
+    );
+    let _ = writeln!(
+        out,
+        "== what does a doorbell cost, against the syscall it guards? ==\n"
+    );
+
+    let _ = writeln!(out, "{:<30} {:>12}", "operation", "ns/op");
+    for timing in &observation.timings {
+        let _ = writeln!(out, "{:<30} {:>12.1}", timing.label, timing.nanos_per_op);
+    }
+
+    match park {
+        Some(ns) => {
+            let _ = writeln!(out, "{:<30} {:>12.1}", "park_and_wake round trip", ns);
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "{:<30} {:>12}",
+                "park_and_wake round trip", "TIMED OUT"
+            );
+        }
+    }
+
+    let _ = writeln!(out, "\ninterpretation:");
+
+    if let Some(atomic) = observation.get("atomic_fetch_add")
+        && let Some(doorbell) = observation.get("set_reset_event")
+        && atomic > 0.0
+    {
+        let _ = writeln!(
+            out,
+            "  a doorbell cycle costs {:.0}x an uncontended atomic ({:.0} ns vs {:.1} ns).",
+            doorbell / atomic,
+            doorbell,
+            atomic
+        );
+        if let Some(park) = park {
+            let _ = writeln!(
+                out,
+                "  an actual park-and-wake round trip costs {:.0}x that again ({:.0} ns),",
+                park / doorbell,
+                park
+            );
+            let _ = writeln!(
+                out,
+                "  which is what is paid when the consumer genuinely sleeps."
+            );
+        }
+    }
+
+    // Deliberately NOT expressed as a share of the empty submit. See below.
+    if let Some(submit) = observation.submit_nanos {
+        let _ = writeln!(
+            out,
+            "\n  CAUTION: an empty SubmitIoRing measured {submit:.0} ns, which is far too"
+        );
+        let _ = writeln!(
+            out,
+            "  cheap for a kernel transition -- it is almost certainly short-"
+        );
+        let _ = writeln!(
+            out,
+            "  circuiting in user mode when there is nothing queued. It is"
+        );
+        let _ = writeln!(
+            out,
+            "  therefore NOT a fair denominator, and any 'doorbell is N% of a"
+        );
+        let _ = writeln!(
+            out,
+            "  syscall' figure derived from it would be a confident wrong answer."
+        );
+        let _ = writeln!(
+            out,
+            "  The honest denominator is the cost of the real work a submission"
+        );
+        let _ = writeln!(out, "  carries, which this probe does not measure.");
+    }
+
+    // What can be said without a denominator: how much batching it takes for
+    // the doorbell to disappear, which is the lever the design actually has.
+    if let Some(doorbell) = observation.get("set_reset_event")
+        && let Some(atomic) = observation.get("atomic_fetch_add")
+        && atomic > 0.0
+    {
+        let _ = writeln!(
+            out,
+            "\n  batching is the lever, and it is a strong one. One doorbell per"
+        );
+        let _ = writeln!(out, "  drained batch costs, per operation:");
+        for batch in [1_u32, 8, 32, 128] {
+            let _ = writeln!(
+                out,
+                "    batch of {batch:>4}: {:>7.1} ns/op ({:.1}x an atomic)",
+                doorbell / f64::from(batch),
+                doorbell / f64::from(batch) / atomic
+            );
+        }
+        let break_even = (doorbell / atomic).ceil() as u32;
+        let _ = writeln!(
+            out,
+            "  so at a batch of about {break_even}, the doorbell costs less per"
+        );
+        let _ = writeln!(out, "  operation than the atomic push it accompanies.");
+    }
+
+    let _ = writeln!(
+        out,
+        "\n  => The skip-when-busy rule is a refinement, not a prerequisite."
+    );
+    let _ = writeln!(
+        out,
+        "     Batching alone drives the doorbell below the cost of the push,"
+    );
+    let _ = writeln!(
+        out,
+        "     so a first implementation can always-signal and stay honest."
+    );
+    let _ = writeln!(
+        out,
+        "     Adopt the eventcount when a measurement against real work"
+    );
+    let _ = writeln!(out, "     justifies its lost-wakeup risk -- not before.");
+
+    let atomic = observation.get("atomic_fetch_add").unwrap_or(f64::NAN);
+    let already = observation
+        .get("set_event_already_signalled")
+        .unwrap_or(f64::NAN);
+    let cycle = observation.get("set_reset_event").unwrap_or(f64::NAN);
+    let wait0 = observation.get("wait_zero_signalled").unwrap_or(f64::NAN);
+    let _ = writeln!(
+        out,
+        concat!(
+            r#"{{"reason":"x-probe-doorbell-cost","arch":"{}","atomic_ns":{:.1},"#,
+            r#""set_event_already_signalled_ns":{:.1},"set_reset_event_ns":{:.1},"#,
+            r#""wait_zero_signalled_ns":{:.1},"park_and_wake_round_trip_ns":{},"#,
+            r#""submit_io_ring_empty_ns":{},"doorbell_share_of_submit":{}}}"#
+        ),
+        std::env::consts::ARCH,
+        atomic,
+        already,
+        cycle,
+        wait0,
+        park.map_or("null".to_string(), |n| format!("{n:.1}")),
+        observation
+            .submit_nanos
+            .map_or("null".to_string(), |n| format!("{n:.1}")),
+        observation
+            .doorbell_share_of_submit()
+            .map_or("null".to_string(), |s| format!("{s:.4}")),
+    );
+    out
+}

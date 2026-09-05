@@ -125,11 +125,39 @@ fn seed_from_environment() -> Option<u64> {
         return None;
     }
 
+    parse_seed(&value[..written as usize])
+}
+
+/// Parse a seed from the environment variable's text.
+///
+/// # Why this is separate from reading the variable
+///
+/// Everything interesting about a seed is here -- the `0x` prefix, the radix
+/// that follows from it, and the overflow that must refuse rather than wrap --
+/// and none of it can be exercised through [`seed_from_environment`], which
+/// reads a *process-global* variable. Setting one from a test would be visible
+/// to every other test in the process, because this workspace runs tests as
+/// threads rather than processes, so such a test could not be written safely
+/// even once.
+///
+/// A mutation run made that concrete: the prefix arm, the truncation check, and
+/// both comparisons in the guard above all survived, and not one of them could
+/// have been reached from a test.
+///
+/// **The split closes some of that and not all of it, and an earlier version of
+/// this note claimed otherwise.** What became reachable is what moved: the
+/// prefix arm, the radix that follows it, the empty-digits case and the overflow
+/// checks, all of which tests now drive directly. The truncation check and the
+/// two comparisons in [`seed_from_environment`] did **not** move -- they run
+/// before this function is called, so a test that calls `parse_seed` cannot
+/// reach them, and they remain unexercised. Closing those needs the
+/// `GetEnvironmentVariableW` call to be injectable, which is a larger change
+/// than this split and is not pretended to be done. Raised in the PR #56 review.
+fn parse_seed(digits: &[u16]) -> Option<u64> {
     const ZERO: u16 = b'0' as u16;
     const LOWER_X: u16 = b'x' as u16;
     const UPPER_X: u16 = b'X' as u16;
 
-    let digits = &value[..written as usize];
     let (digits, radix) = match digits {
         [ZERO, LOWER_X | UPPER_X, rest @ ..] => (rest, 16),
         _ => (digits, 10),

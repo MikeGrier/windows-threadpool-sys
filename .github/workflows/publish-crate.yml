@@ -126,7 +126,35 @@ jobs:
               *" $dep_name "*) ;;
               *) continue ;;
             esac
+            # `*` is what cargo reports for a `path` dependency carrying no
+            # `version` field. Cargo strips such a dependency from the published
+            # manifest entirely, so there is nothing on crates.io to wait for.
+            # Waiting anyway is worse than useless: the literal `*` can never
+            # equal a `.vers`, so the loop below burns all 60 attempts -- twenty
+            # minutes -- and then fails telling the operator to re-run once the
+            # dependency is available, which will never help.
+            #
+            # `windows-ioring-sys` reached exactly this state when its
+            # `windows-topology-sys` dev-dependency became path-only: the
+            # sibling is in `workspace_crates`, so it is not skipped by the
+            # `case` above, and this step converted a working publish path into
+            # one that always failed, in the most misleading way available.
+            if [ "$dep_req" = "*" ]; then
+              echo "skipping ${dep_name}: no version requirement, so it is absent from the published manifest"
+              continue
+            fi
             dep_version="$(printf '%s' "$dep_req" | sed -E 's/^\^//')"
+            # Only a caret or bare requirement reduces to something comparable
+            # against the index's `.vers`. Anything else -- `~1.2`, `>=1, <2`,
+            # `=1.2.3` -- would compare unequal forever, which is the same
+            # twenty-minute failure with a different cause. Fail immediately and
+            # name the requirement instead.
+            case "$dep_version" in
+              ''|*[!0-9.]*)
+                echo "::error::cannot wait for ${dep_name}: version requirement '${dep_req}' is not a form this step can resolve against the index" >&2
+                exit 1
+                ;;
+            esac
             # Probe the *sparse index*, not the REST API: a version can appear in
             # api/v1 before the index has propagated, and `cargo publish --locked`
             # resolves dependencies through the index -- so an API-only check can

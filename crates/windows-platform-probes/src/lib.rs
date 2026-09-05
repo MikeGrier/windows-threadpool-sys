@@ -112,10 +112,17 @@
 pub mod cancel_io;
 pub mod completion_port;
 pub mod device_map;
+pub mod doorbell_cost;
 pub mod error_mode;
 pub mod handle_state;
 pub mod ioring;
+pub mod long_path;
+pub mod long_path_report;
 pub mod pool_growth;
+pub mod queue_contention;
+pub mod report;
+pub mod request_cost;
+pub mod topology;
 pub mod worker_context;
 
 #[cfg(test)]
