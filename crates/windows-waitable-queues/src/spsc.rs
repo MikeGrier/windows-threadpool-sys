@@ -35,12 +35,25 @@
 //! }
 //! ```
 //!
-//! **They have since shipped, and they kept those signatures.**
-//! [`slotwise_mpsc`](crate::slotwise_mpsc) was written against this sketch and matched it, which
-//! is the validation [D-3](../DESIGN-NOTES.md#d-3) demanded before any trait
-//! was allowed to exist. The sketch is left here because it is the artefact
-//! that made the check possible: what [`crate::traits`] says now is what this
-//! comment said before either type existed.
+//! **They have since shipped, and this is the sketch as written -- not as the
+//! traits ended up.** [`slotwise_mpsc`](crate::slotwise_mpsc) was written
+//! against it and matched it, which is the validation
+//! [D-3](../DESIGN-NOTES.md#d-3) demanded before any trait was allowed to
+//! exist. The sketch is left unamended because that is the whole of its value:
+//! updating it would turn a record of what was predicted into a copy of what
+//! was built, and the check it made possible could not be re-run.
+//!
+//! Two things have moved since, and [`crate::traits`] is authoritative for
+//! both:
+//!
+//! - **[`Consumer::pop`](crate::Consumer::pop) returns
+//!   `Result<Self::Item, TryRecvError>`**, not `Option`. An empty queue and a
+//!   finished one are different answers demanding opposite reactions, and the
+//!   sketch could not say so. [`Consumer`](crate::Consumer) also grew `drain`
+//!   and `try_iter`.
+//! - **[`Bounded`](crate::Bounded) also carries `remaining` and `is_full`.**
+//!
+//! [`Producer`](crate::Producer) is unchanged from the sketch.
 //!
 //! # Why the operations take `&self`
 //!
@@ -760,12 +773,14 @@ impl<T> Consumer<T> {
 
     /// Whether the producer has been dropped.
     ///
-    /// **Check this only after [`Self::pop`] has returned `None`.** A producer
-    /// may push and then drop, so a queue can be disconnected and still hold
-    /// items; testing this first would discard them. Draining to empty and
-    /// then finding the producer gone is the only order that cannot lose an
-    /// item, and the release store in the producer's `Drop` is what makes the
-    /// preceding pushes visible to a consumer that observes it.
+    /// **A queue can be disconnected and still hold items**, because a producer
+    /// may push and then drop -- so this alone does not mean the stream is
+    /// finished, and acting on it while items remain would discard them.
+    /// [`Self::pop`] answers the composite question in the only order that
+    /// cannot lose the tail, and is what a drain loop should use.
+    ///
+    /// The release store in the producer's `Drop` is what makes its preceding
+    /// pushes visible to a consumer that observes this.
     #[must_use]
     pub fn is_disconnected(&self) -> bool {
         !self.shared.producer_live.load(Ordering::Acquire)

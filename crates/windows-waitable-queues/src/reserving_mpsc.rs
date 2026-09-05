@@ -1704,9 +1704,11 @@ impl<T, L: ClaimLayout> Consumer<T, L> {
 
     /// Whether every producer and every outstanding reservation is gone.
     ///
-    /// **Check this only after [`Self::pop`] has returned `None`.** A producer
-    /// may push and then drop, so a queue can be disconnected and still hold
-    /// items; testing this first would discard them.
+    /// **A queue can be disconnected and still hold items**, because a producer
+    /// may push and then drop -- so this alone does not mean the stream is
+    /// finished, and acting on it while items remain would discard them.
+    /// [`Self::pop`] answers the composite question in the only order that
+    /// cannot lose the tail, and is what a drain loop should use.
     #[must_use]
     pub fn is_disconnected(&self) -> bool {
         self.shared.producers.load(Ordering::Acquire) == 0

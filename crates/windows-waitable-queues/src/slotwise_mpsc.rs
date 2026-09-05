@@ -838,12 +838,14 @@ impl<T> Consumer<T> {
 
     /// Whether every producer has been dropped.
     ///
-    /// **Check this only after [`Self::pop`] has returned `None`.** A producer
-    /// may push and then drop, so a queue can be disconnected and still hold
-    /// items; testing this first would discard them. Draining to empty and then
-    /// finding the producers gone is the only order that cannot lose an item,
-    /// and the release in the last producer's `Drop` is what makes every
-    /// producer's preceding pushes visible to a consumer that observes it.
+    /// **A queue can be disconnected and still hold items**, because a producer
+    /// may push and then drop -- so this alone does not mean the stream is
+    /// finished, and acting on it while items remain would discard them.
+    /// [`Self::pop`] answers the composite question in the only order that
+    /// cannot lose the tail, and is what a drain loop should use.
+    ///
+    /// The release in the last producer's `Drop` is what makes every producer's
+    /// preceding pushes visible to a consumer that observes this.
     #[must_use]
     pub fn is_disconnected(&self) -> bool {
         self.shared.producers.load(Ordering::Acquire) == 0

@@ -417,7 +417,7 @@ queue empty". They disagree over a slot a producer has claimed but not yet publi
 matters in both directions:
 
 - **`len` says non-empty**, because it counts the claim. Arming on that would refuse to bless the wait, and
-  the consumer would spin -- calling `pop`, getting `None`, re-arming, getting `false` -- until the
+  the consumer would spin -- calling `pop`, getting `Empty`, re-arming, getting `false` -- until the
   producer was rescheduled. Correct, and a burnt core.
 - **Readiness says nothing is takeable**, so the consumer parks. That is safe precisely because the
   producer's publishing release store is followed by a signal, so the wakeup is guaranteed to arrive.
