@@ -224,10 +224,10 @@ impl core::error::Error for CapacityError {}
 /// change**: every caller's exhaustive `match` would need the wildcard it does
 /// not have. Free before the first publish, and a major bump after it.
 ///
-/// The concrete reason to keep the room open is
-/// [M32.3](../../CHECKLIST-io-domains.md), the open decision on whether a
-/// producer can *wait* for capacity rather than only being refused it. If that
-/// lands, the send side may need to report something this enum cannot express
+/// The concrete reason to keep the room open is the expected future work on
+/// letting a producer *wait* for capacity rather than only being refused it --
+/// see the crate documentation. If that lands, the send side may need to
+/// report something this enum cannot express
 /// today. The crate's own precedent suggests a separate error type instead --
 /// [`RecvError`] and [`RecvTimeoutError`] are distinct rather than one extended
 /// enum -- so a new variant here may never be needed. Deciding that under time

@@ -19,7 +19,7 @@
 //! `reserving_mpsc` decides "there is room" by reading the consumer's `head`,
 //! and then compare-exchanges a claim word that does not contain `head`. The
 //! decision and the operation that acts on it are separate, which is
-//! [SH-14.1](../../../CHECKLIST-ship-topology-and-queues.md): a producer stalled
+//! the recurrence hazard described in the crate documentation: a producer stalled
 //! between them resumes after the position field has recurred, its exchange
 //! succeeds against a numerically equal but generations-later value, and it
 //! writes a slot whose freedom was decided long ago.

@@ -86,7 +86,6 @@ one that can be neither cloned nor shared is held by exactly one thread.
 | `slotwise_mpsc` | `Clone` | not `Clone` | **no** |
 | `reserving_mpsc` | `Clone` | not `Clone` | yes |
 | `permit_mpsc` | `Clone` | not `Clone` | yes |
-| MPMC | `Clone` | `Clone` | not yet built |
 
 The shapes also disagree about their smallest usable capacity, and the error
 says so rather than the documentation: `spsc` accepts one slot, while the MPSC
@@ -101,9 +100,12 @@ validated them, rather than being designed against one.
 about it: it packs its claim position beside a reservation count in a single
 word, and how those bits divide is the caller's to pick.
 
+The set is expected to grow. Shapes with many consumers, and shapes that signal
+when space becomes available so a producer can wait for room, are both under
+consideration for a future revision.
+
 The decisions all of this was built against are in
-[DESIGN-NOTES.md](DESIGN-NOTES.md), and the remaining work is tracked in
-[CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) at the workspace root.
+[DESIGN-NOTES.md](DESIGN-NOTES.md).
 
 ## How long `reserving_mpsc` runs before its claim position recurs
 
@@ -405,17 +407,10 @@ Two things that look like reasons to choose and are not:
   must decide what to do -- shed the item, retry on its own schedule, or grow a
   buffer of its own -- rather than being parked by the queue.
 
-  This is a deliberate absence rather than an oversight, and it is not
-  permanent: whether a producer can wait, and **what it would wait on**, is the
-  open question in [M32.3](../../CHECKLIST-io-domains.md). The constraint that
-  makes it non-trivial is the one this crate exists for -- a blocking send that
-  parks on something `WaitForMultipleObjects` cannot see would reintroduce
-  exactly the composition problem that ruled out the existing channel crates.
-  Two further wrinkles, recorded so the shape of the problem is visible: a
-  bounded queue can offer this and an unbounded one never can, so it belongs in
-  its own capability trait rather than in `Waitable`; and while every shape here
-  has one consumer, two have many *producers*, so a room signal has N waiters
-  and is not the mirror image of the doorbell.
+  **A deliberate absence rather than an oversight, and under consideration for
+  a future revision.** It is not simply the doorbell mirrored: a blocking send
+  that parked on something `WaitForMultipleObjects` cannot see would reintroduce
+  the very composition problem that ruled out the existing channel crates.
 - **It will not decide between two real queue designs on your behalf.** `slotwise_mpsc`
   and `reserving_mpsc` are different claim protocols, both well studied and both
   used in production and in research. `slotwise_mpsc` asks each slot's own sequence
