@@ -63,6 +63,17 @@ sabotage was not run and proves nothing.
 
 **`MANIFEST INERT`** -- the patch does not change the file at all.
 
+**`MANIFEST DOES NOT COMPILE`** -- the patch is not valid Rust, so the tests
+never got a chance to notice it. Reported for a build-phase failure and,
+separately, for `a doctest would not build`: `--no-run` cannot pre-build
+doctests (cargo rejects `--doc --no-run` outright), so a patch that compiles in
+the crate but breaks a `///` example gets as far as the run phase and fails
+there with a compile error. Left unclassified that reads as `caught`, which is
+the weaker claim wearing the stronger one's label -- so it is detected from
+rustdoc's own `Couldn't compile the test.` marker and reported as the manifest
+problem it is. Renaming or deleting a public item an example uses is the usual
+way to land here.
+
 ## Beware the test that exercises a copy of the code
 
 If a sabotage is caught only *sometimes*, the usual cause is not a slow machine.
@@ -170,8 +181,23 @@ Small patches survive refactoring and stay readable in the failure output.
 
 Files are restored in a `finally` block and the restoration is verified by
 comparing contents; if it cannot be restored the script stops immediately and
-tells you the `git checkout` to run. Targets must be clean in git before a
-sweep starts -- that is what makes an interrupted run recoverable -- and
-`-AllowDirty` waives it if you accept the risk.
+names the file to copy back.
 
-Transcripts land in `.scratch/sabotage/`, one per sabotage plus the baseline.
+**The pre-patch contents are written to `.scratch/sabotage/restore/` before any
+file is touched**, and deleted once the restore is verified. That copy is what
+makes recovery possible when the in-memory one is gone -- after a Ctrl+C, a
+crash, or a `Stop-Process` -- so a file left in that directory means a run was
+interrupted before it could restore.
+
+Targets must be clean in git before a sweep starts, which additionally makes
+`git checkout` a safe second recourse; `-AllowDirty` waives that check. Note
+that it waives only the *second* recourse: once a target carries uncommitted
+work, `git checkout` would destroy it, and the backup above is the only correct
+recovery. The script's own messages say so rather than offering a `checkout`
+that would discard your work.
+
+Transcripts land in `.scratch/sabotage/`, one per sabotage plus the baseline,
+and stale ones are cleared at startup so a transcript named in an error message
+is always from the current run. Build-phase diagnostics go to the `.build.err`
+transcript, since cargo writes them to stderr, and error messages name whichever
+of the two actually holds the evidence.

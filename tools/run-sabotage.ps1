@@ -74,19 +74,26 @@
     cold build must never be mistaken for a hang, and it costs nothing when
     builds are fast. A sabotage that fails to build is reported as such rather
     than as caught -- the compiler rejecting a patch says nothing about whether
-    the tests would have noticed it.
+    the tests would have noticed it. The same holds for a patch that only breaks
+    a doctest: those cannot be built in this phase, so they surface during the
+    run and are reclassified there rather than being counted as caught.
 
 .PARAMETER OutputDirectory
     Where to write per-sabotage transcripts. Defaults to .scratch/sabotage.
+    Stale transcripts are cleared at startup, and pre-patch copies of every
+    target are kept under its `restore/` subdirectory until their restore is
+    verified.
 
 .PARAMETER List
     Print the manifest's sabotages and exit without running anything.
 
 .PARAMETER AllowDirty
     Permit running when a target file has uncommitted changes. Off by default:
-    the script restores files by rewriting their pre-sabotage contents, and if
-    it is interrupted, a clean starting tree is what makes the damage obvious
-    and recoverable with `git checkout`.
+    a clean starting tree makes the damage from an interrupted run obvious, and
+    makes `git checkout` a safe second recourse. It is not safe once a target
+    carries uncommitted work, so under this switch the pre-patch copy written to
+    the output directory is the only correct recovery -- which is what the
+    script's restore-failure message names.
 
 .OUTPUTS
     Exits 0 only if every sabotage matched its declared expectation.
@@ -215,8 +222,31 @@ function Invoke-Sabotaged {
         return [pscustomobject]@{ Outcome = 'build-hung'; Code = $null }
     }
 
-    return Invoke-Bounded -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
+    $run = Invoke-Bounded -CargoArgs $CargoArgs -WorkingDirectory $WorkingDirectory `
         -TranscriptPath $TranscriptPath -Seconds $TestSeconds
+
+    # The one hole the phase split above cannot close by itself: `--no-run` does
+    # not build DOCTESTS (see the note at the top of this file -- `cargo test
+    # --doc --no-run` is rejected outright with "can't skip running doc tests",
+    # so there is no way to pre-pay them in the build phase). A patch that is
+    # valid Rust in the crate but not in a doc example therefore sails through
+    # the build and fails here, during the run, with a compile error -- and
+    # would otherwise be reported as `caught`, which is exactly the weaker claim
+    # this function exists to keep separate from the stronger one.
+    #
+    # Detected by reading the transcript rather than by an exit code, which is
+    # a deliberate exception to how every other outcome here is judged: rustdoc
+    # reports a doctest that would not compile as an ordinary test failure, so
+    # the exit code is 101 either way and carries no way to tell them apart.
+    # The marker is libtest's own fixed string, verified on this toolchain to
+    # land on stdout (the transcript, not `.err`).
+    if ($run.Outcome -eq 'failed' -and (Test-Path -LiteralPath $TranscriptPath)) {
+        if (Select-String -LiteralPath $TranscriptPath -Pattern "Couldn't compile the test." -SimpleMatch -Quiet) {
+            return [pscustomobject]@{ Outcome = 'doc-compile-failed'; Code = $run.Code }
+        }
+    }
+
+    return $run
 }
 
 function Format-Patch {
@@ -226,6 +256,23 @@ function Format-Patch {
     foreach ($line in $Replace -split "`n") { $lines += "    + $line" }
     if ([string]::IsNullOrEmpty($Replace)) { $lines += '    + (removed)' }
     return $lines -join "`n"
+}
+
+# Which transcript actually holds the evidence for an outcome.
+#
+# The two phases write different files, and cargo puts its diagnostics on
+# stderr, so a build failure's evidence is in `.build.err` while a test
+# failure's is in the transcript itself. Naming the wrong one sends the reader
+# to a file that this run never wrote -- and, because a build-phase failure
+# never reaches the test phase, that file may still hold a GREEN transcript
+# from an earlier sweep, contradicting the message that points at it.
+function Get-EvidencePath {
+    param([string] $Outcome, [string] $TranscriptPath)
+    switch ($Outcome) {
+        'build-failed' { return "$TranscriptPath.build.err" }
+        'build-hung' { return "$TranscriptPath.build.err" }
+        default { return $TranscriptPath }
+    }
 }
 
 $repoRoot = Get-RepoRoot
@@ -243,6 +290,19 @@ if ($spec.PSObject.Properties.Name -contains 'root' -and $spec.root) {
 
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+
+# Transcripts from an earlier sweep are deleted rather than left to be
+# overwritten. A run that fails in the build phase never creates the test-phase
+# transcript at all, so a survivor from a previous green sweep would still be
+# sitting at exactly the path an abort message names. Clearing them up front
+# makes any transcript this run names either its own or absent, never stale.
+Get-ChildItem -LiteralPath $OutputDirectory -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+
+# Pre-patch copies live in their own subdirectory, so the sweep of stale
+# transcripts above cannot reach them, and so a leftover here is unambiguous.
+$backupDirectory = Join-Path $OutputDirectory 'restore'
+New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
 
 $package = $spec.package
 $testArgs = @('test', '-p', $package, '--locked')
@@ -295,9 +355,11 @@ foreach ($sabotage in $selected) {
             Exit-WithMessage (@(
                     "Sabotage targets must be clean in git, and this one is not:"
                     "  $target"
-                    "This script restores files by rewriting their previous contents; starting"
-                    "from a clean tree is what makes an interrupted run recoverable with a"
-                    "'git checkout'. Commit or stash first, or pass -AllowDirty to accept that risk."
+                    "This script restores files by rewriting their previous contents, and keeps"
+                    "a pre-patch copy under the output directory in case that fails. Starting"
+                    "from a clean tree additionally makes 'git checkout' a safe second recourse,"
+                    "which it is not once a file carries uncommitted work. Commit or stash"
+                    "first, or pass -AllowDirty to proceed with the backup as the only recourse."
                 ) -join "`n") 2
         }
     }
@@ -311,7 +373,7 @@ $baseline = Invoke-Sabotaged -CargoArgs $testArgs -WorkingDirectory $repoRoot `
 if ($baseline.Outcome -ne 'passed') {
     Exit-WithMessage (@(
             "The baseline suite did not pass ($($baseline.Outcome))."
-            "Transcript: $baselinePath"
+            "Transcript: $(Get-EvidencePath -Outcome $baseline.Outcome -TranscriptPath $baselinePath)"
             "A sweep against a red suite reports every sabotage as caught and proves"
             "nothing while looking like a clean bill of health. Fix the suite first."
         ) -join "`n") 2
@@ -351,6 +413,19 @@ foreach ($sabotage in $selected) {
     }
 
     $transcript = Join-Path $OutputDirectory ((($sabotage.name -replace '[^A-Za-z0-9]+', '-')) + '.txt')
+
+    # The pre-patch contents, on disk and not only in $original.
+    #
+    # $original is a variable, so it dies with the process: an interruption --
+    # Ctrl+C, a crash, Stop-Process -- leaves the file patched with no in-memory
+    # copy to put back. `git checkout` recovers that only when the file was
+    # clean to begin with, which is precisely what -AllowDirty waives. Writing
+    # the backup first is what lets the restore advice below be non-destructive
+    # in both modes rather than only in the default one.
+    $backup = Join-Path $backupDirectory `
+    ((($sabotage.name -replace '[^A-Za-z0-9]+', '-')) + '.' + (Split-Path -Leaf $target) + '.bak')
+    [System.IO.File]::WriteAllText($backup, $original, $utf8NoBom)
+
     try {
         # Inside the guarded region, not before it. A write that throws part-way
         # through -- having already truncated the file -- would otherwise never
@@ -363,8 +438,20 @@ foreach ($sabotage in $selected) {
     finally {
         [System.IO.File]::WriteAllText($target, $original, $utf8NoBom)
         if ([System.IO.File]::ReadAllText($target) -ne $original) {
-            Exit-WithMessage "FAILED TO RESTORE $target -- recover it with 'git checkout -- $target' before doing anything else." 3
+            Exit-WithMessage (@(
+                    "FAILED TO RESTORE $target"
+                    "Its pre-sabotage contents are saved at:"
+                    "  $backup"
+                    "Copy that file back over the target before doing anything else."
+                    "Do NOT reach for 'git checkout' unless the target was clean when this"
+                    "sweep started: under -AllowDirty it was not, and reverting to HEAD would"
+                    "discard the uncommitted work that the backup above still holds."
+                ) -join "`n") 3
         }
+        # The restore is verified, so the backup has served its purpose. Removing
+        # it is what makes a file left behind in that directory meaningful: it
+        # can then only be from a run that was interrupted before it restored.
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
     }
 
     $actual = switch ($run.Outcome) {
@@ -376,6 +463,10 @@ foreach ($sabotage in $selected) {
         # not a result to record.
         'build-failed' { 'MANIFEST DOES NOT COMPILE (tests never ran)' }
         'build-hung' { "BUILD HUNG past ${BuildTimeoutSeconds}s (tests never ran)" }
+        # Same category as build-failed, reached one phase later because
+        # doctests cannot be built by the build phase. The tests did run, but
+        # the one that "failed" failed to compile, so it detected nothing.
+        'doc-compile-failed' { 'MANIFEST DOES NOT COMPILE (a doctest would not build)' }
     }
     $ok = switch ($run.Outcome) {
         'passed' { $sabotage.expect -eq 'survives' }
