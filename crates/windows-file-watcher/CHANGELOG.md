@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.0](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.1.3...windows-file-watcher-v0.2.0) (2026-09-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **file-watcher:** the reopen-by-id fast path is removed. It was root-caused as impossible rather than merely unused -- a handle reopened by file id rejects the watcher's own read -- so the path could not have worked and its removal takes away nothing a caller could have relied on.
+
+### Features
+
+* **file-watcher:** harden the watcher, remove the reopen-by-id fast path, and close the mutation gaps ([3bbb9c1](https://github.com/MikeGrier/windows-threadpool-sys/commit/3bbb9c153b27c0e685e6058d0be385b51e993533))
+
+
+### Bug Fixes
+
+* **file-watcher:** drain by count, and stop ignoring CancelIo's result ([b4a2407](https://github.com/MikeGrier/windows-threadpool-sys/commit/b4a2407bfceba9bb24864517d6218f97f6b3a9f1))
+* **file-watcher:** make the tripwire fire in release, and stop routing paths through display() ([deab234](https://github.com/MikeGrier/windows-threadpool-sys/commit/deab234aff1672d7b29446f748008fa4cfdb3991))
+* **file-watcher:** size the path fixtures in UTF-16 units, not UTF-8 bytes ([bf51474](https://github.com/MikeGrier/windows-threadpool-sys/commit/bf51474dccd23fb669903642655deb871f85936a))
+* **file-watcher:** strip the verbatim prefix by code unit, not by to_str ([2097ad7](https://github.com/MikeGrier/windows-threadpool-sys/commit/2097ad74904156685a8d79179ecedbf14f9bc387))
+
 ## [0.1.3](https://github.com/MikeGrier/windows-threadpool-sys/compare/windows-file-watcher-v0.1.2...windows-file-watcher-v0.1.3) (2026-08-29)
 
 
