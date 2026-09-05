@@ -839,7 +839,18 @@ impl Drop for StandingHold {
         // replaced by an abort from a second panic. Anything else is a new
         // discard path that has not settled its reservation; see above for the
         // one way it is allowed to.
-        debug_assert!(
+        // **`assert!`, not `debug_assert!`.** A tripwire compiled out of release
+        // builds is not a tripwire: the violation this guards is a future
+        // discard path that forgets to settle its reservation, which would
+        // leave the capacity accounting corrupted and, in release, silently.
+        //
+        // The "no second panic during an unwind" property is preserved by the
+        // predicate rather than by the assertion's flavour: when the thread is
+        // already panicking this passes, so the original panic -- the real
+        // diagnostic -- propagates untouched. It fires only when the hold
+        // outlived its entry *without* an unwind, which is the case that has no
+        // other explanation.
+        assert!(
             std::thread::panicking(),
             "a StandingHold outlived its entry with the queue still alive: a \
              discard path must release the reservation under the `items` lock it \

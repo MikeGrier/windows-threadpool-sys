@@ -91,7 +91,11 @@ fn opens_a_directory_whose_name_is_not_ascii() {
 #[test]
 fn opens_a_directory_with_a_trailing_separator() {
     let dir = TempDir::new("open-trailing");
-    let with_sep = format!("{}\\", dir.path().display());
+    // Composed rather than formatted: the separator is what this test is about,
+    // and routing the rest of the path through `display()` could change it on
+    // the way past.
+    let mut with_sep = dir.path().as_os_str().to_os_string();
+    with_sep.push("\\");
     assert!(DirectoryHandle::open(Path::new(&with_sep)).is_ok());
     dir.cleanup();
 }
@@ -514,13 +518,18 @@ fn case_sensitivity_is_read_from_the_directory_rather_than_assumed() {
     );
 
     let sensitive = TempDir::new("case-sensitive");
+    // The path goes to `Command` as an `OsStr`, not through `display()`.
+    // `Command` takes `AsRef<OsStr>` and passes the bytes to Windows unchanged,
+    // whereas `display().to_string()` is documented to replace invalid
+    // sequences with U+FFFD -- which would point `fsutil` at a *different*
+    // directory than the one this test then opens, on exactly the paths D-85
+    // exists to protect. Argument-by-argument rather than one array, because
+    // the array's elements must share a type.
     let marked = std::process::Command::new("fsutil.exe")
-        .args([
-            "file",
-            "setCaseSensitiveInfo",
-            &sensitive.path().display().to_string(),
-            "enable",
-        ])
+        .arg("file")
+        .arg("setCaseSensitiveInfo")
+        .arg(sensitive.path())
+        .arg("enable")
         .output();
 
     let enabled = matches!(&marked, Ok(output) if output.status.success());
@@ -635,9 +644,14 @@ fn a_caller_supplied_verbatim_prefix_is_forwarded_and_honoured() {
     let dir = TempDir::new("verbatim-prefixed");
     let expected = identity_of(dir.path());
 
-    let prefixed = format!(r"\\?\{}", dir.path().display());
+    // Composed rather than formatted, for the reason this test exists: D-85
+    // promises the caller's own bytes are forwarded unchanged, and
+    // `Path::display` is documented to replace invalid sequences with U+FFFD --
+    // so building the fixture through it could hand `open` a path the caller
+    // never wrote, and the test would be guarding the wrong thing.
+    let (prefixed, _) = verbatim(dir.path());
     let handle = DirectoryHandle::open(Path::new(&prefixed))
-        .expect("a caller's own `\\?\\` path must be forwarded unchanged and open");
+        .expect(r"a caller's own `\\?\` path must be forwarded unchanged and open");
     assert_eq!(
         handle.identity(),
         expected,
@@ -677,7 +691,7 @@ fn canonical_path_grows_its_buffer_when_the_path_does_not_fit() {
     std::fs::create_dir_all(&prefixed).expect("create the deep directory");
 
     let handle = DirectoryHandle::open(Path::new(&prefixed))
-        .expect("a caller's own `\\?\\` path opens past MAX_PATH (D-85)");
+        .expect(r"a caller's own `\\?\` path opens past MAX_PATH (D-85)");
     let reported = handle.canonical_path().expect("canonical path");
 
     let units = reported.as_os_str().encode_wide().count();

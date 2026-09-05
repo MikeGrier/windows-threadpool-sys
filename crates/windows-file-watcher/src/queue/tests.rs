@@ -969,7 +969,11 @@ fn dropping_an_unused_standing_slot_returns_its_capacity() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
+// **Not `cfg(debug_assertions)`.** It was, correctly, while the tripwire was a
+// `debug_assert!` -- a test for an assertion the release build does not contain
+// would fail there. Now that the assertion is unconditional the gate would do
+// the opposite: leave the release configuration, the one where a silent
+// violation actually costs something, as the only one nothing checks.
 #[should_panic(expected = "must release the reservation under the `items` lock")]
 fn a_hold_that_outlives_its_entry_while_the_queue_is_alive_trips_the_tripwire() {
     // `StandingHold::drop` is not a release path. Reaching its body means an
