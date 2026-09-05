@@ -3,9 +3,7 @@
 This file records the decisions this crate's code is built against. D-1 to D-9 were taken during the
 2026-08-30 design session and transcribed here so they steer the work rather than sitting in a session
 record nothing is obliged to read; D-10 onwards were taken while building the shapes those decisions
-called for, and record what the building settled or corrected. The work itself is tracked in
-CHECKLIST-io-domains.md at the workspace root, because it spans several
-components.
+called for, and record what the building settled or corrected.
 
 The naming decision -- plural, and no `-sys` suffix -- lives in the workspace
 [DESIGN-NOTES.md](../../DESIGN-NOTES.md#the-waitable-queues-crate-is-named-plural-and-carries-no-sys-suffix)
@@ -51,13 +49,13 @@ preferred.
 | <a id="d-25"></a>D-25 | **`Observable` deliberately does not restate depth.** [D-2](#d-2)'s sketch listed it, but `Bounded::len` already reports it from positions the queue keeps anyway. Naming it twice would give one number two spellings and two places to drift. What belongs on `Observable` is only what must be *accumulated*. |
 | <a id="d-26"></a>D-26 | **Measured: the tail claim contends badly, and `reserving_mpsc` is up to 4x FASTER than `slotwise_mpsc` under contention -- the opposite of what [D-16](#d-16) assumed.** Aggregate throughput *falls* as producers are added, for both shapes and far more than a bare contended atomic explains. D-16's premise, that reading the consumer's position makes the reserving shape the expensive one, is falsified everywhere except a single producer with a live consumer. |
 | <a id="d-27"></a>D-27 | **The gap is intrinsic to Vyukov's sequence protocol, not a fixable flaw in `slotwise_mpsc`'s retry loop.** Its producer must read a slot's sequence *before* claiming, and that slot marches through memory as the tail advances while other producers write it. Padding slots onto their own cache lines was tested and rejected: it recovers about a fifth at eight producers, for four times the memory, and leaves the shape still 2.8x slower. |
-| <a id="d-28"></a>D-28 | **Amended -- the blanket rejection is withdrawn; the verdict depends on thread placement, and the open question is queued as CHECKLIST-io-domains.md M-inf.4.** Caching the peer's index was measured, and it engaged as designed. It cost ~1.8x on x64 with the threads across cores, and *won* 17x on ARM64 and 1.8x on x64 SMT siblings. Batch depth decides the sign, and batch depth is set by where the two threads are scheduled -- not by the architecture and not by our code. A prefetch-only "warming" control changed nothing on any host. |
+| <a id="d-28"></a>D-28 | **Amended -- the blanket rejection is withdrawn; the verdict depends on thread placement, and the open question is an open question queued outside this crate.** Caching the peer's index was measured, and it engaged as designed. It cost ~1.8x on x64 with the threads across cores, and *won* 17x on ARM64 and 1.8x on x64 SMT siblings. Batch depth decides the sign, and batch depth is set by where the two threads are scheduled -- not by the architecture and not by our code. A prefetch-only "warming" control changed nothing on any host. |
 | <a id="d-29"></a>D-29 | **Both multi-producer shapes ship. The crate publishes what it measured and declines to choose for the caller.** [D-26](#d-26) falsified [D-16](#d-16)'s cost premise, which reopened merge-or-delete; the answer is neither. Vyukov's sequence protocol and the head-based one are independently researched designs, both in production use, and our own workload having settled which *we* want is not evidence about anyone else's. Deleting a shape because no visible consumer wants it is what PLATFORM INTEGRITY forbids. What the crate owes instead is the data and, through `probe-core-affinity`, the means to gather it on the caller's own hardware. |
 | <a id="d-30"></a>D-30 | **Both MPSC shapes are qualified by name; neither is `mpsc`.** A bare `mpsc` beside `reserving_mpsc` makes one canonical by implication, which contradicts this crate's own "no shape is the canonical one" and, after [D-29](#d-29), is simply false. `slotwise_mpsc` names its claim protocol -- it claims slot by slot, with no shared counter -- and avoids the reading `sequence_mpsc` invites, that it alone preserves FIFO order when both shapes do. Renamed before first publish, where it is free. |
 | <a id="d-31"></a>D-31 | **0.1.0 ships without machine-checked memory orderings, and says so in its own documentation.** Model-checking gates 1.0, not 0.1.0. It would close the *demonstrated* gap -- a weakened `Acquire` survives the whole suite -- but not the dangerous one: it cannot model `SetEvent`/`ResetEvent`, so it cannot cover the doorbell, and [D-15](#d-15)'s lost wakeup, the only ordering bug this crate has had, was found by sabotage instead. The risk it addresses is mostly regression risk, which is lowest before there are consumers. The disclosure, not the deferral, is the decision. |
 | <a id="d-32"></a>D-32 | **`Reserving::Reservation<'a>` gains a bound, before the crate publishes.** The associated type is currently unbounded, so a caller generic over the trait can claim a slot and drop it but never redeem it -- the trait cannot express the operation it exists for. Both implementors already have identical `send` and `is_disconnected` signatures, so the bound is additive; adding it after publication is a breaking change to every implementor. Done as SH-1.5: the [`Claim`](src/traits.rs) trait carries `send` and `is_disconnected`, and both reservation types implement it as forwarders. `Claim` must be in scope to call those methods on a claim whose concrete type the caller has not named, which is why it is re-exported at the crate root. |
 | <a id="d-33"></a>D-33 | **`PushError` is `#[non_exhaustive]`, and the one-directional doorbell is disclosed rather than fixed before 0.1.0.** The receive-side errors already carried the attribute and the send side lacked it by omission; adding it after publication is itself breaking, so it is taken now while the crate has no external consumers. Whether a producer can *wait* for room stays open as M32.3 -- it is additive, so it does not gate the release -- but the absence is stated in both the crate docs and the README, because `crossbeam-channel`'s `send` blocks and a reader arriving from it will assume this one does too. |
-| <a id="d-34"></a>D-34 | **Every bounded queue surveyed is ABA-safe for one of two reasons, and this crate's `reserving_mpsc` has neither.** Either the claim counter is a whole machine word, so recurrence is unreachable -- crossbeam, concurrent-queue, thingbuf, Vyukov, SCQ's `Head`/`Tail` -- or the authorizing compare-exchange is moved onto the cell, so the decision and the write are validated together (CRQ, SCQ). Ours packs the position into a 32-bit *subfield* and authorizes with an exchange that does not cover the separately-read `head`. Nikolaev (DISC 2019, section 3) states the width assumption the field relies on and states it for **CPU-word** width, which a subfield does not satisfy; DPDK's `rte_ring` is the same protocol as ours and its published justification covers modular arithmetic only. The generalisation -- ours, unstated in any source -- is that **the atomic operation authorizing the write must cover everything the decision depended on.** Survey in [DESIGN-SESSION-2026-09-02](design-sessions/DESIGN-SESSION-2026-09-02-claim-protocol-prior-art.md); the fix is M15 in CHECKLIST-ship-topology-and-queues.md. |
+| <a id="d-34"></a>D-34 | **Every bounded queue surveyed is ABA-safe for one of two reasons, and this crate's `reserving_mpsc` has neither.** Either the claim counter is a whole machine word, so recurrence is unreachable -- crossbeam, concurrent-queue, thingbuf, Vyukov, SCQ's `Head`/`Tail` -- or the authorizing compare-exchange is moved onto the cell, so the decision and the write are validated together (CRQ, SCQ). Ours packs the position into a 32-bit *subfield* and authorizes with an exchange that does not cover the separately-read `head`. Nikolaev (DISC 2019, section 3) states the width assumption the field relies on and states it for **CPU-word** width, which a subfield does not satisfy; DPDK's `rte_ring` is the same protocol as ours and its published justification covers modular arithmetic only. The generalisation -- ours, unstated in any source -- is that **the atomic operation authorizing the write must cover everything the decision depended on.** Survey in [DESIGN-SESSION-2026-09-02](design-sessions/DESIGN-SESSION-2026-09-02-claim-protocol-prior-art.md); the fix is the claim-protocol replacement recorded there. |
 | <a id="d-35"></a>D-35 | **Measured: the permit claim is 2.7x faster than `reserving_mpsc` at 16-32 producers, and 1.45x slower at one.** The safer claim is also the faster one everywhere contention exists, which was not the expected result -- it touches *two* shared lines where the shipping shape touches one plus a read, and [D-26](#d-26) had established that the shared line is what collapses. The mechanism is that both of its operations are unconditional read-modify-writes that never retry, where the shipping shape's compare-exchange retries once per lost race; the retries dominate long before the second line does. It is the only shape measured that gets *faster* per push as producers are added (42.8 ns at two to 19.5 at thirty-two) and the only one that stays within 1.5x of a bare contended `fetch_add`. **This decides the shape of the fix but not the fix**: the drained regime's refusal counts differ by orders of magnitude in a way this harness cannot attribute, which SH-15.5.1 exists to settle before SH-15.6 adopts anything. |
 | <a id="d-36"></a>D-36 | **Superseded by [D-41](#d-41): the hazard is now a layout choice, not a defect that must ship.** The reasoning below stands as the record of why it was right to disclose rather than delay while the only known fix was the claim-protocol replacement. **0.1.0 ships SH-14.1 disclosed rather than fixed, and the disclosure is a release blocker.** Following [D-31](#d-31)'s principle -- the disclosure, not the deferral, is the decision -- because the fix is a claim-protocol replacement ([D-35](#d-35)) whose adoption is still gated on an open question, and holding the release for it would trade a *documented* hazard for an undocumented rush. **The two gaps are not equally forgiving and the text says so**: an unverified ordering is a risk of a bug, this is a known one with a computed exposure, and its failure mode is silent -- no error, panic, or counter -- so a caller can neither detect nor mitigate it. That is precisely why it may not ship in silence. Stated in the crate docs, the README, and the shape's own module docs, each leading with **"on every target, not only 32-bit ones"**, because the natural spelling "32-bit position" invites the opposite reading and SH-6.1 already had to be corrected for exactly that. The shape-selection guidance in both documents was also amended: it previously said "start with `reserving_mpsc`" with no caveat, pointing callers at the hazardous shape by default. |
 | <a id="d-37"></a>D-37 | **Partly superseded by [D-41](#d-41): the wide word ships as a *layout* behind the non-default `dwcas` feature, not as a separate `reserving_mpsc_wide` shape, and the gate is the feature rather than the target.** What stands is the reasoning below about `portable-atomic`: `default-features = false` is load-bearing, because with defaults on it silently substitutes a global lock, and D-7's burden of proof is discharged rather than waived. What does not is the shape's name and the premise that the narrow word must keep SH-14.1 -- re-apportioning the narrow word removes the exposure for free, so the wide word is no longer the only way out. **The reserving claim word ships in two widths: the narrow one on every target, the wide one only where a 128-bit exchange is genuinely lock-free.** `reserving_mpsc` keeps its packed 64-bit word, keeps SH-14.1's hazard, keeps [D-36](#d-36)'s warnings, and is **never silently swapped** for the wide shape on targets that could host one -- a contract that changes with the target is what PLATFORM INTEGRITY rule 2 forbids, and a caller who read "2^32" must get 2^32. `reserving_mpsc_wide` is the same protocol with a `u128` word split 64/64: recurrence needs 2^64 pushes, and the capacity ceiling rises to 2^62. **The gate is one line of `Cargo.toml`: `default-features = false`.** Measured, not designed -- with the default feature set `portable-atomic` compiles on i686 and silently substitutes a global lock, but with defaults off `AtomicU128` **does not exist** there (`no AtomicU128 in the root`), nor on x86_64 built without `cmpxchg16b`. It exists exactly where a native lock-free exchange is guaranteed at compile time, so the `use` statement is the gate and it fails loudly. A `cfg(target_has_atomic = "128")` would be the *wrong* gate -- it is emitted even with `cmpxchg16b` disabled -- and a `const` assertion on `is_always_lock_free()`, though genuinely const-evaluable, is redundant where the type exists and unreachable where it does not. That is the standard SH-14.2 already set when it probed i686 to confirm `AtomicU64` was lock-free before widening `slotwise_mpsc`, recording that a hidden mutex "would have made this a bad trade". [D-7](#d-7)'s burden of proof for adding a Cargo feature is **discharged, not waived**: D-7 rejected feature-gating because the only benefit was compile time, and the cost here is a third-party dependency, which dead-code elimination does not remove from `Cargo.lock` or from an auditor's review. |
@@ -251,7 +249,7 @@ trap that rule exists to name.
 **No test can catch this, and that is a property of the hazard.** Removing either fence leaves the
 whole suite green, and no entry in [`sabotage.json`](sabotage.json) can express it, because the defect is a fact about
 the memory model rather than an interleaving a scheduler can be coaxed into producing. It is the named
-target of the `loom` work in CHECKLIST-io-domains.md item M31.6.
+target of the planned `loom` verification.
 
 **This is asserted by sabotage, not by argument.** The suite reverses steps 2 and 3 deliberately and
 requires the result to hang -- a real `WaitForSingleObject` that returns `WAIT_TIMEOUT` while an item
@@ -678,7 +676,7 @@ knob, because a knob invites a caller to pick the wrong one.
 
 ## D-20: teardown hands undrained items back, and the decision is made at construction
 
-[R8](../../design-sessions/DESIGN-SESSION-2026-08-30-numa-sharded-io-execution-domains.md) asks that
+R8 asks that
 descriptors in flight at teardown be **accounted, not dropped**, "because some own handles, and their
 disposal must be allowed to block". The 2026-08-27 namespace session states the same hazard concretely:
 an async open's completion carries an owned handle, and closing one to a dead network path is exactly the
@@ -903,8 +901,7 @@ design note is not scheduled work.
 ## D-28: caching the peer's index was measured and rejected
 
 **Amended -- the rejection held on x64 only, and ARM64 reverses it by 17x. The blanket "no shape adopts
-it" no longer follows from the evidence; the open question is queued as
-CHECKLIST-io-domains.md item M-inf.4.**
+it" no longer follows from the evidence; the question is left open.**
 
 The engineer recalled a technique credited with taking queue throughput from millions to hundreds of
 millions of operations per second: a load on the waiting side of the shared index. That memory is real
@@ -974,7 +971,7 @@ x64 machine that produced the rejection reverses it. The variable is placement, 
 Two consequences, and the second is the uncomfortable one:
 
 - The blanket rule **"no shape adopts it"** does not follow from the evidence any more. It is now a
-  choice between hosts, queued as CHECKLIST-io-domains.md M-inf.4,
+  choice between hosts, an open question queued outside this crate,
   which asks for a *policy* for a technique whose sign depends on the machine rather than for more
   measurement. We have the measurement twice and it disagrees with itself.
 - **The probe was printing this decision's conclusion as fixed prose.** It stated "the technique WORKED
@@ -1005,7 +1002,7 @@ below.
 
 **Work is now scheduled by this decision**, where an earlier revision said none was. That sentence was
 accurate when the answer was a flat rejection and is not accurate now: the open question is
-CHECKLIST-io-domains.md M-inf.4. It is recorded so the technique is
+that open question. It is recorded so the technique is
 neither re-proposed without measurement nor adopted on the strength of whichever host someone happened
 to benchmark on.
 
@@ -1064,7 +1061,7 @@ neither alone can produce the full table.
 The two hosts are in fact **disjoint** -- no placement is measured by both -- so every row rests on a
 single machine and none cross-checks another. The per-placement coverage matrix, including the one row
 (`same cache, cross class`) that neither host can express, is kept with the open question in
-CHECKLIST-io-domains.md M-inf.4 rather than duplicated here.
+that open question rather than duplicated here.
 
 **A probe defect found while doing this, now fixed.** `probe-core-affinity` printed its placement
 table from a hard-coded list of four variants that omitted `SameCoreSiblings`, while the
@@ -1108,7 +1105,7 @@ consumers, all of which begin after publication.
 
 **Gating has a cost that is not paid by this crate.** It blocks 0.1.0, and through it the placement
 tool and the measurements from other people's machines that the whole release sequence exists to
-obtain -- see CHECKLIST-placement-tool.md. Every host available
+obtain -- see the placement-probe tooling. Every host available
 here has one NUMA node; that is not fixable locally at any price.
 
 **The disclosure is what makes this a decision rather than a deferral.** The crate says what is

@@ -323,9 +323,10 @@
 //! [`spsc`], [`slotwise_mpsc`] and [`reserving_mpsc`] are implemented, each with its
 //! doorbell: any of them can
 //! be polled with no kernel object at all, blocked on directly, or waited on
-//! alongside other handles. The remaining shapes land in the milestones tracked
-//! by `CHECKLIST-io-domains.md` at the workspace root; the decisions they are
-//! built against are recorded in `DESIGN-NOTES.md` beside this file.
+//! alongside other handles. Shapes with many consumers, and shapes that signal
+//! when space becomes available so a producer can wait for room, are under
+//! consideration for a future revision. The decisions this crate is built
+//! against are recorded in `DESIGN-NOTES.md` beside this file.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]

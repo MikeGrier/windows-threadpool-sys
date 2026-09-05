@@ -1,8 +1,7 @@
 # Design session 2026-09-02: what other bounded queues do about claim-protocol ABA
 
-Resulted in [D-34](../DESIGN-NOTES.md#d-34), an amendment to
-[D-18](../DESIGN-NOTES.md#d-18), and milestone M15 of
-[CHECKLIST-ship-topology-and-queues.md](../../../CHECKLIST-ship-topology-and-queues.md).
+Resulted in [D-34](../DESIGN-NOTES.md#d-34) and an amendment to
+[D-18](../DESIGN-NOTES.md#d-18).
 
 Prompted by SH-14.1: `reserving_mpsc` can overwrite a live slot after 2^32 pushes, on every
 target, because a producer's room decision is made against a separately-read `head` and the
