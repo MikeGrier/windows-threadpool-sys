@@ -82,6 +82,30 @@ peeled off PR #56. The merge-or-delete decision is `CW-1.6`.
 > `windows-waitable-queues` and is gated on `CW-1.4`'s numbers and on the
 > `mikegrier/waitable-queues` peel merging. Parked deliberately, not pending.
 
+**Decided: offer a set of named layouts rather than one, on the condition that
+each carries its own ramifications.** The engineer's direction was that options
+are the right answer "as long as quality is maintained" and "the ramifications
+of the choices are available". Both halves are binding, and the second is the
+one an options API usually fails: a caller who cannot see what a layout costs
+will pick by name, and the names are the least informative thing about them.
+
+Three obligations follow, and they apply to every item in this milestone:
+
+- **Each layout states its own consequences where it is named** -- reservation
+  ceiling, capacity ceiling, and time-to-recurrence at a stated push rate. Not
+  in a table elsewhere that the layout links to; a caller reading the type must
+  see the trade. The rollover figures already exist in
+  [DESIGN-NOTES.md](DESIGN-NOTES.md) and are the source, not a second copy: the
+  crate documentation restates them once and nothing else does.
+- **Quality is per-layout, not per-crate.** Every layout gets the same const
+  assertions, the same tests, and the same mutation coverage as the shipping
+  one. A layout that exists but is exercised only by a doctest is worse than no
+  option, because its presence claims a support level nothing verifies.
+- **Adding a layout must not weaken the default.** Callers who never name one
+  keep today's semantics unless `CW-2.3` explicitly changes them, and the
+  layout parameter must not leak into the signatures of callers who do not use
+  it. If it cannot be kept out of them, say so rather than accepting the churn.
+
 - [ ] **CW-2.1** -- Derive `BOUNDS_MAX` from both constraints rather than from
   the ring bound alone, so that widening the position narrows the capacity
   ceiling instead of tripping a const assertion.
@@ -115,3 +139,29 @@ peeled off PR #56. The merge-or-delete decision is `CW-1.6`.
   `CW-1.4`'s evidence. This is the question behind `D-37`'s conditional gating,
   and the engineer has said 32-bit Windows deployment is not a present concern
   -- which changes `D-18`'s premise and must be recorded rather than assumed.
+
+- [ ] **CW-2.4** -- Document the layouts as a choice, in the crate documentation
+  and the README, with the rollover table and the two axes a caller actually
+  trades between: outstanding reservations against time-to-recurrence. Lead with
+  the fact `CW-1.4` measured -- re-apportioning is free, widening is not -- so a
+  caller is not left assuming the safest option must be the slowest. State the
+  push rate the figures assume and that a draining queue cannot sustain the
+  fastest of them, or the numbers will be read as forecasts rather than as the
+  floor they are.
+
+  **Compiled, not merely written.** Any README example naming a layout is a
+  doctest per this repository's CONTRACT INTEGRITY rule, so a layout that is
+  renamed or removed breaks the build instead of leaving the documentation
+  teaching a name that no longer exists.
+
+- [ ] **CW-2.5** -- Sweep the existing `SH-14.1` disclosure once the layouts
+  land. `D-36` states the hazard in the crate documentation, the README, and
+  `reserving_mpsc`'s module documentation, each leading with "on every target,
+  not only 32-bit ones", and `lib.rs` separately claims the shape is "sound
+  below the wrap". Every one of those statements is scoped to a 32-bit position
+  and becomes wrong for a caller who selected a different layout.
+
+  This is a blast-radius sweep, not an edit of the site someone reports: grep
+  the distinguishing terms across `src/`, `tests/`, `examples/` and `*.md` for
+  the crate and its dependents, fix every hit or say why it is out of scope, and
+  record the sweep in the commit message.
