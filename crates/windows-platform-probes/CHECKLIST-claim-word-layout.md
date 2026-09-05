@@ -70,11 +70,33 @@ peeled off PR #56. The merge-or-delete decision is `CW-1.6`.
   with the host fingerprint, and raise the finding against the queue crate's
   `D-37` so the shipping decision has the number it currently lacks.
 
-- [ ] **CW-1.6** -- Decide merge-or-delete for the duplicated path: either the
-  layouts are promoted into `windows-waitable-queues` (which is `M2`) and the
-  probe keeps only what it needs to compare them, or the experiment is deleted.
-  Recorded here so a duplicated path cannot become permanent by nobody
-  returning to it.
+- [ ] **CW-1.6** -- Decide merge-or-delete for the duplicated *implementation*
+  in [claim_layout.rs](src/claim_layout.rs). Recorded here so a duplicated path
+  cannot become permanent by nobody returning to it.
+
+  **This is not a decision about which layouts to offer.** That is settled --
+  multiple layouts ship as caller-selectable options, per `M2`. This item is
+  only about the private copy of the reserving protocol that lives in this
+  crate, which exists so the layouts could be measured without touching
+  `windows-waitable-queues` while it was being peeled off PR #56.
+
+  **`M2` done properly makes the copy obsolete.** Once the shipping crate takes
+  the layout as a compile-time parameter, the probe instantiates the *real*
+  type at any layout it wants to compare, including candidates that are not
+  defaults -- so exploring a new apportionment no longer needs a duplicate.
+
+  Deleting it is not tidiness. A second implementation of the same protocol
+  drifts, and this one already did: `CW-1.4`'s first run measured 3.7x against
+  the shipping shape on an entirely different scaling curve, because the
+  duplicate had not cache-padded `head` and the claim word. Corrected, it still
+  sits about 1.26x off. A duplicate that diverges silently produces a
+  measurement that looks healthy and describes something nobody ships.
+
+  **One exception survives:** the 64/64 layout needs `AtomicU128`. If `CW-2.3`
+  declines that dependency for the shipping crate, this crate must keep its
+  `wide` implementation, because a layout the crate cannot express is one the
+  probe cannot instantiate. Keep the minimum that case requires and delete the
+  rest.
 
 ## M2+: expose the apportionment
 
