@@ -168,7 +168,21 @@ fn dropping_every_session_disconnects_the_receiver() {
         receiver.is_disconnected(),
         "the last session away ends the stream, so a `recv` loop terminates"
     );
-    assert!(receiver.recv().is_none());
+    // Deliberately a *blocking* `recv()`, not `recv_timeout`: this is the only
+    // site that exercises `recv`'s own disconnect check, and swapping it for the
+    // bounded call was measured to turn a detected mutant into a survivor. It is
+    // bounded instead by running it on its own thread and collecting the answer
+    // with a deadline, so a broken disconnect fails here rather than hanging the
+    // run (M15.11). A thread left blocked on the failure path is fine: libtest
+    // exits the process without joining it.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(receiver.recv().is_none());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(ended) => assert!(ended, "a blocking recv on an ended stream yields None"),
+        Err(_) => panic!("a blocking recv did not return once every session was gone"),
+    }
 }
 
 #[test]

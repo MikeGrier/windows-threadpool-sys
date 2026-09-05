@@ -273,26 +273,16 @@ struct WatcherInner {
     /// crate), but never set outside a test.
     force_coarse: AtomicBool,
     /// The `DirectoryId` this watcher is currently known by -- i.e. the key
-    /// `Resident.directories` holds it under. Only a path-based reopen
-    /// fallback (M11.2) can legitimately change this; an `OpenFileById`
-    /// success is structurally incapable of landing on a different
-    /// filesystem object (D-78).
+    /// `Resident.directories` holds it under. A reopen is always path-based
+    /// (D-80 removed the by-reference fast path), and a path-based reopen can
+    /// legitimately land on a different filesystem object, so this is updated
+    /// on every one (M11.2/D-78).
     directory_id: Mutex<DirectoryId>,
     /// The last volume identity recorded from an installed handle (M11.3,
-    /// D-78 groundwork), compared against on the next path-based reopen
-    /// fallback. `None` only if `GetVolumeInformationByHandleW` itself failed
-    /// when this watcher was last installed.
+    /// D-78 groundwork), compared against on the next reopen. `None` only if
+    /// `GetVolumeInformationByHandleW` itself failed when this watcher was
+    /// last installed.
     volume_identity: Mutex<Option<VolumeIdentity>>,
-    /// This watcher's own canonical path (M11.2), recorded from the handle
-    /// installed each time, via `GetFinalPathNameByHandleW` rather than
-    /// `self.path` (a client-supplied string, possibly not even fully
-    /// resolved). `OpenFileById` is path-independent -- it keeps finding the
-    /// same object even after it is moved or renamed elsewhere -- so this is
-    /// what lets a fast reopen notice that and refuse to trust it, since a
-    /// client subscribed to a path expects to watch that path, not wherever
-    /// the object ends up. `None` only if the query itself failed when this
-    /// watcher was last installed.
-    canonical_path: Mutex<Option<PathBuf>>,
     /// The resident-state map this watcher's directory entry lives in, bound
     /// once by [`DirectoryWatcher::bind_resident`] immediately after
     /// construction (M11.4) -- unset for a watcher built directly by a unit
@@ -473,16 +463,7 @@ impl WatcherInner {
                     overlapped,
                     None,
                 );
-                if ok != 0 {
-                    // A synchronous success still delivers a completion, because
-                    // the handle is not in skip-on-success mode.
-                    return Ok(Issued::Pending);
-                }
-                let error = io::Error::last_os_error();
-                if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
-                    return Ok(Issued::Pending);
-                }
-                Err(error)
+                classify_submission(ok, io::Error::last_os_error)
             })
         };
 
@@ -708,22 +689,16 @@ impl WatcherInner {
 
     /// `retry_timer`'s callback: attempt one re-establishment.
     ///
-    /// Tries `OpenFileById` against the file reference this watcher is
-    /// currently known by first (M11.2/D-78): structurally incapable of
-    /// landing on a different filesystem object, so no volume-identity
-    /// comparison or `DirectoryId` re-key is ever needed when it succeeds.
-    /// Falls back to the path-based `DirectoryHandle::open` only when that
-    /// fails -- most often because the original object is genuinely gone
-    /// (deleted, or its media was ejected). An open failure that is retryable
-    /// (D-22) re-enters the fault loop as an open-class fault; a permanent one
-    /// is the one edge that does not (`stopped`). An arm failure after a
-    /// successful open re-enters the fault loop as an arm-class fault.
+    /// Always a path-based `DirectoryHandle::open`. A by-reference reopen was
+    /// tried first here (M11.2/D-78) because it is structurally incapable of
+    /// landing on a different filesystem object; D-80 removed it, because
+    /// `ReadDirectoryChangesW` rejects a handle opened by file ID, so such a
+    /// reopen could never produce a watchable handle. An open failure that is
+    /// retryable (D-22) re-enters the fault loop as an open-class fault; a
+    /// permanent one is the one edge that does not (`stopped`). An arm failure
+    /// after a successful open re-enters the fault loop as an arm-class fault.
     fn retry_reestablish(self: &Arc<Self>) {
         if *lock(&self.gate) == ArmGate::TornDown {
-            return;
-        }
-        if let Some(handle) = self.reopen_via_existing_handle() {
-            self.finish_reopen(handle);
             return;
         }
         match DirectoryHandle::open(&self.path) {
@@ -747,51 +722,9 @@ impl WatcherInner {
         }
     }
 
-    /// Try `OpenFileById` against the file reference this watcher is
-    /// currently known by, using the installed detailed endpoint's handle
-    /// only as the volume hint (M11.2). `None` if there is no detailed handle
-    /// installed (coarse mode, or nothing installed yet), if `OpenFileById`
-    /// itself failed, or if the reopened object's current path no longer
-    /// matches this watcher's own recorded canonical path -- `OpenFileById`
-    /// is path-independent, so it would otherwise silently keep following the
-    /// object after a move or rename elsewhere in the namespace, which a
-    /// client subscribed to a specific path does not expect. Either way, the
-    /// caller falls back to a path-based open.
-    ///
-    /// **Disabled for now (returns `None` unconditionally):** measured
-    /// (real-OS test, D-52's precedent) to hang or, once, crash with
-    /// `STATUS_STACK_BUFFER_OVERRUN` once a handle obtained this way is
-    /// associated with the thread pool's I/O completion port and armed --
-    /// reproduced with `OpenFileById` alone, with `canonical_path`'s
-    /// comparison never reached. The cause is not yet understood; every
-    /// piece below (`DirectoryHandle::reopen_by_id`, `canonical_path`) is
-    /// independently verified correct by `directory::tests`, so the defect is
-    /// specifically in the IOCP-association/arm path against such a handle,
-    /// not in identity or path computation. Path-based reopen (this
-    /// function's caller's fallback) is unaffected and remains the only
-    /// active mechanism until this is root-caused.
-    fn reopen_via_existing_handle(&self) -> Option<DirectoryHandle> {
-        return None;
-        #[expect(
-            unreachable_code,
-            reason = "kept ready for when the hang/crash above is root-caused"
-        )]
-        let candidate = {
-            let endpoint = lock(&self.endpoint);
-            let Some(Endpoint::Detailed(io)) = endpoint.as_ref() else {
-                return None;
-            };
-            let file_id = lock(&self.directory_id).file_reference();
-            DirectoryHandle::reopen_by_id(io.handle(), file_id).ok()?
-        };
-        let current_path = candidate.canonical_path().ok()?;
-        let expected_path = lock(&self.canonical_path).clone()?;
-        (current_path == expected_path).then_some(candidate)
-    }
-
-    /// Only a path-based reopen can legitimately land on a different
-    /// directory or volume than before (M11.3/M11.4/M12) -- an `OpenFileById`
-    /// success cannot. Re-keys `Resident.directories` immediately if the
+    /// A path-based reopen can legitimately land on a different directory or
+    /// volume than before (M11.3/M11.4/M12), and since D-80 it is the only kind
+    /// there is. Re-keys `Resident.directories` immediately if the
     /// directory changed (identity is never subject to confirmation), then
     /// either installs `handle` straight away (no volume change, or nobody
     /// asked) or asks every `Confirm`-opted route and defers installing until
@@ -829,9 +762,17 @@ impl WatcherInner {
             .collect();
         if awaiting.is_empty() {
             drop(routes);
+            // The path the handle *resolves to*, not `self.path`: a volume
+            // change is precisely the case where the client's own string names
+            // something that no longer leads where it used to, so echoing that
+            // string back says nothing about what actually happened. `None`
+            // here is itself informative -- the new handle would not report a
+            // path at all.
             log::warn!(
-                "windows-file-watcher: {:?} reopened on a different volume than before",
-                self.path
+                "windows-file-watcher: {:?} reopened on a different volume than before, and now \
+                 resolves to {:?}",
+                self.path,
+                handle.canonical_path().ok()
             );
             self.finish_reopen(handle);
             return;
@@ -1137,7 +1078,6 @@ impl WatcherInner {
             if let Ok(identity) = handle.volume_identity() {
                 *lock(&self.volume_identity) = Some(identity);
             }
-            *lock(&self.canonical_path) = handle.canonical_path().ok();
             self.case_sensitive
                 .store(handle.is_case_sensitive(), Ordering::Relaxed);
             self.establish_detailed(handle)?;
@@ -1292,7 +1232,6 @@ impl DirectoryWatcher {
             force_coarse: AtomicBool::new(force_coarse),
             directory_id: Mutex::new(initial_id),
             volume_identity: Mutex::new(None),
-            canonical_path: Mutex::new(None),
             resident: OnceLock::new(),
             volume_change: Mutex::new(None),
             // Overwritten by `install` below, from the real handle, before
@@ -1531,6 +1470,22 @@ impl DirectoryWatcher {
         lock(&self.inner.fault).as_ref().map(|state| state.detail)
     }
 
+    #[cfg(test)]
+    pub(crate) fn enter_fault_for_test(&self, detail: FaultDetail, operation: FaultOperation) {
+        self.inner.enter_fault(detail, operation);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_stop_for_test(&self, error: io::Error) {
+        self.inner.record_stop(error);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn simulate_volume_change_for_test(&self, previous: VolumeIdentity) {
+        *lock(&self.inner.volume_identity) = Some(previous);
+        self.inner.retry_reestablish();
+    }
+
     /// Which tier is currently servicing this directory (D-13/D-17).
     #[must_use]
     pub(crate) fn mode(&self) -> WatchMode {
@@ -1638,6 +1593,47 @@ impl Drop for DirectoryWatcher {
         // and the client's receiver observes the disconnect rather than blocking
         // forever on a queue nothing can fill again.
     }
+}
+
+/// What `ReadDirectoryChangesW` reported, as the submission seam's answer to
+/// "will a completion packet arrive?".
+///
+/// Takes the raw `BOOL` rather than a `bool` on purpose: the `!= 0` convention is
+/// part of the contract being tested, and leaving it at the call site would put
+/// the most dangerous comparison in this crate back outside the reach of a test.
+///
+/// A free function rather than inline in the submission closure, so this crate's
+/// most dangerous misreading is observable by a test rather than only by its
+/// wreckage. Getting either half wrong tells the thread pool to reclaim an I/O
+/// the kernel is still going to complete, and the completion then lands in a
+/// freed buffer -- a heap corruption whose visibility depends on allocator
+/// behaviour, not a test result. That is not hypothetical: with the comparison
+/// still at the call site, inverting it was "caught" only by the process dying
+/// with `STATUS_HEAP_CORRUPTION`, and the same class of mutation was recorded
+/// `MISSED` in one sweep and a crash in another. A crash is not a test (M15.5).
+///
+/// Both of the native call's success shapes mean the same thing here, for the
+/// reason [`Issued::Pending`] spells out: a packet is coming either way. A
+/// non-zero return says the I/O is already done, not that the packet is not
+/// coming, and `ERROR_IO_PENDING` says it has not finished yet. Only a genuine
+/// failure means no packet will arrive, and only then may the caller reclaim the
+/// buffer.
+///
+/// `last_error` is taken lazily and must not be consulted after a success:
+/// `GetLastError` is not meaningful when the call succeeded, so reading it there
+/// would classify on a stale value left by some earlier, unrelated call.
+fn classify_submission<F>(returned: i32, last_error: F) -> Result<Issued, io::Error>
+where
+    F: FnOnce() -> io::Error,
+{
+    if returned != 0 {
+        return Ok(Issued::Pending);
+    }
+    let error = last_error();
+    if error.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
+        return Ok(Issued::Pending);
+    }
+    Err(error)
 }
 
 /// Lock, recovering the guard if a previous holder panicked.

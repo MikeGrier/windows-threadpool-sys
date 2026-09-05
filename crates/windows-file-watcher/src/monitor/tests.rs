@@ -8,11 +8,18 @@
 
 use std::time::{Duration, Instant};
 
-use super::Monitor;
-use crate::queue::{Notification, Receiver};
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_NOT_SUPPORTED};
+
+use super::{
+    Monitor, Opened, Request, Subscription, awaits_open_answer, lock, open_file_target,
+    should_report_established,
+};
+use crate::directory::{DirectoryHandle, FaultDetail, OpenFailure, VolumeIdentity};
+use crate::queue::{Notification, Receiver, WatchId};
+use crate::retry::FaultOperation;
 use crate::session::Session;
 use crate::testing::TempDir;
-use crate::watch::{Watch, WatchOptions};
+use crate::watch::{RetryMode, VolumeChangeDecision, VolumeChangePolicy, Watch, WatchOptions};
 
 /// What teardown is allowed to take. Cancellation retires an outstanding read at
 /// once, so this only fires if teardown waited for a change instead.
@@ -348,10 +355,14 @@ fn cancelling_the_last_coalesced_subscription_tears_down_the_watcher() {
         .expect("register");
     monitor.quiesce();
 
+    let a_id = a.id();
+    let b_id = b.id();
     a.cancel();
     b.cancel();
     monitor.quiesce();
 
+    assert!(!monitor.is_registered(a_id));
+    assert!(!monitor.is_registered(b_id));
     assert_eq!(monitor.watcher_count(), 0);
     assert_eq!(monitor.directory_count(), 0, "the watcher is torn down");
 
@@ -477,10 +488,10 @@ fn a_path_based_reopen_that_lands_on_a_new_directory_rekeys_so_a_later_subscript
     monitor.quiesce();
     assert_eq!(monitor.directory_count(), 1);
 
-    // Delete and recreate the watched directory: the fast, file-reference-based
-    // reopen path is currently disabled (D-80), so re-establishment always
-    // falls back to a path-based open here, which lands on a genuinely
-    // different `DirectoryId` than the one this watcher started under.
+    // Delete and recreate the watched directory: every reopen is a path-based
+    // open (D-80 removed the file-reference fast path), so re-establishment
+    // lands on a genuinely different `DirectoryId` than the one this watcher
+    // started under.
     std::fs::remove_dir_all(dir.path()).expect("delete the watched directory");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -529,7 +540,15 @@ fn a_path_based_reopen_that_lands_on_a_new_directory_rekeys_so_a_later_subscript
         "the recreated directory's watcher must be re-keyed, not duplicated"
     );
 
-    drop((watch, second));
+    watch.cancel();
+    second.cancel();
+    monitor.quiesce();
+    assert_eq!(
+        monitor.directory_count(),
+        0,
+        "cancelling re-keyed routes must retire their shared watcher"
+    );
+
     drop(monitor);
     dir.cleanup();
 }
@@ -621,4 +640,246 @@ fn a_path_based_reopen_that_collides_with_another_watched_directory_migrates_rou
     // `TempDir::cleanup`'s `remove_dir_all` does exactly that without
     // following it into `dir_a`.
     dir_b.cleanup();
+}
+
+fn with_only_directory_watcher<T>(
+    monitor: &Monitor,
+    inspect: impl FnOnce(&crate::watcher::DirectoryWatcher) -> T,
+) -> T {
+    let resident = lock(&monitor.resident);
+    assert_eq!(resident.directories.len(), 1);
+    inspect(
+        resident
+            .directories
+            .values()
+            .next()
+            .expect("the directory watcher exists"),
+    )
+}
+
+#[test]
+fn request_debug_reports_the_variant_and_fields() {
+    let request = Request::Retry {
+        watch: WatchId::from_raw(17),
+    };
+
+    assert_eq!(format!("{request:?}"), "Retry { watch: WatchId(17) }");
+}
+
+#[test]
+fn only_interactive_routes_with_a_standing_slot_await_an_open_answer() {
+    let cases = [
+        (RetryMode::Defaults, false, false),
+        (RetryMode::Defaults, true, false),
+        (RetryMode::Interactive, false, false),
+        (RetryMode::Interactive, true, true),
+    ];
+
+    for (retry, has_fault_slot, expected) in cases {
+        assert_eq!(
+            awaits_open_answer(retry, has_fault_slot),
+            expected,
+            "retry={retry:?}, has_fault_slot={has_fault_slot}"
+        );
+    }
+}
+
+#[test]
+fn established_is_reported_only_for_a_live_opted_in_route() {
+    let cases = [
+        (false, false, false),
+        (false, true, false),
+        (true, false, true),
+        (true, true, false),
+    ];
+
+    for (report_liveness, is_faulted, expected) in cases {
+        assert_eq!(
+            should_report_established(report_liveness, is_faulted),
+            expected,
+            "report_liveness={report_liveness}, is_faulted={is_faulted}"
+        );
+    }
+}
+
+#[test]
+fn file_target_parent_failures_retain_their_retry_classification() {
+    let dir = TempDir::new("monitor-file-parent-failures");
+
+    let missing_parent = dir.path().join("missing-parent").join("leaf.txt");
+    match open_file_target(&missing_parent) {
+        Opened::Pending(detail) => assert!(detail.failure.is_retryable()),
+        Opened::Handle { .. } | Opened::Failed(_) => {
+            panic!("a missing parent must remain retryable")
+        }
+    }
+
+    let file_parent = dir.path().join("not-a-directory");
+    std::fs::write(&file_parent, b"x").expect("create the non-directory parent");
+    match open_file_target(&file_parent.join("leaf.txt")) {
+        Opened::Failed(detail) => assert_eq!(detail.failure, OpenFailure::NotADirectory),
+        Opened::Handle { .. } | Opened::Pending(_) => {
+            panic!("a file used as the parent must fail permanently")
+        }
+    }
+
+    dir.cleanup();
+}
+
+#[test]
+fn monitor_projects_a_routed_watchers_fault_and_permanent_stop() {
+    let dir = TempDir::new("monitor-project-watcher-state");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, _receiver) = monitor.session();
+    let watch = session
+        .subscribe(
+            dir.path(),
+            WatchOptions::new().retry(RetryMode::Interactive),
+        )
+        .expect("register the subscription");
+    monitor.quiesce();
+
+    let detail = FaultDetail::synthetic(OpenFailure::Unsupported, ERROR_NOT_SUPPORTED);
+    with_only_directory_watcher(&monitor, |watcher| {
+        watcher.enter_fault_for_test(detail, FaultOperation::Arm);
+    });
+    assert_eq!(monitor.fault_detail(watch.id()), Some(detail));
+    assert!(monitor.stop_reason(watch.id()).is_none());
+
+    with_only_directory_watcher(&monitor, |watcher| {
+        watcher.record_stop_for_test(std::io::Error::from_raw_os_error(
+            i32::try_from(ERROR_ACCESS_DENIED).expect("Win32 errors fit in i32"),
+        ));
+    });
+    assert_eq!(
+        monitor
+            .stop_reason(watch.id())
+            .and_then(|error| error.raw_os_error()),
+        Some(i32::try_from(ERROR_ACCESS_DENIED).expect("Win32 errors fit in i32"))
+    );
+    assert_eq!(monitor.fault_detail(watch.id()), None);
+
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn a_volume_confirmation_slot_does_not_make_open_retries_interactive() {
+    let dir = TempDir::new("monitor-volume-slot-open-retry");
+    let target = dir.path().join("not-yet");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(
+            &target,
+            WatchOptions::new().on_volume_change(VolumeChangePolicy::Confirm),
+        )
+        .expect("register the subscription");
+    monitor.quiesce();
+
+    let resident = lock(&monitor.resident);
+    let Some(Subscription::Pending {
+        awaiting_answer, ..
+    }) = resident.subscriptions.get(&watch.id())
+    else {
+        panic!("the missing target must be pending")
+    };
+    assert!(!awaiting_answer);
+    drop(resident);
+
+    while let Some(notification) = receiver.try_recv() {
+        assert!(
+            !matches!(notification, Notification::RetryQuestion { watch: id, .. } if id == watch.id()),
+            "a volume-only standing slot must not receive an open-fault question"
+        );
+    }
+
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn coalescing_onto_a_faulted_watcher_suppresses_established() {
+    let dir = TempDir::new("monitor-faulted-coalesce");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let first = session
+        .subscribe(
+            dir.path(),
+            WatchOptions::new().retry(RetryMode::Interactive),
+        )
+        .expect("register the first subscription");
+    monitor.quiesce();
+
+    let detail = FaultDetail::synthetic(OpenFailure::Unsupported, ERROR_NOT_SUPPORTED);
+    with_only_directory_watcher(&monitor, |watcher| {
+        watcher.enter_fault_for_test(detail, FaultOperation::Arm);
+    });
+
+    let second = session
+        .subscribe(dir.path(), WatchOptions::new().report_liveness(true))
+        .expect("coalesce the second subscription");
+    monitor.quiesce();
+
+    while let Some(notification) = receiver.try_recv() {
+        assert!(
+            !matches!(notification, Notification::Established { watch, .. } if watch == second.id()),
+            "a faulted watcher has no settled tier to report"
+        );
+    }
+
+    drop((first, second));
+    drop(monitor);
+    dir.cleanup();
+}
+
+#[test]
+fn stopping_the_only_route_after_a_volume_change_removes_its_resident_state() {
+    let dir = TempDir::new("monitor-volume-stop-cleanup");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+    let watch = session
+        .subscribe(
+            dir.path(),
+            WatchOptions::new().on_volume_change(VolumeChangePolicy::Confirm),
+        )
+        .expect("register the subscription");
+    monitor.quiesce();
+
+    let current = DirectoryHandle::open(dir.path())
+        .expect("open the watched directory")
+        .volume_identity()
+        .expect("read its volume identity");
+    let previous = [0, u32::MAX]
+        .into_iter()
+        .map(|serial| VolumeIdentity::synthetic(serial, "TEST-FS", "TEST-VOLUME"))
+        .find(|candidate| *candidate != current)
+        .expect("one synthetic serial differs from the real volume");
+    with_only_directory_watcher(&monitor, |watcher| {
+        watcher.simulate_volume_change_for_test(previous);
+    });
+
+    let mut asked = false;
+    while let Some(notification) = receiver.try_recv() {
+        if matches!(notification, Notification::VolumeChanged { watch: id, .. } if id == watch.id())
+        {
+            asked = true;
+        }
+    }
+    assert!(
+        asked,
+        "the confirming route must receive the volume question"
+    );
+
+    session.answer_volume_change(watch.id(), VolumeChangeDecision::Stop);
+    monitor.quiesce();
+
+    assert!(!monitor.is_registered(watch.id()));
+    assert_eq!(monitor.directory_count(), 0);
+
+    drop(watch);
+    drop(monitor);
+    dir.cleanup();
 }

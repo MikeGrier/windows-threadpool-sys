@@ -66,6 +66,49 @@ impl Session {
     /// returned handle owns the subscription's lifetime -- dropping it cancels --
     /// so it must be kept for as long as the client wants notifications.
     ///
+    /// `path` reaches Win32 **verbatim** (D-85). It may be relative, may use
+    /// forward slashes, and may contain `.` or `..`, because this crate does not
+    /// prepend `\\?\` on a caller's behalf -- that prefix selects a different
+    /// path parsing mode in which none of those resolve.
+    ///
+    /// The consequence worth knowing: a path longer than `MAX_PATH` opens only
+    /// by one of two escapes, and **only the first is available to a relative
+    /// path**.
+    ///
+    /// - **Long-path opt-in -- works for relative and absolute alike.** If
+    ///   **your** application declares `longPathAware` in its manifest *and*
+    ///   the machine has `LongPathsEnabled` set, `CreateFileW` is one of the
+    ///   functions Windows lists as no longer carrying a `MAX_PATH`
+    ///   restriction, and that is a property of the call rather than of the
+    ///   shape of the path.
+    /// - **The `\\?\` prefix -- absolute only.** Windows states that a
+    ///   relative path is limited to `MAX_PATH` *because the prefix cannot be
+    ///   applied to one*: the prefix means "pass this through with minimal
+    ///   modification", so there is nothing left to resolve it against. That
+    ///   limit is a consequence of the prefix route, not a separate ceiling
+    ///   the opt-in leaves standing.
+    ///
+    /// So a long relative path is fine in a long-path-aware process, and has
+    /// no escape at all in one that has not opted in.
+    ///
+    /// **Measured, not inferred.** `probe-long-path-aware` and
+    /// `probe-long-path-unaware` in `windows-platform-probes` are the same code
+    /// differing only in whether their manifest declares `longPathAware`. They
+    /// open a file through a relative path of 429 characters, from a short
+    /// current directory, with no prefix. With the opt-in every shape opens;
+    /// without it every shape is refused with `ERROR_PATH_NOT_FOUND` while the
+    /// same shapes at 78 characters open, which is the length refusal rather
+    /// than a missing file -- the probe creates each target first.
+    ///
+    /// The measurement also answers a question the documentation does not.
+    /// A plausible implementation of the opt-in would be to regularize the path
+    /// and prepend `\\?\`, and that prefix is exactly what disables `.`, `..`
+    /// and forward-slash translation -- so a relative path using any of those
+    /// could have resolved under `MAX_PATH` and failed over it. **It does
+    /// not.** Both shapes resolve past the ceiling exactly as they do below it,
+    /// so the opt-in lifts the length check without re-parsing, and this crate
+    /// passing paths verbatim exposes no edge at that boundary.
+    ///
     /// # Errors
     ///
     /// Returns [`io::ErrorKind::WouldBlock`] if the notification queue has no

@@ -6,13 +6,18 @@
 //! the kernel, not a model of it.
 
 use std::num::NonZeroUsize;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::ERROR_NOT_SUPPORTED;
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_IO_PENDING, ERROR_NOT_SUPPORTED, FILETIME,
+    HANDLE,
+};
+use windows_sys::Win32::Storage::FileSystem::{FILE_WRITE_ATTRIBUTES, SetFileTime};
 
-use super::{ArmGate, DirectoryWatcher, ReadBuffer, lock};
+use super::{ArmGate, DirectoryWatcher, Issued, ReadBuffer, lock};
 use crate::directory::{
     DirectoryHandle, FailureCode, FaultDetail, OpenFailure, VolumeIdentity, classify_detail,
 };
@@ -24,7 +29,26 @@ use crate::testing::TempDir;
 use crate::watch::{RetryMode, VolumeChangeDecision, VolumeChangePolicy};
 
 /// Upper bound for waiting on a notification the kernel really should deliver.
-const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// 5s, lowered from 30s once the cost was measured (M15.7). Instrumenting every
+/// wait in this suite: 45 of 46 complete in **2.5ms or less**, and the entire
+/// tail is one test gated on the retry *backoff timer* at ~515ms -- structural,
+/// not notification latency. None of it moved under 4x oversubscription (three
+/// concurrent suites plus a full release build), so the budget was absorbing no
+/// contention it needed to.
+///
+/// Why lower it rather than leave it generous: when a mutation breaks delivery,
+/// dozens of these waits each burn the full budget on the way to failing, and
+/// the suite then overruns cargo-mutants' kill deadline -- so the mutant is
+/// filed as `timeout` rather than `caught`, detected but recorded as though it
+/// were not. Measured on one such mutant: **93.6s at 30s (killed) against 31.8s
+/// at 5s (a clean red test)**.
+///
+/// The residual risk, stated because it is real: that was one 12-core developer
+/// machine. 5s is ~10x the structural outlier and ~2000x the p95, but a much
+/// slower runner is unmeasured. If this ever flakes, that is the reason, and the
+/// answer is to raise it -- not to conclude the tests are wrong.
+const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The subscription every test in this module watches under.
 fn test_watch() -> WatchId {
@@ -615,10 +639,17 @@ fn teardown_releases_the_sender_so_the_receiver_disconnects() {
         receiver.is_disconnected(),
         "dropping the watcher must release the queue sender"
     );
-    assert!(
-        receiver.recv().is_none(),
-        "a drain loop must terminate rather than block"
-    );
+    // A blocking `recv()`, bounded by a thread and a deadline rather than by
+    // swapping in `recv_timeout` -- the claim being made is about a *drain loop*
+    // terminating, and a bounded read does not test that (M15.11).
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(receiver.recv().is_none());
+    });
+    match rx.recv_timeout(NOTIFY_TIMEOUT) {
+        Ok(ended) => assert!(ended, "a drain loop must terminate rather than block"),
+        Err(_) => panic!("a blocking recv did not return once the watcher was gone"),
+    }
 
     dir.cleanup();
 }
@@ -1661,4 +1692,371 @@ fn stopping_a_volume_change_removes_only_that_route() {
 
     drop(watcher);
     dir.cleanup();
+}
+
+// --- the notification filter's less-travelled categories (mutation gap) ---
+//
+// `ALL_NOTIFY_FILTERS` is seven flags OR'd together. Replacing one `|` with `&`
+// zeroes the two flags on either side of it -- `A | B & C | D` parses as
+// `A | (B & C) | D`, and disjoint flags AND to nothing -- so each such mutant
+// silently drops a whole category of change from what the kernel is asked to
+// report. That is a real gap rather than a curiosity: a watcher that reports
+// creation and deletion but silently never reports a write is a plausible
+// defect, and for a while nothing here would have noticed.
+//
+// **All six are now caught**, each confirmed by injecting it and watching this
+// module go red. The last two to fall were the pairs LAST_WRITE+CREATION and
+// CREATION+SECURITY, closed by the two `SetFileTime` tests below.
+//
+// What made them closable was measuring which filter bit actually reports which
+// operation -- arming a watch with a single bit at a time -- rather than
+// reasoning about it. The result, and it corrects two claims this comment used
+// to make:
+//
+//   SetFileTime last-write only   -> LAST_WRITE alone
+//   SetFileTime creation only     -> CREATION alone
+//   SetFileTime last-access only  -> LAST_ACCESS alone
+//   DACL edit (icacls)            -> SECURITY alone
+//   same-length rewrite           -> SIZE and LAST_WRITE (not ATTRIBUTES)
+//
+// The corrections: a same-length rewrite is *not* masked by the archive bit --
+// ATTRIBUTES does not fire for it at all, and what actually reports it is SIZE,
+// because `std::fs::write` truncates before writing, so the length does change
+// on the way through. And a DACL edit *is* reported by SECURITY alone, so the
+// permissions test below does isolate that category; the earlier note saying it
+// did not was simply wrong.
+
+#[test]
+fn writing_to_an_existing_file_is_reported_as_modified() {
+    // Covers FILE_NOTIFY_CHANGE_SIZE and FILE_NOTIFY_CHANGE_LAST_WRITE: the
+    // file already exists and keeps its name, so neither of the name filters
+    // can account for this notification.
+    let dir = TempDir::new("modified-write");
+    std::fs::write(dir.path().join("existing.txt"), b"first").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    std::fs::write(dir.path().join("existing.txt"), b"second, and longer").expect("rewrite");
+
+    collected.wait_until("a Modified for existing.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "existing.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn changing_an_existing_files_attributes_is_reported_as_modified() {
+    // Covers FILE_NOTIFY_CHANGE_ATTRIBUTES. The file's name, size and contents
+    // are untouched, so this is the one category that can report it.
+    let dir = TempDir::new("modified-attrs");
+    let path = dir.path().join("attrs.txt");
+    std::fs::write(&path, b"x").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    let mut permissions = std::fs::metadata(&path)
+        .expect("read metadata")
+        .permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&path, permissions).expect("mark read-only");
+
+    collected.wait_until("a Modified for attrs.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "attrs.txt")
+    });
+
+    // Clear it again so the temp directory can be removed.
+    let mut permissions = std::fs::metadata(&path)
+        .expect("read metadata")
+        .permissions();
+    // clippy warns that this makes a file world-writable *on Unix*. This crate
+    // is entirely `cfg(windows)`, where the call clears the read-only attribute
+    // and nothing more -- which is exactly what the cleanup below needs.
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&path, permissions).expect("clear read-only");
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn the_default_buffer_is_the_documented_size() {
+    // `64 * 1024` survived being changed to `64 + 1024`, which would leave a
+    // 1088-byte buffer: still large enough for the handful of records a test
+    // produces, so nothing noticed, but small enough to overflow under the
+    // burst this constant's doc comment says it is sized for.
+    //
+    // Asserting a constant's value is usually circular. It is not here: this is
+    // `pub`, so the number is part of the crate's published surface, and the
+    // doc comment two lines above it states the size in prose that a reader is
+    // entitled to trust.
+    assert_eq!(
+        super::DEFAULT_BUFFER_BYTES,
+        64 * 1024,
+        "the documented default is 64 KiB"
+    );
+}
+
+#[test]
+fn rewriting_a_file_without_changing_its_length_is_reported_as_modified() {
+    // A rewrite whose *net* length is unchanged.
+    //
+    // It was written to isolate FILE_NOTIFY_CHANGE_LAST_WRITE and it does not,
+    // but not for the reason first recorded here. Measured, one filter bit at a
+    // time: this operation fires SIZE and LAST_WRITE, and does *not* fire
+    // ATTRIBUTES -- the archive bit was a red herring. What defeats the
+    // isolation is that `std::fs::write` truncates before writing, so the length
+    // really does change on the way through and SIZE reports it. Isolating
+    // last-write needs a change that touches only the timestamp, which
+    // `changing_only_a_files_last_write_time_is_reported_as_modified` below now
+    // does.
+    //
+    // Kept anyway, because a same-length rewrite being reported at all is worth
+    // asserting and nothing else here does it.
+    let dir = TempDir::new("modified-same-size");
+    let path = dir.path().join("fixed-size.txt");
+    std::fs::write(&path, b"aaaa").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    std::fs::write(&path, b"bbbb").expect("rewrite at the same length");
+
+    collected.wait_until("a Modified for fixed-size.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "fixed-size.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn changing_only_a_files_last_write_time_is_reported_as_modified() {
+    // Isolates FILE_NOTIFY_CHANGE_LAST_WRITE, which nothing else here does: a
+    // `SetFileTime` touching only the last-write stamp changes no name, no
+    // length, and no attribute, so no other filter in `ALL_NOTIFY_FILTERS` can
+    // account for the notification. Measured before it was written -- armed one
+    // filter bit at a time, this operation fires LAST_WRITE and nothing else.
+    //
+    // The handle is opened for `FILE_WRITE_ATTRIBUTES` alone rather than for
+    // writing, deliberately: a write-access handle can set the archive bit when
+    // it closes, which would let ATTRIBUTES report this instead and quietly undo
+    // the isolation.
+    let dir = TempDir::new("modified-timestamp");
+    let path = dir.path().join("stamped.txt");
+    std::fs::write(&path, b"unchanged").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    set_last_write_time(&path);
+
+    collected.wait_until("a Modified for stamped.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "stamped.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+#[test]
+fn changing_only_a_files_creation_time_is_reported_as_modified() {
+    // Isolates FILE_NOTIFY_CHANGE_CREATION on the same principle. Worth having
+    // separately from the last-write case because the two surviving mutants drop
+    // *pairs* of adjacent flags -- LAST_WRITE+CREATION and CREATION+SECURITY --
+    // so a creation-only change is the one operation that fails under both.
+    let dir = TempDir::new("modified-creation");
+    let path = dir.path().join("born.txt");
+    std::fs::write(&path, b"unchanged").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    set_creation_time(&path);
+
+    collected.wait_until("a Modified for born.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "born.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+/// An arbitrary fixed instant, far enough in the past that it cannot equal the
+/// stamp already on a file this test just created.
+fn a_distinct_filetime() -> FILETIME {
+    // 100ns ticks since 1601, i.e. some time in 2013.
+    const TICKS: u64 = 130_000_000_000_000_000;
+    FILETIME {
+        dwLowDateTime: (TICKS & 0xFFFF_FFFF) as u32,
+        dwHighDateTime: (TICKS >> 32) as u32,
+    }
+}
+
+/// Open for `FILE_WRITE_ATTRIBUTES` only -- see the tests above for why the
+/// narrower access matters.
+fn open_for_timestamps(path: &Path) -> std::fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .open(path)
+        .expect("open the file for its timestamps")
+}
+
+fn set_last_write_time(path: &Path) {
+    let file = open_for_timestamps(path);
+    let stamp = a_distinct_filetime();
+    // SAFETY: `file` is live for the call, and the two null pointers are the
+    // documented way to leave creation and last-access untouched.
+    let ok = unsafe {
+        SetFileTime(
+            file.as_raw_handle() as HANDLE,
+            std::ptr::null(),
+            std::ptr::null(),
+            &stamp,
+        )
+    };
+    assert!(ok != 0, "SetFileTime(last write) failed");
+}
+
+fn set_creation_time(path: &Path) {
+    let file = open_for_timestamps(path);
+    let stamp = a_distinct_filetime();
+    // SAFETY: as above, leaving last-access and last-write untouched.
+    let ok = unsafe {
+        SetFileTime(
+            file.as_raw_handle() as HANDLE,
+            &stamp,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    assert!(ok != 0, "SetFileTime(creation) failed");
+}
+
+#[test]
+fn changing_a_files_permissions_is_reported_as_modified() {
+    // A DACL edit, which is a change no other test here makes.
+    //
+    // This **does** isolate FILE_NOTIFY_CHANGE_SECURITY, and an earlier note
+    // here claiming otherwise was wrong. Measured one filter bit at a time, a
+    // DACL edit fires SECURITY and nothing else; injecting the mutant that drops
+    // SECURITY turns this test red. Whatever the earlier check did, it was not
+    // measuring this.
+    //
+    // `icacls` rather than a Win32 call, because the point is to make a real
+    // security-descriptor change and observe that the watch reports it, not to
+    // exercise any particular way of making one.
+    let dir = TempDir::new("modified-acl");
+    let path = dir.path().join("acl.txt");
+    std::fs::write(&path, b"x").expect("seed the file");
+
+    let (watcher, collected) = watch(dir.path(), false);
+
+    // *S-1-1-0 is the well-known Everyone SID, named by SID so this does not
+    // depend on the machine's language.
+    let granted = std::process::Command::new("icacls.exe")
+        .arg(path.as_os_str())
+        .args(["/grant", "*S-1-1-0:(R)"])
+        .output()
+        .expect("run icacls");
+    assert!(
+        granted.status.success(),
+        "could not change the file's DACL, so the security half of the filter \
+         went untested: {}",
+        String::from_utf8_lossy(&granted.stderr)
+    );
+
+    collected.wait_until("a Modified for acl.txt", |d| {
+        d.changes()
+            .iter()
+            .any(|(kind, name)| *kind == ChangeKind::Modified && name == "acl.txt")
+    });
+
+    drop(watcher);
+    dir.cleanup();
+}
+
+// --- the arming contract: which submission results mean "a packet is coming" ---
+//
+// This is the crate's most dangerous misreading, and before these tests the only
+// thing standing between getting it wrong and a green suite was whether the
+// allocator happened to notice. Telling the pool that a genuinely-pending read
+// failed makes it cancel its accounting for an I/O the kernel is still going to
+// complete, and the completion lands in a freed buffer -- so detection depended
+// on heap layout. The same mutation was recorded `MISSED` in one sweep and
+// crashed the process in another; two crashes were even scored as "caught"
+// purely because the process exited non-zero. A crash is not a test (M15.5).
+//
+// `classify_submission` exists so the contract can be asserted directly instead.
+
+#[test]
+fn a_synchronous_success_still_means_a_completion_is_coming() {
+    // The counter-intuitive half: `TRUE` says the *I/O* finished, not that the
+    // *packet* is not coming. Treating it as "done, nothing to wait for" would
+    // free a buffer the kernel has already queued a completion for.
+    let issued = super::classify_submission(1, || {
+        panic!("GetLastError must not be consulted after a success")
+    });
+    assert!(
+        matches!(issued, Ok(Issued::Pending)),
+        "a native success must still be reported as pending"
+    );
+}
+
+#[test]
+fn a_pending_submission_is_armed_rather_than_failed() {
+    // The half that corrupts the heap when it is wrong.
+    let issued = super::classify_submission(0, || {
+        std::io::Error::from_raw_os_error(ERROR_IO_PENDING as i32)
+    });
+    assert!(
+        matches!(issued, Ok(Issued::Pending)),
+        "ERROR_IO_PENDING is how a submission reports success, not failure"
+    );
+}
+
+#[test]
+fn a_genuinely_failed_submission_is_reported_as_failed() {
+    // The other direction, and the one that hangs a watcher rather than
+    // corrupting it: claiming a failed submission is pending leaves the pool
+    // waiting for a completion that will never arrive. `ERROR_INVALID_PARAMETER`
+    // is the real case -- it is what a directory handle opened by file id
+    // answers (D-80).
+    for code in [
+        ERROR_INVALID_PARAMETER as i32,
+        ERROR_ACCESS_DENIED as i32,
+        ERROR_NOT_SUPPORTED as i32,
+    ] {
+        let issued = super::classify_submission(0, || std::io::Error::from_raw_os_error(code));
+        match issued {
+            Err(error) => assert_eq!(
+                error.raw_os_error(),
+                Some(code),
+                "the failure must be reported with the code the OS gave"
+            ),
+            Ok(_) => panic!("error {code} must not be reported as armed"),
+        }
+    }
+}
+
+#[test]
+fn a_submission_failure_with_no_os_code_is_still_a_failure() {
+    // Nothing guarantees the seam only ever sees OS-coded errors, and the
+    // pending test is an equality against a code -- an error carrying none must
+    // fall through to the failure arm rather than matching anything.
+    let issued = super::classify_submission(0, || std::io::Error::other("no raw code"));
+    assert!(
+        issued.is_err(),
+        "an error with no OS code cannot be a pending submission"
+    );
 }

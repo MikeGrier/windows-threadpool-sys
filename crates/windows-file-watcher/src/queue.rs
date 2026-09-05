@@ -303,19 +303,17 @@ pub(crate) trait Resume: Send + Sync {
     fn resume(&self);
 }
 
-/// One queued notification, optionally carrying the obligation to hand a
-/// [`StandingSlot`]'s permanent reservation back to `reserved` once the entry
-/// is gone.
+/// One queued notification, optionally carrying a [`StandingSlot`]'s permanent
+/// reservation for as long as it sits in the queue.
 ///
 /// A `StandingSlot` send transfers its one carved-out unit of `reserved`
 /// capacity into the queue for as long as the message sits there (so `free()`
 /// is never double-charged for it, once as `reserved` and again as an
-/// occupied queue slot). [`StandingHold`]'s own `Drop` is what hands that unit
-/// back, whenever and however this entry is finally discarded -- taken
-/// normally or dropped some other way -- which is also what lets
-/// [`StandingSlot::drop`] tell whether it still owns that unit itself (no hold
-/// outstanding) or has already transferred it to a queued entry that has not
-/// been drained yet.
+/// occupied queue slot). [`take`] hands that unit back, inline with the pop
+/// that removes this entry; the [`StandingHold`] is the record that the
+/// transfer happened, which is what lets [`StandingSlot::drop`] tell whether it
+/// still owns that unit itself (no hold outstanding) or has already
+/// transferred it to a queued entry that has not been drained yet.
 struct Entry {
     notification: EntryNotification,
     _standing_hold: Option<StandingHold>,
@@ -348,7 +346,7 @@ impl Entry {
 
     /// The notification this entry carries, reading a standing entry's
     /// current (possibly coalesced) value from its `StandingHold` before the
-    /// hold itself drops and releases the reservation.
+    /// entry itself is discarded.
     fn into_notification(self) -> Notification {
         match self.notification {
             EntryNotification::Plain(notification) => notification,
@@ -657,10 +655,11 @@ impl Drop for Reservation {
 /// together with the `reserved` count they gate, never observed mid-way.
 ///
 /// Lock order is fixed as *the queue's `items`, then this* everywhere it is
-/// taken (`send`, both `Drop` impls), which is what makes the combined
-/// transition atomic: whichever of `StandingSlot::drop` or
-/// `StandingHold::drop` runs first holds this lock for its entire mutation of
-/// `reserved`, so the other side cannot observe a half-finished transfer.
+/// taken (`send`, `StandingSlot::drop`, and [`take`]), which is what makes the
+/// combined transition atomic: whichever of `StandingSlot::drop` or `take` runs
+/// first holds this lock for its entire mutation of `reserved`, so the other
+/// side cannot observe a half-finished transfer. `StandingHold::drop` takes
+/// neither lock -- see that impl for why it must not.
 struct StandingState {
     /// Whether the owning `StandingSlot` has been dropped. Once false, no
     /// further send can ever happen, so an outstanding hold's eventual drain
@@ -774,20 +773,19 @@ impl std::fmt::Debug for StandingSlot {
     }
 }
 
-/// The reservation-release obligation a [`StandingSlot::send`] transfers into
-/// its queued entry.
+/// The record that a [`StandingSlot::send`] has transferred its permanent
+/// reservation into a queued entry.
 ///
-/// `Drop` -- rather than only [`take`] -- is what performs the release on any
-/// path other than an ordinary pop, so it happens exactly once no matter how
-/// the entry is finally discarded (normal drain, or the queue itself going
-/// away). `take` is the common case and the one path where the pop and the
-/// release must be one atomic accounting transition (PR #20 review
-/// response): popping a standing entry exposes its queue slot before its
-/// reservation was restored under the old design, and a producer woken in
-/// that gap could overcommit capacity. `take` therefore performs the release
-/// itself, inline with the pop, under the same `items` lock, and marks
-/// `resolved` so this `Drop` becomes a no-op for that path; `Drop` remains
-/// the fallback for every other discard.
+/// The release itself belongs to [`take`], performed inline with the pop under
+/// the same `items` lock (PR #20 review response): popping a standing entry
+/// exposed its queue slot before the reservation was restored under the old
+/// design -- where this type's own `Drop` did the restoring, deferred until
+/// after the queue lock was released -- and a producer woken in that gap could
+/// overcommit capacity. `take` therefore performs the release itself and marks
+/// `resolved`. What is left here is the record of the transfer, which is what
+/// [`StandingSlot::drop`] reads to tell whether it still owns its unit; it is
+/// not a second release path, and this type's `Drop` explains why no discard may
+/// delegate the release back to it.
 struct StandingHold {
     /// `Weak`, not `Arc` (PR #20 review response): this hold lives inside an
     /// `Entry` inside `Shared.items.queue` -- inside the very `Shared` a
@@ -799,38 +797,54 @@ struct StandingHold {
     /// `reserved` accounting left to update.
     shared: Weak<Shared>,
     state: Arc<Mutex<StandingState>>,
-    /// Set once this hold's release has already been performed inline by
-    /// `take`, so `Drop` does not perform it a second time.
+    /// Set once [`take`] has performed this hold's release inline with the pop.
+    /// Every hold that leaves the queue leaves it that way, so this is the arm
+    /// `Drop` actually takes; see `Drop` for why the other arm is a tripwire
+    /// rather than a fallback.
     resolved: bool,
 }
 
 impl Drop for StandingHold {
-    /// Lock order: `items`, then `standing` -- matching [`StandingSlot::send`]
-    /// and [`take`].
+    /// A tripwire, not a release path.
+    ///
+    /// Both arms below return, and that is the whole behaviour: a hold is
+    /// reachable only from `state.queue`, the one site that removes an entry
+    /// from that queue ([`take`]) settles the reservation itself and sets
+    /// `resolved`, and the only other way a hold dies is `Shared` being torn
+    /// down, where `upgrade` fails and there is no accounting left to update.
+    ///
+    /// It deliberately does **not** restore the reservation itself, and a future
+    /// discard path must not make it. `take` receives `&mut State`, so its caller
+    /// holds the `items` guard -- and any other way to remove an entry from
+    /// `state.queue` needs that same guard, so a hold discarded on such a path is
+    /// dropped *inside* the lock. Re-taking it here would deadlock, because
+    /// [`lock`] is a plain non-reentrant `Mutex::lock`. That is measured, not
+    /// supposed: with a forced unwind out of `take`, the earlier body that did
+    /// the accounting here hung indefinitely, while the same unwind with this
+    /// `Drop` short-circuited failed immediately. **Any discard path must release
+    /// the reservation under the lock it already holds, exactly as [`take`]
+    /// does.**
     fn drop(&mut self) {
         if self.resolved {
             return;
         }
-        let Some(shared) = self.shared.upgrade() else {
+        if self.shared.upgrade().is_none() {
             // `Shared` is already being torn down; nothing to update.
             return;
-        };
-        let mut state = lock(&shared.items);
-        let mut standing = lock(&self.state);
-        standing.in_flight = false;
-        standing.queued = None;
-        if !standing.slot_alive {
-            // Nothing will ever reserve this unit again: `queue.len()`
-            // already accounted for its release when this entry left the
-            // queue, so there is nothing further to do here beyond
-            // recording that no hold remains outstanding.
-            return;
         }
-        drop(standing);
-        state.reserved += 1;
-        let resumers = freed_resumers(&mut state, true);
-        drop(state);
-        prod(resumers);
+        // Reaching here means a hold outlived its entry while the queue was
+        // still alive. Today the only way that can happen is an unwind out of
+        // `take` between the pop and `resolved` being set, and there the original
+        // panic is the real diagnostic -- so it is left to propagate rather than
+        // replaced by an abort from a second panic. Anything else is a new
+        // discard path that has not settled its reservation; see above for the
+        // one way it is allowed to.
+        debug_assert!(
+            std::thread::panicking(),
+            "a StandingHold outlived its entry with the queue still alive: a \
+             discard path must release the reservation under the `items` lock it \
+             already holds, as `take` does"
+        );
     }
 }
 
@@ -1102,7 +1116,11 @@ impl Receiver {
 /// capacity. The returned `Entry` still carries its (now inert) `StandingHold`
 /// so a caller may defer *dropping* it until after the queue lock is released
 /// -- the hold's own `Drop` is a no-op here, since `resolved` is already set --
-/// but the reservation itself is never left outstanding past this call.
+/// but the reservation itself is never left outstanding past this call. Setting
+/// `resolved` is not bookkeeping that can be skipped: it is what keeps the hold
+/// off the tripwire in `StandingHold::drop`, which any future path that removes
+/// an entry from the queue must satisfy the same way -- by releasing inline,
+/// here, under the lock it already holds.
 fn take(state: &mut State) -> Option<Entry> {
     if let Some(mut entry) = state.queue.pop_front() {
         if matches!(entry.notification, EntryNotification::Standing) {

@@ -30,7 +30,7 @@
 //! is stable for as long as the file exists regardless of how it was reached.
 
 use std::os::windows::ffi::OsStringExt;
-use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 
 use wtf_string::Wtf16String;
@@ -41,11 +41,10 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_CASE_SENSITIVE_INFO,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_ID_DESCRIPTOR, FILE_ID_DESCRIPTOR_0,
-    FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FileCaseSensitiveInfo, FileIdType, GetFileInformationByHandle,
-    GetFileInformationByHandleEx, GetFinalPathNameByHandleW, GetVolumeInformationByHandleW,
-    OPEN_EXISTING, OpenFileById, VOLUME_NAME_DOS,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileCaseSensitiveInfo,
+    GetFileInformationByHandle, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+    GetVolumeInformationByHandleW, OPEN_EXISTING, VOLUME_NAME_DOS,
 };
 
 /// What a failed open means for the retry policy.
@@ -257,6 +256,15 @@ pub(crate) fn classify(error: &std::io::Error) -> OpenFailure {
 
 /// Encode a path as a NUL-terminated wide string.
 ///
+/// Otherwise **verbatim**: the caller's units reach Win32 unchanged, and in
+/// particular this never prepends `\\?\` (D-85). That prefix is a different path
+/// *parsing mode*, not a longer-path switch -- it would stop forward slashes,
+/// `.`, `..`, and relative paths from resolving, all of which work today -- and
+/// whether a path past `MAX_PATH` opens without it depends on the machine's
+/// `LongPathsEnabled` policy together with the consuming *application's*
+/// `longPathAware` manifest, neither of which is a library's to decide. A caller
+/// who wants `\\?\` semantics passes a `\\?\` path, and it arrives intact.
+///
 /// An interior NUL is rejected rather than passed on: Win32 would stop at it and
 /// silently open a *different, shorter* path than the caller named, which is a
 /// correctness hole rather than a mere inconvenience. `Wtf16String` keeps content
@@ -285,16 +293,6 @@ pub(crate) fn wide_path(path: &Path) -> Result<Wtf16String, OpenError> {
 pub(crate) struct DirectoryId {
     volume_serial: u32,
     file_index: u64,
-}
-
-impl DirectoryId {
-    /// The NTFS file reference number, in the exact form `OpenFileById`'s
-    /// `FILE_ID_DESCRIPTOR` needs (M11.2/D-78) -- this is the same value
-    /// `identify` already read via `GetFileInformationByHandle`, not a fresh
-    /// syscall.
-    pub(crate) fn file_reference(self) -> u64 {
-        self.file_index
-    }
 }
 
 /// Read a directory's identity from a live handle, rejecting one that turns out
@@ -369,6 +367,10 @@ pub struct DirectoryHandle {
 impl DirectoryHandle {
     /// Open `path` for change notification.
     ///
+    /// `path` is passed to `CreateFileW` verbatim -- see [`wide_path`] and D-85
+    /// for why no `\\?\` prefix is added, and what that means for paths longer
+    /// than `MAX_PATH`.
+    ///
     /// # Errors
     ///
     /// Returns a classified [`OpenError`]; see [`OpenFailure`] for what each
@@ -403,71 +405,6 @@ impl DirectoryHandle {
         let case_sensitive = is_case_sensitive_dir(handle.as_raw_handle());
         Ok(Self {
             handle,
-            identity,
-            case_sensitive,
-        })
-    }
-
-    /// Reopen the directory identified by `file_id` on the same volume as
-    /// `volume_hint` (D-78/M11), rather than by path: `OpenFileById` opens by
-    /// file reference number, so it is structurally incapable of landing on a
-    /// different filesystem object than the one `file_id` already names --
-    /// unlike a fresh `CreateFileW` against the original path, which cannot
-    /// tell a recreated directory from the one this watcher started on.
-    ///
-    /// Measured empirically in preference to `ReOpenFile` (D-52's precedent):
-    /// `ReOpenFile` against a directory handle consistently failed with
-    /// `ERROR_ACCESS_DENIED` on an ordinary, unprivileged process (it needs
-    /// `SeBackupPrivilege` *enabled*, not merely `FILE_FLAG_BACKUP_SEMANTICS`,
-    /// which only exempts the check on a fresh `CreateFileW`). `OpenFileById`
-    /// carries no such requirement here.
-    ///
-    /// `volume_hint` only needs to name *some* still-open handle on the same
-    /// volume as `file_id` -- it is never itself the object being reopened,
-    /// so it stays valid even once `file_id`'s own object is gone.
-    ///
-    /// # Errors
-    ///
-    /// Returns a classified [`OpenError`] if `OpenFileById` fails -- most
-    /// often because the original object no longer exists (deleted, or its
-    /// volume was ejected). That is exactly when the path-based fallback is
-    /// needed.
-    pub(crate) fn reopen_by_id(
-        volume_hint: BorrowedHandle<'_>,
-        file_id: u64,
-    ) -> Result<Self, OpenError> {
-        let descriptor = FILE_ID_DESCRIPTOR {
-            dwSize: u32::try_from(size_of::<FILE_ID_DESCRIPTOR>())
-                .expect("this fixed, small struct's size always fits a u32"),
-            Type: FileIdType,
-            Anonymous: FILE_ID_DESCRIPTOR_0 {
-                FileId: file_id.cast_signed(),
-            },
-        };
-        // SAFETY: `volume_hint` is borrowed and live for the duration of this
-        // call; `descriptor` is a fully initialized, valid `FILE_ID_DESCRIPTOR`
-        // the callee only reads.
-        let raw = unsafe {
-            OpenFileById(
-                volume_hint.as_raw_handle(),
-                &descriptor,
-                FILE_LIST_DIRECTORY,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                std::ptr::null(),
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
-            )
-        };
-        if raw == INVALID_HANDLE_VALUE {
-            let source = std::io::Error::last_os_error();
-            return Err(OpenError::new(classify(&source), source));
-        }
-        // SAFETY: `OpenFileById` returned a live handle that this call
-        // exclusively owns.
-        let owned = unsafe { OwnedHandle::from_raw_handle(raw) };
-        let identity = identify(owned.as_raw_handle())?;
-        let case_sensitive = is_case_sensitive_dir(owned.as_raw_handle());
-        Ok(Self {
-            handle: owned,
             identity,
             case_sensitive,
         })
@@ -516,13 +453,11 @@ impl DirectoryHandle {
     /// queried fresh via `GetFinalPathNameByHandleW` rather than cached from
     /// whatever string originally opened it (M11.2/D-78).
     ///
-    /// `OpenFileById` reopens by file reference, which is path-independent:
-    /// it keeps finding the same object even after it is moved or renamed
-    /// elsewhere in the namespace. A client subscribed to a path expects to
-    /// watch *that path*, not "wherever this object ends up" -- so a fast
-    /// `OpenFileById` reopen must confirm the object is still where this
-    /// watcher's own canonical path last recorded it before trusting it, or
-    /// fall back to a path-based reopen instead.
+    /// The distinction is the point: the string a client passed may be
+    /// relative, unnormalised, or routed through a junction or mapped drive
+    /// that no longer leads where it did. This reports where the handle
+    /// actually is, which is what a diagnostic about a *changed* resolution has
+    /// to say to be worth printing.
     ///
     /// # Errors
     ///
@@ -705,6 +640,14 @@ fn canonical_path(handle: HANDLE) -> Result<PathBuf, OpenError> {
             return Err(OpenError::new(classify(&source), source));
         }
         let written = written as usize;
+        // Win32's two-call convention makes `written == buffer.len()` unreachable,
+        // which is why this is `<` and why a `<=` here would be equivalent rather
+        // than wrong: on success the call returns the length *excluding* the NUL
+        // and needs room for it, so `written < buffer.len()`; when the buffer is
+        // too small it returns the length *including* the NUL, which by
+        // definition exceeds `buffer.len()`. Confirmed empirically -- an
+        // `assert_ne!` here never fired across the suite, including a walk of
+        // every path length from 508 to 516 units.
         if written < buffer.len() {
             buffer.truncate(written);
             return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
