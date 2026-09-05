@@ -1,16 +1,25 @@
 # windows-topology-sys
 
-Safe enumeration of Windows processor, cache, and memory topology.
+A refined view of the processor, cache, and memory topology Windows publishes.
 
-**Windows only.** Every item is behind `cfg(windows)`; the crate builds to an
-empty shell on other platforms.
+**Windows 11 / Windows Server 2025 and later.** That floor is what is *tested*,
+not the oldest version the APIs might work on: `discover` calls
+`GetSystemCpuSetInformation`, which is documented only from Windows 10 /
+Server 2016 and is imported statically, and nothing below Windows 11 is
+exercised here. (Server 2025 is the server release built on the Windows 11
+codebase; Server 2022 is not, despite the adjacent version numbers.)
+
+**Windows only.** The crate does not build on other platforms, and is not
+intended to: an earlier version of this line claimed it degraded to an empty
+shell elsewhere, which was never true and was never built in CI (raised in
+PR #56 review).
 
 ## Example
 
 ```rust,no_run
-use windows_topology_sys::Topology;
+use windows_topology_sys::MachineMemoryTopology;
 
-let topology = Topology::discover()?;
+let topology = MachineMemoryTopology::discover()?;
 println!(
     "{} logical processor(s), {} domain(s)",
     topology.processors.len(),
@@ -38,33 +47,71 @@ be solved by walking the buffer correctly.
 
 This crate does that walk once, safely, and hands back owned records.
 
+## What the model is
+
+**Observed connectivity, not a ladder of levels with optional rungs.** The
+difference matters to a consumer: a level-shaped model has to invent a value
+for a rung the platform did not report, and the invented value is
+indistinguishable from a measured one.
+
+- **Relations are held as a set, and never reduced on insert.** Windows
+  describes processors through *two* APIs --
+  `GetLogicalProcessorInformationEx` and `GetSystemCpuSetInformation` -- and
+  they are not the same API twice. Each relation carries an [`Observation`]
+  naming its [`Source`], so where the two disagree the disagreement survives
+  rather than being silently resolved in favour of whichever was read last.
+  [`MachineMemoryTopology::cpu_sets`] also keeps the CPU-set view verbatim.
+- **[`Observed<T>`] distinguishes three facts that a plain `Option` collapses
+  into two**: `Known`, `Absent` ("asked, and there is none"), and `NotObserved`
+  ("nobody asked"). With the `serde` feature these are three distinct
+  encodings, so a description round-trips the distinction instead of losing it.
+- **[`Granularity`] orders the domain kinds**, and `minimal_shared` is the meet
+  -- so "how close are these two processors?" is answered over every kind and
+  any cache depth, rather than over one nominated level. `proximity` derives
+  the pairwise answer from an inclusion-ordered partitioning rather than
+  restating the rule.
+- **[`MachineMemoryTopology::enumeration_anomalies`] records what could not be
+  decoded.** Empty on every healthy machine. A malformed record is neither a
+  panic nor a silent truncation, so a short list is distinguishable from a
+  small machine.
+- **[`Provenance`] records how the object was obtained** -- discovered,
+  restored from a description, or hand-built -- which is a fact about the
+  construction, orthogonal to which source reported any given relation.
+
 ## Scope
 
-**What this is:** safe enumeration ([`Topology::discover`]), plus a plain-data
-description ([`Topology`], [`Domain`]) that needs no Windows API to construct
--- build one by hand, or (with the `serde` feature) deserialize one from JSON
-written for a machine you do not have.
+**What this is:** safe enumeration ([`MachineMemoryTopology::discover`]), plus a plain-data
+description ([`MachineMemoryTopology`], [`Domain`]) that needs no Windows API *call* to
+construct -- build one by hand, or (with the `serde` feature) deserialize one
+from JSON written for a machine you do not have. (A machine you do not have,
+not a platform you are not on.)
 
-**What this is not:** an opinionated topology model. It does not decide what
-counts as a "locality domain worth partitioning by" -- by NUMA node, by
-last-level cache, by package -- that is the consumer's call, because the
-right answer depends on the workload. It is also not a partitioning policy,
-and not a device topology: no NVMe controller, NIC, or GPU is a topology
-participant here, and there is no HMAT-style attributed-distance model. Both
-were considered and declined for now.
+**What this is not:** a partitioning policy. It answers what the machine looks
+like, never which boundary you should shard on -- that depends on the workload,
+so it is the consumer's call. It is also not a device topology: no NVMe
+controller, NIC, or GPU is a participant here.
+
+**It does not go below the Win32 topology APIs.** If Windows does not report a
+fact, this crate does not have it. That is a scope boundary rather than a
+judgement about the fact: ACPI carries SLIT distances, no Win32 API surfaces
+them, and reading firmware directly would be going below the boundary -- so
+there is no attributed-distance model, and none is planned here.
 
 See [DESIGN-NOTES.md](DESIGN-NOTES.md) for the full reasoning, including a
-cross-check against Linux's topology model, D-9's full list of what was
-declined and why, and D-8's note that the JSON schema is not covered by this
-crate's semver contract.
+cross-check against Linux's topology model, D-9's list of what was declined and
+why, D-20's scope ruling above, and D-8's note that the JSON schema is not
+covered by this crate's semver contract.
 
-Run `cargo run --example print_topology --features serde` to see the host's
-own topology as JSON -- the shape a hand-written or synthetic description
-takes.
-
-[`Topology::discover`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Topology.html#method.discover
-[`Topology`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Topology.html
+[`MachineMemoryTopology::discover`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.MachineMemoryTopology.html#method.discover
+[`MachineMemoryTopology`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.MachineMemoryTopology.html
+[`MachineMemoryTopology::cpu_sets`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.MachineMemoryTopology.html#structfield.cpu_sets
+[`MachineMemoryTopology::enumeration_anomalies`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.MachineMemoryTopology.html#structfield.enumeration_anomalies
 [`Domain`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Domain.html
+[`Observation`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/struct.Observation.html
+[`Source`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/enum.Source.html
+[`Observed<T>`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/enum.Observed.html
+[`Granularity`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/enum.Granularity.html
+[`Provenance`]: https://docs.rs/windows-topology-sys/latest/windows_topology_sys/enum.Provenance.html
 
 ## License
 

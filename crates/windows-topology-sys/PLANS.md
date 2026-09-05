@@ -1,10 +1,10 @@
 # Plans: windows-topology-sys
 
-Completed checklists are recorded in [COMPLETED-PLANS.md](COMPLETED-PLANS.md), and the milestones they
-contained are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md). Design decisions are in
-[DESIGN-NOTES.md](DESIGN-NOTES.md).
-
 | Path to CHECKLIST.md | Status | Brief description | Design Notes |
 |---|---|---|---|
 
-No checklists are currently in progress.
+No plan is currently open for this crate. [CHECKLIST.md](CHECKLIST.md) retains only the
+`Deferred, and why` section, which records two things left out of the reshape on purpose --
+context for a future reader rather than work anybody is expected to pick up.
+
+Completed plans are in [COMPLETED-PLANS.md](COMPLETED-PLANS.md).

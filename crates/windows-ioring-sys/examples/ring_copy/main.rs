@@ -21,7 +21,7 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
 };
-use windows_topology_sys::Topology;
+use windows_topology_sys::MachineMemoryTopology;
 
 const DEFAULT_CHUNK_LEN: usize = 1024 * 1024;
 
@@ -141,13 +141,13 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
-fn load_topology(path: Option<&PathBuf>) -> io::Result<Topology> {
+fn load_topology(path: Option<&PathBuf>) -> io::Result<MachineMemoryTopology> {
     match path {
         Some(path) => {
             let file = std::fs::File::open(path)?;
             serde_json::from_reader(file).map_err(io::Error::other)
         }
-        None => Topology::discover(),
+        None => MachineMemoryTopology::discover(),
     }
 }
 
@@ -233,6 +233,78 @@ fn main() -> io::Result<()> {
     let source_handle = SendHandle(source_file.as_raw_handle());
     let destination_handle = SendHandle(destination_file.as_raw_handle());
 
+    // Settled once, before any thread starts, because both answers are about
+    // the topology rather than about a domain -- and because the refusal must
+    // happen before the copy rather than per-chunk inside it.
+    if args.remote_placement {
+        // Three questions, asked at the level each belongs to. Answering only
+        // the first was a defect caught by running this; then routing the first
+        // through the per-domain function was a second one, which refused every
+        // run including on a live machine.
+        //
+        // Machine level: does anything name a node at all? A restored
+        // description names none, because deserialization drops the
+        // observations that carry them.
+        //
+        // Domain level: is this domain's own node known, and is there a
+        // different one? Neither can be asked of the machine, because both are
+        // relative to one domain.
+        let classified: Vec<plan::RemoteNode> = plans
+            .iter()
+            .map(|domain_plan| plan::remote_numa_node(&topology, domain_plan.local_numa_node))
+            .collect();
+        let machine_names_nodes = plan::names_any_numa_node(&topology);
+        let outcome = if !machine_names_nodes {
+            plan::RemoteNode::Unnamed
+        } else if let Some(unknown) = classified
+            .iter()
+            .find(|node| matches!(node, plan::RemoteNode::LocalUnknown))
+        {
+            *unknown
+        } else if classified
+            .iter()
+            .any(|node| matches!(node, plan::RemoteNode::Other(_)))
+        {
+            plan::RemoteNode::Other(0)
+        } else {
+            plan::RemoteNode::SameAsLocal
+        };
+        match outcome {
+            plan::RemoteNode::Unnamed => {
+                report.error_line(format_args!(
+                    "--placement remote needs a topology that names its NUMA nodes, and this one \
+                     does not. A restored description (--topology) carries no node numbers: \
+                     deserialization deliberately drops the observations that hold them, because \
+                     a file cannot establish what the relationship walk saw. Refusing rather \
+                     than placing locally, which would report a remote run that measured a local \
+                     one. Drop --topology to measure this machine, or use --placement local."
+                ));
+                std::process::exit(2);
+            }
+            plan::RemoteNode::LocalUnknown => {
+                report.error_line(format_args!(
+                    "--placement remote needs to know which NUMA node each domain is local to, and \
+                     this topology does not say. A node cannot be shown to be remote without one \
+                     to be remote from, so proceeding would report a remote run on no evidence. \
+                     Use --placement local, or a topology that names its nodes."
+                ));
+                std::process::exit(2);
+            }
+            plan::RemoteNode::SameAsLocal | plan::RemoteNode::Other(_) => {
+                let any_remote = classified
+                    .iter()
+                    .any(|node| matches!(node, plan::RemoteNode::Other(_)));
+                if !any_remote {
+                    report.line(format_args!(
+                        "note: no domain has a NUMA node other than its own, so there is nothing \
+                         remote to place on; --placement remote measures the same placement as \
+                         --placement local on this machine"
+                    ));
+                }
+            }
+        }
+    }
+
     let domain_count = plans.len() as u64;
     let per_domain = source_len.div_ceil(domain_count.max(1));
 
@@ -244,8 +316,15 @@ fn main() -> io::Result<()> {
                 let start = per_domain * index as u64;
                 let end = (start + per_domain).min(source_len);
                 let numa_node = if args.remote_placement {
-                    plan::remote_numa_node(&topology, domain_plan.local_numa_node)
-                        .or(domain_plan.local_numa_node)
+                    match plan::remote_numa_node(&topology, domain_plan.local_numa_node) {
+                        plan::RemoteNode::Other(node) => Some(node),
+                        // Both already reported above -- `Unnamed` exited, and
+                        // `SameAsLocal` said that local is the only node there
+                        // is. Neither may reach here as a silent substitution.
+                        plan::RemoteNode::SameAsLocal
+                        | plan::RemoteNode::Unnamed
+                        | plan::RemoteNode::LocalUnknown => domain_plan.local_numa_node,
+                    }
                 } else {
                     domain_plan.local_numa_node
                 };

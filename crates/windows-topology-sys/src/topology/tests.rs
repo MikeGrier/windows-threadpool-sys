@@ -4,9 +4,9 @@ use crate::domain::{Domain, DomainKind};
 use crate::processor_set::ProcessorSet;
 use crate::relation::CacheKind;
 
-fn synthetic() -> Topology {
+fn synthetic() -> MachineMemoryTopology {
     let group0 = ProcessorSet::from_group_mask(0, 0b11);
-    Topology {
+    MachineMemoryTopology {
         processors: vec![
             Processor {
                 id: ProcessorId {
@@ -28,21 +28,21 @@ fn synthetic() -> Topology {
         domains: vec![
             Domain {
                 kind: DomainKind::Group,
-                id: 0,
                 processors: group0.clone(),
+                observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Package,
-                id: 0,
                 processors: group0.clone(),
+                observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Core {
                     simultaneous_multithreading: true,
                     efficiency_class: 10,
                 },
-                id: 0,
                 processors: group0.clone(),
+                observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Cache {
@@ -52,8 +52,8 @@ fn synthetic() -> Topology {
                     size_bytes: 32 * 1024 * 1024,
                     cache_type: CacheKind::Unified,
                 },
-                id: 0,
                 processors: group0.clone(),
+                observations: Vec::new(),
             },
             Domain {
                 kind: DomainKind::Cache {
@@ -63,16 +63,24 @@ fn synthetic() -> Topology {
                     size_bytes: 512 * 1024,
                     cache_type: CacheKind::Unified,
                 },
-                id: 1,
                 processors: group0,
+                observations: Vec::new(),
             },
             Domain {
-                kind: DomainKind::Memory { memory_bytes: None },
-                id: 0,
+                kind: DomainKind::Memory {
+                    memory_bytes: Observed::NotObserved,
+                },
                 processors: ProcessorSet::empty(),
+                observations: Vec::new(),
             },
         ],
-        distances: None,
+        cpu_sets: None,
+        // Named rather than defaulted, so this fixture states what it is. The
+        // helper is called `synthetic` and now says so in the value too.
+        provenance: Provenance::Synthetic,
+        coherence: Coherence::NotCollected,
+        enumeration_anomalies: Vec::new(),
+        processor_attributes: Vec::new(),
     }
 }
 
@@ -133,7 +141,7 @@ fn processor_looks_up_by_id() {
 
 #[test]
 fn discover_succeeds_and_every_online_processor_is_in_some_group() {
-    let topo = Topology::discover().expect("discover");
+    let topo = MachineMemoryTopology::discover().expect("discover");
     assert!(!topo.processors.is_empty());
     assert!(topo.groups().count() >= 1);
 
@@ -151,7 +159,7 @@ fn discover_succeeds_and_every_online_processor_is_in_some_group() {
 
 #[test]
 fn discover_reports_a_processor_entry_for_every_slot_up_to_each_groups_maximum() {
-    let topo = Topology::discover().expect("discover");
+    let topo = MachineMemoryTopology::discover().expect("discover");
     let relations = crate::relation::discover().expect("discover relations");
     let expected: usize = relations
         .groups
@@ -168,13 +176,755 @@ mod serde_tests {
     use super::super::*;
 
     #[test]
-    fn a_discovered_topology_round_trips_through_json_unchanged() {
-        let topology = Topology::discover().expect("discover");
+    fn a_discovered_topology_round_trips_through_json_except_for_its_provenance() {
+        // This test used to assert the round trip was *unchanged*. That is now
+        // deliberately false, and the change is the point rather than a
+        // regression: a discovered topology asserts "this is the machine you
+        // are on", and once written to a file it can no longer assert that.
+        // Reloading yields `Restored`.
+        //
+        // Four things are downgraded across the boundary, for one reason. The
+        // provenance drops to `Restored`; every relation's platform
+        // observations are dropped; so are the per-processor attribute claims;
+        // and the coherence drops to `NotCollected` -- because a file saying
+        // "the relationship walk observed this" or "the two enumerations
+        // agreed" cannot establish that it did, and carrying the claim would be
+        // exactly the forgery D-12 refuses.
+        //
+        // The assertion is deliberately not weakened to "the parts I still
+        // expect to match". Everything else must survive verbatim, so this
+        // compares against the original with only those adjusted -- a second
+        // corruption would still fail here.
+        let topology = MachineMemoryTopology::discover().expect("discover");
+        assert!(
+            topology.provenance.is_measured(),
+            "discover must claim the machine it read"
+        );
+        assert!(
+            topology
+                .domains
+                .iter()
+                .all(|domain| !domain.observations.is_empty()),
+            "a discovered relation must record which source reported it"
+        );
+        assert!(
+            !topology.processor_attributes.is_empty(),
+            "a discovered topology records what each source said per processor"
+        );
+
         let json = serde_json::to_string(&topology).expect("serialize");
-        let back: Topology = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(topology, back);
+        let back: MachineMemoryTopology = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.provenance, Provenance::Restored);
+        assert!(
+            back.domains
+                .iter()
+                .all(|domain| domain.observations.is_empty()),
+            "a restored relation must not claim a platform source observed it"
+        );
+        assert!(
+            back.processor_attributes.is_empty(),
+            "nor may a restored topology claim a source said anything per processor"
+        );
+        assert_eq!(
+            back.coherence,
+            Coherence::NotCollected,
+            "nor may it claim the two enumerations agreed, which only a collection can establish"
+        );
+
+        let mut expected = topology;
+        expected.provenance = Provenance::Restored;
+        expected.coherence = Coherence::NotCollected;
+        expected.processor_attributes.clear();
+        for domain in &mut expected.domains {
+            domain.observations.clear();
+        }
+        assert_eq!(back, expected);
     }
 
+    #[test]
+    fn both_sources_are_folded_into_one_relation_where_they_agree() {
+        // M3+.1.2: the walk and CPU Sets both describe cores and NUMA nodes. On
+        // a machine where they agree -- measured to be the ordinary case
+        // (D-15) -- that is ONE relation carrying TWO observations, not two
+        // competing relations.
+        //
+        // This test replaced one asserting exactly one observation per
+        // relation, which is what caught this change arriving rather than
+        // letting it land unnoticed.
+        let topology = MachineMemoryTopology::discover().expect("discover");
+
+        let doubly_observed = topology
+            .domains
+            .iter()
+            .filter(|domain| domain.observations.len() > 1)
+            .count();
+        assert!(
+            doubly_observed > 0,
+            "both Win32 sources report cores, so at least one relation must \
+             carry two observations: {:?}",
+            topology
+                .domains
+                .iter()
+                .map(|d| (&d.kind, d.observations.len()))
+                .collect::<Vec<_>>()
+        );
+
+        for domain in &topology.domains {
+            assert!(
+                !domain.observations.is_empty(),
+                "every relation names who reported it: {domain:?}"
+            );
+            let mut sources: Vec<_> = domain.observations.iter().map(|o| o.source).collect();
+            sources.sort_unstable();
+            sources.dedup();
+            assert_eq!(
+                sources.len(),
+                domain.observations.len(),
+                "one observation per source, never two from the same one: {domain:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_doubly_observed_relation_keeps_both_labels() {
+        // The measured disagreement D-15 is built on: the sources agree on the
+        // core partition and label it differently. Both labels survive, which
+        // they could not if the relation carried a single id.
+        let topology = MachineMemoryTopology::discover().expect("discover");
+
+        let both: Vec<_> = topology
+            .domains
+            .iter()
+            .filter(|d| d.observations.len() > 1)
+            .collect();
+        assert!(!both.is_empty(), "nothing was unified");
+
+        for domain in both {
+            assert!(
+                domain
+                    .observations
+                    .iter()
+                    .any(|o| o.source == Source::RelationshipWalk),
+                "{domain:?}"
+            );
+            assert!(
+                domain
+                    .observations
+                    .iter()
+                    .any(|o| o.source == Source::CpuSets),
+                "{domain:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_last_level_cache_grouping_is_not_folded_into_a_cache_relation() {
+        // D-14: CPU Sets' LastLevelCacheIndex answers a different question from
+        // the derived cache partitioning -- one group against eight L2
+        // partitions on the development host -- so folding it into `Cache`
+        // would assert an agreement neither source made.
+        let topology = MachineMemoryTopology::discover().expect("discover");
+
+        for domain in topology.caches() {
+            assert!(
+                domain
+                    .observations
+                    .iter()
+                    .all(|o| o.source == Source::RelationshipWalk),
+                "no cache relation may carry a CPU-sets observation: {domain:?}"
+            );
+        }
+    }
+    /// A topology whose walk reports exactly `processors` in group 0.
+    fn walk_reporting(processors: &[(u8, bool)]) -> MachineMemoryTopology {
+        MachineMemoryTopology {
+            processors: processors
+                .iter()
+                .map(|&(number, online)| Processor {
+                    id: ProcessorId { group: 0, number },
+                    online,
+                    capacity: 0,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn two_sources_reporting_the_same_processors_are_coherent() {
+        let topology = walk_reporting(&[(0, true), (1, true)]);
+        let sets = vec![cpu_set(0, 0, 0, 0), cpu_set(1, 0, 0, 0)];
+        assert_eq!(
+            topology.processor_divergence(&sets),
+            (Vec::new(), Vec::new()),
+            "identical processor sets are the coherent case"
+        );
+    }
+
+    #[test]
+    fn a_processor_only_the_walk_saw_is_a_divergence() {
+        // The hot-remove shape: the walk enumerated a processor that was gone
+        // by the time CPU Sets was asked. D-16's retry exists to find out
+        // whether that persists.
+        let topology = walk_reporting(&[(0, true), (1, true)]);
+        let sets = vec![cpu_set(0, 0, 0, 0)];
+        let (walk_only, cpu_sets_only) = topology.processor_divergence(&sets);
+        assert_eq!(
+            walk_only,
+            vec![ProcessorId {
+                group: 0,
+                number: 1
+            }]
+        );
+        assert!(cpu_sets_only.is_empty());
+    }
+
+    #[test]
+    fn a_processor_only_cpu_sets_saw_is_a_divergence() {
+        // The hot-add shape, and asserted separately because a comparison that
+        // comes out right in one direction can be wrong in the other.
+        let topology = walk_reporting(&[(0, true)]);
+        let sets = vec![cpu_set(0, 0, 0, 0), cpu_set(1, 0, 0, 0)];
+        let (walk_only, cpu_sets_only) = topology.processor_divergence(&sets);
+        assert!(walk_only.is_empty());
+        assert_eq!(
+            cpu_sets_only,
+            vec![ProcessorId {
+                group: 0,
+                number: 1
+            }]
+        );
+    }
+
+    #[test]
+    fn an_inactive_slot_is_not_a_divergence() {
+        // The walk reports a slot for every position up to a group's maximum,
+        // occupied or not, and CPU Sets reports only real processors. Comparing
+        // those raw would make every machine with an inactive slot look
+        // incoherent forever -- three passes, then a false `Disagreed`. That is
+        // a difference in what the two APIs enumerate, not about the machine.
+        let topology = walk_reporting(&[(0, true), (1, false)]);
+        let sets = vec![cpu_set(0, 0, 0, 0)];
+        assert_eq!(
+            topology.processor_divergence(&sets),
+            (Vec::new(), Vec::new()),
+            "an offline slot is outside the comparison"
+        );
+    }
+
+    #[test]
+    fn a_discovered_topology_states_its_coherence() {
+        // The live path. This machine's two enumerations agree, so the retry
+        // settles on the first pass -- but what is asserted is that `discover`
+        // *states* an answer, never leaving the default that means "nobody
+        // collected this".
+        let topology = MachineMemoryTopology::discover().expect("discover");
+        assert_ne!(
+            topology.coherence,
+            Coherence::NotCollected,
+            "a collected topology must say how its two sources agreed"
+        );
+        assert_eq!(
+            topology.coherence,
+            Coherence::Agreed,
+            "the two enumerations disagree about which processors exist on this host"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn a_document_cannot_assert_enumeration_anomalies_into_a_restored_topology() {
+        // An anomaly is a fact about *an enumeration*, and a deserialized
+        // topology performed none -- the same reason `coherence` is not read
+        // back. The field's own documentation has always said the list is empty
+        // for a deserialized topology; `serde(default)` let a document say
+        // otherwise, so the contract was contradicted by its own attribute.
+        let document = r#"{
+            "processors": [],
+            "domains": [],
+            "cpu_sets": [],
+            "provenance": "measured",
+            "enumeration_anomalies": [
+                {
+                    "source": "relationship_walk",
+                    "offset": 64,
+                    "kind": { "TrailingBytes": { "remaining": 3 } }
+                }
+            ]
+        }"#;
+
+        let restored: MachineMemoryTopology =
+            serde_json::from_str(document).expect("the document must still deserialize");
+
+        assert!(
+            restored.enumeration_anomalies.is_empty(),
+            "a restored topology claimed anomalies from an enumeration it never ran: {:?}",
+            restored.enumeration_anomalies
+        );
+        // The neighbouring guarantee, asserted here so the two cannot drift:
+        // both fields describe a collection, and neither survives a round trip.
+        assert_eq!(restored.coherence, Coherence::NotCollected);
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn enumeration_anomalies_are_still_written_out() {
+        // Skipping the *deserialize* side only. A dump is where a human reads
+        // how the run that produced it went, so dropping these from the output
+        // would lose the diagnosis this field exists to carry.
+        let mut topology = MachineMemoryTopology::default();
+        topology.enumeration_anomalies.push(EnumerationAnomaly {
+            source: Source::RelationshipWalk,
+            offset: 64,
+            kind: crate::AnomalyKind::TrailingBytes { remaining: 3 },
+        });
+
+        let text = serde_json::to_string(&topology).expect("serialize");
+
+        assert!(
+            text.contains("enumeration_anomalies"),
+            "the anomaly must survive into the document: {text}"
+        );
+        assert!(text.contains("64"), "got {text}");
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn coherence_serializes_in_the_lowercase_spelling_the_rest_of_this_crate_uses() {
+        // Every serialized name this crate emits is lowercase -- `Provenance`,
+        // `Source` and `ProcessorAttribute` carry `rename_all`, and `Domain`'s
+        // hand-written serializer writes "group", "package", "cache". This enum
+        // was derived without the attribute and spelled its variants
+        // `NotCollected` and `Disagreed`, which is not a cosmetic difference:
+        // a consumer archiving a document containing one freezes that spelling.
+        let agreed = serde_json::to_string(&Coherence::Agreed).expect("serialize");
+        let not_collected = serde_json::to_string(&Coherence::NotCollected).expect("serialize");
+        let disagreed = serde_json::to_string(&Coherence::Disagreed {
+            walk_only: vec![ProcessorId {
+                group: 0,
+                number: 1,
+            }],
+            cpu_sets_only: Vec::new(),
+            attempts: 3,
+        })
+        .expect("serialize");
+
+        assert_eq!(agreed, "\"agreed\"");
+        assert_eq!(not_collected, "\"not_collected\"");
+        assert!(
+            disagreed.starts_with("{\"disagreed\":"),
+            "the data-carrying variant must be spelled the same way: {disagreed}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn every_coherence_variant_round_trips_through_its_serialized_form() {
+        // The rename is only safe because it is applied to both halves. An
+        // attribute on `Serialize` alone would write a name `Deserialize` then
+        // refused to read, which no test of serialization alone would notice.
+        for coherence in [
+            Coherence::NotCollected,
+            Coherence::Agreed,
+            Coherence::Disagreed {
+                walk_only: vec![ProcessorId {
+                    group: 1,
+                    number: 7,
+                }],
+                cpu_sets_only: vec![ProcessorId {
+                    group: 0,
+                    number: 2,
+                }],
+                attempts: 3,
+            },
+        ] {
+            let text = serde_json::to_string(&coherence).expect("serialize");
+            let back: Coherence = serde_json::from_str(&text).expect("deserialize");
+            assert_eq!(back, coherence, "round trip changed {text}");
+        }
+    }
+
+    /// A CPU-set record for one processor in group 0.
+    fn cpu_set(index: u8, core: u8, node: u8, efficiency_class: u8) -> crate::cpu_set::CpuSet {
+        crate::cpu_set::CpuSet {
+            id: u32::from(index),
+            group: 0,
+            logical_processor_index: index,
+            core_index: core,
+            last_level_cache_index: 0,
+            numa_node_index: node,
+            efficiency_class,
+            parked: false,
+            allocated: true,
+            allocated_to_target_process: true,
+            real_time: false,
+            scheduling_class: 0,
+            allocation_tag: 0,
+        }
+    }
+
+    fn core_domain(label: u32, members: &[u8], efficiency_class: u8) -> Domain {
+        let mut processors = ProcessorSet::empty();
+        for &m in members {
+            processors.insert(0, m);
+        }
+        Domain {
+            kind: DomainKind::Core {
+                simultaneous_multithreading: members.len() > 1,
+                efficiency_class,
+            },
+            processors,
+            observations: vec![Observation::new(Source::RelationshipWalk, label)],
+        }
+    }
+
+    // --- the fold, against shapes this host does not have ---
+    //
+    // Every other fold test runs `discover()`, which sees one machine whose two
+    // sources agree exactly. That cannot distinguish matching on equal
+    // membership from matching on a subset, because here the two coincide -- a
+    // sabotage run proved it, passing all 169 tests. These build the disagreeing
+    // shapes deliberately.
+
+    #[test]
+    fn folding_matches_on_equal_membership_not_on_containment() {
+        // The walk reports one four-processor core; CPU Sets reports two
+        // two-processor ones. Each CPU-sets membership is a strict SUBSET of the
+        // walk's, so a containment match would attach both observations to the
+        // walk's relation and record a false agreement.
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(0, &[0, 1, 2, 3], 0)],
+            cpu_sets: None,
+            provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
+            enumeration_anomalies: Vec::new(),
+            processor_attributes: Vec::new(),
+        };
+        topology.fold_in_cpu_sets(&[
+            cpu_set(0, 0, 0, 0),
+            cpu_set(1, 0, 0, 0),
+            cpu_set(2, 1, 0, 0),
+            cpu_set(3, 1, 0, 0),
+        ]);
+
+        let walk_relation = topology
+            .domains
+            .iter()
+            .find(|d| d.processors.len() == 4)
+            .expect("the walk's relation survives");
+        assert_eq!(
+            walk_relation.observations.len(),
+            1,
+            "a relation nothing agreed with keeps its single observation"
+        );
+
+        let cpu_only: Vec<_> = topology
+            .domains
+            .iter()
+            .filter(|d| {
+                matches!(d.kind, DomainKind::Core { .. })
+                    && d.observations.iter().all(|o| o.source == Source::CpuSets)
+            })
+            .collect();
+        assert_eq!(
+            cpu_only.len(),
+            2,
+            "each disagreeing CPU-sets membership becomes its own relation: {:?}",
+            topology.domains
+        );
+    }
+
+    #[test]
+    fn a_core_only_cpu_sets_reports_takes_its_efficiency_class_from_the_record() {
+        // Never fabricated. Defaulting to `0` would reinvent the
+        // `Processor::capacity` sentinel, because `0` is a legitimate class.
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: Vec::new(),
+            cpu_sets: None,
+            provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
+            enumeration_anomalies: Vec::new(),
+            processor_attributes: Vec::new(),
+        };
+        topology.fold_in_cpu_sets(&[cpu_set(0, 0, 0, 2), cpu_set(1, 0, 0, 2)]);
+
+        let core = topology
+            .domains
+            .iter()
+            .find(|d| matches!(d.kind, DomainKind::Core { .. }))
+            .expect("a core relation");
+        assert!(
+            matches!(
+                core.kind,
+                DomainKind::Core {
+                    efficiency_class: 2,
+                    simultaneous_multithreading: true
+                }
+            ),
+            "{:?}",
+            core.kind
+        );
+        assert_eq!(
+            core.observations,
+            vec![Observation::new(Source::CpuSets, 0)]
+        );
+    }
+
+    #[test]
+    fn folding_agreeing_sources_yields_one_relation_with_both_labels() {
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(7, &[0, 1], 0)],
+            cpu_sets: None,
+            provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
+            enumeration_anomalies: Vec::new(),
+            processor_attributes: Vec::new(),
+        };
+        topology.fold_in_cpu_sets(&[cpu_set(0, 3, 0, 0), cpu_set(1, 3, 0, 0)]);
+
+        let cores: Vec<_> = topology
+            .domains
+            .iter()
+            .filter(|d| matches!(d.kind, DomainKind::Core { .. }))
+            .collect();
+        assert_eq!(cores.len(), 1, "agreement is one relation: {cores:?}");
+        assert_eq!(
+            cores[0].observations,
+            vec![
+                Observation::new(Source::RelationshipWalk, 7),
+                Observation::new(Source::CpuSets, 3),
+            ],
+            "both labels survive, which is the whole of D-15"
+        );
+    }
+
+    #[test]
+    fn folding_never_attaches_a_cpu_sets_observation_to_the_wrong_kind() {
+        // A memory domain covering the same processors as a core must not
+        // absorb the core's CPU-sets observation.
+        let mut memory = core_domain(0, &[0, 1], 0);
+        memory.kind = DomainKind::Memory {
+            memory_bytes: Observed::NotObserved,
+        };
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![memory],
+            cpu_sets: None,
+            provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
+            enumeration_anomalies: Vec::new(),
+            processor_attributes: Vec::new(),
+        };
+        topology.fold_in_cpu_sets(&[cpu_set(0, 5, 0, 0), cpu_set(1, 5, 0, 0)]);
+
+        let memory_domain = topology
+            .domains
+            .iter()
+            .find(|d| matches!(d.kind, DomainKind::Memory { .. }))
+            .expect("the memory domain");
+        assert!(
+            memory_domain
+                .observations
+                .iter()
+                .any(|o| o.source == Source::CpuSets),
+            "the NUMA membership does match this one, and should attach"
+        );
+        let core = topology
+            .domains
+            .iter()
+            .find(|d| matches!(d.kind, DomainKind::Core { .. }))
+            .expect("the core arrives as its own relation");
+        assert_eq!(
+            core.observations,
+            vec![Observation::new(Source::CpuSets, 5)]
+        );
+    }
+    // --- M3+.2: the two Provenance properties, re-derived at the relation level ---
+
+    #[test]
+    fn a_relation_nobody_reported_claims_no_source() {
+        // "The default is the untrusted value", carried down a level. A
+        // hand-built relation has an empty observation list, which says nobody
+        // reported it -- rather than defaulting to a source and asserting
+        // something no API said. The argument is STRONGER here than for the
+        // object, because there are far more places to forget.
+        let domain = core_domain(0, &[0, 1], 0);
+        assert_eq!(domain.observations.len(), 1, "the helper states its source");
+
+        let silent = Domain {
+            observations: Vec::new(),
+            ..core_domain(0, &[0, 1], 0)
+        };
+        assert!(
+            silent.observations.is_empty(),
+            "nothing fills this in on a caller's behalf"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn relation_level_trust_never_upgrades_across_a_file() {
+        // "Trust never upgrades", carried down a level. A description asserting
+        // the relationship walk observed something cannot establish that it
+        // did, so the claim does not survive deserialization -- the same rule
+        // `Provenance::downgraded_to` applies to the object (D-12).
+        let json = r#"{
+            "processors": [
+                {"id": {"group": 0, "number": 0}, "online": true, "capacity": 0}
+            ],
+            "domains": [
+                {"kind": "core", "id": 0, "processors": [{"group":0,"number":0}],
+                 "simultaneous_multithreading": false, "efficiency_class": 0}
+            ],
+            "provenance": "measured"
+        }"#;
+        let topology: MachineMemoryTopology = serde_json::from_str(json).expect("parse");
+
+        assert_eq!(
+            topology.provenance,
+            Provenance::Restored,
+            "the object's claim is capped"
+        );
+        assert!(
+            topology
+                .domains
+                .iter()
+                .all(|domain| domain.observations.is_empty()),
+            "and no relation claims a platform source either"
+        );
+    }
+    // --- M3+.1.4: the attribute subject (D-18) ---
+
+    #[test]
+    fn both_sources_claim_an_efficiency_class_for_every_processor() {
+        let topology = MachineMemoryTopology::discover().expect("discover");
+
+        for processor in topology.processors.iter().filter(|p| p.online) {
+            let claims: Vec<_> = topology
+                .processor_attributes
+                .iter()
+                .filter(|a| {
+                    a.processor == processor.id
+                        && a.attribute == ProcessorAttribute::EfficiencyClass
+                })
+                .collect();
+            assert_eq!(
+                claims.len(),
+                2,
+                "both Win32 sources report an efficiency class for {:?}: {claims:?}",
+                processor.id
+            );
+        }
+    }
+
+    #[test]
+    fn this_host_has_no_attribute_conflict() {
+        // Measured, not assumed. Every efficiency class reads 0 here, so this
+        // asserts what the machine actually is rather than standing in for the
+        // conflicting case -- which is why the next test builds one.
+        let topology = MachineMemoryTopology::discover().expect("discover");
+        assert_eq!(topology.attribute_conflicts(), Vec::new());
+    }
+
+    #[test]
+    fn a_disagreement_about_one_processor_is_reported_not_resolved() {
+        // Testable only synthetically (D-17): the development host is not
+        // hybrid, and the field cases are hardware nobody here has plus
+        // prerelease firmware.
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(0, &[0, 1], 0)],
+            cpu_sets: None,
+            processor_attributes: Vec::new(),
+            provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
+            enumeration_anomalies: Vec::new(),
+        };
+        topology.record_walk_attributes();
+        // CPU Sets disagrees about processor 0 and agrees about processor 1.
+        topology.fold_in_cpu_sets(&[cpu_set(0, 0, 0, 1), cpu_set(1, 0, 0, 0)]);
+
+        assert_eq!(
+            topology.attribute_conflicts(),
+            vec![(
+                ProcessorId {
+                    group: 0,
+                    number: 0
+                },
+                ProcessorAttribute::EfficiencyClass
+            )],
+            "only the contested processor is named"
+        );
+
+        // Both claims survive. Picking a winner would destroy the disagreement,
+        // and on a hybrid part it decides whether this is a performance core.
+        let values: Vec<u32> = topology
+            .processor_attributes
+            .iter()
+            .filter(|a| {
+                a.processor
+                    == ProcessorId {
+                        group: 0,
+                        number: 0,
+                    }
+            })
+            .map(|a| a.value)
+            .collect();
+        assert_eq!(values.len(), 2);
+        assert!(values.contains(&0) && values.contains(&1), "{values:?}");
+    }
+
+    #[test]
+    fn a_conflict_is_local_to_the_subject_that_has_one() {
+        // D-19's blast radius, at the attribute level: one contested processor
+        // must not make the others look uncertain.
+        let mut topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(0, &[0, 1, 2, 3], 0)],
+            cpu_sets: None,
+            processor_attributes: Vec::new(),
+            provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
+            enumeration_anomalies: Vec::new(),
+        };
+        topology.record_walk_attributes();
+        topology.fold_in_cpu_sets(&[
+            cpu_set(0, 0, 0, 0),
+            cpu_set(1, 0, 0, 0),
+            cpu_set(2, 0, 0, 3),
+            cpu_set(3, 0, 0, 0),
+        ]);
+
+        assert_eq!(topology.attribute_conflicts().len(), 1);
+        assert_eq!(
+            topology.attribute_conflicts()[0].0,
+            ProcessorId {
+                group: 0,
+                number: 2
+            }
+        );
+    }
+
+    #[test]
+    fn a_hand_built_topology_records_no_attribute_claims() {
+        // Nobody asked, so nothing is claimed -- the same untrusted default the
+        // relation-level observations take.
+        let topology = MachineMemoryTopology {
+            processors: Vec::new(),
+            domains: vec![core_domain(0, &[0, 1], 0)],
+            cpu_sets: None,
+            processor_attributes: Vec::new(),
+            provenance: Provenance::Synthetic,
+            coherence: Coherence::NotCollected,
+            enumeration_anomalies: Vec::new(),
+        };
+        assert!(topology.processor_attributes.is_empty());
+        assert!(topology.attribute_conflicts().is_empty());
+    }
     #[test]
     fn a_hand_written_synthetic_topology_parses() {
         let json = r#"{
@@ -188,7 +938,7 @@ mod serde_tests {
             ],
             "distances": null
         }"#;
-        let topology: Topology = serde_json::from_str(json).expect("parse");
+        let topology: MachineMemoryTopology = serde_json::from_str(json).expect("parse");
         assert_eq!(topology.processors.len(), 2);
         assert_eq!(topology.groups().count(), 1);
         let memory: Vec<_> = topology.memory_domains().collect();
@@ -198,11 +948,18 @@ mod serde_tests {
 
     /// A description shaped like what a Linux system would produce: a
     /// single processor group (Linux has no group concept), a memory-only
-    /// node, and a populated scalar distance matrix -- all things Windows
-    /// itself never reports through this crate's own discovery, but that a
-    /// fed-in description can legitimately carry (D-10).
+    /// node, and a populated scalar distance matrix.
+    ///
+    /// The matrix is **ignored** as of D-20 in `DESIGN-NOTES.md`: this crate does not go below
+    /// the Win32 topology APIs, so inter-node distance is not a fact it
+    /// states, and the field it used to be read into is gone. The test keeps
+    /// the populated matrix rather than dropping it, because what needs
+    /// proving is that such a description still *parses* -- nothing here sets
+    /// `deny_unknown_fields`, so an existing Linux-shaped description does not
+    /// become unreadable. It does not round-trip: the value is dropped on read
+    /// and absent on write.
     #[test]
-    fn a_linux_shaped_description_with_a_memory_only_node_and_distances_parses() {
+    fn a_linux_shaped_description_parses_and_its_distances_are_ignored() {
         let json = r#"{
             "processors": [
                 {"id": {"group": 0, "number": 0}, "online": true, "capacity": 1024},
@@ -216,15 +973,20 @@ mod serde_tests {
             ],
             "distances": {"over": "memory", "matrix": [[10, 40], [40, 10]]}
         }"#;
-        let topology: Topology = serde_json::from_str(json).expect("parse");
+        let topology: MachineMemoryTopology = serde_json::from_str(json).expect("parse");
         assert_eq!(topology.memory_domains().count(), 2);
         assert!(
             topology.memory_domains().any(|d| d.processors.is_empty()),
             "the CXL-shaped node must survive"
         );
-        let distances = topology.distances.expect("distances present");
-        assert_eq!(distances.over, "memory");
-        assert_eq!(distances.matrix, vec![vec![10, 40], vec![40, 10]]);
+
+        // The half that D-20 changed: re-serializing does not carry the matrix
+        // back out, so the drop is silent and is asserted rather than assumed.
+        let round_tripped = serde_json::to_string(&topology).expect("serialize");
+        assert!(
+            !round_tripped.contains("distances"),
+            "distances must not reappear on write: {round_tripped}"
+        );
     }
 
     /// The other half of D-10: a single "group" holding more than 64
@@ -242,11 +1004,973 @@ mod serde_tests {
             ],
             "distances": null
         }"#;
-        let error = serde_json::from_str::<Topology>(json)
+        let error = serde_json::from_str::<MachineMemoryTopology>(json)
             .expect_err("processor number 100 is out of range");
         assert!(
             error.to_string().contains("100"),
             "error should name the offending number: {error}"
         );
+    }
+}
+
+#[test]
+fn a_hand_built_topology_is_not_measured() {
+    // The fixture above names `Synthetic` explicitly; this pins down that the
+    // value survives to a reader, so a consumer asking "is this my machine"
+    // gets the right answer from hand-built data.
+    assert_eq!(synthetic().provenance, Provenance::Synthetic);
+    assert!(!synthetic().provenance.is_measured());
+}
+
+#[test]
+fn a_defaulted_topology_is_not_measured() {
+    // `MachineMemoryTopology::default()` is the easiest way to obtain one and must be the
+    // safe one. If this ever reports measured, every forgetful construction in
+    // every dependent silently starts asserting it read the machine.
+    let topology = MachineMemoryTopology::default();
+
+    assert_eq!(topology.provenance, Provenance::Synthetic);
+    assert!(!topology.provenance.is_measured());
+}
+
+#[test]
+fn struct_update_syntax_from_default_stays_untrusted() {
+    // `..Default::default()` is how a caller builds a topology while naming
+    // only the fields they care about, and provenance is exactly the field
+    // nobody thinks to name.
+    let topology = MachineMemoryTopology {
+        cpu_sets: None,
+        ..Default::default()
+    };
+
+    assert!(!topology.provenance.is_measured());
+}
+
+#[cfg(feature = "serde")]
+mod serde_provenance {
+    use super::*;
+
+    fn load(provenance_field: &str) -> MachineMemoryTopology {
+        let json =
+            format!(r#"{{"processors": [], "domains": [], "distances": null{provenance_field}}}"#);
+        serde_json::from_str(&json).expect("the description must parse")
+    }
+
+    #[test]
+    fn a_description_claiming_measured_is_downgraded_to_restored() {
+        // The core of the rule. A file cannot establish that it is the machine
+        // you are running on, however sincerely it asserts it -- and a
+        // hand-edited description is the obvious way someone would try.
+        let topology = load(r#", "provenance": "measured""#);
+
+        assert_eq!(topology.provenance, Provenance::Restored);
+        assert!(!topology.provenance.is_measured());
+    }
+
+    #[test]
+    fn a_description_claiming_restored_stays_restored() {
+        assert_eq!(
+            load(r#", "provenance": "restored""#).provenance,
+            Provenance::Restored
+        );
+    }
+
+    #[test]
+    fn a_description_claiming_synthetic_is_not_promoted() {
+        // The ceiling is a maximum, not an assignment: passing through a loader
+        // must not launder fabricated data into merely-restored data.
+        assert_eq!(
+            load(r#", "provenance": "synthetic""#).provenance,
+            Provenance::Synthetic
+        );
+    }
+
+    #[test]
+    fn a_description_without_the_field_loads_as_synthetic() {
+        // Every description written before this field existed takes this path,
+        // so the default has to be the safe one here too.
+        assert_eq!(load("").provenance, Provenance::Synthetic);
+    }
+
+    #[test]
+    fn a_measured_topology_does_not_survive_a_round_trip_as_measured() {
+        // The property that makes persistence honest, stated end to end: you
+        // may archive a real topology, and what you reload is explicitly a
+        // description of a machine rather than a claim about this one.
+        let mut measured = synthetic();
+        measured.provenance = Provenance::Measured;
+
+        let json = serde_json::to_string(&measured).expect("must serialize");
+        assert!(
+            json.contains("measured"),
+            "the marker is not visible in the persisted form: {json}"
+        );
+
+        let reloaded: MachineMemoryTopology = serde_json::from_str(&json).expect("must parse");
+        assert_eq!(reloaded.provenance, Provenance::Restored);
+        assert!(!reloaded.provenance.is_measured());
+    }
+
+    #[test]
+    fn everything_but_the_provenance_round_trips_unchanged() {
+        // The downgrade must be the *only* thing a round trip changes,
+        // otherwise this would be trading one silent corruption for another.
+        let mut measured = synthetic();
+        measured.provenance = Provenance::Measured;
+
+        let json = serde_json::to_string(&measured).expect("must serialize");
+        let reloaded: MachineMemoryTopology = serde_json::from_str(&json).expect("must parse");
+
+        assert_eq!(reloaded.processors, measured.processors);
+        assert_eq!(reloaded.domains, measured.domains);
+        assert_eq!(reloaded.cpu_sets, measured.cpu_sets);
+    }
+}
+
+// --- capacity is the class of the processor's OWN core (mutation-testing gap) ---
+//
+// A `cargo mutants` run replaced the match guard in `processors_from` -- the
+// test that a core domain actually contains the processor being described --
+// with both `true` and `false`, and the whole suite passed either way.
+//
+// Both mutants are real defects. With `true`, every processor takes the first
+// core domain's efficiency class, so on a heterogeneous machine the performance
+// cores would be reported with the efficiency cores' class. With `false`, no
+// domain ever matches and every processor reports capacity 0.
+//
+// Nothing caught them because the only test reaching `processors_from` asserted
+// the *count* of processors, and the serde round-trip compares a discovered
+// topology against itself -- identically wrong on both sides of the comparison.
+//
+// These use a synthetic two-core, two-class fixture rather than the real
+// machine, so they assert the mapping on every host rather than only on a
+// heterogeneous one.
+
+/// Two processors on two cores of different efficiency classes.
+fn heterogeneous_relations() -> (crate::relation::Relations, Vec<Domain>) {
+    use crate::relation::{CoreRelation, GroupRelation, Relations};
+
+    let cpu0 = ProcessorSet::from_group_mask(0, 0b01);
+    let cpu1 = ProcessorSet::from_group_mask(0, 0b10);
+
+    let relations = Relations {
+        cores: vec![
+            CoreRelation {
+                simultaneous_multithreading: false,
+                efficiency_class: 0,
+                processors: cpu0.clone(),
+            },
+            CoreRelation {
+                simultaneous_multithreading: false,
+                efficiency_class: 1,
+                processors: cpu1.clone(),
+            },
+        ],
+        packages: Vec::new(),
+        dies: Vec::new(),
+        modules: Vec::new(),
+        caches: Vec::new(),
+        numa_nodes: Vec::new(),
+        groups: vec![GroupRelation {
+            group: 0,
+            maximum_processor_count: 2,
+            active_processor_count: 2,
+            active_processors: ProcessorSet::from_group_mask(0, 0b11),
+        }],
+        anomalies: Vec::new(),
+    };
+
+    let domains = vec![
+        Domain {
+            kind: DomainKind::Core {
+                simultaneous_multithreading: false,
+                efficiency_class: 0,
+            },
+            processors: cpu0,
+            observations: Vec::new(),
+        },
+        Domain {
+            kind: DomainKind::Core {
+                simultaneous_multithreading: false,
+                efficiency_class: 1,
+            },
+            processors: cpu1,
+            observations: Vec::new(),
+        },
+    ];
+
+    (relations, domains)
+}
+
+#[test]
+fn each_processor_takes_the_efficiency_class_of_its_own_core() {
+    let (relations, domains) = heterogeneous_relations();
+    let processors = MachineMemoryTopology::processors_from(&relations, &domains);
+
+    assert_eq!(processors.len(), 2);
+    assert_eq!(
+        processors[0].capacity, 0,
+        "processor 0 belongs to the class-0 core"
+    );
+    assert_eq!(
+        processors[1].capacity, 1,
+        "processor 1 belongs to the class-1 core, and must not inherit the \
+         first core domain's class"
+    );
+}
+
+#[test]
+fn a_processor_with_no_matching_core_domain_reports_no_capacity() {
+    // The other side of the same guard: a domain list that does not describe
+    // this processor must yield 0 rather than borrowing some other core's
+    // class. Windows reports relations only for active processors, so this is
+    // the inactive-slot path.
+    let (relations, _) = heterogeneous_relations();
+    let processors = MachineMemoryTopology::processors_from(&relations, &[]);
+
+    assert_eq!(processors.len(), 2);
+    for processor in &processors {
+        assert_eq!(
+            processor.capacity, 0,
+            "with no core domains there is no class to report"
+        );
+    }
+}
+
+#[test]
+fn an_offline_processor_reports_no_capacity_even_when_a_core_claims_it() {
+    use crate::relation::{CoreRelation, GroupRelation, Relations};
+
+    // A slot that exists but is not active. The core domain still names it, so
+    // only the `online` check keeps its capacity at 0 -- which makes this the
+    // test for that check rather than for the guard above.
+    let both = ProcessorSet::from_group_mask(0, 0b11);
+    let relations = Relations {
+        cores: vec![CoreRelation {
+            simultaneous_multithreading: false,
+            efficiency_class: 7,
+            processors: both.clone(),
+        }],
+        packages: Vec::new(),
+        dies: Vec::new(),
+        modules: Vec::new(),
+        caches: Vec::new(),
+        numa_nodes: Vec::new(),
+        groups: vec![GroupRelation {
+            group: 0,
+            maximum_processor_count: 2,
+            active_processor_count: 1,
+            // Only processor 0 is online.
+            active_processors: ProcessorSet::from_group_mask(0, 0b01),
+        }],
+        anomalies: Vec::new(),
+    };
+    let domains = vec![Domain {
+        kind: DomainKind::Core {
+            simultaneous_multithreading: false,
+            efficiency_class: 7,
+        },
+        processors: both,
+        observations: Vec::new(),
+    }];
+
+    let processors = MachineMemoryTopology::processors_from(&relations, &domains);
+
+    assert!(processors[0].online);
+    assert_eq!(processors[0].capacity, 7);
+    assert!(!processors[1].online);
+    assert_eq!(
+        processors[1].capacity, 0,
+        "an offline slot's capacity is not invented from a domain that names it"
+    );
+}
+
+/// A machine of `cores` two-processor cores, each with the split L1 that real
+/// firmware reports, plus a shared last-level cache.
+///
+/// The split L1 is the point: Windows reports one relationship per *cache*, so
+/// a core contributes an L1 `data` domain **and** an L1 `instruction` domain
+/// covering exactly the same two processors.
+fn split_l1_machine(cores: u32, last_level: u8) -> MachineMemoryTopology {
+    let mut domains = Vec::new();
+    let mut all = 0usize;
+    let mut id = 0u32;
+    for core in 0..cores {
+        let mask = 0b11usize << (core * 2);
+        all |= mask;
+        let processors = ProcessorSet::from_group_mask(0, mask);
+        for cache_type in [CacheKind::Data, CacheKind::Instruction] {
+            domains.push(Domain {
+                kind: DomainKind::Cache {
+                    level: 1,
+                    associativity: 8,
+                    line_size: 64,
+                    size_bytes: 32 * 1024,
+                    cache_type,
+                },
+                processors: processors.clone(),
+                // The fixture stands in for a discovered machine, so its
+                // relations say who reported them and carry the walk's own
+                // numbering -- which is what the partitioning rule reads back.
+                observations: vec![Observation::new(Source::RelationshipWalk, id)],
+            });
+            id += 1;
+        }
+    }
+    domains.push(Domain {
+        kind: DomainKind::Cache {
+            level: last_level,
+            associativity: 16,
+            line_size: 64,
+            size_bytes: 32 * 1024 * 1024,
+            cache_type: CacheKind::Unified,
+        },
+        processors: ProcessorSet::from_group_mask(0, all),
+        observations: Vec::new(),
+    });
+
+    MachineMemoryTopology {
+        processors: Vec::new(),
+        domains,
+        cpu_sets: None,
+        provenance: Provenance::Synthetic,
+        coherence: Coherence::NotCollected,
+        enumeration_anomalies: Vec::new(),
+        processor_attributes: Vec::new(),
+    }
+}
+
+#[test]
+fn cache_levels_are_ascending_and_without_repeats() {
+    // Sixteen L1 relationships, one L3, but only two distinct levels.
+    assert_eq!(split_l1_machine(8, 3).cache_levels(), vec![1, 3]);
+}
+
+#[test]
+fn cache_levels_are_empty_when_no_cache_is_reported() {
+    let topo = MachineMemoryTopology {
+        processors: Vec::new(),
+        domains: Vec::new(),
+        cpu_sets: None,
+        provenance: Provenance::Synthetic,
+        coherence: Coherence::NotCollected,
+        enumeration_anomalies: Vec::new(),
+        processor_attributes: Vec::new(),
+    };
+    assert!(topo.cache_levels().is_empty());
+}
+
+#[test]
+fn a_split_instruction_and_data_cache_is_one_partition_not_two() {
+    // The measured shape of the development host: eight cores, so sixteen L1
+    // relationships over eight distinct processor pairs. Counting
+    // relationships reports twice as many partitions as the machine has.
+    let topo = split_l1_machine(8, 3);
+    assert_eq!(topo.caches_at_level(1).count(), 16);
+    assert_eq!(topo.cache_partitions_at_level(1).len(), 8);
+}
+
+// --- M4+.3: residency, with the unplaced case distinguishable ---
+
+#[test]
+fn a_processor_in_a_memory_domain_reports_it() {
+    let mut node = core_domain_at(0, &[0, 1]);
+    node.kind = DomainKind::Memory {
+        memory_bytes: Observed::NotObserved,
+    };
+    let topo = machine_of(4, vec![node]);
+
+    assert!(
+        topo.memory_domain_of(ProcessorId {
+            group: 0,
+            number: 0
+        })
+        .was_observed()
+    );
+}
+
+#[test]
+fn an_unplaced_processor_is_not_observed_rather_than_node_zero() {
+    // The asymmetry `windows-placement-probe` already encodes: an unknown cache
+    // domain costs an optimisation, an unknown memory domain has no honest
+    // fallback, because the pool must be allocated somewhere and guessing means
+    // quietly allocating remote memory for the life of the process.
+    let mut node = core_domain_at(0, &[0, 1]);
+    node.kind = DomainKind::Memory {
+        memory_bytes: Observed::NotObserved,
+    };
+    let topo = machine_of(4, vec![node]);
+
+    let unplaced = topo.memory_domain_of(ProcessorId {
+        group: 0,
+        number: 3,
+    });
+    assert!(!unplaced.was_observed());
+    assert_eq!(unplaced.known(), None);
+    assert_eq!(
+        topo.unplaced_processors(),
+        vec![
+            ProcessorId {
+                group: 0,
+                number: 2
+            },
+            ProcessorId {
+                group: 0,
+                number: 3
+            }
+        ]
+    );
+}
+
+#[test]
+fn a_fully_covered_machine_has_no_unplaced_processors() {
+    let mut node = core_domain_at(0, &[0, 1, 2, 3]);
+    node.kind = DomainKind::Memory {
+        memory_bytes: Observed::NotObserved,
+    };
+    assert!(machine_of(4, vec![node]).unplaced_processors().is_empty());
+}
+
+// --- M4+.2: the shard-set surface, without sentinels ---
+
+#[test]
+fn an_unknown_efficiency_class_is_not_observed_rather_than_zero() {
+    // The M5+.1 collision, from the other side. `Processor::capacity` spells
+    // "in no core" and "class zero" as the same 0, and class zero is every
+    // processor on every non-hybrid machine -- so the sentinel collides with
+    // the overwhelmingly common real value.
+    let topo = machine_of(2, Vec::new());
+    let facts = topo.shard_set();
+
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0].efficiency_class, Observed::NotObserved);
+    assert!(facts[0].core.is_none());
+    assert_eq!(facts[0].simultaneous_multithreading, Observed::NotObserved);
+}
+
+#[test]
+fn a_genuine_class_zero_is_known_not_missing() {
+    let topo = machine_of(2, vec![core_domain_at(0, &[0, 1])]);
+    let facts = topo.shard_set();
+
+    assert_eq!(facts[0].efficiency_class, Observed::Known(0));
+    assert!(
+        facts[0].efficiency_class.was_observed(),
+        "class zero is an answer, not an absence"
+    );
+    assert_eq!(
+        facts[0].simultaneous_multithreading,
+        Observed::Known(true),
+        "two processors in the core"
+    );
+}
+
+#[test]
+fn availability_is_not_observed_when_cpu_sets_was_never_consulted() {
+    // A hand-built topology has no CPU-set records, so parked and allocation
+    // state are gaps in what we asked -- not claims that the processor is
+    // available or unavailable.
+    let topo = machine_of(2, vec![core_domain_at(0, &[0, 1])]);
+    let facts = topo.shard_set();
+
+    assert_eq!(facts[0].parked, Observed::NotObserved);
+    assert_eq!(facts[0].allocated_to_this_process, Observed::NotObserved);
+}
+
+#[test]
+fn the_shard_set_states_availability_and_does_not_judge_it() {
+    // There is deliberately no `usable()` helper. Which of online, parked and
+    // allocation disqualifies a processor is a POLICY, and per D-21 this crate
+    // states facts -- baking the judgement in here is exactly what
+    // `outermost_partitioning_cache` was criticised for.
+    //
+    // It would also have been wrong: `allocated_to_this_process` reads false
+    // for every processor on the development host, so a `usable()` that
+    // refused on it refused the whole machine.
+    let mut topo = machine_of(2, vec![core_domain_at(0, &[0, 1])]);
+    topo.processors[1].online = false;
+    let facts = topo.shard_set();
+
+    assert!(facts[0].online);
+    assert!(!facts[1].online);
+
+    let mut parked = machine_of(1, Vec::new());
+    parked.cpu_sets = Some(vec![cpu_set_parked(0)]);
+    assert_eq!(
+        parked.shard_set()[0].parked,
+        Observed::Known(true),
+        "parked is reported, and is not the same as offline"
+    );
+    assert!(
+        parked.shard_set()[0].online,
+        "a parked processor is active; the scheduler is merely avoiding it"
+    );
+}
+
+#[test]
+fn the_shard_set_reads_availability_from_the_cpu_sets_when_present() {
+    let mut topo = machine_of(1, Vec::new());
+    topo.cpu_sets = Some(vec![cpu_set(0, 0, 0, 0)]);
+    let facts = topo.shard_set();
+
+    assert_eq!(facts[0].parked, Observed::Known(false));
+    assert_eq!(facts[0].allocated_to_this_process, Observed::Known(true));
+}
+
+/// A core relation over `numbers`, labelled by the relationship walk.
+fn core_domain_at(label: u32, numbers: &[u8]) -> Domain {
+    let mut processors = ProcessorSet::empty();
+    for &n in numbers {
+        processors.insert(0, n);
+    }
+    Domain {
+        kind: DomainKind::Core {
+            simultaneous_multithreading: numbers.len() > 1,
+            efficiency_class: 0,
+        },
+        processors,
+        observations: vec![Observation::new(Source::RelationshipWalk, label)],
+    }
+}
+
+fn cpu_set(index: u8, core: u8, node: u8, efficiency_class: u8) -> crate::cpu_set::CpuSet {
+    crate::cpu_set::CpuSet {
+        id: u32::from(index),
+        group: 0,
+        logical_processor_index: index,
+        core_index: core,
+        last_level_cache_index: 0,
+        numa_node_index: node,
+        efficiency_class,
+        parked: false,
+        allocated: true,
+        allocated_to_target_process: true,
+        real_time: false,
+        scheduling_class: 0,
+        allocation_tag: 0,
+    }
+}
+
+fn cpu_set_parked(index: u8) -> crate::cpu_set::CpuSet {
+    crate::cpu_set::CpuSet {
+        parked: true,
+        ..cpu_set(index, 0, 0, 0)
+    }
+}
+// --- M4+.4: "outermost" is inclusion, not the level number ---
+
+/// A cache relation over `numbers`, labelled by the relationship walk.
+fn cache_at(level: u8, label: u32, numbers: &[u8]) -> Domain {
+    let mut processors = ProcessorSet::empty();
+    for &n in numbers {
+        processors.insert(0, n);
+    }
+    Domain {
+        kind: DomainKind::Cache {
+            level,
+            associativity: 8,
+            line_size: 64,
+            size_bytes: 32 * 1024,
+            cache_type: CacheKind::Unified,
+        },
+        processors,
+        observations: vec![Observation::new(Source::RelationshipWalk, label)],
+    }
+}
+
+fn machine_of(count: u8, domains: Vec<Domain>) -> MachineMemoryTopology {
+    MachineMemoryTopology {
+        processors: (0..count)
+            .map(|number| Processor {
+                id: ProcessorId { group: 0, number },
+                online: true,
+                capacity: 0,
+            })
+            .collect(),
+        domains,
+        cpu_sets: None,
+        processor_attributes: Vec::new(),
+        provenance: Provenance::Synthetic,
+        coherence: Coherence::NotCollected,
+        enumeration_anomalies: Vec::new(),
+    }
+}
+
+#[test]
+fn the_outermost_partition_is_the_coarsest_one_not_the_highest_level() {
+    // The discriminating case, which no fixture built from real hardware has:
+    // the LOWER level number forms the COARSER partition. Ordering by level
+    // would answer L2 (four blocks of two); ordering by inclusion answers L1
+    // (two blocks of four), which is the outer boundary.
+    //
+    // Every pre-existing test passes under either rule, so without this one the
+    // change from `.rev()` over level numbers to a refinement order would be
+    // invisible.
+    let topo = machine_of(
+        8,
+        vec![
+            cache_at(1, 0, &[0, 1, 2, 3]),
+            cache_at(1, 1, &[4, 5, 6, 7]),
+            cache_at(2, 2, &[0, 1]),
+            cache_at(2, 3, &[2, 3]),
+            cache_at(2, 4, &[4, 5]),
+            cache_at(2, 5, &[6, 7]),
+        ],
+    );
+
+    let (level, blocks) = topo
+        .outermost_partitioning_cache()
+        .expect("both levels partition");
+    assert_eq!(
+        level, 1,
+        "the coarser partition wins even though its level number is lower"
+    );
+    assert_eq!(blocks.len(), 2);
+}
+
+#[test]
+fn identical_partitions_under_two_levels_report_the_outer_one() {
+    // The ordinary shape on this host: L1 and L2 split the machine into the
+    // same eight pairs. Neither refines the other, so inclusion cannot separate
+    // them -- and answering "L1" would name the inner cache for a boundary the
+    // outer one also owns.
+    //
+    // Caught by an existing platform-probes test, which asserted that nothing
+    // deeper may also partition. That test was right.
+    let topo = machine_of(
+        8,
+        vec![
+            cache_at(1, 0, &[0, 1]),
+            cache_at(1, 1, &[2, 3]),
+            cache_at(1, 2, &[4, 5]),
+            cache_at(1, 3, &[6, 7]),
+            cache_at(2, 4, &[0, 1]),
+            cache_at(2, 5, &[2, 3]),
+            cache_at(2, 6, &[4, 5]),
+            cache_at(2, 7, &[6, 7]),
+        ],
+    );
+
+    let (level, blocks) = topo.outermost_partitioning_cache().expect("both partition");
+    assert_eq!(level, 2, "the outer name for one boundary");
+    assert_eq!(blocks.len(), 4);
+}
+#[test]
+fn the_usual_ordering_is_unchanged_where_the_two_rules_agree() {
+    // Ordinary hardware: the higher level is also the coarser one, so the
+    // answer must not move.
+    let topo = machine_of(
+        8,
+        vec![
+            cache_at(1, 0, &[0, 1]),
+            cache_at(1, 1, &[2, 3]),
+            cache_at(1, 2, &[4, 5]),
+            cache_at(1, 3, &[6, 7]),
+            cache_at(3, 4, &[0, 1, 2, 3]),
+            cache_at(3, 5, &[4, 5, 6, 7]),
+        ],
+    );
+
+    let (level, blocks) = topo.outermost_partitioning_cache().expect("both partition");
+    assert_eq!(level, 3);
+    assert_eq!(blocks.len(), 2);
+}
+
+#[test]
+fn two_incomparable_partitions_have_no_outermost_one() {
+    // Raised in PR #56 review. The level tie-break is only allowed to decide
+    // between two names for the *same* boundary. Here L2 and L3 partition the
+    // same eight processors *differently* -- {0,1}/{2,3}/{4,5}/{6,7} against
+    // {0,2}/{1,3}/{4,6}/{5,7} -- so neither refines the other and they are not
+    // the same partition. There is no outermost partitioning cache, and
+    // answering "L3" because 3 > 2 would invent one, which is the level
+    // ordering M2+.2 forbids in the one case where it changes the answer.
+    let topo = machine_of(
+        8,
+        vec![
+            cache_at(2, 0, &[0, 1]),
+            cache_at(2, 1, &[2, 3]),
+            cache_at(2, 2, &[4, 5]),
+            cache_at(2, 3, &[6, 7]),
+            cache_at(3, 4, &[0, 2]),
+            cache_at(3, 5, &[1, 3]),
+            cache_at(3, 6, &[4, 6]),
+            cache_at(3, 7, &[5, 7]),
+        ],
+    );
+
+    assert_eq!(
+        topo.outermost_partitioning_cache().map(|(level, _)| level),
+        None,
+        "no partition is outermost, so none may be named"
+    );
+}
+
+#[test]
+fn a_level_that_partitions_nothing_is_still_never_a_candidate() {
+    // A fully shared cache is one block, so it cannot be the boundary however
+    // coarse it is -- the rule this projection must not lose.
+    let topo = machine_of(
+        4,
+        vec![
+            cache_at(2, 0, &[0, 1]),
+            cache_at(2, 1, &[2, 3]),
+            cache_at(3, 2, &[0, 1, 2, 3]),
+        ],
+    );
+
+    let (level, blocks) = topo.outermost_partitioning_cache().expect("L2 divides");
+    assert_eq!(level, 2, "the shared L3 partitions nothing");
+    assert_eq!(blocks.len(), 2);
+}
+
+#[test]
+fn overlapping_blocks_still_disqualify_a_level() {
+    // Pairwise disjointness is not weakened by the reordering: a hand-built
+    // topology whose blocks overlap would make a caller double-count.
+    let topo = machine_of(
+        4,
+        vec![
+            cache_at(2, 0, &[0, 1]),
+            cache_at(2, 1, &[1, 2]),
+            cache_at(3, 2, &[0, 1]),
+            cache_at(3, 3, &[2, 3]),
+        ],
+    );
+
+    let (level, _) = topo.outermost_partitioning_cache().expect("L3 divides");
+    assert_eq!(level, 3, "the overlapping L2 is refused");
+}
+#[test]
+fn cache_partitions_keep_the_first_domain_for_each_processor_set() {
+    let topo = split_l1_machine(2, 3);
+    let ids: Vec<u32> = topo
+        .cache_partitions_at_level(1)
+        .iter()
+        .map(|domain| {
+            domain
+                .label_from(Source::RelationshipWalk)
+                .expect("the fixture records a walk observation")
+        })
+        .collect();
+    // 0 and 2 are the `data` domains; 1 and 3 are the `instruction` domains
+    // covering the same processors, and are the ones dropped.
+    assert_eq!(ids, vec![0, 2]);
+}
+
+#[test]
+fn the_outermost_partitioning_cache_skips_a_level_that_covers_everything() {
+    // L3 spans the machine and so divides nothing, however far out it sits.
+    let topo = split_l1_machine(4, 3);
+    let (level, partitions) = topo.outermost_partitioning_cache().expect("L1 divides");
+    assert_eq!(level, 1);
+    assert_eq!(partitions.len(), 4);
+}
+
+#[test]
+fn a_partitioning_cache_above_level_four_is_found() {
+    // `level` is a `u8`. A consumer sweeping a hard-coded `1..=4` reports this
+    // machine as having no partitioning cache at all.
+    let mut topo = split_l1_machine(1, 5);
+    // Replace the shared last level with two L5 partitions, so the dividing
+    // level is one a fixed `1..=4` ceiling cannot reach.
+    topo.domains.pop();
+    for (_id, mask) in [(100u32, 0b01usize), (101, 0b10)] {
+        topo.domains.push(Domain {
+            kind: DomainKind::Cache {
+                level: 5,
+                associativity: 16,
+                line_size: 64,
+                size_bytes: 64 * 1024 * 1024,
+                cache_type: CacheKind::Unified,
+            },
+            processors: ProcessorSet::from_group_mask(0, mask),
+            observations: Vec::new(),
+        });
+    }
+    let (level, partitions) = topo.outermost_partitioning_cache().expect("L5 divides");
+    assert_eq!(level, 5);
+    assert_eq!(partitions.len(), 2);
+}
+
+#[test]
+fn a_single_core_split_l1_partitions_nothing() {
+    // The false positive deduplication removes: two cache relationships over
+    // one processor set is one partition, so no level divides this machine and
+    // a caller must not be told L1 does.
+    let topo = split_l1_machine(1, 3);
+    assert_eq!(topo.caches_at_level(1).count(), 2);
+    assert_eq!(topo.cache_partitions_at_level(1).len(), 1);
+    assert!(topo.outermost_partitioning_cache().is_none());
+}
+
+#[test]
+fn a_machine_with_no_cache_at_all_has_no_partitioning_cache() {
+    assert!(synthetic().outermost_partitioning_cache().is_none());
+}
+
+#[test]
+fn a_level_whose_domains_overlap_is_not_a_partition() {
+    // `MachineMemoryTopology` is deliberately constructible by hand and by deserialization,
+    // so `outermost_partitioning_cache` cannot assume hardware produced its
+    // input. Two L2 domains that share processor 1 are distinct sets, so
+    // deduplication keeps both -- and a caller told they are partitions places
+    // work on processor 1 twice and overwrites its domain assignment.
+    let mut topo = split_l1_machine(1, 3);
+    topo.domains.pop(); // the shared last level, which divides nothing
+    for (_id, mask) in [(200u32, 0b011usize), (201, 0b110)] {
+        topo.domains.push(Domain {
+            kind: DomainKind::Cache {
+                level: 2,
+                associativity: 8,
+                line_size: 64,
+                size_bytes: 1024 * 1024,
+                cache_type: CacheKind::Unified,
+            },
+            processors: ProcessorSet::from_group_mask(0, mask),
+            observations: Vec::new(),
+        });
+    }
+
+    // Both survive deduplication, which only removes *equal* sets...
+    assert_eq!(topo.cache_partitions_at_level(2).len(), 2);
+    // ...but overlapping domains are not a partition, so no level qualifies.
+    assert!(
+        topo.outermost_partitioning_cache().is_none(),
+        "overlapping cache domains must not be reported as partitions"
+    );
+}
+
+#[test]
+fn a_level_whose_domains_are_disjoint_but_incomplete_still_partitions() {
+    // The deliberate limit of the disjointness rule. A processor with no cache
+    // reported at this level is a gap in what the firmware said; the domains
+    // that *were* reported still divide the processors they cover, so
+    // discarding the level over the gap would throw away a true boundary.
+    let mut topo = split_l1_machine(1, 3);
+    topo.domains.pop();
+    for (_id, mask) in [(300u32, 0b0001usize), (301, 0b0010)] {
+        topo.domains.push(Domain {
+            kind: DomainKind::Cache {
+                level: 2,
+                associativity: 8,
+                line_size: 64,
+                size_bytes: 1024 * 1024,
+                cache_type: CacheKind::Unified,
+            },
+            processors: ProcessorSet::from_group_mask(0, mask),
+            observations: Vec::new(),
+        });
+    }
+
+    let (level, partitions) = topo
+        .outermost_partitioning_cache()
+        .expect("two disjoint L2 domains divide what they cover");
+    assert_eq!(level, 2);
+    assert_eq!(partitions.len(), 2);
+}
+
+#[test]
+fn a_domain_covering_nothing_is_not_a_partition() {
+    // The other end of the same threat model as the overlap test above. An
+    // empty processor set is *disjoint from everything*, vacuously, so it
+    // passes the pairwise check; and it is not equal to any non-empty set, so
+    // deduplication keeps it. A level with one real cache plus one empty domain
+    // therefore counts two "partitions" and is reported as dividing a machine
+    // it does not divide -- a caller sharding across the result gets a shard
+    // covering no processors at all.
+    //
+    // `Domain` is publicly constructible and `ProcessorSet` has `empty()`, so
+    // this is reachable by hand and by deserialization, which is precisely the
+    // input this method promises not to trust.
+    let mut topo = split_l1_machine(1, 3);
+    topo.domains.pop();
+    for (_id, processors) in [
+        (400u32, ProcessorSet::from_group_mask(0, 0b111)),
+        (401, ProcessorSet::empty()),
+    ] {
+        topo.domains.push(Domain {
+            kind: DomainKind::Cache {
+                level: 2,
+                associativity: 8,
+                line_size: 64,
+                size_bytes: 1024 * 1024,
+                cache_type: CacheKind::Unified,
+            },
+            processors,
+            observations: Vec::new(),
+        });
+    }
+
+    assert!(
+        topo.outermost_partitioning_cache().is_none(),
+        "a level whose only second domain covers nothing does not divide the machine"
+    );
+}
+
+#[test]
+fn cpu_sets_in_different_groups_sharing_a_core_index_are_not_folded_together() {
+    // Raised in PR #56 review. `SYSTEM_CPU_SET_INFORMATION::CoreIndex` is
+    // documented as relative to the record's `Group`, so on a multi-group host
+    // group 0 core 0 and group 1 core 0 are *different* cores that share an
+    // index. Keying the fold on the index alone merged them into one
+    // cross-group `Core` domain, which corrupts both membership and the
+    // efficiency class derived from it.
+    let mut topology = MachineMemoryTopology::default();
+    // Both groups have a core whose group-relative index is 0, each with two
+    // logical processors. That is the collision: four records, two cores.
+    let sets = vec![
+        cpu_set_in(0, 0, 0, 0, 0),
+        cpu_set_in(0, 1, 0, 0, 0),
+        cpu_set_in(1, 0, 0, 0, 0),
+        cpu_set_in(1, 1, 0, 0, 0),
+    ];
+    topology.fold_in_cpu_sets(&sets);
+
+    let cores: Vec<_> = topology
+        .domains
+        .iter()
+        .filter(|d| matches!(d.kind, DomainKind::Core { .. }))
+        .collect();
+
+    assert_eq!(
+        cores.len(),
+        2,
+        "one core per group, not one shared: {cores:?}"
+    );
+    for core in &cores {
+        assert_eq!(
+            core.processors.len(),
+            2,
+            "each core holds only its own group's processors: {core:?}"
+        );
+        let groups: Vec<u16> = core.processors.iter().map(|(group, _)| group).collect();
+        assert!(
+            groups.windows(2).all(|w| w[0] == w[1]),
+            "a core must not span groups: {groups:?}"
+        );
+    }
+    // The label stays the source's own group-relative index, not the key.
+    let labels: Vec<u32> = cores
+        .iter()
+        .flat_map(|c| c.observations.iter().map(|o| o.label))
+        .collect();
+    assert!(
+        labels.iter().all(|&l| l == 0),
+        "both cores are index 0 in their own group: {labels:?}"
+    );
+}
+
+/// As [`cpu_set`], but places the record in a named group.
+fn cpu_set_in(
+    group: u16,
+    index: u8,
+    core: u8,
+    node: u8,
+    efficiency_class: u8,
+) -> crate::cpu_set::CpuSet {
+    crate::cpu_set::CpuSet {
+        group,
+        ..cpu_set(index, core, node, efficiency_class)
     }
 }

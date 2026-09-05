@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Mike Grier
 //! Policy -> domain selection (M7.1): named code, not data.
 
-use windows_topology_sys::{Domain, DomainKind, ProcessorSet, Topology};
+use windows_topology_sys::{Domain, DomainKind, MachineMemoryTopology, ProcessorSet};
 
 /// How to partition the machine into `IoRing` execution domains (M7.1).
 ///
@@ -48,7 +48,7 @@ impl Policy {
     /// domains, generalized to every policy here (M7.5 depends on knowing
     /// when this happened, to report it honestly rather than silently).
     #[must_use]
-    pub fn select(self, topology: &Topology) -> (Vec<Domain>, bool) {
+    pub fn select(self, topology: &MachineMemoryTopology) -> (Vec<Domain>, bool) {
         let matched: Vec<Domain> = match self {
             Self::Single => Vec::new(),
             Self::ByL3 => topology
@@ -98,8 +98,8 @@ impl Policy {
         (
             vec![Domain {
                 kind,
-                id: 0,
                 processors,
+                observations: Vec::new(),
             }],
             degraded,
         )

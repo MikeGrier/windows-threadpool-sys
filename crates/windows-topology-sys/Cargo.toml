@@ -47,6 +47,9 @@ serde = ["dep:serde"]
 windows-sys = { version = "0.61.2", default-features = false, features = [
 	"Win32_Foundation",
 	"Win32_System_SystemInformation",
+	# For `GetCurrentProcess`, which `cpu_set::enumerate` names explicitly so
+	# `AllocatedToTargetProcess` is computed against a process at all.
+	"Win32_System_Threading",
 ] }
 serde = { version = "1.0", features = ["derive"], optional = true }
 

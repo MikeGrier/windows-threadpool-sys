@@ -10,10 +10,10 @@
 //! cargo run --example print_topology --features serde
 //! ```
 
-use windows_topology_sys::Topology;
+use windows_topology_sys::MachineMemoryTopology;
 
 fn main() {
-    let topology = Topology::discover().expect("discover the host topology");
+    let topology = MachineMemoryTopology::discover().expect("discover the host topology");
     let json = serde_json::to_string_pretty(&topology).expect("serialize");
     println!("{json}");
 }
