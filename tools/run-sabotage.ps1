@@ -398,8 +398,26 @@ if ($selected.Count -eq 0) {
 # name so the loop below spells the sanitiser in one place only.
 $stems = @{}
 $stemOwners = @{}
+
+# Stems this directory has already spoken for. `baseline.txt` and its phase
+# variants are written before the sweep begins, so a sabotage reducing to
+# `baseline` would overwrite the baseline's transcript with its own -- and the
+# baseline is the evidence that the suite was green before any patching, which
+# is the premise the whole sweep rests on. Compared case-insensitively because
+# the sanitiser preserves case while the filesystem does not, so `Baseline` and
+# `baseline` are one file here.
+$reservedStems = @('baseline')
+
 foreach ($sabotage in $selected) {
     $stem = $sabotage.name -replace '[^A-Za-z0-9]+', '-'
+    if ($reservedStems -contains $stem.ToLowerInvariant()) {
+        Exit-WithMessage (@(
+                "This sabotage's name reduces to a file name stem this directory"
+                "already uses for its own transcripts:"
+                "  $($sabotage.name)"
+                "It becomes '$stem', which would collide with '$stem.txt'. Rename it."
+            ) -join "`n") 2
+    }
     if ($stemOwners.ContainsKey($stem)) {
         Exit-WithMessage (@(
                 "Two sabotages in this manifest reduce to the same file name stem,"
@@ -422,7 +440,25 @@ foreach ($sabotage in $selected) {
         Exit-WithMessage "Sabotage '$($sabotage.name)' names a file that does not exist: $target" 2
     }
     if (-not $AllowDirty) {
-        $status = git -C $repoRoot status --porcelain -- $target
+        # An absolute pathspec is fine -- git resolves it against the repository
+        # root, so this matches regardless of the caller's working directory.
+        # What is NOT fine is assuming the query succeeded: git reports an
+        # unusable pathspec (a manifest `root` pointing outside the repository,
+        # say) on stderr and exits non-zero, leaving $status empty -- which is
+        # indistinguishable from "the file is clean". A guard that cannot tell
+        # "clean" from "I could not check" is not a guard, so the exit code is
+        # inspected rather than the output alone.
+        $status = git -C $repoRoot status --porcelain -- $target 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Exit-WithMessage (@(
+                    "Could not determine whether this sabotage target is clean in git:"
+                    "  $target"
+                    "git exited $LASTEXITCODE and said:"
+                    "  $status"
+                    "Refusing to proceed: a failed check is not a clean result, and"
+                    "treating it as one is how a sweep overwrites uncommitted work."
+                ) -join "`n") 2
+        }
         if ($status) {
             Exit-WithMessage (@(
                     "Sabotage targets must be clean in git, and this one is not:"

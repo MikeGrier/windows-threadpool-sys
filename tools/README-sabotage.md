@@ -207,6 +207,8 @@ is always from the current run. Both a transcript and a backup are named after
 the sabotage with non-alphanumerics collapsed to dashes, so two entries
 differing only in punctuation would collide; the manifest is checked for that up
 front and rejected rather than allowed to overwrite one entry's evidence -- or,
-worse, one entry's recovery copy -- with another's. Build-phase diagnostics go to the `.build.err`
+worse, one entry's recovery copy -- with another's. A stem of `baseline` is
+rejected for the same reason: that name is taken by the baseline's own
+transcript, which is the evidence that the suite was green before any patching. Build-phase diagnostics go to the `.build.err`
 transcript, since cargo writes them to stderr, and error messages name whichever
 of the two actually holds the evidence.
