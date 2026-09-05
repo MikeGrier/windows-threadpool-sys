@@ -154,7 +154,19 @@ function Exit-WithMessage {
 
 function Get-RepoRoot {
     $root = git rev-parse --show-toplevel 2>$null
-    if ($LASTEXITCODE -ne 0) { throw 'Not inside a git repository.' }
+    if ($LASTEXITCODE -ne 0) {
+        # Reported, not thrown. Under $ErrorActionPreference = 'Stop' a `throw`
+        # here is a terminating error that prints a stack trace and propagates
+        # into whatever invoked this script -- the same defect class as the
+        # manifest failures below, and for the same reason it is wrong: the
+        # problem is the caller's working directory, not a bug in this file.
+        # Raised in the PR #64 review.
+        Exit-WithMessage (@(
+                "Not inside a git repository, so there is no repository root to"
+                "resolve sabotage targets against or to check them for cleanliness."
+                "Run this from within the working tree you mean to sweep."
+            ) -join "`n") 2
+    }
     return $root.Replace('/', '\')
 }
 
@@ -443,34 +455,6 @@ if ($spec.PSObject.Properties.Name -contains 'root' -and $spec.root) {
     $sourceRoot = (Resolve-Path -LiteralPath $rootCandidate).Path
 }
 
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
-New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-
-# Pre-patch copies live in their own subdirectory, so the clearing of stale
-# transcripts below cannot reach them, and so a leftover here is unambiguous.
-$backupDirectory = Join-Path $OutputDirectory 'restore'
-New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
-
-# A leftover backup means the previous run did not get to restore its target,
-# so that copy may be the only surviving version of the file -- and under
-# -AllowDirty it may hold uncommitted work that exists nowhere else. Refusing
-# to start is what makes the "a file here means an interrupted run" claim load
-# bearing: without it, the next sweep would quietly overwrite the evidence it
-# tells the reader to look for.
-$leftover = @(Get-ChildItem -LiteralPath $backupDirectory -File -ErrorAction SilentlyContinue)
-if ($leftover.Count -gt 0) {
-    Exit-WithMessage (@(
-            "Pre-patch backups from an earlier run are still present:"
-            ($leftover | ForEach-Object { "  $($_.FullName)" })
-            "That run was interrupted before it could restore its target, so each of"
-            "these may be the only copy of the file it names -- under -AllowDirty,"
-            "including uncommitted work that is in no commit. Compare each against its"
-            "target and copy it back if the target is still sabotaged, then delete it."
-            "This sweep will not start while they are here, because it would overwrite"
-            "them."
-        ) -join "`n") 2
-}
-
 # Read through the property check rather than directly: validation above allows
 # `package` to be absent when `testArgs` supplies the command, and under
 # Set-StrictMode reading an absent property throws.
@@ -622,6 +606,44 @@ foreach ($sabotage in $selected) {
                 ) -join "`n") 2
         }
     }
+}
+
+# --- Everything from here on is sweep setup, and none of it runs under -List.
+#
+# The output directory is CREATED here rather than earlier, and the leftover
+# check made below rather than above, because -List must be inert: it patches
+# nothing, so it has no business creating directories, and it must stay usable
+# for inspecting a manifest even while an interrupted run's backups are waiting
+# to be dealt with. Being blocked from reading a manifest by a recovery file is
+# precisely when you would want to read it. The README says listing writes and
+# deletes nothing; this ordering is what makes that true. Raised in the PR #64
+# review.
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
+New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+
+# Pre-patch copies live in their own subdirectory, so the clearing of stale
+# transcripts below cannot reach them, and so a leftover here is unambiguous.
+$backupDirectory = Join-Path $OutputDirectory 'restore'
+New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
+
+# A leftover backup means the previous run did not get to restore its target,
+# so that copy may be the only surviving version of the file -- and under
+# -AllowDirty it may hold uncommitted work that exists nowhere else. Refusing
+# to start is what makes the "a file here means an interrupted run" claim load
+# bearing: without it, the next sweep would quietly overwrite the evidence it
+# tells the reader to look for.
+$leftover = @(Get-ChildItem -LiteralPath $backupDirectory -File -ErrorAction SilentlyContinue)
+if ($leftover.Count -gt 0) {
+    Exit-WithMessage (@(
+            "Pre-patch backups from an earlier run are still present:"
+            ($leftover | ForEach-Object { "  $($_.FullName)" })
+            "That run was interrupted before it could restore its target, so each of"
+            "these may be the only copy of the file it names -- under -AllowDirty,"
+            "including uncommitted work that is in no commit. Compare each against its"
+            "target and copy it back if the target is still sabotaged, then delete it."
+            "This sweep will not start while they are here, because it would overwrite"
+            "them. Listing the manifest with -List still works meanwhile."
+        ) -join "`n") 2
 }
 
 # Clear the transcripts this run may write -- and only those.

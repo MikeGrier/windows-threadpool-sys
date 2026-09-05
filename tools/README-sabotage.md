@@ -34,7 +34,8 @@ the field, never a raw PowerShell error: the tool is a diagnostic instrument, so
 its own failures must not need diagnosing, and must not take a calling script
 down with them. Missing file, invalid JSON, absent `package` or `sabotages`, an
 empty `sabotages`, an unresolvable `root`, a missing per-sabotage field, and an
-`expect` that is neither `caught` nor `survives` are each reported this way.
+`expect` that is neither `caught` nor `survives` are each reported this way, as
+is running from outside a git repository.
 
 Runs on **Windows PowerShell 5.1 and PowerShell 7 alike**, like the other
 scripts in this directory, and the full sweep is verified on both. Worth stating
@@ -232,8 +233,12 @@ Transcripts land in `.scratch/sabotage/`, one per sabotage plus the baseline.
 Those this run may write are cleared before it starts -- and only those, since
 the directory is caller-supplied via `-OutputDirectory` and nothing else in it
 is the tool's to delete -- so a transcript named in an error message is always
-from the current run. Listing a manifest with `-List` writes and deletes
-nothing. Both a transcript and a backup are named after
+from the current run.
+
+**`-List` is inert**: it creates no directories, writes and deletes nothing,
+and is never blocked by a leftover backup -- an interrupted run is exactly when
+you want to be able to read the manifest. All of that setup happens after the
+listing path has already exited. Both a transcript and a backup are named after
 the sabotage with non-alphanumerics collapsed to dashes, so two entries
 differing only in punctuation would collide; the manifest is checked for that up
 front and rejected rather than allowed to overwrite one entry's evidence -- or,
