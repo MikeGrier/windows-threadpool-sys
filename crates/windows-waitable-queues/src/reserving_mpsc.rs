@@ -173,11 +173,31 @@ use crate::options::Options;
 /// constants are checked against each other at compile time, and a caller
 /// supplying its own could pick a division this shape cannot honour.
 pub trait ClaimLayout: sealed::Sealed {
+    /// The integer the two halves are packed into.
+    ///
+    /// `u64` for every layout the crate offers by default. The `dwcas` feature
+    /// adds [`Wide`], whose word is a `u128` -- and the arithmetic is done in
+    /// this type rather than uniformly in the wider one, so a `u64` layout
+    /// issues `u64` instructions exactly as it did before the type became a
+    /// parameter.
+    type Word: ClaimWord;
+
+    /// How wide [`Self::Word`] is, in bits.
+    const WORD_BITS: u32;
+
     /// How many of the claim word's bits carry the position.
     const POSITION_BITS: u32;
 
     /// Isolates the position half of the claim word.
-    const POSITION_MASK: u64 = (1u64 << Self::POSITION_BITS) - 1;
+    ///
+    /// A position is carried in a `u64` whatever the word's width, since no
+    /// layout gives it more than 64 bits. At exactly 64 the shift that would
+    /// build this mask overflows, so the whole-width case is spelled out.
+    const POSITION_MASK: u64 = if Self::POSITION_BITS >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << Self::POSITION_BITS) - 1
+    };
 
     /// The largest outstanding-reservation count the word's other half holds.
     ///
@@ -186,7 +206,18 @@ pub trait ClaimLayout: sealed::Sealed {
     /// capacity, because every slot could be reserved at once. That is what made
     /// a large capacity consume the position's bits. Capping the reservations
     /// instead leaves the capacity bounded only by the ring.
-    const MAX_RESERVED: u64 = u64::MAX >> Self::POSITION_BITS;
+    ///
+    /// **Capped at [`u32::MAX`] however wide the field is**, because the count
+    /// is reported to callers as a `u32`. A field wider than that would let the
+    /// queue hold a count it could not describe.
+    const MAX_RESERVED: u64 = {
+        let field = Self::WORD_BITS - Self::POSITION_BITS;
+        if field >= 32 {
+            u32::MAX as u64
+        } else {
+            (1u64 << field) - 1
+        }
+    };
 
     /// The largest capacity this layout accepts.
     ///
@@ -227,8 +258,13 @@ pub trait ClaimLayout: sealed::Sealed {
              that is, a position narrower than 32 -- would be truncated on the way out"
         );
         assert!(
-            Self::POSITION_BITS < 64,
+            Self::POSITION_BITS < Self::WORD_BITS,
             "the count needs at least one bit, so the position cannot take the whole word"
+        );
+        assert!(
+            Self::POSITION_BITS <= 64,
+            "a position is carried in a u64 between the packing and the ring, so a layout giving \
+             it more bits than that would lose them on the way out"
         );
         assert!(
             Self::MAX_RESERVED <= u32::MAX as u64,
@@ -260,6 +296,141 @@ pub trait ClaimLayout: sealed::Sealed {
 mod sealed {
     /// Prevents a caller outside this crate from adding a layout.
     pub trait Sealed {}
+    /// Prevents a caller outside this crate from adding a word width.
+    pub trait SealedWord {}
+}
+
+/// The integer a claim word is packed into, and the atomic that holds it.
+///
+/// Exists so a layout can choose between a `u64` and a `u128` word without the
+/// narrow layouts paying for the wide one: each is monomorphised to the
+/// instructions its own width needs. Sealed for [`ClaimLayout`]'s reason, and
+/// because an implementation that got the packing wrong would corrupt the two
+/// halves into each other.
+pub trait ClaimWord: sealed::SealedWord + Copy + PartialEq {
+    /// The atomic this word lives in.
+    type Atomic;
+
+    /// A fresh atomic holding a zeroed word.
+    fn zeroed() -> Self::Atomic;
+
+    /// Read the word.
+    fn load(cell: &Self::Atomic, order: Ordering) -> Self;
+
+    /// Attempt to replace `current` with `new`.
+    fn compare_exchange_weak(
+        cell: &Self::Atomic,
+        current: Self,
+        new: Self,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Self, Self>;
+
+    /// Read the word through a unique borrow, without synchronization.
+    fn read_mut(cell: &mut Self::Atomic) -> Self;
+
+    /// Pack a reservation count and a position together.
+    fn pack(reserved: u32, position: u64, position_bits: u32, position_mask: u64) -> Self;
+
+    /// Read the position back out.
+    fn position(self, position_mask: u64) -> u64;
+
+    /// Read the reservation count back out.
+    fn reserved(self, position_bits: u32) -> u32;
+}
+
+impl sealed::SealedWord for u64 {}
+impl ClaimWord for u64 {
+    type Atomic = AtomicU64;
+
+    #[inline]
+    fn zeroed() -> Self::Atomic {
+        AtomicU64::new(0)
+    }
+
+    #[inline]
+    fn load(cell: &Self::Atomic, order: Ordering) -> Self {
+        cell.load(order)
+    }
+
+    #[inline]
+    fn compare_exchange_weak(
+        cell: &Self::Atomic,
+        current: Self,
+        new: Self,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Self, Self> {
+        cell.compare_exchange_weak(current, new, success, failure)
+    }
+
+    #[inline]
+    fn read_mut(cell: &mut Self::Atomic) -> Self {
+        *cell.get_mut()
+    }
+
+    #[inline]
+    fn pack(reserved: u32, position: u64, position_bits: u32, position_mask: u64) -> Self {
+        ((reserved as u64) << position_bits) | (position & position_mask)
+    }
+
+    #[inline]
+    fn position(self, position_mask: u64) -> u64 {
+        self & position_mask
+    }
+
+    #[inline]
+    fn reserved(self, position_bits: u32) -> u32 {
+        (self >> position_bits) as u32
+    }
+}
+
+#[cfg(feature = "dwcas")]
+impl sealed::SealedWord for u128 {}
+#[cfg(feature = "dwcas")]
+impl ClaimWord for u128 {
+    type Atomic = portable_atomic::AtomicU128;
+
+    #[inline]
+    fn zeroed() -> Self::Atomic {
+        portable_atomic::AtomicU128::new(0)
+    }
+
+    #[inline]
+    fn load(cell: &Self::Atomic, order: Ordering) -> Self {
+        cell.load(order)
+    }
+
+    #[inline]
+    fn compare_exchange_weak(
+        cell: &Self::Atomic,
+        current: Self,
+        new: Self,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Self, Self> {
+        cell.compare_exchange_weak(current, new, success, failure)
+    }
+
+    #[inline]
+    fn read_mut(cell: &mut Self::Atomic) -> Self {
+        *cell.get_mut()
+    }
+
+    #[inline]
+    fn pack(reserved: u32, position: u64, position_bits: u32, position_mask: u64) -> Self {
+        ((reserved as u128) << position_bits) | ((position & position_mask) as u128)
+    }
+
+    #[inline]
+    fn position(self, position_mask: u64) -> u64 {
+        (self as u64) & position_mask
+    }
+
+    #[inline]
+    fn reserved(self, position_bits: u32) -> u32 {
+        (self >> position_bits) as u32
+    }
 }
 
 /// The shipping division: 32 bits each.
@@ -275,6 +446,8 @@ mod sealed {
 pub struct Balanced;
 impl sealed::Sealed for Balanced {}
 impl ClaimLayout for Balanced {
+    type Word = u64;
+    const WORD_BITS: u32 = 64;
     const POSITION_BITS: u32 = 32;
 }
 
@@ -286,6 +459,8 @@ impl ClaimLayout for Balanced {
 pub struct Enduring;
 impl sealed::Sealed for Enduring {}
 impl ClaimLayout for Enduring {
+    type Word = u64;
+    const WORD_BITS: u32 = 64;
     const POSITION_BITS: u32 = 48;
 }
 
@@ -302,7 +477,38 @@ impl ClaimLayout for Enduring {
 pub struct Perpetual;
 impl sealed::Sealed for Perpetual {}
 impl ClaimLayout for Perpetual {
+    type Word = u64;
+    const WORD_BITS: u32 = 64;
     const POSITION_BITS: u32 = 56;
+}
+
+/// A 128-bit claim word: 64 bits of position, and the count in the other half.
+///
+/// Requires the `dwcas` feature, which is what brings in the `portable-atomic`
+/// dependency this crate otherwise does not have. The position needs 2^64
+/// pushes to recur, which no deployment reaches -- not "not for twenty years",
+/// but not at all.
+///
+/// **Read the cost before choosing it.** The 128-bit exchange measured 2-3x
+/// slower than a `u64` one on the claim itself, and the penalty grows with
+/// producer count; against a draining consumer the difference is much smaller.
+/// [`Perpetual`] reaches about twenty years on a plain `AtomicU64` at no
+/// measured cost, so this is worth taking only when a guarantee is wanted in
+/// place of an argument about deployment lifetimes.
+///
+/// The reservation ceiling is [`u32::MAX`] rather than the 64 bits the field
+/// could hold, because the count is reported to callers as a `u32`.
+#[cfg(feature = "dwcas")]
+#[cfg_attr(docsrs, doc(cfg(feature = "dwcas")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Wide;
+#[cfg(feature = "dwcas")]
+impl sealed::Sealed for Wide {}
+#[cfg(feature = "dwcas")]
+impl ClaimLayout for Wide {
+    type Word = u128;
+    const WORD_BITS: u32 = 128;
+    const POSITION_BITS: u32 = 64;
 }
 
 /// The position after `position`, wrapping at the width the layout gives it.
@@ -381,13 +587,15 @@ const fn bounds<L: ClaimLayout>() -> Bounds {
 }
 
 /// Reads the position out of a claim word.
-const fn position_of<L: ClaimLayout>(word: u64) -> u64 {
-    word & L::POSITION_MASK
+#[inline]
+fn position_of<L: ClaimLayout>(word: L::Word) -> u64 {
+    word.position(L::POSITION_MASK)
 }
 
 /// Reads the outstanding-reservation count out of a claim word.
-const fn reserved_of<L: ClaimLayout>(word: u64) -> u32 {
-    (word >> L::POSITION_BITS) as u32
+#[inline]
+fn reserved_of<L: ClaimLayout>(word: L::Word) -> u32 {
+    word.reserved(L::POSITION_BITS)
 }
 
 /// Builds a claim word from its two halves.
@@ -408,8 +616,9 @@ const fn reserved_of<L: ClaimLayout>(word: u64) -> u32 {
 /// them apart. `|` is kept because it says "these are separate fields" where the
 /// others say "these are numbers"; the equivalence is recorded here so it is not
 /// investigated again.
-const fn claim_word<L: ClaimLayout>(reserved: u32, position: u64) -> u64 {
-    ((reserved as u64) << L::POSITION_BITS) | (position & L::POSITION_MASK)
+#[inline]
+fn claim_word<L: ClaimLayout>(reserved: u32, position: u64) -> L::Word {
+    L::Word::pack(reserved, position, L::POSITION_BITS, L::POSITION_MASK)
 }
 
 /// Creates a reserving multi-producer, single-consumer bounded array queue.
@@ -551,7 +760,7 @@ fn build<T, L: ClaimLayout>(
         mask: capacity - 1,
         capacity,
         head: CacheAligned(AtomicU64::new(0)),
-        claim: CacheAligned(AtomicU64::new(claim_word::<L>(0, 0))),
+        claim: CacheAligned(<L::Word as ClaimWord>::zeroed()),
         producers: AtomicUsize::new(1),
         consumer_live: AtomicBool::new(true),
         doorbell: Doorbell::new(),
@@ -614,7 +823,7 @@ struct Shared<T, L: ClaimLayout> {
     /// One word because they must be claimed together; see the [module
     /// documentation](self) for why two atomics cannot be made correct with any
     /// amount of fencing.
-    claim: CacheAligned<AtomicU64>,
+    claim: CacheAligned<<L::Word as ClaimWord>::Atomic>,
     /// How many producer handles and outstanding reservations are alive.
     ///
     /// **A reservation counts as a producer**, which is not bookkeeping
@@ -695,7 +904,7 @@ impl<T, L: ClaimLayout> Shared<T, L> {
     /// subtraction produce a number near `u32::MAX`. A bounded queue must never
     /// report holding more than it can.
     fn len(&self) -> usize {
-        let position = position_of::<L>(self.claim.0.load(Ordering::Relaxed));
+        let position = position_of::<L>(L::Word::load(&self.claim.0, Ordering::Relaxed));
         let head = self.head.0.load(Ordering::Acquire);
         (distance::<L>(position, head) as usize).min(self.capacity)
     }
@@ -716,7 +925,7 @@ impl<T, L: ClaimLayout> Shared<T, L> {
     /// together to avoid. `head` is still a second load, so the result is
     /// clamped for the reason `len` is.
     fn remaining(&self) -> usize {
-        let word = self.claim.0.load(Ordering::Relaxed);
+        let word = L::Word::load(&self.claim.0, Ordering::Relaxed);
         let head = self.head.0.load(Ordering::Acquire);
         let capacity = self.capacity_u64();
         let occupied = distance::<L>(position_of::<L>(word), head).min(capacity);
@@ -919,7 +1128,7 @@ impl<T, L: ClaimLayout> Drop for Shared<T, L> {
         // instead of leaving it to that argument.
         let mask = self.mask;
         let head = *self.head.0.get_mut();
-        let tail = position_of::<L>(*self.claim.0.get_mut());
+        let tail = position_of::<L>(L::Word::read_mut(&mut self.claim.0));
         let mut position = head;
         while position != tail {
             let published = advance::<L>(position);
@@ -965,7 +1174,7 @@ impl<T, L: ClaimLayout> Producer<T, L> {
         // Relaxed: this load only proposes a claim. The compare-and-swap below
         // is what makes it, and fails if the proposal was stale, so a stale read
         // costs a retry rather than correctness.
-        let mut word = self.shared.claim.0.load(Ordering::Relaxed);
+        let mut word = L::Word::load(&self.shared.claim.0, Ordering::Relaxed);
         let position = loop {
             let position = position_of::<L>(word);
             let reserved = reserved_of::<L>(word);
@@ -980,7 +1189,7 @@ impl<T, L: ClaimLayout> Producer<T, L> {
                 // subtraction wraps, so an *empty* queue reports full. Re-read
                 // the claim: if it moved, this answer was computed from a
                 // snapshot that never existed, so retry rather than refuse.
-                let current = self.shared.claim.0.load(Ordering::Relaxed);
+                let current = L::Word::load(&self.shared.claim.0, Ordering::Relaxed);
                 if current != word {
                     word = current;
                     continue;
@@ -1008,7 +1217,8 @@ impl<T, L: ClaimLayout> Producer<T, L> {
             // The reservation count is carried through unchanged, which is what
             // makes a racing `reserve` fail its own exchange and re-read rather
             // than have its increment silently overwritten.
-            match self.shared.claim.0.compare_exchange_weak(
+            match L::Word::compare_exchange_weak(
+                &self.shared.claim.0,
                 word,
                 claim_word::<L>(reserved, advance::<L>(position)),
                 Ordering::Relaxed,
@@ -1038,7 +1248,7 @@ impl<T, L: ClaimLayout> Producer<T, L> {
     /// consumer will not be told the stream ended and then handed the item.
     #[must_use = "a reservation withholds capacity from every other producer until it is used or dropped"]
     pub fn reserve(&self) -> Option<Reservation<T, L>> {
-        let mut word = self.shared.claim.0.load(Ordering::Relaxed);
+        let mut word = L::Word::load(&self.shared.claim.0, Ordering::Relaxed);
         loop {
             let position = position_of::<L>(word);
             let reserved = reserved_of::<L>(word);
@@ -1050,7 +1260,7 @@ impl<T, L: ClaimLayout> Producer<T, L> {
                 // stale `word` and a freshly-read `head` need not describe the
                 // same instant, and once `head` passes a stale `position` the
                 // subtraction wraps and an empty queue refuses a reservation.
-                let current = self.shared.claim.0.load(Ordering::Relaxed);
+                let current = L::Word::load(&self.shared.claim.0, Ordering::Relaxed);
                 if current != word {
                     word = current;
                     continue;
@@ -1078,7 +1288,8 @@ impl<T, L: ClaimLayout> Producer<T, L> {
             // capacity, not an order. Where the item lands is decided when the
             // reservation is redeemed, so a slot held for a long time does not
             // stall everything queued behind it.
-            match self.shared.claim.0.compare_exchange_weak(
+            match L::Word::compare_exchange_weak(
+                &self.shared.claim.0,
                 word,
                 claim_word::<L>(reserved + 1, position),
                 Ordering::Relaxed,
@@ -1123,7 +1334,7 @@ impl<T, L: ClaimLayout> Producer<T, L> {
     /// snapshot.
     #[must_use]
     pub fn outstanding_reservations(&self) -> usize {
-        reserved_of::<L>(self.shared.claim.0.load(Ordering::Relaxed)) as usize
+        reserved_of::<L>(L::Word::load(&self.shared.claim.0, Ordering::Relaxed)) as usize
     }
 
     /// Whether the next best-effort push would be refused, as a snapshot.
@@ -1235,7 +1446,7 @@ impl<T, L: ClaimLayout> Reservation<T, L> {
         // invariant `occupied + reserved <= capacity` with `reserved >= 1` means
         // `occupied < capacity`, so the slot at this position is one the
         // consumer has already finished with.
-        let mut word = self.shared.claim.0.load(Ordering::Relaxed);
+        let mut word = L::Word::load(&self.shared.claim.0, Ordering::Relaxed);
         let position = loop {
             let position = position_of::<L>(word);
             let reserved = reserved_of::<L>(word);
@@ -1244,7 +1455,8 @@ impl<T, L: ClaimLayout> Reservation<T, L> {
                 "this reservation is outstanding, so the count cannot be zero"
             );
 
-            match self.shared.claim.0.compare_exchange_weak(
+            match L::Word::compare_exchange_weak(
+                &self.shared.claim.0,
                 word,
                 claim_word::<L>(reserved - 1, advance::<L>(position)),
                 Ordering::Relaxed,
@@ -1301,14 +1513,15 @@ impl<T, L: ClaimLayout> Drop for Reservation<T, L> {
     fn drop(&mut self) {
         // Give the slot back. Only the count moves: the position is untouched,
         // because an unredeemed reservation never occupied a position.
-        let mut word = self.shared.claim.0.load(Ordering::Relaxed);
+        let mut word = L::Word::load(&self.shared.claim.0, Ordering::Relaxed);
         loop {
             let reserved = reserved_of::<L>(word);
             debug_assert!(
                 reserved >= 1,
                 "this reservation is outstanding, so the count cannot be zero"
             );
-            match self.shared.claim.0.compare_exchange_weak(
+            match L::Word::compare_exchange_weak(
+                &self.shared.claim.0,
                 word,
                 claim_word::<L>(reserved - 1, position_of::<L>(word)),
                 Ordering::Relaxed,
@@ -1402,7 +1615,7 @@ impl<T, L: ClaimLayout> Consumer<T, L> {
     /// a drained queue with an outstanding reservation is not an idle one.
     #[must_use]
     pub fn outstanding_reservations(&self) -> usize {
-        reserved_of::<L>(self.shared.claim.0.load(Ordering::Relaxed)) as usize
+        reserved_of::<L>(L::Word::load(&self.shared.claim.0, Ordering::Relaxed)) as usize
     }
 
     /// How many further items a best-effort push could still place, as a

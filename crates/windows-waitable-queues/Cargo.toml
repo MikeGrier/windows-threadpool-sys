@@ -43,8 +43,33 @@ targets = ["x86_64-pc-windows-msvc"]
 # by accident.
 experimental-permit-claim = []
 
+# A 128-bit claim word for `reserving_mpsc`, adding the `Wide` layout.
+#
+# **The only thing in this crate that costs a third-party dependency, which is
+# why it is a feature rather than always present.** Rust's standard library has
+# no 128-bit atomic -- `core::sync::atomic` stops at 64 bits -- so a
+# double-width compare-and-swap needs `portable-atomic`. Without this feature
+# the crate depends on `windows-sys` alone and every layout uses `AtomicU64`.
+#
+# `default-features = false` on the dependency is load-bearing: with its
+# defaults, `portable-atomic` silently substitutes a global lock where the
+# native instruction is unavailable, which would put a mutex in the claim path
+# while still compiling. With them off, `AtomicU128` does not exist on such a
+# target and the build fails naming it.
+#
+# Most callers should not need this. `Perpetual` reaches roughly twenty years
+# before its claim position recurs, on a plain `AtomicU64` at no measured cost,
+# whereas the 128-bit exchange measured 2-3x slower on the claim itself. See
+# `ClaimLayout` for the comparison.
+dwcas = ["dep:portable-atomic"]
+
 [lib]
 path = "src/lib.rs"
+
+[dependencies.portable-atomic]
+version = "1.15.0"
+default-features = false
+optional = true
 
 [dependencies.windows-sys]
 version = "0.61.2"

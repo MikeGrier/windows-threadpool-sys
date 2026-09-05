@@ -312,6 +312,7 @@ dependencies = [
 name = "windows-waitable-queues"
 version = "0.0.1"
 dependencies = [
+ "portable-atomic",
  "windows-sys",
 ]
 

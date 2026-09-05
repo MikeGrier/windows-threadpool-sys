@@ -1554,3 +1554,90 @@ fn a_reservation_on_a_deep_layout_still_delivers_its_message() {
     assert_eq!(rx.pop(), Some(99));
     assert_eq!(rx.pop(), None);
 }
+
+// ---------------------------------------------------------------------------
+// The 128-bit layout.
+//
+// Gated with the feature that supplies it, so the default build compiles none
+// of this and a `dwcas` build runs the same protocol tests against a word twice
+// as wide. The point is that `Wide` is a full instantiation of the protocol
+// rather than a constant: nothing about it is shared with the `u64` layouts
+// below the `ClaimWord` trait, so it is exercised rather than assumed.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "dwcas")]
+mod dwcas {
+    use super::*;
+    use crate::reserving_mpsc::Wide;
+
+    #[test]
+    fn the_wide_layout_divides_a_128_bit_word() {
+        assert_eq!(<Wide as ClaimLayout>::WORD_BITS, 128);
+        assert_eq!(<Wide as ClaimLayout>::POSITION_BITS, 64);
+        assert_eq!(
+            <Wide as ClaimLayout>::POSITION_MASK,
+            u64::MAX,
+            "a 64-bit position occupies the whole of the u64 it is carried in, which is the case \
+             the mask's shift cannot express and must special-case"
+        );
+        assert_eq!(
+            <Wide as ClaimLayout>::MAX_RESERVED,
+            u64::from(u32::MAX),
+            "the field holds 64 bits but the count is reported as a u32, so the ceiling is the \
+             narrower of the two rather than what the word could carry"
+        );
+    }
+
+    #[test]
+    fn the_wide_word_round_trips_both_halves() {
+        // The packing is the part that differs from the `u64` layouts, and a
+        // position at its maximum is where a carry into the count would show.
+        for &reserved in &[0_u32, 1, 1000, u32::MAX] {
+            for &position in &[0_u64, 1, 1000, u64::MAX - 1, u64::MAX] {
+                let word = claim_word::<Wide>(reserved, position);
+                assert_eq!(
+                    (reserved_of::<Wide>(word), position_of::<Wide>(word)),
+                    (reserved, position),
+                    "packing must be lossless in both halves of the wider word too"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_position_at_its_maximum_wraps_without_touching_the_count() {
+        let wrapped = claim_word::<Wide>(7, advance::<Wide>(u64::MAX));
+        assert_eq!(
+            (reserved_of::<Wide>(wrapped), position_of::<Wide>(wrapped)),
+            (7, 0),
+            "the position laps within its own half rather than incrementing the count"
+        );
+    }
+
+    #[test]
+    fn the_wide_layout_delivers_items_and_reservations() {
+        let (tx, rx) = bounded_as::<u32, Wide>(4).expect("4 is a valid capacity");
+        let slot = tx.reserve().expect("an empty queue has room");
+        tx.push(1).expect("room beyond the reservation");
+        slot.send(99).expect("the consumer is still here");
+
+        assert_eq!(rx.pop(), Some(1));
+        assert_eq!(rx.pop(), Some(99));
+        assert_eq!(rx.pop(), None);
+    }
+
+    #[test]
+    fn the_wide_layout_refuses_when_full_and_recovers() {
+        let (tx, rx) = bounded_as::<u32, Wide>(2).expect("2 is a valid capacity");
+        tx.push(1).expect("an empty queue has room");
+        tx.push(2).expect("one slot remains");
+        assert!(
+            tx.push(3).is_err(),
+            "a full queue refuses rather than overwriting, whatever the word's width"
+        );
+        assert_eq!(rx.pop(), Some(1));
+        tx.push(3).expect("the popped slot is free again");
+        assert_eq!(rx.pop(), Some(2));
+        assert_eq!(rx.pop(), Some(3));
+    }
+}
