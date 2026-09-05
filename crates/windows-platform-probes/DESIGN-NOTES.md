@@ -728,3 +728,40 @@ absolute numbers for the shipping shape and must not be quoted as such.
 **Comparing a duplicate against the original it stands in for is what made both
 of these visible.** A run of three layouts that agreed with each other and
 disagreed with reality would have looked entirely healthy.
+
+### What each apportionment actually buys
+
+The rollover figures for candidate splits, computed from the rates above. The
+rate model reproduces the crate's own published figure -- 32/32 at 116M/s gives
+37 seconds, which is what `reserving_mpsc`'s module documentation discloses -- so
+these are an extension of that disclosure rather than a competing estimate.
+
+| split (reserved/position) | max outstanding reservations | @257M/s | @116M/s | @33M/s |
+|---|---|---|---|---|
+| 32/32 (ships) | 2^32 | 17 s | 37 s | 2.2 min |
+| 24/40 | 2^24 | 71 min | 2.6 hr | 9.2 hr |
+| 21/43 | 2^21 | 9.5 hr | 21.1 hr | 3.1 days |
+| 20/44 | 2^20 | 19.0 hr | 42.1 hr | 6.1 days |
+| 16/48 | 2^16 | 12.7 days | 28.1 days | 98 days |
+| 12/52 | 2^12 | 202 days | 449 days | 4 yr |
+| 8/56 | 2^8 | 9 yr | 20 yr | 69 yr |
+| 64/64 (`u128`) | 2^64 | 2,270 yr | 5,039 yr | 17,607 yr |
+
+Rates: 257M/s is the measured isolated peak at one producer, which has no
+consumer and so is not a rate any draining queue can sustain -- it is a
+conservative floor on time-to-wrap. 33M/s is the measured drained rate at one
+producer. 116M/s is the crate's own disclosed figure and is the honest planning
+number.
+
+**The reservation half is where the bits are being spent, and it is the half
+worth least.** Outstanding reservations are bounded by how many producers are
+mid-flight -- hundreds, perhaps thousands -- and the field currently holds four
+billion. Giving up reservations nobody will allocate is what buys the position
+bits: 2^21 reservations leaves about a day, 2^12 leaves over a year, and 2^8
+leaves twenty years. The last is the same practical answer a 128-bit word gives,
+on a plain `AtomicU64`, at no measured cost, without a third-party dependency and
+without reopening `D-18`'s i686 question.
+
+So the candidates worth considering are **12/52 and 8/56**, not the 16/48 first
+sketched here: 16/48's 12.7 days at the conservative floor is still reachable by
+a busy long-lived process, and 12/52 is the first row that is not.

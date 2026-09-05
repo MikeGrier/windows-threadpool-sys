@@ -102,6 +102,15 @@ peeled off PR #56. The merge-or-delete decision is `CW-1.6`.
   defaults are permitted on types but not on functions, so the entry points
   need deciding rather than assuming.
 
+  **The default is the substantive question, not the mechanism.** The rollover
+  table in [DESIGN-NOTES.md](DESIGN-NOTES.md) shows the reservation half holds
+  four billion where hundreds would do, and that trading it away is what buys
+  the position bits: 2^12 reservations leaves over a year before recurrence and
+  2^8 leaves twenty years, against today's 37 seconds. A changed default is a
+  contract change for anyone who read the current capacity ceiling, so it is
+  `CW-2.3`'s decision to make explicitly -- but leaving the default at 32/32
+  because it is the status quo would preserve `SH-14.1` by inertia.
+
 - [ ] **CW-2.3** -- Decide whether a 128-bit claim word becomes the default, on
   `CW-1.4`'s evidence. This is the question behind `D-37`'s conditional gating,
   and the engineer has said 32-bit Windows deployment is not a present concern
