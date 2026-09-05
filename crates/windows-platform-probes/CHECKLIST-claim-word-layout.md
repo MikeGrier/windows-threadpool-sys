@@ -82,7 +82,7 @@ review. That reasoning expired: `mikegrier/waitable-queues` has no pull request
 open, so there is no review to disturb, and the `u64` layouts need no new
 dependency at all -- only 64/64 does, which is `CW-2.3`.
 
-- [ ] **CW-2.1** -- Introduce the layout as a compile-time parameter, widen the
+- [x] **CW-2.1** -- Introduce the layout as a compile-time parameter, widen the
   position to 64 bits, and decouple the reservation ceiling from the capacity.
 
   **Merged from two items during execution, because they cannot be verified
