@@ -115,7 +115,18 @@ dependency at all -- only 64/64 does, which is `CW-2.3`.
   different promise rather than a broken one, but it must be stated, not slipped
   in.
 
-- [ ] **CW-2.3** -- Decide whether a 128-bit claim word ships at all.
+- [x] **CW-2.3** -- Decide whether a 128-bit claim word ships at all.
+
+  **Decided: yes, behind an opt-in `dwcas` feature.** The `Wide` layout packs a
+  `u128` divided 64 / 64. Without the feature the crate depends on
+  `windows-sys` alone and every layout uses `AtomicU64`; with it,
+  `portable-atomic` appears. So a caller who does not want the dependency does
+  not carry it, and one who wants a guarantee rather than a twenty-year
+  argument can have it.
+
+  This resolves `CW-1.6`'s scope the other way from what the item anticipated:
+  the shipping crate *can* now express a 128-bit layout, so the probe does not
+  need to keep its own `wide` implementation to measure one.
 
   **Not a dependency question.** An earlier form of this item framed it as
   whether `portable-atomic` becomes a dependency of a published crate, which was
