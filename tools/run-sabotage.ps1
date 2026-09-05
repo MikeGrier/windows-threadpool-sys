@@ -195,6 +195,28 @@ function Invoke-Bounded {
     return [pscustomobject]@{ Outcome = 'hung'; Code = $null }
 }
 
+# Inserts a cargo flag BEFORE any `--` separator, rather than at the end.
+#
+# Everything after `--` belongs to the test binary, not to cargo. Appending
+# `--no-run` to a vector that ends in test-binary arguments would hand it to
+# libtest, which does not know it -- so the build phase would run the tests
+# instead of merely building them, and then fail for a reason unrelated to the
+# sabotage. The manifest format allows that vector (`testArgs`), so this is the
+# manifest author's mistake to be immune to rather than to warn about.
+function Add-CargoFlag {
+    param([string[]] $CargoArgs, [string] $Flag)
+
+    $separator = [array]::IndexOf($CargoArgs, '--')
+    if ($separator -lt 0) { return @($CargoArgs) + $Flag }
+
+    # Select-Object rather than a range, because a `--` at index 0 would make
+    # the range $CargoArgs[0..-1], and a negative index counts from the end in
+    # PowerShell -- silently reversing the vector instead of yielding nothing.
+    $before = @($CargoArgs | Select-Object -First $separator)
+    $after = @($CargoArgs | Select-Object -Skip $separator)
+    return $before + $Flag + $after
+}
+
 # Builds, then runs, under two separate bounds.
 #
 # The phases are timed apart because they mean different things. A hang is what
@@ -213,7 +235,8 @@ function Invoke-Sabotaged {
         [int] $TestSeconds
     )
 
-    $build = Invoke-Bounded -CargoArgs ($CargoArgs + '--no-run') -WorkingDirectory $WorkingDirectory `
+    $build = Invoke-Bounded -CargoArgs (Add-CargoFlag -CargoArgs $CargoArgs -Flag '--no-run') `
+        -WorkingDirectory $WorkingDirectory `
         -TranscriptPath "$TranscriptPath.build" -Seconds $BuildSeconds
     if ($build.Outcome -eq 'failed') {
         return [pscustomobject]@{ Outcome = 'build-failed'; Code = $build.Code }
@@ -304,6 +327,26 @@ Get-ChildItem -LiteralPath $OutputDirectory -File -ErrorAction SilentlyContinue 
 $backupDirectory = Join-Path $OutputDirectory 'restore'
 New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
 
+# A leftover backup means the previous run did not get to restore its target,
+# so that copy may be the only surviving version of the file -- and under
+# -AllowDirty it may hold uncommitted work that exists nowhere else. Refusing
+# to start is what makes the "a file here means an interrupted run" claim load
+# bearing: without it, the next sweep would quietly overwrite the evidence it
+# tells the reader to look for.
+$leftover = @(Get-ChildItem -LiteralPath $backupDirectory -File -ErrorAction SilentlyContinue)
+if ($leftover.Count -gt 0) {
+    Exit-WithMessage (@(
+            "Pre-patch backups from an earlier run are still present:"
+            ($leftover | ForEach-Object { "  $($_.FullName)" })
+            "That run was interrupted before it could restore its target, so each of"
+            "these may be the only copy of the file it names -- under -AllowDirty,"
+            "including uncommitted work that is in no commit. Compare each against its"
+            "target and copy it back if the target is still sabotaged, then delete it."
+            "This sweep will not start while they are here, because it would overwrite"
+            "them."
+        ) -join "`n") 2
+}
+
 $package = $spec.package
 $testArgs = @('test', '-p', $package, '--locked')
 if ($spec.PSObject.Properties.Name -contains 'testArgs' -and $spec.testArgs) {
@@ -340,6 +383,35 @@ if ($List) {
 
 if ($selected.Count -eq 0) {
     Exit-WithMessage "No sabotage in $manifestPath matches name filter '$Name'." 2
+}
+
+# Transcript and backup file names are derived from the sabotage's name, and
+# the sanitiser collapses every run of non-alphanumerics to a single dash -- so
+# two names differing only in punctuation ("a: b" and "a - b") produce the same
+# stem. Sharing a stem means sharing a transcript, losing one entry's evidence,
+# and sharing a backup path, which is the more serious half: it would put two
+# different files' recovery copies at one location.
+#
+# Detected here, once, rather than defended against at each write, so the
+# message names the real problem -- two manifest entries that cannot be told
+# apart -- instead of a stale-file symptom. Computed into a lookup keyed by
+# name so the loop below spells the sanitiser in one place only.
+$stems = @{}
+$stemOwners = @{}
+foreach ($sabotage in $selected) {
+    $stem = $sabotage.name -replace '[^A-Za-z0-9]+', '-'
+    if ($stemOwners.ContainsKey($stem)) {
+        Exit-WithMessage (@(
+                "Two sabotages in this manifest reduce to the same file name stem,"
+                "so they would share a transcript and a restore backup:"
+                "  $($stemOwners[$stem])"
+                "  $($sabotage.name)"
+                "Both become '$stem'. Rename one so the two differ by more than"
+                "punctuation."
+            ) -join "`n") 2
+    }
+    $stemOwners[$stem] = $sabotage.name
+    $stems[$sabotage.name] = $stem
 }
 
 # Resolve and validate every target before touching anything, so a manifest
@@ -412,7 +484,11 @@ foreach ($sabotage in $selected) {
         continue
     }
 
-    $transcript = Join-Path $OutputDirectory ((($sabotage.name -replace '[^A-Za-z0-9]+', '-')) + '.txt')
+    # The stem is the one computed and collision-checked up front, not a second
+    # spelling of the sanitiser: two copies could disagree, and the check would
+    # then be guarding a name the writes do not use.
+    $stem = $stems[$sabotage.name]
+    $transcript = Join-Path $OutputDirectory ($stem + '.txt')
 
     # The pre-patch contents, on disk and not only in $original.
     #
@@ -422,8 +498,7 @@ foreach ($sabotage in $selected) {
     # clean to begin with, which is precisely what -AllowDirty waives. Writing
     # the backup first is what lets the restore advice below be non-destructive
     # in both modes rather than only in the default one.
-    $backup = Join-Path $backupDirectory `
-    ((($sabotage.name -replace '[^A-Za-z0-9]+', '-')) + '.' + (Split-Path -Leaf $target) + '.bak')
+    $backup = Join-Path $backupDirectory ($stem + '.' + (Split-Path -Leaf $target) + '.bak')
     [System.IO.File]::WriteAllText($backup, $original, $utf8NoBom)
 
     try {

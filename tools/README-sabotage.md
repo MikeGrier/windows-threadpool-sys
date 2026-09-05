@@ -189,6 +189,11 @@ makes recovery possible when the in-memory one is gone -- after a Ctrl+C, a
 crash, or a `Stop-Process` -- so a file left in that directory means a run was
 interrupted before it could restore.
 
+**A sweep refuses to start while any such file is present**, and names them.
+Otherwise the next run would overwrite the very copy this section tells you to
+go looking for. Compare each against the file it names, copy it back if that
+file is still sabotaged, then delete it.
+
 Targets must be clean in git before a sweep starts, which additionally makes
 `git checkout` a safe second recourse; `-AllowDirty` waives that check. Note
 that it waives only the *second* recourse: once a target carries uncommitted
@@ -198,6 +203,10 @@ that would discard your work.
 
 Transcripts land in `.scratch/sabotage/`, one per sabotage plus the baseline,
 and stale ones are cleared at startup so a transcript named in an error message
-is always from the current run. Build-phase diagnostics go to the `.build.err`
+is always from the current run. Both a transcript and a backup are named after
+the sabotage with non-alphanumerics collapsed to dashes, so two entries
+differing only in punctuation would collide; the manifest is checked for that up
+front and rejected rather than allowed to overwrite one entry's evidence -- or,
+worse, one entry's recovery copy -- with another's. Build-phase diagnostics go to the `.build.err`
 transcript, since cargo writes them to stderr, and error messages name whichever
 of the two actually holds the evidence.
