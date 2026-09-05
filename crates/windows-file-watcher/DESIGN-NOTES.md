@@ -98,11 +98,12 @@ threads of its own.
 | D-77 | **The per-subscription change-type filter that M4 reserved space for is *withdrawn*, not deferred: it is not faithfully implementable under D-6 coalescing, and the one shape of it that looks implementable (namespace-only) is actively harmful to the workload it appears to serve.** The kernel filter is expressed in *change classes* (`FILE_NOTIFY_CHANGE_SIZE`, `_LAST_WRITE`, `_ATTRIBUTES`, `_LAST_ACCESS`, `_SECURITY`, `_FILE_NAME`, `_DIR_NAME`) but records arrive as *action codes* (`FILE_ACTION_*`), and that mapping is lossy in exactly the wrong direction: all five non-namespace classes collapse into the single `ChangeKind::Modified` action. Because a directory has exactly one watcher armed with the *union* of its subscriptions' masks (D-6), a route asking for size-only changes receives `Modified` records it cannot attribute to a class, and must therefore either over-deliver (defeating the filter) or under-deliver (dropping changes it asked for). Restricting the feature to the namespace classes -- which *are* recoverable from the action code -- fails for a different reason: a name appearing is not a file being complete, its content streams in afterward as `Modified`, and the only workable completeness test on Windows is a quiescence heuristic (openable, parses, then quiet for N ms) built on precisely the `Modified` traffic such a filter discards. Filtering is therefore not a neutral reduction in volume; it destroys the crate's only evidence of ongoing work. The contract this crate keeps instead is *completeness*: a change notification is positive evidence that a file was **not** finished, never evidence that it was, and a client can only reason about quiescence if it sees every change. This also makes D-12's unfilterable `Desync` load-bearing rather than incidental -- a gap in the event set must invalidate any in-flight settling window, which is only sound while `Desync` cannot be filtered out. **This decision schedules no work**: there is deliberately no checklist item anywhere for a change-type filter, and the absence is intentional rather than an oversight. If a future need arises, the only implementable shape is a client-side predicate over the already-decoded `ChangeKind` (which cannot narrow the kernel mask and so buys no kernel-side efficiency), not a `FILE_NOTIFY_CHANGE_*` mask on `WatchOptions`; that shape is recorded here and remains unscheduled. Rationale and the full design discussion: [DESIGN-RATIONALE.md](DESIGN-RATIONALE.md) -> D-77. |
 | <a id="d-78"></a>D-78 | **A reopen that lands on a different volume than before is a per-subscription confirmation, not a silent continuation or a directory-wide veto.** `WatcherInner::reopen` reopens by path and never checked whether the result is still the same volume, so removable media swapped for different media at the same path (the classic case: NTFS media replaced by FAT32) was silently absorbed, with the client learning about it, if at all, only as an ordinary `Established { Coarse }` should the new volume happen to need the fallback tier. See [Volume identity confirmation on reopen](#volume-identity-confirmation-on-reopen). |
 | <a id="d-79"></a>D-79 | **Supersedes [D-54](#d-54): every fault/failure message now carries a `FaultDetail` (this crate's `OpenFailure` classification plus a `FailureCode`), not just which operation faulted.** A client asked to choose a retry delay, or told a subscription failed permanently, previously had no way to know *why* -- `FaultOperation` says only `Open` or `Arm`, and the raw error was logged (D-58) and discarded. `FailureCode` is `Win32(u32)` or `HResult(i32)` rather than one currency: every source in this crate today is a classic last-error API, so `Win32` is the only variant anything currently produces, but a value is kept in the currency it actually arrived in rather than converted through `HRESULT_FROM_WIN32`/`HRESULT_CODE` to force a single shape. See [Failure detail on every fault report](#failure-detail-on-every-fault-report). |
-| <a id="d-80"></a>D-80 | **M11.2's fast reopen path is disabled (returns `None` unconditionally), and reopens by `OpenFileById` (file reference), not `ReOpenFile` (handle), when re-enabled.** Both were measured against the actual OS (D-52's precedent) rather than assumed: `ReOpenFile` against a directory handle fails outright with `ERROR_ACCESS_DENIED` for an ordinary, unprivileged process (it needs `SeBackupPrivilege` *enabled*, which `FILE_FLAG_BACKUP_SEMANTICS` does not grant); `OpenFileById` reopens correctly by identity (confirmed delete-pending-safe and recreate-safe) but is path-independent, which is its own hazard (it would silently keep following a moved/renamed directory away from the path a client subscribed to -- caught by comparing `GetFinalPathNameByHandleW` before trusting it); and, independently of both, a handle obtained via `OpenFileById` hangs or (once) crashes with `STATUS_STACK_BUFFER_OVERRUN` once associated with the thread pool's `ThreadpoolIo`/IOCP and armed, for a reason not yet root-caused. See [Reopening by file reference, and why the fast path is off](#reopening-by-file-reference-and-why-the-fast-path-is-off). |
+| <a id="d-80"></a>D-80 | **M11.2's fast reopen path is removed: reopening a watched directory by file reference cannot work, because Windows rejects a directory-change read on a by-id open.** Superseding this decision's earlier revision, which had it merely *disabled* pending root-cause and attributed the failure to IOCP association; that attribution was measured wrong (see Round 3). Both were measured against the actual OS (D-52's precedent) rather than assumed: `ReOpenFile` against a directory handle fails outright with `ERROR_ACCESS_DENIED` for an ordinary, unprivileged process (it needs `SeBackupPrivilege` *enabled*, which `FILE_FLAG_BACKUP_SEMANTICS` does not grant); `OpenFileById` reopens correctly by identity (confirmed delete-pending-safe and recreate-safe) but is path-independent, which is its own hazard (it would silently keep following a moved/renamed directory away from the path a client subscribed to -- caught by comparing `GetFinalPathNameByHandleW` before trusting it); and, independently of both, a handle obtained via `OpenFileById` is rejected by `ReadDirectoryChangesW` with `ERROR_INVALID_PARAMETER` -- not because of anything this crate does, but because resolving the object **by file ID** rather than **by name** is itself what the read refuses, holding access mask, sync/async mode, create options, and resolved path all identical (controlled measurement, asserted by [tests/reopen_by_id_cannot_be_watched.rs](tests/reopen_by_id_cannot_be_watched.rs)). The fast path could not have paid for itself in any case: it returned a candidate only when its path already equalled the watcher's recorded canonical path, so it could only ever reopen the object at the path the path-based fallback opens anyway. See [Reopening by file reference, and why the fast path is gone](#reopening-by-file-reference). |
 | <a id="d-81"></a>D-81 | **The consumer test surface reuses the delivery model rather than replacing it, and its already-reachable pieces -- `WatchId::from_raw` and every re-exported boundary type -- are blessed as-is, not re-gated.** A downstream consumer tests its own notification-handling code by feeding synthetic `Notification`s through a real `Receiver`: "go below" the `Monitor`, substituting the OS ingest while keeping the delivery model (`Notification`/`Receiver`/queue ordering/doorbell) intact. The reachable pieces shipped public in 0.1, so re-gating them would be a breaking change with no offsetting safety gain. The one further thing a consumer needs -- a `Receiver` it can feed -- was `pub` only inside a private module (hence unreachable), so it is *exposed*, not re-gated, under `test-util` (D-82). See [Consumer test surface](#consumer-test-surface). |
 | <a id="d-82"></a>D-82 | **Everything a consumer needs but cannot otherwise reach is exposed behind an off-by-default `test-util` feature, not on the unconditional public surface: the feedable channel (`channel_with_bound` with `Sender`/`Delivery`/`Reservation`, previously `pub` only inside a private module) and valid-by-construction builders for the two unconstructible boundary types (`RelativeName`, `VolumeIdentity`).** This does not reverse [D-64](DESIGN-RATIONALE.md#the-m64-test-seam-is-a-private-constructor-not-a-public-feature-flag-d-64): D-64's seams serve the crate's own tests reaching internal state, for which `#[cfg(test)]`/`pub(crate)` is strictly better; this seam serves a downstream consumer's tests, which `#[cfg(test)]` cannot reach at all, and it exposes the delivery channel and public boundary constructors rather than internal state (so the retired `unstable-internals` objection does not apply). Feature-gating keeps the crate's internal queue sender, and identity/name construction, out of the production API. See [Consumer test surface](#consumer-test-surface). |
 | <a id="d-83"></a>D-83 | **The consumer test surface tests the consumer's reactions, not whether this crate would ever emit a given sequence.** Builders are valid-by-construction in the type-safety sense (memory-safe, lossless), not production-domain-validating: a `RelativeName` can still carry a unit sequence the kernel itself never reports (an interior NUL, say), and an impossible ordering or an impossible relationship between two otherwise valid values (a `VolumeChanged` with equal `previous`/`current` serials, each individually a legal `VolumeIdentity`) both remain the consumer's responsibility, as with any hand-fed test double. This fidelity limit is documented on the surface so a passing handler test is not mistaken for confirmation that the crate produces that traffic. See [Consumer test surface](#consumer-test-surface). |
 | <a id="d-84"></a>D-84 | **The delivery contract was under-specified, and a second implementation of it -- not a test suite -- is what proved that.** PR #42's example harness promised contract-legal schedules only (its own D-5), which made its generator a second implementation of *this* crate's contract. Converging it took **19 automated review rounds**: eight fixed generated sequences this crate could never emit, five corrected the contract prose itself, and one found a real shipped reliability defect ([`has_room`](#the-has_room-finding-in-this-crate)) on [D-29](#d-29)'s backpressure path. All 278 of this crate's own tests passed throughout and were never going to fail -- they assert what the watcher *does*, and every gap was in what the contract *permits*. The gap categories are workspace-wide and recorded once, in [the workspace design notes](../../DESIGN-NOTES.md#specifying-a-delivery-contract); the decisions amended in response were [D-9](#d-9) (renames never joined), [D-12](#d-12)/[D-30](#d-30) (branch and terminal paths), [D-17](#d-17) (per-tier emission legality), [D-27](#d-27)/[D-28](#d-28) (a fault question is unconditional, and enters as `Arm`), [D-50](#d-50)/[D-78](#d-78) (volume identity: distinct serials, and continuity across reopens), and [D-83](#d-83) (fidelity is type-safety, not production-domain). See [What the second implementation exposed](#what-the-second-implementation-exposed). |
+| <a id="d-85"></a>D-85 | **A caller's path is passed to Win32 verbatim: this crate never adds a `\\?\` prefix, and whether a path longer than `MAX_PATH` opens is the consuming application's decision, not this crate's.** `\\?\` is not a longer-path switch, it is a *different parsing mode*, and adopting it on a caller's behalf silently changes what their path means -- measured, on short paths that open fine today: forward slashes fail with `ERROR_FILE_NOT_FOUND`, and a trailing `.` or an interior `..` fail with `ERROR_INVALID_NAME`. Relative paths would stop resolving entirely, which this crate supports on purpose (`open_file_target` normalises a bare leaf's empty parent to `.`). Long paths *without* the prefix are gated on the machine's `LongPathsEnabled` policy **and** the application's `longPathAware` manifest -- measured: the same source, on the same machine, opens a 300-character path only once that manifest is present. A library cannot set its consumer's manifest, so a caller who wants long-path behaviour either opts in at the application level or passes an explicitly `\\?\`-prefixed path, and both work here because the path is passed through untouched. The complementary case -- a layer that *does* build paths, and so must demand a form it can build on -- is `windows-file-enumeration-sys`; the shared principle is recorded once in [the workspace design notes](../../DESIGN-NOTES.md#path-contracts-follow-path-construction). See [Paths are the caller's, verbatim](#paths-are-the-callers-verbatim). |
 
 
 ### Queue mediation
@@ -303,27 +304,24 @@ avoids). `remove_route_from_volume_change` mirrors D-27's "leaving counts as
 declining": a route removed while its question is outstanding resolves as
 `Stop` for that route rather than wedging the awaiting set forever.
 
-A reopen tries `OpenFileById` against the file reference `DirectoryId` already
-computes, using whichever handle is currently installed only as the volume
-hint (`hVolumeHint`) `OpenFileById` requires -- not itself the object being
-reopened, so it stays valid even once that object is gone. Reopening by file
-reference rather than by handle (`ReOpenFile`) or by path (`CreateFileW`) is
-structurally incapable of landing on a different filesystem object than the
-one the reference already names, so when it succeeds the volume is provably
-unchanged and no `VolumeIdentity` comparison is needed for *that* purpose at
-all. It fails only when the original object is genuinely gone (deleted, or its
-media was ejected), which is exactly when the path-based fallback is needed --
-and only that fallback path can legitimately land on a different `DirectoryId`,
-so only it re-keys `Resident.directories` (previously fixed at first
-insertion, never updated -- a second latent bug this closes: a stale key would
-have made a later new subscription to the same path fail to coalesce onto the
-existing watcher and spin up a redundant second one).
+A reopen goes straight to the path-based `CreateFileW`. It was originally
+designed to try `OpenFileById` first, against the file reference `DirectoryId`
+already computes -- structurally incapable of landing on a different filesystem
+object than the one the reference names, so a success would have proved the
+volume unchanged without any `VolumeIdentity` comparison. That fast path was
+removed once the read it exists to serve turned out to reject such a handle
+outright (D-80, below). What remains is the fallback, and it is the part that
+carries the real work anyway: only a path-based open can legitimately land on a
+different `DirectoryId`, so it is what re-keys `Resident.directories` (previously
+fixed at first insertion, never updated -- a latent bug this closes: a stale key
+would have made a later new subscription to the same path fail to coalesce onto
+the existing watcher and spin up a redundant second one).
 
-### Reopening by file reference, and why the fast path is off
+### <a id="reopening-by-file-reference"></a><a id="reopening-by-file-reference-and-why-the-fast-path-is-off"></a>Reopening by file reference, and why the fast path is gone
 
-D-80: two rounds of measurement (D-52's precedent -- verify empirically,
-never assume) replaced the reopen mechanism above's original design and then
-suspended it entirely.
+D-80: three rounds of measurement (D-52's precedent -- verify empirically,
+never assume) replaced the reopen mechanism above's original design, then
+suspended it, and finally removed it.
 
 **Round 1 -- `ReOpenFile` does not work here.** The original design tried
 `ReOpenFile` against the watcher's still-live previous handle. Measured
@@ -337,7 +335,8 @@ admin or backup-operator tool) does not have this privilege, so the mechanism
 is not viable for this crate's general audience.
 
 **Round 2 -- `OpenFileById` works for identity, but exposes a path hazard and
-an unexplained IOCP defect.** `OpenFileById` opens by file reference number
+a failure that looked like an IOCP defect.** `OpenFileById` opens by file
+reference number
 (exactly what `DirectoryId` already carries) plus a volume-hint handle, and
 needs no special privilege. Measured correct on every identity question: it
 reopens the same object while delete-pending, ignores an unrelated object
@@ -355,22 +354,74 @@ Even with that guarded, a further, independent defect was found: a handle
 obtained via `OpenFileById`, once handed into this crate's ordinary
 establish path (`UnassociatedEndpoint::assume_overlapped` ->
 `ThreadpoolIo::new` -> armed with `ReadDirectoryChangesW`), reliably fails to
-resolve the fault it was reopening for -- the read never completes -- and on
-one run crashed the process with `STATUS_STACK_BUFFER_OVERRUN`. Bisection
-(temporarily short-circuiting `reopen_via_existing_handle` to return early)
-localized this to the `OpenFileById` handle's interaction with IOCP
-association/arming specifically: `DirectoryHandle::reopen_by_id` and
-`canonical_path` are each independently correct per their own unit tests, and
-the defect reproduces with the path check never reached. The cause is not
-yet understood.
+resolve the fault it was reopening for -- the read never completes.
 
-**Current state:** `WatcherInner::reopen_via_existing_handle` returns `None`
-unconditionally, so every reopen uses the path-based fallback -- the
+**Round 3 -- root-caused, and it is neither IOCP nor this crate.** An earlier
+revision of this note attributed that failure to "the `OpenFileById` handle's
+interaction with IOCP association/arming specifically" and recorded that the
+cause was not understood. That attribution was wrong, and it pointed future work
+at the wrong subsystem. A standalone probe -- no thread pool, no IOCP, no crate
+code, just `CreateFileW`, `OpenFileById`, and a bare `ReadDirectoryChangesW` --
+reproduces it exactly:
+
+| How the directory was opened | `ReadDirectoryChangesW` |
+|---|---|
+| `CreateFileW`, by path | TRUE (pending) |
+| `OpenFileById` | FALSE, `ERROR_INVALID_PARAMETER` (87) |
+| `NtCreateFile` by id, **with** `FILE_DIRECTORY_FILE` | FALSE, 87 |
+| `NtCreateFile` by id, without `FILE_DIRECTORY_FILE` | FALSE, 87 |
+| **control:** `NtCreateFile` **by name**, same options | TRUE (pending) |
+
+All five handles are indistinguishable where it would be natural to look:
+`FileModeInformation` reports every one asynchronous (neither `SYNCHRONOUS_IO`
+bit set), `FileAccessInformation` reports the identical granted mask
+`0x00100081`, and `FileNameInformation` resolves the identical path. The only
+variable that changes the outcome is whether the object was resolved **by file
+ID** or **by name**. Windows does not accept a directory-change read on a by-id
+open, and no combination of access, flags, or create options reaches it.
+
+That also explains the shape of the original symptom. The arm does not hang; it
+fails immediately, the watcher re-enters its fault loop, retries, reopens by id
+again, and fails identically -- so the fault is never resolved. Confirmed against
+the crate: re-enabling the fast path fails six tests, every one of them a
+fault-resolution test, with "the fault never resolved after being answered", and
+instrumenting the arm prints `Os { code: 87, kind: InvalidInput }`.
+
+**Current state: the fast path is removed, not disabled.** It was not blocked
+pending a root cause; it is impossible. And it could not have paid for itself in
+any case: `reopen_via_existing_handle` returned its candidate only when the
+reopened object's current path equalled the watcher's recorded canonical path, so
+by construction it could only ever hand back a handle to the object *at the path
+the path-based fallback already opens*. `WatcherInner::reopen_via_existing_handle`,
+`DirectoryHandle::reopen_by_id`, and `DirectoryId::file_reference` are gone;
+`retry_reestablish` goes straight to the path-based open, and the
 DirectoryId/VolumeIdentity comparison and `Resident.directories` re-keying
-described above, which do not depend on the fast path and are unaffected. The
-`OpenFileById`/`canonical_path` machinery is kept, verified, and ready; only
-the wiring that would hand its result into IOCP association is disabled,
-pending whoever root-causes that interaction.
+described above are unchanged, having never depended on the fast path.
+
+The OS limitation itself is asserted by
+[tests/reopen_by_id_cannot_be_watched.rs](tests/reopen_by_id_cannot_be_watched.rs),
+including the by-name control, so this decision rests on something that executes
+rather than on a paragraph. If a future Windows accepts that read, the test fails
+and this decision should be revisited.
+
+Two things worth carrying out of this. First, an attribution recorded as
+"unexplained" is not inert: it had named a subsystem, and naming the wrong one is
+worse than naming none, because it directs the next investigation away from the
+answer. Second, the reason this went unexplained for so long is that every
+natural place to look -- access mask, sync/async mode, resolved path -- shows the
+two handles as identical; only a control that varied *how the object was
+resolved* while holding all of that fixed could isolate it.
+
+**The tail of the removal (M15.8).** Deleting the fast path left
+`WatcherInner::canonical_path` written on every install and read by nothing, and
+no compiler warning would ever have said so, because `lock(&self.canonical_path)`
+counts as a read of the field. The stored copy is gone;
+`DirectoryHandle::canonical_path` stayed, and now has a caller that uses its
+result -- the "reopened on a different volume" warning names the path the handle
+*resolves to* rather than echoing back the client's own string, which is the one
+moment that string is least worth printing, because changed resolution is exactly
+what happened. The rule that decided it: a diagnostic wants the live handle, not
+a cached copy, so needing the *value* is not a reason to keep the *field*.
 
 ### Failure detail on every fault report
 
@@ -770,3 +821,136 @@ The corrected test also asserts that a coarse `QueueFull` is actually *generated
 not merely permitted -- without that, the test would pass just as well against a
 generator that still excluded it, which is the same weakness the wake-edge
 regression test had in its first form.
+
+### <a id="dead-code-that-could-not-have-run"></a>Dead code that could not have run: `StandingHold::drop`
+
+Mutation testing left four survivors in `StandingHold::drop`, and the interesting
+part was not the survivors but why they survived.
+
+The reachability question settles from the source alone. Every `StandingHold` is
+built in one place (`StandingSlot::send`) and moved straight into `state.queue`.
+The only site anywhere in the crate that removes an entry from that queue is
+`take`, which settles the reservation inline with the pop and sets `resolved`, so
+`Drop` returns at its first line. The only other way a hold dies is `Shared` being
+torn down, where the hold's `Weak` fails to upgrade and it returns at its second.
+Nothing reaches the body in between -- confirmed by replacing it with
+`unreachable!()` and passing the full suite.
+
+The history says it was not always so. In `4198aa8` this `Drop` *was* the drain
+path: it "unconditionally restored `reserved` on drain." `07d4b75` then found that
+popping exposed the queue slot before the deferred `Drop` restored the
+reservation, so `queue.len() + reserved` could exceed capacity; the fix moved the
+release into `take`, inline with the pop, and left `Drop` as "the fallback for
+every other discard." The body was live code whose only caller moved out from
+under it.
+
+**The finding that decided what to do about it: the body could not have run
+safely.** `take` takes `&mut State`, so its caller holds the `items` guard -- and
+any other way to remove an entry from `state.queue` needs that same guard. A hold
+discarded on such a path is therefore dropped *inside* the lock, and the body's
+first act was `lock(&shared.items)`, a plain non-reentrant `Mutex::lock`. So the
+"fallback for every other discard" would have deadlocked in precisely the
+situation it was written for. Measured, not reasoned: with a forced unwind out of
+`take`, the body hung past 90s; the identical unwind with `Drop` short-circuited
+failed immediately.
+
+Building the missing discard path was never an option either, and the tests
+already said so: `dropping_a_standing_slot_while_its_message_is_still_queued_releases_capacity_once`
+asserts that a cancelled slot's queued question **still arrives**. There is no
+discard to fall back from.
+
+So the body is gone and an assertion stands in its place, phrased as
+`assert!(std::thread::panicking(), ...)` -- which is the true statement
+rather than a bare `false`. The only way to reach it today is an unwind out of
+`take` between the pop and `resolved` being set, and there the original panic is
+the real diagnostic and must be left to propagate rather than turned into an abort
+by a second one. Any *other* arrival is a new discard path that has not settled
+its reservation, and it fires. **The contract it encodes: a discard must release
+the reservation under the `items` lock it already holds, exactly as `take` does --
+never by delegating to a hold's `Drop`.**
+
+**Unconditional, not `debug_assert!`, corrected 2026-09-05 after the PR #57
+review.** It shipped as a `debug_assert!`, which meant the tripwire did not exist
+in release builds -- so the violation it guards, a future discard path that
+forgets to settle its reservation, would have corrupted the capacity accounting
+silently in exactly the configuration where that costs something. Nothing is
+traded away by making it unconditional: the "do not raise a second panic during
+an unwind" property comes from the *predicate* being `std::thread::panicking()`,
+not from the assertion's flavour, so an in-flight panic still passes through
+untouched. Its test lost `#[cfg(debug_assertions)]` with it, that gate having
+been correct for the old form and inverted by the new one.
+
+Two transferable points. First, "unreachable" and "harmless" are different
+claims, and the second does not follow from the first: this body was unreachable
+*and* was a deadlock waiting for its first caller. Second, the survivors were the
+symptom of a doc that had gone false by vacuity -- `Entry`, `StandingHold`,
+`StandingState`, and `take` all described this `Drop` as the live release
+mechanism, so a reader would have trusted a fallback that could not work. Four
+restatements of one fact, none of which moved when the fact did.
+### <a id="paths-are-the-callers-verbatim"></a>Paths are the caller's, verbatim
+
+D-85. `wide_path` hands `CreateFileW` exactly the units the caller supplied. That
+is a deliberate decision, not an omission, and the temptation it resists is to
+"helpfully" prepend `\\?\` so that longer paths work.
+
+**`\\?\` is a parsing mode, not a length switch.** It turns off the Win32 path
+parser wholesale: no forward-slash translation, no `.`/`..` resolution, no
+trailing-dot-or-space stripping, no reserved-name interception, and no relative
+paths at all. Adopting it on a caller's behalf therefore changes what their path
+*means*, and it does so on paths that have nothing to do with `MAX_PATH`.
+Measured on a short directory that opens fine today:
+
+| what the caller passed | verbatim | if this crate had prefixed it |
+|---|---|---|
+| `C:/Users/.../dir` | opens | `ERROR_FILE_NOT_FOUND` |
+| `C:\...\dir\.` | opens | `ERROR_INVALID_NAME` |
+| `C:\...\dir\subdir\..` | opens | `ERROR_INVALID_NAME` |
+
+Relative paths would stop working entirely, and this crate supports them on
+purpose -- `open_file_target` normalises a bare leaf's empty `parent()` to `.`
+precisely so `subscribe("target.txt", ...)` resolves.
+
+Each of those is pinned by a test in `directory::tests` (the "D-85" section),
+asserting the resolved *identity* rather than merely that something opened, plus
+one in the other direction: a caller's own `\\?\` path must arrive intact and
+reach the same directory, which is what makes "we never add the prefix" a
+complete contract rather than a refusal. The measurement that says those guards
+are worth having: with a blanket prefix injected into `wide_path`, exactly those
+five tests fail and the other **33** in the module pass. A "helpful" prefix would
+otherwise land looking entirely green.
+
+**Long paths are the application's call, not the library's.** Opening past
+`MAX_PATH` without the prefix requires *both* the machine's
+`LongPathsEnabled` policy and the application's own `longPathAware` manifest.
+Measured: the same binary source, on the same machine with the policy already
+enabled, fails a 300-character open with `ERROR_PATH_NOT_FOUND` and succeeds once
+the manifest is embedded. A library cannot set its consumer's manifest, and a
+consumer that has deliberately not opted in should not have this crate opt in for
+it behind its back. So the caller has two routes, and passing the path through
+untouched is what keeps both open: opt in at the application level, or pass an
+explicitly `\\?\`-prefixed path, which this crate forwards unchanged and Win32
+then honours.
+
+A caveat worth stating plainly, since it is the reason this looked like a defect:
+a Rust test binary has no such manifest, so a long-path open fails inside this
+crate's own test suite regardless of machine policy. That is a property of the
+harness, not of the crate.
+
+**Path construction, if it is ever needed here.** Win32 has no relative open, so
+any traversal has to *build* a child path, and a built path can exceed `MAX_PATH`
+even when the caller's own did not -- the one case where the caller's parsing
+mode is genuinely not enough. This crate does not have that problem today and the
+decision schedules no work for it: recursion is the kernel's (`bWatchSubtree`),
+notification names stay relative (D-8), and the only structural path operation in
+the crate is `open_file_target`'s `parent()`, which shortens. If traversal is
+ever added, the base to build on is `DirectoryHandle::canonical_path`, not the
+caller's string: `GetFinalPathNameByHandleW` returns the `\\?\` form *after*
+Win32 has already applied the caller's parsing mode, so switching to `\\?\`
+semantics at that point preserves the meaning the caller's path had, rather than
+reinterpreting it.
+
+One consequence to keep in view: because that canonical form is a different
+parsing mode from what the caller supplied, it must not be compared against, or
+handed back as, the caller's own path. Today it is used only in a diagnostic, and
+nothing in the crate compares the two forms -- `opened_path` is stored verbatim
+and only ever reopened, never matched against a canonical path.

@@ -18,30 +18,102 @@ use crate::queue::{Notification, Outcome, Receiver, WatchId};
 use crate::testing::TempDir;
 
 /// Upper bound for waiting on a change the kernel really should report.
-const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// **5s, matching the measured bound in `watcher/tests.rs`.** That module states
+/// the evidence -- on a mutant that breaks delivery, 93.6s at 30s (killed by
+/// cargo-mutants' deadline, and so filed as `timeout` rather than `caught`)
+/// against 31.8s at 5s (a clean red test) -- and this copy was left at 30s when
+/// the others were lowered, which put this module back in the case that
+/// measurement exists to avoid.
+///
+/// It matters more here than the count of waits suggests: [`Drain::wait_for`]
+/// spends this budget *per notification it is still looking for*, so a broken
+/// delivery path pays it repeatedly on the way to failing.
+///
+/// The same residual risk applies as there: 5s is ~10x the structural outlier
+/// measured on one 12-core developer machine, and a much slower runner is
+/// unmeasured. If this flakes, that is the reason, and the answer is to raise
+/// it -- in both places, together -- rather than to conclude the tests are wrong.
+const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Drain until a change with `name` arrives, returning the subscription it was
-/// tagged with. Fails rather than hanging.
-fn await_change(receiver: &Receiver, name: &str) -> WatchId {
-    let deadline = Instant::now() + NOTIFY_TIMEOUT;
-    loop {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .unwrap_or_default();
-        assert!(
-            !remaining.is_zero(),
-            "timed out waiting for a change to {name}"
-        );
-        let Some(item) = receiver.recv_timeout(remaining) else {
-            continue;
-        };
-        if let Notification::Batch { watch, changes } = item
-            && changes.iter().any(|change| {
+/// The subscription this notification tagged, if it reports `name` as added.
+fn added_by(item: &Notification, name: &str) -> Option<WatchId> {
+    match item {
+        Notification::Batch { watch, changes }
+            if changes.iter().any(|change| {
                 change.kind == ChangeKind::Added
                     && change.name.to_os_string().to_string_lossy() == name
-            })
+            }) =>
         {
-            return watch;
+            Some(*watch)
+        }
+        _ => None,
+    }
+}
+
+/// A receiver being drained, holding on to whatever has not been asked for yet.
+///
+/// # Waiting for one name must not discard the others
+///
+/// **A receiver carries every subscription's stream, and two watches deliver
+/// independently.** The obvious helper -- loop until the wanted name shows up,
+/// dropping whatever else arrives -- silently destroys notifications the test
+/// has not asked for *yet*. A second wait then blocks for the full timeout on
+/// something that already arrived and was thrown away.
+///
+/// That is not hypothetical: it is what
+/// [`two_subscriptions_on_one_session_are_distinguishable`] hit in CI. Its two
+/// directories are watched separately, nothing orders one against the other,
+/// and when the second arrived first the wait for `in-first.txt` consumed and
+/// discarded it. Reproduced deterministically by writing the second file first
+/// -- the failure is a property of the helper, not of the watcher, which had
+/// delivered both.
+///
+/// Holding the unmatched items makes the order irrelevant, so a test states
+/// what it expects to see rather than what order it must arrive in.
+struct Drain<'a> {
+    receiver: &'a Receiver,
+    held: Vec<Notification>,
+}
+
+impl<'a> Drain<'a> {
+    fn new(receiver: &'a Receiver) -> Self {
+        Self {
+            receiver,
+            held: Vec::new(),
+        }
+    }
+
+    /// Wait for a change to `name`, returning the subscription it was tagged
+    /// with. Fails rather than hanging.
+    fn wait_for(&mut self, name: &str) -> WatchId {
+        // Anything already taken off the receiver is checked first, which is
+        // the whole point of holding it.
+        if let Some(index) = self
+            .held
+            .iter()
+            .position(|item| added_by(item, name).is_some())
+        {
+            let item = self.held.remove(index);
+            return added_by(&item, name).expect("just matched");
+        }
+
+        let deadline = Instant::now() + NOTIFY_TIMEOUT;
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_default();
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for a change to {name}"
+            );
+            let Some(item) = self.receiver.recv_timeout(remaining) else {
+                continue;
+            };
+            if let Some(watch) = added_by(&item, name) {
+                return watch;
+            }
+            self.held.push(item);
         }
     }
 }
@@ -188,7 +260,7 @@ fn a_watch_delivers_to_its_sessions_receiver_tagged_with_its_own_id() {
 
     std::fs::write(dir.path().join("alpha.txt"), b"a").expect("create");
     assert_eq!(
-        await_change(&receiver, "alpha.txt"),
+        Drain::new(&receiver).wait_for("alpha.txt"),
         watch.id(),
         "a notification carries the subscription that produced it"
     );
@@ -217,8 +289,14 @@ fn two_subscriptions_on_one_session_are_distinguishable() {
     std::fs::write(second.path().join("in-second.txt"), b"b").expect("create");
 
     // One receiver, two streams: the tag is what lets a client tell them apart.
-    assert_eq!(await_change(&receiver, "in-first.txt"), a.id());
-    assert_eq!(await_change(&receiver, "in-second.txt"), b.id());
+    //
+    // One `Drain` for both waits, deliberately. The two directories are watched
+    // independently and nothing orders their notifications, so either may
+    // arrive first; a helper that dropped the one it was not asked for would
+    // make this test fail whenever the second beat the first.
+    let mut changes = Drain::new(&receiver);
+    assert_eq!(changes.wait_for("in-first.txt"), a.id());
+    assert_eq!(changes.wait_for("in-second.txt"), b.id());
 
     drop((a, b));
     drop(monitor);
@@ -241,7 +319,10 @@ fn a_subtree_subscription_reports_below_itself() {
     std::fs::create_dir(&nested).expect("create the subdirectory");
     std::fs::write(nested.join("deep.txt"), b"deep").expect("create the nested file");
 
-    assert_eq!(await_change(&receiver, "nested\\deep.txt"), watch.id());
+    assert_eq!(
+        Drain::new(&receiver).wait_for("nested\\deep.txt"),
+        watch.id()
+    );
 
     drop(watch);
     drop(monitor);
@@ -667,7 +748,7 @@ fn a_file_target_reports_changes_to_that_file_and_nothing_else() {
     std::fs::remove_file(&target).expect("remove the target");
     std::fs::write(&target, b"recreated").expect("recreate the target");
 
-    assert_eq!(await_change(&receiver, "target.txt"), watch.id());
+    assert_eq!(Drain::new(&receiver).wait_for("target.txt"), watch.id());
 
     drop(watch);
     drop(monitor);
@@ -697,10 +778,50 @@ fn a_file_target_and_a_directory_target_on_the_same_directory_coalesce() {
     );
 
     std::fs::write(dir.path().join("fresh.txt"), b"x").expect("create a new file");
-    let seen_by = await_change(&receiver, "fresh.txt");
+    let seen_by = Drain::new(&receiver).wait_for("fresh.txt");
     assert!(seen_by == file_watch.id() || seen_by == dir_watch.id());
 
     drop((file_watch, dir_watch));
     drop(monitor);
     dir.cleanup();
+}
+
+#[test]
+fn a_wait_does_not_discard_another_subscriptions_notification() {
+    // **The regression guard for a real CI failure.** Two directories are
+    // watched independently and nothing orders their notifications, so the
+    // second may be delivered first. A drain that dropped whatever it was not
+    // currently asked for destroyed that notification, and the next wait then
+    // blocked for the full timeout on something that had already arrived --
+    // reported as "timed out waiting for a change to in-second.txt".
+    //
+    // Writing the second file first, with a gap, forces the order that made it
+    // fail rather than waiting for chance to produce it: before the fix this
+    // failed in 30s every run, and after it passes in well under one.
+    let first = TempDir::new("watch-order-first");
+    let second = TempDir::new("watch-order-second");
+    let monitor = Monitor::new().expect("create the monitor");
+    let (session, receiver) = monitor.session();
+
+    let a = session
+        .subscribe(first.path(), WatchOptions::new())
+        .expect("register");
+    let b = session
+        .subscribe(second.path(), WatchOptions::new())
+        .expect("register");
+    monitor.quiesce();
+
+    std::fs::write(second.path().join("in-second.txt"), b"b").expect("create");
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::write(first.path().join("in-first.txt"), b"a").expect("create");
+
+    // Asked for in the opposite order to the one they arrived in.
+    let mut changes = Drain::new(&receiver);
+    assert_eq!(changes.wait_for("in-first.txt"), a.id());
+    assert_eq!(changes.wait_for("in-second.txt"), b.id());
+
+    drop((a, b));
+    drop(monitor);
+    first.cleanup();
+    second.cleanup();
 }

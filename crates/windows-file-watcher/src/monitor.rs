@@ -796,6 +796,11 @@ fn open_file_target(path: &std::path::Path) -> Opened {
     }
 }
 
+/// Whether an open-class fault must wait for this route's interactive answer.
+fn awaits_open_answer(retry: RetryMode, has_fault_slot: bool) -> bool {
+    retry == RetryMode::Interactive && has_fault_slot
+}
+
 /// Build the timer that fires this subscription's next open retry (M5.1). The
 /// callback submits `Request::Retry` through a `Weak<Core>`, resolved lazily
 /// (see `Monitor::new`) because `Core` cannot exist until after the servicing
@@ -836,7 +841,7 @@ fn park_pending(
     // subscription's eventual permanent failure (rare) falls back to the
     // ordinary best-effort path rather than blocking registration on it.
     let terminal = sink.reserve();
-    let awaiting_answer = options.retry == RetryMode::Interactive && fault_slot.is_some();
+    let awaiting_answer = awaits_open_answer(options.retry, fault_slot.is_some());
     let mut state = lock(resident);
     state.subscriptions.insert(
         watch,
@@ -871,6 +876,11 @@ fn park_pending(
         }
     }
     Ok(())
+}
+
+/// Whether a settled-tier notification accurately describes this route now.
+fn should_report_established(report_liveness: bool, is_faulted: bool) -> bool {
+    report_liveness && !is_faulted
 }
 
 /// Route a successfully opened target into a coalesced watcher (D-6), starting
@@ -947,7 +957,7 @@ fn route_established(
         // `Suspended`/`RetryQuestion` fault notifications, and will get its
         // own `Resumed`/`Established` from `resolve_fault_success` once (if)
         // the watcher recovers.
-        if options.report_liveness && !is_faulted {
+        if should_report_established(options.report_liveness, is_faulted) {
             let _ = sink.send(Notification::Established { watch, mode });
         }
         return Routed::Live;
@@ -1060,7 +1070,7 @@ fn retry_pending(
 
     match open_target(&path, options.subtree) {
         Opened::Pending(detail) => {
-            let awaiting_answer = options.retry == RetryMode::Interactive && fault_slot.is_some();
+            let awaiting_answer = awaits_open_answer(options.retry, fault_slot.is_some());
             let mut state = lock(resident);
             state.subscriptions.insert(
                 watch,

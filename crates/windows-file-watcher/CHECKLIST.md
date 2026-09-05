@@ -15,8 +15,8 @@ with origin) is standard procedure and is not listed as an item.
 
 Completed milestones are archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md).
 
-> **NEXT ACTIONABLE ITEM: none.** M1 through M14 are archived/done. Only the parked, ungated M-inf horizon
-> items remain, and none is a current obligation.
+> **NEXT ACTIONABLE ITEM: none.** M1 through M16 are done. Only the parked, ungated M-inf horizon items
+> remain, and none is a current obligation.
 
 ## M4 -- Coalescing by directory and file targets
 
@@ -87,18 +87,19 @@ after a reopen lands on a different directory. Independent of M10 above; M12 bel
   (`OpenFileById`, reopens by the file reference `DirectoryId` already carries) plus
   `DirectoryHandle::canonical_path` (`GetFinalPathNameByHandleW`, needed because `OpenFileById` is
   path-independent and would otherwise silently follow a moved/renamed directory). See D-80 and
-  [Reopening by file reference, and why the fast path is off](DESIGN-NOTES.md#reopening-by-file-reference-and-why-the-fast-path-is-off).
+  [Reopening by file reference, and why the fast path is gone](DESIGN-NOTES.md#reopening-by-file-reference).
+  **Superseded by M15.2:** `reopen_by_id` is removed -- Windows rejects a directory-change read on a
+  by-id open, so it could never produce a watchable handle.
 
 - [x] **M11.2** -- `WatcherInner::reopen` tries `ReOpenFile` against its still-live previous handle first
   (the old endpoint is not torn down until after this succeeds or fails), falling back to the existing
   path-based `DirectoryHandle::open` only when that fails. Verify empirically (real-OS test, per this
   crate's D-52 precedent of measuring rather than assuming Win32 behavior) that `ReOpenFile` behaves as
   documented for a `FILE_FLAG_BACKUP_SEMANTICS` directory handle. -> `WatcherInner::reopen_via_existing_handle`
-  implements the `OpenFileById`-plus-`canonical_path` mechanism above, but returns `None` unconditionally:
-  measured to hang or (once) crash the process with `STATUS_STACK_BUFFER_OVERRUN` once a handle obtained
-  this way is associated with the thread pool's IOCP and armed, for a reason not yet root-caused. Every
-  reopen therefore uses the path-based fallback only, which is fully implemented and tested (M11.3/M11.4
-  below do not depend on the fast path). See D-80.
+  implemented the `OpenFileById`-plus-`canonical_path` mechanism above but returned `None` unconditionally,
+  pending root-cause of a failure then attributed to IOCP association. **Superseded by M15.2:** root-caused
+  to an OS limitation with nothing to do with IOCP, and the whole fast path removed. Every reopen is
+  path-based, which is what M11.3/M11.4 were already written against. See D-80.
 
 - [x] **M11.3** -- Track each `DirectoryWatcher`'s current `VolumeIdentity`, recorded (no comparison) at
   first establish, compared only on the path-based fallback path -- a `ReOpenFile` success needs no
@@ -111,10 +112,12 @@ after a reopen lands on a different directory. Independent of M10 above; M12 bel
 - [x] **M11.5** -- Integration test: a manufactured reopen through `ReOpenFile` returns a handle to the same
   file (`DirectoryId` unchanged) while the original handle stays open; a deleted-and-recreated directory
   falls back to the path-based open and picks up its (possibly different) new identity, re-keying
-  `Resident.directories` correctly. -> `directory::tests` covers the file-reference-reopen identity claims
-  (`reopen_by_id_*`, including the rename hazard the fast path's disablement is about); `monitor::tests`'s
+  `Resident.directories` correctly. -> `monitor::tests`'s
   `a_path_based_reopen_that_lands_on_a_new_directory_rekeys_so_a_later_subscription_still_coalesces` covers
-  the re-keying claim end to end.
+  the re-keying claim end to end. **Superseded by M15.2** for the file-reference half: the `reopen_by_id_*`
+  identity tests are removed with the mechanism they characterised, and what replaces them is
+  [tests/reopen_by_id_cannot_be_watched.rs](tests/reopen_by_id_cannot_be_watched.rs), which asserts the OS
+  limitation that removal rests on.
 
 ## M12 -- Per-subscription volume-change confirmation (D-78)
 
@@ -127,6 +130,30 @@ Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-25----
 ## M14 -- Audit the delivery contract against the ten specification-gap categories (D-84)
 
 Archived in [COMPLETED-CHECKLIST.md](COMPLETED-CHECKLIST.md#moved-2026-08-27----m14-audit-the-delivery-contract-against-the-ten-specification-gap-categories-d-84).
+
+## M15 -- Findings from the mutation-testing sweep
+
+- [x] **M15.1** -- Resolved the unreachable half of `StandingHold::drop`: it was the drain path until `take` took the release over, and it could not have run safely -- reaching it deadlocks on the `items` lock its caller already holds. Replaced by an exercised tripwire. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m151)
+
+- [x] **M15.2** -- Explained why a `reopen_by_id` handle rejects the watcher's own read: Windows refuses a directory-change read on any by-id open, holding access, mode, create options and resolved path identical. The fast path is removed, not disabled. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m152)
+
+- [x] **M15.8** -- Settled the write-only tail of M15.2's removal: the stored `canonical_path` field is gone, `DirectoryHandle::canonical_path` stayed and now has a caller that uses its result plus the tests it never had. M15.3 stands, confirmed by injection. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m158)
+
+- [x] **M15.3** -- Decided: a caller's path goes to Win32 verbatim, and long-path support is the consuming application's call, not this crate's (D-85). The proposed `\\?\` prefix was measured to break forward slashes, `.`, `..` and relative paths that work today. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m153)
+
+- [x] **M15.9** -- Guarded D-85's pass-through with five identity-asserting tests. Measured worth: with a blanket prefix injected into `wide_path`, exactly those five fail and the other 33 in the module pass. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m159)
+
+- [x] **M15.10** -- Tested `canonical_path`'s 512-unit retry. No junction needed: a caller's own `\\?\` path opens past `MAX_PATH` (D-85), so the retry is reachable through the crate's own API. Added a boundary walk over 508-516 units; `<=` proved equivalent by measurement. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m1510)
+
+- [x] **M15.4** -- Isolated both remaining notification-filter categories. All six `ALL_NOTIFY_FILTERS` flag-pair mutants are now caught. Two of the item's own recorded claims were disproved by measurement: ATTRIBUTES does not mask a same-length rewrite, and a DACL edit *is* reported by SECURITY alone. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m154)
+
+- [x] **M15.5** -- Made the arming contract observable: extracted `classify_submission` (taking the raw `BOOL`, so the `!= 0` convention is inside the tested surface too) and asserted all four cases. Every mutant now fails as a deterministic red test rather than as a heap corruption. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m155)
+
+- [x] **M15.6** -- Converted `queue/tests.rs` to bounded waiting, so a broken wake fails instead of hanging. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m156)
+
+- [x] **M15.7** -- Decided and implemented: `NOTIFY_TIMEOUT` lowered 30s -> 5s across all three copies, after measuring that 45 of 46 waits finish in <=2.5ms and the whole tail is one structural ~515ms backoff, unchanged under 4x oversubscription. One previously-timing-out mutant: 93.6s -> 31.8s. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m157)
+
+- [x] **M15.11** -- Bounded the loop in `no_wakeup_is_lost_under_a_concurrent_burst` (a bounded wait inside an unbounded loop is still an unbounded loop) and aligned `await_signal`'s budget with M15.7's. The suite-wide sweep for the same shape found no other instance. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m1511)
 
 ## M-inf -- Horizon (ungated, post-v1)
 
@@ -149,11 +176,4 @@ when a post-v1 line of work takes one up. None is an open obligation of any curr
 - [ ] **M-inf.3** -- Per-volume capability cache: remember detailed-vs-coarse (and extended-record) support per
   volume so establish/re-establish need not re-probe each time (D-17/D-19).
 
-- [ ] **M-inf.4** -- Root-cause and, if fixed, re-enable M11.2's fast reopen path
-  (`WatcherInner::reopen_via_existing_handle`, currently hard-coded to return `None`): a handle obtained via
-  `OpenFileById` hangs, or once crashed the process with `STATUS_STACK_BUFFER_OVERRUN`, once associated
-  with the thread pool's IOCP and armed (D-80). `DirectoryHandle::reopen_by_id`/`canonical_path` are each
-  independently correct per `directory::tests`; the defect is specifically in the IOCP-association/arm
-  path against such a handle. Deferred because it needs dedicated low-level debugging (likely a minimal
-  repro outside this crate) rather than blocking M11/M12 on it -- the path-based-only reopen it falls back
-  to is fully correct, just without the optimization.
+- [x] **M-inf.4** -- Root-caused M11.2's fast reopen path: not an IOCP defect at all, but Windows refusing a directory-change read on any by-id open, so the path was removed rather than fixed. -> [completed 2026-09-01](COMPLETED-CHECKLIST.md#m152)

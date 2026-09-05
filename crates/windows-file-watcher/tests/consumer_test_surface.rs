@@ -105,6 +105,17 @@ fn a_drained_receiver_reports_empty_then_disconnected() {
 
     drop(sender);
     // With every sender gone and the queue empty, a blocking recv returns None
-    // rather than hanging -- how a consumer's drain loop ends on teardown.
-    assert!(receiver.recv().is_none());
+    // rather than hanging -- how a consumer's drain loop ends on teardown. Kept
+    // blocking on purpose (a bounded read would not demonstrate that), and
+    // bounded instead by a thread plus a deadline so a broken disconnect fails
+    // this test rather than wedging the run (M15.11).
+    assert!(receiver.is_disconnected(), "every sender is gone");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(receiver.recv().is_none());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(ended) => assert!(ended, "a blocking recv on an ended stream yields None"),
+        Err(_) => panic!("a consumer's drain loop would not have terminated"),
+    }
 }
