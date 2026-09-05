@@ -6,10 +6,11 @@
 //! claimed in advance, so that a later delivery cannot be refused for want of
 //! room. *Reserved is guaranteed, unreserved is best-effort.*
 //!
-//! # Known defect: this shape can lose an item after 2^32 pushes
+//! # The claim position recurs, and how soon is a layout choice
 //!
-//! **On every target, not only 32-bit ones** -- the claim position is a 32-bit
-//! half of the packed word below by construction, so this reaches x86-64 and
+//! **Under the default layout this shape can lose an item after 2^32 pushes, on
+//! every target and not only 32-bit ones** -- [`Balanced`] gives the claim
+//! position a 32-bit half of the packed word below, so this reaches x86-64 and
 //! ARM64 exactly as it reaches i686.
 //!
 //! A producer that has checked for room, been descheduled, and resumed after
@@ -19,15 +20,31 @@
 //! silent**: the consumer receives a different item than was sent, and no error,
 //! panic, or counter reports it.
 //!
-//! 2^32 pushes is 37 seconds to about four minutes of *sustained* pushing at
-//! this crate's measured rates, roughly two minutes at two producers. The wrap
-//! alone is not enough -- a producer must also stall inside a window a few
-//! instructions wide -- but a preemption suffices.
+//! Under `Balanced`, 2^32 pushes is 37 seconds to about four minutes of
+//! *sustained* pushing at this crate's measured rates, roughly two minutes at
+//! two producers. The wrap alone is not enough -- a producer must also stall
+//! inside a window a few instructions wide -- but a preemption suffices.
 //!
-//! [`slotwise_mpsc`](crate::slotwise_mpsc) does not have this hazard, its
-//! positions being 64 bits on every target; [`spsc`](crate::spsc) never had it.
-//! Below the wrap this shape is sound. The full statement, and what to do about
-//! it, is in the [crate documentation](crate).
+//! **[`ClaimLayout`] is how far away that is.** [`Perpetual`] moves it to 2^56
+//! pushes, about twenty years at the same rate, for the cost of a reservation
+//! ceiling of 255 and nothing measurable besides -- it is the same exchange on
+//! the same word, differing only in shift constants. [`Enduring`] sits between
+//! them, and the `dwcas` feature adds a 128-bit word that removes the
+//! recurrence outright.
+//!
+//! ```
+//! use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
+//!
+//! let (tx, rx) = reserving_mpsc::bounded_as::<u32, Perpetual>(64)?;
+//! # let _ = (tx, rx);
+//! # Ok::<(), windows_waitable_queues::CapacityError>(())
+//! ```
+//!
+//! The default stays `Balanced` so that introducing the choice changed no
+//! existing caller's behaviour; it is not the recommended layout.
+//! [`slotwise_mpsc`](crate::slotwise_mpsc) does not have this hazard under any
+//! layout, its positions being 64 bits on every target; [`spsc`](crate::spsc)
+//! never had it. The full statement is in the [crate documentation](crate).
 //!
 //! # Why this is a separate shape rather than a method on `slotwise_mpsc`
 //!
@@ -176,7 +193,7 @@ pub trait ClaimLayout: sealed::Sealed {
     /// The integer the two halves are packed into.
     ///
     /// `u64` for every layout the crate offers by default. The `dwcas` feature
-    /// adds [`Wide`], whose word is a `u128` -- and the arithmetic is done in
+    /// adds `Wide`, whose word is a `u128` -- and the arithmetic is done in
     /// this type rather than uniformly in the wider one, so a `u64` layout
     /// issues `u64` instructions exactly as it did before the type became a
     /// parameter.
@@ -244,7 +261,7 @@ pub trait ClaimLayout: sealed::Sealed {
     /// **Forced at construction rather than left to be evaluated.** An
     /// associated constant in a generic context is only evaluated where it is
     /// used, so assertions written here and never mentioned would compile for
-    /// every layout including a broken one. [`build`] names this so that
+    /// every layout including a broken one. The constructors name it, so
     /// creating a queue is what checks it.
     ///
     /// Note what is deliberately *not* asserted: that `BOUNDS_MAX` is at most

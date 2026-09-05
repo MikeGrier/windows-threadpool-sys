@@ -20,9 +20,16 @@
 //! and then compare-exchanges a claim word that does not contain `head`. The
 //! decision and the operation that acts on it are separate, which is
 //! [SH-14.1](../../../CHECKLIST-ship-topology-and-queues.md): a producer stalled
-//! between them resumes after the 32-bit position field has recurred, its
-//! exchange succeeds against a numerically equal but generations-later value,
-//! and it writes a slot whose freedom was decided long ago.
+//! between them resumes after the position field has recurred, its exchange
+//! succeeds against a numerically equal but generations-later value, and it
+//! writes a slot whose freedom was decided long ago.
+//!
+//! How wide that field is, and so how many pushes recurrence takes, is a layout
+//! choice there -- 32 bits under the default and up to 64 under
+//! [`reserving_mpsc::Wide`](crate::reserving_mpsc). **That moves the recurrence
+//! out of reach without removing the separation that causes it**, which is why
+//! this shape remains interesting: it addresses the structure rather than the
+//! interval.
 //!
 //! Here the decision *is* the operation. A producer takes a permit from a count
 //! of unspoken-for slots with one atomic, and that single modification both

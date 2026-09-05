@@ -75,14 +75,48 @@
 //! here has a single consumer, two of them have many *producers*, so a
 //! "there is room" signal has N waiters and is not the doorbell mirrored.
 //!
-//! # A known defect in `reserving_mpsc`, disclosed rather than fixed
+//! # How long `reserving_mpsc` runs before its claim position recurs
 //!
-//! **[`reserving_mpsc`] can lose an item after 2^32 pushes, on every target --
-//! not only 32-bit ones.** Its claim position is a 32-bit half of a packed word
-//! by construction, so this reaches x86-64 and ARM64 exactly as it reaches
-//! i686. Read that sentence before the paragraph below, because the phrase
-//! "32-bit position" invites the opposite reading and this project has already
-//! had to correct that misreading once.
+//! **[`reserving_mpsc`] can lose an item after 2^32 pushes under its default
+//! layout, on every target -- not only 32-bit ones.** That layout gives the
+//! claim position a 32-bit half of a packed word, so this reaches x86-64 and
+//! ARM64 exactly as it reaches i686. Read that sentence before the paragraph
+//! below, because the phrase "32-bit position" invites the opposite reading and
+//! this project has already had to correct that misreading once.
+//!
+//! **This is a property of the default layout, not of the shape**, and that is
+//! a change: it was previously a defect a caller had to live with. The claim
+//! word packs an outstanding-reservation count beside the position, and how its
+//! bits are divided is now a caller's choice. Reservations are bounded by how
+//! many producers are mid-send -- hundreds at most -- so giving up a ceiling
+//! nobody reaches buys positions:
+//!
+//! | Layout | Outstanding reservations | Pushes to recurrence | At sustained maximum rate |
+//! |---|---|---|---|
+//! | `Balanced` (default) | 2^32 | 2^32 | about 37 seconds |
+//! | `Enduring` | 65,535 | 2^48 | about 28 days |
+//! | `Perpetual` | 255 | 2^56 | about 20 years |
+//! | `Wide` (needs `dwcas`) | 2^32 | 2^64 | unreachable |
+//!
+//! ```
+//! use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
+//!
+//! // The same queue, with a claim position that outlives the process.
+//! let (tx, rx) = reserving_mpsc::bounded_as::<u32, Perpetual>(64)?;
+//! # let _ = (tx, rx);
+//! # Ok::<(), windows_waitable_queues::CapacityError>(())
+//! ```
+//!
+//! **A deeper position costs nothing measurable.** `Balanced`, `Enduring`, and
+//! `Perpetual` all issue the same exchange on the same 64-bit word and differ
+//! only in shift and mask constants; a probe comparing them found no difference
+//! outside noise. `Wide` is the exception: it needs a 128-bit exchange, which
+//! measured 2-3x slower on the claim, and it is the only thing in this crate
+//! that costs a third-party dependency. Prefer `Perpetual` unless you want the
+//! guarantee rather than the twenty years.
+//!
+//! The default remains `Balanced` so that no existing caller's behaviour
+//! changed when the choice was introduced. It is not the recommended layout.
 //!
 //! **What happens.** A producer checks that there is room, is descheduled, and
 //! resumes after other producers have driven the position field through a
@@ -96,34 +130,39 @@
 //! observable says so -- which is why this is documented here rather than left
 //! to a caller to discover, and why it cannot be mitigated after the fact.
 //!
-//! **The exposure, measured rather than estimated.** 2^32 pushes is 37 seconds
-//! to roughly four minutes of *sustained* pushing at this crate's own measured
-//! rates -- about two minutes at two producers, which is the smallest count
-//! that can trigger it at all. That is sustained throughput, not a total
-//! accumulated over an uptime. Reaching the wrap is necessary but not
-//! sufficient: a producer must also be stalled inside a window a few
+//! **The exposure, measured rather than estimated.** Under `Balanced`, 2^32
+//! pushes is 37 seconds to roughly four minutes of *sustained* pushing at this
+//! crate's own measured rates -- about two minutes at two producers, which is
+//! the smallest count that can trigger it at all. That is sustained throughput,
+//! not a total accumulated over an uptime. Reaching the wrap is necessary but
+//! not sufficient: a producer must also be stalled inside a window a few
 //! instructions wide. Rare, but a preemption is enough, and "rare" over
 //! billions of pushes is not "never".
 //!
-//! **What to do about it.** The choice is a real one, which is why the crate
-//! states the facts instead of quietly picking:
+//! The figures in the table above scale that same measurement by the position
+//! width, so they are a floor on time rather than a forecast: a queue that must
+//! drain cannot sustain the fastest rate measured, and a slower producer takes
+//! proportionally longer to reach its wrap.
 //!
-//! - **[`slotwise_mpsc`] does not have this hazard.** Its positions are 64 bits
-//!   on every target, so the equivalent wrap needs 2^64 claims and cannot be
-//!   reached. Prefer it unless you need [`Reserving`].
+//! **What to do about it.**
+//!
+//! - **Name a layout.** `Perpetual` puts the recurrence about twenty years out
+//!   at no measured cost, which takes it past any real deployment. This is the
+//!   answer for almost every caller who is exposed at all.
+//! - **[`slotwise_mpsc`] does not have this hazard** under any layout. Its
+//!   positions are 64 bits on every target, so the equivalent wrap needs 2^64
+//!   claims. Prefer it unless you need [`Reserving`].
 //! - **[`spsc`] never had it**, having no contended claim to race.
-//! - **[`reserving_mpsc`] is sound below the wrap.** A queue that will not push
+//! - **The default layout is sound below its wrap.** A queue that will not push
 //!   4.3 billion items in one run, or that is not driven at sustained maximum
-//!   rate by two or more producers, is not exposed.
-//! - If you need reservations *and* those volumes, say so -- the fix is
-//!   prototyped and measured, and it is the shipping decision that is open, not
-//!   the engineering.
+//!   rate by two or more producers, is not exposed even on `Balanced`.
 //!
 //! This is disclosed on the same principle as the ordering gap below: an
 //! adopter gets the information we have rather than an assurance we cannot
-//! support. The two are not equally forgiving, though, and the difference is
-//! worth stating plainly -- an unverified ordering is a *risk* of a bug, while
-//! this is a known one with a computed exposure.
+//! support. The difference between the two is worth stating plainly -- an
+//! unverified ordering is a *risk* of a bug, while this is a known one with a
+//! computed exposure. What has changed is that the exposure is now a number the
+//! caller sets rather than one the crate imposes.
 //!
 //! # How far the memory orderings are verified, and how far they are not
 //!

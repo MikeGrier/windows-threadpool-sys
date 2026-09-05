@@ -203,9 +203,11 @@ fn the_shapes_ceilings_are_what_the_public_documentation_claims() {
         "slotwise_mpsc is bounded by allocation rather than by its own positions"
     );
 
-    // `reserving_mpsc` packs a 32-bit position beside a reservation count, so
-    // its own ceiling is 2^31 -- but it is *also* clamped, and on a 32-bit
-    // target the clamp is the binding constraint.
+    // `reserving_mpsc`'s default layout gives the position 32 bits, so its own
+    // ceiling is 2^31 -- but it is *also* clamped, and on a 32-bit target the
+    // clamp is the binding constraint. `BOUNDS_MAX` is the default layout's
+    // ceiling by definition; a deeper layout has its own, reachable through
+    // `ClaimLayout`, and is not what this constant reports.
     let packed = 1_usize << 31;
     let expected = if packed <= MAX_ADMISSIBLE_CAPACITY {
         packed

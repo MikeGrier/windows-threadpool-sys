@@ -150,7 +150,7 @@ dependency at all -- only 64/64 does, which is `CW-2.3`.
   declined, this crate must keep its `wide` implementation, because a layout the
   queue crate cannot express is one the probe cannot instantiate.
 
-- [ ] **CW-2.4** -- Document the layouts as a choice, in the crate documentation
+- [x] **CW-2.4** -- Document the layouts as a choice, in the crate documentation
   and the README, with the rollover table and the two axes a caller trades
   between: outstanding reservations against time-to-recurrence. Lead with what
   `CW-1.4` measured -- re-apportioning is free, widening is not -- so a caller
@@ -163,7 +163,7 @@ dependency at all -- only 64/64 does, which is `CW-2.3`.
   layout breaks the build instead of leaving the documentation teaching a name
   that no longer exists.
 
-- [ ] **CW-2.5** -- Reopen `D-36` with the measurement in hand, then sweep every
+- [x] **CW-2.5** -- Reopen `D-36` with the measurement in hand, then sweep every
   statement of the hazard.
 
   **`D-36`'s premise is falsified, and that is the finding, not the sweep.** It
