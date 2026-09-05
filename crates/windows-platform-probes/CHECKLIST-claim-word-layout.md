@@ -115,12 +115,25 @@ dependency at all -- only 64/64 does, which is `CW-2.3`.
   different promise rather than a broken one, but it must be stated, not slipped
   in.
 
-- [ ] **CW-2.3** -- Decide whether a 128-bit claim word ships at all, and
-  therefore whether `portable-atomic` becomes a dependency of a published crate.
-  `D-7` sets the burden of proof for a Cargo feature and `D-37` discharged it
-  conditionally; `CW-1.4` supplies the number both were missing. The engineer
-  has said 32-bit Windows deployment is not a present concern, which changes
-  `D-18`'s premise and must be recorded rather than assumed.
+- [ ] **CW-2.3** -- Decide whether a 128-bit claim word ships at all.
+
+  **Not a dependency question.** An earlier form of this item framed it as
+  whether `portable-atomic` becomes a dependency of a published crate, which was
+  wrong: `core::arch::x86_64::cmpxchg16b` is stable on the pinned toolchain, so
+  a 64/64 layout needs no third-party crate. `D-7`'s and `D-37`'s dependency
+  cost does not apply, and the decision must not be made on it.
+
+  What it actually costs: hand-written `unsafe` with manual orderings in the
+  file where that is worst to get wrong, x86-64 only (no ARM64 `casp`, no
+  i686), and a `target-feature` or runtime-detection decision. Against that,
+  `CW-1.4` measured the 128-bit exchange 2-3x slower on the claim in the
+  isolated regime, and `CW-2.1` has since made `Perpetual` reach about 20 years
+  before recurrence on a plain `AtomicU64` at no measured cost.
+
+  So the question is narrow: is going from unreachable-in-any-deployment to
+  unreachable-in-principle worth that? The engineer has said 32-bit Windows
+  deployment is not a present concern, which changes `D-18`'s premise and must
+  be recorded rather than assumed.
 
   **`CW-1.6`'s scope is decided by this item**: if `portable-atomic` is
   declined, this crate must keep its `wide` implementation, because a layout the
