@@ -776,6 +776,75 @@ fn verbatim_counts_utf16_units_rather_than_bytes() {
     }
 }
 
+#[test]
+fn unprefixed_strips_the_verbatim_prefix_even_from_a_non_utf8_path() {
+    use std::os::windows::ffi::OsStringExt;
+
+    // **The case `to_str()` could not handle.** `0xD800` is an unpaired
+    // surrogate: legal in a Windows path, representable in `OsString`, and not
+    // valid UTF-8 -- so `to_str()` answers `None` and the old implementation
+    // left the prefix in place, after which `verbatim` added a second one.
+    //
+    // Nothing else in this file can catch that: every fixture is built under a
+    // temp directory whose path is ASCII, so the two implementations agree on
+    // every path the suite actually uses.
+    let mut units: Vec<u16> = r"\\?\C:\dir\".encode_utf16().collect();
+    units.push(0xD800);
+    let prefixed = PathBuf::from(OsString::from_wide(&units));
+    assert!(
+        prefixed.to_str().is_none(),
+        "the fixture must not be valid UTF-8, or it proves nothing"
+    );
+
+    let stripped = unprefixed(&prefixed);
+
+    // The prefix is gone, the unpaired surrogate survived, and re-adding the
+    // prefix returns exactly what we started with -- so `verbatim` and
+    // `unprefixed` are inverses on a path neither can round-trip through `str`.
+    let (round_tripped, _) = verbatim(&stripped);
+    assert_eq!(
+        Wtf16String::from_os_str(&round_tripped).as_units(),
+        &units[..],
+        "verbatim(unprefixed(p)) must reproduce p"
+    );
+    assert_eq!(
+        Wtf16String::from_os_str(stripped.as_os_str()).as_units(),
+        &units[4..],
+        "exactly the four prefix units are removed"
+    );
+}
+
+#[test]
+fn unprefixed_leaves_a_path_that_has_no_prefix_alone() {
+    let plain = Path::new(r"C:\dir\file");
+
+    assert_eq!(unprefixed(plain), plain);
+}
+
+/// `path` with a leading `\\?\` removed, if it has one.
+///
+/// **The inverse of [`verbatim`], and unit-based for the same reason.** An
+/// earlier version stripped the prefix with `to_str().and_then(strip_prefix)`,
+/// which makes the answer depend on UTF-8 validity: a path holding an unpaired
+/// surrogate -- the case `Wtf16String` exists for, and the reason nothing here
+/// goes through `display()` -- returns `None` from `to_str`, so the prefix
+/// survived and `verbatim` then added a *second* one. The fixture would be
+/// built at `\\?\\\?\C:\...`, mis-sized by four units, and the boundary
+/// assertions it feeds would fail for a reason nothing in them names.
+///
+/// Comparing the encoded units answers the same question without ever asking
+/// whether the path is valid UTF-8, which it need not be.
+fn unprefixed(path: &Path) -> PathBuf {
+    /// `\\?\`, as the UTF-16 code units it is made of.
+    const VERBATIM_PREFIX: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+
+    let wide = Wtf16String::from_os_str(path.as_os_str());
+    match wide.as_units().strip_prefix(&VERBATIM_PREFIX[..]) {
+        Some(rest) => PathBuf::from(OsString::from(Wtf16String::from_wide(rest))),
+        None => path.to_path_buf(),
+    }
+}
+
 /// A directory whose `\\?\` spelling is exactly `target` UTF-16 units, built by
 /// padding the final component. Components stay well under the 255-unit limit.
 ///
@@ -791,10 +860,7 @@ fn deep_dir_of_prefixed_len(base: &Path, target: usize) -> PathBuf {
     // `canonicalize` already returns the `\\?\` form on Windows, and the caller
     // re-adds that prefix when it measures, so strip it here rather than
     // counting it twice.
-    let mut path = match canonical.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
-        Some(stripped) => PathBuf::from(stripped),
-        None => canonical.clone(),
-    };
+    let mut path = unprefixed(&canonical);
     loop {
         let (_, current) = verbatim(&path);
         assert!(
