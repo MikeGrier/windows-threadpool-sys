@@ -201,16 +201,25 @@ Otherwise the next run would overwrite the very copy this section tells you to
 go looking for. Compare each against the file it names, copy it back if that
 file is still sabotaged, then delete it.
 
-Targets must be clean in git before a sweep starts, which additionally makes
-`git checkout` a safe second recourse; `-AllowDirty` waives that check. Note
+**Targets must be inside the repository**, and `-AllowDirty` does not waive
+that. A manifest's `root` may point anywhere, so the boundary is checked for
+every target on every run: the switch waives the cleanliness check, not the
+limit on what may be modified -- and it is the boundary that has no
+`git checkout` behind it.
+
+Targets must also be clean in git before a sweep starts, which additionally
+makes `git checkout` a safe second recourse; `-AllowDirty` waives that check. Note
 that it waives only the *second* recourse: once a target carries uncommitted
 work, `git checkout` would destroy it, and the backup above is the only correct
 recovery. The script's own messages say so rather than offering a `checkout`
 that would discard your work.
 
-Transcripts land in `.scratch/sabotage/`, one per sabotage plus the baseline,
-and stale ones are cleared at startup so a transcript named in an error message
-is always from the current run. Both a transcript and a backup are named after
+Transcripts land in `.scratch/sabotage/`, one per sabotage plus the baseline.
+Those this run may write are cleared before it starts -- and only those, since
+the directory is caller-supplied via `-OutputDirectory` and nothing else in it
+is the tool's to delete -- so a transcript named in an error message is always
+from the current run. Listing a manifest with `-List` writes and deletes
+nothing. Both a transcript and a backup are named after
 the sabotage with non-alphanumerics collapsed to dashes, so two entries
 differing only in punctuation would collide; the manifest is checked for that up
 front and rejected rather than allowed to overwrite one entry's evidence -- or,

@@ -324,6 +324,15 @@ function Get-EvidencePath {
 }
 
 $repoRoot = Get-RepoRoot
+
+# The repository root as a prefix to test paths against: canonical, and ending
+# in a separator so that a sibling directory whose name merely starts with the
+# root's ("...\repo-notes" against "...\repo") cannot pass as being inside it.
+$repoRootPrefix = [System.IO.Path]::GetFullPath($repoRoot)
+if (-not $repoRootPrefix.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+    $repoRootPrefix += [System.IO.Path]::DirectorySeparatorChar
+}
+
 $manifestPath = (Resolve-Path -LiteralPath $Manifest).Path
 $manifestDir = Split-Path -Parent $manifestPath
 $spec = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
@@ -339,16 +348,8 @@ if ($spec.PSObject.Properties.Name -contains 'root' -and $spec.root) {
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot '.scratch\sabotage' }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
-# Transcripts from an earlier sweep are deleted rather than left to be
-# overwritten. A run that fails in the build phase never creates the test-phase
-# transcript at all, so a survivor from a previous green sweep would still be
-# sitting at exactly the path an abort message names. Clearing them up front
-# makes any transcript this run names either its own or absent, never stale.
-Get-ChildItem -LiteralPath $OutputDirectory -File -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
-
-# Pre-patch copies live in their own subdirectory, so the sweep of stale
-# transcripts above cannot reach them, and so a leftover here is unambiguous.
+# Pre-patch copies live in their own subdirectory, so the clearing of stale
+# transcripts below cannot reach them, and so a leftover here is unambiguous.
 $backupDirectory = Join-Path $OutputDirectory 'restore'
 New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
 
@@ -464,6 +465,29 @@ foreach ($sabotage in $selected) {
     if (-not (Test-Path -LiteralPath $target)) {
         Exit-WithMessage "Sabotage '$($sabotage.name)' names a file that does not exist: $target" 2
     }
+
+    # Containment, checked for every target and NOT waived by -AllowDirty.
+    #
+    # A manifest's `root` may point anywhere, so without this the tool will
+    # cheerfully patch a file outside the repository. -AllowDirty is documented
+    # as waiving the CLEANLINESS requirement; letting it also widen what may be
+    # modified conflates two separate things, and the second is the one with no
+    # `git checkout` behind it. Checked before the dirtiness query rather than
+    # after, so an out-of-repo path is reported as what it is instead of as a
+    # git pathspec failure. Raised in the PR #64 review.
+    $targetFull = [System.IO.Path]::GetFullPath($target)
+    if (-not $targetFull.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Exit-WithMessage (@(
+                "Sabotage '$($sabotage.name)' names a file outside this repository:"
+                "  $targetFull"
+                "The repository is rooted at:"
+                "  $repoRoot"
+                "A sweep only ever patches files it can also restore and reason about,"
+                "so this is refused whether or not -AllowDirty was passed -- that switch"
+                "waives the cleanliness check, not the boundary."
+            ) -join "`n") 2
+    }
+
     if (-not $AllowDirty) {
         # An absolute pathspec is fine -- git resolves it against the repository
         # root, so this matches regardless of the caller's working directory.
@@ -494,6 +518,31 @@ foreach ($sabotage in $selected) {
                     "which it is not once a file carries uncommitted work. Commit or stash"
                     "first, or pass -AllowDirty to proceed with the backup as the only recourse."
                 ) -join "`n") 2
+        }
+    }
+}
+
+# Clear the transcripts this run may write -- and only those.
+#
+# The goal is that a path named in an error message is always from this run or
+# absent: a run that fails in the build phase never creates the test-phase
+# transcript, so a survivor from an earlier green sweep would otherwise still be
+# sitting exactly where the abort message points, contradicting it.
+#
+# This used to delete every file in $OutputDirectory, which is a destructive
+# surprise given that the directory is caller-supplied -- pointed at somewhere
+# holding anything else, the sweep would take it. It now removes precisely the
+# paths this invocation can write, which achieves the same goal with no
+# collateral at all. Raised in the PR #64 review.
+#
+# Placed after the -List exit and after validation, so neither listing a
+# manifest nor being rejected by it deletes anything.
+$writableStems = @('baseline') + @($selected | ForEach-Object { $stems[$_.name] })
+foreach ($writableStem in $writableStems) {
+    foreach ($suffix in @('.txt', '.txt.err', '.txt.build', '.txt.build.err')) {
+        $stale = Join-Path $OutputDirectory ($writableStem + $suffix)
+        if (Test-Path -LiteralPath $stale) {
+            Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
         }
     }
 }
