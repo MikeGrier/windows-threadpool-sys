@@ -56,6 +56,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 // because the current directory is per-process environment state rather than a
 // file operation.
 use windows_sys::Win32::System::Environment::{GetCurrentDirectoryW, SetCurrentDirectoryW};
+use wtf_string::Wtf16String;
 
 /// Windows's classic path ceiling.
 const MAX_PATH: usize = 260;
@@ -114,6 +115,11 @@ pub struct Attempt {
     /// Total length the call had to resolve: current directory plus the
     /// relative path. This is the number `MAX_PATH` is compared against, not
     /// the length of the relative part alone.
+    ///
+    /// **In UTF-16 code units**, which is the unit `MAX_PATH` itself is
+    /// expressed in. Counting Rust's platform encoding instead would disagree
+    /// the moment a non-ASCII character appeared in the temporary directory's
+    /// path, and would put an attempt on the wrong side of the ceiling.
     pub resolved_len: usize,
     /// Whether that total exceeds `MAX_PATH`.
     pub over_max_path: bool,
@@ -253,8 +259,13 @@ fn relative_path(depth: usize, shape: Shape) -> String {
 /// directory, with no prefix of any kind.
 fn attempt(current_dir_len: usize, depth: usize, shape: Shape) -> Attempt {
     let relative = relative_path(depth, shape);
-    // Plus one for the separator Windows inserts when it joins the two.
-    let resolved_len = current_dir_len + 1 + relative.len();
+    // Plus one for the separator Windows inserts when it joins the two. Both
+    // lengths are UTF-16 code units, which is the unit `MAX_PATH` is expressed
+    // in -- see `current_dir_len`'s construction in `measure`. The relative
+    // part is built from ASCII constants here, so its two counts agree today;
+    // it is measured the same way regardless, because a unit that is only
+    // correct while the input happens to be ASCII is one waiting to be wrong.
+    let resolved_len = current_dir_len + 1 + Wtf16String::from_os_str(OsStr::new(&relative)).len();
     let wide = wide(OsStr::new(&relative));
     // SAFETY: `wide` is a live null-terminated buffer for the duration of the
     // call; the handle, if any, is closed below.
@@ -455,7 +466,14 @@ pub fn measure(manifest_aware: bool) -> Observation {
         observation.apparatus_error = Some(error);
         return observation;
     }
-    let current_dir_len = root.as_os_str().len();
+    // **UTF-16 code units, not bytes.** `MAX_PATH` counts what Windows counts,
+    // and `OsStr::len` counts Rust's platform encoding -- which is WTF-8 here,
+    // so a non-ASCII character in `%TEMP%` makes the two disagree and can put
+    // an attempt on the wrong side of the ceiling in the report. `Wtf16String`
+    // is the workspace's own answer to exactly this: it holds the string in the
+    // encoding Windows uses, so its `len` is the number under test rather than
+    // a conversion of one.
+    let current_dir_len = Wtf16String::from_os_str(root.as_os_str()).len();
 
     for depth in [shallow, deep] {
         for shape in [Shape::Plain, Shape::DotDot, Shape::ForwardSlash] {

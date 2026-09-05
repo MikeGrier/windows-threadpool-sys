@@ -23,8 +23,11 @@
 //!
 //! Found by writing the third test below, which failed until the lock existed.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
+
+use wtf_string::Wtf16String;
 
 use super::measure;
 
@@ -106,4 +109,44 @@ fn the_apparatus_is_cleaned_up_even_when_the_experiment_is_run_twice() {
         apparatus_root().display()
     );
     assert_eq!(current_directory(), before);
+}
+
+#[test]
+fn the_resolved_length_is_counted_in_the_unit_max_path_uses() {
+    // **The bug this guards is invisible on an ASCII host**, which is every
+    // machine this has run on so far. `MAX_PATH` counts UTF-16 code units;
+    // `OsStr::len` counts Rust's platform encoding, which is WTF-8 here. The
+    // two agree for ASCII and diverge for anything else, so a `%TEMP%` with a
+    // non-ASCII character made the reported length too large and could push an
+    // attempt onto the wrong side of the ceiling in the report.
+    //
+    // Asserted on the encoding rather than through `measure`, because the fault
+    // needs a non-ASCII temporary directory that this test cannot conjure --
+    // and pinning the relationship is what actually stops the regression.
+    let ascii = OsString::from("C:\\Temp");
+    assert_eq!(
+        Wtf16String::from_os_str(&ascii).len(),
+        ascii.len(),
+        "the two units must agree for ASCII, or this test proves nothing below"
+    );
+
+    // U+00E9 is one UTF-16 unit and two WTF-8 bytes; U+4E2D is one and three.
+    // A path Windows sees as shorter than `MAX_PATH` can therefore look longer
+    // when measured in bytes -- the direction that matters, since it would
+    // report a refusal as expected when it was not.
+    for accented in ["C:\\Tempé", "C:\\Temp中"] {
+        let path = OsString::from(accented);
+        let wide = Wtf16String::from_os_str(&path).len();
+
+        assert!(
+            wide < path.len(),
+            "{accented:?} must expose the divergence: {wide} wide vs {} bytes",
+            path.len()
+        );
+        assert_eq!(
+            wide,
+            accented.chars().count(),
+            "every character here is one UTF-16 unit, so the wide count is the character count"
+        );
+    }
 }

@@ -47,15 +47,30 @@ fn downgrading_leaves_an_equal_or_lower_claim_alone() {
     );
 }
 
+/// Every [`Provenance`] variant.
+///
+/// **The `match` is what makes this exhaustive, and it is not decoration.** A
+/// bare array claims to cover the type and cannot: adding a variant leaves it
+/// unchanged, so it still compiles and silently stops testing the new case --
+/// which is what the comment below used to promise and the code did not keep.
+/// Matching on a value makes the compiler refuse to build until the new variant
+/// is added here, so the promise is enforced rather than asserted.
+fn every_variant() -> [Provenance; 3] {
+    // The binding is what forces the check; the arms all yield the same list.
+    match Provenance::Synthetic {
+        Provenance::Synthetic | Provenance::Restored | Provenance::Measured => [
+            Provenance::Synthetic,
+            Provenance::Restored,
+            Provenance::Measured,
+        ],
+    }
+}
+
 #[test]
 fn downgrading_never_raises_for_any_pair() {
     // Exhaustive over the whole type, so a variant added later cannot quietly
     // acquire an upgrade path.
-    let all = [
-        Provenance::Synthetic,
-        Provenance::Restored,
-        Provenance::Measured,
-    ];
+    let all = every_variant();
     for value in all {
         for ceiling in all {
             let result = value.downgraded_to(ceiling);
