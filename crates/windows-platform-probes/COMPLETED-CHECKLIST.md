@@ -1,3 +1,9 @@
+# Completed checklists: windows-platform-probes
+
+Append-only. Newest groups at the bottom.
+
+## Moved 2026-09-05 -- claim-word layout: measured the apportionment, then shipped it as a caller's choice
+
 # Checklist: claim-word layout
 
 Measures how the `reserving_mpsc` claim word's bit apportionment and width
