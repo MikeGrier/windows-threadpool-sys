@@ -205,15 +205,26 @@ fn many_senders_can_enqueue_concurrently() {
     }
     drop(sender);
 
-    // Bounded, for the reason `assert_stream_ended` exists: an unbounded drain
-    // loop ends only when the last sender's drop wakes the receiver, so a
-    // broken wake turns this into an infinite loop rather than a failure. It
-    // was the last such loop in this file, and the one that kept the
-    // `Drop for Sender` mutants costing a full mutation deadline apiece.
+    // **Drained by count, then ended explicitly**, which is the pairing
+    // `assert_stream_ended` exists for. A `while let Some(..) = recv_timeout(..)`
+    // loop reads as though it drains until the stream ends, and does not:
+    // `recv_timeout` answers `None` both for "the stream ended" and for
+    // "nothing arrived in time", so the loop also exits when the final drop
+    // never woke the receiver. Every notification has arrived by then, so the
+    // count assertions below still pass -- and the teardown wake, which is the
+    // property this file cares most about, goes untested while looking tested.
+    //
+    // Splitting it says the two things separately: `next` proves each of the
+    // `SENDERS * EACH` notifications arrived, and `assert_stream_ended` proves
+    // the stream then *ended* rather than merely going quiet -- it pairs the
+    // timeout with `is_disconnected`, which a stalled wake fails.
     let mut per_watch = std::collections::HashMap::<u64, usize>::new();
-    while let Some(item) = receiver.recv_timeout(Duration::from_secs(5)) {
+    for _ in 0..(SENDERS as usize * EACH) {
+        let item = next(&receiver, "a notification from one of the senders");
         *per_watch.entry(item.watch().get()).or_default() += 1;
     }
+    assert_stream_ended(&receiver, "after every sender finished and dropped");
+
     assert_eq!(per_watch.len(), SENDERS as usize);
     for id in 0..SENDERS {
         assert_eq!(per_watch[&id], EACH, "watch {id} lost notifications");
@@ -246,9 +257,16 @@ fn order_is_preserved_per_sender_under_concurrency() {
     a.join().expect("a");
     b.join().expect("b");
 
+    // Drained by count and then ended explicitly, for the reason given in
+    // `many_senders_can_enqueue_concurrently`: a `recv_timeout` drain loop
+    // cannot distinguish a finished stream from a receiver that was never
+    // woken, so it would let a broken teardown pass here as well. Both senders
+    // were moved into the threads above and are dropped by the joins, so the
+    // stream must have ended by this point.
     let mut seen_a = Vec::new();
     let mut seen_b = Vec::new();
-    while let Some(item) = receiver.recv_timeout(Duration::from_secs(5)) {
+    for _ in 0..(2 * EACH) {
+        let item = next(&receiver, "a notification from either producer");
         let name = names(&item).remove(0);
         if item.watch() == WatchId::from_raw(1) {
             seen_a.push(name);
@@ -256,6 +274,8 @@ fn order_is_preserved_per_sender_under_concurrency() {
             seen_b.push(name);
         }
     }
+    assert_stream_ended(&receiver, "after both producers finished and dropped");
+
     let expected_a: Vec<String> = (0..EACH).map(|i| format!("a-{i}")).collect();
     let expected_b: Vec<String> = (0..EACH).map(|i| format!("b-{i}")).collect();
     assert_eq!(seen_a, expected_a);

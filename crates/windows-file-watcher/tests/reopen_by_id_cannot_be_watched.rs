@@ -23,8 +23,8 @@ use std::path::Path;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_INVALID_PARAMETER, ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, GetLastError,
-    HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_INVALID_PARAMETER, ERROR_IO_PENDING, ERROR_NOT_FOUND,
+    ERROR_OPERATION_ABORTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED,
@@ -168,7 +168,13 @@ fn read_directory_changes_accepted(handle: HANDLE) -> Result<(), u32> {
     // `overlapped` and this function's `buffer`.
     //
     // SAFETY: `handle` is live and this thread issued the read above.
-    unsafe { CancelIo(handle) };
+    let cancelled = unsafe { CancelIo(handle) };
+    let cancel_error = if cancelled == 0 {
+        // SAFETY: called immediately after the failing call above.
+        Some(unsafe { GetLastError() })
+    } else {
+        None
+    };
 
     // **`CancelIo` alone would be a use-after-free.** It only *requests*
     // cancellation, returning as soon as the request is marked rather than when
@@ -189,6 +195,22 @@ fn read_directory_changes_accepted(handle: HANDLE) -> Result<(), u32> {
     // This crate has already paid for this exact mistake once -- see the
     // `STATUS_STACK_BUFFER_OVERRUN` history recorded on the removed
     // `reopen_via_existing_handle`.
+    //
+    // **The wait is unconditional, including when `CancelIo` failed, and that is
+    // deliberate.** The PR #57 review asked for a failed cancel to be a hard
+    // test failure, and it is -- but *after* this call rather than instead of
+    // it. Returning or panicking here would unwind the frame while an IRP may
+    // still be outstanding against `overlapped` and `buffer`, which is the
+    // use-after-free this whole function exists to prevent: the review's
+    // remedy, applied literally, reintroduces the defect it is guarding.
+    //
+    // The two failure modes are not equal. Waiting on an operation nothing will
+    // complete hangs, and a hang is bounded by the harness, obvious in a log,
+    // and harmless to memory. Freeing a buffer the kernel still owns corrupts
+    // whatever lands there next and has already been seen in this crate as a
+    // `STATUS_STACK_BUFFER_OVERRUN` with no useful diagnosis. So the safe
+    // failure is chosen over the fast one, and the cancel outcome is asserted
+    // below, once nothing is outstanding.
     let mut transferred: u32 = 0;
     // SAFETY: `overlapped` still names the pending operation and both it and
     // `buffer` are alive across this call. `bWait` is `TRUE`, so this returns
@@ -200,6 +222,21 @@ fn read_directory_changes_accepted(handle: HANDLE) -> Result<(), u32> {
         assert_eq!(
             err, ERROR_OPERATION_ABORTED,
             "a cancelled ReadDirectoryChangesW must complete as aborted, got {err}"
+        );
+    }
+
+    // Asserted here, with nothing outstanding, for the reason given above.
+    //
+    // `ERROR_NOT_FOUND` is the one acceptable failure: it means there was
+    // nothing left to cancel because the IRP had already completed, which is a
+    // race this function is allowed to lose -- the wait above then returned
+    // immediately rather than blocking. Any other failure means the cancel did
+    // not happen and the read may have been left outstanding, so the test is
+    // no longer measuring what it claims.
+    if let Some(error) = cancel_error {
+        assert_eq!(
+            error, ERROR_NOT_FOUND,
+            "CancelIo failed with {error}, so the read may never have been cancelled"
         );
     }
     Ok(())
