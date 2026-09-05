@@ -136,28 +136,187 @@ use crate::error::{CapacityError, Disconnected, PushError, RecvError, RecvTimeou
 use crate::metrics::Metrics;
 use crate::options::Options;
 
-/// How many of the claim word's bits carry the position.
+/// How the claim word's 64 bits are divided between the two things it packs.
 ///
-/// The other half carries the outstanding-reservation count. Changing this
-/// changes [`BOUNDS`] and is a breaking change to the capacities this shape
-/// accepts; see the [module documentation](self) for why an even split is the
-/// only sensible one.
-const POSITION_BITS: u32 = 32;
+/// The word carries an outstanding-reservation count and a claim position, and
+/// it must carry both because a single compare-and-swap has to update them
+/// together (see the [module documentation](self)). Dividing 64 bits between
+/// them is therefore a trade, and this trait is where a caller chooses which
+/// side to spend them on.
+///
+/// **The two things being traded are not equally valuable, and the shipping
+/// default spends the bits on the less valuable one.** The reservation count
+/// bounds how many messages may be held in flight at once -- in practice the
+/// number of producers mid-send, so hundreds or thousands. The position decides
+/// how many pushes occur before it recurs, and a recurrence is the `SH-14.1`
+/// hazard: a producer descheduled across a full wrap can claim against a
+/// numerically identical but generations-later value.
+///
+/// | Layout | reserved / position | Outstanding reservations | Pushes to recurrence |
+/// |---|---|---|---|
+/// | [`Balanced`] | 32 / 32 | 2^32 | 2^32 |
+/// | [`Enduring`] | 16 / 48 | 65,535 | 2^48 |
+/// | [`Perpetual`] | 8 / 56 | 255 | 2^56 |
+///
+/// At this crate's disclosed sustained rate of about 116 million pushes per
+/// second, those recurrences are roughly **37 seconds**, **28 days**, and
+/// **20 years** respectively. The rate is the one `reserving_mpsc`'s own hazard
+/// note quotes; a queue that must drain cannot sustain the fastest rate
+/// measured, so treat these as a floor on time rather than a forecast.
+///
+/// **Choosing a deeper position costs nothing measurable.** All three issue the
+/// same `lock cmpxchg` on the same `u64` and differ only in shift and mask
+/// constants; a probe comparing them found no difference outside noise. The
+/// trade is entirely against the reservation ceiling.
+///
+/// This trait is sealed: the layouts are a fixed set because each one's
+/// constants are checked against each other at compile time, and a caller
+/// supplying its own could pick a division this shape cannot honour.
+pub trait ClaimLayout: sealed::Sealed {
+    /// How many of the claim word's bits carry the position.
+    const POSITION_BITS: u32;
 
-/// Isolates the position half of the claim word.
-const POSITION_MASK: u64 = (1 << POSITION_BITS) - 1;
+    /// Isolates the position half of the claim word.
+    const POSITION_MASK: u64 = (1u64 << Self::POSITION_BITS) - 1;
 
-/// The position after `position`, wrapping at the width the packing gives it.
+    /// The largest outstanding-reservation count the word's other half holds.
+    ///
+    /// **A ceiling on reservations, not on capacity.** An earlier form of this
+    /// shape required the count's half to be wide enough for the whole
+    /// capacity, because every slot could be reserved at once. That is what made
+    /// a large capacity consume the position's bits. Capping the reservations
+    /// instead leaves the capacity bounded only by the ring.
+    const MAX_RESERVED: u64 = u64::MAX >> Self::POSITION_BITS;
+
+    /// The largest capacity this layout accepts.
+    ///
+    /// A wrapping position difference is unambiguous only up to half the
+    /// position space, and the crate-wide ceiling applies as well -- on a
+    /// 32-bit target it is the narrower of the two, and a shift by the position
+    /// width would overflow `usize` outright.
+    const BOUNDS_MAX: usize = {
+        let ring_bits = Self::POSITION_BITS - 1;
+        if ring_bits >= usize::BITS {
+            MAX_ADMISSIBLE_CAPACITY
+        } else {
+            let packed = 1_usize << ring_bits;
+            if packed <= MAX_ADMISSIBLE_CAPACITY {
+                packed
+            } else {
+                MAX_ADMISSIBLE_CAPACITY
+            }
+        }
+    };
+
+    /// The relationships this layout's constants depend on.
+    ///
+    /// **Forced at construction rather than left to be evaluated.** An
+    /// associated constant in a generic context is only evaluated where it is
+    /// used, so assertions written here and never mentioned would compile for
+    /// every layout including a broken one. [`build`] names this so that
+    /// creating a queue is what checks it.
+    ///
+    /// Note what is deliberately *not* asserted: that `BOUNDS_MAX` is at most
+    /// `MAX_RESERVED`. That assertion is what previously tied the capacity to
+    /// the reservation field, and removing it is the point of the decoupling
+    /// above.
+    const VALID: () = {
+        assert!(
+            Self::POSITION_BITS >= 32,
+            "the reservation count is read out as a u32, so a count field wider than 32 bits -- \
+             that is, a position narrower than 32 -- would be truncated on the way out"
+        );
+        assert!(
+            Self::POSITION_BITS < 64,
+            "the count needs at least one bit, so the position cannot take the whole word"
+        );
+        assert!(
+            Self::MAX_RESERVED <= u32::MAX as u64,
+            "the count is read back out through `reserved_of`'s cast to `u32`, so a field the \
+             word could hold but the cast could not would make this constant's name a lie"
+        );
+        assert!(
+            Self::MAX_RESERVED >= 1,
+            "a layout that permits no reservation at all would make `reserve` always fail, which \
+             is the one capability this shape exists to provide"
+        );
+        assert!(
+            Self::BOUNDS_MAX >= 2,
+            "two is the smallest capacity this shape accepts, so a layout offering less accepts \
+             nothing"
+        );
+        assert!(
+            Self::BOUNDS_MAX.is_power_of_two(),
+            "the maximum is offered to a caller as a capacity it could use, so it must itself be \
+             one this shape would accept"
+        );
+        assert!(
+            Self::BOUNDS_MAX <= WRAPPING_MAX_CAPACITY,
+            "a shape may be narrower than the crate-wide bound but never wider"
+        );
+    };
+}
+
+mod sealed {
+    /// Prevents a caller outside this crate from adding a layout.
+    pub trait Sealed {}
+}
+
+/// The shipping division: 32 bits each.
+///
+/// Holds 2^32 outstanding reservations and recurs after 2^32 pushes -- about
+/// **37 seconds** of sustained maximum-rate pushing. This is the default
+/// because it is what the shape shipped with, not because it is the best
+/// choice: the reservation ceiling it buys is far beyond any real use, and it
+/// is paid for with the whole of the `SH-14.1` exposure. Prefer [`Enduring`] or
+/// [`Perpetual`] unless you genuinely hold more than 65,535 reservations at
+/// once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Balanced;
+impl sealed::Sealed for Balanced {}
+impl ClaimLayout for Balanced {
+    const POSITION_BITS: u32 = 32;
+}
+
+/// A deeper position: 16 bits of reservations, 48 of position.
+///
+/// Holds 65,535 outstanding reservations and recurs after 2^48 pushes -- about
+/// **28 days** of sustained maximum-rate pushing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Enduring;
+impl sealed::Sealed for Enduring {}
+impl ClaimLayout for Enduring {
+    const POSITION_BITS: u32 = 48;
+}
+
+/// The deepest position: 8 bits of reservations, 56 of position.
+///
+/// Holds 255 outstanding reservations and recurs after 2^56 pushes -- about
+/// **20 years** of sustained maximum-rate pushing, which puts the recurrence
+/// beyond any real deployment rather than merely far away.
+///
+/// 255 reservations is the whole of the trade, and it is a real limit rather
+/// than a nominal one: [`Producer::reserve`] returns `None` once that many are
+/// outstanding, however empty the queue is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Perpetual;
+impl sealed::Sealed for Perpetual {}
+impl ClaimLayout for Perpetual {
+    const POSITION_BITS: u32 = 56;
+}
+
+/// The position after `position`, wrapping at the width the layout gives it.
 ///
 /// **Centralised because the width is no longer the type's.** A position is
-/// carried in a `u64` but is only [`POSITION_BITS`] wide, so it wraps where the
+/// carried in a `u64` but is only `L::POSITION_BITS` wide, so it wraps where the
 /// packing says rather than where `u64` would. Spelling that as
-/// `wrapping_add(1) & POSITION_MASK` at each of the dozen sites that need it
+/// `wrapping_add(1) & L::POSITION_MASK` at each of the dozen sites that need it
 /// would be a dozen chances to omit the mask, and an omitted mask is not a
 /// compile error -- it is a position that escapes its half of the claim word
 /// and silently corrupts the reservation count beside it.
-const fn advance(position: u64) -> u64 {
-    position.wrapping_add(1) & POSITION_MASK
+#[inline]
+const fn advance<L: ClaimLayout>(position: u64) -> u64 {
+    position.wrapping_add(1) & L::POSITION_MASK
 }
 
 /// How far `position` leads `head`, in the modular arithmetic the position
@@ -165,106 +324,70 @@ const fn advance(position: u64) -> u64 {
 ///
 /// Masked for [`advance`]'s reason. When the position was a `u32` the type
 /// supplied this wrap for free; it no longer does.
-const fn distance(position: u64, head: u64) -> u64 {
-    position.wrapping_sub(head) & POSITION_MASK
+#[inline]
+const fn distance<L: ClaimLayout>(position: u64, head: u64) -> u64 {
+    position.wrapping_sub(head) & L::POSITION_MASK
 }
 
-/// What this shape accepts as a capacity.
+/// The two handles a constructor hands back.
+///
+/// Named because the layout parameter makes the pair long enough to obscure the
+/// error type beside it, not because a caller is expected to write it: the
+/// constructors return it and a caller destructures it immediately.
+pub type Pair<T, L = Balanced> = (Producer<T, L>, Consumer<T, L>);
+
+// The layouts' relationship to one another, checked by the compiler rather than
+// by a test. These are facts about constants, so a test could only report after
+// the fact, on a build somebody chose to run -- and the trade they describe is
+// the whole reason more than one layout exists.
+const _: () = {
+    assert!(
+        <Perpetual as ClaimLayout>::MAX_RESERVED < <Enduring as ClaimLayout>::MAX_RESERVED,
+        "a deeper position must cost reservations, or it would be free and there would be no \
+         choice to offer"
+    );
+    assert!(
+        <Enduring as ClaimLayout>::MAX_RESERVED < <Balanced as ClaimLayout>::MAX_RESERVED,
+        "the layouts must order consistently, or the table documenting them is wrong"
+    );
+    assert!(
+        <Perpetual as ClaimLayout>::POSITION_MASK > <Enduring as ClaimLayout>::POSITION_MASK,
+        "and the reservations given up must buy positions with them"
+    );
+    assert!(
+        <Enduring as ClaimLayout>::POSITION_MASK > <Balanced as ClaimLayout>::POSITION_MASK,
+        "as above, across the whole ordering"
+    );
+};
+
+/// The largest capacity the default layout accepts.
+///
+/// Retained as a plain constant because it is public API and a caller may name
+/// it. It is [`Balanced`]'s ceiling; other layouts have their own, reachable as
+/// `<L as ClaimLayout>::BOUNDS_MAX`.
+pub const BOUNDS_MAX: usize = <Balanced as ClaimLayout>::BOUNDS_MAX;
+
+/// The capacities a layout accepts.
 ///
 /// The minimum is two for the same reason [`slotwise_mpsc`](crate::slotwise_mpsc)'s is: with a
 /// single slot, "published at `p`" and "free again on the next lap" would be the
-/// same sequence number.
-///
-/// The maximum is 2^31 rather than the crate-wide bound, because a position is
-/// half of the packed claim word rather than a whole [`usize`]. A wrapping
-/// 32-bit difference is unambiguous only up to 2^31, and that is exactly the
-/// most items this shape can hold.
-///
-/// **Bounded by the `usize` width as well as by the packing, because on a
-/// 32-bit target the packing is the *wider* of the two.** The crate-wide
-/// ceiling below which a wrapping position difference stays unambiguous is
-/// `usize::MAX / 2`, which on a 32-bit target is `2^31 - 1` -- narrower than
-/// the packing. A flat `1 << 31` therefore exceeds it, and the const assertion
-/// below rejects it, failing the build for every capacity including the small
-/// valid ones. Taking the narrower of the two limits keeps this a power of two
-/// on every target, which matters because the value is offered to a caller as a
-/// capacity it could actually use.
-pub const BOUNDS_MAX: usize = {
-    let packed = 1_usize << (POSITION_BITS - 1);
-    if packed <= MAX_ADMISSIBLE_CAPACITY {
-        packed
-    } else {
-        MAX_ADMISSIBLE_CAPACITY
+/// same sequence number. The maximum is the layout's own, since the position
+/// width decides how large a wrapping difference stays unambiguous.
+const fn bounds<L: ClaimLayout>() -> Bounds {
+    Bounds {
+        min: 2,
+        max: L::BOUNDS_MAX,
     }
-};
-
-/// The capacities this shape accepts. See [`BOUNDS_MAX`].
-const BOUNDS: Bounds = Bounds {
-    min: 2,
-    max: BOUNDS_MAX,
-};
-
-/// The largest reservation count the word's other half can hold.
-const MAX_RESERVED: u64 = u64::MAX >> POSITION_BITS;
-
-// The relationships the packing depends on, checked by the compiler rather than
-// by a test. They are facts about constants, so a test could only ever report
-// after the fact, on a build somebody chose to run; here, moving the split
-// without re-deriving what depends on it does not compile.
-//
-// **Note what is deliberately NOT asserted.** That `BOUNDS_MAX` equals
-// `1 << (POSITION_BITS - 1)` is tautological -- it is the definition -- and an
-// earlier version of this block asserted exactly that, which is to say nothing.
-// Widening the position to 40 bits sailed past it while silently narrowing the
-// reservation field to 24, which is the real breakage. The assertions below are
-// the ones that catch it.
-const _: () = {
-    assert!(
-        POSITION_BITS >= 32,
-        "the reservation count is read out as a u32, so a field wider than 32 bits would be \
-         truncated on the way out"
-    );
-    assert!(
-        MAX_RESERVED <= u32::MAX as u64,
-        "the count is read back out through `reserved_of`'s cast to `u32`, so a field the word \
-         could hold but the cast could not would make this constant's name a lie -- and the \
-         assertion below would then be satisfied by a ceiling that truncates on the way out"
-    );
-    assert!(
-        BOUNDS_MAX as u64 <= MAX_RESERVED,
-        "every slot may be reserved at once, so the count's half of the word must be able to hold \
-         the whole capacity -- widening the position narrows this and is the way the packing \
-         actually breaks"
-    );
-    assert!(
-        BOUNDS.max <= WRAPPING_MAX_CAPACITY,
-        "a shape may be narrower than the crate-wide bound but never wider"
-    );
-    assert!(
-        BOUNDS.max.is_power_of_two(),
-        "the maximum is offered to a caller as a capacity it could use, so it must itself be one \
-         this shape would accept -- and on a 32-bit target the crate-wide ceiling is not a power \
-         of two, so clamping to it directly would have produced a suggestion that is rejected"
-    );
-    assert!(
-        BOUNDS.min <= BOUNDS.max,
-        "a shape that accepts nothing would reject every capacity with a suggestion it would also \
-         reject"
-    );
-    // The clamp's own shape -- that it is the *widest* such power of two -- is
-    // asserted where it is defined, in `capacity::MAX_ADMISSIBLE_CAPACITY`, so
-    // every shape that clamps against it inherits the check rather than
-    // restating it.
-};
+}
 
 /// Reads the position out of a claim word.
-const fn position_of(word: u64) -> u64 {
-    word & POSITION_MASK
+const fn position_of<L: ClaimLayout>(word: u64) -> u64 {
+    word & L::POSITION_MASK
 }
 
 /// Reads the outstanding-reservation count out of a claim word.
-const fn reserved_of(word: u64) -> u32 {
-    (word >> POSITION_BITS) as u32
+const fn reserved_of<L: ClaimLayout>(word: u64) -> u32 {
+    (word >> L::POSITION_BITS) as u32
 }
 
 /// Builds a claim word from its two halves.
@@ -285,8 +408,8 @@ const fn reserved_of(word: u64) -> u32 {
 /// them apart. `|` is kept because it says "these are separate fields" where the
 /// others say "these are numbers"; the equivalence is recorded here so it is not
 /// investigated again.
-const fn claim_word(reserved: u32, position: u64) -> u64 {
-    ((reserved as u64) << POSITION_BITS) | (position & POSITION_MASK)
+const fn claim_word<L: ClaimLayout>(reserved: u32, position: u64) -> u64 {
+    ((reserved as u64) << L::POSITION_BITS) | (position & L::POSITION_MASK)
 }
 
 /// Creates a reserving multi-producer, single-consumer bounded array queue.
@@ -328,8 +451,52 @@ const fn claim_word(reserved: u32, position: u64) -> u64 {
 /// assert_eq!(rx.pop(), Some(99));
 /// # Ok::<(), windows_waitable_queues::CapacityError>(())
 /// ```
-pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
+pub fn bounded<T>(capacity: usize) -> Result<Pair<T>, CapacityError> {
     build(capacity, Options::new())
+}
+
+/// Creates a queue whose claim word is divided as `L` says.
+///
+/// [`bounded`] is this with `L` left at [`Balanced`], and the two are otherwise
+/// identical. See [`ClaimLayout`] for what the division trades: a lower ceiling
+/// on outstanding reservations against a longer run before the claim position
+/// recurs.
+///
+/// A separate entry point rather than a defaulted parameter on [`bounded`],
+/// because Rust permits generic defaults on types but not on functions. The
+/// types carry the default, so a caller who never names a layout never sees
+/// one.
+///
+/// ```
+/// use windows_waitable_queues::reserving_mpsc::{self, Perpetual};
+///
+/// // 255 outstanding reservations, and a claim position that recurs after
+/// // 2^56 pushes rather than 2^32.
+/// let (tx, rx) = reserving_mpsc::bounded_as::<u32, Perpetual>(4)?;
+/// tx.push(1).expect("an empty queue has room");
+/// assert_eq!(rx.pop(), Some(1));
+/// # Ok::<(), windows_waitable_queues::CapacityError>(())
+/// ```
+///
+/// # Errors
+///
+/// As [`bounded`], against `L`'s own capacity ceiling.
+pub fn bounded_as<T, L: ClaimLayout>(capacity: usize) -> Result<Pair<T, L>, CapacityError> {
+    build(capacity, Options::new())
+}
+
+/// Creates a queue with both a layout and non-default behaviour.
+///
+/// [`bounded_as`] with [`Options`], as [`bounded_with`] is to [`bounded`].
+///
+/// # Errors
+///
+/// As [`bounded`], against `L`'s own capacity ceiling.
+pub fn bounded_with_as<T, L: ClaimLayout>(
+    capacity: usize,
+    options: Options<T>,
+) -> Result<Pair<T, L>, CapacityError> {
+    build(capacity, options)
 }
 
 /// Creates a queue with something other than the default behaviour.
@@ -349,17 +516,14 @@ pub fn bounded<T>(capacity: usize) -> Result<(Producer<T>, Consumer<T>), Capacit
 /// # Errors
 ///
 /// As [`bounded`].
-pub fn bounded_with<T>(
-    capacity: usize,
-    options: Options<T>,
-) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
+pub fn bounded_with<T>(capacity: usize, options: Options<T>) -> Result<Pair<T>, CapacityError> {
     build(capacity, options)
 }
-fn build<T>(
+fn build<T, L: ClaimLayout>(
     capacity: usize,
     options: Options<T>,
-) -> Result<(Producer<T>, Consumer<T>), CapacityError> {
-    validate_capacity(capacity, BOUNDS)?;
+) -> Result<Pair<T, L>, CapacityError> {
+    validate_capacity(capacity, bounds::<L>())?;
 
     let mut slots = Vec::with_capacity(capacity);
     for index in 0..capacity {
@@ -373,14 +537,21 @@ fn build<T>(
         });
     }
 
+    // Names `L::VALID` so the layout's own const assertions are evaluated.
+    // An associated constant in a generic context is only checked where it is
+    // used, so a layout whose constants contradict each other would otherwise
+    // compile untouched until something happened to mention them.
+    let () = L::VALID;
+
     let shared = Arc::new(Shared {
+        layout: PhantomData,
         teardown: Teardown::new(options.disposal),
         metrics: Metrics::new(options.track_high_water),
         slots: slots.into_boxed_slice(),
         mask: capacity - 1,
         capacity,
         head: CacheAligned(AtomicU64::new(0)),
-        claim: CacheAligned(AtomicU64::new(claim_word(0, 0))),
+        claim: CacheAligned(AtomicU64::new(claim_word::<L>(0, 0))),
         producers: AtomicUsize::new(1),
         consumer_live: AtomicBool::new(true),
         doorbell: Doorbell::new(),
@@ -415,7 +586,12 @@ struct Slot<T> {
     value: UnsafeCell<MaybeUninit<T>>,
 }
 
-struct Shared<T> {
+struct Shared<T, L: ClaimLayout> {
+    /// Ties the shared state to the layout its arithmetic is done in.
+    ///
+    /// Carries no data: the layout is entirely a set of compile-time constants,
+    /// so this exists only because a type parameter must appear in the type.
+    layout: PhantomData<L>,
     /// What becomes of undrained items at teardown.
     ///
     /// Read only by [`Shared::drop`], which holds `&mut self`, so it needs no
@@ -468,11 +644,11 @@ struct Shared<T> {
 // is private, no method reads it, and the only access is from Drop, which
 // holds &mut self and runs when the last handle is already gone. So no two
 // threads can reach it at all, concurrently or otherwise.
-unsafe impl<T: Send> Sync for Shared<T> {}
+unsafe impl<T: Send, L: ClaimLayout> Sync for Shared<T, L> {}
 // SAFETY: as above; sending the shared state is sending the items it holds.
-unsafe impl<T: Send> Send for Shared<T> {}
+unsafe impl<T: Send, L: ClaimLayout> Send for Shared<T, L> {}
 
-impl<T> Shared<T> {
+impl<T, L: ClaimLayout> Shared<T, L> {
     /// The capacity as the width the positions are counted in.
     ///
     /// Lossless by construction: [`BOUNDS`] caps the capacity at 2^31.
@@ -503,7 +679,7 @@ impl<T> Shared<T> {
             u64::from(reserved) <= capacity,
             "reservations may never exceed the capacity they are claimed from"
         );
-        let occupied = distance(position, self.head.0.load(Ordering::Acquire));
+        let occupied = distance::<L>(position, self.head.0.load(Ordering::Acquire));
         occupied < capacity - u64::from(reserved)
     }
 
@@ -519,9 +695,9 @@ impl<T> Shared<T> {
     /// subtraction produce a number near `u32::MAX`. A bounded queue must never
     /// report holding more than it can.
     fn len(&self) -> usize {
-        let position = position_of(self.claim.0.load(Ordering::Relaxed));
+        let position = position_of::<L>(self.claim.0.load(Ordering::Relaxed));
         let head = self.head.0.load(Ordering::Acquire);
-        (distance(position, head) as usize).min(self.capacity)
+        (distance::<L>(position, head) as usize).min(self.capacity)
     }
 
     /// How many further items a best-effort push could still place, as a
@@ -543,8 +719,8 @@ impl<T> Shared<T> {
         let word = self.claim.0.load(Ordering::Relaxed);
         let head = self.head.0.load(Ordering::Acquire);
         let capacity = self.capacity_u64();
-        let occupied = distance(position_of(word), head).min(capacity);
-        let spoken_for = occupied.saturating_add(u64::from(reserved_of(word)));
+        let occupied = distance::<L>(position_of::<L>(word), head).min(capacity);
+        let spoken_for = occupied.saturating_add(u64::from(reserved_of::<L>(word)));
         capacity.saturating_sub(spoken_for) as usize
     }
 
@@ -565,7 +741,7 @@ impl<T> Shared<T> {
         // the load mean, at this point in the source, what it appears to mean.
         let position = self.head.0.load(Ordering::Acquire);
         let slot = &self.slots[position as usize & self.mask];
-        slot.sequence.load(Ordering::Acquire) == advance(position)
+        slot.sequence.load(Ordering::Acquire) == advance::<L>(position)
     }
 
     /// Give up one unit of the producer count, signalling if it was the last.
@@ -667,12 +843,12 @@ impl<T> Shared<T> {
         // invariant makes the condition already true in modification order --
         // this waits to *see* it, not for it to *become* true.
         let mut head = self.head.0.load(Ordering::Acquire);
-        while distance(position, head) >= self.capacity_u64() {
+        while distance::<L>(position, head) >= self.capacity_u64() {
             std::hint::spin_loop();
             head = self.head.0.load(Ordering::Acquire);
         }
         if self.metrics.tracks_high_water() {
-            let depth = (distance(position, head) + 1) as usize;
+            let depth = (distance::<L>(position, head) + 1) as usize;
             // **The clamp is unreachable from here, and is kept deliberately.**
             // The wait above exits only once `position - head < capacity`, so
             // `depth <= capacity` already holds and `min` never binds. It was
@@ -713,7 +889,8 @@ impl<T> Shared<T> {
         // and this is what forbids the compiler and the processor from moving it
         // earlier. Until it lands, the consumer sees the slot as
         // claimed-but-empty and skips it.
-        slot.sequence.store(advance(position), Ordering::Release);
+        slot.sequence
+            .store(advance::<L>(position), Ordering::Release);
 
         // After the publication, never before: the doorbell says "there is
         // something to take", and that must not become true before the item is
@@ -728,7 +905,7 @@ impl<T> Shared<T> {
     }
 }
 
-impl<T> Drop for Shared<T> {
+impl<T, L: ClaimLayout> Drop for Shared<T, L> {
     fn drop(&mut self) {
         // Every handle is gone, so no synchronization is needed and the
         // positions can be read directly. A slot between the two positions still
@@ -742,10 +919,10 @@ impl<T> Drop for Shared<T> {
         // instead of leaving it to that argument.
         let mask = self.mask;
         let head = *self.head.0.get_mut();
-        let tail = position_of(*self.claim.0.get_mut());
+        let tail = position_of::<L>(*self.claim.0.get_mut());
         let mut position = head;
         while position != tail {
-            let published = advance(position);
+            let published = advance::<L>(position);
             let slot = &mut self.slots[position as usize & mask];
             if *slot.sequence.get_mut() == published {
                 // SAFETY: the slot's sequence says the producer finished writing
@@ -755,7 +932,7 @@ impl<T> Drop for Shared<T> {
                 let item = unsafe { slot.value.get_mut().assume_init_read() };
                 self.teardown.dispose(item);
             }
-            position = advance(position);
+            position = advance::<L>(position);
         }
     }
 }
@@ -765,14 +942,14 @@ impl<T> Drop for Shared<T> {
 /// [`Clone`], so producers multiply by cloning rather than by sharing: each
 /// thread owns its own handle. Not [`Sync`], so a handle is used by one thread
 /// at a time.
-pub struct Producer<T> {
-    shared: Arc<Shared<T>>,
+pub struct Producer<T, L: ClaimLayout = Balanced> {
+    shared: Arc<Shared<T, L>>,
     /// Removes [`Sync`] without removing [`Send`]. A [`Cell`] is exactly that
     /// shape, and no value of it is ever created.
     not_sync: PhantomData<Cell<()>>,
 }
 
-impl<T> Producer<T> {
+impl<T, L: ClaimLayout> Producer<T, L> {
     /// Appends an item, best-effort.
     ///
     /// **Cannot take a reserved slot.** A queue with one free slot and one
@@ -790,8 +967,8 @@ impl<T> Producer<T> {
         // costs a retry rather than correctness.
         let mut word = self.shared.claim.0.load(Ordering::Relaxed);
         let position = loop {
-            let position = position_of(word);
-            let reserved = reserved_of(word);
+            let position = position_of::<L>(word);
+            let reserved = reserved_of::<L>(word);
             #[cfg(test)]
             crate::race_hooks::CLAIM.run();
 
@@ -833,7 +1010,7 @@ impl<T> Producer<T> {
             // than have its increment silently overwritten.
             match self.shared.claim.0.compare_exchange_weak(
                 word,
-                claim_word(reserved, advance(position)),
+                claim_word::<L>(reserved, advance::<L>(position)),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
@@ -860,11 +1037,11 @@ impl<T> Producer<T> {
     /// The queue stays connected while a reservation is outstanding, so a
     /// consumer will not be told the stream ended and then handed the item.
     #[must_use = "a reservation withholds capacity from every other producer until it is used or dropped"]
-    pub fn reserve(&self) -> Option<Reservation<T>> {
+    pub fn reserve(&self) -> Option<Reservation<T, L>> {
         let mut word = self.shared.claim.0.load(Ordering::Relaxed);
         loop {
-            let position = position_of(word);
-            let reserved = reserved_of(word);
+            let position = position_of::<L>(word);
+            let reserved = reserved_of::<L>(word);
             #[cfg(test)]
             crate::race_hooks::CLAIM.run();
 
@@ -881,13 +1058,29 @@ impl<T> Producer<T> {
                 return None;
             }
 
+            // The count's own half of the word can overflow into the position's
+            // before the capacity is exhausted, once a layout gives it fewer
+            // bits than the capacity has slots. Refusing here is what decouples
+            // the two ceilings: the capacity is bounded by the ring, and the
+            // reservations by whatever the layout left room for.
+            //
+            // **Checked against the word this iteration read, not against a
+            // separate load.** The count and the position share the word
+            // precisely so a decision about one cannot be made against a stale
+            // reading of the other, and the exchange below re-validates the
+            // whole word -- so a racing `reserve` that got there first makes
+            // this one fail and re-read rather than exceed the ceiling.
+            if u64::from(reserved) >= L::MAX_RESERVED {
+                return None;
+            }
+
             // The position is carried through unchanged: a reservation claims
             // capacity, not an order. Where the item lands is decided when the
             // reservation is redeemed, so a slot held for a long time does not
             // stall everything queued behind it.
             match self.shared.claim.0.compare_exchange_weak(
                 word,
-                claim_word(reserved + 1, position),
+                claim_word::<L>(reserved + 1, position),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
@@ -930,7 +1123,7 @@ impl<T> Producer<T> {
     /// snapshot.
     #[must_use]
     pub fn outstanding_reservations(&self) -> usize {
-        reserved_of(self.shared.claim.0.load(Ordering::Relaxed)) as usize
+        reserved_of::<L>(self.shared.claim.0.load(Ordering::Relaxed)) as usize
     }
 
     /// Whether the next best-effort push would be refused, as a snapshot.
@@ -962,7 +1155,7 @@ impl<T> Producer<T> {
     }
 }
 
-impl<T> Clone for Producer<T> {
+impl<T, L: ClaimLayout> Clone for Producer<T, L> {
     fn clone(&self) -> Self {
         // Relaxed, for the reason given in `reserve`.
         self.shared.producers.fetch_add(1, Ordering::Relaxed);
@@ -977,7 +1170,7 @@ impl<T> Clone for Producer<T> {
 // would make a handle to a queue of non-`Debug` items un-printable for no
 // reason. The item type is not the handle's business, so the handle reports the
 // queue's state instead.
-impl<T> fmt::Debug for Producer<T> {
+impl<T, L: ClaimLayout> fmt::Debug for Producer<T, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("reserving_mpsc::Producer")
             .field("capacity", &self.capacity())
@@ -989,7 +1182,7 @@ impl<T> fmt::Debug for Producer<T> {
     }
 }
 
-impl<T> Drop for Producer<T> {
+impl<T, L: ClaimLayout> Drop for Producer<T, L> {
     fn drop(&mut self) {
         self.shared.release_producer();
     }
@@ -1006,14 +1199,14 @@ impl<T> Drop for Producer<T> {
 ///
 /// Dropping it returns the slot to the queue.
 #[must_use = "a reservation withholds capacity from every other producer until it is used or dropped"]
-pub struct Reservation<T> {
-    shared: Arc<Shared<T>>,
+pub struct Reservation<T, L: ClaimLayout = Balanced> {
+    shared: Arc<Shared<T, L>>,
     /// See [`Producer::not_sync`]. A reservation may be *moved* between threads
     /// but is used by one at a time, exactly like the handle that made it.
     not_sync: PhantomData<Cell<()>>,
 }
 
-impl<T> Reservation<T> {
+impl<T, L: ClaimLayout> Reservation<T, L> {
     /// Delivers into the reserved slot.
     ///
     /// **This cannot fail for want of room**, which is the entire purpose: the
@@ -1044,8 +1237,8 @@ impl<T> Reservation<T> {
         // consumer has already finished with.
         let mut word = self.shared.claim.0.load(Ordering::Relaxed);
         let position = loop {
-            let position = position_of(word);
-            let reserved = reserved_of(word);
+            let position = position_of::<L>(word);
+            let reserved = reserved_of::<L>(word);
             debug_assert!(
                 reserved >= 1,
                 "this reservation is outstanding, so the count cannot be zero"
@@ -1053,7 +1246,7 @@ impl<T> Reservation<T> {
 
             match self.shared.claim.0.compare_exchange_weak(
                 word,
-                claim_word(reserved - 1, advance(position)),
+                claim_word::<L>(reserved - 1, advance::<L>(position)),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
@@ -1096,7 +1289,7 @@ impl<T> Reservation<T> {
     }
 }
 
-impl<T> fmt::Debug for Reservation<T> {
+impl<T, L: ClaimLayout> fmt::Debug for Reservation<T, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("reserving_mpsc::Reservation")
             .field("disconnected", &self.is_disconnected())
@@ -1104,20 +1297,20 @@ impl<T> fmt::Debug for Reservation<T> {
     }
 }
 
-impl<T> Drop for Reservation<T> {
+impl<T, L: ClaimLayout> Drop for Reservation<T, L> {
     fn drop(&mut self) {
         // Give the slot back. Only the count moves: the position is untouched,
         // because an unredeemed reservation never occupied a position.
         let mut word = self.shared.claim.0.load(Ordering::Relaxed);
         loop {
-            let reserved = reserved_of(word);
+            let reserved = reserved_of::<L>(word);
             debug_assert!(
                 reserved >= 1,
                 "this reservation is outstanding, so the count cannot be zero"
             );
             match self.shared.claim.0.compare_exchange_weak(
                 word,
-                claim_word(reserved - 1, position_of(word)),
+                claim_word::<L>(reserved - 1, position_of::<L>(word)),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
@@ -1133,13 +1326,13 @@ impl<T> Drop for Reservation<T> {
 ///
 /// Neither [`Clone`] nor [`Sync`], which is what makes "single consumer" a fact
 /// the compiler checks rather than a rule to remember.
-pub struct Consumer<T> {
-    shared: Arc<Shared<T>>,
+pub struct Consumer<T, L: ClaimLayout = Balanced> {
+    shared: Arc<Shared<T, L>>,
     /// See [`Producer::not_sync`].
     not_sync: PhantomData<Cell<()>>,
 }
 
-impl<T> Consumer<T> {
+impl<T, L: ClaimLayout> Consumer<T, L> {
     /// Takes the oldest item, or `None` if there is none right now.
     ///
     /// `None` does not mean the queue is finished, and here it does not even
@@ -1157,7 +1350,7 @@ impl<T> Consumer<T> {
         let slot = &self.shared.slots[position as usize & self.shared.mask];
         // Acquire: pairs with the producer's release store, so an item it
         // published is visible here.
-        if slot.sequence.load(Ordering::Acquire) != advance(position) {
+        if slot.sequence.load(Ordering::Acquire) != advance::<L>(position) {
             return None;
         }
 
@@ -1179,7 +1372,7 @@ impl<T> Consumer<T> {
         self.shared
             .head
             .0
-            .store(advance(position), Ordering::Release);
+            .store(advance::<L>(position), Ordering::Release);
         Some(item)
     }
 
@@ -1209,7 +1402,7 @@ impl<T> Consumer<T> {
     /// a drained queue with an outstanding reservation is not an idle one.
     #[must_use]
     pub fn outstanding_reservations(&self) -> usize {
-        reserved_of(self.shared.claim.0.load(Ordering::Relaxed)) as usize
+        reserved_of::<L>(self.shared.claim.0.load(Ordering::Relaxed)) as usize
     }
 
     /// How many further items a best-effort push could still place, as a
@@ -1328,7 +1521,7 @@ impl<T> Consumer<T> {
     }
 }
 
-impl<T> Parked for Consumer<T> {
+impl<T, L: ClaimLayout> Parked for Consumer<T, L> {
     type Item = T;
 
     fn pop(&self) -> Option<T> {
@@ -1353,7 +1546,7 @@ impl<T> Parked for Consumer<T> {
 }
 
 /// See [`Producer`]'s impl for why this is hand-written.
-impl<T> fmt::Debug for Consumer<T> {
+impl<T, L: ClaimLayout> fmt::Debug for Consumer<T, L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("reserving_mpsc::Consumer")
             .field("capacity", &self.capacity())
@@ -1365,13 +1558,13 @@ impl<T> fmt::Debug for Consumer<T> {
     }
 }
 
-impl<T> Drop for Consumer<T> {
+impl<T, L: ClaimLayout> Drop for Consumer<T, L> {
     fn drop(&mut self) {
         self.shared.consumer_live.store(false, Ordering::Release);
     }
 }
 
-impl<T> crate::Producer for Producer<T> {
+impl<T, L: ClaimLayout> crate::Producer for Producer<T, L> {
     type Item = T;
 
     fn push(&self, item: T) -> Result<(), PushError<T>> {
@@ -1383,7 +1576,7 @@ impl<T> crate::Producer for Producer<T> {
     }
 }
 
-impl<T> crate::Claim for Reservation<T> {
+impl<T, L: ClaimLayout> crate::Claim for Reservation<T, L> {
     type Item = T;
 
     fn send(self, item: T) -> Result<(), Disconnected<T>> {
@@ -1395,14 +1588,14 @@ impl<T> crate::Claim for Reservation<T> {
     }
 }
 
-impl<T> crate::Reserving for Producer<T> {
+impl<T, L: ClaimLayout> crate::Reserving for Producer<T, L> {
     type Item = T;
     type Reservation<'a>
-        = Reservation<T>
+        = Reservation<T, L>
     where
         Self: 'a;
 
-    fn reserve(&self) -> Option<Reservation<T>> {
+    fn reserve(&self) -> Option<Reservation<T, L>> {
         Self::reserve(self)
     }
 
@@ -1411,7 +1604,7 @@ impl<T> crate::Reserving for Producer<T> {
     }
 }
 
-impl<T> crate::Consumer for Consumer<T> {
+impl<T, L: ClaimLayout> crate::Consumer for Consumer<T, L> {
     type Item = T;
 
     fn pop(&self) -> Option<T> {
@@ -1423,7 +1616,7 @@ impl<T> crate::Consumer for Consumer<T> {
     }
 }
 
-impl<T> crate::Bounded for Producer<T> {
+impl<T, L: ClaimLayout> crate::Bounded for Producer<T, L> {
     fn capacity(&self) -> usize {
         Self::capacity(self)
     }
@@ -1444,7 +1637,7 @@ impl<T> crate::Bounded for Producer<T> {
     }
 }
 
-impl<T> crate::Bounded for Consumer<T> {
+impl<T, L: ClaimLayout> crate::Bounded for Consumer<T, L> {
     fn capacity(&self) -> usize {
         Self::capacity(self)
     }
@@ -1465,7 +1658,7 @@ impl<T> crate::Bounded for Consumer<T> {
     }
 }
 
-impl<T> Shared<T> {
+impl<T, L: ClaimLayout> Shared<T, L> {
     /// The counters, as the [`Observable`](crate::Observable) trait reports
     /// them. Written once so the two handles cannot drift apart.
     fn refused(&self) -> u64 {
@@ -1481,7 +1674,7 @@ impl<T> Shared<T> {
     }
 }
 
-impl<T> Producer<T> {
+impl<T, L: ClaimLayout> Producer<T, L> {
     /// How many pushes have been refused for want of room.
     #[must_use]
     pub fn refused(&self) -> u64 {
@@ -1501,7 +1694,7 @@ impl<T> Producer<T> {
     }
 }
 
-impl<T> Consumer<T> {
+impl<T, L: ClaimLayout> Consumer<T, L> {
     /// How many pushes have been refused for want of room.
     #[must_use]
     pub fn refused(&self) -> u64 {
@@ -1521,7 +1714,7 @@ impl<T> Consumer<T> {
     }
 }
 
-impl<T> crate::Observable for Producer<T> {
+impl<T, L: ClaimLayout> crate::Observable for Producer<T, L> {
     fn refused(&self) -> u64 {
         Self::refused(self)
     }
@@ -1535,7 +1728,7 @@ impl<T> crate::Observable for Producer<T> {
     }
 }
 
-impl<T> crate::Observable for Consumer<T> {
+impl<T, L: ClaimLayout> crate::Observable for Consumer<T, L> {
     fn refused(&self) -> u64 {
         Self::refused(self)
     }
@@ -1549,7 +1742,7 @@ impl<T> crate::Observable for Consumer<T> {
     }
 }
 
-impl<T> crate::Waitable for Consumer<T> {
+impl<T, L: ClaimLayout> crate::Waitable for Consumer<T, L> {
     fn doorbell(&self) -> io::Result<BorrowedHandle<'_>> {
         Self::doorbell(self)
     }

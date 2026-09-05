@@ -13,9 +13,15 @@
 //! slot -- so the interesting cases all put the queue under pressure first.
 
 use super::{
-    BOUNDS_MAX, Consumer, MAX_RESERVED, POSITION_MASK, Producer, Reservation, advance, bounded,
-    bounded_with, claim_word, position_of, reserved_of,
+    BOUNDS_MAX, Balanced, ClaimLayout, Consumer, Enduring, Perpetual, Producer, Reservation,
+    advance, bounded, bounded_as, bounded_with, claim_word, position_of, reserved_of,
 };
+
+/// The default layout's constants, named once so the packing tests read as
+/// prose rather than as turbofish.
+const POSITION_MASK: u64 = <Balanced as ClaimLayout>::POSITION_MASK;
+/// As [`POSITION_MASK`].
+const MAX_RESERVED: u64 = <Balanced as ClaimLayout>::MAX_RESERVED;
 use crate::race_hooks;
 use crate::{Disposal, Options};
 // The trait is imported anonymously because this module also names the concrete
@@ -71,9 +77,9 @@ fn the_claim_word_round_trips_both_halves() {
     let max_reserved = MAX_RESERVED as u32;
     for &reserved in &[0_u32, 1, 2, 1000, max_reserved - 1, max_reserved] {
         for &position in &[0_u64, 1, 2, 1000, POSITION_MASK - 1, POSITION_MASK] {
-            let word = claim_word(reserved, position);
+            let word = claim_word::<Balanced>(reserved, position);
             assert_eq!(
-                (reserved_of(word), position_of(word)),
+                (reserved_of::<Balanced>(word), position_of::<Balanced>(word)),
                 (reserved, position),
                 "packing must be lossless in both halves, including at their extremes"
             );
@@ -85,16 +91,16 @@ fn the_claim_word_round_trips_both_halves() {
 fn the_two_halves_do_not_bleed_into_each_other() {
     // The mistake packing invites: a position that wraps must not carry into
     // the reservation count, and a count must not appear as a position.
-    let word = claim_word(0, POSITION_MASK);
+    let word = claim_word::<Balanced>(0, POSITION_MASK);
     assert_eq!(
-        reserved_of(word),
+        reserved_of::<Balanced>(word),
         0,
         "a maximal position leaves the count at zero"
     );
 
-    let word = claim_word(MAX_RESERVED as u32, 0);
+    let word = claim_word::<Balanced>(MAX_RESERVED as u32, 0);
     assert_eq!(
-        position_of(word),
+        position_of::<Balanced>(word),
         0,
         "a maximal count leaves the position at zero"
     );
@@ -102,8 +108,14 @@ fn the_two_halves_do_not_bleed_into_each_other() {
     // And an increment of the position at its maximum wraps within its own half
     // rather than incrementing the count, which is what the queue relies on
     // every time a position laps.
-    let wrapped = claim_word(7, advance(POSITION_MASK));
-    assert_eq!((reserved_of(wrapped), position_of(wrapped)), (7, 0));
+    let wrapped = claim_word::<Balanced>(7, advance::<Balanced>(POSITION_MASK));
+    assert_eq!(
+        (
+            reserved_of::<Balanced>(wrapped),
+            position_of::<Balanced>(wrapped)
+        ),
+        (7, 0)
+    );
 }
 
 // The relationship between the split and the ceiling is deliberately NOT tested
@@ -1298,7 +1310,10 @@ fn the_gauges_are_clamped_when_head_has_passed_the_sampled_position() {
     // a sabotage run caught it doing.
     let (tx, _rx) = bounded::<u32>(4).expect("4 is a valid capacity");
 
-    tx.shared.claim.0.store(claim_word(0, 1), Ordering::Release);
+    tx.shared
+        .claim
+        .0
+        .store(claim_word::<Balanced>(0, 1), Ordering::Release);
     tx.shared.head.0.store(2, Ordering::Release);
 
     assert_eq!(
@@ -1318,7 +1333,10 @@ fn the_gauges_are_clamped_when_head_has_passed_the_sampled_position() {
     // held, so leaving `head` ahead sets that walk a `u32::MAX`-length loop and
     // the test hangs rather than fails. Measured the hard way.
     tx.shared.head.0.store(0, Ordering::Release);
-    tx.shared.claim.0.store(claim_word(0, 0), Ordering::Release);
+    tx.shared
+        .claim
+        .0
+        .store(claim_word::<Balanced>(0, 0), Ordering::Release);
 }
 
 #[test]
@@ -1428,4 +1446,111 @@ fn the_high_water_mark_is_untracked_by_default_on_this_shape() {
     let (tx, _rx) = bounded::<u32>(4).expect("4 is a valid capacity");
     tx.push(1).expect("room");
     assert_eq!(tx.high_water(), None);
+}
+
+// ---------------------------------------------------------------------------
+// The claim-word layouts.
+//
+// The apportionment is arithmetic over compile-time constants, so most of it is
+// checked by `ClaimLayout::VALID` at build time. What a test is needed for is
+// the part that is *behaviour*: that a narrow reservation half actually refuses
+// at its ceiling, and that the ceiling no longer drags the capacity down with
+// it. Neither is observable under `Balanced`, whose ceiling of 2^32 cannot be
+// reached on any queue that fits in memory -- which is why these tests are
+// written against `Perpetual`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn each_layout_divides_the_word_as_documented() {
+    // The documentation states these numbers to callers choosing between the
+    // layouts, so they are asserted rather than left to be re-derived by a
+    // reader who wants to check the table.
+    assert_eq!(<Balanced as ClaimLayout>::POSITION_BITS, 32);
+    assert_eq!(<Balanced as ClaimLayout>::MAX_RESERVED, u64::from(u32::MAX));
+
+    assert_eq!(<Enduring as ClaimLayout>::POSITION_BITS, 48);
+    assert_eq!(<Enduring as ClaimLayout>::MAX_RESERVED, 65_535);
+
+    assert_eq!(<Perpetual as ClaimLayout>::POSITION_BITS, 56);
+    assert_eq!(<Perpetual as ClaimLayout>::MAX_RESERVED, 255);
+}
+
+#[test]
+fn a_layout_may_hold_more_slots_than_it_can_reserve() {
+    // **This is the decoupling, and it is the whole point of the change.**
+    // Before it, the reservation half had to be wide enough for the entire
+    // capacity, because every slot could be reserved at once -- so a layout
+    // with 255 reservations would have been limited to 255 slots, and a large
+    // capacity would have been unbuildable. A queue of 1024 slots on a layout
+    // that can reserve 255 of them is exactly what that rule forbade.
+    let capacity = 1024;
+    assert!(
+        capacity > <Perpetual as ClaimLayout>::MAX_RESERVED,
+        "the fixture must exceed the reservation ceiling or it tests nothing"
+    );
+
+    let (tx, rx) = bounded_as::<u32, Perpetual>(capacity as usize)
+        .expect("a capacity far below the layout's ceiling");
+    for value in 0..capacity as u32 {
+        tx.push(value).expect("every slot is free");
+    }
+    assert!(tx.is_full(), "all 1024 slots hold an item");
+    for expected in 0..capacity as u32 {
+        assert_eq!(rx.pop(), Some(expected));
+    }
+}
+
+#[test]
+fn reservations_stop_at_the_layouts_ceiling_not_at_the_capacity() {
+    // The other half of the decoupling: the ceiling is real and refuses, rather
+    // than being a number that silently overflows into the position beside it.
+    let ceiling = <Perpetual as ClaimLayout>::MAX_RESERVED as usize;
+    let (tx, _rx) =
+        bounded_as::<u32, Perpetual>(1024).expect("a capacity far above the reservation ceiling");
+
+    let held: Vec<_> = (0..ceiling)
+        .map(|index| {
+            tx.reserve()
+                .unwrap_or_else(|| panic!("reservation {index} is within the ceiling"))
+        })
+        .collect();
+    assert_eq!(held.len(), ceiling);
+    assert_eq!(tx.outstanding_reservations(), ceiling);
+
+    assert!(
+        tx.reserve().is_none(),
+        "the reservation past the ceiling must be refused even though 769 slots are still free"
+    );
+    assert!(
+        !tx.is_full(),
+        "and the refusal must be the layout's ceiling rather than a full queue -- otherwise this \
+         test would pass for the wrong reason"
+    );
+
+    // Releasing one makes room for exactly one more, so the ceiling is a live
+    // count rather than a latch.
+    drop(
+        held.into_iter()
+            .next_back()
+            .expect("the ceiling is not zero"),
+    );
+    assert!(
+        tx.reserve().is_some(),
+        "a released reservation returns its place under the ceiling"
+    );
+}
+
+#[test]
+fn a_reservation_on_a_deep_layout_still_delivers_its_message() {
+    // The layouts are not merely constants: each is a distinct instantiation of
+    // the whole protocol, so the capability the shape exists for is exercised
+    // on a non-default one rather than assumed to follow.
+    let (tx, rx) = bounded_as::<u32, Enduring>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("an empty queue has room");
+    tx.push(1).expect("room beyond the reservation");
+    slot.send(99).expect("the consumer is still here");
+
+    assert_eq!(rx.pop(), Some(1));
+    assert_eq!(rx.pop(), Some(99));
+    assert_eq!(rx.pop(), None);
 }
