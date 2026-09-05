@@ -14,6 +14,13 @@ waited on alongside other handles. The capability traits over them --
 `Producer`, `Consumer`, `Bounded`, `Waitable`, `Reserving` -- each ship with the
 second implementation that validated them.
 
+`reserving_mpsc` packs its claim position beside a reservation count in one
+word, and **how those bits are divided is a caller's choice**: `Balanced`,
+`Enduring`, and `Perpetual` trade a reservation ceiling nobody reaches for a
+claim position that lasts from about 37 seconds to about 20 years of sustained
+maximum-rate pushing, at no measured cost. See
+[the section on recurrence](#how-long-reserving_mpsc-runs-before-its-claim-position-recurs).
+
 The decisions all of this was built against are in
 [DESIGN-NOTES.md](DESIGN-NOTES.md), and the remaining work is tracked in
 [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) at the workspace root.
@@ -153,6 +160,25 @@ difference between the two is worth stating plainly -- an unverified ordering is
 a *risk* of a bug, while this is a known one with a computed exposure. What has
 changed is that the exposure is now a number the caller sets rather than one the
 crate imposes.
+
+## Cargo features
+
+Both are off by default, and the default build depends on `windows-sys` alone.
+
+**`dwcas`** adds the `Wide` claim layout, a 128-bit claim word for
+`reserving_mpsc`. This is the only thing in the crate that costs a third-party
+dependency: Rust's standard library has no 128-bit atomic -- `core::sync::atomic`
+stops at 64 bits -- so the double-width compare-and-swap comes from
+`portable-atomic`. Most callers do not need it; `Perpetual` reaches roughly
+twenty years before its claim position recurs with no dependency and no measured
+cost, while the 128-bit exchange measured 2-4x slower on the claim itself. Take
+it when you want the recurrence gone as a guarantee rather than deferred by an
+argument about deployment lifetimes.
+
+**`experimental-permit-claim`** adds `permit_mpsc`, a different claim protocol in
+which the decision and the operation are one atomic rather than two. It is
+**not** covered by this crate's semver promise: it will either be merged into
+`reserving_mpsc` or deleted once it has been measured enough to decide.
 
 ## How far the memory orderings are verified, and how far they are not
 

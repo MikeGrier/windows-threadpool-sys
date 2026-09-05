@@ -60,3 +60,20 @@ once set at process scope -- irreversible, so no test performs it.
 its source, with the control that makes that attributable; that closing a
 duplicate leaves the source usable; and that single-shot metadata queries do not
 disturb an enumeration in progress, on the handle or on a duplicate.
+
+**Queue claim contention, and the claim word's layout.** How `slotwise_mpsc`,
+`reserving_mpsc`, and the experimental permit claim scale as producers are
+added, against an uncontended `fetch_add` floor, in two regimes: producers alone
+so the compare-and-swap is the only thing happening, and producers against a
+continuously draining consumer. Reports each run's refusal count, so a run that
+was bounded by the consumer rather than by the claim is visible as a fact rather
+than mistaken for contention.
+
+Also measures the four apportionments of `reserving_mpsc`'s claim word --
+32/32, 16/48, 8/56, and the 128-bit 64/64 -- which is what established that
+re-apportioning the bits is free while widening the word is not. That decided
+how the layouts ship. The probe instantiates the shipping type at each layout
+rather than a stand-in, and the reason is recorded in
+[DESIGN-NOTES.md](DESIGN-NOTES.md): an earlier version carried its own copy of
+the protocol and was found to be *understating* the cost of the layout it
+existed to evaluate.
