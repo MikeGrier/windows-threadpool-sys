@@ -5,38 +5,57 @@ Bounded producer/consumer queues whose readiness is a waitable Windows `HANDLE`.
 **Windows only.** Every public item is behind `cfg(windows)`; the crate builds to
 an empty shell on other platforms.
 
-## The problem
+## Queues, and the moment a consumer has to wait
 
-A Windows thread usually has to wait on several things at once:
+A bounded queue -- a ring of slots with producers at one end and a consumer at
+the other -- is how one thread hands work to another without the two sharing
+mutable state. The producer pushes; the consumer pops; the ring is fixed in size,
+so a full queue is backpressure rather than unbounded memory growth.
+
+The interesting moment is when the queue is **empty**. The consumer has nothing
+to do and must decide how to wait for the next item. Spinning answers instantly
+and burns a core doing it, so any queue meant for real work offers a blocking
+receive instead, and needs something to sleep on until a producer wakes it.
+
+**What it sleeps on is the design decision this crate is about.** Every
+general-purpose Rust queue picks an internal primitive of its own -- a condition
+variable, a futex, a parking lot. That is exactly right when the queue is the
+only thing the thread is waiting for.
+
+## On Windows, a thread is rarely waiting for only one thing
+
+The realistic wait is a disjunction:
 
 > a message arrived **or** my I/O completed **or** shutdown was signalled
 
-On Windows that is normally easy, because a `HANDLE` is the universal waitable
-currency. `WaitForSingleObject`, `WaitForMultipleObjects`,
+Windows is built for that. A `HANDLE` is the platform's universal waitable
+currency: `WaitForSingleObject`, `WaitForMultipleObjects`,
 `MsgWaitForMultipleObjects`, a thread-pool wait, and alertable waits all take
 one, and an I/O completion, a process exit, a timer, and a cancellation event
 are all handles. A thread can wait on any mixture of them in a single call.
 
-**A queue is the one thing in that list that is not a handle.** Rust's
-concurrent queues park on their own internal primitives:
+**A queue is the one thing in that list that is not a handle** -- because the
+primitive it sleeps on is private to it.
 [`crossbeam-channel`](https://docs.rs/crossbeam-channel) blocks in `recv` but
 exposes no handle, and its `Select` composes only channel operations, with no
 way to register a foreign OS object;
-[`crossbeam-queue`](https://docs.rs/crossbeam-queue) does not block at all. They
-are good queues -- they simply cannot appear in the wait above.
+[`crossbeam-queue`](https://docs.rs/crossbeam-queue) does not block at all.
+These are good queues; they simply cannot appear in the wait above.
 
-So the thread has to poll one source while blocking on another, which either
-burns a core or adds latency to whichever source lost.
+So the thread must poll one source while blocking on another -- burning a core,
+or adding latency to whichever source lost.
 
-## The approach
+## What this crate contributes
 
-**Make the queue's readiness itself a `HANDLE`.** Then it composes with
-everything the platform can already wait on, and the wait above is one call.
+**The queue's readiness *is* a `HANDLE`.** That is the whole idea, and everything
+else here follows from it: a queue that hands out a handle composes with
+everything the platform can already wait on, so the disjunction above becomes one
+call instead of a polling loop.
 
-A queue whose readiness is a handle can still be used without one: every shape
-here can be polled, blocked on directly through `recv`, or waited on alongside
-other handles. The kernel object is created lazily, so a consumer that only ever
-polls never allocates one.
+Nothing is given up to get it. Every shape here can still be polled, or blocked
+on directly through `recv`, without the caller ever touching a handle -- and the
+kernel object is created lazily, so a consumer that only polls never allocates
+one.
 
 ## The shapes
 
@@ -78,14 +97,9 @@ The capability traits over the shapes -- `Producer`, `Consumer`, `Bounded`,
 `Waitable`, `Reserving` -- each shipped with the second implementation that
 validated them, rather than being designed against one.
 
-### Choosing how long `reserving_mpsc` runs before its position recurs
-
-`reserving_mpsc` packs its claim position beside a reservation count in one
-word, and **how those bits are divided is a caller's choice**: `Balanced`,
-`Enduring`, and `Perpetual` trade a reservation ceiling nobody reaches for a
-claim position that lasts from about 37 seconds to about 20 years of sustained
-maximum-rate pushing, at no measured cost. See
-[the section on recurrence](#how-long-reserving_mpsc-runs-before-its-claim-position-recurs).
+`reserving_mpsc` carries one further choice, and the next section is entirely
+about it: it packs its claim position beside a reservation count in a single
+word, and how those bits divide is the caller's to pick.
 
 The decisions all of this was built against are in
 [DESIGN-NOTES.md](DESIGN-NOTES.md), and the remaining work is tracked in
