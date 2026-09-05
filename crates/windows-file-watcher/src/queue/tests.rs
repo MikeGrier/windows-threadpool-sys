@@ -624,34 +624,46 @@ fn next(receiver: &Receiver, expected: &str) -> Notification {
 /// Assert that the stream has ended, without hanging if it has not.
 ///
 /// The companion to [`next`], and a separate function because `recv_timeout`
-/// cannot express this: it returns `None` both for "the stream ended" and for
-/// "nothing arrived in time", so it cannot tell a correct disconnection from
-/// the exact bug this is checking for. The blocking `recv` *can* -- it returns
-/// only on a real end -- so the wait has to happen on another thread with the
-/// deadline enforced here.
+/// cannot express this on its own: it answers `None` both for "the stream
+/// ended" and for "nothing arrived in time". Pairing it with
+/// [`Receiver::is_disconnected`], which reads the sender count under the
+/// `items` lock, separates those -- nothing more arrived *and* the queue agrees
+/// there is nobody left to send.
 ///
 /// Borrows rather than consuming, and uses no thread. A first attempt moved the
-/// receiver onto a worker so the blocking `recv` could be abandoned on failure;
+/// receiver onto a worker so a blocking `recv` could be abandoned on failure;
 /// that does work, but it cannot be used where something else already borrows
-/// the receiver -- the doorbell test, for one -- and the two assertions below
-/// are strictly more informative anyway.
+/// the receiver -- the doorbell test, for one.
 ///
-/// The pair is what makes this unambiguous. `recv_timeout` alone cannot express
-/// "the stream ended", because it answers `None` both for that and for "nothing
-/// arrived in time". Pairing it with [`Receiver::is_disconnected`] separates
-/// them: a real end satisfies both, a broken wake satisfies neither.
+/// # What this does not establish
+///
+/// **It does not prove the teardown wake fired**, and an earlier version of
+/// this comment claimed it did ("a broken wake satisfies neither"). That is
+/// false, and measured to be: breaking the last-sender wake -- `let last =
+/// false` in `Drop for Sender` -- leaves every caller of this helper passing,
+/// because by the time they reach it the queue is already drained and `senders`
+/// is already zero, so `recv_timeout` reports the end without ever blocking and
+/// `is_disconnected` reads the count directly.
+///
+/// The wake is covered, by the two tests written for it:
+/// `a_blocked_receiver_is_woken_by_the_last_sender_dropping` and
+/// `disconnection_signals_the_doorbell`. Both fail under that sabotage. Do not
+/// reach for this helper to cover a wake -- it answers a different question,
+/// and treating it as though it answered that one is how a gap gets filed as
+/// closed. Raised in the PR #57 review after the same conclusion was reached by
+/// measurement here.
 #[track_caller]
 fn assert_stream_ended(receiver: &Receiver, what: &str) {
     assert!(
         receiver.recv_timeout(Duration::from_secs(5)).is_none(),
-        "{what}: a notification arrived where the stream should have ended, or \
-         the receiver was never woken -- either way this is not a finished stream"
+        "{what}: a notification arrived where the stream should have ended, so \
+         more was delivered than this test accounted for"
     );
     assert!(
         receiver.is_disconnected(),
-        "{what}: nothing arrived within 5s but the queue does not report \
-         disconnection, so the receiver was never woken rather than the stream \
-         having ended"
+        "{what}: nothing arrived within 5s, but the queue still reports senders, \
+         so the stream has not ended -- either a sender outlived the point this \
+         test expected it to drop, or nothing was delivered in time"
     );
 }
 
