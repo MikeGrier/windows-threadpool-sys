@@ -289,16 +289,46 @@ fn the_timestamp_renders_known_instants_correctly() {
     assert_eq!(iso8601_utc(1_788_177_600), "2026-08-31T12:00:00Z");
 }
 
+/// The inverse of [`civil_from_days`], for the round trip below.
+///
+/// Howard Hinnant's `days_from_civil`, the counterpart of the algorithm under
+/// test rather than a reimplementation of it: it runs the era arithmetic in the
+/// opposite direction, so agreement between the two is evidence about the
+/// conversion and not about a copy of it.
+fn days_from_civil(year: i64, month: u32, dom: u32) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let shifted_month = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * i64::from(shifted_month) + 2) / 5 + i64::from(dom) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 #[test]
 fn the_civil_conversion_round_trips_across_a_long_span() {
     // A property rather than a fixture: every day for eighty years must convert
     // to a real date, and consecutive days must differ by exactly one day.
+    //
+    // The round trip is what establishes the second half. This test used to
+    // assert only that no date REPEATED, which is much weaker than it reads:
+    // a conversion that skipped a day, or shifted every date by one, produces
+    // no repeat at all and passed. Confirmed by sabotage -- `days + 1` in
+    // `civil_from_days` left the old assertion green. Raised in the PR #63
+    // review.
     let mut previous: Option<(i64, u32, u32)> = None;
     for day in 0..(80 * 365 + 20) {
         let (year, month, dom) = civil_from_days(day);
         assert!((1..=12).contains(&month), "day {day} gave month {month}");
         assert!((1..=31).contains(&dom), "day {day} gave day-of-month {dom}");
         assert!((1970..2060).contains(&year), "day {day} gave year {year}");
+
+        assert_eq!(
+            days_from_civil(year, month, dom),
+            day,
+            "day {day} converted to {year}-{month:02}-{dom:02}, which is a \
+             different day"
+        );
 
         if let Some(prev) = previous {
             assert_ne!(prev, (year, month, dom), "day {day} repeated a date");
