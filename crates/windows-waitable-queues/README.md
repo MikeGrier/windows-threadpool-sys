@@ -5,14 +5,80 @@ Bounded producer/consumer queues whose readiness is a waitable Windows `HANDLE`.
 **Windows only.** Every public item is behind `cfg(windows)`; the crate builds to
 an empty shell on other platforms.
 
-**Status: three shapes, all waitable.** `spsc` is a bounded ring with no
-compare-and-swap on either side; `slotwise_mpsc` is a bounded array queue using Vyukov's
-sequence protocol, so any number of producers may push without a lock; and
-`reserving_mpsc` is that queue plus the ability to claim a slot in advance. Any
-of them can be polled with no kernel object at all, blocked on directly, or
-waited on alongside other handles. The capability traits over them --
-`Producer`, `Consumer`, `Bounded`, `Waitable`, `Reserving` -- each ship with the
-second implementation that validated them.
+## The problem
+
+A Windows thread usually has to wait on several things at once:
+
+> a message arrived **or** my I/O completed **or** shutdown was signalled
+
+On Windows that is normally easy, because a `HANDLE` is the universal waitable
+currency. `WaitForSingleObject`, `WaitForMultipleObjects`,
+`MsgWaitForMultipleObjects`, a thread-pool wait, and alertable waits all take
+one, and an I/O completion, a process exit, a timer, and a cancellation event
+are all handles. A thread can wait on any mixture of them in a single call.
+
+**A queue is the one thing in that list that is not a handle.** Rust's
+concurrent queues park on their own internal primitives:
+[`crossbeam-channel`](https://docs.rs/crossbeam-channel) blocks in `recv` but
+exposes no handle, and its `Select` composes only channel operations, with no
+way to register a foreign OS object;
+[`crossbeam-queue`](https://docs.rs/crossbeam-queue) does not block at all. They
+are good queues -- they simply cannot appear in the wait above.
+
+So the thread has to poll one source while blocking on another, which either
+burns a core or adds latency to whichever source lost.
+
+## The approach
+
+**Make the queue's readiness itself a `HANDLE`.** Then it composes with
+everything the platform can already wait on, and the wait above is one call.
+
+A queue whose readiness is a handle can still be used without one: every shape
+here can be polled, blocked on directly through `recv`, or waited on alongside
+other handles. The kernel object is created lazily, so a consumer that only ever
+polls never allocates one.
+
+## The shapes
+
+There is deliberately **no type named `Queue`**. What a queue must support --
+how many threads push, whether a slot can be claimed before the message exists
+-- decides its *algorithm*, not merely its configuration, so these are separate
+shapes rather than one type with switches. A caller names the shape it wants.
+
+| Shape | Producers | What it adds | Choose it when |
+|---|---|---|---|
+| `spsc` | one | nothing -- no compare-and-swap on either side | exactly one thread pushes |
+| `slotwise_mpsc` | many | Vyukov's per-slot sequence protocol, so producers push without a lock | **the default** for many producers |
+| `reserving_mpsc` | many | claiming a slot *before* the message exists | a message must not be lost to a full queue |
+| `permit_mpsc` | many | an experimental claim protocol | never in production -- see below |
+
+Every shape has one consumer. `permit_mpsc` is behind the non-default
+`experimental-permit-claim` feature and is outside the semver promise; it will
+either be merged into `reserving_mpsc` or deleted.
+
+**Cardinality is enforced by the compiler, not by a sentence in a doc comment.**
+Each shape splits into a producer handle and a consumer handle, and "single
+producer" means the handle is not `Clone`. The handles are also not `Sync`, so
+one that can be neither cloned nor shared is held by exactly one thread.
+
+| Shape | Producer | Consumer | Reserves |
+|---|---|---|---|
+| `spsc` | not `Clone` | not `Clone` | yes |
+| `slotwise_mpsc` | `Clone` | not `Clone` | **no** |
+| `reserving_mpsc` | `Clone` | not `Clone` | yes |
+| `permit_mpsc` | `Clone` | not `Clone` | yes |
+| MPMC | `Clone` | `Clone` | not yet built |
+
+The shapes also disagree about their smallest usable capacity, and the error
+says so rather than the documentation: `spsc` accepts one slot, while the MPSC
+shapes need two, because a per-slot sequence cannot distinguish "just published"
+from "free again next lap" in a one-slot ring.
+
+The capability traits over the shapes -- `Producer`, `Consumer`, `Bounded`,
+`Waitable`, `Reserving` -- each shipped with the second implementation that
+validated them, rather than being designed against one.
+
+### Choosing how long `reserving_mpsc` runs before its position recurs
 
 `reserving_mpsc` packs its claim position beside a reservation count in one
 word, and **how those bits are divided is a caller's choice**: `Balanced`,
@@ -24,55 +90,6 @@ maximum-rate pushing, at no measured cost. See
 The decisions all of this was built against are in
 [DESIGN-NOTES.md](DESIGN-NOTES.md), and the remaining work is tracked in
 [CHECKLIST-io-domains.md](../../CHECKLIST-io-domains.md) at the workspace root.
-
-## Why
-
-Rust has good concurrent queues. What none of them offers on Windows is the one
-property this crate is named for: **you cannot wait on them alongside a kernel
-object.**
-
-`crossbeam-channel` blocks in `recv`, but parks on its own internal primitive and
-exposes no `HANDLE`; its `Select` is built purely from channel operations, with no
-way to register a foreign OS object. `crossbeam-queue` does not block at all.
-
-So a thread that needs to wake on
-
-> a message arrived **or** my I/O completed **or** shutdown was signalled
-
-cannot express that wait. It has to poll one source while blocking on another,
-which either burns a core or adds latency.
-
-On Windows a `HANDLE` is the universal waitable currency -- `WaitForSingleObject`,
-`WaitForMultipleObjects`, `MsgWaitForMultipleObjects`, a thread-pool wait, and
-alertable waits all take one. A queue whose readiness *is* a `HANDLE` composes
-with everything the platform can wait on. One that hides its readiness behind a
-private primitive composes with nothing.
-
-## Plural, and no `Queue` type
-
-This is a family of shapes, not one queue: they differ in producer and consumer
-cardinality, in how they store items, and in what they do when full. None is
-canonical, so there is deliberately no type named `Queue` -- a consumer names the
-shape it wants.
-
-Each shape splits into a **producer handle** and a **consumer handle**, and
-cardinality is carried by whether those handles are `Clone`:
-
-| Shape | Producer | Consumer | Reserves | Shipped |
-|---|---|---|---|---|
-| `spsc` | not `Clone` | not `Clone` | yes | yes |
-| `slotwise_mpsc` | `Clone` | not `Clone` | **no** | yes |
-| `reserving_mpsc` | `Clone` | not `Clone` | yes | yes |
-| MPMC | `Clone` | `Clone` | -- | not yet |
-
-So "single producer" is a fact the compiler enforces, not a sentence in a doc
-comment: the handles are also not `Sync`, so a handle that cannot be cloned and
-cannot be shared is held by exactly one thread.
-
-The two shapes also disagree about their smallest usable capacity, and the error
-says so rather than the documentation: `spsc` accepts one slot, and `slotwise_mpsc` needs
-two, because its per-slot sequence cannot distinguish "just published" from "free
-again next lap" in a one-slot ring.
 
 ## How long `reserving_mpsc` runs before its claim position recurs
 
@@ -295,9 +312,6 @@ because a `pop` returning `None` could not say which situation it was in.
 yourself -- through a `ThreadpoolWait`, or a `WaitForMultipleObjects` across
 several queues -- because then there is nothing to delegate to.
 
-The event is created lazily, so a consumer that only polls never allocates a
-kernel object at all.
-
 ## Choosing between `slotwise_mpsc` and `reserving_mpsc`
 
 They are **two different claim protocols**, not one queue with a switch. `slotwise_mpsc`
@@ -310,13 +324,16 @@ both rather than picking one for you.
 **Start here:**
 
 - **Pushing more than ~4 billion items in one run, from two or more producers?**
-  Use `slotwise_mpsc`. `reserving_mpsc` has a known item-loss defect past that
-  volume, on every target -- see [A known defect in
-  `reserving_mpsc`](#a-known-defect-in-reserving_mpsc-disclosed-rather-than-fixed)
+  Either use `slotwise_mpsc`, whose positions are 64 bits under every
+  configuration, or name a deeper layout on `reserving_mpsc` -- `Perpetual`
+  puts the recurrence about twenty years out at no measured cost. Under its
+  default layout `reserving_mpsc` can lose an item past that volume; see
+  [the section on recurrence](#how-long-reserving_mpsc-runs-before-its-claim-position-recurs)
   above, which you should read before choosing.
 - Need `reserve`? Only `reserving_mpsc` has it, and `slotwise_mpsc` structurally
-  cannot. Weigh that against the defect above rather than treating the
-  capability as settling the choice.
+  cannot. That no longer forces a trade against the recurrence: choosing a
+  layout addresses it, so the capability can settle the choice on its own
+  merits.
 - Otherwise, **start with `reserving_mpsc`.** It was the faster of the two at
   every producer count we measured above one.
 - Only one producer *and* one consumer? Use `spsc`, which beats both.
