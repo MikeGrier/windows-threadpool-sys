@@ -1641,3 +1641,127 @@ mod dwcas {
         assert_eq!(rx.pop(), Ok(3));
     }
 }
+
+// ---------------------------------------------------------------------------
+// The surface added after comparing this crate against the published queue
+// crates, repeated here for the reason `spsc`'s copy records: each shape
+// implements `pop` and the `Bounded` accessors separately, so covering one says
+// nothing about the others. These run under the default layout; the layout
+// tests above cover the rest.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_empty_queue_is_distinguishable_from_a_finished_one() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    assert_eq!(
+        rx.pop(),
+        Err(TryRecvError::Empty),
+        "empty with a producer alive is a reason to try again"
+    );
+
+    drop(tx);
+    assert_eq!(
+        rx.pop(),
+        Err(TryRecvError::Disconnected),
+        "empty with every producer gone is a reason to stop"
+    );
+}
+
+#[test]
+fn an_outstanding_reservation_holds_the_stream_open() {
+    // Specific to this shape: a reservation counts as a producer, so the stream
+    // has not ended while one is outstanding even though the handle is gone.
+    // `pop` must report `Empty` rather than `Disconnected`, or the consumer
+    // stops before the message the reservation exists to protect arrives.
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    let slot = tx.reserve().expect("an empty queue has room");
+    drop(tx);
+
+    assert_eq!(
+        rx.pop(),
+        Err(TryRecvError::Empty),
+        "a reservation is a promise of a message still to come"
+    );
+
+    slot.send(7).expect("the consumer is still here");
+    assert_eq!(rx.pop(), Ok(7));
+    assert_eq!(
+        rx.pop(),
+        Err(TryRecvError::Disconnected),
+        "and only once it is redeemed is the stream finished"
+    );
+}
+
+#[test]
+fn a_departed_producers_items_are_delivered_before_the_disconnection() {
+    let (tx, rx) = bounded::<u32>(4).expect("4 is a valid capacity");
+    tx.push(1).expect("an empty queue has room");
+    tx.push(2).expect("one item does not fill four slots");
+    drop(tx);
+
+    assert_eq!(rx.pop(), Ok(1), "the items come first");
+    assert_eq!(rx.pop(), Ok(2));
+    assert_eq!(
+        rx.pop(),
+        Err(TryRecvError::Disconnected),
+        "and only then the end of the stream"
+    );
+}
+
+#[test]
+fn is_full_agrees_across_the_trait_and_both_handles() {
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    assert!(!tx.is_full());
+    assert!(!rx.is_full());
+
+    tx.push(1).expect("an empty queue has room");
+    tx.push(2).expect("one slot remains");
+
+    assert!(tx.is_full(), "the producer sees a full queue");
+    assert!(rx.is_full(), "and so does the consumer");
+    assert!(
+        Bounded::is_full(&tx),
+        "and so does a caller generic over the trait"
+    );
+    assert!(Bounded::is_full(&rx));
+
+    assert_eq!(rx.pop(), Ok(1));
+    assert!(
+        !tx.is_full(),
+        "and it is no longer full once a slot is freed"
+    );
+}
+
+#[test]
+fn is_full_counts_a_reservation_as_occupancy() {
+    // Specific to this shape, and the reason `is_full` is derived from
+    // `remaining` rather than from `len`: a reservation withdraws capacity
+    // without becoming an item, so a queue whose every slot is spoken for is
+    // full even though it holds nothing.
+    let (tx, rx) = bounded::<u32>(2).expect("2 is a valid capacity");
+    let _first = tx.reserve().expect("an empty queue has room");
+    let _second = tx.reserve().expect("one slot remains");
+
+    assert!(tx.is_full(), "every slot is spoken for");
+    assert!(rx.is_full());
+    assert!(
+        rx.is_empty(),
+        "and yet it holds nothing -- which is why `is_full` is not `len == capacity`"
+    );
+}
+
+#[test]
+fn try_iter_and_drain_are_the_same_iterator_and_need_no_import() {
+    let (tx, rx) = bounded::<u32>(8).expect("8 is a valid capacity");
+    for value in 0..4u32 {
+        tx.push(value).expect("four items fit in eight slots");
+    }
+    let taken: Vec<u32> = rx.try_iter().collect();
+    assert_eq!(taken, vec![0, 1, 2, 3]);
+
+    for value in 4..6u32 {
+        tx.push(value).expect("room remains");
+    }
+    let taken: Vec<u32> = rx.drain().collect();
+    assert_eq!(taken, vec![4, 5]);
+}

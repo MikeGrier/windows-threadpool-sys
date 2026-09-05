@@ -18,7 +18,7 @@
 
 use std::io;
 
-use super::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError};
+use super::{CapacityError, Disconnected, PushError, RecvError, RecvTimeoutError, TryRecvError};
 use crate::capacity::Bounds;
 
 /// An `io::Error` distinguishable from any other, so a `source` that returns
@@ -99,6 +99,8 @@ fn every_error_renders_something_that_names_its_cause() {
         (PushError::Full(1_u32).to_string(), "capacity"),
         (PushError::Disconnected(1_u32).to_string(), "consumer"),
         (Disconnected(1_u32).to_string(), "consumer"),
+        (TryRecvError::Empty.to_string(), "empty"),
+        (TryRecvError::Disconnected.to_string(), "producer"),
         (RecvError::Disconnected.to_string(), "producer"),
         (RecvError::from(io_error()).to_string(), "doorbell"),
         (RecvTimeoutError::Timeout.to_string(), "deadline"),

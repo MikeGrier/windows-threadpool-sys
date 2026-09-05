@@ -362,6 +362,10 @@ impl sealed::SealedWord for u64 {}
 impl ClaimWord for u64 {
     type Atomic = AtomicU64;
 
+    // `AtomicU64::new(0)` and `AtomicU64::default()` are the same value, so a
+    // mutation run reports this as a survivor. It is an equivalent mutant: the
+    // explicit zero is kept because the protocol depends on the initial claim
+    // word being zero, which `default()` states only by coincidence.
     #[inline]
     fn zeroed() -> Self::Atomic {
         AtomicU64::new(0)
@@ -389,6 +393,14 @@ impl ClaimWord for u64 {
     }
 
     #[inline]
+    // **The `|` could equally be `^`, or `+`, and a mutation run reports as
+    // much.** The halves are disjoint by construction -- the shift clears every
+    // bit the position occupies -- so all three agree on every input and no test
+    // can tell them apart. `|` says "these are separate fields" where the others
+    // say "these are numbers". Recorded at both `pack` impls as well as on
+    // `claim_word`, because that is where the operation actually lives: a run
+    // reported it here after the word became a type parameter and the note
+    // stayed behind on the caller.
     fn pack(reserved: u32, position: u64, position_bits: u32, position_mask: u64) -> Self {
         ((reserved as u64) << position_bits) | (position & position_mask)
     }
@@ -410,6 +422,7 @@ impl sealed::SealedWord for u128 {}
 impl ClaimWord for u128 {
     type Atomic = portable_atomic::AtomicU128;
 
+    // Equivalent-mutant note as on the `u64` impl above.
     #[inline]
     fn zeroed() -> Self::Atomic {
         portable_atomic::AtomicU128::new(0)
@@ -437,6 +450,7 @@ impl ClaimWord for u128 {
     }
 
     #[inline]
+    // Equivalent-mutant note as on the `u64` impl above.
     fn pack(reserved: u32, position: u64, position_bits: u32, position_mask: u64) -> Self {
         ((reserved as u128) << position_bits) | ((position & position_mask) as u128)
     }
