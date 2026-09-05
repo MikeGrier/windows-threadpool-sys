@@ -1,0 +1,336 @@
+# Copyright (c) 2026 Mike Grier
+name: release-placement-probe
+
+# The tool is distributed as a downloadable binary rather than through
+# crates.io, because **the download is the provenance**: an artifact attached to
+# a release here is traceable to the commit that built it, in a way a local
+# build of byte-identical source is not. That is what makes the "official build"
+# distinction in the submission record mean something rather than decorate it.
+on:
+  push:
+    tags:
+      - 'placement-probe-v*'
+  # **A pull request touching the tool builds and verifies it, without
+  # releasing.** This is what makes the release path exercised rather than
+  # hoped for, and it matters most for the `aarch64` artifact: `ci.yml`
+  # cross-compiles only `thumbv7em` for `wtf-string`, so nothing else in this
+  # repository would ever build the ARM64 target before a tag turned a failure
+  # into a broken release.
+  #
+  # It also covers a trap in the alternative. `workflow_dispatch` is only
+  # offered for workflows that already exist on the **default branch**, so a
+  # dispatch cannot verify a workflow still on a feature branch -- which is
+  # exactly when verification is wanted.
+  #
+  # Path-scoped so an unrelated pull request does not pay for two Windows
+  # builds.
+  #
+  # **Nothing is published from a pull request**, and that now takes two guards
+  # rather than one. The release job below is guarded on the tag ref, which was
+  # once described here as sufficient -- it was not. The artifact upload in the
+  # build job ran on every trigger, so each pull-request run attached two
+  # downloadable binaries stamped `[ci]` that reported themselves official. The
+  # publishing steps are guarded on the tag ref too, and this sentence is only
+  # true because of that.
+  pull_request:
+    # **The dependencies are in this filter for a reason specific to ARM64.**
+    # This is the only workflow in the repository that builds
+    # `aarch64-pc-windows-msvc`, and `windows-placement-probe` compiles both
+    # path dependencies into itself. Filtering on this crate's own directory
+    # alone meant a change to either dependency was exercised on x64 by `ci.yml`
+    # and on no other architecture at all, so an architecture-specific
+    # regression in one of them would first surface *after* a release tag was
+    # pushed -- turning a build failure into a broken release, which is exactly
+    # what the pull-request trigger exists to prevent.
+    paths:
+      - 'crates/windows-placement-probe/**'
+      - 'crates/windows-topology-sys/**'
+      - 'crates/windows-waitable-queues/**'
+      - '.github/workflows/release-placement-probe.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+  # Kept for a re-run after merge, when the file does live on the default
+  # branch. Build-and-verify-only -- but **that is enforced below rather than
+  # inherent**, and an earlier revision of this comment claimed otherwise.
+  #
+  # A dispatch takes a `ref`, and GitHub accepts a **tag** there as readily as a
+  # branch. Dispatching against an existing `placement-probe-v*` tag therefore
+  # made `github.ref` match the tag-prefix guards, so a manual run reached the
+  # publishing steps and could mint attestations and replace the assets of a
+  # release that had already shipped. The guards now require a `push` event as
+  # well, which is the only trigger that can create a tag rather than merely
+  # name one.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: windows-latest
+    # Build under the floating stable toolchain rather than the repository's
+    # rust-toolchain.toml MSRV pin: rustup resolves a directory override ahead
+    # of `rustup default`, so without this every cargo call below would silently
+    # use the pinned MSRV. The MSRV floor is guarded by ci.yml's own job.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both Windows architectures this workspace has ever measured on. The
+        # aarch64 artifact matters specifically: the two hosts measured so far
+        # disagreed about a queue result, and the ARM64 one is the more
+        # revealing of the two for anything ordering-related.
+        target:
+          - x86_64-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build the tool
+        shell: bash
+        env:
+          # What stamps the artifact as official. `build.rs` reads these, and
+          # without them a binary honestly reports itself as a local build --
+          # which is the behaviour the verify step below depends on.
+          PLACEMENT_PROBE_COMMIT: ${{ github.sha }}
+          PLACEMENT_PROBE_SOURCE: ci
+        run: |
+          cargo build --release --locked \
+            --target "${{ matrix.target }}" \
+            -p windows-placement-probe --bin placement-probe
+
+      - name: Verify the artifact reports itself official
+        # Only the native artifact can be executed on this runner; the aarch64
+        # binary is cross-compiled and cannot run here. Verifying the one that
+        # can is what makes the claim testable at all, and a distinction nobody
+        # has watched hold is a distinction that does not work.
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          identity="$(./target/${{ matrix.target }}/release/placement-probe.exe --version)"
+          echo "build identity: ${identity}"
+          case "${identity}" in
+            *'!!UNOFFICIAL!!'*)
+              echo "::error::a CI build reported itself unofficial: ${identity}" >&2
+              echo "::error::the commit and source stamps did not reach build.rs" >&2
+              exit 1
+              ;;
+          esac
+          # The stamps must carry the *right* commit, not merely some commit: a
+          # stale one would make every submission traceable to the wrong code.
+          case "${identity}" in
+            *"$(echo "${GITHUB_SHA}" | cut -c1-12)"*) ;;
+            *)
+              echo "::error::identity does not name this commit: ${identity}" >&2
+              exit 1
+              ;;
+          esac
+          # And the *right version*. Any `placement-probe-v*` tag triggers this
+          # workflow, and nothing else compares the tag against the crate
+          # version the binary reports. A mistyped or stale tag would otherwise
+          # publish a release titled one version containing a binary that calls
+          # itself another -- and since the record embeds the crate version,
+          # every submission from it would disagree with the release it came
+          # from.
+          #
+          # Only on a tag: a pull request run has no version to check against.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME##*-v}"
+            case "${identity}" in
+              *"v${tag_version} "*) ;;
+              *)
+                echo "::error::tag ${GITHUB_REF_NAME} claims version ${tag_version}," >&2
+                echo "::error::but the binary reports: ${identity}" >&2
+                exit 1
+                ;;
+            esac
+            echo "tag version ${tag_version} matches the binary"
+          fi
+
+      - name: Verify an unstamped build reports itself unofficial
+        # The negative case, and the one that would otherwise never be watched.
+        # If a build claimed to be official without the stamps, the whole
+        # distinction would be decorative and nothing would say so.
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          cargo build --release --locked \
+            --target "${{ matrix.target }}" \
+            -p windows-placement-probe --bin placement-probe
+          identity="$(./target/${{ matrix.target }}/release/placement-probe.exe --version)"
+          echo "unstamped identity: ${identity}"
+          case "${identity}" in
+            *'!!UNOFFICIAL!!'*) ;;
+            *)
+              echo "::error::an unstamped build claimed to be official: ${identity}" >&2
+              exit 1
+              ;;
+          esac
+
+      # **Everything below here is release-only, and the guard is the point.**
+      #
+      # A pull-request or dispatch run builds and verifies -- that is why those
+      # triggers exist -- but it must not *publish*. Without the guard these
+      # steps ran on every trigger, so each pull-request run attached two
+      # downloadable binaries stamped `[ci]`, which `is_official` accepts and
+      # `SubmissionRecord::is_fully_traceable` then passes. Anyone could take one
+      # from the run's artifact list and submit results indistinguishable from a
+      # real release build, which is precisely the boundary this file's header
+      # says the release attachment exists to draw.
+      #
+      # Measured on this pull request rather than reasoned about: the run
+      # published both artifacts, and the x86_64 one reported
+      # `v0.1.0 5e9e85de527c [ci]` -- no `!!UNOFFICIAL!!` marker. Worse, on a
+      # `pull_request` event `github.sha` is the ephemeral merge commit, so that
+      # identity names a commit which exists on no branch and cannot be checked
+      # out. The claim was not merely unearned; it was unresolvable.
+      #
+      # The release job below is already tag-guarded, so nothing consumes these
+      # on any other trigger and gating them loses nothing.
+      - name: Rebuild with the stamps for release
+        # The negative check above overwrote the artifact with an unstamped one.
+        # Rebuilding is not a formality: shipping that binary would attach a
+        # file marked UNOFFICIAL to an official release.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/placement-probe-v')
+        shell: bash
+        env:
+          PLACEMENT_PROBE_COMMIT: ${{ github.sha }}
+          PLACEMENT_PROBE_SOURCE: ci
+        run: |
+          cargo build --release --locked \
+            --target "${{ matrix.target }}" \
+            -p windows-placement-probe --bin placement-probe
+
+      - name: Name the artifact for its architecture
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/placement-probe-v')
+        shell: bash
+        run: |
+          arch="${{ matrix.target }}"
+          arch="${arch%%-*}"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/placement-probe.exe" \
+             "dist/placement-probe-${arch}.exe"
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/placement-probe-v')
+        with:
+          name: placement-probe-${{ matrix.target }}
+          path: dist/placement-probe-*.exe
+          if-no-files-found: error
+
+  release:
+    name: attach to the release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/placement-probe-v')
+    permissions:
+      # The only job that needs it, and only for the tag path.
+      contents: write
+      # Artifact attestation needs both: `id-token` to mint the OIDC token
+      # Sigstore signs against, and `attestations` to persist the result. Kept
+      # on this job rather than at workflow level so the build and pull-request
+      # paths cannot mint anything.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # **What the `--version` stamp cannot do.** That stamp is self-reported:
+      # `build.rs` reads it from environment variables, so a binary built
+      # anywhere can claim to be an official build at any commit. It catches an
+      # accident, not a forgery, and the crate README says so.
+      #
+      # This is the part that does not rely on being told. GitHub signs a
+      # statement binding these exact bytes to this workflow, this repository
+      # and this commit, and a downloader checks it without trusting anything
+      # the binary says about itself:
+      #
+      #     gh attestation verify placement-probe-x86_64.exe \
+      #       --repo MikeGrier/windows-threadpool-sys
+      #
+      # Deliberately **before** the upload, so a failure here means nothing was
+      # published rather than something unattested was. Re-running after a
+      # partial upload mints a second attestation for the same bytes, which is
+      # allowed and harmless -- the alternative is publishing first and finding
+      # out afterwards.
+      #
+      # It runs here rather than in the build matrix for two reasons: these are
+      # the exact files that get uploaded, so nothing can change between the
+      # claim and the artifact; and this job alone is gated on the tag, so the
+      # pull-request path builds and verifies without minting attestations for
+      # binaries nobody will ever download.
+      - name: Attest the binaries
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: artifacts/placement-probe-*.exe
+
+      - name: Write the release notes
+        # A file rather than an inline `--notes` string. The notes mention
+        # `--preview` in backticks, and a backtick inside a double-quoted bash
+        # string is command substitution: the shell would try to execute it.
+        # Quoting the heredoc delimiter also stops any `$` being expanded.
+        run: |
+          cat > notes.md <<'NOTES'
+          Measures what thread placement costs on a Windows machine, and prints a
+          result you can paste back.
+
+          Download the binary for your architecture and run it. Pass `--preview`
+          first if you would like to see exactly what it collects before it
+          measures anything.
+
+          By default a result carries **only** the machine's shape and its
+          timings. The CPU model, OS build, virtualisation hint and run time are
+          withheld unless you pass `--include-metadata`; sending them helps tie
+          a result to a particular platform version, and is entirely your
+          choice. `--no-cpu-model` subtracts the processor name from that
+          opt-in, so on its own it changes nothing.
+
+          It makes **no network connections**. Sending the result is your
+          decision and your action:
+          https://github.com/MikeGrier/windows-threadpool-sys/discussions/55
+
+          Machines with more than one NUMA node are the ones we most need, since
+          every host measured so far has exactly one.
+          NOTES
+
+      # Written to be re-runnable, because the failure it guards against leaves
+      # the job in exactly the state that blocks a retry. `gh release create`
+      # both creates the release and uploads the assets; if it creates the
+      # release and then an upload fails -- a network blip, a throttled API --
+      # the tag now has a release, so a re-run fails immediately with "release
+      # already exists" and the only way forward is to delete the release by
+      # hand. So: create it only if it is absent, then upload separately with
+      # `--clobber` so a partial upload can be completed rather than restarted.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists; updating its notes and assets."
+            gh release edit "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "windows-placement-probe ${GITHUB_REF_NAME##*-v}" \
+              --notes-file notes.md
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "windows-placement-probe ${GITHUB_REF_NAME##*-v}" \
+              --notes-file notes.md
+          fi
+          gh release upload "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            artifacts/placement-probe-*.exe

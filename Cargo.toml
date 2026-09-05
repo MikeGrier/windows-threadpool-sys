@@ -10,6 +10,7 @@ members = [
 	"crates/windows-ioring-sys",
 	"crates/windows-overlapped-io-sys",
 	"crates/windows-namespace-request-sys",
+	"crates/windows-placement-probe",
 	"crates/windows-platform-probes",
 	"crates/windows-thread-ambient-sys",
 	"crates/windows-threadpool-sys",

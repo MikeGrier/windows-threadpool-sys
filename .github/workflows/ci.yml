@@ -253,6 +253,43 @@ jobs:
           RUST_LIB_BACKTRACE: 1
         run: cargo test -p windows-ioring-sys --locked --no-fail-fast
 
+  placement-probe-no-serde:
+    name: windows-placement-probe (no serde feature)
+    runs-on: windows-latest
+    # The crate's manifest states that the `serde` feature "exists so the
+    # measurement code can be used without it", which makes
+    # `--no-default-features` a promised configuration that nothing else builds:
+    # every `--workspace` step takes the default set, and `--all-features` turns
+    # the feature back on.
+    #
+    # Unprotected, it did not merely rot -- it never worked. `paste_json` and
+    # `submission` were ungated while importing `serde`, so the advertised
+    # configuration failed to compile outright with five errors. This job is what
+    # would have caught that, and is the cost the feature gate is accepted with.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build
+        run: cargo build -p windows-placement-probe --all-targets --no-default-features --locked
+      - name: cargo clippy
+        run: cargo clippy -p windows-placement-probe --all-targets --no-default-features --locked -- -D warnings
+      - name: cargo test
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LIB_BACKTRACE: 1
+        run: cargo test -p windows-placement-probe --no-default-features --locked --no-fail-fast
+      # The `docs` job documents `--all-features` only, so a link from ungated
+      # prose into a now-gated item resolves there and dangles here.
+      - name: cargo doc (deny broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc -p windows-placement-probe --no-deps --no-default-features --locked
+
   fmt:
     name: rustfmt
     runs-on: windows-latest
