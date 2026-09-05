@@ -313,8 +313,16 @@ function Format-Patch {
     param([string] $Find, [string] $Replace)
     $lines = @('    --- injected patch ---')
     foreach ($line in $Find -split "`n") { $lines += "    - $line" }
-    foreach ($line in $Replace -split "`n") { $lines += "    + $line" }
-    if ([string]::IsNullOrEmpty($Replace)) { $lines += '    + (removed)' }
+    # The empty case is `(removed)` ALONE, not an empty `+` line followed by it.
+    # Splitting "" yields one empty element, so the old order printed both. Five
+    # entries across the two shipped manifests use the deleting form, so this was
+    # every deletion sabotage's patch display. Raised in the PR #64 review.
+    if ([string]::IsNullOrEmpty($Replace)) {
+        $lines += '    + (removed)'
+    }
+    else {
+        foreach ($line in $Replace -split "`n") { $lines += "    + $line" }
+    }
     return $lines -join "`n"
 }
 
@@ -332,6 +340,29 @@ function Get-EvidencePath {
         'build-failed' { return "$TranscriptPath.build.err" }
         'build-hung' { return "$TranscriptPath.build.err" }
         default { return $TranscriptPath }
+    }
+}
+
+# The two bounds reach [Process]::WaitForExit($Seconds * 1000), which does not
+# mean what a caller might hope at or below zero -- and gets it wrong in the
+# dangerous direction. Zero returns immediately without waiting, so every phase
+# would be classified as a hang and every sabotage would read as `caught`: a
+# fully green sweep that proved nothing, which is the one outcome this tool
+# exists to make impossible. A negative value throws a MethodInvocationException
+# instead, breaking the report-don't-throw contract. Both are measured, and both
+# are rejected here rather than allowed to reach the wait. Raised in the PR #64
+# review.
+foreach ($bound in @(
+        @{ Name = 'TimeoutSeconds'; Value = $TimeoutSeconds },
+        @{ Name = 'BuildTimeoutSeconds'; Value = $BuildTimeoutSeconds })) {
+    if ($bound.Value -lt 1) {
+        Exit-WithMessage (@(
+                "-$($bound.Name) must be at least 1 second, and was $($bound.Value)."
+                "A bound of zero does not disable the timeout; it makes every phase"
+                "time out instantly, which this tool would report as every sabotage"
+                "being caught -- a green sweep that proved nothing. Pass a real"
+                "budget instead."
+            ) -join "`n") 2
     }
 }
 
@@ -733,7 +764,16 @@ foreach ($sabotage in $selected) {
     # the backup first is what lets the restore advice below be non-destructive
     # in both modes rather than only in the default one.
     $backup = Join-Path $backupDirectory ($stem + '.' + (Split-Path -Leaf $target) + '.bak')
-    [System.IO.File]::WriteAllText($backup, $original, $utf8NoBom)
+    # Copied byte-for-byte rather than written from the decoded string. The
+    # decoded round trip is not lossless: ReadAllText strips a UTF-8 BOM and
+    # WriteAllText with $utf8NoBom does not put it back, so restoring a BOM'd
+    # file that way silently drops three bytes -- and the old verification,
+    # which compared decoded TEXT, passed anyway and then deleted the backup.
+    # Measured: a 23-byte BOM'd file came back 20 bytes with the comparison
+    # still reporting success. No tracked file here carries a BOM today (570
+    # checked, 0 found), but a manifest may point at any file, and "restores
+    # what it patched" has to mean the bytes. Raised in the PR #64 review.
+    [System.IO.File]::WriteAllBytes($backup, [System.IO.File]::ReadAllBytes($target))
 
     try {
         # Inside the guarded region, not before it. A write that throws part-way
@@ -745,8 +785,26 @@ foreach ($sabotage in $selected) {
             -TranscriptPath $transcript -BuildSeconds $BuildTimeoutSeconds -TestSeconds $TimeoutSeconds
     }
     finally {
-        [System.IO.File]::WriteAllText($target, $original, $utf8NoBom)
-        if ([System.IO.File]::ReadAllText($target) -ne $original) {
+        # Restored from the byte copy, and verified by hashing both files
+        # rather than by comparing decoded text -- see the note above the
+        # backup. The patched state is still written as decoded text, which is
+        # fine: it is transient and only has to compile, and this restore puts
+        # the original bytes back regardless of what the patch write did.
+        #
+        # WriteAllBytes, NOT File.Copy, and the difference is not stylistic.
+        # File.Copy preserves the SOURCE's LastWriteTime, so a restored file
+        # would carry its original timestamp -- older than the artifact cargo
+        # had just built from the patched source. Cargo compares those mtimes,
+        # concludes the crate is up to date, and leaves the SABOTAGED binary in
+        # the build cache: the next `cargo test`, by this tool or by a person,
+        # then runs against sabotaged code. Measured while writing this commit,
+        # by doing exactly that and watching an unrelated test fail on a clean
+        # tree until the source was touched. WriteAllBytes stamps the file now,
+        # so cargo rebuilds.
+        [System.IO.File]::WriteAllBytes($target, [System.IO.File]::ReadAllBytes($backup))
+        $targetHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+        $backupHash = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash
+        if ($targetHash -ne $backupHash) {
             Exit-WithMessage (@(
                     "FAILED TO RESTORE $target"
                     "Its pre-sabotage contents are saved at:"
